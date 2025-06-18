@@ -1,27 +1,23 @@
-use std::collections::HashMap;
-
 use bitcoin::{
     Address, Transaction,
     hashes::{Hash, sha256},
+    params::Params,
 };
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::{
-    Network,
+    operator_rpc::connection_manager::ConnectionManager,
     services::{DepositAddress, DepositService},
     signer::Signer,
     wallet::leaf::WalletLeaf,
 };
 
-pub enum SparkWalletError {
-    InvalidAddress(String),
-    SignerError(String),
-    DepositAddressUsed,
-}
+use super::{SparkWalletConfig, SparkWalletError};
 
 pub struct SparkWallet<S> {
+    config: SparkWalletConfig,
     deposit_service: DepositService,
-    network: Network,
     signer: S,
 }
 
@@ -29,12 +25,20 @@ impl<S> SparkWallet<S>
 where
     S: Signer,
 {
-    pub fn new(deposit_service: DepositService, network: Network, signer: S) -> Self {
-        SparkWallet {
+    pub fn new(config: SparkWalletConfig, signer: S) -> Result<Self, SparkWalletError> {
+        let identity_public_key = signer.get_identity_public_key(0, config.network)?;
+        let cm = ConnectionManager::new(identity_public_key.serialize().to_vec())?;
+        let spark_service_client =
+            cm.get_spark_service_client(&config.get_coordinator().address)?;
+
+        let deposit_service =
+            DepositService::new(spark_service_client, identity_public_key, config.network);
+
+        Ok(SparkWallet {
             deposit_service,
-            network,
+            config,
             signer,
-        }
+        })
     }
 
     // TODO: In the js sdk this function calls an electrum server to fetch the transaction hex based on a txid.
@@ -52,7 +56,7 @@ where
             .into_iter()
             .map(|addr| (addr.address.clone(), addr))
             .collect();
-        let params = self.network.into();
+        let params: Params = self.config.network.into();
         for (vout, output) in tx.output.iter().enumerate() {
             let Ok(address) = Address::from_script(&output.script_pubkey, &params) else {
                 continue;
@@ -122,9 +126,7 @@ where
     ) -> Result<Address, SparkWalletError> {
         let leaf_id = Uuid::now_v7();
         let hash = sha256::Hash::hash(leaf_id.as_bytes());
-        let signing_public_key = self.signer.generate_public_key(hash).await.map_err(|e| {
-            SparkWalletError::SignerError(format!("Failed to generate public key: {}", e))
-        })?;
+        let signing_public_key = self.signer.generate_public_key(hash).await?;
         let address = self
             .deposit_service
             .generate_deposit_address(signing_public_key, leaf_id.to_string(), is_static)

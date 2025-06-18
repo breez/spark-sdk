@@ -1,18 +1,14 @@
 mod deposit;
 
-pub use deposit::{DepositAddress, DepositService};
+pub use deposit::{DepositAddress, DepositService, DepositServiceError};
 
-mod spark {
-    tonic::include_proto!("spark");
-}
-
-impl From<crate::Network> for spark::Network {
+impl From<crate::Network> for spark_protos::spark::Network {
     fn from(network: crate::Network) -> Self {
         match network {
-            crate::Network::Mainnet => spark::Network::Mainnet,
-            crate::Network::Regtest => spark::Network::Regtest,
-            crate::Network::Testnet => spark::Network::Testnet,
-            crate::Network::Signet => spark::Network::Signet,
+            crate::Network::Mainnet => spark_protos::spark::Network::Mainnet,
+            crate::Network::Regtest => spark_protos::spark::Network::Regtest,
+            crate::Network::Testnet => spark_protos::spark::Network::Testnet,
+            crate::Network::Signet => spark_protos::spark::Network::Signet,
         }
     }
 }

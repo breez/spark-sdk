@@ -1,18 +1,16 @@
 use bitcoin::{
-    Address, PublicKey,
+    Address, Transaction,
     address::NetworkUnchecked,
     hashes::{Hash, sha256},
     key::Secp256k1,
+    secp256k1::PublicKey,
 };
 use thiserror::Error;
 use tonic::{Status, transport::Channel};
 
-use crate::{
-    Network,
-    cryptography::subtract_public_keys,
-    services::spark::{
-        self, GenerateDepositAddressRequest, spark_service_client::SparkServiceClient,
-    },
+use crate::{Network, cryptography::subtract_public_keys};
+use spark_protos::spark::{
+    GenerateDepositAddressRequest, spark_service_client::SparkServiceClient,
 };
 
 #[derive(Debug, Error)]
@@ -47,7 +45,7 @@ pub struct DepositAddress {
 }
 
 impl DepositService {
-    fn spark_network(&self) -> spark::Network {
+    fn spark_network(&self) -> spark_protos::spark::Network {
         self.network.into()
     }
 
@@ -304,8 +302,8 @@ impl DepositService {
         let resp = self
             .get_client()
             .generate_deposit_address(GenerateDepositAddressRequest {
-                signing_public_key: signing_public_key.to_bytes(),
-                identity_public_key: self.identity_public_key.to_bytes(),
+                signing_public_key: signing_public_key.serialize().to_vec(),
+                identity_public_key: self.identity_public_key.serialize().to_vec(),
                 network: self.spark_network() as i32,
                 leaf_id: Some(leaf_id.clone()),
                 is_static: Some(is_static),
@@ -328,10 +326,12 @@ impl DepositService {
     ) -> Result<Vec<DepositAddress>, DepositServiceError> {
         let resp = self
             .get_client()
-            .query_unused_deposit_addresses(spark::QueryUnusedDepositAddressesRequest {
-                identity_public_key: self.identity_public_key.to_bytes(),
-                network: self.spark_network() as i32,
-            })
+            .query_unused_deposit_addresses(
+                spark_protos::spark::QueryUnusedDepositAddressesRequest {
+                    identity_public_key: self.identity_public_key.serialize().to_vec(),
+                    network: self.spark_network() as i32,
+                },
+            )
             .await?
             .into_inner();
 
@@ -373,15 +373,15 @@ impl DepositService {
         operator_public_key: &PublicKey,
         address: &Address,
     ) -> sha256::Hash {
-        let mut msg = operator_public_key.to_bytes();
-        msg.extend_from_slice(&self.identity_public_key.to_bytes());
+        let mut msg = operator_public_key.serialize().to_vec();
+        msg.extend_from_slice(&self.identity_public_key.serialize());
         msg.extend_from_slice(address.to_string().as_bytes());
         sha256::Hash::hash(&msg)
     }
 
     fn validate_deposit_address(
         &self,
-        deposit_address: spark::Address,
+        deposit_address: spark_protos::spark::Address,
         signing_public_key: PublicKey,
         leaf_id: String,
     ) -> Result<DepositAddress, DepositServiceError> {

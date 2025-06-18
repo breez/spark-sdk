@@ -1,4 +1,16 @@
 [workspace]
 resolver = "2"
 
-members = ["crates/spark"]
+members = ["crates/spark", "crates/spark-protos"]
+
+[workspace.dependencies]
+spark-protos = { path = "crates/spark-protos" }
+tonic = { version = "0.12.3", features = [
+    "tls",
+    "tls-native-roots",
+    "prost",
+    "channel",
+] }
+tonic-build = { version = "0.12.3", features = ["prost"] }
+prost = "0.13.4"
+prost-types = "0.13.4"

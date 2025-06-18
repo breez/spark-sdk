@@ -1,6 +1,6 @@
 mod core;
 mod cryptography;
-mod default_signer;
+mod operator_rpc;
 mod services;
 mod signer;
 mod wallet;

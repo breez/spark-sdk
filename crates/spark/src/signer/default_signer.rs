@@ -1,12 +1,17 @@
 use bip32::{ChildNumber, XPrv};
+use bitcoin::secp256k1::SecretKey;
 use bitcoin::{
-    NetworkKind, PrivateKey, PublicKey,
+    NetworkKind,
     hashes::{Hash, sha256},
     key::Secp256k1,
     secp256k1::All,
+    secp256k1::PublicKey,
 };
 
-use crate::signer::{Signer, SignerError};
+use crate::{
+    Network,
+    signer::{Signer, SignerError},
+};
 
 pub struct DefaultSigner {
     master_key: XPrv,
@@ -33,7 +38,7 @@ impl DefaultSigner {
 }
 
 impl DefaultSigner {
-    fn derive_signing_key(&self, hash: sha256::Hash) -> Result<PrivateKey, SignerError> {
+    fn derive_signing_key(&self, hash: sha256::Hash) -> Result<SecretKey, SignerError> {
         let u32_bytes = hash.as_byte_array()[..4]
             .try_into()
             .map_err(|_| SignerError::InvalidHash)?;
@@ -43,7 +48,7 @@ impl DefaultSigner {
             SignerError::KeyDerivationError(format!("failed to derive child: {}", e))
         })?;
         Ok(
-            PrivateKey::from_slice(&child.private_key().to_bytes(), self.network).map_err(|e| {
+            SecretKey::from_slice(&child.private_key().to_bytes()).map_err(|e| {
                 SignerError::KeyDerivationError(format!("failed to create private key: {}", e))
             })?,
         )
@@ -55,5 +60,13 @@ impl Signer for DefaultSigner {
     async fn generate_public_key(&self, hash: sha256::Hash) -> Result<PublicKey, SignerError> {
         let signing_key = self.derive_signing_key(hash)?;
         Ok(signing_key.public_key(&self.secp))
+    }
+
+    fn get_identity_public_key(
+        &self,
+        account_index: u32,
+        network: Network,
+    ) -> Result<PublicKey, SignerError> {
+        todo!()
     }
 }
