@@ -6,12 +6,13 @@ use bitcoin::{
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::{
-    operator_rpc::connection_manager::ConnectionManager,
+use spark::{
+    operator_rpc::ConnectionManager,
     services::{DepositAddress, DepositService},
     signer::Signer,
-    wallet::leaf::WalletLeaf,
 };
+
+use crate::leaf::WalletLeaf;
 
 use super::{SparkWalletConfig, SparkWalletError};
 

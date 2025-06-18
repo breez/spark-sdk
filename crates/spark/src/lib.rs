@@ -1,9 +1,7 @@
-mod core;
-mod cryptography;
-mod operator_rpc;
-mod services;
-mod signer;
-mod wallet;
+pub mod core;
+pub mod cryptography;
+pub mod operator_rpc;
+pub mod services;
+pub mod signer;
 
 pub use core::Network;
-pub use wallet::SparkWallet;

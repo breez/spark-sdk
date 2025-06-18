@@ -6,16 +6,16 @@ pub enum SparkWalletError {
     InvalidAddress(String),
 
     #[error("Signer error: {0}")]
-    SignerServiceError(#[from] crate::signer::error::SignerError),
+    SignerServiceError(#[from] spark::signer::SignerError),
 
     #[error("Deposit address used")]
     DepositAddressUsed,
 
     #[error("Deposit service error: {0}")]
-    DepositServiceError(#[from] crate::services::DepositServiceError),
+    DepositServiceError(#[from] spark::services::DepositServiceError),
 
     #[error("Operator RPC error: {0}")]
-    OperatorRpcError(#[from] crate::operator_rpc::error::OperatorRpcError),
+    OperatorRpcError(#[from] spark::operator_rpc::OperatorRpcError),
 
     #[error("Generic error: {0}")]
     Generic(String),

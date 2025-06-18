@@ -1,9 +1,12 @@
-pub mod default_signer;
-pub mod error;
-use bitcoin::{hashes::sha256, secp256k1::PublicKey};
-use error::SignerError;
+mod default_signer;
+mod error;
 
-use crate::Network;
+pub use default_signer::DefaultSigner;
+pub use error::SignerError;
+
+use bitcoin::{hashes::sha256, secp256k1::PublicKey};
+
+use crate::core::Network;
 
 #[async_trait::async_trait]
 pub trait Signer {

@@ -1,4 +1,4 @@
-use crate::Network;
+use spark::Network;
 
 pub struct SparkWalletConfig {
     pub network: Network,

@@ -1,10 +1,12 @@
 [workspace]
 resolver = "2"
 
-members = ["crates/spark", "crates/spark-protos"]
+members = ["crates/spark", "crates/spark-protos", "crates/spark-wallet"]
 
 [workspace.dependencies]
 spark-protos = { path = "crates/spark-protos" }
+spark = { path = "crates/spark" }
+spark-wallet = { path = "crates/spark-wallet" }
 tonic = { version = "0.12.3", features = [
     "tls",
     "tls-native-roots",
@@ -14,3 +16,6 @@ tonic = { version = "0.12.3", features = [
 tonic-build = { version = "0.12.3", features = ["prost"] }
 prost = "0.13.4"
 prost-types = "0.13.4"
+thiserror = "2.0.12"
+bitcoin = "0.32.6"
+uuid = { version = "1.17.0", features = ["v7"] }
