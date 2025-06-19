@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 async-trait.workspace = true
 bip32.workspace = true
-bitcoin.workspace = true
+bitcoin = { workspace = true, features = ["rand"] }
 frost-core.workspace = true
 frost-secp256k1-tr.workspace = true
 serde.workspace = true
