@@ -9,21 +9,17 @@ use tonic::transport::Channel;
 use super::error::{OperatorRpcError, Result};
 
 pub struct ConnectionManager {
-    identity_pubkey: Vec<u8>,
     connections_map: Mutex<HashMap<String, OperatorConnection>>,
 }
 
 struct OperatorConnection {
     channel: Channel,
-    auth_token: Option<String>,
-    expiration_time: u64,
 }
 
 impl ConnectionManager {
-    pub fn new(identity_pubkey: Vec<u8>) -> Result<ConnectionManager> {
+    pub fn new() -> Result<ConnectionManager> {
         let connections_map = HashMap::new();
         Ok(Self {
-            identity_pubkey,
             connections_map: Mutex::new(connections_map),
         })
     }
@@ -46,8 +42,6 @@ impl ConnectionManager {
                     url.to_string(),
                     OperatorConnection {
                         channel: channel.clone(),
-                        auth_token: None,
-                        expiration_time: 0,
                     },
                 );
                 debug!("Created new connection to operator: {}", url);

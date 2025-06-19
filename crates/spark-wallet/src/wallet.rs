@@ -28,7 +28,7 @@ where
 {
     pub fn new(config: SparkWalletConfig, signer: S) -> Result<Self, SparkWalletError> {
         let identity_public_key = signer.get_identity_public_key(0, config.network)?;
-        let cm = ConnectionManager::new(identity_public_key.serialize().to_vec())?;
+        let cm = ConnectionManager::new()?;
         let spark_service_client =
             cm.get_spark_service_client(&config.get_coordinator().address)?;
 
