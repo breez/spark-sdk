@@ -10,7 +10,7 @@ use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 
-pub(crate) struct OperatorAuth<S>
+pub struct OperatorAuth<S>
 where
     S: Signer,
 {
@@ -20,7 +20,7 @@ where
 }
 
 #[derive(Clone)]
-pub(crate) struct OperationSession {
+pub struct OperationSession {
     token: MetadataValue<Ascii>,
     expiration: u64,
 }
@@ -29,7 +29,7 @@ impl<S> OperatorAuth<S>
 where
     S: Signer,
 {
-    pub(crate) fn new(channel: Channel, signer: S) -> Self {
+    pub fn new(channel: Channel, signer: S) -> Self {
         Self {
             channel,
             signer,
@@ -37,7 +37,7 @@ where
         }
     }
 
-    pub(crate) fn spark_service_client(
+    pub fn spark_service_client(
         &self,
     ) -> Result<SparkServiceClient<InterceptedService<Channel, OperationSession>>> {
         let session = self.get_authenticated_session()?;
@@ -47,7 +47,7 @@ where
         ))
     }
 
-    pub(crate) fn get_authenticated_session(&self) -> Result<OperationSession> {
+    pub fn get_authenticated_session(&self) -> Result<OperationSession> {
         let session = self.session.lock().unwrap();
         match session.as_ref() {
             Some(session) => Ok(session.clone()),
