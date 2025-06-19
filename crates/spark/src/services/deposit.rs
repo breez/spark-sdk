@@ -10,7 +10,7 @@ use thiserror::Error;
 use crate::{
     Network,
     cryptography::subtract_public_keys,
-    operator_rpc::{OperatorRpcError, SparkRpcClient},
+    operator::rpc::{OperatorRpcError, SparkRpcClient},
     signer::Signer,
 };
 use spark_protos::spark::GenerateDepositAddressRequest;

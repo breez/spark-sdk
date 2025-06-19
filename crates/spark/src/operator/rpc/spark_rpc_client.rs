@@ -1,5 +1,5 @@
-use crate::operator_rpc::auth::OperatorAuth;
-use crate::operator_rpc::error::Result;
+use super::auth::OperatorAuth;
+use super::error::Result;
 use crate::signer::Signer;
 use spark_protos::spark::{
     GenerateDepositAddressRequest, GenerateDepositAddressResponse,
@@ -30,7 +30,8 @@ where
     ) -> Result<GenerateDepositAddressResponse> {
         Ok(self
             .auth
-            .spark_service_client().await?
+            .spark_service_client()
+            .await?
             .generate_deposit_address(req)
             .await?
             .into_inner())
@@ -42,7 +43,8 @@ where
     ) -> Result<QueryUnusedDepositAddressesResponse> {
         Ok(self
             .auth
-            .spark_service_client().await?
+            .spark_service_client()
+            .await?
             .query_unused_deposit_addresses(req)
             .await?
             .into_inner())

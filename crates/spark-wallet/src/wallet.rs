@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use spark::{
-    operator_rpc::{ConnectionManager, SparkRpcClient},
+    operator::rpc::{ConnectionManager, SparkRpcClient},
     services::{DepositAddress, DepositService},
     signer::Signer,
 };

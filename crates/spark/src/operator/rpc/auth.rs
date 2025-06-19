@@ -1,4 +1,4 @@
-use crate::operator_rpc::error::Result;
+use super::error::Result;
 use crate::signer::Signer;
 use spark_protos::spark::spark_service_client::SparkServiceClient;
 use tokio::sync::Mutex;

@@ -1,6 +1,6 @@
 pub mod core;
 pub mod cryptography;
-pub mod operator_rpc;
+pub mod operator;
 pub mod services;
 pub mod signer;
 
