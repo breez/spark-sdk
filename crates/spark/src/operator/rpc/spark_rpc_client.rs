@@ -1,7 +1,6 @@
 use super::auth::OperatorAuth;
 use super::error::Result;
 use crate::signer::Signer;
-//use google::protobuf::Empty;
 use spark_protos::spark::*;
 use tonic::transport::Channel;
 
@@ -20,6 +19,19 @@ where
         Self {
             auth: OperatorAuth::new(channel, signer),
         }
+    }
+
+    pub async fn finalize_node_signatures(
+        &self,
+        req: spark_protos::spark::FinalizeNodeSignaturesRequest,
+    ) -> Result<spark_protos::spark::FinalizeNodeSignaturesResponse> {
+        Ok(self
+            .auth
+            .spark_service_client()
+            .await?
+            .finalize_node_signatures(req)
+            .await?
+            .into_inner())
     }
 
     pub async fn generate_deposit_address(
@@ -57,32 +69,6 @@ where
             .spark_service_client()
             .await?
             .start_deposit_tree_creation(req)
-            .await?
-            .into_inner())
-    }
-
-    pub async fn start_tree_creation(
-        &self,
-        req: StartTreeCreationRequest,
-    ) -> Result<StartTreeCreationResponse> {
-        Ok(self
-            .auth
-            .spark_service_client()
-            .await?
-            .start_tree_creation(req)
-            .await?
-            .into_inner())
-    }
-
-    pub async fn finalize_node_signatures(
-        &self,
-        req: FinalizeNodeSignaturesRequest,
-    ) -> Result<FinalizeNodeSignaturesResponse> {
-        Ok(self
-            .auth
-            .spark_service_client()
-            .await?
-            .finalize_node_signatures(req)
             .await?
             .into_inner())
     }

@@ -2,11 +2,13 @@ use bitcoin::{
     Address, Transaction,
     hashes::{Hash, sha256},
     params::Params,
+    secp256k1::PublicKey,
 };
 use std::collections::HashMap;
 use uuid::Uuid;
 
 use spark::{
+    bitcoin::BitcoinService,
     operator::rpc::{ConnectionManager, SparkRpcClient},
     services::{DepositAddress, DepositService},
     signer::Signer,
@@ -28,12 +30,20 @@ where
 impl<S: Signer + Clone> SparkWallet<S> {
     pub async fn new(config: SparkWalletConfig, signer: S) -> Result<Self, SparkWalletError> {
         let identity_public_key = signer.get_identity_public_key(0, config.network)?;
-        let cm = ConnectionManager::new();
-        let spark_service_channel = cm.get_channel(&config.get_coordinator().address).await?;
-        let spark_service_client = SparkRpcClient::new(spark_service_channel, signer.clone());
-
-        let deposit_service =
-            DepositService::new(spark_service_client, identity_public_key, config.network);
+        let connection_manager = ConnectionManager::new();
+        let spark_service_channel = connection_manager
+            .get_channel(&config.operator_pool.get_coordinator())
+            .await?;
+        let bitcoin_service = BitcoinService::new(config.network);
+        let spark_rpc_client = SparkRpcClient::new(spark_service_channel, signer.clone());
+        let deposit_service = DepositService::new(
+            bitcoin_service,
+            spark_rpc_client,
+            identity_public_key,
+            config.network,
+            config.operator_pool.clone(),
+            signer.clone(),
+        );
 
         Ok(SparkWallet {
             deposit_service,
@@ -67,6 +77,10 @@ impl<S: Signer + Clone> SparkWallet<S> {
                 continue;
             };
 
+            let signing_pubkey = self
+                .signer
+                .generate_public_key(sha256::Hash::hash(deposit_address.leaf_id.as_bytes()))
+                .await?;
             // TODO: If leaf id is actually optional:
             //   let signingPubKey: Uint8Array;
             //   if (!depositAddress.leafId) {
@@ -77,7 +91,9 @@ impl<S: Signer + Clone> SparkWallet<S> {
             //     );
             //   }
 
-            return self.finalize_deposit(deposit_address, tx, vout).await;
+            return self
+                .finalize_deposit(&signing_pubkey, deposit_address, tx, vout as u32)
+                .await;
         }
 
         Err(SparkWalletError::DepositAddressUsed)
@@ -85,13 +101,14 @@ impl<S: Signer + Clone> SparkWallet<S> {
 
     async fn finalize_deposit(
         &self,
+        signing_public_key: &PublicKey,
         address: &DepositAddress,
         tx: Transaction,
-        vout: usize,
+        vout: u32,
     ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
         let res = self
             .deposit_service
-            .create_tree_root(address, tx, vout)
+            .create_tree_root(signing_public_key, &address.verifying_public_key, tx, vout)
             .await?;
         todo!()
         // const resultingNodes: TreeNode[] = [];
