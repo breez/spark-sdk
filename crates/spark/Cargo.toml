@@ -9,7 +9,7 @@ bip32.workspace = true
 bitcoin = { workspace = true, features = ["rand"] }
 frost-core.workspace = true
 frost-secp256k1-tr.workspace = true
-hex = "0.4.3"
+hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 spark-protos.workspace = true
