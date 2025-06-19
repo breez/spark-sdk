@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use bip32::{ChildNumber, XPrv};
 use bitcoin::secp256k1::SecretKey;
+use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
 use bitcoin::{
-    NetworkKind,
     hashes::{Hash, sha256},
     key::Secp256k1,
     secp256k1::All,
@@ -23,7 +23,7 @@ use crate::{
 
 pub struct DefaultSigner {
     master_key: XPrv,
-    network: NetworkKind,
+    network: Network,
     nonce_commitments: Mutex<HashMap<Vec<u8>, SigningNonces>>, // TODO: Nonce commitments are never cleared, is this okay?
     private_key_map: Mutex<HashMap<PublicKey, SecretKey>>,     // TODO: Is this really the way?
     secp: Secp256k1<All>,
@@ -34,14 +34,11 @@ pub enum DefaultSignerError {
 }
 
 impl DefaultSigner {
-    pub fn new(
-        seed: [u8; 32],
-        network: impl Into<NetworkKind>,
-    ) -> Result<Self, DefaultSignerError> {
+    pub fn new(seed: [u8; 32], network: Network) -> Result<Self, DefaultSignerError> {
         let master_key = XPrv::new(&seed).map_err(|_| DefaultSignerError::InvalidSeed)?;
         Ok(DefaultSigner {
             master_key,
-            network: network.into(),
+            network,
             nonce_commitments: Mutex::new(HashMap::new()),
             private_key_map: Mutex::new(HashMap::new()),
             secp: Secp256k1::new(),
@@ -85,6 +82,15 @@ impl Signer for DefaultSigner {
         // frost_secp256k1_tr::round2::aggregate(signing_package, signature_shares, public_key_package)
     }
 
+    fn sign_message_ecdsa_with_identity_key<T: AsRef<[u8]>>(
+        &self,
+        message: T,
+        apply_hashing: bool,
+        network: Network,
+    ) -> Result<Signature, SignerError> {
+        todo!()
+    }
+
     async fn generate_frost_signing_commitments(&self) -> Result<SigningCommitments, SignerError> {
         let mut nonce_commitments = self.nonce_commitments.lock().await;
         let mut rng = thread_rng();
@@ -111,11 +117,7 @@ impl Signer for DefaultSigner {
         Ok(signing_key.public_key(&self.secp))
     }
 
-    fn get_identity_public_key(
-        &self,
-        account_index: u32,
-        network: Network,
-    ) -> Result<PublicKey, SignerError> {
+    fn get_identity_public_key(&self, account_index: u32) -> Result<PublicKey, SignerError> {
         todo!()
     }
 

@@ -1,6 +1,13 @@
+use super::OperatorRpcError;
 use super::error::Result;
+use crate::Network;
 use crate::signer::Signer;
+use prost::Message;
 use spark_protos::spark::spark_service_client::SparkServiceClient;
+use spark_protos::spark_authn::{
+    GetChallengeRequest, VerifyChallengeRequest,
+    spark_authn_service_client::SparkAuthnServiceClient,
+};
 use tokio::sync::Mutex;
 use tonic::Request;
 use tonic::Status;
@@ -16,6 +23,7 @@ where
 {
     channel: Channel,
     signer: S,
+    network: Network,
     session: Mutex<Option<OperationSession>>,
 }
 
@@ -29,10 +37,11 @@ impl<S> OperatorAuth<S>
 where
     S: Signer,
 {
-    pub fn new(channel: Channel, signer: S) -> Self {
+    pub fn new(channel: Channel, network: Network, signer: S) -> Self {
         Self {
             channel,
             signer,
+            network,
             session: Mutex::new(None),
         }
     }
@@ -55,14 +64,66 @@ where
             }
         }
 
-        let session = self.authenticate()?;
+        let session = self.authenticate().await?;
         self.session.lock().await.replace(session.clone());
         Ok(session)
     }
 
     // TODO: implement authentication with rpc call
-    fn authenticate(&self) -> Result<OperationSession> {
-        todo!()
+    async fn authenticate(&self) -> Result<OperationSession> {
+        let pk = self.signer.get_identity_public_key(0)?;
+        let challenge_req = GetChallengeRequest {
+            public_key: pk.serialize().to_vec(),
+        };
+
+        let mut auth_client = SparkAuthnServiceClient::new(self.channel.clone());
+
+        // get the challenge from Spark Authn Service
+        let spark_authn_response = auth_client
+            .get_challenge(Request::new(challenge_req))
+            .await?
+            .into_inner();
+
+        let protected_challenge = spark_authn_response.protected_challenge.unwrap();
+
+        // sign the challenge
+        let challenge =
+            protected_challenge
+                .challenge
+                .clone()
+                .ok_or(OperatorRpcError::Authentication(
+                    "Invalid challenge".to_string(),
+                ))?;
+
+        // Serialize the challenge to match what the server uses
+        let challenge_bytes = challenge.encode_to_vec(); // This is the same as proto.Marshal in Go.
+
+        let signature = self.signer.sign_message_ecdsa_with_identity_key(
+            &challenge_bytes,
+            true,
+            self.network,
+        )?;
+
+        let verify_req = VerifyChallengeRequest {
+            protected_challenge: Some(protected_challenge),
+            signature: signature.serialize_der().to_vec(),
+            public_key: pk.serialize().to_vec(),
+        };
+
+        let verify_resp = auth_client
+            .verify_challenge(Request::new(verify_req))
+            .await?
+            .into_inner();
+
+        let session = OperationSession {
+            token: verify_resp.session_token.parse().map_err(|_| {
+                OperatorRpcError::Authentication("Invalid session token".to_string())
+            })?,
+            expiration: verify_resp.expiration_timestamp.try_into().map_err(|_| {
+                OperatorRpcError::Authentication("Invalid expiration timestamp".to_string())
+            })?,
+        };
+        Ok(session)
     }
 }
 

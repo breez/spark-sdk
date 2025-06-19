@@ -13,6 +13,7 @@ hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 spark-protos.workspace = true
+prost.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tonic.workspace = true

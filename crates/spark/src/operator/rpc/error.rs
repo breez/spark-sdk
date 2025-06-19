@@ -20,6 +20,9 @@ pub enum OperatorRpcError {
 
     #[error("Unexpected error: {0}")]
     Unexpected(String),
+
+    #[error("Signer error: {0}")]
+    SignerError(#[from] crate::signer::SignerError),
 }
 
 pub type Result<T> = std::result::Result<T, OperatorRpcError>;

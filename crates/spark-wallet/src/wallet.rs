@@ -29,13 +29,15 @@ where
 
 impl<S: Signer + Clone> SparkWallet<S> {
     pub async fn new(config: SparkWalletConfig, signer: S) -> Result<Self, SparkWalletError> {
-        let identity_public_key = signer.get_identity_public_key(0, config.network)?;
+        let identity_public_key = signer.get_identity_public_key(0)?;
         let connection_manager = ConnectionManager::new();
         let spark_service_channel = connection_manager
             .get_channel(&config.operator_pool.get_coordinator())
             .await?;
         let bitcoin_service = BitcoinService::new(config.network);
-        let spark_rpc_client = SparkRpcClient::new(spark_service_channel, signer.clone());
+        let spark_rpc_client =
+            SparkRpcClient::new(spark_service_channel, config.network, signer.clone());
+
         let deposit_service = DepositService::new(
             bitcoin_service,
             spark_rpc_client,

@@ -3,7 +3,7 @@ mod error;
 
 use std::collections::BTreeMap;
 
-use bip32::secp256k1::ecdsa::Signature;
+use bitcoin::secp256k1::ecdsa::Signature;
 pub use default_signer::DefaultSigner;
 pub use error::SignerError;
 
@@ -26,13 +26,15 @@ pub trait Signer {
         self_signature: &SignatureShare,
         adaptor_pub_key: Option<PublicKey>,
     ) -> Result<frost_secp256k1_tr::Signature, SignerError>;
+    fn sign_message_ecdsa_with_identity_key<T: AsRef<[u8]>>(
+        &self,
+        message: T,
+        apply_hashing: bool,
+        network: Network,
+    ) -> Result<Signature, SignerError>;
     async fn generate_frost_signing_commitments(&self) -> Result<SigningCommitments, SignerError>;
     async fn generate_public_key(&self, hash: sha256::Hash) -> Result<PublicKey, SignerError>;
-    fn get_identity_public_key(
-        &self,
-        account_index: u32,
-        network: Network,
-    ) -> Result<PublicKey, SignerError>;
+    fn get_identity_public_key(&self, account_index: u32) -> Result<PublicKey, SignerError>;
     async fn sign_frost(
         &self,
         message: &[u8],

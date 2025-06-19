@@ -1555,6 +1555,7 @@ dependencies = [
  "frost-core",
  "frost-secp256k1-tr",
  "hex",
+ "prost",
  "serde",
  "serde_json",
  "spark-protos",
