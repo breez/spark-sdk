@@ -1341,12 +1341,13 @@ dependencies = [
  "async-trait",
  "bip32",
  "bitcoin",
- "log",
  "serde",
  "serde_json",
  "spark-protos",
  "thiserror",
+ "tokio",
  "tonic",
+ "tracing",
  "uuid",
 ]
 

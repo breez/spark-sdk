@@ -1,7 +1,7 @@
-use log::debug;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use tonic::transport::Channel;
+use tracing::debug;
 
 use super::error::{OperatorRpcError, Result};
 
@@ -17,8 +17,8 @@ impl ConnectionManager {
         }
     }
 
-    pub fn get_channel(&self, url: &str) -> Result<Channel> {
-        let mut map = self.connections_map.lock().unwrap();
+    pub async fn get_channel(&self, url: &str) -> Result<Channel> {
+        let mut map = self.connections_map.lock().await;
         let operator_connection = map.get(url);
         match operator_connection {
             Some(operator_connection) => Ok(operator_connection.clone()),

@@ -26,10 +26,10 @@ where
 }
 
 impl<S: Signer + Clone> SparkWallet<S> {
-    pub fn new(config: SparkWalletConfig, signer: S) -> Result<Self, SparkWalletError> {
+    pub async fn new(config: SparkWalletConfig, signer: S) -> Result<Self, SparkWalletError> {
         let identity_public_key = signer.get_identity_public_key(0, config.network)?;
         let cm = ConnectionManager::new();
-        let spark_service_channel = cm.get_channel(&config.get_coordinator().address)?;
+        let spark_service_channel = cm.get_channel(&config.get_coordinator().address).await?;
         let spark_service_client = SparkRpcClient::new(spark_service_channel, signer.clone());
 
         let deposit_service =
