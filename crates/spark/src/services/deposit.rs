@@ -40,6 +40,7 @@ where
     client: SparkRpcClient<S>,
     identity_public_key: PublicKey,
     network: Network,
+    signer: S,
 }
 
 pub struct DepositAddress {
@@ -61,11 +62,13 @@ where
         client: SparkRpcClient<S>,
         identity_public_key: PublicKey,
         network: impl Into<Network>,
+        signer: S,
     ) -> Self {
         DepositService {
             client,
             identity_public_key,
             network: network.into(),
+            signer,
         }
     }
 
