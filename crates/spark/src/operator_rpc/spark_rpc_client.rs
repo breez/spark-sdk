@@ -30,7 +30,7 @@ where
     ) -> Result<GenerateDepositAddressResponse> {
         Ok(self
             .auth
-            .spark_service_client()?
+            .spark_service_client().await?
             .generate_deposit_address(req)
             .await?
             .into_inner())
@@ -42,7 +42,7 @@ where
     ) -> Result<QueryUnusedDepositAddressesResponse> {
         Ok(self
             .auth
-            .spark_service_client()?
+            .spark_service_client().await?
             .query_unused_deposit_addresses(req)
             .await?
             .into_inner())

@@ -1,7 +1,7 @@
 use crate::operator_rpc::error::Result;
 use crate::signer::Signer;
 use spark_protos::spark::spark_service_client::SparkServiceClient;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use tonic::Request;
 use tonic::Status;
 use tonic::metadata::Ascii;
@@ -37,26 +37,27 @@ where
         }
     }
 
-    pub fn spark_service_client(
+    pub async fn spark_service_client(
         &self,
     ) -> Result<SparkServiceClient<InterceptedService<Channel, OperationSession>>> {
-        let session = self.get_authenticated_session()?;
+        let session = self.get_authenticated_session().await?;
         Ok(SparkServiceClient::with_interceptor(
             self.channel.clone(),
             session,
         ))
     }
 
-    pub fn get_authenticated_session(&self) -> Result<OperationSession> {
-        let session = self.session.lock().unwrap();
-        match session.as_ref() {
-            Some(session) => Ok(session.clone()),
-            None => {
-                let session = self.authenticate()?;
-                self.session.lock().unwrap().replace(session.clone());
-                Ok(session)
+    pub async fn get_authenticated_session(&self) -> Result<OperationSession> {
+        if let Some(session) = self.session.lock().await.as_ref() {
+            // Check if the session is still valid
+            if session.expiration > tokio::time::Instant::now().elapsed().as_secs() {
+                return Ok(session.clone());
             }
         }
+
+        let session = self.authenticate()?;
+        self.session.lock().await.replace(session.clone());
+        Ok(session)
     }
 
     // TODO: implement authentication with rpc call
