@@ -59,9 +59,7 @@ where
 
     // TODO: implement authentication with rpc call
     fn authenticate(&self) -> Result<OperationSession> {
-        let token = "token".to_string();
-        let expiration = 0;
-        Ok(OperationSession { token, expiration })
+        todo!()
     }
 }
 
