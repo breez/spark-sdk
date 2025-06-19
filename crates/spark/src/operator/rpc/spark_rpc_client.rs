@@ -4,6 +4,7 @@ use crate::signer::Signer;
 use spark_protos::spark::{
     GenerateDepositAddressRequest, GenerateDepositAddressResponse,
     QueryUnusedDepositAddressesRequest, QueryUnusedDepositAddressesResponse,
+    StartDepositTreeCreationRequest, StartDepositTreeCreationResponse,
 };
 use tonic::transport::Channel;
 
@@ -46,6 +47,19 @@ where
             .spark_service_client()
             .await?
             .query_unused_deposit_addresses(req)
+            .await?
+            .into_inner())
+    }
+
+    pub async fn start_deposit_tree_creation(
+        &self,
+        req: StartDepositTreeCreationRequest,
+    ) -> Result<StartDepositTreeCreationResponse> {
+        Ok(self
+            .auth
+            .spark_service_client()
+            .await?
+            .start_deposit_tree_creation(req)
             .await?
             .into_inner())
     }
