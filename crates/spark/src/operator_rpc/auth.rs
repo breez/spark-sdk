@@ -4,6 +4,8 @@ use spark_protos::spark::spark_service_client::SparkServiceClient;
 use std::sync::Mutex;
 use tonic::Request;
 use tonic::Status;
+use tonic::metadata::Ascii;
+use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
@@ -19,7 +21,7 @@ where
 
 #[derive(Clone)]
 pub(crate) struct OperationSession {
-    token: String,
+    token: MetadataValue<Ascii>,
     expiration: u64,
 }
 
@@ -66,7 +68,7 @@ where
 impl Interceptor for OperationSession {
     fn call(&mut self, mut req: Request<()>) -> std::result::Result<Request<()>, Status> {
         req.metadata_mut()
-            .insert("authorization", self.token.clone().parse().unwrap());
+            .insert("authorization", self.token.clone());
         Ok(req)
     }
 }
