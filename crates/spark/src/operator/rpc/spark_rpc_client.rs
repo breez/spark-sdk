@@ -25,6 +25,19 @@ where
         }
     }
 
+    pub async fn finalize_node_signatures(
+        &self,
+        req: spark_protos::spark::FinalizeNodeSignaturesRequest,
+    ) -> Result<spark_protos::spark::FinalizeNodeSignaturesResponse> {
+        Ok(self
+            .auth
+            .spark_service_client()
+            .await?
+            .finalize_node_signatures(req)
+            .await?
+            .into_inner())
+    }
+
     pub async fn generate_deposit_address(
         &self,
         req: GenerateDepositAddressRequest,

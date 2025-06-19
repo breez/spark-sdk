@@ -1,9 +1,57 @@
 use bitcoin::{Transaction, secp256k1::PublicKey};
 use frost_secp256k1_tr::Identifier;
 
-use crate::Network;
+pub enum TreeNodeStatus {
+    /// Creating is the status of a tree node that is under creation.
+    Creating,
+    /// Available is the status of a tree node that is available.
+    Available,
+    /// FrozenByIssuer is the status of a tree node that is frozen by the issuer.
+    FrozenByIssuer,
+    /// TransferLocked is the status of a tree node that is transfer locked.
+    TransferLocked,
+    /// SplitLocked is the status of a tree node that is split locked.
+    SplitLocked,
+    /// Splitted is the status of a tree node that is splitted.
+    Splitted,
+    /// Aggregated is the status of a tree node that is aggregated, this is a terminal state.
+    Aggregated,
+    /// OnChain is the status of a tree node that is on chain, this is a terminal state.
+    OnChain,
+    /// Exited is the status of a tree node where the whole tree exited, this is a terminal state.
+    Exited,
+    /// AggregateLock is the status of a tree node that is aggregate locked.
+    AggregateLock,
+    /// Investigation is the status of a tree node that is investigated.
+    Investigation,
+    /// Lost is the status of a tree node that is in a unrecoverable bad state.
+    Lost,
+    /// Reimbursed is the status of a tree node that is reimbursed after LOST.
+    Reimbursed,
+}
 
-pub enum TreeNodeStatus {}
+impl std::str::FromStr for TreeNodeStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "CREATING" => Ok(TreeNodeStatus::Creating),
+            "AVAILABLE" => Ok(TreeNodeStatus::Available),
+            "FROZEN_BY_ISSUER" => Ok(TreeNodeStatus::FrozenByIssuer),
+            "TRANSFER_LOCKED" => Ok(TreeNodeStatus::TransferLocked),
+            "SPLIT_LOCKED" => Ok(TreeNodeStatus::SplitLocked),
+            "SPLITTED" => Ok(TreeNodeStatus::Splitted),
+            "AGGREGATED" => Ok(TreeNodeStatus::Aggregated),
+            "ON_CHAIN" => Ok(TreeNodeStatus::OnChain),
+            "EXITED" => Ok(TreeNodeStatus::Exited),
+            "AGGREGATE_LOCK" => Ok(TreeNodeStatus::AggregateLock),
+            "INVESTIGATION" => Ok(TreeNodeStatus::Investigation),
+            "LOST" => Ok(TreeNodeStatus::Lost),
+            "REIMBURSED" => Ok(TreeNodeStatus::Reimbursed),
+            _ => Err(format!("Unknown TreeNodeStatus: {}", s)),
+        }
+    }
+}
 
 pub struct TreeNode {
     pub id: String,
@@ -14,7 +62,7 @@ pub struct TreeNode {
     pub refund_tx: Transaction,
     /// This vout is the vout to spend the previous transaction, which is in the
     /// parent node.
-    pub vout: usize,
+    pub vout: u32,
     pub verifying_public_key: PublicKey,
     pub owner_identity_public_key: PublicKey,
     /// The signing keyshare information of the node on the SE side.
