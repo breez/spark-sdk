@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use spark::{
-    operator_rpc::ConnectionManager,
+    operator_rpc::{ConnectionManager, SparkRpcClient},
     services::{DepositAddress, DepositService},
     signer::Signer,
 };
@@ -16,21 +16,21 @@ use crate::leaf::WalletLeaf;
 
 use super::{SparkWalletConfig, SparkWalletError};
 
-pub struct SparkWallet<S> {
+pub struct SparkWallet<S>
+where
+    S: Signer + Clone,
+{
     config: SparkWalletConfig,
-    deposit_service: DepositService,
+    deposit_service: DepositService<S>,
     signer: S,
 }
 
-impl<S> SparkWallet<S>
-where
-    S: Signer,
-{
+impl<S: Signer + Clone> SparkWallet<S> {
     pub fn new(config: SparkWalletConfig, signer: S) -> Result<Self, SparkWalletError> {
         let identity_public_key = signer.get_identity_public_key(0, config.network)?;
-        let cm = ConnectionManager::new()?;
-        let spark_service_client =
-            cm.get_spark_service_client(&config.get_coordinator().address)?;
+        let cm = ConnectionManager::new();
+        let spark_service_channel = cm.get_channel(&config.get_coordinator().address)?;
+        let spark_service_client = SparkRpcClient::new(spark_service_channel, signer.clone());
 
         let deposit_service =
             DepositService::new(spark_service_client, identity_public_key, config.network);

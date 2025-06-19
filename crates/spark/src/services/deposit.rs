@@ -6,12 +6,14 @@ use bitcoin::{
     secp256k1::PublicKey,
 };
 use thiserror::Error;
-use tonic::{Status, transport::Channel};
 
-use crate::{Network, cryptography::subtract_public_keys};
-use spark_protos::spark::{
-    GenerateDepositAddressRequest, spark_service_client::SparkServiceClient,
+use crate::{
+    Network,
+    cryptography::subtract_public_keys,
+    operator_rpc::{OperatorRpcError, SparkRpcClient},
+    signer::Signer,
 };
+use spark_protos::spark::GenerateDepositAddressRequest;
 
 #[derive(Debug, Error)]
 pub enum DepositServiceError {
@@ -28,11 +30,14 @@ pub enum DepositServiceError {
     #[error("invalid deposit address proof")]
     InvalidDepositAddressProof,
     #[error("service connection error: {0}")]
-    ServiceConnectionError(#[from] Status),
+    ServiceConnectionError(#[from] OperatorRpcError),
 }
 
-pub struct DepositService {
-    client: SparkServiceClient<Channel>,
+pub struct DepositService<S>
+where
+    S: Signer,
+{
+    client: SparkRpcClient<S>,
     identity_public_key: PublicKey,
     network: Network,
 }
@@ -44,13 +49,16 @@ pub struct DepositAddress {
     pub verifying_public_key: PublicKey,
 }
 
-impl DepositService {
+impl<S> DepositService<S>
+where
+    S: Signer,
+{
     fn spark_network(&self) -> spark_protos::spark::Network {
         self.network.into()
     }
 
     pub fn new(
-        client: SparkServiceClient<Channel>,
+        client: SparkRpcClient<S>,
         identity_public_key: PublicKey,
         network: impl Into<Network>,
     ) -> Self {
@@ -300,7 +308,7 @@ impl DepositService {
         is_static: bool,
     ) -> Result<DepositAddress, DepositServiceError> {
         let resp = self
-            .get_client()
+            .client
             .generate_deposit_address(GenerateDepositAddressRequest {
                 signing_public_key: signing_public_key.serialize().to_vec(),
                 identity_public_key: self.identity_public_key.serialize().to_vec(),
@@ -308,8 +316,7 @@ impl DepositService {
                 leaf_id: Some(leaf_id.clone()),
                 is_static: Some(is_static),
             })
-            .await?
-            .into_inner();
+            .await?;
 
         let Some(deposit_address) = resp.deposit_address else {
             return Err(DepositServiceError::MissingDepositAddress);
@@ -325,15 +332,14 @@ impl DepositService {
         &self,
     ) -> Result<Vec<DepositAddress>, DepositServiceError> {
         let resp = self
-            .get_client()
+            .client
             .query_unused_deposit_addresses(
                 spark_protos::spark::QueryUnusedDepositAddressesRequest {
                     identity_public_key: self.identity_public_key.serialize().to_vec(),
                     network: self.spark_network() as i32,
                 },
             )
-            .await?
-            .into_inner();
+            .await?;
 
         let addresses = resp
             .deposit_addresses
@@ -362,10 +368,6 @@ impl DepositService {
             .map_err(|_| DepositServiceError::InvalidDepositAddress)?;
 
         Ok(addresses)
-    }
-
-    fn get_client(&self) -> SparkServiceClient<Channel> {
-        self.client.clone()
     }
 
     fn proof_of_possession_message_hash(

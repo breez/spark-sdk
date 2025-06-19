@@ -1,5 +1,5 @@
 use thiserror::Error;
-use tonic::transport::Error as TonicError;
+use tonic::{Status, transport::Error as TonicError};
 
 #[derive(Error, Debug)]
 pub enum OperatorRpcError {
@@ -13,7 +13,7 @@ pub enum OperatorRpcError {
     Authentication(String),
 
     #[error("Connection error: {0}")]
-    Connection(String),
+    Connection(#[from] Status),
 
     #[error("Operator not found: {0}")]
     OperatorNotFound(String),

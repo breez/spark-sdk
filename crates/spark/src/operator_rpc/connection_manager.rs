@@ -1,51 +1,35 @@
-use std::sync::Mutex;
-
-use spark_protos::spark::spark_service_client::SparkServiceClient;
-
 use log::debug;
 use std::collections::HashMap;
+use std::sync::Mutex;
 use tonic::transport::Channel;
 
 use super::error::{OperatorRpcError, Result};
 
 pub struct ConnectionManager {
-    connections_map: Mutex<HashMap<String, OperatorConnection>>,
-}
-
-struct OperatorConnection {
-    channel: Channel,
+    connections_map: Mutex<HashMap<String, Channel>>,
 }
 
 impl ConnectionManager {
-    pub fn new() -> Result<ConnectionManager> {
+    pub fn new() -> ConnectionManager {
         let connections_map = HashMap::new();
-        Ok(Self {
+        Self {
             connections_map: Mutex::new(connections_map),
-        })
+        }
     }
 
-    //TODO: We should return here an authenticated client preferably with some middleware.
-    pub fn get_spark_service_client(&self, url: &str) -> Result<SparkServiceClient<Channel>> {
+    pub fn get_channel(&self, url: &str) -> Result<Channel> {
         let mut map = self.connections_map.lock().unwrap();
         let operator_connection = map.get(url);
         match operator_connection {
-            Some(operator_connection) => {
-                let channel = operator_connection.channel.clone();
-                Ok(SparkServiceClient::new(channel.clone()))
-            }
+            Some(operator_connection) => Ok(operator_connection.clone()),
             None => {
                 let channel = Channel::from_shared(url.to_string())
                     .map_err(|e| OperatorRpcError::InvalidUri(e.to_string()))?
                     .connect_lazy();
 
-                map.insert(
-                    url.to_string(),
-                    OperatorConnection {
-                        channel: channel.clone(),
-                    },
-                );
+                map.insert(url.to_string(), channel.clone());
                 debug!("Created new connection to operator: {}", url);
-                Ok(SparkServiceClient::new(channel))
+                Ok(channel)
             }
         }
     }
