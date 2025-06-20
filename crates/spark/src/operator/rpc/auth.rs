@@ -69,7 +69,6 @@ where
         Ok(session)
     }
 
-    // TODO: implement authentication with rpc call
     async fn authenticate(&self) -> Result<OperationSession> {
         let pk = self.signer.get_identity_public_key(0)?;
         let challenge_req = GetChallengeRequest {
@@ -84,7 +83,12 @@ where
             .await?
             .into_inner();
 
-        let protected_challenge = spark_authn_response.protected_challenge.unwrap();
+        let protected_challenge =
+            spark_authn_response
+                .protected_challenge
+                .ok_or(OperatorRpcError::Authentication(
+                    "Missing challenge".to_string(),
+                ))?;
 
         // sign the challenge
         let challenge =
