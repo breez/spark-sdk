@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:    
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.crate }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build
+        working-directory: crates/${{ matrix.crate }}
+        run: make build-target-${{ matrix.target }}
+
+      - name: Check git status
+        uses: ./.github/actions/check-git-status
+    strategy:
+      matrix:
+        crate:
+          - spark
+          - spark-protos
+          - spark-wallet
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - wasm32-unknown-unknown
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Clippy
+        run: make clippy-check
+
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Format Check
+        run: make fmt-check
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Tests
+        working-directory: crates/${{ matrix.crate }}
+        run: make test
+
+      - name: Check git status
+        uses: ./.github/actions/check-git-status
+    strategy:
+      matrix:
+        crate:
+          - spark
+          - spark-protos
+          - spark-wallet
+  
+  wasm-clippy:
+    name: Wasm clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          ssh-private-key: ${{ secrets.REPO_SSH_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Clippy
+        run: make wasm-clippy-check

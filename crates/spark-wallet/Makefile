@@ -8,8 +8,10 @@ build:
 build-release:
 	cargo build --release
 
-build-wasm: install-target-wasm32-unknown-unknown
-	$(CLANG_PREFIX) cargo build --target=wasm32-unknown-unknown
+build-target-%: install-target-%
+	$(CLANG_PREFIX) cargo build --target=$*
+
+build-wasm: build-target-wasm32-unknown-unknown
 
 check: fmt-check clippy-check wasm-clippy-check
 
