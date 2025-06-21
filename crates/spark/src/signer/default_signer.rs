@@ -57,8 +57,8 @@ impl DefaultSigner {
             SignerError::KeyDerivationError(format!("failed to derive child: {}", e))
         })?;
         SecretKey::from_slice(&child.private_key().to_bytes()).map_err(|e| {
-                SignerError::KeyDerivationError(format!("failed to create private key: {}", e))
-            })
+            SignerError::KeyDerivationError(format!("failed to create private key: {}", e))
+        })
     }
 }
 

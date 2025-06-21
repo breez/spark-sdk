@@ -137,13 +137,12 @@ where
         &self,
         req: ClaimTransferTweakKeysRequest,
     ) -> Result<()> {
-        self
-        .auth
-        .spark_service_client()
-        .await?
-        .claim_transfer_tweak_keys(req)
-        .await?
-        .into_inner();
+        self.auth
+            .spark_service_client()
+            .await?
+            .claim_transfer_tweak_keys(req)
+            .await?
+            .into_inner();
         Ok(())
     }
 
@@ -174,13 +173,12 @@ where
     }
 
     pub async fn store_preimage_share(&self, req: StorePreimageShareRequest) -> Result<()> {
-        self
-        .auth
-        .spark_service_client()
-        .await?
-        .store_preimage_share(req)
-        .await?
-        .into_inner();
+        self.auth
+            .spark_service_client()
+            .await?
+            .store_preimage_share(req)
+            .await?
+            .into_inner();
         Ok(())
     }
 
@@ -407,13 +405,12 @@ where
         &self,
         req: FinalizeTokenTransactionRequest,
     ) -> Result<()> {
-        self
-        .auth
-        .spark_service_client()
-        .await?
-        .finalize_token_transaction(req)
-        .await?
-        .into_inner();
+        self.auth
+            .spark_service_client()
+            .await?
+            .finalize_token_transaction(req)
+            .await?
+            .into_inner();
         Ok(())
     }
 
@@ -454,13 +451,12 @@ where
     }
 
     pub async fn return_lightning_payment(&self, req: ReturnLightningPaymentRequest) -> Result<()> {
-        self
-        .auth
-        .spark_service_client()
-        .await?
-        .return_lightning_payment(req)
-        .await?
-        .into_inner();
+        self.auth
+            .spark_service_client()
+            .await?
+            .return_lightning_payment(req)
+            .await?
+            .into_inner();
         Ok(())
     }
 

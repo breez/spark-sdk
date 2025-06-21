@@ -202,10 +202,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         // TODO: Validate the pending transfer contains the leaves we expect to transfer.
 
         let result_nodes = match pending_transfer {
-            Some(pending_transfer) => {
-                self.claim_transfer(&pending_transfer, false, 0, false)
-                    .await?
-            }
+            Some(pending_transfer) => self.claim_transfer(&pending_transfer, false, false).await?,
             None => vec![],
         };
 
@@ -219,7 +216,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
         &self,
         transfer: &Transfer,
         emit: bool,
-        retry_count: u32,
         optimize: bool,
     ) -> Result<Vec<TreeNode>, SparkWalletError> {
         let max_retries = 5;
@@ -228,67 +224,76 @@ impl<S: Signer + Clone> SparkWallet<S> {
 
         // TODO: Does this have to me run inside a mutex? The js sdk does this.
 
-        if retry_count >= max_retries {
-            // TODO: Return the last error instead of a generic error.
-            return Err(SparkWalletError::Generic(
-                "max retries exceeded".to_string(),
-            ));
-        }
+        let mut retry_count = 0;
+        loop {
+            if retry_count >= max_retries {
+                // TODO: Return the last error instead of a generic error.
+                return Err(SparkWalletError::Generic(
+                    "max retries exceeded".to_string(),
+                ));
+            }
 
-        // Introduce an exponential backoff delay before retrying.
-        if retry_count > 0 {
-            let delay_ms = (base_delay_ms * 2u64.pow(retry_count - 1)).min(max_delay_ms);
-            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-        }
+            // Introduce an exponential backoff delay before retrying.
+            if retry_count > 0 {
+                let delay_ms = (base_delay_ms * 2u64.pow(retry_count - 1)).min(max_delay_ms);
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
 
-        // TODO: Is this step really necessary? We expect to be claiming these leaves. If they don't exist on the remote, there is a problem. It seems like we shouldn't just ignore the missing ones.
-        let Ok(leaf_pubkey_map) = self
-            .transfer_service
-            .verify_pending_transfer(transfer)
-            .await
-        else {
-            return Box::pin(self.claim_transfer(transfer, emit, retry_count + 1, optimize)).await;
-        };
-
-        let mut leaves_to_claim = Vec::new();
-        for leaf in &transfer.leaves {
-            let Some(leaf_pubkey) = leaf_pubkey_map.get(&leaf.leaf.id) else {
-                continue;
+            // TODO: Is this step really necessary? We expect to be claiming these leaves. If they don't exist on the remote, there is a problem. It seems like we shouldn't just ignore the missing ones.
+            let leaf_pubkey_map = match self
+                .transfer_service
+                .verify_pending_transfer(transfer)
+                .await
+            {
+                Ok(map) => map,
+                Err(_) => {
+                    retry_count += 1;
+                    continue;
+                }
             };
 
-            leaves_to_claim.push(LeafKeyTweak {
-                node: leaf.leaf.clone(),
-                signing_public_key: *leaf_pubkey,
-                new_signing_public_key: self
-                    .signer
-                    .generate_public_key(sha256::Hash::hash(leaf.leaf.id.as_bytes()))?,
-            });
+            let mut leaves_to_claim = Vec::new();
+            for leaf in &transfer.leaves {
+                let Some(leaf_pubkey) = leaf_pubkey_map.get(&leaf.leaf.id) else {
+                    continue;
+                };
+                leaves_to_claim.push(LeafKeyTweak {
+                    node: leaf.leaf.clone(),
+                    signing_public_key: *leaf_pubkey,
+                    new_signing_public_key: self
+                        .signer
+                        .generate_public_key(sha256::Hash::hash(leaf.leaf.id.as_bytes()))?,
+                });
+            }
+
+            if leaves_to_claim.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            // TODO: Validate the resulting leaves are the ones we expect to claim.
+            let result = match self
+                .transfer_service
+                .claim_transfer(transfer, leaves_to_claim)
+                .await
+            {
+                Ok(res) => res,
+                Err(_) => {
+                    retry_count += 1;
+                    continue;
+                }
+            };
+
+            // TODO: If emit is true, emit an event here.
+            // TODO: Is this the right place to check timelocks? Perhaps a leaf manager should handle this?
+
+            let result = self.check_refresh_timelock_nodes(result).await?;
+            let result = self.check_extend_timelock_nodes(result).await?;
+            self.leaf_manager.add_leaves(&result).await;
+
+            // TODO: Optimize leaves if optimize is true and the transfer type is not counter swap. (or make leaf manager handle this)
+
+            return Ok(result);
         }
-
-        if leaves_to_claim.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // TODO: Validate the resulting leaves are the ones we expect to claim.
-        let Ok(result) = self
-            .transfer_service
-            .claim_transfer(transfer, leaves_to_claim)
-            .await
-        else {
-            return Box::pin(self.claim_transfer(transfer, emit, retry_count + 1, optimize)).await;
-        };
-
-        // TODO: If emit is true, emit an event here.
-
-        // TODO: Is this the right place to check timelocks? Perhaps a leaf manager should handle this?
-        let result = self.check_refresh_timelock_nodes(result).await?;
-        let result = self.check_extend_timelock_nodes(result).await?;
-
-        self.leaf_manager.add_leaves(&result).await;
-
-        // TODO: Optimize leaves if optimize is true and the transfer type is not counter swap. (or make leaf manager handle this)
-
-        Ok(result)
     }
 
     async fn check_extend_timelock_nodes(
