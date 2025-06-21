@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-spark = { workspace = true }
-thiserror.workspace = true
 bitcoin.workspace = true
+spark.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
 uuid.workspace = true

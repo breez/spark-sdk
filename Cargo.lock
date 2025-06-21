@@ -1583,6 +1583,7 @@ dependencies = [
  "bitcoin",
  "spark",
  "thiserror",
+ "tokio",
  "uuid",
 ]
 

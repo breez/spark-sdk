@@ -4,17 +4,20 @@ use bitcoin::{
     params::Params,
     secp256k1::PublicKey,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 use uuid::Uuid;
 
 use spark::{
     bitcoin::BitcoinService,
+    core::next_sequence,
+    leaves::LeafManager,
     operator::rpc::{ConnectionManager, SparkRpcClient},
-    services::{DepositAddress, DepositService},
+    services::{DepositAddress, DepositService, LeafKeyTweak, Transfer, TransferService},
     signer::Signer,
+    tree::{TreeNode, TreeNodeStatus},
 };
 
-use crate::leaf::WalletLeaf;
+use crate::leaf::{self, WalletLeaf};
 
 use super::{SparkWalletConfig, SparkWalletError};
 
@@ -24,7 +27,9 @@ where
 {
     config: SparkWalletConfig,
     deposit_service: DepositService<S>,
+    leaf_manager: LeafManager,
     signer: S,
+    transfer_service: TransferService<S>,
 }
 
 impl<S: Signer + Clone> SparkWallet<S> {
@@ -47,10 +52,14 @@ impl<S: Signer + Clone> SparkWallet<S> {
             signer.clone(),
         );
 
+        let transfer_service = TransferService::new(signer.clone());
+        let leaf_manager = LeafManager::new();
         Ok(SparkWallet {
             deposit_service,
             config,
+            leaf_manager,
             signer,
+            transfer_service,
         })
     }
 
@@ -81,8 +90,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
 
             let signing_pubkey = self
                 .signer
-                .generate_public_key(sha256::Hash::hash(deposit_address.leaf_id.as_bytes()))
-                .await?;
+                .generate_public_key(sha256::Hash::hash(deposit_address.leaf_id.as_bytes()))?;
             // TODO: If leaf id is actually optional:
             //   let signingPubKey: Uint8Array;
             //   if (!depositAddress.leafId) {
@@ -93,9 +101,11 @@ impl<S: Signer + Clone> SparkWallet<S> {
             //     );
             //   }
 
-            return self
+            let nodes = self
                 .finalize_deposit(&signing_pubkey, deposit_address, tx, vout as u32)
-                .await;
+                .await?;
+
+            return Ok(nodes.map(WalletLeaf::from).collect());
         }
 
         Err(SparkWalletError::DepositAddressUsed)
@@ -108,36 +118,38 @@ impl<S: Signer + Clone> SparkWallet<S> {
         tx: Transaction,
         vout: u32,
     ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
-        let res = self
+        let nodes = self
             .deposit_service
             .create_tree_root(signing_public_key, &address.verifying_public_key, tx, vout)
             .await?;
-        todo!()
-        // const resultingNodes: TreeNode[] = [];
-        // for (const node of res.nodes) {
-        //   if (node.status === "AVAILABLE") {
-        //     const { nodes } = await this.transferService.extendTimelock(
-        //       node,
-        //       signingPubKey,
-        //     );
 
-        //     for (const n of nodes) {
-        //       if (n.status === "AVAILABLE") {
-        //         const transfer = await this.transferLeavesToSelf(
-        //           [n],
-        //           signingPubKey,
-        //         );
-        //         resultingNodes.push(...transfer);
-        //       } else {
-        //         resultingNodes.push(n);
-        //       }
-        //     }
-        //   } else {
-        //     resultingNodes.push(node);
-        //   }
-        // }
+        // TODO: The `create_tree_root` result should probably be persisted in case below calls fail.
 
-        // return resultingNodes;
+        let mut resulting_nodes = Vec::new();
+        for node in nodes {
+            if node.status != TreeNodeStatus::Available {
+                resulting_nodes.push(node);
+                continue;
+            }
+
+            let nodes = self
+                .transfer_service
+                .extend_time_lock(&node, signing_public_key)
+                .await?;
+
+            for n in nodes {
+                if n.status == TreeNodeStatus::Available {
+                    let transfer = self
+                        .transfer_leaves_to_self(vec![n], signing_public_key)
+                        .await?;
+                    resulting_nodes.extend(transfer.into_iter());
+                } else {
+                    resulting_nodes.push(n);
+                }
+            }
+        }
+
+        Ok(resulting_nodes)
     }
 
     pub async fn generate_deposit_address(
@@ -146,11 +158,152 @@ impl<S: Signer + Clone> SparkWallet<S> {
     ) -> Result<Address, SparkWalletError> {
         let leaf_id = Uuid::now_v7();
         let hash = sha256::Hash::hash(leaf_id.as_bytes());
-        let signing_public_key = self.signer.generate_public_key(hash).await?;
+        let signing_public_key = self.signer.generate_public_key(hash)?;
         let address = self
             .deposit_service
             .generate_deposit_address(signing_public_key, leaf_id.to_string(), is_static)
             .await?;
         Ok(address.address)
+    }
+
+    async fn transfer_leaves_to_self(
+        &self,
+        leaves: Vec<TreeNode>,
+        signing_public_key: &PublicKey,
+    ) -> Result<Vec<TreeNode>, SparkWalletError> {
+        let leaf_key_tweaks = leaves
+            .iter()
+            .map(|leaf| {
+                let new_signing_public_key = self
+                    .signer
+                    .generate_public_key(sha256::Hash::hash(leaf.id.as_bytes()))?;
+                Ok(LeafKeyTweak {
+                    node: leaf.clone(),
+                    signing_public_key: signing_public_key.clone(),
+                    new_signing_public_key,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let transfer = self
+            .transfer_service
+            .send_transfer_with_key_tweaks(leaf_key_tweaks, signing_public_key)
+            .await?;
+
+        let pending_transfer = self.transfer_service.query_transfer(&transfer.id).await?;
+        let result_nodes = match pending_transfer {
+            Some(pending_transfer) => {
+                self.claim_transfer(&pending_transfer, false, 0, false)
+                    .await?
+            }
+            None => vec![],
+        };
+
+        self.leaf_manager.add_leaves(&result_nodes).await;
+        self.leaf_manager.remove_leaves(&leaves).await;
+
+        Ok(result_nodes)
+    }
+
+    async fn claim_transfer(
+        &self,
+        transfer: &Transfer,
+        emit: bool,
+        retry_count: u32,
+        optimize: bool,
+    ) -> Result<Vec<TreeNode>, SparkWalletError> {
+        let max_retries = 5;
+        let base_delay_ms = 1000;
+        let max_delay_ms = 10000;
+
+        // TODO: Does this have to me run inside a mutex? The js sdk does this.
+
+        if retry_count >= max_retries {
+            // TODO: Return the last error instead of a generic error.
+            return Err(SparkWalletError::Generic(
+                "max retries exceeded".to_string(),
+            ));
+        }
+
+        if retry_count > 0 {
+            let delay_ms = (base_delay_ms * 2u64.pow(retry_count - 1)).min(max_delay_ms);
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        }
+
+        let Ok(leaf_pubkey_map) = self
+            .transfer_service
+            .verify_pending_transfer(transfer)
+            .await
+        else {
+            return Box::pin(self.claim_transfer(transfer, emit, retry_count + 1, optimize)).await;
+        };
+
+        let mut leaves_to_claim = Vec::new();
+        for leaf in &transfer.leaves {
+            let Some(leaf_pubkey) = leaf_pubkey_map.get(&leaf.leaf.id) else {
+                continue;
+            };
+
+            leaves_to_claim.push(LeafKeyTweak {
+                node: leaf.leaf.clone(),
+                signing_public_key: *leaf_pubkey,
+                new_signing_public_key: self
+                    .signer
+                    .generate_public_key(sha256::Hash::hash(leaf.leaf.id.as_bytes()))?,
+            });
+        }
+
+        if leaves_to_claim.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let Ok(result) = self
+            .transfer_service
+            .claim_transfer(transfer, leaves_to_claim)
+            .await
+        else {
+            return Box::pin(self.claim_transfer(transfer, emit, retry_count + 1, optimize)).await;
+        };
+
+        // TODO: If emit is true, emit an event here.
+
+        let result = self.check_refresh_timelock_nodes(result).await?;
+        let result = self.check_extend_timelock_nodes(result).await?;
+
+        self.leaf_manager.add_leaves(&result).await;
+
+        // TODO: Optimize leaves if optimize is true and the transfer type is not counter swap.
+
+        Ok(result)
+    }
+
+    async fn check_extend_timelock_nodes(
+        &self,
+        nodes: Vec<TreeNode>,
+    ) -> Result<Vec<TreeNode>, SparkWalletError> {
+        todo!()
+    }
+
+    async fn check_refresh_timelock_nodes(
+        &self,
+        nodes: Vec<TreeNode>,
+    ) -> Result<Vec<TreeNode>, SparkWalletError> {
+        let mut nodes_to_refresh = Vec::new();
+        let mut valid_nodes = Vec::new();
+        for node in nodes {
+            // TODO: Is it really always true the first input contains the right sequence number?
+            let first_input = node
+                .refund_tx
+                .input
+                .first()
+                .ok_or(SparkWalletError::MissingRefundInput)?;
+
+            match next_sequence(first_input.sequence) {
+                Some(sequence) => todo!(),
+                None => todo!(),
+            }
+        }
+
+        todo!()
     }
 }

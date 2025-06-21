@@ -112,7 +112,7 @@ impl Signer for DefaultSigner {
 
         Ok(*commitments)
     }
-    async fn generate_public_key(&self, hash: sha256::Hash) -> Result<PublicKey, SignerError> {
+    fn generate_public_key(&self, hash: sha256::Hash) -> Result<PublicKey, SignerError> {
         let signing_key = self.derive_signing_key(hash)?;
         Ok(signing_key.public_key(&self.secp))
     }

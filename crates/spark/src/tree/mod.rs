@@ -1,6 +1,7 @@
-use bitcoin::{Transaction, secp256k1::PublicKey};
+use bitcoin::{secp256k1::PublicKey, Sequence, Transaction};
 use frost_secp256k1_tr::Identifier;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TreeNodeStatus {
     /// Creating is the status of a tree node that is under creation.
     Creating,
@@ -53,6 +54,7 @@ impl std::str::FromStr for TreeNodeStatus {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct TreeNode {
     pub id: String,
     pub tree_id: String,
@@ -71,6 +73,12 @@ pub struct TreeNode {
     // pub network: Network,
 }
 
+pub struct TreeNodeTransactionSequence {
+    pub next_sequence: Sequence,
+    pub needs_refresh: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct SigningKeyshare {
     /// The identifiers of the owners of the keyshare.
     pub owner_identifiers: Vec<Identifier>,

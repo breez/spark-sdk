@@ -79,7 +79,7 @@ where
         verifying_public_key: &PublicKey,
         deposit_tx: Transaction,
         vout: u32,
-    ) -> Result<TreeNode, DepositServiceError> {
+    ) -> Result<Vec<TreeNode>, DepositServiceError> {
         let deposit_txid = deposit_tx.compute_txid();
         let deposit_output = deposit_tx
             .output
@@ -379,28 +379,54 @@ where
             threshold: signing_keyshare.threshold,
         };
 
-        Ok(TreeNode {
-            id: finalized_root_node.id,
-            tree_id: finalized_root_node.tree_id,
-            value: finalized_root_node.value,
-            parent_node_id: finalized_root_node.parent_node_id,
-            node_tx: deserialize(&finalized_root_node.node_tx)
-                .map_err(|_| DepositServiceError::InvalidTransaction)?,
-            refund_tx: deserialize(&finalized_root_node.refund_tx)
-                .map_err(|_| DepositServiceError::InvalidTransaction)?,
-            vout: finalized_root_node.vout,
-            verifying_public_key: PublicKey::from_slice(&finalized_root_node.verifying_public_key)
-                .map_err(|_| DepositServiceError::InvalidVerifyingKey)?,
-            owner_identity_public_key: PublicKey::from_slice(
-                &finalized_root_node.owner_identity_public_key,
-            )
-            .map_err(|_| DepositServiceError::InvalidPublicKey)?,
-            signing_keyshare,
-            status: finalized_root_node
-                .status
-                .parse()
-                .map_err(|_| DepositServiceError::UnknownStatus(finalized_root_node.status))?,
-        })
+        let nodes = finalize_resp
+            .nodes
+            .into_iter()
+            .map(|node| {
+                let signing_keyshare = node
+                    .signing_keyshare
+                    .ok_or(DepositServiceError::MissingSigningKeyshare)?;
+                let signing_keyshare = SigningKeyshare {
+                    owner_identifiers: signing_keyshare
+                        .owner_identifiers
+                        .into_iter()
+                        .map(|id| {
+                            Ok(Identifier::deserialize(
+                                &hex::decode(&id)
+                                    .map_err(|_| DepositServiceError::InvalidIdentifier)?,
+                            )
+                            .map_err(|_| DepositServiceError::InvalidIdentifier)?)
+                        })
+                        .collect::<Result<Vec<_>, DepositServiceError>>()?,
+                    threshold: signing_keyshare.threshold,
+                };
+
+                Ok(TreeNode {
+                    id: node.id,
+                    tree_id: node.tree_id,
+                    value: node.value,
+                    parent_node_id: node.parent_node_id,
+                    node_tx: deserialize(&node.node_tx)
+                        .map_err(|_| DepositServiceError::InvalidTransaction)?,
+                    refund_tx: deserialize(&node.refund_tx)
+                        .map_err(|_| DepositServiceError::InvalidTransaction)?,
+                    vout: node.vout,
+                    verifying_public_key: PublicKey::from_slice(&node.verifying_public_key)
+                        .map_err(|_| DepositServiceError::InvalidVerifyingKey)?,
+                    owner_identity_public_key: PublicKey::from_slice(
+                        &node.owner_identity_public_key,
+                    )
+                    .map_err(|_| DepositServiceError::InvalidPublicKey)?,
+                    signing_keyshare,
+                    status: node
+                        .status
+                        .parse()
+                        .map_err(|_| DepositServiceError::UnknownStatus(node.status.clone()))?,
+                })
+            })
+            .collect::<Result<Vec<_>, DepositServiceError>>()?;
+
+        Ok(nodes)
     }
 
     pub async fn generate_deposit_address(

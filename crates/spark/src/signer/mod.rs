@@ -33,7 +33,7 @@ pub trait Signer {
         network: Network,
     ) -> Result<Signature, SignerError>;
     async fn generate_frost_signing_commitments(&self) -> Result<SigningCommitments, SignerError>;
-    async fn generate_public_key(&self, hash: sha256::Hash) -> Result<PublicKey, SignerError>;
+    fn generate_public_key(&self, hash: sha256::Hash) -> Result<PublicKey, SignerError>;
     fn get_identity_public_key(&self, account_index: u32) -> Result<PublicKey, SignerError>;
     async fn sign_frost(
         &self,

@@ -1,6 +1,8 @@
 mod deposit;
+mod transfer;
 
-pub use deposit::{DepositAddress, DepositService, DepositServiceError};
+pub use deposit::*;
+pub use transfer::*;
 
 impl From<crate::Network> for spark_protos::spark::Network {
     fn from(network: crate::Network) -> Self {
