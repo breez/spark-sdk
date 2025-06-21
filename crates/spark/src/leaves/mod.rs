@@ -7,6 +7,12 @@ pub struct LeafManager {
     leaves: Mutex<Vec<TreeNode>>,
 }
 
+impl Default for LeafManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LeafManager {
     pub fn new() -> Self {
         LeafManager {

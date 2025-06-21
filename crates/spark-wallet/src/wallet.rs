@@ -36,7 +36,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let identity_public_key = signer.get_identity_public_key(0)?;
         let connection_manager = ConnectionManager::new();
         let spark_service_channel = connection_manager
-            .get_channel(&config.operator_pool.get_coordinator())
+            .get_channel(config.operator_pool.get_coordinator())
             .await?;
         let bitcoin_service = BitcoinService::new(config.network);
         let spark_rpc_client =
@@ -185,7 +185,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
                     .generate_public_key(sha256::Hash::hash(leaf.id.as_bytes()))?;
                 Ok(LeafKeyTweak {
                     node: leaf.clone(),
-                    signing_public_key: signing_public_key.clone(),
+                    signing_public_key: *signing_public_key,
                     new_signing_public_key,
                 })
             })

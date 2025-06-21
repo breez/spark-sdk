@@ -225,9 +225,9 @@ where
             .signer
             .sign_frost(
                 &root_tx_sighash.to_byte_array(),
-                &signing_public_key,
-                &signing_public_key,
-                &verifying_public_key,
+                signing_public_key,
+                signing_public_key,
+                verifying_public_key,
                 &root_nonce_commitment,
                 node_tx_signing_nonce_commitments.clone(),
                 None,
@@ -237,9 +237,9 @@ where
             .signer
             .sign_frost(
                 &refund_tx_sighash.to_byte_array(),
-                &signing_public_key,
-                &signing_public_key,
-                &verifying_public_key,
+                signing_public_key,
+                signing_public_key,
+                verifying_public_key,
                 &refund_nonce_commitment,
                 refund_tx_signing_nonce_commitments.clone(),
                 None,
@@ -252,10 +252,10 @@ where
                 &root_tx_sighash.to_byte_array(),
                 node_tx_signature_shares,
                 node_tx_statechain_public_keys,
-                &verifying_public_key,
+                verifying_public_key,
                 node_tx_signing_nonce_commitments,
                 &root_nonce_commitment,
-                &signing_public_key,
+                signing_public_key,
                 &root_sig,
                 None,
             )
@@ -266,10 +266,10 @@ where
                 &root_tx_sighash.to_byte_array(),
                 refund_tx_signature_shares,
                 refund_tx_statechain_public_keys,
-                &verifying_public_key,
+                verifying_public_key,
                 refund_tx_signing_nonce_commitments,
                 &refund_nonce_commitment,
-                &signing_public_key,
+                signing_public_key,
                 &refund_sig,
                 None,
             )
@@ -307,11 +307,11 @@ where
                         .owner_identifiers
                         .into_iter()
                         .map(|id| {
-                            Ok(Identifier::deserialize(
+                            Identifier::deserialize(
                                 &hex::decode(&id)
                                     .map_err(|_| DepositServiceError::InvalidIdentifier)?,
                             )
-                            .map_err(|_| DepositServiceError::InvalidIdentifier)?)
+                            .map_err(|_| DepositServiceError::InvalidIdentifier)
                         })
                         .collect::<Result<Vec<_>, DepositServiceError>>()?,
                     threshold: signing_keyshare.threshold,
@@ -479,12 +479,12 @@ where
             // TODO: rather than using hex::encode here, we should define our own type for the frost identifier, and use a hashmap with the identifier as key here.
             let Some(operator_sig) = proof
                 .address_signatures
-                .get(&hex::encode(&operator.identifier.serialize()))
+                .get(&hex::encode(operator.identifier.serialize()))
             else {
                 return Err(DepositServiceError::InvalidDepositAddressProof);
             };
 
-            let Ok(operator_sig) = ecdsa::Signature::from_der(&operator_sig) else {
+            let Ok(operator_sig) = ecdsa::Signature::from_der(operator_sig) else {
                 return Err(DepositServiceError::InvalidDepositAddressProof);
             };
 

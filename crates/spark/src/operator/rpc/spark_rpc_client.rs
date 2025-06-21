@@ -137,13 +137,14 @@ where
         &self,
         req: ClaimTransferTweakKeysRequest,
     ) -> Result<()> {
-        Ok(self
-            .auth
-            .spark_service_client()
-            .await?
-            .claim_transfer_tweak_keys(req)
-            .await?
-            .into_inner())
+        self
+        .auth
+        .spark_service_client()
+        .await?
+        .claim_transfer_tweak_keys(req)
+        .await?
+        .into_inner();
+        Ok(())
     }
 
     pub async fn claim_transfer_sign_refunds(
@@ -173,13 +174,14 @@ where
     }
 
     pub async fn store_preimage_share(&self, req: StorePreimageShareRequest) -> Result<()> {
-        Ok(self
-            .auth
-            .spark_service_client()
-            .await?
-            .store_preimage_share(req)
-            .await?
-            .into_inner())
+        self
+        .auth
+        .spark_service_client()
+        .await?
+        .store_preimage_share(req)
+        .await?
+        .into_inner();
+        Ok(())
     }
 
     pub async fn get_signing_commitments(
@@ -405,13 +407,14 @@ where
         &self,
         req: FinalizeTokenTransactionRequest,
     ) -> Result<()> {
-        Ok(self
-            .auth
-            .spark_service_client()
-            .await?
-            .finalize_token_transaction(req)
-            .await?
-            .into_inner())
+        self
+        .auth
+        .spark_service_client()
+        .await?
+        .finalize_token_transaction(req)
+        .await?
+        .into_inner();
+        Ok(())
     }
 
     pub async fn freeze_tokens(&self, req: FreezeTokensRequest) -> Result<FreezeTokensResponse> {
@@ -451,13 +454,14 @@ where
     }
 
     pub async fn return_lightning_payment(&self, req: ReturnLightningPaymentRequest) -> Result<()> {
-        Ok(self
-            .auth
-            .spark_service_client()
-            .await?
-            .return_lightning_payment(req)
-            .await?
-            .into_inner())
+        self
+        .auth
+        .spark_service_client()
+        .await?
+        .return_lightning_payment(req)
+        .await?
+        .into_inner();
+        Ok(())
     }
 
     pub async fn query_static_deposit_addresses(

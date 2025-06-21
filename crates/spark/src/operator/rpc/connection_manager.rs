@@ -11,6 +11,12 @@ pub struct ConnectionManager {
     connections_map: Mutex<HashMap<String, Channel>>,
 }
 
+impl Default for ConnectionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConnectionManager {
     pub fn new() -> ConnectionManager {
         let connections_map = HashMap::new();

@@ -35,7 +35,7 @@ pub enum DefaultSignerError {
 
 impl DefaultSigner {
     pub fn new(seed: [u8; 32], network: Network) -> Result<Self, DefaultSignerError> {
-        let master_key = XPrv::new(&seed).map_err(|_| DefaultSignerError::InvalidSeed)?;
+        let master_key = XPrv::new(seed).map_err(|_| DefaultSignerError::InvalidSeed)?;
         Ok(DefaultSigner {
             master_key,
             network,
@@ -56,11 +56,9 @@ impl DefaultSigner {
         let child = self.master_key.derive_child(child_number).map_err(|e| {
             SignerError::KeyDerivationError(format!("failed to derive child: {}", e))
         })?;
-        Ok(
-            SecretKey::from_slice(&child.private_key().to_bytes()).map_err(|e| {
+        SecretKey::from_slice(&child.private_key().to_bytes()).map_err(|e| {
                 SignerError::KeyDerivationError(format!("failed to create private key: {}", e))
-            })?,
-        )
+            })
     }
 }
 

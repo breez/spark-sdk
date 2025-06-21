@@ -1,4 +1,4 @@
-use bitcoin::{network, params::Params};
+use bitcoin::params::Params;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Network {
