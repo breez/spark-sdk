@@ -90,7 +90,10 @@ impl<S> TransferService<S> {
         todo!()
     }
 
-    pub async fn query_transfer(&self, transfer_id: &str) -> Result<Option<Transfer>, TransferServiceError> {
+    pub async fn query_transfer(
+        &self,
+        transfer_id: &str,
+    ) -> Result<Option<Transfer>, TransferServiceError> {
         todo!()
     }
 

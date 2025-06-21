@@ -1,4 +1,7 @@
-use bitcoin::{relative::{Height, LockTime}, Sequence};
+use bitcoin::{
+    Sequence,
+    relative::{Height, LockTime},
+};
 
 pub const INITIAL_TIME_LOCK: u32 = 2000;
 pub const TIME_LOCK_INTERVAL: u32 = 100;

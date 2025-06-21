@@ -17,6 +17,9 @@ pub enum SparkWalletError {
     #[error("Operator RPC error: {0}")]
     OperatorRpcError(#[from] spark::operator::rpc::OperatorRpcError),
 
+    #[error("Transfer service error: {0}")]
+    TransferServiceError(#[from] spark::services::TransferServiceError),
+
     #[error("Generic error: {0}")]
     Generic(String),
 }

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use bitcoin::{
     Address, Amount, OutPoint, ScriptBuf, Transaction, TxIn, TxOut,
@@ -179,59 +179,25 @@ where
             })
             .await?;
 
-        let Some(root_node_signature_shares) = tree_resp.root_node_signature_shares else {
-            return Err(DepositServiceError::MissingTreeSignatures);
-        };
-
-        let Some(node_tx_signing_result) = root_node_signature_shares.node_tx_signing_result else {
-            return Err(DepositServiceError::MissingTreeSignatures);
-        };
-
-        let Some(refund_tx_signing_result) = root_node_signature_shares.refund_tx_signing_result
-        else {
-            return Err(DepositServiceError::MissingTreeSignatures);
-        };
+        let root_node_signature_shares = tree_resp
+            .root_node_signature_shares
+            .ok_or(DepositServiceError::MissingTreeSignatures)?;
+        let node_tx_signing_result = root_node_signature_shares
+            .node_tx_signing_result
+            .ok_or(DepositServiceError::MissingTreeSignatures)?;
+        let refund_tx_signing_result = root_node_signature_shares
+            .refund_tx_signing_result
+            .ok_or(DepositServiceError::MissingTreeSignatures)?;
 
         if node_tx_signing_result.signing_nonce_commitments.is_empty() {
             return Err(DepositServiceError::MissingTreeSignatures);
         }
 
-        let mut node_tx_signing_nonce_commitments = BTreeMap::new();
-        for (identifier, commitment) in node_tx_signing_result.signing_nonce_commitments {
-            let identifier = Identifier::deserialize(
-                &hex::decode(identifier).map_err(|_| DepositServiceError::InvalidIdentifier)?,
-            )
-            .map_err(|_| DepositServiceError::InvalidIdentifier)?;
-            let commitments = SigningCommitments::new(
-                NonceCommitment::deserialize(&commitment.hiding)
-                    .map_err(|_| DepositServiceError::InvalidSignatureShare)?,
-                NonceCommitment::deserialize(&commitment.binding)
-                    .map_err(|_| DepositServiceError::InvalidSignatureShare)?,
-            );
-            node_tx_signing_nonce_commitments.insert(identifier, commitments);
-        }
-
-        let mut node_tx_signature_shares = BTreeMap::new();
-        for (identifier, signature_share) in node_tx_signing_result.signature_shares {
-            let identifier = Identifier::deserialize(
-                &hex::decode(identifier).map_err(|_| DepositServiceError::InvalidIdentifier)?,
-            )
-            .map_err(|_| DepositServiceError::InvalidIdentifier)?;
-            let signature_share = SignatureShare::deserialize(&signature_share)
-                .map_err(|_| DepositServiceError::InvalidSignatureShare)?;
-            node_tx_signature_shares.insert(identifier, signature_share);
-        }
-
-        let mut node_tx_statechain_public_keys = BTreeMap::new();
-        for (identifier, public_key) in node_tx_signing_result.public_keys {
-            let identifier = Identifier::deserialize(
-                &hex::decode(identifier).map_err(|_| DepositServiceError::InvalidIdentifier)?,
-            )
-            .map_err(|_| DepositServiceError::InvalidIdentifier)?;
-            let public_key = PublicKey::from_slice(&public_key)
-                .map_err(|_| DepositServiceError::InvalidPublicKey)?;
-            node_tx_statechain_public_keys.insert(identifier, public_key);
-        }
+        let node_tx_signing_nonce_commitments =
+            map_signing_nonce_commitments(node_tx_signing_result.signing_nonce_commitments)?;
+        let node_tx_signature_shares =
+            map_signature_shares(node_tx_signing_result.signature_shares)?;
+        let node_tx_statechain_public_keys = map_public_keys(node_tx_signing_result.public_keys)?;
 
         if refund_tx_signing_result
             .signing_nonce_commitments
@@ -240,42 +206,12 @@ where
             return Err(DepositServiceError::MissingTreeSignatures);
         }
 
-        let mut refund_tx_signing_nonce_commitments = BTreeMap::new();
-        for (identifier, commitment) in refund_tx_signing_result.signing_nonce_commitments {
-            let identifier = Identifier::deserialize(
-                &hex::decode(identifier).map_err(|_| DepositServiceError::InvalidIdentifier)?,
-            )
-            .map_err(|_| DepositServiceError::InvalidIdentifier)?;
-            let commitments = SigningCommitments::new(
-                NonceCommitment::deserialize(&commitment.hiding)
-                    .map_err(|_| DepositServiceError::InvalidSignatureShare)?,
-                NonceCommitment::deserialize(&commitment.binding)
-                    .map_err(|_| DepositServiceError::InvalidSignatureShare)?,
-            );
-            refund_tx_signing_nonce_commitments.insert(identifier, commitments);
-        }
-
-        let mut refund_tx_signature_shares = BTreeMap::new();
-        for (identifier, signature_share) in refund_tx_signing_result.signature_shares {
-            let identifier = Identifier::deserialize(
-                &hex::decode(identifier).map_err(|_| DepositServiceError::InvalidIdentifier)?,
-            )
-            .map_err(|_| DepositServiceError::InvalidIdentifier)?;
-            let signature_share = SignatureShare::deserialize(&signature_share)
-                .map_err(|_| DepositServiceError::InvalidSignatureShare)?;
-            refund_tx_signature_shares.insert(identifier, signature_share);
-        }
-
-        let mut refund_tx_statechain_public_keys = BTreeMap::new();
-        for (identifier, public_key) in refund_tx_signing_result.public_keys {
-            let identifier = Identifier::deserialize(
-                &hex::decode(identifier).map_err(|_| DepositServiceError::InvalidIdentifier)?,
-            )
-            .map_err(|_| DepositServiceError::InvalidIdentifier)?;
-            let public_key = PublicKey::from_slice(&public_key)
-                .map_err(|_| DepositServiceError::InvalidPublicKey)?;
-            refund_tx_statechain_public_keys.insert(identifier, public_key);
-        }
+        let refund_tx_signing_nonce_commitments =
+            map_signing_nonce_commitments(refund_tx_signing_result.signing_nonce_commitments)?;
+        let refund_tx_signature_shares =
+            map_signature_shares(refund_tx_signing_result.signature_shares)?;
+        let refund_tx_statechain_public_keys =
+            map_public_keys(refund_tx_signing_result.public_keys)?;
 
         let tree_resp_verifying_key =
             PublicKey::from_slice(&root_node_signature_shares.verifying_key)
@@ -357,27 +293,7 @@ where
             })
             .await?;
 
-        let finalized_root_node = finalize_resp.nodes[0].clone();
-
-        // TODO: Insert the finalized root node into the leaf manager
-        // TODO: Verify the signatures and store the transactions?
-
-        let signing_keyshare = finalized_root_node
-            .signing_keyshare
-            .ok_or(DepositServiceError::MissingSigningKeyshare)?;
-        let signing_keyshare = SigningKeyshare {
-            owner_identifiers: signing_keyshare
-                .owner_identifiers
-                .into_iter()
-                .map(|id| {
-                    Ok(Identifier::deserialize(
-                        &hex::decode(&id).map_err(|_| DepositServiceError::InvalidIdentifier)?,
-                    )
-                    .map_err(|_| DepositServiceError::InvalidIdentifier)?)
-                })
-                .collect::<Result<Vec<_>, DepositServiceError>>()?,
-            threshold: signing_keyshare.threshold,
-        };
+        // TODO: Verify the returned tx signatures
 
         let nodes = finalize_resp
             .nodes
@@ -452,6 +368,8 @@ where
 
         let address =
             self.validate_deposit_address(deposit_address, signing_public_key, leaf_id)?;
+
+        // TODO: Watch this address for deposits
 
         Ok(address)
     }
@@ -530,6 +448,9 @@ where
         let verifying_public_key = PublicKey::from_slice(&deposit_address.verifying_key)
             .map_err(|_| DepositServiceError::InvalidDepositAddressProof)?;
 
+        // TODO: This way of generating a shared deposit address is not safe, as the operator can start
+        // with a public key, then substract the user's key to create the verifying key.
+        // Or maybe it is because of the operator signatures below.
         let operator_public_key = self
             .bitcoin_service
             .subtract_public_keys(&verifying_public_key, &user_signing_public_key)
@@ -537,6 +458,8 @@ where
         let taproot_key = self
             .bitcoin_service
             .compute_taproot_key_no_script(&operator_public_key);
+
+        // Note this is not a proof of possession really, but rather a commitment by the server that they associate the address with the user's identity.
         let msg = self.proof_of_possession_message_hash(&operator_public_key, &address);
         let msg = Message::from_digest(msg.to_byte_array());
         let proof_of_possession_signature =
@@ -597,4 +520,59 @@ fn marshal_frost_commitment(
     let binding = commitments.binding().serialize().unwrap();
 
     Ok(common::SigningCommitment { hiding, binding })
+}
+
+fn map_public_keys(
+    source: HashMap<String, Vec<u8>>,
+) -> Result<BTreeMap<Identifier, PublicKey>, DepositServiceError> {
+    let mut public_keys = BTreeMap::new();
+    for (identifier, public_key) in source {
+        let identifier = Identifier::deserialize(
+            &hex::decode(identifier).map_err(|_| DepositServiceError::InvalidIdentifier)?,
+        )
+        .map_err(|_| DepositServiceError::InvalidIdentifier)?;
+        let public_key = PublicKey::from_slice(&public_key)
+            .map_err(|_| DepositServiceError::InvalidPublicKey)?;
+        public_keys.insert(identifier, public_key);
+    }
+
+    Ok(public_keys)
+}
+
+fn map_signature_shares(
+    source: HashMap<String, Vec<u8>>,
+) -> Result<BTreeMap<Identifier, SignatureShare>, DepositServiceError> {
+    let mut signature_shares = BTreeMap::new();
+    for (identifier, signature_share) in source {
+        let identifier = Identifier::deserialize(
+            &hex::decode(identifier).map_err(|_| DepositServiceError::InvalidIdentifier)?,
+        )
+        .map_err(|_| DepositServiceError::InvalidIdentifier)?;
+        let signature_share = SignatureShare::deserialize(&signature_share)
+            .map_err(|_| DepositServiceError::InvalidSignatureShare)?;
+        signature_shares.insert(identifier, signature_share);
+    }
+
+    Ok(signature_shares)
+}
+
+fn map_signing_nonce_commitments(
+    source: HashMap<String, common::SigningCommitment>,
+) -> Result<BTreeMap<Identifier, SigningCommitments>, DepositServiceError> {
+    let mut nonce_commitments = BTreeMap::new();
+    for (identifier, commitment) in source {
+        let identifier = Identifier::deserialize(
+            &hex::decode(identifier).map_err(|_| DepositServiceError::InvalidIdentifier)?,
+        )
+        .map_err(|_| DepositServiceError::InvalidIdentifier)?;
+        let commitments = SigningCommitments::new(
+            NonceCommitment::deserialize(&commitment.hiding)
+                .map_err(|_| DepositServiceError::InvalidSignatureShare)?,
+            NonceCommitment::deserialize(&commitment.binding)
+                .map_err(|_| DepositServiceError::InvalidSignatureShare)?,
+        );
+        nonce_commitments.insert(identifier, commitments);
+    }
+
+    Ok(nonce_commitments)
 }

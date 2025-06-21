@@ -9,7 +9,6 @@ use uuid::Uuid;
 
 use spark::{
     bitcoin::BitcoinService,
-    core::next_sequence,
     leaves::LeafManager,
     operator::rpc::{ConnectionManager, SparkRpcClient},
     services::{DepositAddress, DepositService, LeafKeyTweak, Transfer, TransferService},
@@ -17,7 +16,7 @@ use spark::{
     tree::{TreeNode, TreeNodeStatus},
 };
 
-use crate::leaf::{self, WalletLeaf};
+use crate::leaf::WalletLeaf;
 
 use super::{SparkWalletConfig, SparkWalletError};
 
@@ -65,11 +64,14 @@ impl<S: Signer + Clone> SparkWallet<S> {
 
     // TODO: In the js sdk this function calls an electrum server to fetch the transaction hex based on a txid.
     // Intuitively this function is being called when you've already learned about a transaction, so it could be passed in directly.
+    /// Claims a deposit by finding the first unused deposit address in the transaction outputs.
     pub async fn claim_deposit(
         &self,
         tx: Transaction,
     ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
         // TODO: This entire function happens inside a txid mutex in the js sdk. It seems unnecessary here?
+
+        // TODO: It seems like the unused deposit addresses could be cached in the wallet, so we don't have to query them every time.
         let unused_addresses = self
             .deposit_service
             .query_unused_deposit_addresses()
@@ -79,6 +81,9 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .map(|addr| (addr.address.clone(), addr))
             .collect();
         let params: Params = self.config.network.into();
+
+        // TODO: Ensure all inputs are segwit inputs, so this tx is not malleable.
+        // Normally the tx should be already confirmed, but perhaps we get in trouble with a reorg?
         for (vout, output) in tx.output.iter().enumerate() {
             let Ok(address) = Address::from_script(&output.script_pubkey, &params) else {
                 continue;
@@ -105,7 +110,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
                 .finalize_deposit(&signing_pubkey, deposit_address, tx, vout as u32)
                 .await?;
 
-            return Ok(nodes.map(WalletLeaf::from).collect());
+            return Ok(nodes.into_iter().map(WalletLeaf::from).collect());
         }
 
         Err(SparkWalletError::DepositAddressUsed)
@@ -117,14 +122,15 @@ impl<S: Signer + Clone> SparkWallet<S> {
         address: &DepositAddress,
         tx: Transaction,
         vout: u32,
-    ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
+    ) -> Result<Vec<TreeNode>, SparkWalletError> {
         let nodes = self
             .deposit_service
             .create_tree_root(signing_public_key, &address.verifying_public_key, tx, vout)
             .await?;
 
-        // TODO: The `create_tree_root` result should probably be persisted in case below calls fail.
+        // TODO: The `create_tree_root` result should probably be persisted in case below calls fail. Persisting should include the transactions.
 
+        // TODO: Seems below can be more efficient.
         let mut resulting_nodes = Vec::new();
         for node in nodes {
             if node.status != TreeNodeStatus::Available {
@@ -183,14 +189,18 @@ impl<S: Signer + Clone> SparkWallet<S> {
                     new_signing_public_key,
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, SparkWalletError>>()?;
 
         let transfer = self
             .transfer_service
             .send_transfer_with_key_tweaks(leaf_key_tweaks, signing_public_key)
             .await?;
 
+        // TODO: Why is the transfer queried again after the send_transfer_with_key_tweaks above?
         let pending_transfer = self.transfer_service.query_transfer(&transfer.id).await?;
+
+        // TODO: Validate the pending transfer contains the leaves we expect to transfer.
+
         let result_nodes = match pending_transfer {
             Some(pending_transfer) => {
                 self.claim_transfer(&pending_transfer, false, 0, false)
@@ -225,11 +235,13 @@ impl<S: Signer + Clone> SparkWallet<S> {
             ));
         }
 
+        // Introduce an exponential backoff delay before retrying.
         if retry_count > 0 {
             let delay_ms = (base_delay_ms * 2u64.pow(retry_count - 1)).min(max_delay_ms);
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
         }
 
+        // TODO: Is this step really necessary? We expect to be claiming these leaves. If they don't exist on the remote, there is a problem. It seems like we shouldn't just ignore the missing ones.
         let Ok(leaf_pubkey_map) = self
             .transfer_service
             .verify_pending_transfer(transfer)
@@ -257,6 +269,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
             return Ok(Vec::new());
         }
 
+        // TODO: Validate the resulting leaves are the ones we expect to claim.
         let Ok(result) = self
             .transfer_service
             .claim_transfer(transfer, leaves_to_claim)
@@ -267,12 +280,13 @@ impl<S: Signer + Clone> SparkWallet<S> {
 
         // TODO: If emit is true, emit an event here.
 
+        // TODO: Is this the right place to check timelocks? Perhaps a leaf manager should handle this?
         let result = self.check_refresh_timelock_nodes(result).await?;
         let result = self.check_extend_timelock_nodes(result).await?;
 
         self.leaf_manager.add_leaves(&result).await;
 
-        // TODO: Optimize leaves if optimize is true and the transfer type is not counter swap.
+        // TODO: Optimize leaves if optimize is true and the transfer type is not counter swap. (or make leaf manager handle this)
 
         Ok(result)
     }
@@ -288,22 +302,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
         &self,
         nodes: Vec<TreeNode>,
     ) -> Result<Vec<TreeNode>, SparkWalletError> {
-        let mut nodes_to_refresh = Vec::new();
-        let mut valid_nodes = Vec::new();
-        for node in nodes {
-            // TODO: Is it really always true the first input contains the right sequence number?
-            let first_input = node
-                .refund_tx
-                .input
-                .first()
-                .ok_or(SparkWalletError::MissingRefundInput)?;
-
-            match next_sequence(first_input.sequence) {
-                Some(sequence) => todo!(),
-                None => todo!(),
-            }
-        }
-
         todo!()
     }
 }

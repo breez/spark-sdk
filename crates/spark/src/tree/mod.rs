@@ -1,4 +1,4 @@
-use bitcoin::{secp256k1::PublicKey, Sequence, Transaction};
+use bitcoin::{Sequence, Transaction, secp256k1::PublicKey};
 use frost_secp256k1_tr::Identifier;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
