@@ -28,6 +28,7 @@ jobs:
       - name: Check git status
         uses: ./.github/actions/check-git-status
     strategy:
+      fail-fast: false
       matrix:
         crate:
           - spark
