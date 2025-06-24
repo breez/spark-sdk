@@ -4,4 +4,7 @@ use thiserror::Error;
 pub enum TreeServiceError {
     #[error("insufficient funds")]
     InsufficientFunds,
+
+    #[error("illegal amount")]
+    IllegalAmount,
 }
