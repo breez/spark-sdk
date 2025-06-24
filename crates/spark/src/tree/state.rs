@@ -21,16 +21,21 @@ impl TreeState {
         let mut amount = 0;
         let mut nodes = vec![];
         let mut leaves = self.leaves.lock().unwrap().clone();
-        leaves.sort_by_key(|leaf| leaf.value);
+        leaves.sort_by(|a, b| b.value.cmp(&a.value));
 
+        let mut aggregated_amount: u32 = 0;
         for leaf in leaves {
+            aggregated_amount += leaf.value;
             if target_amount.saturating_sub(amount) >= leaf.value {
                 amount += leaf.value;
                 nodes.push(leaf);
             }
         }
         if amount < target_amount {
-            return Err(TreeServiceError::InsufficientFunds);
+            match aggregated_amount > target_amount {
+                true => return Err(TreeServiceError::UnselectableAmount),
+                false => return Err(TreeServiceError::InsufficientFunds),
+            }
         }
         Ok(nodes)
     }
