@@ -1,7 +1,12 @@
 // GraphQL mutation strings
+use super::fragments::{
+    COOP_EXIT_REQUEST_FIELDS, CURRENCY_AMOUNT_FIELDS, LEAVES_SWAP_REQUEST_FIELDS,
+    LIGHTNING_INVOICE_FIELDS, LIGHTNING_RECEIVE_REQUEST_FIELDS, LIGHTNING_SEND_REQUEST_FIELDS,
+    REQUEST_BASE_FIELDS, SWAP_LEAF_FIELDS, TRANSFER_FIELDS, with_fragments,
+};
 
 /// GetChallenge mutation
-pub const GET_CHALLENGE: &str = r#"
+const GET_CHALLENGE: &str = r#"
 mutation GetChallenge(
   $public_key: String!
 ) {
@@ -13,8 +18,12 @@ mutation GetChallenge(
 }
 "#;
 
+pub fn get_challenge() -> String {
+    GET_CHALLENGE.to_string()
+}
+
 /// VerifyChallenge mutation
-pub const VERIFY_CHALLENGE: &str = r#"
+const VERIFY_CHALLENGE: &str = r#"
 mutation VerifyChallenge(
   $protected_challenge: String!
   $signature: String!
@@ -33,8 +42,12 @@ mutation VerifyChallenge(
 }
 "#;
 
+pub fn verify_challenge() -> String {
+    VERIFY_CHALLENGE.to_string()
+}
+
 /// RequestLightningReceive mutation
-pub const REQUEST_LIGHTNING_RECEIVE: &str = r#"
+const REQUEST_LIGHTNING_RECEIVE: &str = r#"
 mutation RequestLightningReceive(
   $network: BitcoinNetwork!
   $amount_sats: Long!
@@ -58,85 +71,118 @@ mutation RequestLightningReceive(
     }
   ) {
     request {
-      id
-      status
-      invoice {
-        encoded_invoice
-        payment_hash
-        amount_sats
-        memo
-        expiry_timestamp
-      }
+      ...LightningReceiveRequestFields
     }
   }
 }
 "#;
+
+pub fn request_lightning_receive() -> String {
+    with_fragments(
+        REQUEST_LIGHTNING_RECEIVE,
+        &[
+            LIGHTNING_RECEIVE_REQUEST_FIELDS,
+            LIGHTNING_INVOICE_FIELDS,
+            REQUEST_BASE_FIELDS,
+            TRANSFER_FIELDS,
+            CURRENCY_AMOUNT_FIELDS,
+        ],
+    )
+}
 
 /// RequestLightningSend mutation
-pub const REQUEST_LIGHTNING_SEND: &str = r#"
-mutation RequestLightningSend($encoded_invoice: String!, $idempotency_key: String!) {
-  request_lightning_send(encoded_invoice: $encoded_invoice, idempotency_key: $idempotency_key) {
+const REQUEST_LIGHTNING_SEND: &str = r#"
+mutation RequestLightningSend(
+  $encoded_invoice: String!,
+  $idempotency_key: String!
+) {
+  request_lightning_send(input: {
+    encoded_invoice: $encoded_invoice,
+    idempotency_key: $idempotency_key
+  }) {
     request {
-      id
-      status
-      encoded_invoice
-      payment_hash
-      amount_sats
-      fee_sats
-      preimage
+      ...LightningSendRequestFields
     }
   }
 }
 "#;
 
+pub fn request_lightning_send() -> String {
+    with_fragments(
+        REQUEST_LIGHTNING_SEND,
+        &[
+            LIGHTNING_SEND_REQUEST_FIELDS,
+            REQUEST_BASE_FIELDS,
+            TRANSFER_FIELDS,
+            CURRENCY_AMOUNT_FIELDS,
+        ],
+    )
+}
+
 /// RequestCoopExit mutation
-pub const REQUEST_COOP_EXIT: &str = r#"
+const REQUEST_COOP_EXIT: &str = r#"
 mutation RequestCoopExit(
   $leaf_external_ids: [String!]!, 
   $withdrawal_address: String!, 
   $idempotency_key: String!,
   $exit_speed: ExitSpeed!
 ) {
-  request_coop_exit(
+  request_coop_exit(input: {
     leaf_external_ids: $leaf_external_ids, 
     withdrawal_address: $withdrawal_address, 
     idempotency_key: $idempotency_key,
     exit_speed: $exit_speed
-  ) {
+  }) {
     request {
-      id
-      status
-      leaf_external_ids
-      withdrawal_address
-      total_amount_sats
-      request_fee_sats
-      exit_fee_sats
-      exit_speed
+      ...CoopExitRequestFields
     }
   }
 }
 "#;
+
+pub fn request_coop_exit() -> String {
+    with_fragments(
+        REQUEST_COOP_EXIT,
+        &[
+            COOP_EXIT_REQUEST_FIELDS,
+            REQUEST_BASE_FIELDS,
+            TRANSFER_FIELDS,
+            CURRENCY_AMOUNT_FIELDS,
+        ],
+    )
+}
 
 /// CompleteCoopExit mutation
-pub const COMPLETE_COOP_EXIT: &str = r#"
-mutation CompleteCoopExit($user_outbound_transfer_external_id: String!, $coop_exit_request_id: String!) {
-  complete_coop_exit(user_outbound_transfer_external_id: $user_outbound_transfer_external_id, coop_exit_request_id: $coop_exit_request_id) {
+const COMPLETE_COOP_EXIT: &str = r#"
+mutation CompleteCoopExit(
+  $user_outbound_transfer_external_id: String!,
+  $coop_exit_request_id: String!
+) {
+  complete_coop_exit(input: {
+    user_outbound_transfer_external_id: $user_outbound_transfer_external_id,
+    coop_exit_request_id: $coop_exit_request_id
+  }) {
     request {
-      id
-      status
-      leaf_external_ids
-      withdrawal_address
-      total_amount_sats
-      request_fee_sats
-      exit_fee_sats
-      exit_speed
+      ...CoopExitRequestFields
     }
   }
 }
 "#;
 
+pub fn complete_coop_exit() -> String {
+    with_fragments(
+        COMPLETE_COOP_EXIT,
+        &[
+            COOP_EXIT_REQUEST_FIELDS,
+            REQUEST_BASE_FIELDS,
+            TRANSFER_FIELDS,
+            CURRENCY_AMOUNT_FIELDS,
+        ],
+    )
+}
+
 /// RequestLeavesSwap mutation
-pub const REQUEST_LEAVES_SWAP: &str = r#"
+const REQUEST_LEAVES_SWAP: &str = r#"
 mutation RequestLeavesSwap(
   $adaptor_pubkey: String!,
   $total_amount_sats: Int!,
@@ -145,54 +191,68 @@ mutation RequestLeavesSwap(
   $user_leaves: [String!]!,
   $idempotency_key: String!
 ) {
-  request_leaves_swap(
+  request_leaves_swap(input: {
     adaptor_pubkey: $adaptor_pubkey,
     total_amount_sats: $total_amount_sats,
     target_amount_sats: $target_amount_sats, 
     fee_sats: $fee_sats,
     user_leaves: $user_leaves,
     idempotency_key: $idempotency_key
-  ) {
+  }) {
     request {
-      id
-      status
-      total_amount_sats
-      target_amount_sats
-      fee_sats
-      user_leaves
-      adaptor_pubkey
+      ...LeavesSwapRequestFields
     }
   }
 }
 "#;
 
+pub fn request_leaves_swap() -> String {
+    with_fragments(
+        REQUEST_LEAVES_SWAP,
+        &[
+            LEAVES_SWAP_REQUEST_FIELDS,
+            SWAP_LEAF_FIELDS,
+            REQUEST_BASE_FIELDS,
+            TRANSFER_FIELDS,
+            CURRENCY_AMOUNT_FIELDS,
+        ],
+    )
+}
+
 /// CompleteLeavesSwap mutation
-pub const COMPLETE_LEAVES_SWAP: &str = r#"
+const COMPLETE_LEAVES_SWAP: &str = r#"
 mutation CompleteLeavesSwap(
   $adaptor_secret_key: String!,
   $user_outbound_transfer_external_id: String!,
   $leaves_swap_request_id: String!
 ) {
-  complete_leaves_swap(
+  complete_leaves_swap(input: {
     adaptor_secret_key: $adaptor_secret_key,
     user_outbound_transfer_external_id: $user_outbound_transfer_external_id,
     leaves_swap_request_id: $leaves_swap_request_id
-  ) {
+  }) {
     request {
-      id
-      status
-      total_amount_sats
-      target_amount_sats
-      fee_sats
-      user_leaves
-      adaptor_pubkey
+      ...LeavesSwapRequestFields
     }
   }
 }
 "#;
 
+pub fn complete_leaves_swap() -> String {
+    with_fragments(
+        COMPLETE_LEAVES_SWAP,
+        &[
+            LEAVES_SWAP_REQUEST_FIELDS,
+            SWAP_LEAF_FIELDS,
+            REQUEST_BASE_FIELDS,
+            TRANSFER_FIELDS,
+            CURRENCY_AMOUNT_FIELDS,
+        ],
+    )
+}
+
 /// ClaimStaticDeposit mutation
-pub const CLAIM_STATIC_DEPOSIT: &str = r#"
+const CLAIM_STATIC_DEPOSIT: &str = r#"
 mutation ClaimStaticDeposit(
   $transaction_id: String!,
   $output_index: Int!,
@@ -203,7 +263,7 @@ mutation ClaimStaticDeposit(
   $signature: String!,
   $quote_signature: String!
 ) {
-  claim_static_deposit(
+  claim_static_deposit(input: {
     transaction_id: $transaction_id,
     output_index: $output_index,
     network: $network,
@@ -212,11 +272,12 @@ mutation ClaimStaticDeposit(
     deposit_secret_key: $deposit_secret_key,
     signature: $signature,
     quote_signature: $quote_signature
-  ) {
-    deposit_value_sats
-    credit_value_sats
-    fee_sats
-    static_deposit_address
+  }) {
+    transfer_id
   }
 }
 "#;
+
+pub fn claim_static_deposit() -> String {
+    CLAIM_STATIC_DEPOSIT.to_string()
+}

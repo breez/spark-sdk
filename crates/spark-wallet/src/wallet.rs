@@ -12,6 +12,7 @@ use spark::{
     operator::rpc::{ConnectionManager, SparkRpcClient},
     services::{DepositAddress, DepositService, LeafKeyTweak, Transfer, TransferService},
     signer::Signer,
+    ssp::ServiceProvider,
     tree::{TreeNode, TreeNodeStatus, TreeState},
 };
 
@@ -24,6 +25,7 @@ where
     S: Signer + Clone,
 {
     config: SparkWalletConfig,
+    service_provider: ServiceProvider<S>,
     deposit_service: DepositService<S>,
     tree_state: TreeState,
     signer: S,
@@ -40,6 +42,11 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let bitcoin_service = BitcoinService::new(config.network);
         let spark_rpc_client =
             SparkRpcClient::new(spark_service_channel, config.network, signer.clone());
+        let service_provider = ServiceProvider::new(
+            config.service_provider_config.clone(),
+            config.network,
+            signer.clone(),
+        );
 
         let deposit_service = DepositService::new(
             bitcoin_service,
@@ -53,6 +60,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let transfer_service = TransferService::new(signer.clone());
         let tree_state = TreeState::new();
         Ok(SparkWallet {
+            service_provider,
             deposit_service,
             config,
             tree_state,
