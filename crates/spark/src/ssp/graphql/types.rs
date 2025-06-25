@@ -9,8 +9,6 @@ pub struct GraphQLClientOptions {
     pub base_url: String,
     /// Schema endpoint path (defaults to "graphql/spark/2025-03-19")
     pub schema_endpoint: Option<String>,
-    /// Identity public key for authentication
-    pub identity_public_key: String,
 }
 
 /// GraphQL query structure
