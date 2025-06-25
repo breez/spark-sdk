@@ -1,3 +1,4 @@
+pub mod address;
 pub mod bitcoin;
 pub mod core;
 pub mod leaves;
