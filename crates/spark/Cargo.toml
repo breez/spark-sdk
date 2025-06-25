@@ -5,11 +5,14 @@ edition = "2024"
 
 [dependencies]
 async-trait.workspace = true
+base64.workspace = true
 bip32.workspace = true
 bitcoin = { workspace = true, features = ["rand"] }
+chrono = { workspace = true, features = ["serde"] }
 frost-core.workspace = true
 frost-secp256k1-tr.workspace = true
 hex.workspace = true
+reqwest = { workspace = true, features = ["json"] }
 serde.workspace = true
 serde_json.workspace = true
 spark-protos.workspace = true
