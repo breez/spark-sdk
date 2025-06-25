@@ -1,6 +1,5 @@
 pub mod bitcoin;
 pub mod core;
-pub mod leaves;
 pub mod operator;
 pub mod services;
 pub mod signer;

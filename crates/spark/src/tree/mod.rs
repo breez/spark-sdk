@@ -89,3 +89,5 @@ pub struct SigningKeyshare {
 mod error;
 mod service;
 mod state;
+
+pub use state::TreeState;
