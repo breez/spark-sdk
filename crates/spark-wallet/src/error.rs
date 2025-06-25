@@ -5,6 +5,12 @@ pub enum SparkWalletError {
     #[error("Invalid address: {0}")]
     InvalidAddress(String),
 
+    #[error("Invalid output index")]
+    InvalidOutputIndex,
+
+    #[error("Not a deposit output")]
+    NotADepositOutput,
+
     #[error("Signer error: {0}")]
     SignerServiceError(#[from] spark::signer::SignerError),
 

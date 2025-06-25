@@ -1,10 +1,10 @@
 use bitcoin::{
-    Address, Transaction,
+    Address, Transaction, TxOut,
     hashes::{Hash, sha256},
     params::Params,
     secp256k1::PublicKey,
 };
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 use uuid::Uuid;
 
 use spark::{
@@ -68,52 +68,32 @@ impl<S: Signer + Clone> SparkWallet<S> {
     pub async fn claim_deposit(
         &self,
         tx: Transaction,
+        vout: usize,
     ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
         // TODO: This entire function happens inside a txid mutex in the js sdk. It seems unnecessary here?
+        // TODO: Ensure all inputs are segwit inputs, so this tx is not malleable. Normally the tx should be already confirmed, but perhaps we get in trouble with a reorg?
 
-        // TODO: It seems like the unused deposit addresses could be cached in the wallet, so we don't have to query them every time.
-        let unused_addresses = self
-            .deposit_service
-            .query_unused_deposit_addresses()
-            .await?;
-        let unused_addresses: HashMap<Address, DepositAddress> = unused_addresses
-            .into_iter()
-            .map(|addr| (addr.address.clone(), addr))
-            .collect();
         let params: Params = self.config.network.into();
 
-        // TODO: Ensure all inputs are segwit inputs, so this tx is not malleable.
-        // Normally the tx should be already confirmed, but perhaps we get in trouble with a reorg?
-        for (vout, output) in tx.output.iter().enumerate() {
-            let Ok(address) = Address::from_script(&output.script_pubkey, &params) else {
-                continue;
-            };
+        let output: &TxOut = tx
+            .output
+            .get(vout)
+            .ok_or(SparkWalletError::InvalidOutputIndex)?;
+        let address = Address::from_script(&output.script_pubkey, params)
+            .map_err(|_| SparkWalletError::NotADepositOutput)?;
+        let deposit_address = self
+            .deposit_service
+            .get_unused_deposit_address(&address)
+            .await?
+            .ok_or(SparkWalletError::DepositAddressUsed)?;
+        let signing_pubkey = self
+            .signer
+            .generate_public_key(sha256::Hash::hash(deposit_address.leaf_id.as_bytes()))?;
+        let nodes = self
+            .finalize_deposit(&signing_pubkey, &deposit_address, tx, vout as u32)
+            .await?;
 
-            let Some(deposit_address) = unused_addresses.get(&address) else {
-                continue;
-            };
-
-            let signing_pubkey = self
-                .signer
-                .generate_public_key(sha256::Hash::hash(deposit_address.leaf_id.as_bytes()))?;
-            // TODO: If leaf id is actually optional:
-            //   let signingPubKey: Uint8Array;
-            //   if (!depositAddress.leafId) {
-            //     signingPubKey = depositAddress.userSigningPublicKey;
-            //   } else {
-            //     signingPubKey = await this.config.signer.generatePublicKey(
-            //       sha256(depositAddress.leafId),
-            //     );
-            //   }
-
-            let nodes = self
-                .finalize_deposit(&signing_pubkey, deposit_address, tx, vout as u32)
-                .await?;
-
-            return Ok(nodes.into_iter().map(WalletLeaf::from).collect());
-        }
-
-        Err(SparkWalletError::DepositAddressUsed)
+        Ok(nodes.into_iter().map(WalletLeaf::from).collect())
     }
 
     async fn finalize_deposit(
@@ -130,7 +110,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
 
         // TODO: The `create_tree_root` result should probably be persisted in case below calls fail. Persisting should include the transactions.
 
-        // TODO: Seems below can be more efficient.
+        // TODO: This step is leaf optimization. This should go in a separate service.
         let mut resulting_nodes = Vec::new();
         for node in nodes {
             if node.status != TreeNodeStatus::Available {
@@ -169,6 +149,9 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .deposit_service
             .generate_deposit_address(signing_public_key, leaf_id.to_string(), is_static)
             .await?;
+
+        // TODO: Watch this address for deposits.
+
         Ok(address.address)
     }
 

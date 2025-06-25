@@ -369,9 +369,19 @@ where
         let address =
             self.validate_deposit_address(deposit_address, signing_public_key, leaf_id)?;
 
-        // TODO: Watch this address for deposits
-
         Ok(address)
+    }
+
+    pub async fn get_unused_deposit_address(
+        &self,
+        address: &Address,
+    ) -> Result<Option<DepositAddress>, DepositServiceError> {
+        // TODO: unused deposit addresses could be cached in the wallet, so they don't have to be queried from the server every time.
+        Ok(self
+            .query_unused_deposit_addresses()
+            .await?
+            .into_iter()
+            .find(|d| &d.address == address))
     }
 
     pub async fn query_unused_deposit_addresses(
