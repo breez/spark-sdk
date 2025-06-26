@@ -85,14 +85,24 @@ impl<S: Signer + Clone> SparkWallet<S> {
         invoice: &String,
     ) -> Result<LightningSendPayment, SparkWalletError> {
         let leaves = self.leaf_manager.get_leaves().await;
-        PayLightningInvoice::new(
-            self.lightning_service.clone(),
-            self.transfer_service.clone(),
-            invoice.clone(),
-            leaves.clone(),
-        )
-        .execute()
-        .await
+
+        // start the lightning swap with the operator
+        let swap = self
+            .lightning_service
+            .start_lightning_swap(invoice, &leaves)
+            .await?;
+
+        // send the leaves to the operator
+        let _ = self
+            .transfer_service
+            .send_transfer_with_key_tweaks(&swap.leaves, &swap.receiver_identity_public_key)
+            .await?;
+
+        // finalize the lightning swap with the ssp - send the actual lightning payment
+        Ok(self
+            .lightning_service
+            .finalize_lightning_swap(&swap)
+            .await?)
     }
     // TODO: In the js sdk this function calls an electrum server to fetch the transaction hex based on a txid.
     // Intuitively this function is being called when you've already learned about a transaction, so it could be passed in directly.
