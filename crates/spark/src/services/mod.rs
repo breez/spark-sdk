@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use bitcoin::consensus::Encodable;
 pub use deposit::*;
 pub use error::*;
-pub use lightning::LightningService;
+pub use lightning::{LightningSendPayment, LightningService};
 pub use transfer::*;
 
 use frost_secp256k1_tr::{

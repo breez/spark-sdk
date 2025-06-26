@@ -245,7 +245,7 @@ impl<S: Signer> TransferService<S> {
 
     pub async fn send_transfer_with_key_tweaks(
         &self,
-        tweaks: Vec<LeafKeyTweak>,
+        tweaks: &Vec<LeafKeyTweak>,
         receiver_public_key: &PublicKey,
     ) -> Result<Transfer, TransferServiceError> {
         todo!()

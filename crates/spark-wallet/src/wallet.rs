@@ -80,7 +80,10 @@ impl<S: Signer + Clone> SparkWallet<S> {
         })
     }
 
-    pub async fn pay_lightning_invoice(&self, invoice: &String) -> Result<Uuid, SparkWalletError> {
+    pub async fn pay_lightning_invoice(
+        &self,
+        invoice: &String,
+    ) -> Result<LightningSendPayment, SparkWalletError> {
         let leaves = self.leaf_manager.get_leaves().await;
         PayLightningInvoice::new(
             self.lightning_service.clone(),

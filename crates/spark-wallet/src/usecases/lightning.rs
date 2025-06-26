@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
 use spark::{
-    services::{LightningService, TransferService},
+    services::{LightningSendPayment, LightningService, TransferService},
     signer::Signer,
     tree::TreeNode,
 };
-use uuid::Uuid;
 
 use crate::SparkWalletError;
 
@@ -34,15 +33,18 @@ impl<S: Signer + Clone> PayLightningInvoice<S> {
         }
     }
 
-    pub async fn execute(&self) -> Result<Uuid, SparkWalletError> {
+    pub async fn execute(&self) -> Result<LightningSendPayment, SparkWalletError> {
         let swap = self
             .lightning_service
             .start_lightning_swap(&self.invoice, &self.leaves)
             .await?;
-        let transfer = self
+        let _ = self
             .transfer_service
-            .send_transfer_with_key_tweaks(swap.leaves, &swap.receiver_identity_public_key)
+            .send_transfer_with_key_tweaks(&swap.leaves, &swap.receiver_identity_public_key)
             .await?;
-        Ok(transfer.id)
+        Ok(self
+            .lightning_service
+            .finalize_lightning_swap(&swap)
+            .await?)
     }
 }
