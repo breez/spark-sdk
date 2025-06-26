@@ -1,4 +1,4 @@
-use spark::{operator::OperatorPool, ssp::ServiceProviderConfig, Network};
+use spark::{Network, operator::OperatorPool, ssp::ServiceProviderConfig};
 
 pub struct SparkWalletConfig {
     pub network: Network,

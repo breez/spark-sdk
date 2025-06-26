@@ -119,4 +119,4 @@ mod error;
 mod service;
 mod state;
 
-pub use state::TreeState;
+pub use {error::TreeServiceError, service::TreeService, state::TreeState};

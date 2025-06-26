@@ -80,7 +80,6 @@ impl<S> TransferService<S> {
     pub async fn extend_time_lock(
         &self,
         node: &TreeNode,
-        signing_public_key: &PublicKey,
     ) -> Result<Vec<TreeNode>, TransferServiceError> {
         todo!()
     }
@@ -90,6 +89,13 @@ impl<S> TransferService<S> {
         tweaks: Vec<LeafKeyTweak>,
         receiver_public_key: &PublicKey,
     ) -> Result<Transfer, TransferServiceError> {
+        todo!()
+    }
+
+    pub async fn transfer_leaves_to_self(
+        &self,
+        leaves: Vec<TreeNode>,
+    ) -> Result<Vec<TreeNode>, TransferServiceError> {
         todo!()
     }
 

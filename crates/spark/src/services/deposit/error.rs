@@ -7,6 +7,8 @@ use crate::operator::rpc::OperatorRpcError;
 pub enum DepositServiceError {
     #[error("bitcoin error: {0}")]
     BitcoinError(#[from] crate::bitcoin::BitcoinError),
+    #[error("deposit address already used")]
+    DepositAddressUsed,
     #[error("invalid deposit address")]
     InvalidDepositAddress,
     #[error("invalid deposit address network")]
@@ -37,6 +39,8 @@ pub enum DepositServiceError {
     InvalidTransaction,
     #[error("invalid verifying key")]
     InvalidVerifyingKey,
+    #[error("not a deposit output")]
+    NotADepositOutput,
     #[error("request error: {0}")]
     RequestError(#[from] Status),
     #[error("signer error: {0}")]

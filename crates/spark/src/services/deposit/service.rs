@@ -6,6 +6,7 @@ use bitcoin::{
     address::NetworkUnchecked,
     consensus::{deserialize, serialize},
     hashes::{Hash, sha256},
+    params::Params,
     secp256k1::{Message, PublicKey, ecdsa, schnorr},
     transaction::Version,
 };
@@ -73,7 +74,40 @@ where
         }
     }
 
-    pub async fn create_tree_root(
+    pub async fn claim_deposit(
+        &self,
+        deposit_tx: Transaction,
+        vout: u32,
+    ) -> Result<Vec<TreeNode>, DepositServiceError> {
+        // TODO: Ensure all inputs are segwit inputs, so this tx is not malleable. Normally the tx should be already confirmed, but perhaps we get in trouble with a reorg?
+
+        let params: Params = self.network.into();
+
+        let output: &TxOut = deposit_tx
+            .output
+            .get(vout as usize)
+            .ok_or(DepositServiceError::InvalidOutputIndex)?;
+        let address = Address::from_script(&output.script_pubkey, params)
+            .map_err(|_| DepositServiceError::NotADepositOutput)?;
+        let deposit_address = self
+            .get_unused_deposit_address(&address)
+            .await?
+            .ok_or(DepositServiceError::DepositAddressUsed)?;
+        let signing_public_key = self
+            .signer
+            .get_public_key_for_node(&deposit_address.leaf_id)?;
+        let nodes = self
+            .create_tree_root(
+                &signing_public_key,
+                &deposit_address.verifying_public_key,
+                deposit_tx,
+                vout,
+            )
+            .await?;
+        Ok(nodes)
+    }
+
+    async fn create_tree_root(
         &self,
         signing_public_key: &PublicKey,
         verifying_public_key: &PublicKey,

@@ -8,6 +8,9 @@ pub enum TreeServiceError {
     #[error("unselectable amount")]
     UnselectableAmount,
 
+    #[error("transfer service error: {0}")]
+    TransferServiceError(#[from] crate::services::TransferServiceError),
+
     #[error("illegal amount")]
     IllegalAmount,
 }

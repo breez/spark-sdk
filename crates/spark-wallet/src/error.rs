@@ -26,6 +26,9 @@ pub enum SparkWalletError {
     #[error("Transfer service error: {0}")]
     TransferServiceError(#[from] spark::services::TransferServiceError),
 
+    #[error("Tree service error: {0}")]
+    TreeServiceError(#[from] spark::tree::TreeServiceError),
+
     #[error("Generic error: {0}")]
     Generic(String),
 }
