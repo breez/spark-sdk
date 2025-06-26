@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build ${{ matrix.crate }}
+    name: Build ${{ matrix.crate }} ${{ matrix.target }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,8 +36,6 @@ jobs:
           - spark-wallet
         target:
           - x86_64-unknown-linux-gnu
-          - aarch64-unknown-linux-gnu
-          - wasm32-unknown-unknown
 
   clippy:
     name: Clippy
@@ -95,7 +93,6 @@ jobs:
       - name: Setup build environment
         uses: ./.github/actions/setup-build
         with:
-          ssh-private-key: ${{ secrets.REPO_SSH_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Clippy
