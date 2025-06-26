@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use bitcoin::{Transaction, secp256k1::PublicKey};
 
-use crate::{services::transfer::TransferServiceError, tree::TreeNode};
+use crate::{
+    services::transfer::TransferServiceError,
+    tree::{TreeNode, TreeNodeId},
+};
 
 pub struct LeafKeyTweak {
     pub node: TreeNode,
@@ -100,7 +103,7 @@ impl<S> TransferService<S> {
     pub async fn verify_pending_transfer(
         &self,
         transfer: &Transfer,
-    ) -> Result<HashMap<String, PublicKey>, TransferServiceError> {
+    ) -> Result<HashMap<TreeNodeId, PublicKey>, TransferServiceError> {
         todo!()
     }
 }

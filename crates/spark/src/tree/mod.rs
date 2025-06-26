@@ -1,5 +1,8 @@
+use std::str::FromStr;
+
 use bitcoin::{Sequence, Transaction, secp256k1::PublicKey};
 use frost_secp256k1_tr::Identifier;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TreeNodeStatus {
@@ -56,10 +59,10 @@ impl std::str::FromStr for TreeNodeStatus {
 
 #[derive(Debug, Clone)]
 pub struct TreeNode {
-    pub id: String,
+    pub id: TreeNodeId,
     pub tree_id: String,
     pub value: u64,
-    pub parent_node_id: Option<String>,
+    pub parent_node_id: Option<TreeNodeId>,
     pub node_tx: Transaction,
     pub refund_tx: Transaction,
     /// This vout is the vout to spend the previous transaction, which is in the
@@ -71,6 +74,32 @@ pub struct TreeNode {
     pub signing_keyshare: SigningKeyshare,
     pub status: TreeNodeStatus,
     // pub network: Network,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TreeNodeId(String);
+
+impl TreeNodeId {
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7().to_string())
+    }
+}
+
+impl std::fmt::Display for TreeNodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for TreeNodeId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err("TreeNodeId cannot be empty".to_string());
+        }
+        Ok(TreeNodeId(s.to_string()))
+    }
 }
 
 pub struct TreeNodeTransactionSequence {

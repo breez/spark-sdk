@@ -16,6 +16,7 @@ use frost_secp256k1_tr::round1::{SigningCommitments, SigningNonces};
 use frost_secp256k1_tr::round2::SignatureShare;
 use tokio::sync::Mutex;
 
+use crate::tree::TreeNodeId;
 use crate::{
     Network,
     signer::{Signer, SignerError},
@@ -110,7 +111,8 @@ impl Signer for DefaultSigner {
 
         Ok(*commitments)
     }
-    fn generate_public_key(&self, hash: sha256::Hash) -> Result<PublicKey, SignerError> {
+    fn generate_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError> {
+        let hash = sha256::Hash::hash(id.to_string().as_bytes());
         let signing_key = self.derive_signing_key(hash)?;
         Ok(signing_key.public_key(&self.secp))
     }

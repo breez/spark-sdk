@@ -25,6 +25,8 @@ pub enum DepositServiceError {
     MissingLeafId,
     #[error("invalid deposit address proof")]
     InvalidDepositAddressProof,
+    #[error("invalid node id: '{0}'")]
+    InvalidNodeId(String),
     #[error("invalid output index")]
     InvalidOutputIndex,
     #[error("invalid public key")]

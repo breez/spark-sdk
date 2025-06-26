@@ -19,7 +19,7 @@ use crate::{
     operator::{OperatorPool, rpc::SparkRpcClient},
     services::DepositServiceError,
     signer::Signer,
-    tree::{SigningKeyshare, TreeNode},
+    tree::{SigningKeyshare, TreeNode, TreeNodeId},
 };
 use spark_protos::{
     common::{self, SignatureIntent},
@@ -42,7 +42,7 @@ where
 
 pub struct DepositAddress {
     pub address: Address,
-    pub leaf_id: String,
+    pub leaf_id: TreeNodeId,
     pub user_signing_public_key: PublicKey,
     pub verifying_public_key: PublicKey,
 }
@@ -318,10 +318,19 @@ where
                 };
 
                 Ok(TreeNode {
-                    id: node.id,
+                    id: node
+                        .id
+                        .parse()
+                        .map_err(|_| DepositServiceError::InvalidNodeId(node.id))?,
                     tree_id: node.tree_id,
                     value: node.value,
-                    parent_node_id: node.parent_node_id,
+                    parent_node_id: match node.parent_node_id {
+                        Some(id) => Some(
+                            id.parse()
+                                .map_err(|_| DepositServiceError::InvalidNodeId(id))?,
+                        ),
+                        None => None,
+                    },
                     node_tx: deserialize(&node.node_tx)
                         .map_err(|_| DepositServiceError::InvalidTransaction)?,
                     refund_tx: deserialize(&node.refund_tx)
@@ -348,7 +357,7 @@ where
     pub async fn generate_deposit_address(
         &self,
         signing_public_key: PublicKey,
-        leaf_id: String,
+        leaf_id: &TreeNodeId,
         is_static: bool,
     ) -> Result<DepositAddress, DepositServiceError> {
         let resp = self
@@ -357,7 +366,7 @@ where
                 signing_public_key: signing_public_key.serialize().to_vec(),
                 identity_public_key: self.identity_public_key.serialize().to_vec(),
                 network: self.spark_network() as i32,
-                leaf_id: Some(leaf_id.clone()),
+                leaf_id: Some(leaf_id.to_string()),
                 is_static: Some(is_static),
             })
             .await?;
@@ -411,7 +420,11 @@ where
                         .require_network(self.network.into())
                         .map_err(|_| DepositServiceError::InvalidDepositAddressNetwork)?,
                     // TODO: Is it possible addresses do not have a leaf_id?
-                    leaf_id: addr.leaf_id.ok_or(DepositServiceError::MissingLeafId)?,
+                    leaf_id: addr
+                        .leaf_id
+                        .ok_or(DepositServiceError::MissingLeafId)?
+                        .parse()
+                        .map_err(DepositServiceError::InvalidNodeId)?,
                     user_signing_public_key: PublicKey::from_slice(&addr.user_signing_public_key)
                         .map_err(|_| {
                         DepositServiceError::InvalidDepositAddressProof
@@ -441,7 +454,7 @@ where
         &self,
         deposit_address: spark_protos::spark::Address,
         user_signing_public_key: PublicKey,
-        leaf_id: String,
+        leaf_id: &TreeNodeId,
     ) -> Result<DepositAddress, DepositServiceError> {
         let address: Address<NetworkUnchecked> = deposit_address
             .address
@@ -509,7 +522,7 @@ where
 
         Ok(DepositAddress {
             address,
-            leaf_id,
+            leaf_id: leaf_id.clone(),
             user_signing_public_key,
             verifying_public_key,
         })

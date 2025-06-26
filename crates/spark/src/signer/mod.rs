@@ -7,10 +7,10 @@ use bitcoin::secp256k1::ecdsa::Signature;
 pub use default_signer::DefaultSigner;
 pub use error::SignerError;
 
-use bitcoin::{hashes::sha256, secp256k1::PublicKey};
+use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
 
-use crate::core::Network;
+use crate::{core::Network, tree::TreeNodeId};
 
 #[async_trait::async_trait]
 pub trait Signer {
@@ -34,7 +34,7 @@ pub trait Signer {
     ) -> Result<Signature, SignerError>;
     async fn generate_frost_signing_commitments(&self) -> Result<SigningCommitments, SignerError>;
     // TODO: Create a method generate_public_key function that takes a leaf id.
-    fn generate_public_key(&self, hash: sha256::Hash) -> Result<PublicKey, SignerError>;
+    fn generate_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError>;
     fn get_identity_public_key(&self, account_index: u32) -> Result<PublicKey, SignerError>;
     async fn sign_frost(
         &self,

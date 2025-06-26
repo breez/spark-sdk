@@ -1,19 +1,8 @@
-use bitcoin::{
-    Address, Transaction, TxOut,
-    hashes::{Hash, sha256},
-    params::Params,
-    secp256k1::PublicKey,
-};
+use bitcoin::{Address, Transaction, TxOut, params::Params, secp256k1::PublicKey};
 use std::time::Duration;
-use uuid::Uuid;
 
 use spark::{
-    bitcoin::BitcoinService,
-    operator::rpc::{ConnectionManager, SparkRpcClient},
-    services::{DepositAddress, DepositService, LeafKeyTweak, Transfer, TransferService},
-    signer::Signer,
-    ssp::ServiceProvider,
-    tree::{TreeNode, TreeNodeStatus, TreeState},
+    bitcoin::BitcoinService, operator::rpc::{ConnectionManager, SparkRpcClient}, services::{DepositAddress, DepositService, LeafKeyTweak, Transfer, TransferService}, signer::Signer, ssp::ServiceProvider, tree::{TreeNode, TreeNodeId, TreeNodeStatus, TreeState}
 };
 
 use crate::leaf::WalletLeaf;
@@ -93,7 +82,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .ok_or(SparkWalletError::DepositAddressUsed)?;
         let signing_pubkey = self
             .signer
-            .generate_public_key(sha256::Hash::hash(deposit_address.leaf_id.as_bytes()))?;
+            .generate_public_key_for_node(&deposit_address.leaf_id)?;
         let nodes = self
             .finalize_deposit(&signing_pubkey, &deposit_address, tx, vout as u32)
             .await?;
@@ -147,12 +136,11 @@ impl<S: Signer + Clone> SparkWallet<S> {
         &self,
         is_static: bool,
     ) -> Result<Address, SparkWalletError> {
-        let leaf_id = Uuid::now_v7();
-        let hash = sha256::Hash::hash(leaf_id.as_bytes());
-        let signing_public_key = self.signer.generate_public_key(hash)?;
+        let leaf_id = TreeNodeId::generate();
+        let signing_public_key = self.signer.generate_public_key_for_node(&leaf_id)?;
         let address = self
             .deposit_service
-            .generate_deposit_address(signing_public_key, leaf_id.to_string(), is_static)
+            .generate_deposit_address(signing_public_key, &leaf_id, is_static)
             .await?;
 
         // TODO: Watch this address for deposits.
@@ -168,9 +156,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let leaf_key_tweaks = leaves
             .iter()
             .map(|leaf| {
-                let new_signing_public_key = self
-                    .signer
-                    .generate_public_key(sha256::Hash::hash(leaf.id.as_bytes()))?;
+                let new_signing_public_key = self.signer.generate_public_key_for_node(&leaf.id)?;
                 Ok(LeafKeyTweak {
                     node: leaf.clone(),
                     signing_public_key: *signing_public_key,
@@ -250,7 +236,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
                     signing_public_key: *leaf_pubkey,
                     new_signing_public_key: self
                         .signer
-                        .generate_public_key(sha256::Hash::hash(leaf.leaf.id.as_bytes()))?,
+                        .generate_public_key_for_node(&leaf.leaf.id)?,
                 });
             }
 
