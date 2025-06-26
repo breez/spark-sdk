@@ -28,9 +28,9 @@ impl<S> GraphQLClient<S>
 where
     S: Signer,
 {
-    /// Create a new GraphQLClient with the given options
-    pub fn new(options: GraphQLClientOptions, network: Network, signer: S) -> Self {
-        let schema_endpoint = options
+    /// Create a new GraphQLClient with the given configuration, network, and signer
+    pub fn new(config: GraphQLClientConfig, network: Network, signer: S) -> Self {
+        let schema_endpoint = config
             .schema_endpoint
             .unwrap_or_else(|| String::from("graphql/spark/2025-03-19"));
 
@@ -39,7 +39,7 @@ where
                 .user_agent("rust-spark/0.1.0")
                 .build()
                 .unwrap(),
-            base_url: options.base_url,
+            base_url: config.base_url,
             schema_endpoint,
             auth_provider: Arc::new(AuthProvider::new()),
             network,
@@ -87,9 +87,7 @@ where
 
         if let Some(errors) = json.errors {
             if !errors.is_empty() {
-                let error_messages: Vec<String> =
-                    errors.iter().map(|e| e.message.clone()).collect();
-                return Err(GraphQLError::GraphQL(error_messages.join(", ")));
+                return Err(GraphQLError::from_graphql_errors(&errors));
             }
         }
 
@@ -160,7 +158,7 @@ where
             .execute_raw_query_inner(
                 &full_url,
                 &headers,
-                mutations::GET_CHALLENGE,
+                &mutations::get_challenge(),
                 challenge_vars,
             )
             .await?;
@@ -188,7 +186,7 @@ where
             .execute_raw_query_inner(
                 &full_url,
                 &headers,
-                mutations::VERIFY_CHALLENGE,
+                &mutations::verify_challenge(),
                 verify_vars,
             )
             .await?;
@@ -215,7 +213,7 @@ where
         }
 
         let response: Response = self
-            .execute_raw_query(queries::LEAVES_SWAP_FEE_ESTIMATE, vars, true)
+            .execute_raw_query(&queries::leaves_swap_fee_estimate(), vars, true)
             .await?;
 
         Ok(response.leaves_swap_fee_estimate)
@@ -236,7 +234,7 @@ where
         }
 
         let response: Response = self
-            .execute_raw_query(queries::LIGHTNING_SEND_FEE_ESTIMATE, vars, true)
+            .execute_raw_query(&queries::lightning_send_fee_estimate(), vars, true)
             .await?;
 
         Ok(response.lightning_send_fee_estimate)
@@ -259,7 +257,7 @@ where
         }
 
         let response: Response = self
-            .execute_raw_query(queries::COOP_EXIT_FEE_ESTIMATE, vars, true)
+            .execute_raw_query(&queries::coop_exit_fee_estimate(), vars, true)
             .await?;
 
         Ok(response.coop_exit_fee_estimates)
@@ -287,7 +285,7 @@ where
         }
 
         let response: Response = self
-            .execute_raw_query(mutations::COMPLETE_COOP_EXIT, vars, true)
+            .execute_raw_query(&mutations::complete_coop_exit(), vars, true)
             .await?;
 
         Ok(response.complete_coop_exit.request)
@@ -312,7 +310,7 @@ where
         }
 
         let response: Response = self
-            .execute_raw_query(mutations::REQUEST_COOP_EXIT, vars, true)
+            .execute_raw_query(&mutations::request_coop_exit(), vars, true)
             .await?;
 
         Ok(response.request_coop_exit.request)
@@ -337,7 +335,7 @@ where
         }
 
         let response: Response = self
-            .execute_raw_query(mutations::REQUEST_LIGHTNING_RECEIVE, vars, true)
+            .execute_raw_query(&mutations::request_lightning_receive(), vars, true)
             .await?;
 
         Ok(response.request_lightning_receive.request)
@@ -362,7 +360,7 @@ where
         }
 
         let response: Response = self
-            .execute_raw_query(mutations::REQUEST_LIGHTNING_SEND, vars, true)
+            .execute_raw_query(&mutations::request_lightning_send(), vars, true)
             .await?;
 
         Ok(response.request_lightning_send.request)
@@ -371,10 +369,15 @@ where
     /// Get claim deposit quote
     pub async fn get_claim_deposit_quote(
         &self,
-        input: StaticDepositQuoteInput,
+        transaction_id: String,
+        output_index: i32,
+        network: BitcoinNetwork,
     ) -> GraphQLResult<StaticDepositQuoteOutput> {
-        let vars =
-            serde_json::to_value(input).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
+        let vars = serde_json::json!({
+            "transaction_id": transaction_id,
+            "output_index": output_index,
+            "network": network
+        });
 
         #[derive(Deserialize)]
         struct Response {
@@ -382,7 +385,7 @@ where
         }
 
         let response: Response = self
-            .execute_raw_query(queries::GET_CLAIM_DEPOSIT_QUOTE, vars, true)
+            .execute_raw_query(&queries::get_claim_deposit_quote(), vars, true)
             .await?;
 
         Ok(response.static_deposit_quote)
@@ -403,7 +406,7 @@ where
         }
 
         let response: Response = self
-            .execute_raw_query(queries::USER_REQUEST, vars, true)
+            .execute_raw_query(&queries::user_request(), vars, true)
             .await?;
 
         Ok(response.user_request)
@@ -424,7 +427,7 @@ where
         }
 
         let response: Response = self
-            .execute_raw_query(queries::USER_REQUEST, vars, true)
+            .execute_raw_query(&queries::user_request(), vars, true)
             .await?;
 
         Ok(response.user_request)
@@ -442,7 +445,7 @@ where
         }
 
         let response: Response = self
-            .execute_raw_query(queries::USER_REQUEST, vars, true)
+            .execute_raw_query(&queries::user_request(), vars, true)
             .await?;
 
         Ok(response.user_request)

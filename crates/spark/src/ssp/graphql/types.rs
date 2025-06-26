@@ -2,9 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Options for creating a GraphQLClient
+/// Config for creating a GraphQLClient
 #[derive(Debug, Clone)]
-pub struct GraphQLClientOptions {
+pub(crate) struct GraphQLClientConfig {
     /// Base URL for the GraphQL API
     pub base_url: String,
     /// Schema endpoint path (defaults to "graphql/spark/2025-03-19")
@@ -13,7 +13,7 @@ pub struct GraphQLClientOptions {
 
 /// GraphQL query structure
 #[derive(Debug, Serialize)]
-pub struct GraphQLQuery {
+pub(crate) struct GraphQLQuery {
     pub query: String,
     pub variables: HashMap<String, serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -22,7 +22,7 @@ pub struct GraphQLQuery {
 
 /// GraphQL error structure
 #[derive(Debug, Deserialize)]
-pub struct GraphQLErrorObject {
+pub(crate) struct GraphQLErrorObject {
     pub message: String,
     #[serde(default)]
     pub locations: Vec<GraphQLErrorLocation>,
@@ -32,59 +32,51 @@ pub struct GraphQLErrorObject {
 
 /// GraphQL error location
 #[derive(Debug, Deserialize)]
-pub struct GraphQLErrorLocation {
+pub(crate) struct GraphQLErrorLocation {
     pub line: i32,
     pub column: i32,
 }
 
 /// GraphQL response wrapper
 #[derive(Debug, Deserialize)]
-pub struct GraphQLResponse<T> {
+pub(crate) struct GraphQLResponse<T> {
     pub data: Option<T>,
     pub errors: Option<Vec<GraphQLErrorObject>>,
 }
 
 /// Bitcoin network enum
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum BitcoinNetwork {
-    #[serde(rename = "BITCOIN_NETWORK_MAINNET")]
     Mainnet,
-    #[serde(rename = "BITCOIN_NETWORK_TESTNET")]
     Testnet,
-    #[serde(rename = "BITCOIN_NETWORK_SIGNET")]
     Signet,
-    #[serde(rename = "BITCOIN_NETWORK_REGTEST")]
     Regtest,
 }
 
 /// Request status enum
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RequestStatus {
-    #[serde(rename = "REQUEST_STATUS_PENDING")]
     Pending,
-    #[serde(rename = "REQUEST_STATUS_IN_PROGRESS")]
     InProgress,
-    #[serde(rename = "REQUEST_STATUS_COMPLETED")]
     Completed,
-    #[serde(rename = "REQUEST_STATUS_FAILED")]
     Failed,
 }
 
 /// Exit speed enum for cooperative exits
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ExitSpeed {
-    #[serde(rename = "EXIT_SPEED_NORMAL")]
     Normal,
-    #[serde(rename = "EXIT_SPEED_FAST")]
     Fast,
 }
 
 /// Claim static deposit request type enum
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClaimStaticDepositRequestType {
-    #[serde(rename = "CLAIM_STATIC_DEPOSIT_REQUEST_TYPE_FIXED_AMOUNT")]
     FixedAmount,
-    #[serde(rename = "CLAIM_STATIC_DEPOSIT_REQUEST_TYPE_FULL_AMOUNT")]
     FullAmount,
 }
 
@@ -105,86 +97,126 @@ pub struct VerifyChallengeOutput {
 #[derive(Debug, Clone, Deserialize)]
 pub struct LightningInvoice {
     pub encoded_invoice: String,
+    pub bitcoin_network: BitcoinNetwork,
     pub payment_hash: String,
-    pub amount_sats: i64,
+    pub amount: CurrencyAmount,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
     pub memo: Option<String>,
-    pub expiry_timestamp: Option<DateTime<Utc>>,
+}
+
+/// Currency amount structure
+#[derive(Debug, Clone, Deserialize)]
+pub struct CurrencyAmount {
+    pub original_value: String,
+    pub original_unit: String,
+    pub preferred_currency_unit: String,
+    pub preferred_currency_value_rounded: String,
+    pub preferred_currency_value_approx: f64,
+}
+
+/// Transfer structure
+#[derive(Debug, Clone, Deserialize)]
+pub struct Transfer {
+    pub total_amount: CurrencyAmount,
+    pub spark_id: Option<String>,
 }
 
 /// LightningReceiveRequest structure
 #[derive(Debug, Clone, Deserialize)]
 pub struct LightningReceiveRequest {
     pub id: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub network: BitcoinNetwork,
     pub status: RequestStatus,
     pub invoice: LightningInvoice,
+    pub transfer: Option<Transfer>,
+    pub payment_preimage: Option<String>,
 }
 
 /// LightningSendRequest structure
 #[derive(Debug, Clone, Deserialize)]
 pub struct LightningSendRequest {
     pub id: String,
-    pub status: RequestStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub network: BitcoinNetwork,
     pub encoded_invoice: String,
-    pub payment_hash: String,
-    pub amount_sats: i64,
-    pub fee_sats: i64,
-    pub preimage: Option<String>,
+    pub fee: CurrencyAmount,
+    pub idempotency_key: String,
+    pub status: RequestStatus,
+    pub transfer: Option<Transfer>,
+    pub payment_preimage: Option<String>,
+}
+
+/// SwapLeaf structure
+#[derive(Debug, Clone, Deserialize)]
+pub struct SwapLeaf {
+    pub leaf_id: String,
+    pub raw_unsigned_refund_transaction: String,
+    pub adaptor_signed_signature: String,
 }
 
 /// LeavesSwapRequest structure
 #[derive(Debug, Clone, Deserialize)]
 pub struct LeavesSwapRequest {
     pub id: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub network: BitcoinNetwork,
     pub status: RequestStatus,
-    pub total_amount_sats: i64,
-    pub target_amount_sats: i64,
-    pub fee_sats: i64,
-    pub user_leaves: Vec<String>,
-    pub adaptor_pubkey: Option<String>,
+    pub total_amount: CurrencyAmount,
+    pub target_amount: CurrencyAmount,
+    pub fee: CurrencyAmount,
+    pub inbound_transfer: Transfer,
+    pub swap_leaves: Vec<SwapLeaf>,
+    pub outbound_transfer: Option<Transfer>,
+    pub expires_at: Option<String>,
 }
 
 /// CoopExitRequest structure
 #[derive(Debug, Clone, Deserialize)]
 pub struct CoopExitRequest {
     pub id: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub network: BitcoinNetwork,
+    pub fee: CurrencyAmount,
+    pub l1_broadcast_fee: CurrencyAmount,
     pub status: RequestStatus,
-    pub leaf_external_ids: Vec<String>,
-    pub withdrawal_address: String,
-    pub total_amount_sats: i64,
-    pub request_fee_sats: i64,
-    pub exit_fee_sats: i64,
-    pub exit_speed: ExitSpeed,
+    pub expires_at: String,
+    pub raw_connector_transaction: String,
+    pub raw_coop_exit_transaction: String,
+    pub coop_exit_txid: String,
+    pub transfer: Option<Transfer>,
 }
 
 /// Lightning send fee estimate output
 #[derive(Debug, Clone, Deserialize)]
 pub struct LightningSendFeeEstimateOutput {
-    pub fee_sats: i64,
-    pub amount_sats: i64,
-    pub total_sats: i64,
+    pub fee_estimate: CurrencyAmount,
+}
+
+/// CoopExitFeeEstimate structure
+#[derive(Debug, Clone, Deserialize)]
+pub struct CoopExitFeeEstimate {
+    pub user_fee: CurrencyAmount,
+    pub l1_broadcast_fee: CurrencyAmount,
+}
+
+/// CoopExitFeeEstimatesOutput structure
+#[derive(Debug, Clone, Deserialize)]
+pub struct CoopExitFeeEstimatesOutput {
+    pub speed_fast: Option<CoopExitFeeEstimate>,
+    pub speed_medium: Option<CoopExitFeeEstimate>,
+    pub speed_slow: Option<CoopExitFeeEstimate>,
 }
 
 /// Leaves swap fee estimate output
 #[derive(Debug, Clone, Deserialize)]
 pub struct LeavesSwapFeeEstimateOutput {
-    pub fee_sats: i64,
-    pub min_per_leaf_amount_sats: i64,
-}
-
-/// Cooperative exit fee estimates output
-#[derive(Debug, Clone, Deserialize)]
-pub struct CoopExitFeeEstimatesOutput {
-    pub request_fee_sats: i64,
-    pub exit_fee_sats: i64,
-    pub min_withdrawal_sats: i64,
-}
-
-/// Static deposit quote input
-#[derive(Debug, Clone, Serialize)]
-pub struct StaticDepositQuoteInput {
-    pub transaction_id: String,
-    pub output_index: i32,
-    pub network: BitcoinNetwork,
+    pub fee_estimate: CurrencyAmount,
 }
 
 /// Static deposit quote output
@@ -192,19 +224,15 @@ pub struct StaticDepositQuoteInput {
 pub struct StaticDepositQuoteOutput {
     pub transaction_id: String,
     pub output_index: i32,
-    pub deposit_value_sats: i64,
-    pub credit_value_sats: i64,
-    pub fee_sats: i64,
+    pub network: BitcoinNetwork,
+    pub credit_amount_sats: i64,
+    pub signature: String,
 }
 
 /// Claim static deposit output
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClaimStaticDepositOutput {
-    pub transaction_id: String,
-    pub output_index: i32,
-    pub deposit_value_sats: i64,
-    pub credit_amount_sats: i64,
-    pub fee_sats: i64,
+    pub transfer_id: String,
 }
 
 /// Request lightning receive input

@@ -1,87 +1,183 @@
 // GraphQL query strings
+use super::fragments::{
+    COOP_EXIT_FEE_ESTIMATE_FIELDS, CURRENCY_AMOUNT_FIELDS, FEE_ESTIMATE_FIELDS,
+    LIGHTNING_INVOICE_FIELDS, REQUEST_BASE_FIELDS, SWAP_LEAF_FIELDS, TRANSFER_FIELDS,
+    with_fragments,
+};
 
 /// LightningSendFeeEstimate query
-pub const LIGHTNING_SEND_FEE_ESTIMATE: &str = r#"
-query LightningSendFeeEstimate($encoded_invoice: String!) {
-  lightning_send_fee_estimate(encoded_invoice: $encoded_invoice) {
-    fee_sats
-    amount_sats
-    total_sats
+const LIGHTNING_SEND_FEE_ESTIMATE: &str = r#"
+query LightningSendFeeEstimate(
+  $encoded_invoice: String!
+) {
+  lightning_send_fee_estimate(input: {
+    encoded_invoice: $encoded_invoice
+  }) {
+    fee_estimate {
+      ...FeeEstimateFields
+    }
   }
 }
 "#;
+
+pub fn lightning_send_fee_estimate() -> String {
+    with_fragments(
+        LIGHTNING_SEND_FEE_ESTIMATE,
+        &[FEE_ESTIMATE_FIELDS, CURRENCY_AMOUNT_FIELDS],
+    )
+}
 
 /// CoopExitFeeEstimate query
-pub const COOP_EXIT_FEE_ESTIMATE: &str = r#"
-query CoopExitFeeEstimates($leaf_external_ids: [String!]!, $withdrawal_address: String!) {
-  coop_exit_fee_estimates(leaf_external_ids: $leaf_external_ids, withdrawal_address: $withdrawal_address) {
-    request_fee_sats
-    exit_fee_sats
-    min_withdrawal_sats
+const COOP_EXIT_FEE_ESTIMATE: &str = r#"
+query CoopExitEstimates(
+  $leaf_external_ids: [String!]!,
+  $withdrawal_address: String!
+) {
+  coop_exit_fee_estimates(input: {
+    leaf_external_ids: $leaf_external_ids,
+    withdrawal_address: $withdrawal_address
+  }) {
+    speed_fast {
+      ...CoopExitFeeEstimateFields
+    }
+    speed_medium {
+      ...CoopExitFeeEstimateFields
+    }
+    speed_slow {
+      ...CoopExitFeeEstimateFields
+    }
   }
 }
 "#;
+
+pub fn coop_exit_fee_estimate() -> String {
+    with_fragments(
+        COOP_EXIT_FEE_ESTIMATE,
+        &[COOP_EXIT_FEE_ESTIMATE_FIELDS, CURRENCY_AMOUNT_FIELDS],
+    )
+}
 
 /// LeavesSwapFeeEstimate query
-pub const LEAVES_SWAP_FEE_ESTIMATE: &str = r#"
-query LeavesSwapFeeEstimate($total_amount_sats: Int!) {
-  leaves_swap_fee_estimate(total_amount_sats: $total_amount_sats) {
-    fee_sats
-    min_per_leaf_amount_sats
+const LEAVES_SWAP_FEE_ESTIMATE: &str = r#"
+query LeavesSwapFeeEstimate(
+  $total_amount_sats: Int!
+) {
+  leaves_swap_fee_estimate(input: {
+    total_amount_sats: $total_amount_sats
+  }) {
+    fee_estimate {
+      ...FeeEstimateFields
+    }
   }
 }
 "#;
+
+pub fn leaves_swap_fee_estimate() -> String {
+    with_fragments(
+        LEAVES_SWAP_FEE_ESTIMATE,
+        &[FEE_ESTIMATE_FIELDS, CURRENCY_AMOUNT_FIELDS],
+    )
+}
 
 /// GetClaimDepositQuote query
-pub const GET_CLAIM_DEPOSIT_QUOTE: &str = r#"
-query StaticDepositQuote($transaction_id: String!, $output_index: Int!, $network: BitcoinNetwork!) {
-  static_deposit_quote(transaction_id: $transaction_id, output_index: $output_index, network: $network) {
+const GET_CLAIM_DEPOSIT_QUOTE: &str = r#"
+query StaticDepositQuote(
+  $transaction_id: String!,
+  $output_index: Int!,
+  $network: BitcoinNetwork!
+) {
+  static_deposit_quote(input: {
+    transaction_id: $transaction_id,
+    output_index: $output_index,
+    network: $network
+  }) {
     transaction_id
     output_index
-    deposit_value_sats
-    credit_value_sats
-    fee_sats
+    network
+    credit_amount_sats
+    signature
   }
 }
 "#;
 
+pub fn get_claim_deposit_quote() -> String {
+    GET_CLAIM_DEPOSIT_QUOTE.to_string()
+}
+
 /// UserRequest query - used for different types of user requests
-pub const USER_REQUEST: &str = r#"
+const USER_REQUEST: &str = r#"
 query UserRequest($request_id: ID!) {
   user_request(request_id: $request_id) {
-    id
-    status
+    ...RequestBaseFields
     ... on LightningReceiveRequest {
       invoice {
-        encoded_invoice
-        payment_hash
-        amount_sats
-        memo
-        expiry_timestamp
+        ...LightningInvoiceFields
       }
+      transfer {
+        ...TransferFields
+      }
+      payment_preimage
     }
     ... on LightningSendRequest {
       encoded_invoice
-      payment_hash
-      amount_sats
-      fee_sats
-      preimage
+      fee {
+        ...CurrencyAmountFields
+      }
+      idempotency_key
+      transfer {
+        ...TransferFields
+      }
+      payment_preimage
     }
     ... on CoopExitRequest {
-      leaf_external_ids
-      withdrawal_address
-      total_amount_sats
-      request_fee_sats
-      exit_fee_sats
-      exit_speed
+      fee {
+        ...CurrencyAmountFields
+      }
+      l1_broadcast_fee {
+        ...CurrencyAmountFields
+      }
+      expires_at
+      raw_connector_transaction
+      raw_coop_exit_transaction
+      coop_exit_txid
+      transfer {
+        ...TransferFields
+      }
     }
     ... on LeavesSwapRequest {
-      total_amount_sats
-      target_amount_sats
-      fee_sats
-      user_leaves
-      adaptor_pubkey
+      total_amount {
+        ...CurrencyAmountFields
+      }
+      target_amount {
+        ...CurrencyAmountFields
+      }
+      fee {
+        ...CurrencyAmountFields
+      }
+      inbound_transfer {
+        ...TransferFields
+      }
+      outbound_transfer {
+        ...TransferFields
+      }
+      expires_at
+      swap_leaves {
+        ...SwapLeafFields
+      }
     }
   }
 }
 "#;
+
+pub fn user_request() -> String {
+    with_fragments(
+        USER_REQUEST,
+        &[
+            LIGHTNING_INVOICE_FIELDS,
+            SWAP_LEAF_FIELDS,
+            REQUEST_BASE_FIELDS,
+            TRANSFER_FIELDS,
+            CURRENCY_AMOUNT_FIELDS,
+        ],
+    )
+}

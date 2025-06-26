@@ -41,10 +41,7 @@ impl AuthProvider {
         let valid_until = self.valid_until.lock().unwrap();
 
         // TODO: WASM handling of now()
-        Ok(token_exists
-            && valid_until
-                .as_ref()
-                .map_or(false, |date| *date > Utc::now()))
+        Ok(token_exists && valid_until.as_ref().is_some_and(|date| *date > Utc::now()))
     }
 
     /// Set authentication token and expiry

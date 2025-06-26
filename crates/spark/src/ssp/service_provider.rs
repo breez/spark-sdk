@@ -2,13 +2,13 @@ use crate::{
     Network,
     signer::Signer,
     ssp::{
-        ServiceProviderOptions,
+        BitcoinNetwork, ServiceProviderConfig,
         error::ServiceProviderResult,
         graphql::{
             CoopExitFeeEstimatesOutput, CoopExitRequest, GraphQLClient,
             LeavesSwapFeeEstimateOutput, LightningReceiveRequest, LightningSendFeeEstimateOutput,
             LightningSendRequest, RequestCoopExitInput, RequestLightningReceiveInput,
-            RequestLightningSendInput, StaticDepositQuoteInput, StaticDepositQuoteOutput,
+            RequestLightningSendInput, StaticDepositQuoteOutput,
         },
     },
 };
@@ -24,10 +24,10 @@ impl<S> ServiceProvider<S>
 where
     S: Signer,
 {
-    /// Create a new GraphQLClient with the given options
-    pub fn new(options: ServiceProviderOptions, network: Network, signer: S) -> Self {
+    /// Create a new GraphQLClient with the given configuration, network, and signer
+    pub fn new(config: ServiceProviderConfig, network: Network, signer: S) -> Self {
         Self {
-            gql_client: GraphQLClient::new(options.into(), network, signer),
+            gql_client: GraphQLClient::new(config.into(), network, signer),
         }
     }
 
@@ -101,9 +101,14 @@ where
     /// Get claim deposit quote
     pub async fn get_claim_deposit_quote(
         &self,
-        input: StaticDepositQuoteInput,
+        transaction_id: String,
+        output_index: i32,
+        network: BitcoinNetwork,
     ) -> ServiceProviderResult<StaticDepositQuoteOutput> {
-        Ok(self.gql_client.get_claim_deposit_quote(input).await?)
+        Ok(self
+            .gql_client
+            .get_claim_deposit_quote(transaction_id, output_index, network)
+            .await?)
     }
 
     /// Get a lightning receive request by ID
