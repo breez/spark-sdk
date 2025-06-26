@@ -4,6 +4,7 @@ mod error;
 mod graphql;
 mod service_provider;
 
+use bitcoin::secp256k1::PublicKey;
 pub use graphql::types::*;
 pub use service_provider::ServiceProvider;
 
@@ -14,6 +15,8 @@ pub struct ServiceProviderConfig {
     pub base_url: String,
     /// Schema endpoint path (defaults to "graphql/spark/2025-03-19")
     pub schema_endpoint: Option<String>,
+    /// Identity public key of the service provider
+    pub identity_public_key: PublicKey,
 }
 
 impl From<ServiceProviderConfig> for GraphQLClientConfig {

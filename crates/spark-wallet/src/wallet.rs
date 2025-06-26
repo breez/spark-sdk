@@ -25,7 +25,6 @@ where
     S: Signer + Clone,
 {
     config: SparkWalletConfig,
-    service_provider: ServiceProvider<S>,
     deposit_service: DepositService<S>,
     tree_state: TreeState,
     signer: S,
@@ -60,7 +59,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let transfer_service = TransferService::new(signer.clone());
         let tree_state = TreeState::new();
         Ok(SparkWallet {
-            service_provider,
             deposit_service,
             config,
             tree_state,
