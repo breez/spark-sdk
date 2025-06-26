@@ -9,8 +9,16 @@ pub enum ServiceError {
 
     #[error("bitcoin io error: {0}")]
     BitcoinIOError(#[from] bitcoin::io::Error),
+
+    // Lightning related errors
     #[error("invoice decoding error: {0}")]
     InvoiceDecodingError(String),
+
+    #[error("SSP swap error: {0}")]
+    SSPswapError(String),
+
+    #[error("service provider error: {0}")]
+    ServiceProviderError(#[from] crate::ssp::ServiceProviderError),
     #[error("validation error: {0}")]
     ValidationError(String),
     #[error("signer error: {0}")]

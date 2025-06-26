@@ -68,7 +68,7 @@ pub fn create_refund_tx(
 
 pub async fn sign_refunds<S: Signer>(
     signer: &S,
-    leaves: Vec<LeafKeyTweak>,
+    leaves: &Vec<LeafKeyTweak>,
     spark_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
     receiver_pubkey: &PublicKey,
     network: Network,

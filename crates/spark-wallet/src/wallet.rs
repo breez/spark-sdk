@@ -81,11 +81,15 @@ impl<S: Signer + Clone> SparkWallet<S> {
     }
 
     pub async fn pay_lightning_invoice(&self, invoice: &String) -> Result<Uuid, SparkWalletError> {
-        // Ok(self
-        //     .lightning_service
-        //     .pay_lightning_invoice(invoice)
-        //     .await?)
-        !todo!()
+        let leaves = self.leaf_manager.get_leaves().await;
+        PayLightningInvoice::new(
+            self.lightning_service.clone(),
+            self.transfer_service.clone(),
+            invoice.clone(),
+            leaves.clone(),
+        )
+        .execute()
+        .await
     }
     // TODO: In the js sdk this function calls an electrum server to fetch the transaction hex based on a txid.
     // Intuitively this function is being called when you've already learned about a transaction, so it could be passed in directly.
