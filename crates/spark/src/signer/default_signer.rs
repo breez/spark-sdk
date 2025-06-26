@@ -111,7 +111,7 @@ impl Signer for DefaultSigner {
 
         Ok(*commitments)
     }
-    fn generate_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError> {
+    fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError> {
         let hash = sha256::Hash::hash(id.to_string().as_bytes());
         let signing_key = self.derive_signing_key(hash)?;
         Ok(signing_key.public_key(&self.secp))

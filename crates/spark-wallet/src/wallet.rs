@@ -82,7 +82,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .ok_or(SparkWalletError::DepositAddressUsed)?;
         let signing_pubkey = self
             .signer
-            .generate_public_key_for_node(&deposit_address.leaf_id)?;
+            .get_public_key_for_node(&deposit_address.leaf_id)?;
         let nodes = self
             .finalize_deposit(&signing_pubkey, &deposit_address, tx, vout as u32)
             .await?;
@@ -137,7 +137,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         is_static: bool,
     ) -> Result<Address, SparkWalletError> {
         let leaf_id = TreeNodeId::generate();
-        let signing_public_key = self.signer.generate_public_key_for_node(&leaf_id)?;
+        let signing_public_key = self.signer.get_public_key_for_node(&leaf_id)?;
         let address = self
             .deposit_service
             .generate_deposit_address(signing_public_key, &leaf_id, is_static)
@@ -156,7 +156,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let leaf_key_tweaks = leaves
             .iter()
             .map(|leaf| {
-                let new_signing_public_key = self.signer.generate_public_key_for_node(&leaf.id)?;
+                let new_signing_public_key = self.signer.get_public_key_for_node(&leaf.id)?;
                 Ok(LeafKeyTweak {
                     node: leaf.clone(),
                     signing_public_key: *signing_public_key,
@@ -234,9 +234,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
                 leaves_to_claim.push(LeafKeyTweak {
                     node: leaf.leaf.clone(),
                     signing_public_key: *leaf_pubkey,
-                    new_signing_public_key: self
-                        .signer
-                        .generate_public_key_for_node(&leaf.leaf.id)?,
+                    new_signing_public_key: self.signer.get_public_key_for_node(&leaf.leaf.id)?,
                 });
             }
 
