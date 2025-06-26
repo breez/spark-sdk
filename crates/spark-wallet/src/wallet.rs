@@ -68,7 +68,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         // TODO: This entire function happens inside a txid mutex in the js sdk. It seems unnecessary here?
 
         let deposit_nodes = self.deposit_service.claim_deposit(tx, vout).await?;
-        let optimized_nodes = self.tree_service.collect_nodes(deposit_nodes).await?;
+        let optimized_nodes = self.tree_service.collect_leaves(deposit_nodes).await?;
         Ok(optimized_nodes.into_iter().map(WalletLeaf::from).collect())
     }
 

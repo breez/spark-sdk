@@ -45,7 +45,7 @@ impl<S> TreeService<S> {
         Ok(nodes)
     }
 
-    pub async fn collect_nodes(
+    pub async fn collect_leaves(
         &self,
         nodes: Vec<TreeNode>,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
