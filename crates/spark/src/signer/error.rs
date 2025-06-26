@@ -14,4 +14,7 @@ pub enum SignerError {
     UnknownKey,
     #[error("unknown nonce commitment")]
     UnknownNonceCommitment,
+
+    #[error("generic error: {0}")]
+    Generic(String),
 }

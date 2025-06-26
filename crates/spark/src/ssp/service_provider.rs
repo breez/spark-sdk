@@ -1,3 +1,5 @@
+use bitcoin::secp256k1::PublicKey;
+
 use crate::{
     Network,
     signer::Signer,
