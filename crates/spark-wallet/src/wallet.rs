@@ -9,11 +9,10 @@ use uuid::Uuid;
 
 use spark::{
     bitcoin::BitcoinService,
-    leaves::LeafManager,
     operator::rpc::{ConnectionManager, SparkRpcClient},
     services::{DepositAddress, DepositService, LeafKeyTweak, Transfer, TransferService},
     signer::Signer,
-    tree::{TreeNode, TreeNodeStatus},
+    tree::{TreeNode, TreeNodeStatus, TreeState},
 };
 
 use crate::leaf::WalletLeaf;
@@ -26,7 +25,7 @@ where
 {
     config: SparkWalletConfig,
     deposit_service: DepositService<S>,
-    leaf_manager: LeafManager,
+    tree_state: TreeState,
     signer: S,
     transfer_service: TransferService<S>,
 }
@@ -52,11 +51,11 @@ impl<S: Signer + Clone> SparkWallet<S> {
         );
 
         let transfer_service = TransferService::new(signer.clone());
-        let leaf_manager = LeafManager::new();
+        let tree_state = TreeState::new();
         Ok(SparkWallet {
             deposit_service,
             config,
-            leaf_manager,
+            tree_state,
             signer,
             transfer_service,
         })
@@ -189,8 +188,8 @@ impl<S: Signer + Clone> SparkWallet<S> {
             None => vec![],
         };
 
-        self.leaf_manager.add_leaves(&result_nodes).await;
-        self.leaf_manager.remove_leaves(&leaves).await;
+        self.tree_state.add_leaves(&result_nodes).await;
+        self.tree_state.remove_leaves(&leaves).await;
 
         Ok(result_nodes)
     }
@@ -271,7 +270,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
 
             let result = self.check_refresh_timelock_nodes(result).await?;
             let result = self.check_extend_timelock_nodes(result).await?;
-            self.leaf_manager.add_leaves(&result).await;
+            self.tree_state.add_leaves(&result).await;
 
             // TODO: Optimize leaves if optimize is true and the transfer type is not counter swap. (or make leaf manager handle this)
 

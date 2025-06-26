@@ -85,3 +85,9 @@ pub struct SigningKeyshare {
     /// The threshold of the keyshare.
     pub threshold: u32,
 }
+
+mod error;
+mod service;
+mod state;
+
+pub use state::TreeState;

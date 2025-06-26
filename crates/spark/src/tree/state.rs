@@ -2,20 +2,20 @@ use tokio::sync::Mutex;
 
 use crate::tree::TreeNode;
 
-// TODO: Implement proper leafmanager logic.
-pub struct LeafManager {
+// TODO: Implement proper tree state logic.
+pub struct TreeState {
     leaves: Mutex<Vec<TreeNode>>,
 }
 
-impl Default for LeafManager {
+impl Default for TreeState {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl LeafManager {
+impl TreeState {
     pub fn new() -> Self {
-        LeafManager {
+        TreeState {
             leaves: Mutex::new(Vec::new()),
         }
     }
