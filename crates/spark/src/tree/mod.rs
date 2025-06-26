@@ -1,3 +1,11 @@
+mod error;
+mod service;
+mod state;
+
+pub use error::TreeServiceError;
+pub use service::TreeService;
+pub use state::TreeState;
+
 use std::str::FromStr;
 
 use bitcoin::{Sequence, Transaction, secp256k1::PublicKey};
@@ -114,9 +122,3 @@ pub struct SigningKeyshare {
     /// The threshold of the keyshare.
     pub threshold: u32,
 }
-
-mod error;
-mod service;
-mod state;
-
-pub use {error::TreeServiceError, service::TreeService, state::TreeState};

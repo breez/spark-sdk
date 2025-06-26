@@ -1,5 +1,5 @@
 #[derive(Debug, thiserror::Error)]
-pub enum AddressServiceError {
+pub enum AddressError {
     #[error("Invalid bech32m address: {0}")]
     InvalidBech32mAddress(String),
     #[error("Unknown HRP (human-readable part): {0}")]

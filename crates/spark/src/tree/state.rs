@@ -1,10 +1,13 @@
+use std::sync::Arc;
+
 use tokio::sync::Mutex;
 
 use crate::tree::TreeNode;
 
 // TODO: Implement proper tree state logic.
+#[derive(Clone)]
 pub struct TreeState {
-    leaves: Mutex<Vec<TreeNode>>,
+    leaves: Arc<Mutex<Vec<TreeNode>>>,
 }
 
 impl Default for TreeState {
@@ -16,7 +19,7 @@ impl Default for TreeState {
 impl TreeState {
     pub fn new() -> Self {
         TreeState {
-            leaves: Mutex::new(Vec::new()),
+            leaves: Arc::new(Mutex::new(Vec::new())),
         }
     }
 

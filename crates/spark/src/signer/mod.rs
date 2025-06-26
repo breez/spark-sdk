@@ -33,6 +33,7 @@ pub trait Signer {
     async fn generate_frost_signing_commitments(&self) -> Result<SigningCommitments, SignerError>;
     // TODO: Create a method generate_public_key function that takes a leaf id.
     fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError>;
+    fn generate_random_public_key(&self) -> Result<PublicKey, SignerError>;
     fn get_identity_public_key(&self) -> Result<PublicKey, SignerError>;
     async fn sign_frost(
         &self,
