@@ -478,8 +478,8 @@ where
         operator_public_key: &PublicKey,
         address: &Address,
     ) -> sha256::Hash {
-        let mut msg = operator_public_key.serialize().to_vec();
-        msg.extend_from_slice(&self.identity_public_key.serialize());
+        let mut msg = self.identity_public_key.serialize().to_vec();
+        msg.extend_from_slice(&operator_public_key.serialize());
         msg.extend_from_slice(address.to_string().as_bytes());
         sha256::Hash::hash(&msg)
     }
@@ -505,9 +505,6 @@ where
         let verifying_public_key = PublicKey::from_slice(&deposit_address.verifying_key)
             .map_err(|_| DepositServiceError::InvalidDepositAddressProof)?;
 
-        // TODO: This way of generating a shared deposit address is not safe, as the operator can start
-        // with a public key, then substract the user's key to create the verifying key.
-        // Or maybe it is because of the operator signatures below.
         let operator_public_key = self
             .bitcoin_service
             .subtract_public_keys(&verifying_public_key, &user_signing_public_key)
