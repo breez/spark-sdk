@@ -2,6 +2,10 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum SignerError {
+    #[error("frost error: {0}")]
+    FrostError(String),
+    #[error("failed to derive identifier")]
+    IdentifierError,
     #[error("invalid hash")]
     InvalidHash,
     #[error("key derivation error: {0}")]

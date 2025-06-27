@@ -24,7 +24,7 @@ pub trait Signer {
         self_commitment: &SigningCommitments,
         public_key: &PublicKey,
         self_signature: &SignatureShare,
-        adaptor_pub_key: Option<PublicKey>,
+        adaptor_public_key: Option<PublicKey>,
     ) -> Result<frost_secp256k1_tr::Signature, SignerError>;
     fn sign_message_ecdsa_with_identity_key<T: AsRef<[u8]>>(
         &self,
