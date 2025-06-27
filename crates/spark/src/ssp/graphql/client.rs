@@ -145,7 +145,7 @@ where
         self.auth_provider.remove_auth()?;
 
         // Get the identity public key
-        let identity_public_key = hex::encode(self.signer.get_identity_public_key(0)?.serialize());
+        let identity_public_key = hex::encode(self.signer.get_identity_public_key()?.serialize());
 
         // Get a challenge from the server
         let challenge_vars = serde_json::json!({

@@ -70,7 +70,7 @@ where
     }
 
     async fn authenticate(&self) -> Result<OperationSession> {
-        let pk = self.signer.get_identity_public_key(0)?;
+        let pk = self.signer.get_identity_public_key()?;
         let challenge_req = GetChallengeRequest {
             public_key: pk.serialize().to_vec(),
         };

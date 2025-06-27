@@ -123,7 +123,7 @@ impl Signer for DefaultSigner {
         Ok(signing_key.public_key(&self.secp))
     }
 
-    fn get_identity_public_key(&self, account_index: u32) -> Result<PublicKey, SignerError> {
+    fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
         todo!()
     }
 
