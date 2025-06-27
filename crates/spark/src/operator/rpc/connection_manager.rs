@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use tokio::sync::Mutex;
-use tonic::transport::Channel;
+use tonic::transport::{Channel, ClientTlsConfig};
 use tracing::debug;
 
 use crate::operator::Operator;
@@ -19,6 +19,9 @@ impl Default for ConnectionManager {
 
 impl ConnectionManager {
     pub fn new() -> ConnectionManager {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("Failed to install rustls crypto provider");
         let connections_map = HashMap::new();
         Self {
             connections_map: Mutex::new(connections_map),
@@ -33,6 +36,7 @@ impl ConnectionManager {
             None => {
                 let channel = Channel::from_shared(operator.address.to_string())
                     .map_err(|e| OperatorRpcError::InvalidUri(e.to_string()))?
+                    .tls_config(ClientTlsConfig::new().with_enabled_roots())?
                     .connect_lazy();
 
                 map.insert(operator.address.to_string(), channel.clone());
