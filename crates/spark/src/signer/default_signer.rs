@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use bip32::{ChildNumber, XPrv};
-use bitcoin::secp256k1::SecretKey;
+use bitcoin::secp256k1::{self, SecretKey};
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
 use bitcoin::{
@@ -45,7 +45,7 @@ fn zero() -> ChildNumber {
 
 #[derive(Clone)]
 pub struct DefaultSigner {
-    identity_key: XPrv,
+    identity_key: SecretKey,
     master_key: XPrv,
     network: Network,
     nonce_commitments: Arc<Mutex<HashMap<Vec<u8>, SigningNonces>>>, // TODO: Nonce commitments are never cleared, is this okay?
@@ -68,13 +68,20 @@ impl From<bip32::Error> for DefaultSignerError {
     }
 }
 
+impl From<secp256k1::Error> for DefaultSignerError {
+    fn from(e: secp256k1::Error) -> Self {
+        DefaultSignerError::KeyDerivationError(e.to_string())
+    }
+}
+
 impl DefaultSigner {
     pub fn new(seed: [u8; 32], network: Network) -> Result<Self, DefaultSignerError> {
         let master_key = XPrv::new(seed).map_err(|_| DefaultSignerError::InvalidSeed)?;
-        let identity_key = master_key
+        let extended_identity_key = master_key
             .derive_child(purpose())?
             .derive_child(coin_type(network))?
             .derive_child(zero())?;
+        let identity_key = SecretKey::from_slice(&extended_identity_key.private_key().to_bytes())?;
         Ok(DefaultSigner {
             identity_key,
             master_key,
@@ -158,10 +165,7 @@ impl Signer for DefaultSigner {
     }
 
     fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
-        Ok(
-            PublicKey::from_slice(&self.identity_key.public_key().to_bytes())
-                .map_err(|e| SignerError::KeyDerivationError(e.to_string()))?,
-        )
+        Ok(self.identity_key.public_key(&self.secp))
     }
 
     async fn sign_frost(
