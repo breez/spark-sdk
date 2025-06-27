@@ -9,8 +9,6 @@ default: check
 
 build: $(SUBDIRS)
 
-build-release: $(SUBDIRS)
-
 check: fmt-check clippy-check test
 
 clippy-fix: $(SUBDIRS)

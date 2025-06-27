@@ -12,11 +12,12 @@ chrono = { workspace = true, features = ["serde"] }
 frost-core.workspace = true
 frost-secp256k1-tr.workspace = true
 hex.workspace = true
+prost.workspace = true
 reqwest = { workspace = true, features = ["json"] }
 serde.workspace = true
 serde_json.workspace = true
+serde_with.workspace = true
 spark-protos.workspace = true
-prost.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tonic.workspace = true

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use bip32::{ChildNumber, XPrv};
 use bitcoin::secp256k1::SecretKey;
@@ -14,6 +15,7 @@ use frost_core::round1::Nonce;
 use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::{SigningCommitments, SigningNonces};
 use frost_secp256k1_tr::round2::SignatureShare;
+use thiserror::Error;
 use tokio::sync::Mutex;
 
 use crate::tree::TreeNodeId;
@@ -22,15 +24,18 @@ use crate::{
     signer::{Signer, SignerError},
 };
 
+#[derive(Clone)]
 pub struct DefaultSigner {
     master_key: XPrv,
     network: Network,
-    nonce_commitments: Mutex<HashMap<Vec<u8>, SigningNonces>>, // TODO: Nonce commitments are never cleared, is this okay?
-    private_key_map: Mutex<HashMap<PublicKey, SecretKey>>,     // TODO: Is this really the way?
+    nonce_commitments: Arc<Mutex<HashMap<Vec<u8>, SigningNonces>>>, // TODO: Nonce commitments are never cleared, is this okay?
+    private_key_map: Arc<Mutex<HashMap<PublicKey, SecretKey>>>,     // TODO: Is this really the way?
     secp: Secp256k1<All>,
 }
 
+#[derive(Debug, Error)]
 pub enum DefaultSignerError {
+    #[error("invalid seed")]
     InvalidSeed,
 }
 
@@ -40,8 +45,8 @@ impl DefaultSigner {
         Ok(DefaultSigner {
             master_key,
             network,
-            nonce_commitments: Mutex::new(HashMap::new()),
-            private_key_map: Mutex::new(HashMap::new()),
+            nonce_commitments: Arc::new(Mutex::new(HashMap::new())),
+            private_key_map: Arc::new(Mutex::new(HashMap::new())),
             secp: Secp256k1::new(),
         })
     }

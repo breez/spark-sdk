@@ -1,10 +1,12 @@
 use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::Identifier;
+use serde::{Deserialize, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
 use tonic::transport::Uri;
 
 use super::OperatorError;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct OperatorPool {
     coordinator_index: usize,
     operators: Vec<Operator>,
@@ -47,11 +49,14 @@ impl OperatorPool {
     }
 }
 
-#[derive(Clone, Debug)]
+#[serde_as]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Operator {
     pub id: usize,
     pub identifier: Identifier,
+    #[serde_as(as = "DisplayFromStr")]
     pub address: Uri,
+    #[serde_as(as = "DisplayFromStr")]
     pub identity_public_key: PublicKey,
 }
 

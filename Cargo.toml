@@ -1,14 +1,18 @@
 [workspace]
 resolver = "2"
 
-members = ["crates/spark", "crates/spark-protos", "crates/spark-wallet"]
+members = ["crates/spark", "crates/spark-protos", "crates/spark-wallet", "examples/spark-cli"]
 
 [workspace.dependencies]
 async-trait = "0.1.88"
 base64 = "0.22.1"
 bip32 = "0.5.3"
+bip39 = "2.2.0"
 bitcoin = "0.32.6"
 chrono = { version = "0.4.37", features = ["serde"] }
+clap = "4.5.40"
+electrum-client = "0.23.1"
+figment = "0.10.19"
 frost-core = "2.1.0"
 frost-secp256k1-tr = "2.1.0"
 hex = "0.4.3"
@@ -17,6 +21,7 @@ prost-types = "0.13.4"
 reqwest = { version = "0.12.18", features = ["json"] }
 serde = "1.0.219"
 serde_json = "1.0.140"
+serde_with = "3.13.0"
 spark-protos = { path = "crates/spark-protos" }
 spark = { path = "crates/spark" }
 spark-wallet = { path = "crates/spark-wallet" }

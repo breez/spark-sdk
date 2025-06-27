@@ -1,10 +1,15 @@
 use bitcoin::params::Params;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Network {
+    #[serde(rename = "mainnet")]
     Mainnet,
+    #[serde(rename = "regtest")]
     Regtest,
+    #[serde(rename = "testnet")]
     Testnet,
+    #[serde(rename = "signet")]
     Signet,
 }
 
