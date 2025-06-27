@@ -126,7 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         command::Command::GenerateDepositAddress => {
-            let address = wallet.generate_deposit_address(true).await?;
+            let address = wallet.generate_deposit_address(false).await?;
             println!("{}", address);
         }
     }
