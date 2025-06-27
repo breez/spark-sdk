@@ -7,6 +7,7 @@ use bitcoin::{
     secp256k1::PublicKey,
 };
 use spark_protos::spark::{SendLeafKeyTweak, TransferPackage};
+use uuid::Uuid;
 
 use crate::{
     services::transfer::TransferServiceError,
@@ -21,7 +22,7 @@ pub struct LeafKeyTweak {
 }
 
 pub struct Transfer {
-    pub id: String,
+    pub id: Uuid,
     pub sender_identity_public_key: PublicKey,
     pub receiver_identity_public_key: PublicKey,
     pub status: TransferStatus,
@@ -245,7 +246,7 @@ impl<S: Signer> TransferService<S> {
 
     pub async fn send_transfer_with_key_tweaks(
         &self,
-        tweaks: Vec<LeafKeyTweak>,
+        tweaks: &Vec<LeafKeyTweak>,
         receiver_public_key: &PublicKey,
     ) -> Result<Transfer, TransferServiceError> {
         todo!()
@@ -264,7 +265,7 @@ impl<S: Signer> TransferService<S> {
 
     pub async fn query_transfer(
         &self,
-        transfer_id: &str,
+        transfer_id: &Uuid,
     ) -> Result<Option<Transfer>, TransferServiceError> {
         todo!()
     }

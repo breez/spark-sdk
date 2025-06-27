@@ -6,7 +6,7 @@ use spark::{
     address::SparkAddress,
     bitcoin::BitcoinService,
     operator::rpc::{ConnectionManager, SparkRpcClient},
-    services::{DepositService, Transfer, TransferService},
+    services::{DepositService, LightningSendPayment, LightningService, Transfer, TransferService},
     signer::Signer,
     ssp::ServiceProvider,
     tree::{TreeNode, TreeNodeId, TreeService, TreeState},
@@ -25,27 +25,39 @@ where
     signer: S,
     tree_service: TreeService<S>,
     transfer_service: Arc<TransferService<S>>,
+    lightning_service: Arc<LightningService<S>>,
 }
 
 impl<S: Signer + Clone> SparkWallet<S> {
     pub async fn new(config: SparkWalletConfig, signer: S) -> Result<Self, SparkWalletError> {
         let identity_public_key = signer.get_identity_public_key()?;
         let connection_manager = ConnectionManager::new();
+
+        // spark operator
         let spark_service_channel = connection_manager
             .get_channel(config.operator_pool.get_coordinator())
             .await?;
         let bitcoin_service = BitcoinService::new(config.network);
-        let spark_rpc_client =
-            SparkRpcClient::new(spark_service_channel, config.network, signer.clone());
-        let _service_provider = ServiceProvider::new(
+        let spark_rpc_client = Arc::new(SparkRpcClient::new(
+            spark_service_channel,
+            config.network,
+            signer.clone(),
+        ));
+        let _service_provider = Arc::new(ServiceProvider::new(
             config.service_provider_config.clone(),
             config.network,
             signer.clone(),
-        );
+        ));
 
+        let lightning_service = Arc::new(LightningService::new(
+            spark_rpc_client.clone(),
+            _service_provider.clone(),
+            config.network,
+            signer.clone(),
+        ));
         let deposit_service = DepositService::new(
             bitcoin_service,
-            spark_rpc_client,
+            spark_rpc_client.clone(),
             identity_public_key,
             config.network,
             config.operator_pool.clone(),
@@ -62,9 +74,43 @@ impl<S: Signer + Clone> SparkWallet<S> {
             signer,
             tree_service,
             transfer_service,
+            lightning_service,
         })
     }
 
+    pub async fn pay_lightning_invoice(
+        &self,
+        invoice: &String,
+    ) -> Result<LightningSendPayment, SparkWalletError> {
+        let decoded_invoice = self.lightning_service.validate_payment(invoice)?;
+        let invoice_amount_sat = decoded_invoice
+            .amount_milli_satoshis()
+            .map(|msats| msats.div_ceil(1000))
+            .ok_or(SparkWalletError::ValidationError(invoice.to_string()))?;
+
+        let leaves = self
+            .tree_service
+            .select_leaves_by_amount(invoice_amount_sat)
+            .await?;
+
+        // start the lightning swap with the operator
+        let swap = self
+            .lightning_service
+            .start_lightning_swap(invoice, &leaves)
+            .await?;
+
+        // send the leaves to the operator
+        let _ = self
+            .transfer_service
+            .send_transfer_with_key_tweaks(&swap.leaves, &swap.receiver_identity_public_key)
+            .await?;
+
+        // finalize the lightning swap with the ssp - send the actual lightning payment
+        Ok(self
+            .lightning_service
+            .finalize_lightning_swap(&swap)
+            .await?)
+    }
     // TODO: In the js sdk this function calls an electrum server to fetch the transaction hex based on a txid.
     // Intuitively this function is being called when you've already learned about a transaction, so it could be passed in directly.
     /// Claims a deposit by finding the first unused deposit address in the transaction outputs.

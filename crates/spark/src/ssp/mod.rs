@@ -5,6 +5,7 @@ mod graphql;
 mod service_provider;
 
 use bitcoin::secp256k1::PublicKey;
+pub use error::ServiceProviderError;
 pub use graphql::types::*;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};

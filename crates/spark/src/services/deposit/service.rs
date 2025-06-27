@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use bitcoin::{
     Address, Amount, OutPoint, ScriptBuf, Transaction, TxIn, TxOut,
@@ -34,7 +37,7 @@ where
     S: Signer,
 {
     bitcoin_service: BitcoinService,
-    client: SparkRpcClient<S>,
+    client: Arc<SparkRpcClient<S>>,
     identity_public_key: PublicKey,
     network: Network,
     operator_pool: OperatorPool,
@@ -58,7 +61,7 @@ where
 
     pub fn new(
         bitcoin_service: BitcoinService,
-        client: SparkRpcClient<S>,
+        client: Arc<SparkRpcClient<S>>,
         identity_public_key: PublicKey,
         network: impl Into<Network>,
         operator_pool: OperatorPool,

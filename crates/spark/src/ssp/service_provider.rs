@@ -1,3 +1,5 @@
+use bitcoin::secp256k1::PublicKey;
+
 use crate::{
     Network,
     signer::Signer,
@@ -17,6 +19,7 @@ pub struct ServiceProvider<S>
 where
     S: Signer,
 {
+    identity_public_key: PublicKey,
     gql_client: GraphQLClient<S>,
 }
 
@@ -27,8 +30,13 @@ where
     /// Create a new GraphQLClient with the given configuration, network, and signer
     pub fn new(config: ServiceProviderConfig, network: Network, signer: S) -> Self {
         Self {
+            identity_public_key: config.identity_public_key,
             gql_client: GraphQLClient::new(config.into(), network, signer),
         }
+    }
+
+    pub fn identity_public_key(&self) -> PublicKey {
+        self.identity_public_key
     }
 
     /// Get a swap fee estimate
