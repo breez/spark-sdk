@@ -29,8 +29,6 @@ pub trait Signer {
     fn sign_message_ecdsa_with_identity_key<T: AsRef<[u8]>>(
         &self,
         message: T,
-        apply_hashing: bool,
-        network: Network,
     ) -> Result<Signature, SignerError>;
     async fn generate_frost_signing_commitments(&self) -> Result<SigningCommitments, SignerError>;
     // TODO: Create a method generate_public_key function that takes a leaf id.

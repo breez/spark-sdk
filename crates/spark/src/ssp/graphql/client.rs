@@ -171,7 +171,7 @@ where
         // Sign the challenge with the identity key
         let signature = self
             .signer
-            .sign_message_ecdsa_with_identity_key(&challenge_bytes, true, self.network)?
+            .sign_message_ecdsa_with_identity_key(&challenge_bytes)?
             .serialize_der()
             .to_vec();
 

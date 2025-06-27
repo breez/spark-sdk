@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use bip32::{ChildNumber, XPrv};
-use bitcoin::secp256k1::{self, SecretKey};
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
+use bitcoin::secp256k1::{self, Message, SecretKey};
 use bitcoin::{
     hashes::{Hash, sha256},
     key::Secp256k1,
@@ -130,10 +130,13 @@ impl Signer for DefaultSigner {
     fn sign_message_ecdsa_with_identity_key<T: AsRef<[u8]>>(
         &self,
         message: T,
-        apply_hashing: bool,
-        network: Network,
     ) -> Result<Signature, SignerError> {
-        todo!()
+        let digest = sha256::Hash::hash(message.as_ref());
+        let sig = self.secp.sign_ecdsa(
+            &Message::from_digest(digest.to_byte_array()),
+            &self.identity_key,
+        );
+        Ok(sig)
     }
 
     async fn generate_frost_signing_commitments(&self) -> Result<SigningCommitments, SignerError> {

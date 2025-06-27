@@ -102,11 +102,9 @@ where
         // Serialize the challenge to match what the server uses
         let challenge_bytes = challenge.encode_to_vec(); // This is the same as proto.Marshal in Go.
 
-        let signature = self.signer.sign_message_ecdsa_with_identity_key(
-            &challenge_bytes,
-            true,
-            self.network,
-        )?;
+        let signature = self
+            .signer
+            .sign_message_ecdsa_with_identity_key(&challenge_bytes)?;
 
         let verify_req = VerifyChallengeRequest {
             protected_challenge: Some(protected_challenge),
