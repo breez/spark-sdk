@@ -3,7 +3,10 @@ use clap::Subcommand;
 #[derive(Clone, Debug, Subcommand)]
 pub enum Command {
     /// Claim a deposit after it has been confirmed onchain.
-    ClaimDeposit { address: String },
+    ClaimDeposit {
+        /// The transaction ID of the deposit transaction.
+        txid: String,
+    },
 
     /// Generate a new onchain deposit address.
     GenerateDepositAddress,

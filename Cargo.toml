@@ -12,7 +12,6 @@ bitcoin = "0.32.6"
 chrono = { version = "0.4.37", features = ["serde"] }
 clap = "4.5.40"
 ecies = "0.2.0"
-electrum-client = "0.23.1"
 figment = "0.10.19"
 # frost-core = "2.1.0"
 frost-core = { package = "frost-core-unofficial", version = "2.2.0" }

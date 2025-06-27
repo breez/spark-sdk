@@ -1,16 +1,17 @@
 use std::{fs::canonicalize, path::PathBuf};
 
 use bip39::Mnemonic;
-use clap::Parser;
-use electrum_client::{
-    ElectrumApi,
-    bitcoin::{Address, address::NetworkUnchecked},
+use bitcoin::{
+    Address, OutPoint, Transaction, Txid, address::NetworkUnchecked,
+    consensus::encode::deserialize_hex,
 };
+use clap::Parser;
 use figment::{
     Figment,
     providers::{Env, Format, Yaml},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use spark_wallet::{DefaultSigner, SparkWalletConfig};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -32,7 +33,9 @@ struct Args {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
-    pub electrum_url: String,
+    pub mempool_url: String,
+    pub mempool_username: String,
+    pub mempool_password: String,
     pub log_filter: String,
     pub log_path: PathBuf,
     pub mnemonic: Mnemonic,
@@ -40,7 +43,9 @@ pub struct Config {
     pub spark_config: SparkWalletConfig,
 }
 const DEFAULT_CONFIG: &str = r#"
-electrum_url: "https://regtest-mempool.us-west-2.sparkinfra.net/api"
+mempool_url: "https://regtest-mempool.us-west-2.sparkinfra.net/api"
+mempool_username: "spark-sdk"
+mempool_password: "mCMk1JqlBNtetUNy"
 log_filter: "spark_wallet=debug,spark=debug,info"
 log_path: "spark.log"
 passphrase: ""
@@ -101,24 +106,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let wallet = spark_wallet::SparkWallet::new(config.spark_config, signer).await?;
     match args.command {
-        command::Command::ClaimDeposit { address } => {
-            let address: Address<NetworkUnchecked> = address.parse()?;
-            let address = address.require_network(network.try_into()?)?;
-            let electrum_client = electrum_client::Client::new(&config.electrum_url)?;
-            let unspent = electrum_client.script_list_unspent(&address.script_pubkey())?;
-            if unspent.is_empty() {
-                println!("No unspent outputs found for address: {}", address);
-                return Ok(());
-            }
-
-            if unspent.len() > 1 {
-                println!("Multiple unspent outputs found for address: {}", address);
-                return Ok(());
-            }
-
-            let unspent = unspent.into_iter().nth(0).unwrap();
-            let tx = electrum_client.transaction_get(&unspent.tx_hash)?;
-            let leaves = wallet.claim_deposit(tx, unspent.tx_pos as u32).await?;
+        command::Command::ClaimDeposit { txid } => {
+            println!("1");
+            let tx = get_transaction(&config, txid).await?;
+            println!("2");
+            // TODO: Look for correct output index
+            let leaves = wallet.claim_deposit(tx, 1).await?;
+            println!("3");
             println!(
                 "Claimed deposit: {}",
                 serde_json::to_string_pretty(&leaves)?
@@ -159,4 +153,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+async fn get_transaction(
+    config: &Config,
+    txid: String,
+) -> Result<Transaction, Box<dyn std::error::Error>> {
+    let url = format!("{}/tx/{}/hex", config.mempool_url, txid);
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .basic_auth(
+            config.mempool_username.clone(),
+            Some(config.mempool_password.clone()),
+        )
+        .send()
+        .await?;
+    let hex = response.text().await?;
+    let tx = deserialize_hex(&hex)?;
+    Ok(tx)
 }
