@@ -13,7 +13,6 @@ pub enum ServiceError {
     // Lightning related errors
     #[error("invoice decoding error: {0}")]
     InvoiceDecodingError(String),
-
     #[error("SSP swap error: {0}")]
     SSPswapError(String),
 

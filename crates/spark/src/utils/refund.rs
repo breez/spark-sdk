@@ -101,7 +101,7 @@ pub async fn sign_refunds<S: Signer>(
             .await?;
 
         signed_refunds.push(SignedTx {
-            node_id: leaf.node.id.clone(),
+            node_id: leaf.node.id.clone().to_string(),
             signing_public_key: leaf.signing_public_key.clone(),
             tx: new_refund_tx,
             user_signature: user_signature_share,

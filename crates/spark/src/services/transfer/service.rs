@@ -7,6 +7,7 @@ use bitcoin::{
     secp256k1::PublicKey,
 };
 use spark_protos::spark::{SendLeafKeyTweak, TransferPackage};
+use uuid::Uuid;
 
 use crate::{
     services::transfer::TransferServiceError,

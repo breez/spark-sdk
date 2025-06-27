@@ -6,7 +6,7 @@ use spark::{
     address::SparkAddress,
     bitcoin::BitcoinService,
     operator::rpc::{ConnectionManager, SparkRpcClient},
-    services::{DepositService, Transfer, TransferService},
+    services::{DepositService, LightningSendPayment, LightningService, Transfer, TransferService},
     signer::Signer,
     ssp::ServiceProvider,
     tree::{TreeNode, TreeNodeId, TreeService, TreeState},
@@ -25,6 +25,7 @@ where
     signer: S,
     tree_service: TreeService<S>,
     transfer_service: Arc<TransferService<S>>,
+    lightning_service: Arc<LightningService<S>>,
 }
 
 impl<S: Signer + Clone> SparkWallet<S> {
@@ -37,27 +38,23 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .get_channel(config.operator_pool.get_coordinator())
             .await?;
         let bitcoin_service = BitcoinService::new(config.network);
-        let spark_rpc_client =
-            SparkRpcClient::new(spark_service_channel, config.network, signer.clone());
-        let _service_provider = ServiceProvider::new(
-            config.service_provider_config.clone(),
+        let spark_rpc_client = Arc::new(SparkRpcClient::new(
+            spark_service_channel,
             config.network,
             signer.clone(),
-        );
-
-        // spark ssp
-        let ssp_client = Arc::new(ServiceProvider::new(
-            // TODO: Should be taken from config
-            ServiceProviderOptions {
-                base_url: "".to_string(),
-                schema_endpoint: None,
-                identity_public_key,
-            },
+        ));
+        let _service_provider = Arc::new(ServiceProvider::new(
+            config.service_provider_config.clone(),
             config.network,
             signer.clone(),
         ));
 
-        let bitcoin_service = BitcoinService::new(config.network);
+        let lightning_service = Arc::new(LightningService::new(
+            spark_rpc_client.clone(),
+            _service_provider.clone(),
+            config.network,
+            signer.clone(),
+        ));
         let deposit_service = DepositService::new(
             bitcoin_service,
             spark_rpc_client.clone(),
@@ -77,6 +74,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
             signer,
             tree_service,
             transfer_service,
+            lightning_service,
         })
     }
 
@@ -84,7 +82,16 @@ impl<S: Signer + Clone> SparkWallet<S> {
         &self,
         invoice: &String,
     ) -> Result<LightningSendPayment, SparkWalletError> {
-        let leaves = self.leaf_manager.get_leaves().await;
+        let decoded_invoice = self.lightning_service.validate_payment(invoice)?;
+        let invoice_amount_sat = decoded_invoice
+            .amount_milli_satoshis()
+            .map(|msats| msats.div_ceil(1000))
+            .ok_or(SparkWalletError::ValidationError(invoice.to_string()))?;
+
+        let leaves = self
+            .tree_service
+            .select_leaves_by_amount(invoice_amount_sat)
+            .await?;
 
         // start the lightning swap with the operator
         let swap = self

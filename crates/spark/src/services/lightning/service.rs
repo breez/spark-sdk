@@ -1,10 +1,11 @@
+use crate::core::Network;
 use crate::operator::rpc::SparkRpcClient;
 use crate::services::{
     LeafKeyTweak, ServiceError, from_proto_signing_commitments, to_proto_signed_tx,
 };
-use crate::ssp::{RequestLightningSendInput, ServiceProvider};
+use crate::ssp::{BitcoinNetwork, RequestLightningSendInput, ServiceProvider};
 use crate::utils::refund as refund_utils;
-use crate::{Network, signer::Signer, tree::TreeNode};
+use crate::{signer::Signer, tree::TreeNode};
 use bitcoin::hashes::{Hash, HashEngine, sha256};
 use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::Identifier;
@@ -31,12 +32,15 @@ pub struct LightningSwap {
 #[derive(Debug, Clone, Deserialize)]
 pub struct LightningSendPayment {
     pub id: String,
-    pub status: RequestStatus,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub network: Network,
     pub encoded_invoice: String,
-    pub payment_hash: String,
-    pub amount_sats: i64,
-    pub fee_sats: i64,
-    pub preimage: Option<String>,
+    pub fee_msat: u64,
+    pub idempotency_key: String,
+    pub status: RequestStatus,
+    pub transfer_id: Option<String>,
+    pub payment_preimage: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -58,16 +62,36 @@ impl From<crate::ssp::RequestStatus> for RequestStatus {
     }
 }
 
-impl From<crate::ssp::LightningSendRequest> for LightningSendPayment {
-    fn from(value: crate::ssp::LightningSendRequest) -> Self {
-        Self {
+impl TryFrom<crate::ssp::LightningSendRequest> for LightningSendPayment {
+    type Error = ServiceError;
+
+    fn try_from(value: crate::ssp::LightningSendRequest) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: value.id,
-            status: value.status.into(),
+            created_at: value.created_at.timestamp(),
+            updated_at: value.updated_at.timestamp(),
+            network: value.network.into(),
             encoded_invoice: value.encoded_invoice,
-            payment_hash: value.payment_hash,
-            amount_sats: value.amount_sats,
-            fee_sats: value.fee_sats,
-            preimage: value.preimage,
+            fee_msat: value
+                .fee
+                .original_value
+                .parse()
+                .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))?,
+            idempotency_key: value.idempotency_key,
+            status: value.status.into(),
+            transfer_id: value.transfer.and_then(|t| t.spark_id),
+            payment_preimage: value.payment_preimage,
+        })
+    }
+}
+
+impl From<BitcoinNetwork> for Network {
+    fn from(value: BitcoinNetwork) -> Self {
+        match value {
+            BitcoinNetwork::Mainnet => Network::Mainnet,
+            BitcoinNetwork::Testnet => Network::Testnet,
+            BitcoinNetwork::Signet => Network::Signet,
+            BitcoinNetwork::Regtest => Network::Regtest,
         }
     }
 }
@@ -105,20 +129,22 @@ where
         invoice: &str,
         leaves: &Vec<TreeNode>,
     ) -> Result<LightningSwap, ServiceError> {
-        let invoice = self.validate_payment(invoice, leaves)?;
+        let invoice = self.validate_payment(invoice)?;
         let amount_sats = get_invoice_amount_sats(&invoice)?;
         let payment_hash = invoice.payment_hash();
+
+        let leaves_amount: u64 = leaves.iter().map(|l| l.value).sum();
+        if leaves_amount != amount_sats {
+            return Err(ServiceError::ValidationError(
+                "Amount must match the invoice amount".to_string(),
+            ));
+        }
 
         // prepare leaf tweaks
         let mut leaf_tweaks = Vec::with_capacity(leaves.len());
         for tree_node in leaves {
-            // hash the leaf id
-            let mut engine = sha256::Hash::engine();
-            engine.input(tree_node.id.as_bytes());
-            let leaf_hash = sha256::Hash::from_engine(engine);
-
-            let signing_public_key = self.signer.generate_public_key(Some(leaf_hash))?;
-            let new_signing_public_key = self.signer.generate_public_key(None)?;
+            let signing_public_key = self.signer.get_public_key_for_node(&tree_node.id)?;
+            let new_signing_public_key = self.signer.generate_random_public_key()?;
             // derive the signing key
             let leaf_tweak = LeafKeyTweak {
                 node: tree_node.clone(),
@@ -168,13 +194,10 @@ where
             })
             .await?;
 
-        Ok(res.into())
+        res.try_into()
     }
-    fn validate_payment(
-        &self,
-        invoice: &str,
-        leaves: &Vec<TreeNode>,
-    ) -> Result<Bolt11Invoice, ServiceError> {
+
+    pub fn validate_payment(&self, invoice: &str) -> Result<Bolt11Invoice, ServiceError> {
         let invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
 
@@ -183,13 +206,6 @@ where
         if amount_sats == 0 {
             return Err(ServiceError::ValidationError(
                 "Amount must be greater than 0".to_string(),
-            ));
-        }
-
-        let leaves_amount: u64 = leaves.iter().map(|l| l.value).sum();
-        if leaves_amount != amount_sats {
-            return Err(ServiceError::ValidationError(
-                "Amount must match the invoice amount".to_string(),
             ));
         }
 
@@ -207,7 +223,10 @@ where
         is_inbound_payment: bool,
     ) -> Result<InitiatePreimageSwapResponse, ServiceError> {
         // get signing commitments
-        let node_ids: Vec<String> = leaves.iter().map(|l| l.node.id.clone()).collect();
+        let node_ids: Vec<String> = leaves
+            .iter()
+            .map(|l| l.node.id.clone().to_string())
+            .collect();
         let spark_commitments = self
             .spark_client
             .get_signing_commitments(GetSigningCommitmentsRequest { node_ids })
@@ -251,7 +270,7 @@ where
                 transfer_id: transfer_id.clone(),
                 owner_identity_public_key: self
                     .signer
-                    .get_identity_public_key(0)?
+                    .get_identity_public_key()?
                     .serialize()
                     .to_vec(),
                 receiver_identity_public_key: receiver_pubkey.serialize().to_vec(),
