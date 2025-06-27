@@ -24,8 +24,28 @@ use crate::{
     signer::{Signer, SignerError},
 };
 
+const PURPOSE: u32 = 8797555;
+fn coin_type(network: Network) -> ChildNumber {
+    let coin_type: u32 = match network {
+        Network::Mainnet => 0,
+        _ => 1,
+    };
+    ChildNumber::new(coin_type, true)
+        .expect(format!("Hardened coin type {} is invalid", coin_type).as_str())
+}
+
+fn purpose() -> ChildNumber {
+    ChildNumber::new(PURPOSE, true)
+        .expect(format!("Hardened purpose {} is invalid", PURPOSE).as_str())
+}
+
+fn zero() -> ChildNumber {
+    ChildNumber::new(0, true).expect("Hardened zero is invalid")
+}
+
 #[derive(Clone)]
 pub struct DefaultSigner {
+    identity_key: XPrv,
     master_key: XPrv,
     network: Network,
     nonce_commitments: Arc<Mutex<HashMap<Vec<u8>, SigningNonces>>>, // TODO: Nonce commitments are never cleared, is this okay?
@@ -37,12 +57,26 @@ pub struct DefaultSigner {
 pub enum DefaultSignerError {
     #[error("invalid seed")]
     InvalidSeed,
+
+    #[error("key derivation error: {0}")]
+    KeyDerivationError(String),
+}
+
+impl From<bip32::Error> for DefaultSignerError {
+    fn from(e: bip32::Error) -> Self {
+        DefaultSignerError::KeyDerivationError(e.to_string())
+    }
 }
 
 impl DefaultSigner {
     pub fn new(seed: [u8; 32], network: Network) -> Result<Self, DefaultSignerError> {
         let master_key = XPrv::new(seed).map_err(|_| DefaultSignerError::InvalidSeed)?;
+        let identity_key = master_key
+            .derive_child(purpose())?
+            .derive_child(coin_type(network))?
+            .derive_child(zero())?;
         Ok(DefaultSigner {
+            identity_key,
             master_key,
             network,
             nonce_commitments: Arc::new(Mutex::new(HashMap::new())),
@@ -124,7 +158,10 @@ impl Signer for DefaultSigner {
     }
 
     fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
-        todo!()
+        Ok(
+            PublicKey::from_slice(&self.identity_key.public_key().to_bytes())
+                .map_err(|e| SignerError::KeyDerivationError(e.to_string()))?,
+        )
     }
 
     async fn sign_frost(
@@ -169,5 +206,30 @@ impl Signer for DefaultSigner {
         //     ),
         // )?;
         // Ok(signature_share)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        Network,
+        signer::default_signer::{coin_type, purpose, zero},
+    };
+
+    /// Ensure constants are defined correctly and don't panic.
+    #[test]
+    fn test_constants() {
+        assert_eq!(coin_type(Network::Mainnet).index(), 0);
+        assert_eq!(coin_type(Network::Mainnet).is_hardened(), true);
+        assert_eq!(coin_type(Network::Testnet).index(), 1);
+        assert_eq!(coin_type(Network::Testnet).is_hardened(), true);
+        assert_eq!(coin_type(Network::Regtest).index(), 1);
+        assert_eq!(coin_type(Network::Regtest).is_hardened(), true);
+        assert_eq!(coin_type(Network::Signet).index(), 1);
+        assert_eq!(coin_type(Network::Signet).is_hardened(), true);
+        assert_eq!(purpose().index(), 8797555u32);
+        assert_eq!(purpose().is_hardened(), true);
+        assert_eq!(zero().index(), 0u32);
+        assert_eq!(zero().is_hardened(), true);
     }
 }
