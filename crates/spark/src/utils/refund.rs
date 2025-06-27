@@ -62,6 +62,7 @@ pub fn create_refund_tx(
         value: node_tx.output[0].value,
         script_pubkey: addr.script_pubkey(),
     });
+    new_refund_tx.output.push(ephemeral_anchor_output());
 
     Ok(new_refund_tx)
 }
@@ -111,4 +112,11 @@ pub async fn sign_refunds<S: Signer>(
     }
 
     Ok(signed_refunds)
+}
+
+fn ephemeral_anchor_output() -> bitcoin::TxOut {
+    bitcoin::TxOut {
+        value: bitcoin::Amount::from_sat(0),
+        script_pubkey: bitcoin::ScriptBuf::from_bytes(vec![bitcoin::opcodes::OP_TRUE.to_u8()]),
+    }
 }

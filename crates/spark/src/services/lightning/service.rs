@@ -279,5 +279,5 @@ fn get_invoice_amount_sats(invoice: &Bolt11Invoice) -> Result<u64, ServiceError>
         .amount_milli_satoshis()
         .ok_or(ServiceError::InvoiceDecodingError(invoice.to_string()))?;
 
-    Ok(invoice_amount_msats / 1000)
+    Ok(invoice_amount_msats.div_ceil(1000))
 }
