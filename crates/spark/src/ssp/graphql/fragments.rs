@@ -18,6 +18,9 @@ fragment TransferFields on Transfer {
     ...CurrencyAmountFields
   }
   spark_id
+  user_request {
+    id
+  }
 }
 "#;
 

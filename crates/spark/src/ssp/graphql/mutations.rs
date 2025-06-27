@@ -8,7 +8,7 @@ use super::fragments::{
 /// GetChallenge mutation
 const GET_CHALLENGE: &str = r#"
 mutation GetChallenge(
-  $public_key: String!
+  $public_key: PublicKey!
 ) {
   get_challenge(input: {
     public_key: $public_key
@@ -27,7 +27,7 @@ const VERIFY_CHALLENGE: &str = r#"
 mutation VerifyChallenge(
   $protected_challenge: String!
   $signature: String!
-  $identity_public_key: String!
+  $identity_public_key: PublicKey!
   $provider: Provider
 ) {
   verify_challenge(input: {
@@ -93,12 +93,14 @@ pub fn request_lightning_receive() -> String {
 /// RequestLightningSend mutation
 const REQUEST_LIGHTNING_SEND: &str = r#"
 mutation RequestLightningSend(
-  $encoded_invoice: String!,
+  $encoded_invoice: String!
   $idempotency_key: String!
+  $amount_sats: Long
 ) {
   request_lightning_send(input: {
     encoded_invoice: $encoded_invoice,
-    idempotency_key: $idempotency_key
+    idempotency_key: $idempotency_key,
+    amount_sats: $amount_sats
   }) {
     request {
       ...LightningSendRequestFields
@@ -122,9 +124,9 @@ pub fn request_lightning_send() -> String {
 /// RequestCoopExit mutation
 const REQUEST_COOP_EXIT: &str = r#"
 mutation RequestCoopExit(
-  $leaf_external_ids: [String!]!, 
-  $withdrawal_address: String!, 
-  $idempotency_key: String!,
+  $leaf_external_ids: [UUID!]!
+  $withdrawal_address: String!
+  $idempotency_key: String!
   $exit_speed: ExitSpeed!
 ) {
   request_coop_exit(input: {
@@ -155,8 +157,8 @@ pub fn request_coop_exit() -> String {
 /// CompleteCoopExit mutation
 const COMPLETE_COOP_EXIT: &str = r#"
 mutation CompleteCoopExit(
-  $user_outbound_transfer_external_id: String!,
-  $coop_exit_request_id: String!
+  $user_outbound_transfer_external_id: UUID!
+  $coop_exit_request_id: ID!
 ) {
   complete_coop_exit(input: {
     user_outbound_transfer_external_id: $user_outbound_transfer_external_id,
@@ -184,11 +186,11 @@ pub fn complete_coop_exit() -> String {
 /// RequestLeavesSwap mutation
 const REQUEST_LEAVES_SWAP: &str = r#"
 mutation RequestLeavesSwap(
-  $adaptor_pubkey: String!,
-  $total_amount_sats: Int!,
-  $target_amount_sats: Int!,
-  $fee_sats: Int!,
-  $user_leaves: [String!]!,
+  $adaptor_pubkey: PublicKey!
+  $total_amount_sats: Int!
+  $target_amount_sats: Int!
+  $fee_sats: Int!
+  $user_leaves: [UserLeafInput!]!
   $idempotency_key: String!
 ) {
   request_leaves_swap(input: {
@@ -222,9 +224,9 @@ pub fn request_leaves_swap() -> String {
 /// CompleteLeavesSwap mutation
 const COMPLETE_LEAVES_SWAP: &str = r#"
 mutation CompleteLeavesSwap(
-  $adaptor_secret_key: String!,
-  $user_outbound_transfer_external_id: String!,
-  $leaves_swap_request_id: String!
+  $adaptor_secret_key: String!
+  $user_outbound_transfer_external_id: UUID!
+  $leaves_swap_request_id: ID!
 ) {
   complete_leaves_swap(input: {
     adaptor_secret_key: $adaptor_secret_key,
@@ -254,13 +256,13 @@ pub fn complete_leaves_swap() -> String {
 /// ClaimStaticDeposit mutation
 const CLAIM_STATIC_DEPOSIT: &str = r#"
 mutation ClaimStaticDeposit(
-  $transaction_id: String!,
-  $output_index: Int!,
-  $network: BitcoinNetwork!,
-  $request_type: ClaimStaticDepositRequestType!,
-  $credit_amount_sats: Int!,
-  $deposit_secret_key: String!,
-  $signature: String!,
+  $transaction_id: String!
+  $output_index: Int!
+  $network: BitcoinNetwork!
+  $request_type: ClaimStaticDepositRequestType!
+  $credit_amount_sats: Int
+  $deposit_secret_key: String!
+  $signature: String!
   $quote_signature: String!
 ) {
   claim_static_deposit(input: {

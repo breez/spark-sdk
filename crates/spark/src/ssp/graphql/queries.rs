@@ -9,9 +9,11 @@ use super::fragments::{
 const LIGHTNING_SEND_FEE_ESTIMATE: &str = r#"
 query LightningSendFeeEstimate(
   $encoded_invoice: String!
+  amount_sats: Long
 ) {
   lightning_send_fee_estimate(input: {
-    encoded_invoice: $encoded_invoice
+    encoded_invoice: $encoded_invoice,
+    amount_sats: $amount_sats
   }) {
     fee_estimate {
       ...FeeEstimateFields
@@ -29,8 +31,8 @@ pub fn lightning_send_fee_estimate() -> String {
 
 /// CoopExitFeeEstimate query
 const COOP_EXIT_FEE_ESTIMATE: &str = r#"
-query CoopExitEstimates(
-  $leaf_external_ids: [String!]!,
+query CoopExitFeeEstimate(
+  $leaf_external_ids: [UUID!]!
   $withdrawal_address: String!
 ) {
   coop_exit_fee_estimates(input: {
@@ -82,8 +84,8 @@ pub fn leaves_swap_fee_estimate() -> String {
 /// GetClaimDepositQuote query
 const GET_CLAIM_DEPOSIT_QUOTE: &str = r#"
 query StaticDepositQuote(
-  $transaction_id: String!,
-  $output_index: Int!,
+  $transaction_id: String!
+  $output_index: Int!
   $network: BitcoinNetwork!
 ) {
   static_deposit_quote(input: {
@@ -104,12 +106,25 @@ pub fn get_claim_deposit_quote() -> String {
     GET_CLAIM_DEPOSIT_QUOTE.to_string()
 }
 
+/// Transfer query
+const GET_TRANSFER: &str = r#"
+query Transfer($transfer_spark_id: UUID!) {
+  transfer(transfer_spark_id: $transfer_spark_id) {
+    ...TransferFields
+  }
+}
+"#;
+
+pub fn get_transfer() -> String {
+    with_fragments(GET_TRANSFER, &[TRANSFER_FIELDS, CURRENCY_AMOUNT_FIELDS])
+}
+
 /// UserRequest query - used for different types of user requests
 const USER_REQUEST: &str = r#"
 query UserRequest($request_id: ID!) {
   user_request(request_id: $request_id) {
-    ...RequestBaseFields
     ... on LightningReceiveRequest {
+      ...RequestBaseFields
       invoice {
         ...LightningInvoiceFields
       }
@@ -119,6 +134,7 @@ query UserRequest($request_id: ID!) {
       payment_preimage
     }
     ... on LightningSendRequest {
+      ...RequestBaseFields
       encoded_invoice
       fee {
         ...CurrencyAmountFields
@@ -130,6 +146,7 @@ query UserRequest($request_id: ID!) {
       payment_preimage
     }
     ... on CoopExitRequest {
+      ...RequestBaseFields
       fee {
         ...CurrencyAmountFields
       }
@@ -145,6 +162,7 @@ query UserRequest($request_id: ID!) {
       }
     }
     ... on LeavesSwapRequest {
+      ...RequestBaseFields
       total_amount {
         ...CurrencyAmountFields
       }
