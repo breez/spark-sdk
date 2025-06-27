@@ -35,4 +35,5 @@ tonic = { version = "0.12.3", features = [
 ] }
 tonic-build = { version = "0.12.3", features = ["prost"] }
 tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
 uuid = { version = "1.17.0", features = ["v7"] }

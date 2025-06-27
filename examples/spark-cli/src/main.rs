@@ -1,4 +1,4 @@
-use std::{fs::canonicalize, io::Read, path::PathBuf};
+use std::{fs::canonicalize, path::PathBuf};
 
 use bip39::Mnemonic;
 use clap::Parser;
@@ -8,10 +8,11 @@ use electrum_client::{
 };
 use figment::{
     Figment,
-    providers::{Env, Format, Serialized, Yaml},
+    providers::{Env, Format, Yaml},
 };
 use serde::{Deserialize, Serialize};
-use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
+use spark_wallet::{DefaultSigner, SparkWalletConfig};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod command;
 
@@ -32,12 +33,16 @@ struct Args {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
     pub electrum_url: String,
+    pub log_filter: String,
+    pub log_path: PathBuf,
     pub mnemonic: Mnemonic,
     pub passphrase: String,
     pub spark_config: SparkWalletConfig,
 }
 const DEFAULT_CONFIG: &str = r#"
 electrum_url: "https://regtest-mempool.us-west-2.sparkinfra.net/api"
+log_filter: "spark_wallet=debug,spark=debug,info"
+log_path: "spark.log"
 passphrase: ""
 spark_config:
   network: "regtest"
@@ -79,6 +84,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let config: Config = figment.merge(Env::prefixed("SPARK_")).extract()?;
+
+    tracing_subscriber::registry()
+        .with(EnvFilter::new(&config.log_filter))
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
+        .init();
+
     let seed = config.mnemonic.to_seed(config.passphrase);
     let network = config.spark_config.network;
     let signer = DefaultSigner::new(
