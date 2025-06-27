@@ -166,6 +166,11 @@ impl Signer for DefaultSigner {
         let signing_key = self.derive_signing_key(hash)?;
         Ok(signing_key.public_key(&self.secp))
     }
+    fn generate_random_public_key(&self) -> Result<PublicKey, SignerError> {
+        let (_secret_key, public_key) = self.secp.generate_keypair(&mut thread_rng());
+        // TODO: save secret key in memory
+        Ok(public_key)
+    }
 
     fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
         Ok(self.identity_key.public_key(&self.secp))

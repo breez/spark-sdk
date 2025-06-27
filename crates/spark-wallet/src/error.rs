@@ -2,6 +2,9 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum SparkWalletError {
+    #[error("Invalid network")]
+    InvalidNetwork,
+
     #[error("Invalid address: {0}")]
     InvalidAddress(String),
 
@@ -25,6 +28,9 @@ pub enum SparkWalletError {
 
     #[error("Transfer service error: {0}")]
     TransferServiceError(#[from] spark::services::TransferServiceError),
+
+    #[error("Address error: {0}")]
+    AddressError(#[from] spark::address::error::AddressError),
 
     #[error("Tree service error: {0}")]
     TreeServiceError(#[from] spark::tree::TreeServiceError),

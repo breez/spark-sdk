@@ -1,6 +1,7 @@
 mod config;
 mod error;
 mod leaf;
+mod model;
 mod wallet;
 
 pub use config::*;
