@@ -1,14 +1,16 @@
+use std::sync::Arc;
+
 use crate::{services::TransferService, signer::Signer, tree::TreeNodeStatus};
 
 use super::{TreeNode, error::TreeServiceError, state::TreeState};
 
 pub struct TreeService<S: Signer> {
     state: TreeState,
-    transfer_service: TransferService<S>,
+    transfer_service: Arc<TransferService<S>>,
 }
 
 impl<S: Signer> TreeService<S> {
-    pub fn new(state: TreeState, transfer_service: TransferService<S>) -> Self {
+    pub fn new(state: TreeState, transfer_service: Arc<TransferService<S>>) -> Self {
         TreeService {
             state,
             transfer_service,

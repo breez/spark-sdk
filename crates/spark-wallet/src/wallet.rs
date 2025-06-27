@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bitcoin::{Address, Transaction};
 
 use spark::{
@@ -10,7 +12,7 @@ use spark::{
     tree::{TreeNode, TreeNodeId, TreeService, TreeState},
 };
 
-use crate::{WalletTransfer, leaf::WalletLeaf};
+use crate::{leaf::WalletLeaf, model::WalletTransfer};
 
 use super::{SparkWalletConfig, SparkWalletError};
 
@@ -22,7 +24,7 @@ where
     deposit_service: DepositService<S>,
     signer: S,
     tree_service: TreeService<S>,
-    transfer_service: TransferService<S>,
+    transfer_service: Arc<TransferService<S>>,
 }
 
 impl<S: Signer + Clone> SparkWallet<S> {
@@ -50,10 +52,10 @@ impl<S: Signer + Clone> SparkWallet<S> {
             signer.clone(),
         );
 
-        let transfer_service = TransferService::new(signer.clone());
+        let transfer_service = Arc::new(TransferService::new(signer.clone()));
         let tree_state = TreeState::new();
-        let tree_service = TreeService::new(tree_state, transfer_service);
-        let transfer_service = TransferService::new(signer.clone());
+        let tree_service = TreeService::new(tree_state, Arc::clone(&transfer_service));
+
         Ok(SparkWallet {
             config,
             deposit_service,
@@ -98,17 +100,16 @@ impl<S: Signer + Clone> SparkWallet<S> {
     pub async fn transfer(
         &self,
         amount_sat: u64,
-        receiver_address: &str,
+        receiver_address: &SparkAddress,
     ) -> Result<WalletTransfer, SparkWalletError> {
         // validate receiver address and get its pubkey
-        let receiver_address = receiver_address.parse::<SparkAddress>()?;
         if self.config.network != receiver_address.network {
             return Err(SparkWalletError::InvalidNetwork);
         }
         let receiver_pubkey = receiver_address.identity_public_key;
 
         // TODO: is there a good reason to allow self-transfers?
-        let is_self_transfer = receiver_pubkey == self.signer.get_identity_public_key(0)?;
+        let is_self_transfer = receiver_pubkey == self.signer.get_identity_public_key()?;
 
         // get leaves to transfer
         let leaves = self
