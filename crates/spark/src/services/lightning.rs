@@ -1,27 +1,28 @@
 use crate::core::Network;
 use crate::operator::rpc::SparkRpcClient;
+use crate::operator::rpc::spark::initiate_preimage_swap_request::Reason;
+use crate::operator::rpc::spark::{
+    GetSigningCommitmentsRequest, InitiatePreimageSwapRequest, InitiatePreimageSwapResponse,
+    InvoiceAmount, InvoiceAmountProof, StartUserSignedTransferRequest,
+};
 use crate::services::ServiceError;
 use crate::ssp::{BitcoinNetwork, RequestLightningSendInput, ServiceProvider};
 use crate::utils::refund as refund_utils;
 use crate::{signer::Signer, tree::TreeNode};
+use bip32::secp256k1::elliptic_curve::generic_array::iter;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::Identifier;
 use hex::ToHex;
 use lightning_invoice::Bolt11Invoice;
 use serde::{Deserialize, Serialize};
-use spark_protos::spark::initiate_preimage_swap_request::Reason;
-use spark_protos::spark::{
-    GetSigningCommitmentsRequest, InitiatePreimageSwapRequest, InitiatePreimageSwapResponse,
-    InvoiceAmount, InvoiceAmountProof, StartUserSignedTransferRequest,
-};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use super::LeafKeyTweak;
-use super::models::{map_signing_nonce_commitments, to_proto_signed_tx};
+use super::models::map_signing_nonce_commitments;
 
 pub struct LightningSwap {
     pub transfer_id: Uuid,
@@ -277,8 +278,8 @@ where
                 receiver_identity_public_key: receiver_pubkey.serialize().to_vec(),
                 expiry_time: Default::default(),
                 leaves_to_send: user_signed_refunds
-                    .iter()
-                    .map(|l| to_proto_signed_tx(l))
+                    .into_iter()
+                    .map(|l| l.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
             }),
             receiver_identity_public_key: receiver_pubkey.serialize().to_vec(),

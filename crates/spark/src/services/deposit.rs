@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use bitcoin::{
     Address, Amount, OutPoint, ScriptBuf, Transaction, TxIn, TxOut,
@@ -19,31 +16,21 @@ use crate::{
     Network,
     bitcoin::{BitcoinService, sighash_from_tx},
     core::initial_sequence,
-    operator::{OperatorPool, rpc::SparkRpcClient},
+    operator::{OperatorPool, rpc as operator_rpc},
     signer::Signer,
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
-};
-use spark_protos::{
-    common::{self, SignatureIntent},
-    spark::{
-        self, FinalizeNodeSignaturesRequest, GenerateDepositAddressRequest, NodeSignatures,
-        SigningJob, StartDepositTreeCreationRequest,
-    },
 };
 
 use super::{
     ServiceError,
-    models::{
-        map_public_keys, map_signature_shares, map_signing_nonce_commitments,
-        marshal_frost_commitment,
-    },
+    models::{map_public_keys, map_signature_shares, map_signing_nonce_commitments},
 };
 pub struct DepositService<S>
 where
     S: Signer,
 {
     bitcoin_service: BitcoinService,
-    client: Arc<SparkRpcClient<S>>,
+    client: Arc<operator_rpc::SparkRpcClient<S>>,
     identity_public_key: PublicKey,
     network: Network,
     operator_pool: OperatorPool,
@@ -61,13 +48,13 @@ impl<S> DepositService<S>
 where
     S: Signer,
 {
-    fn spark_network(&self) -> spark_protos::spark::Network {
+    fn spark_network(&self) -> operator_rpc::spark::Network {
         self.network.into()
     }
 
     pub fn new(
         bitcoin_service: BitcoinService,
-        client: Arc<SparkRpcClient<S>>,
+        client: Arc<operator_rpc::SparkRpcClient<S>>,
         identity_public_key: PublicKey,
         network: impl Into<Network>,
         operator_pool: OperatorPool,
@@ -197,27 +184,23 @@ where
 
         let tree_resp = self
             .client
-            .start_deposit_tree_creation(StartDepositTreeCreationRequest {
+            .start_deposit_tree_creation(operator_rpc::spark::StartDepositTreeCreationRequest {
                 identity_public_key: self.identity_public_key.serialize().to_vec(),
-                on_chain_utxo: Some(spark::Utxo {
+                on_chain_utxo: Some(operator_rpc::spark::Utxo {
                     raw_tx: serialize(&deposit_tx),
                     vout,
                     network: self.spark_network() as i32,
                     txid: deposit_txid.as_byte_array().to_vec(),
                 }),
-                root_tx_signing_job: Some(SigningJob {
+                root_tx_signing_job: Some(operator_rpc::spark::SigningJob {
                     signing_public_key: signing_public_key.serialize().to_vec(),
                     raw_tx: root_tx_bytes.clone(),
-                    signing_nonce_commitment: Some(marshal_frost_commitment(
-                        &root_nonce_commitment,
-                    )?),
+                    signing_nonce_commitment: Some(root_nonce_commitment.try_into()?),
                 }),
-                refund_tx_signing_job: Some(SigningJob {
+                refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
                     signing_public_key: signing_public_key.serialize().to_vec(),
                     raw_tx: refund_tx_bytes.clone(),
-                    signing_nonce_commitment: Some(marshal_frost_commitment(
-                        &refund_nonce_commitment,
-                    )?),
+                    signing_nonce_commitment: Some(refund_nonce_commitment.try_into()?),
                 }),
             })
             .await?;
@@ -320,9 +303,9 @@ where
 
         let finalize_resp = self
             .client
-            .finalize_node_signatures(FinalizeNodeSignaturesRequest {
-                intent: SignatureIntent::Creation as i32,
-                node_signatures: vec![NodeSignatures {
+            .finalize_node_signatures(operator_rpc::spark::FinalizeNodeSignaturesRequest {
+                intent: operator_rpc::common::SignatureIntent::Creation as i32,
+                node_signatures: vec![operator_rpc::spark::NodeSignatures {
                     node_id: root_node_signature_shares.node_id,
                     node_tx_signature: root_aggregate
                         .serialize()
@@ -401,7 +384,7 @@ where
     ) -> Result<DepositAddress, ServiceError> {
         let resp = self
             .client
-            .generate_deposit_address(GenerateDepositAddressRequest {
+            .generate_deposit_address(operator_rpc::spark::GenerateDepositAddressRequest {
                 signing_public_key: signing_public_key.serialize().to_vec(),
                 identity_public_key: self.identity_public_key.serialize().to_vec(),
                 network: self.spark_network() as i32,
@@ -438,7 +421,7 @@ where
         let resp = self
             .client
             .query_unused_deposit_addresses(
-                spark_protos::spark::QueryUnusedDepositAddressesRequest {
+                operator_rpc::spark::QueryUnusedDepositAddressesRequest {
                     identity_public_key: self.identity_public_key.serialize().to_vec(),
                     network: self.spark_network() as i32,
                 },
@@ -491,7 +474,7 @@ where
 
     fn validate_deposit_address(
         &self,
-        deposit_address: spark_protos::spark::Address,
+        deposit_address: crate::operator::rpc::spark::Address,
         user_signing_public_key: PublicKey,
         leaf_id: &TreeNodeId,
     ) -> Result<DepositAddress, ServiceError> {

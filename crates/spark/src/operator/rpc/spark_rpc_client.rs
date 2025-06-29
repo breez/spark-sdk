@@ -1,8 +1,8 @@
 use super::auth::OperatorAuth;
 use super::error::Result;
+use super::spark::*;
 use crate::Network;
 use crate::signer::Signer;
-use spark_protos::spark::*;
 use tonic::transport::Channel;
 
 pub struct SparkRpcClient<S>
@@ -24,8 +24,8 @@ where
 
     pub async fn finalize_node_signatures(
         &self,
-        req: spark_protos::spark::FinalizeNodeSignaturesRequest,
-    ) -> Result<spark_protos::spark::FinalizeNodeSignaturesResponse> {
+        req: FinalizeNodeSignaturesRequest,
+    ) -> Result<FinalizeNodeSignaturesResponse> {
         Ok(self
             .auth
             .spark_service_client()
