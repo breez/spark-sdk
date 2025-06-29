@@ -1,12 +1,10 @@
 use crate::core::Network;
 use crate::operator::rpc::SparkRpcClient;
-use crate::services::{
-    LeafKeyTweak, ServiceError, from_proto_signing_commitments, to_proto_signed_tx,
-};
+use crate::services::{ServiceError, from_proto_signing_commitments, to_proto_signed_tx};
 use crate::ssp::{BitcoinNetwork, RequestLightningSendInput, ServiceProvider};
 use crate::utils::refund as refund_utils;
 use crate::{signer::Signer, tree::TreeNode};
-use bitcoin::hashes::{Hash, HashEngine, sha256};
+use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::Identifier;
 use hex::ToHex;
@@ -21,6 +19,8 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
+
+use super::LeafKeyTweak;
 
 pub struct LightningSwap {
     pub transfer_id: Uuid,

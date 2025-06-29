@@ -10,10 +10,11 @@ use spark_protos::spark::{SendLeafKeyTweak, TransferPackage};
 use uuid::Uuid;
 
 use crate::{
-    services::transfer::TransferServiceError,
     signer::Signer,
     tree::{TreeNode, TreeNodeId},
 };
+
+use super::ServiceError;
 
 pub struct LeafKeyTweak {
     pub node: TreeNode,
@@ -103,13 +104,13 @@ impl<S: Signer> TransferService<S> {
         &self,
         transfer: &Transfer,
         config: Option<ClaimTransferConfig>,
-    ) -> Result<Vec<TreeNode>, TransferServiceError> {
+    ) -> Result<Vec<TreeNode>, ServiceError> {
         let config = config.unwrap_or_default();
 
         let mut retry_count = 0;
         loop {
             if retry_count >= config.max_retries {
-                return Err(TransferServiceError::MaxRetriesExceeded);
+                return Err(ServiceError::MaxRetriesExceeded);
             }
 
             // Introduce an exponential backoff delay before retrying.
@@ -134,7 +135,7 @@ impl<S: Signer> TransferService<S> {
                 .await
             {
                 Ok(leaves) => leaves,
-                Err(TransferServiceError::NoLeavesToClaim) => {
+                Err(ServiceError::NoLeavesToClaim) => {
                     return Ok(Vec::new());
                 }
                 Err(_) => {
@@ -167,7 +168,7 @@ impl<S: Signer> TransferService<S> {
         &self,
         transfer: &Transfer,
         leaf_pubkey_map: &HashMap<TreeNodeId, PublicKey>,
-    ) -> Result<Vec<LeafKeyTweak>, TransferServiceError> {
+    ) -> Result<Vec<LeafKeyTweak>, ServiceError> {
         let mut leaves_to_claim = Vec::new();
 
         for leaf in &transfer.leaves {
@@ -182,7 +183,7 @@ impl<S: Signer> TransferService<S> {
         }
 
         if leaves_to_claim.is_empty() {
-            return Err(TransferServiceError::NoLeavesToClaim);
+            return Err(ServiceError::NoLeavesToClaim);
         }
 
         Ok(leaves_to_claim)
@@ -193,7 +194,7 @@ impl<S: Signer> TransferService<S> {
         &self,
         nodes: Vec<TreeNode>,
         config: &ClaimTransferConfig,
-    ) -> Result<Vec<TreeNode>, TransferServiceError> {
+    ) -> Result<Vec<TreeNode>, ServiceError> {
         let mut result = nodes;
 
         if config.should_refresh_timelocks {
@@ -211,7 +212,7 @@ impl<S: Signer> TransferService<S> {
     async fn check_refresh_timelock_nodes(
         &self,
         nodes: Vec<TreeNode>,
-    ) -> Result<Vec<TreeNode>, TransferServiceError> {
+    ) -> Result<Vec<TreeNode>, ServiceError> {
         // TODO: Implement timelock refresh logic
         // For now, return nodes unchanged
         Ok(nodes)
@@ -221,7 +222,7 @@ impl<S: Signer> TransferService<S> {
     async fn check_extend_timelock_nodes(
         &self,
         nodes: Vec<TreeNode>,
-    ) -> Result<Vec<TreeNode>, TransferServiceError> {
+    ) -> Result<Vec<TreeNode>, ServiceError> {
         // TODO: Implement timelock extension logic
         // For now, return nodes unchanged
         Ok(nodes)
@@ -232,15 +233,12 @@ impl<S: Signer> TransferService<S> {
         &self,
         transfer: &Transfer,
         leaves_to_claim: Vec<LeafKeyTweak>,
-    ) -> Result<Vec<TreeNode>, TransferServiceError> {
+    ) -> Result<Vec<TreeNode>, ServiceError> {
         // TODO: implement according to js claimTransfer method
         todo!()
     }
 
-    pub async fn extend_time_lock(
-        &self,
-        node: &TreeNode,
-    ) -> Result<Vec<TreeNode>, TransferServiceError> {
+    pub async fn extend_time_lock(&self, node: &TreeNode) -> Result<Vec<TreeNode>, ServiceError> {
         todo!()
     }
 
@@ -248,32 +246,32 @@ impl<S: Signer> TransferService<S> {
         &self,
         tweaks: &Vec<LeafKeyTweak>,
         receiver_public_key: &PublicKey,
-    ) -> Result<Transfer, TransferServiceError> {
+    ) -> Result<Transfer, ServiceError> {
         todo!()
     }
 
-    pub async fn query_pending_transfers(&self) -> Result<Vec<Transfer>, TransferServiceError> {
+    pub async fn query_pending_transfers(&self) -> Result<Vec<Transfer>, ServiceError> {
         todo!()
     }
 
     pub async fn transfer_leaves_to_self(
         &self,
         leaves: Vec<TreeNode>,
-    ) -> Result<Vec<TreeNode>, TransferServiceError> {
+    ) -> Result<Vec<TreeNode>, ServiceError> {
         todo!()
     }
 
     pub async fn query_transfer(
         &self,
         transfer_id: &Uuid,
-    ) -> Result<Option<Transfer>, TransferServiceError> {
+    ) -> Result<Option<Transfer>, ServiceError> {
         todo!()
     }
 
     pub async fn verify_pending_transfer(
         &self,
         transfer: &Transfer,
-    ) -> Result<HashMap<TreeNodeId, PublicKey>, TransferServiceError> {
+    ) -> Result<HashMap<TreeNodeId, PublicKey>, ServiceError> {
         todo!()
     }
 
@@ -281,7 +279,7 @@ impl<S: Signer> TransferService<S> {
         &self,
         leaves: &[TreeNode],
         receiver_id: &PublicKey,
-    ) -> Result<Transfer, TransferServiceError> {
+    ) -> Result<Transfer, ServiceError> {
         let transfer_id = uuid::Uuid::now_v7();
 
         // build leaf key tweaks with new signing public key as a random key (for which we have the private key in memory only)
@@ -298,7 +296,7 @@ impl<S: Signer> TransferService<S> {
                     new_signing_public_key,
                 })
             })
-            .collect::<Result<Vec<_>, TransferServiceError>>()?;
+            .collect::<Result<Vec<_>, ServiceError>>()?;
 
         let leaves_tweaks_map: HashMap<String, Vec<SendLeafKeyTweak>> = HashMap::new();
         // TODO: build the map
