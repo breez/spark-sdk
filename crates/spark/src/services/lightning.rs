@@ -1,6 +1,6 @@
 use crate::core::Network;
 use crate::operator::rpc::SparkRpcClient;
-use crate::services::{ServiceError, from_proto_signing_commitments, to_proto_signed_tx};
+use crate::services::ServiceError;
 use crate::ssp::{BitcoinNetwork, RequestLightningSendInput, ServiceProvider};
 use crate::utils::refund as refund_utils;
 use crate::{signer::Signer, tree::TreeNode};
@@ -21,6 +21,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::LeafKeyTweak;
+use super::models::{map_signing_nonce_commitments, to_proto_signed_tx};
 
 pub struct LightningSwap {
     pub transfer_id: Uuid,
@@ -238,7 +239,7 @@ where
         > = spark_commitments
             .signing_commitments
             .iter()
-            .map(|sc| from_proto_signing_commitments(sc.signing_nonce_commitments.clone()))
+            .map(|sc| map_signing_nonce_commitments(sc.signing_nonce_commitments.clone()))
             .collect::<Result<Vec<_>, _>>()?;
 
         let user_signed_refunds = refund_utils::sign_refunds(

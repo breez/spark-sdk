@@ -13,8 +13,7 @@ use bitcoin::{
     secp256k1::{Message, PublicKey, ecdsa, schnorr},
     transaction::Version,
 };
-use frost_core::round1::NonceCommitment;
-use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
+use frost_secp256k1_tr::Identifier;
 
 use crate::{
     Network,
@@ -32,7 +31,13 @@ use spark_protos::{
     },
 };
 
-use super::ServiceError;
+use super::{
+    ServiceError,
+    models::{
+        map_public_keys, map_signature_shares, map_signing_nonce_commitments,
+        marshal_frost_commitment,
+    },
+};
 pub struct DepositService<S>
 where
     S: Signer,
@@ -565,68 +570,4 @@ fn ephemeral_anchor_output() -> TxOut {
         script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]), // Pay-to-anchor (P2A) ephemeral anchor output
         value: Amount::from_sat(0),
     }
-}
-
-fn marshal_frost_commitment(
-    commitments: &SigningCommitments,
-) -> Result<common::SigningCommitment, ServiceError> {
-    let hiding = commitments.hiding().serialize().unwrap();
-    let binding = commitments.binding().serialize().unwrap();
-
-    Ok(common::SigningCommitment { hiding, binding })
-}
-
-fn map_public_keys(
-    source: HashMap<String, Vec<u8>>,
-) -> Result<BTreeMap<Identifier, PublicKey>, ServiceError> {
-    let mut public_keys = BTreeMap::new();
-    for (identifier, public_key) in source {
-        let identifier = Identifier::deserialize(
-            &hex::decode(identifier).map_err(|_| ServiceError::InvalidIdentifier)?,
-        )
-        .map_err(|_| ServiceError::InvalidIdentifier)?;
-        let public_key =
-            PublicKey::from_slice(&public_key).map_err(|_| ServiceError::InvalidPublicKey)?;
-        public_keys.insert(identifier, public_key);
-    }
-
-    Ok(public_keys)
-}
-
-fn map_signature_shares(
-    source: HashMap<String, Vec<u8>>,
-) -> Result<BTreeMap<Identifier, SignatureShare>, ServiceError> {
-    let mut signature_shares = BTreeMap::new();
-    for (identifier, signature_share) in source {
-        let identifier = Identifier::deserialize(
-            &hex::decode(identifier).map_err(|_| ServiceError::InvalidIdentifier)?,
-        )
-        .map_err(|_| ServiceError::InvalidIdentifier)?;
-        let signature_share = SignatureShare::deserialize(&signature_share)
-            .map_err(|_| ServiceError::InvalidSignatureShare)?;
-        signature_shares.insert(identifier, signature_share);
-    }
-
-    Ok(signature_shares)
-}
-
-fn map_signing_nonce_commitments(
-    source: HashMap<String, common::SigningCommitment>,
-) -> Result<BTreeMap<Identifier, SigningCommitments>, ServiceError> {
-    let mut nonce_commitments = BTreeMap::new();
-    for (identifier, commitment) in source {
-        let identifier = Identifier::deserialize(
-            &hex::decode(identifier).map_err(|_| ServiceError::InvalidIdentifier)?,
-        )
-        .map_err(|_| ServiceError::InvalidIdentifier)?;
-        let commitments = SigningCommitments::new(
-            NonceCommitment::deserialize(&commitment.hiding)
-                .map_err(|_| ServiceError::InvalidSignatureShare)?,
-            NonceCommitment::deserialize(&commitment.binding)
-                .map_err(|_| ServiceError::InvalidSignatureShare)?,
-        );
-        nonce_commitments.insert(identifier, commitments);
-    }
-
-    Ok(nonce_commitments)
 }
