@@ -1,6 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
-
+use crate::core::Network;
 use bitcoin::{consensus::Encodable, secp256k1::PublicKey};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 
 use frost_secp256k1_tr::{
     Identifier,
@@ -8,7 +9,7 @@ use frost_secp256k1_tr::{
     round2::SignatureShare,
 };
 
-use crate::utils::refund::SignedTx;
+use crate::{ssp::BitcoinNetwork, utils::refund::SignedTx};
 
 use super::ServiceError;
 use crate::operator::rpc as operator_rpc;
@@ -20,6 +21,36 @@ impl From<crate::Network> for operator_rpc::spark::Network {
             crate::Network::Regtest => operator_rpc::spark::Network::Regtest,
             crate::Network::Testnet => operator_rpc::spark::Network::Testnet,
             crate::Network::Signet => operator_rpc::spark::Network::Signet,
+        }
+    }
+}
+
+impl From<BitcoinNetwork> for Network {
+    fn from(value: BitcoinNetwork) -> Self {
+        match value {
+            BitcoinNetwork::Mainnet => Network::Mainnet,
+            BitcoinNetwork::Testnet => Network::Testnet,
+            BitcoinNetwork::Signet => Network::Signet,
+            BitcoinNetwork::Regtest => Network::Regtest,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RequestStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+impl From<crate::ssp::RequestStatus> for RequestStatus {
+    fn from(value: crate::ssp::RequestStatus) -> Self {
+        match value {
+            crate::ssp::RequestStatus::Pending => RequestStatus::Pending,
+            crate::ssp::RequestStatus::InProgress => RequestStatus::InProgress,
+            crate::ssp::RequestStatus::Completed => RequestStatus::Completed,
+            crate::ssp::RequestStatus::Failed => RequestStatus::Failed,
         }
     }
 }

@@ -6,7 +6,7 @@ use crate::operator::rpc::spark::{
     InvoiceAmount, InvoiceAmountProof, StartUserSignedTransferRequest,
 };
 use crate::services::ServiceError;
-use crate::ssp::{BitcoinNetwork, RequestLightningSendInput, ServiceProvider};
+use crate::ssp::{RequestLightningSendInput, ServiceProvider};
 use crate::utils::refund as refund_utils;
 use crate::{signer::Signer, tree::TreeNode};
 use bitcoin::hashes::{Hash, sha256};
@@ -14,14 +14,14 @@ use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::Identifier;
 use hex::ToHex;
 use lightning_invoice::Bolt11Invoice;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use super::LeafKeyTweak;
-use super::models::map_signing_nonce_commitments;
+use super::models::{RequestStatus, map_signing_nonce_commitments};
 
 pub struct LightningSwap {
     pub transfer_id: Uuid,
@@ -44,25 +44,6 @@ pub struct LightningSendPayment {
     pub payment_preimage: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum RequestStatus {
-    Pending,
-    InProgress,
-    Completed,
-    Failed,
-}
-
-impl From<crate::ssp::RequestStatus> for RequestStatus {
-    fn from(value: crate::ssp::RequestStatus) -> Self {
-        match value {
-            crate::ssp::RequestStatus::Pending => RequestStatus::Pending,
-            crate::ssp::RequestStatus::InProgress => RequestStatus::InProgress,
-            crate::ssp::RequestStatus::Completed => RequestStatus::Completed,
-            crate::ssp::RequestStatus::Failed => RequestStatus::Failed,
-        }
-    }
-}
-
 impl TryFrom<crate::ssp::LightningSendRequest> for LightningSendPayment {
     type Error = ServiceError;
 
@@ -83,17 +64,6 @@ impl TryFrom<crate::ssp::LightningSendRequest> for LightningSendPayment {
             transfer_id: value.transfer.and_then(|t| t.spark_id),
             payment_preimage: value.payment_preimage,
         })
-    }
-}
-
-impl From<BitcoinNetwork> for Network {
-    fn from(value: BitcoinNetwork) -> Self {
-        match value {
-            BitcoinNetwork::Mainnet => Network::Mainnet,
-            BitcoinNetwork::Testnet => Network::Testnet,
-            BitcoinNetwork::Signet => Network::Signet,
-            BitcoinNetwork::Regtest => Network::Regtest,
-        }
     }
 }
 
