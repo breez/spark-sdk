@@ -1,12 +1,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::operator::rpc::{self as operator_rpc, spark::SendLeafKeyTweak};
-use bitcoin::{
-    Transaction,
-    hashes::{Hash, sha256},
-    secp256k1::PublicKey,
-};
+use crate::operator::rpc::{self as operator_rpc};
+use bitcoin::{Transaction, secp256k1::PublicKey};
 use uuid::Uuid;
 
 use crate::{

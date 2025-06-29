@@ -9,7 +9,6 @@ use crate::services::ServiceError;
 use crate::ssp::{BitcoinNetwork, RequestLightningSendInput, ServiceProvider};
 use crate::utils::refund as refund_utils;
 use crate::{signer::Signer, tree::TreeNode};
-use bip32::secp256k1::elliptic_curve::generic_array::iter;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::Identifier;
