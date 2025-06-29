@@ -76,8 +76,8 @@ impl TryFrom<SigningCommitments> for operator_rpc::common::SigningCommitment {
 
     fn try_from(signing_commitment: SigningCommitments) -> Result<Self, Self::Error> {
         Ok(operator_rpc::common::SigningCommitment {
-            hiding: signing_commitment.hiding().serialize().unwrap(),
-            binding: signing_commitment.binding().serialize().unwrap(),
+            hiding: signing_commitment.hiding().serialize()?,
+            binding: signing_commitment.binding().serialize()?,
         })
     }
 }
