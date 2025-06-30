@@ -6,4 +6,5 @@ pub struct SparkWalletConfig {
     pub network: Network,
     pub operator_pool: OperatorPool,
     pub service_provider_config: ServiceProviderConfig,
+    pub split_secret_threshold: u32,
 }

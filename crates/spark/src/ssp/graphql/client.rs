@@ -81,10 +81,10 @@ where
             .headers(headers.clone())
             .json(&graphql_query)
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
 
         let json: GraphQLResponse<T> = response.json().await?;
-
         if let Some(errors) = json.errors {
             if !errors.is_empty() {
                 return Err(GraphQLError::from_graphql_errors(&errors));
@@ -109,6 +109,7 @@ where
     {
         if needs_auth && !self.auth_provider.is_authorized()? {
             self.authenticate().await?;
+            tracing::debug!("Authenticated succesfully with ssp");
         }
 
         let full_url = self.get_full_url();
@@ -121,6 +122,7 @@ where
         {
             Ok(response) => Ok(response),
             Err(e) => {
+                tracing::debug!("Received error: {}", e.to_string());
                 if let GraphQLError::Network {
                     code: Some(status_code),
                     ..
@@ -142,6 +144,7 @@ where
 
     /// Authenticate with the server using challenge-response
     async fn authenticate(&self) -> GraphQLResult<()> {
+        tracing::debug!("Authenticating with ssp");
         self.auth_provider.remove_auth()?;
 
         // Get the identity public key
@@ -154,7 +157,11 @@ where
 
         let full_url = self.get_full_url();
         let headers = HeaderMap::new();
-        let challenge_response: GetChallengeOutput = self
+        #[derive(Deserialize)]
+        struct Response {
+            get_challenge: GetChallengeOutput,
+        }
+        let challenge_response: Response = self
             .execute_raw_query_inner(
                 &full_url,
                 &headers,
@@ -163,26 +170,31 @@ where
             )
             .await?;
 
+        tracing::debug!("Received challenge from ssp");
         // Decode the base64 protected challenge
-        let challenge_bytes = base64::engine::general_purpose::STANDARD
-            .decode(&challenge_response.protected_challenge)
-            .map_err(|_| GraphQLError::serialization("Failed to decode challenge"))?;
+        let challenge_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&challenge_response.get_challenge.protected_challenge)
+            .map_err(|e| GraphQLError::serialization(e.to_string()))?;
 
+        tracing::debug!("Decoded challenge bytes: {}", challenge_bytes.len());
         // Sign the challenge with the identity key
         let signature = self
             .signer
             .sign_message_ecdsa_with_identity_key(&challenge_bytes)?
             .serialize_der()
             .to_vec();
-
         // Verify the challenge
         let verify_vars = serde_json::json!({
-            "protected_challenge": challenge_response.protected_challenge,
-            "signature": base64::engine::general_purpose::STANDARD.encode(signature),
+            "protected_challenge": challenge_response.get_challenge.protected_challenge,
+            "signature": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature),
             "identity_public_key": identity_public_key
         });
 
-        let verify_response: VerifyChallengeOutput = self
+        #[derive(Deserialize)]
+        struct VerifyChallengeResponse {
+            verify_challenge: VerifyChallengeOutput,
+        }
+        let verify_response: VerifyChallengeResponse = self
             .execute_raw_query_inner(
                 &full_url,
                 &headers,
@@ -192,8 +204,10 @@ where
             .await?;
 
         // Store the session token
-        self.auth_provider
-            .set_auth(verify_response.session_token, verify_response.valid_until)?;
+        self.auth_provider.set_auth(
+            verify_response.verify_challenge.session_token,
+            verify_response.verify_challenge.valid_until,
+        )?;
 
         Ok(())
     }

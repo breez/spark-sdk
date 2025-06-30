@@ -46,6 +46,7 @@ log_path: "spark.log"
 passphrase: ""
 spark_config:
   network: "regtest"
+  split_secret_threshold: 2
   operator_pool:
     coordinator_index: 0
     operators:
@@ -66,8 +67,7 @@ spark_config:
         identity_public_key: 022eda13465a59205413086130a65dc0ed1b8f8e51937043161f8be0c369b1a410
 
   service_provider_config:
-    base_url: "https://api.lightspark.com"
-    schema_endpoint: ""
+    base_url: "https://api.lightspark.com"    
     identity_public_key: "022bf283544b16c0622daecb79422007d167eca6ce9f0c98c0c49833b1f7170bfe"
 "#;
 
@@ -84,7 +84,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let config: Config = figment.merge(Env::prefixed("SPARK_")).extract()?;
-
     tracing_subscriber::registry()
         .with(EnvFilter::new(&config.log_filter))
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
@@ -128,6 +127,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         command::Command::GenerateDepositAddress => {
             let address = wallet.generate_deposit_address(false).await?;
             println!("{}", address);
+        }
+        command::Command::PayLightningInvoice {
+            invoice,
+            max_fee_sat,
+        } => {
+            let payment = wallet.pay_lightning_invoice(&invoice, max_fee_sat).await?;
+            println!("{}", serde_json::to_string_pretty(&payment)?);
+        }
+        command::Command::CreateLightningInvoice {
+            amount_sat,
+            description,
+        } => {
+            let payment = wallet
+                .create_lightning_invoice(amount_sat, description)
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&payment)?);
+        }
+        command::Command::FetchLightningSendPayment { id } => {
+            let payment = wallet.fetch_lightning_send_payment(&id).await?;
+            println!("{}", serde_json::to_string_pretty(&payment)?);
+        }
+        command::Command::FetchLightningReceivePayment { id } => {
+            let payment = wallet.fetch_lightning_receive_payment(&id).await?;
+            println!("{}", serde_json::to_string_pretty(&payment)?);
+        }
+        command::Command::FetchLightningSendFeeEstimate { invoice } => {
+            let fee = wallet.fetch_lightning_send_fee_estimate(&invoice).await?;
+            println!("{}", fee);
         }
     }
 

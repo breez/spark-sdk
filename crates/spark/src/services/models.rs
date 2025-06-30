@@ -37,6 +37,17 @@ impl From<BitcoinNetwork> for Network {
     }
 }
 
+impl From<Network> for BitcoinNetwork {
+    fn from(value: Network) -> Self {
+        match value {
+            Network::Mainnet => BitcoinNetwork::Mainnet,
+            Network::Testnet => BitcoinNetwork::Testnet,
+            Network::Signet => BitcoinNetwork::Signet,
+            Network::Regtest => BitcoinNetwork::Regtest,
+        }
+    }
+}
+
 pub(crate) fn to_proto_signing_commitments(
     signing_commitments: &BTreeMap<Identifier, SigningCommitments>,
 ) -> Result<HashMap<String, operator_rpc::common::SigningCommitment>, ServiceError> {
