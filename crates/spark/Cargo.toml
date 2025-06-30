@@ -25,6 +25,8 @@ tracing.workspace = true
 uuid.workspace = true
 lightning-invoice.workspace = true
 prost-types.workspace = true
+k256 = { version = "0.13.0", features = ["arithmetic", "schnorr", "ecdsa"] }
+futures.workspace = true
 
 [build-dependencies]
 tonic.workspace = true

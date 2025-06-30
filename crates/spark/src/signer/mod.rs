@@ -1,16 +1,16 @@
 mod default_signer;
 mod error;
-
+mod models;
 use std::collections::BTreeMap;
 
+use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::ecdsa::Signature;
 pub use default_signer::DefaultSigner;
 pub use error::SignerError;
-
-use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
+use models::VerifiableSecretShare;
 
-use crate::{core::Network, tree::TreeNodeId};
+use crate::tree::TreeNodeId;
 
 #[async_trait::async_trait]
 pub trait Signer {
@@ -45,4 +45,10 @@ pub trait Signer {
         statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
         adaptor_public_key: Option<&PublicKey>,
     ) -> Result<SignatureShare, SignerError>;
+    async fn split_secret_with_proofs(
+        &self,
+        secret: Vec<u8>,
+        threshold: u32,
+        num_shares: u32,
+    ) -> Result<Vec<VerifiableSecretShare>, SignerError>;
 }

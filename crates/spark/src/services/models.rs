@@ -36,6 +36,17 @@ impl From<BitcoinNetwork> for Network {
     }
 }
 
+impl From<Network> for BitcoinNetwork {
+    fn from(value: Network) -> Self {
+        match value {
+            Network::Mainnet => BitcoinNetwork::Mainnet,
+            Network::Testnet => BitcoinNetwork::Testnet,
+            Network::Signet => BitcoinNetwork::Signet,
+            Network::Regtest => BitcoinNetwork::Regtest,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum RequestStatus {
     Pending,

@@ -26,6 +26,9 @@ pub enum SparkWalletError {
     #[error("Operator RPC error: {0}")]
     OperatorRpcError(#[from] spark::operator::rpc::OperatorRpcError),
 
+    #[error("Operator pool error: {0}")]
+    OperatorPoolError(String),
+
     #[error("Address error: {0}")]
     AddressError(#[from] spark::address::error::AddressError),
 

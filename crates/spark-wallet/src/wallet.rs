@@ -33,16 +33,10 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let identity_public_key = signer.get_identity_public_key()?;
         let connection_manager = ConnectionManager::new();
 
-        // spark operator
-        let spark_service_channel = connection_manager
-            .get_channel(config.operator_pool.get_coordinator())
-            .await?;
+        let (all_operator_clients, coordinator_client) =
+            Self::init_operator_clients(&config, &connection_manager, signer.clone()).await?;
+
         let bitcoin_service = BitcoinService::new(config.network);
-        let spark_rpc_client = Arc::new(SparkRpcClient::new(
-            spark_service_channel,
-            config.network,
-            signer.clone(),
-        ));
         let _service_provider = Arc::new(ServiceProvider::new(
             config.service_provider_config.clone(),
             config.network,
@@ -50,14 +44,17 @@ impl<S: Signer + Clone> SparkWallet<S> {
         ));
 
         let lightning_service = Arc::new(LightningService::new(
-            spark_rpc_client.clone(),
+            coordinator_client.clone(),
+            all_operator_clients,
             _service_provider.clone(),
             config.network,
             signer.clone(),
+            config.operator_pool.clone(),
+            config.split_secret_threshold,
         ));
         let deposit_service = DepositService::new(
             bitcoin_service,
-            spark_rpc_client.clone(),
+            coordinator_client.clone(),
             identity_public_key,
             config.network,
             config.operator_pool.clone(),
@@ -76,6 +73,27 @@ impl<S: Signer + Clone> SparkWallet<S> {
             transfer_service,
             lightning_service,
         })
+    }
+
+    async fn init_operator_clients(
+        config: &SparkWalletConfig,
+        connection_manager: &ConnectionManager,
+        signer: S,
+    ) -> Result<(Vec<Arc<SparkRpcClient<S>>>, Arc<SparkRpcClient<S>>), SparkWalletError> {
+        let mut all_operator_clients = vec![];
+        let mut coordinator_client = None;
+        for operator in config.operator_pool.get_signing_operators() {
+            let channel = connection_manager.get_channel(operator).await?;
+            let client = Arc::new(SparkRpcClient::new(channel, config.network, signer.clone()));
+            if operator.id == config.operator_pool.get_coordinator().id {
+                coordinator_client = Some(client.clone());
+            }
+            all_operator_clients.push(client);
+        }
+        let coordinator = coordinator_client.ok_or(SparkWalletError::OperatorPoolError(
+            "Coordinator not found".to_string(),
+        ))?;
+        Ok((all_operator_clients, coordinator))
     }
 
     pub async fn pay_lightning_invoice(

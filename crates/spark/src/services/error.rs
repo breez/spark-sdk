@@ -46,6 +46,8 @@ pub enum ServiceError {
     InvoiceDecodingError(String),
     #[error("SSP swap error: {0}")]
     SSPswapError(String),
+    #[error("perimage share store failed")]
+    PerimageShareStoreFailed,
 
     // Transfer related errors
     #[error("Failed to extend time lock: {0}")]

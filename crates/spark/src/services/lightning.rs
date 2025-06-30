@@ -1,12 +1,14 @@
 use crate::core::Network;
+use crate::operator::OperatorPool;
 use crate::operator::rpc::SparkRpcClient;
 use crate::operator::rpc::spark::initiate_preimage_swap_request::Reason;
 use crate::operator::rpc::spark::{
     GetSigningCommitmentsRequest, InitiatePreimageSwapRequest, InitiatePreimageSwapResponse,
-    InvoiceAmount, InvoiceAmountProof, StartUserSignedTransferRequest,
+    InvoiceAmount, InvoiceAmountProof, SecretShare, StartUserSignedTransferRequest,
+    StorePreimageShareRequest,
 };
 use crate::services::ServiceError;
-use crate::ssp::{RequestLightningSendInput, ServiceProvider};
+use crate::ssp::{RequestLightningReceiveInput, RequestLightningSendInput, ServiceProvider};
 use crate::utils::refund as refund_utils;
 use crate::{signer::Signer, tree::TreeNode};
 use bitcoin::hashes::{Hash, sha256};
@@ -67,14 +69,54 @@ impl TryFrom<crate::ssp::LightningSendRequest> for LightningSendPayment {
     }
 }
 
+pub struct LightningReceiveRequest {
+    pub id: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub network: Network,
+    pub status: RequestStatus,
+    pub invoice: String,
+    pub transfer_id: Option<String>,
+    pub transfer_amount_sat: Option<u64>,
+    pub payment_preimage: Option<String>,
+}
+
+impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceiveRequest {
+    type Error = ServiceError;
+
+    fn try_from(value: crate::ssp::LightningReceiveRequest) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: value.id,
+            created_at: value.created_at.timestamp(),
+            updated_at: value.updated_at.timestamp(),
+            network: value.network.into(),
+            status: value.status.into(),
+            invoice: value.invoice.encoded_invoice,
+            transfer_id: value.transfer.as_ref().and_then(|t| t.spark_id.clone()),
+            transfer_amount_sat: match value.transfer {
+                Some(t) => Some(
+                    t.total_amount
+                        .original_value
+                        .parse()
+                        .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))?,
+                ),
+                None => None,
+            },
+            payment_preimage: value.payment_preimage,
+        })
+    }
+}
+
 pub struct LightningService<S>
 where
     S: Signer,
 {
-    spark_client: Arc<SparkRpcClient<S>>,
+    coordinator_spark_client: Arc<SparkRpcClient<S>>,
+    operators_spark_clients: Vec<Arc<SparkRpcClient<S>>>,
     ssp_client: Arc<ServiceProvider<S>>,
     network: Network,
     signer: S,
+    split_secret_threshold: u32,
 }
 
 impl<S> LightningService<S>
@@ -82,17 +124,83 @@ where
     S: Signer,
 {
     pub fn new(
-        spark_client: Arc<SparkRpcClient<S>>,
+        coordinator_spark_client: Arc<SparkRpcClient<S>>,
+        operators_spark_clients: Vec<Arc<SparkRpcClient<S>>>,
         ssp_client: Arc<ServiceProvider<S>>,
         network: Network,
         signer: S,
+        split_secret_threshold: u32,
     ) -> Self {
         LightningService {
-            spark_client,
+            coordinator_spark_client,
+            operators_spark_clients,
             ssp_client,
             network,
             signer,
+            split_secret_threshold,
         }
+    }
+
+    pub async fn create_lightning_invoice_with_preimage(
+        &self,
+        amount_sats: i64,
+        memo: Option<String>,
+        preimage: Vec<u8>,
+        expiry_secs: Option<i32>,
+    ) -> Result<LightningReceiveRequest, ServiceError> {
+        let payment_hash = sha256::Hash::hash(&preimage);
+        let invoice = self
+            .ssp_client
+            .request_lightning_receive(RequestLightningReceiveInput {
+                receiver_identity_pubkey: Some(
+                    self.signer
+                        .get_identity_public_key()?
+                        .serialize()
+                        .to_vec()
+                        .encode_hex(),
+                ),
+                amount_sats,
+                network: self.network.into(),
+                payment_hash: Some(payment_hash.encode_hex()),
+                description_hash: None,
+                expiry_secs: expiry_secs,
+                memo: memo,
+                include_spark_address: Some(false),
+            })
+            .await?;
+
+        let shares = self
+            .signer
+            .split_secret_with_proofs(
+                preimage,
+                self.split_secret_threshold,
+                self.operators_spark_clients.len() as u32,
+            )
+            .await?;
+
+        let identity_pubkey = self.signer.get_identity_public_key()?;
+        let requests = self
+            .operators_spark_clients
+            .iter()
+            .zip(shares)
+            .map(|(operator, share)| {
+                operator.store_preimage_share(StorePreimageShareRequest {
+                    payment_hash: payment_hash.to_byte_array().to_vec(),
+                    preimage_share: Some(SecretShare {
+                        secret_share: share.secret_share.share.to_bytes().to_vec(),
+                        proofs: share.proofs,
+                    }),
+                    threshold: share.secret_share.threshold as u32,
+                    invoice_string: invoice.clone().invoice.encoded_invoice,
+                    user_identity_public_key: identity_pubkey.serialize().to_vec(),
+                })
+            });
+
+        futures::future::try_join_all(requests)
+            .await
+            .map_err(|_| ServiceError::PerimageShareStoreFailed)?;
+
+        invoice.try_into()
     }
 
     pub async fn start_lightning_swap(
@@ -199,7 +307,7 @@ where
             .map(|l| l.node.id.clone().to_string())
             .collect();
         let spark_commitments = self
-            .spark_client
+            .coordinator_spark_client
             .get_signing_commitments(GetSigningCommitmentsRequest { node_ids })
             .await?;
 
@@ -256,7 +364,7 @@ where
         };
 
         let response = self
-            .spark_client
+            .coordinator_spark_client
             .initiate_preimage_swap(request_data)
             .await?;
 
