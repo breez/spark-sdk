@@ -12,7 +12,7 @@ use bitcoin::{
     secp256k1::PublicKey,
 };
 use frost_core::round1::Nonce;
-use frost_secp256k1_tr::keys::{PublicKeyPackage, VerifyingShare};
+use frost_secp256k1_tr::keys::{PublicKeyPackage, SigningShare, VerifyingShare};
 use frost_secp256k1_tr::round1::{SigningCommitments, SigningNonces};
 use frost_secp256k1_tr::round2::SignatureShare;
 use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
@@ -44,6 +44,53 @@ fn purpose() -> ChildNumber {
 
 fn zero() -> ChildNumber {
     ChildNumber::new(0, true).expect("Hardened zero is invalid")
+}
+
+fn frost_signing_package(
+    user_identifier: Identifier,
+    message: &[u8],
+    statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
+    self_commitment: &SigningCommitments,
+    adaptor_public_key: Option<&PublicKey>,
+) -> Result<SigningPackage, SignerError> {
+    // Clone statechain commitments to add our own commitment
+    let mut signing_commitments = statechain_commitments.clone();
+
+    // Create participant groups for the signing operation
+    // First group is all statechain participants
+    let mut signing_participants_groups = Vec::new();
+    signing_participants_groups.push(
+        statechain_commitments
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+    );
+
+    // Add the user's commitment to the signing commitments
+    signing_commitments.insert(user_identifier, *self_commitment);
+    // Add a second participant group containing only the user
+    signing_participants_groups.push(BTreeSet::from([user_identifier]));
+
+    // Convert the adaptor public key format if provided
+    let adaptor = match adaptor_public_key {
+        Some(pk) => {
+            let adaptor = VerifyingKey::deserialize(pk.serialize().as_slice()).map_err(|e| {
+                SignerError::SerializationError(format!(
+                    "Failed to deserialize adaptor public key: {e}"
+                ))
+            })?;
+            Some(adaptor)
+        }
+        None => None,
+    };
+
+    // Create a signing package containing commitments, participant groups, message and adaptor
+    Ok(SigningPackage::new_with_adaptor(
+        signing_commitments,
+        Some(signing_participants_groups),
+        message,
+        adaptor,
+    ))
 }
 
 #[derive(Clone)]
@@ -143,53 +190,20 @@ impl Signer for DefaultSigner {
         self_commitment: &SigningCommitments,
         public_key: &PublicKey,
         self_signature: &SignatureShare,
-        adaptor_public_key: Option<PublicKey>,
+        adaptor_public_key: Option<&PublicKey>,
     ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
-        // Clone statechain commitments to add our own commitment
-        let mut signing_commitments = statechain_commitments.clone();
-
-        // Create participant groups for the signing operation
-        // First group is all statechain participants
-        let mut signing_participants_groups = Vec::new();
-        signing_participants_groups.push(
-            statechain_commitments
-                .keys()
-                .cloned()
-                .collect::<BTreeSet<_>>(),
-        );
-
         // Derive an identifier for the local user
         let user_identifier =
             Identifier::derive("user".as_bytes()).map_err(|_| SignerError::IdentifierError)?;
 
-        // Add the user's commitment to the signing commitments
-        signing_commitments.insert(user_identifier, *self_commitment);
-        // Add a second participant group containing only the user
-        signing_participants_groups.push(BTreeSet::from([user_identifier]));
-
-        // Convert the adaptor public key format if provided
-        let adaptor = match adaptor_public_key {
-            Some(pk) => {
-                let adaptor =
-                    frost_secp256k1_tr::VerifyingKey::deserialize(pk.serialize().as_slice())
-                        .map_err(|e| {
-                            SignerError::SerializationError(format!(
-                                "Failed to deserialize adaptor public key: {}",
-                                e
-                            ))
-                        })?;
-                Some(adaptor)
-            }
-            None => None,
-        };
-
         // Create a signing package containing commitments, participant groups, message and adaptor
-        let signing_package = SigningPackage::new_with_adaptor(
-            signing_commitments,
-            Some(signing_participants_groups),
+        let signing_package = frost_signing_package(
+            user_identifier,
             message,
-            adaptor,
-        );
+            statechain_commitments,
+            self_commitment,
+            adaptor_public_key,
+        )?;
 
         // Combine all signature shares (statechain + user)
         let mut signature_shares = statechain_signatures.clone();
@@ -202,8 +216,7 @@ impl Signer for DefaultSigner {
             let verifying_key =
                 VerifyingShare::deserialize(pk.serialize().as_slice()).map_err(|e| {
                     SignerError::SerializationError(format!(
-                        "Failed to deserialize public key for participant {:?}: {}",
-                        id, e
+                        "Failed to deserialize public key for participant {id:?}: {e}"
                     ))
                 })?;
             verifying_shares.insert(*id, verifying_key);
@@ -220,16 +233,15 @@ impl Signer for DefaultSigner {
             })?,
         );
 
-        // Create a public key package with all verifying shares and the group's verifying key
-        let public_key_package = PublicKeyPackage::new(
-            verifying_shares,
-            VerifyingKey::deserialize(verifying_key.serialize().as_slice()).map_err(|e| {
+        let verifying_key = VerifyingKey::deserialize(verifying_key.serialize().as_slice())
+            .map_err(|e| {
                 SignerError::SerializationError(format!(
-                    "Failed to deserialize group verifying key: {}",
-                    e
+                    "Failed to deserialize group verifying key: {e}"
                 ))
-            })?,
-        );
+            })?;
+
+        // Create a public key package with all verifying shares and the group's verifying key
+        let public_key_package = PublicKeyPackage::new(verifying_shares, verifying_key);
 
         // For taproot signatures, we provide an empty merkle root
         let merkle_root = Vec::new();
@@ -295,48 +307,115 @@ impl Signer for DefaultSigner {
         Ok(self.identity_key.public_key(&self.secp))
     }
 
+    /// Creates a FROST signature share for threshold signing
+    ///
+    /// This function generates a partial signature (signature share) that will be combined
+    /// with other shares from statechain participants to create a complete threshold signature.
+    /// It uses pre-generated nonce commitments and the corresponding signing key.
+    ///
+    /// # Parameters
+    /// * `message` - The message being signed
+    /// * `public_key` - The public key associated with the local signing key
+    /// * `private_as_public_key` - Public key representation of the private key used for signing
+    /// * `verifying_key` - The group's verifying key (threshold public key)
+    /// * `self_commitment` - The local user's previously generated commitment
+    /// * `statechain_commitments` - Map of identifier to commitment values from statechain participants
+    /// * `adaptor_public_key` - Optional adaptor public key for adaptor signatures
+    ///
+    /// # Returns
+    /// A signature share that can be combined with other shares to form a complete signature
+    ///
+    /// # Errors
+    /// * `UnknownNonceCommitment` - If the provided commitment doesn't match any stored nonce
+    /// * `UnknownKey` - If the public key doesn't correspond to any known private key
+    /// * `SerializationError` - If there are issues serializing cryptographic components
     async fn sign_frost(
         &self,
-        _message: &[u8],
+        message: &[u8],
         public_key: &PublicKey,
-        _private_as_public_key: &PublicKey,
-        _verifying_key: &PublicKey,
+        private_as_public_key: &PublicKey,
+        verifying_key: &PublicKey,
         self_commitment: &SigningCommitments,
-        _statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
-        _adaptor_public_key: Option<&PublicKey>,
+        statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
+        adaptor_public_key: Option<&PublicKey>,
     ) -> Result<SignatureShare, SignerError> {
-        let _nonce = self
-            .nonce_commitments
-            .lock()
-            .await
-            .get(&self_commitment.serialize().map_err(|e| {
-                SignerError::SerializationError(format!(
-                    "failed to serialize self commitment: {}",
-                    e
-                ))
-            })?)
+        // Derive a deterministic identifier for the local user from the string "user"
+        let user_identifier =
+            Identifier::derive("user".as_bytes()).map_err(|_| SignerError::IdentifierError)?;
+
+        // Create a signing package containing the message, commitments, and participant groups
+        // This is used by the FROST protocol to coordinate the multi-party signing process
+        let signing_package = frost_signing_package(
+            user_identifier,
+            message,
+            statechain_commitments,
+            self_commitment,
+            adaptor_public_key,
+        )?;
+
+        // Serialize the commitment to look up the corresponding nonces in our storage
+        let serialized_commitment = self_commitment.serialize().map_err(|e| {
+            SignerError::SerializationError(format!("failed to serialize self commitment: {e}",))
+        })?;
+
+        // Retrieve the nonces that were previously generated and stored when creating the commitment
+        // These nonces are critical for the security of the Schnorr signature scheme
+        let nonce_commitments_guard = self.nonce_commitments.lock().await;
+        let signing_nonces = nonce_commitments_guard
+            .get(&serialized_commitment)
             .ok_or(SignerError::UnknownNonceCommitment)?;
 
-        let _secret_key = self
+        // Retrieve the private key corresponding to the provided public key
+        // This is the user's secret share of the threshold signing key
+        let secret_key = self
             .private_key_map
             .lock()
             .await
-            .get(public_key)
+            .get(private_as_public_key)
             .cloned()
             .ok_or(SignerError::UnknownKey)?;
-        todo!()
-        // let signature_share = frost_secp256k1_tr::round2::sign(
-        //     &SigningPackage::new(statechain_commitments, message),
-        //     nonce,
-        //     &KeyPackage::new(
-        //         adaptor_public_key: todo!(),
-        //         secret_key: todo!(),
-        //         verifying_share: todo!(),
-        //         verifying_key: todo!(),
-        //         min_signers: todo!(),
-        //     ),
-        // )?;
-        // Ok(signature_share)
+
+        // Convert the Bitcoin secret key to FROST SigningShare format
+        // This allows it to be used with the FROST API for creating signature shares
+        let signing_share = SigningShare::deserialize(&secret_key.secret_bytes()).map_err(|e| {
+            SignerError::SerializationError(format!("Failed to deserialize secret key: {e}"))
+        })?;
+
+        // Convert the Bitcoin public key to FROST VerifyingShare format
+        // This represents the user's public verification key in the threshold scheme
+        let verifying_share = VerifyingShare::deserialize(public_key.serialize().as_slice())
+            .map_err(|e| {
+                SignerError::SerializationError(format!(
+                    "Failed to deserialize private as public key: {e}"
+                ))
+            })?;
+
+        // Convert the group's Bitcoin public key to FROST VerifyingKey format
+        // This is the aggregate public key that will verify the final threshold signature
+        let verifying_key = VerifyingKey::deserialize(verifying_key.serialize().as_slice())
+            .map_err(|e| {
+                SignerError::SerializationError(format!("Failed to deserialize verifying key: {e}"))
+            })?;
+
+        // Create a key package containing all the necessary cryptographic material
+        // for the user's participation in the threshold signing protocol
+        let key_package = frost_secp256k1_tr::keys::KeyPackage::new(
+            user_identifier,
+            signing_share,
+            verifying_share,
+            verifying_key,
+            1, // Minimum signers required (set to 1 for this user's perspective)
+        );
+
+        // Generate the user's signature share using the FROST round2 signing algorithm
+        // This combines the message, nonces, and key package to produce a partial signature
+        let signature_share =
+            frost_secp256k1_tr::round2::sign(&signing_package, signing_nonces, &key_package)
+                .map_err(|e| SignerError::FrostError(format!("Failed to sign: {}", e)))?;
+
+        // Return the generated signature share to be combined with other shares
+        // from the statechain participants to form a complete threshold signature
+        return Ok(signature_share);
     }
 
     async fn split_secret_with_proofs(
