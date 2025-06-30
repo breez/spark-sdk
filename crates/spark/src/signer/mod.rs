@@ -1,16 +1,17 @@
 mod default_signer;
 mod error;
 mod models;
+
 use std::collections::BTreeMap;
 
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::ecdsa::Signature;
+use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
+use crate::tree::TreeNodeId;
+
 pub use default_signer::DefaultSigner;
 pub use error::SignerError;
-use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
-use models::VerifiableSecretShare;
-
-use crate::tree::TreeNodeId;
+pub use models::*;
 
 #[async_trait::async_trait]
 pub trait Signer {

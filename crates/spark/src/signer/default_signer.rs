@@ -417,7 +417,7 @@ impl Signer for DefaultSigner {
         // from the statechain participants to form a complete threshold signature
         return Ok(signature_share);
     }
-
+    
     async fn split_secret_with_proofs(
         &self,
         secret: Vec<u8>,
