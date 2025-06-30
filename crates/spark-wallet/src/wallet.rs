@@ -49,7 +49,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
             _service_provider.clone(),
             config.network,
             signer.clone(),
-            config.operator_pool.clone(),
             config.split_secret_threshold,
         ));
         let deposit_service = DepositService::new(
