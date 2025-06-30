@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use bitcoin::{
     Address, Amount, OutPoint, ScriptBuf, Transaction, TxIn, TxOut,
@@ -13,31 +10,27 @@ use bitcoin::{
     secp256k1::{Message, PublicKey, ecdsa, schnorr},
     transaction::Version,
 };
-use frost_core::round1::NonceCommitment;
-use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
+use frost_secp256k1_tr::Identifier;
 
 use crate::{
     Network,
     bitcoin::{BitcoinService, sighash_from_tx},
     core::initial_sequence,
-    operator::{OperatorPool, rpc::SparkRpcClient},
-    services::DepositServiceError,
+    operator::{OperatorPool, rpc as operator_rpc},
     signer::Signer,
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
 };
-use spark_protos::{
-    common::{self, SignatureIntent},
-    spark::{
-        self, FinalizeNodeSignaturesRequest, GenerateDepositAddressRequest, NodeSignatures,
-        SigningJob, StartDepositTreeCreationRequest,
-    },
+
+use super::{
+    ServiceError,
+    models::{map_public_keys, map_signature_shares, map_signing_nonce_commitments},
 };
 pub struct DepositService<S>
 where
     S: Signer,
 {
     bitcoin_service: BitcoinService,
-    client: Arc<SparkRpcClient<S>>,
+    client: Arc<operator_rpc::SparkRpcClient<S>>,
     identity_public_key: PublicKey,
     network: Network,
     operator_pool: OperatorPool,
@@ -55,13 +48,13 @@ impl<S> DepositService<S>
 where
     S: Signer,
 {
-    fn spark_network(&self) -> spark_protos::spark::Network {
+    fn spark_network(&self) -> operator_rpc::spark::Network {
         self.network.into()
     }
 
     pub fn new(
         bitcoin_service: BitcoinService,
-        client: Arc<SparkRpcClient<S>>,
+        client: Arc<operator_rpc::SparkRpcClient<S>>,
         identity_public_key: PublicKey,
         network: impl Into<Network>,
         operator_pool: OperatorPool,
@@ -81,7 +74,7 @@ where
         &self,
         deposit_tx: Transaction,
         vout: u32,
-    ) -> Result<Vec<TreeNode>, DepositServiceError> {
+    ) -> Result<Vec<TreeNode>, ServiceError> {
         // TODO: Ensure all inputs are segwit inputs, so this tx is not malleable. Normally the tx should be already confirmed, but perhaps we get in trouble with a reorg?
 
         let params: Params = self.network.into();
@@ -89,13 +82,13 @@ where
         let output: &TxOut = deposit_tx
             .output
             .get(vout as usize)
-            .ok_or(DepositServiceError::InvalidOutputIndex)?;
+            .ok_or(ServiceError::InvalidOutputIndex)?;
         let address = Address::from_script(&output.script_pubkey, params)
-            .map_err(|_| DepositServiceError::NotADepositOutput)?;
+            .map_err(|_| ServiceError::NotADepositOutput)?;
         let deposit_address = self
             .get_unused_deposit_address(&address)
             .await?
-            .ok_or(DepositServiceError::DepositAddressUsed)?;
+            .ok_or(ServiceError::DepositAddressUsed)?;
         let signing_public_key = self
             .signer
             .get_public_key_for_node(&deposit_address.leaf_id)?;
@@ -116,12 +109,12 @@ where
         verifying_public_key: &PublicKey,
         deposit_tx: Transaction,
         vout: u32,
-    ) -> Result<Vec<TreeNode>, DepositServiceError> {
+    ) -> Result<Vec<TreeNode>, ServiceError> {
         let deposit_txid = deposit_tx.compute_txid();
         let deposit_output = deposit_tx
             .output
             .get(vout as usize)
-            .ok_or(DepositServiceError::InvalidOutputIndex)?;
+            .ok_or(ServiceError::InvalidOutputIndex)?;
         let deposit_value = deposit_output.value;
 
         let root_tx = Transaction {
@@ -191,43 +184,39 @@ where
 
         let tree_resp = self
             .client
-            .start_deposit_tree_creation(StartDepositTreeCreationRequest {
+            .start_deposit_tree_creation(operator_rpc::spark::StartDepositTreeCreationRequest {
                 identity_public_key: self.identity_public_key.serialize().to_vec(),
-                on_chain_utxo: Some(spark::Utxo {
+                on_chain_utxo: Some(operator_rpc::spark::Utxo {
                     raw_tx: serialize(&deposit_tx),
                     vout,
                     network: self.spark_network() as i32,
                     txid: deposit_txid.as_byte_array().to_vec(),
                 }),
-                root_tx_signing_job: Some(SigningJob {
+                root_tx_signing_job: Some(operator_rpc::spark::SigningJob {
                     signing_public_key: signing_public_key.serialize().to_vec(),
                     raw_tx: root_tx_bytes.clone(),
-                    signing_nonce_commitment: Some(marshal_frost_commitment(
-                        &root_nonce_commitment,
-                    )?),
+                    signing_nonce_commitment: Some(root_nonce_commitment.try_into()?),
                 }),
-                refund_tx_signing_job: Some(SigningJob {
+                refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
                     signing_public_key: signing_public_key.serialize().to_vec(),
                     raw_tx: refund_tx_bytes.clone(),
-                    signing_nonce_commitment: Some(marshal_frost_commitment(
-                        &refund_nonce_commitment,
-                    )?),
+                    signing_nonce_commitment: Some(refund_nonce_commitment.try_into()?),
                 }),
             })
             .await?;
 
         let root_node_signature_shares = tree_resp
             .root_node_signature_shares
-            .ok_or(DepositServiceError::MissingTreeSignatures)?;
+            .ok_or(ServiceError::MissingTreeSignatures)?;
         let node_tx_signing_result = root_node_signature_shares
             .node_tx_signing_result
-            .ok_or(DepositServiceError::MissingTreeSignatures)?;
+            .ok_or(ServiceError::MissingTreeSignatures)?;
         let refund_tx_signing_result = root_node_signature_shares
             .refund_tx_signing_result
-            .ok_or(DepositServiceError::MissingTreeSignatures)?;
+            .ok_or(ServiceError::MissingTreeSignatures)?;
 
         if node_tx_signing_result.signing_nonce_commitments.is_empty() {
-            return Err(DepositServiceError::MissingTreeSignatures);
+            return Err(ServiceError::MissingTreeSignatures);
         }
 
         let node_tx_signing_nonce_commitments =
@@ -240,7 +229,7 @@ where
             .signing_nonce_commitments
             .is_empty()
         {
-            return Err(DepositServiceError::MissingTreeSignatures);
+            return Err(ServiceError::MissingTreeSignatures);
         }
 
         let refund_tx_signing_nonce_commitments =
@@ -252,10 +241,10 @@ where
 
         let tree_resp_verifying_key =
             PublicKey::from_slice(&root_node_signature_shares.verifying_key)
-                .map_err(|_| DepositServiceError::InvalidVerifyingKey)?;
+                .map_err(|_| ServiceError::InvalidVerifyingKey)?;
 
         if &tree_resp_verifying_key != verifying_public_key {
-            return Err(DepositServiceError::InvalidVerifyingKey);
+            return Err(ServiceError::InvalidVerifyingKey);
         }
 
         let root_sig = self
@@ -314,17 +303,17 @@ where
 
         let finalize_resp = self
             .client
-            .finalize_node_signatures(FinalizeNodeSignaturesRequest {
-                intent: SignatureIntent::Creation as i32,
-                node_signatures: vec![NodeSignatures {
+            .finalize_node_signatures(operator_rpc::spark::FinalizeNodeSignaturesRequest {
+                intent: operator_rpc::common::SignatureIntent::Creation as i32,
+                node_signatures: vec![operator_rpc::spark::NodeSignatures {
                     node_id: root_node_signature_shares.node_id,
                     node_tx_signature: root_aggregate
                         .serialize()
-                        .map_err(|_| DepositServiceError::InvalidSignatureShare)?
+                        .map_err(|_| ServiceError::InvalidSignatureShare)?
                         .to_vec(),
                     refund_tx_signature: refund_aggregate
                         .serialize()
-                        .map_err(|_| DepositServiceError::InvalidSignatureShare)?
+                        .map_err(|_| ServiceError::InvalidSignatureShare)?
                         .to_vec(),
                 }],
             })
@@ -338,19 +327,18 @@ where
             .map(|node| {
                 let signing_keyshare = node
                     .signing_keyshare
-                    .ok_or(DepositServiceError::MissingSigningKeyshare)?;
+                    .ok_or(ServiceError::MissingSigningKeyshare)?;
                 let signing_keyshare = SigningKeyshare {
                     owner_identifiers: signing_keyshare
                         .owner_identifiers
                         .into_iter()
                         .map(|id| {
                             Identifier::deserialize(
-                                &hex::decode(&id)
-                                    .map_err(|_| DepositServiceError::InvalidIdentifier)?,
+                                &hex::decode(&id).map_err(|_| ServiceError::InvalidIdentifier)?,
                             )
-                            .map_err(|_| DepositServiceError::InvalidIdentifier)
+                            .map_err(|_| ServiceError::InvalidIdentifier)
                         })
-                        .collect::<Result<Vec<_>, DepositServiceError>>()?,
+                        .collect::<Result<Vec<_>, ServiceError>>()?,
                     threshold: signing_keyshare.threshold,
                 };
 
@@ -358,35 +346,32 @@ where
                     id: node
                         .id
                         .parse()
-                        .map_err(|_| DepositServiceError::InvalidNodeId(node.id))?,
+                        .map_err(|_| ServiceError::InvalidNodeId(node.id))?,
                     tree_id: node.tree_id,
                     value: node.value,
                     parent_node_id: match node.parent_node_id {
-                        Some(id) => Some(
-                            id.parse()
-                                .map_err(|_| DepositServiceError::InvalidNodeId(id))?,
-                        ),
+                        Some(id) => Some(id.parse().map_err(|_| ServiceError::InvalidNodeId(id))?),
                         None => None,
                     },
                     node_tx: deserialize(&node.node_tx)
-                        .map_err(|_| DepositServiceError::InvalidTransaction)?,
+                        .map_err(|_| ServiceError::InvalidTransaction)?,
                     refund_tx: deserialize(&node.refund_tx)
-                        .map_err(|_| DepositServiceError::InvalidTransaction)?,
+                        .map_err(|_| ServiceError::InvalidTransaction)?,
                     vout: node.vout,
                     verifying_public_key: PublicKey::from_slice(&node.verifying_public_key)
-                        .map_err(|_| DepositServiceError::InvalidVerifyingKey)?,
+                        .map_err(|_| ServiceError::InvalidVerifyingKey)?,
                     owner_identity_public_key: PublicKey::from_slice(
                         &node.owner_identity_public_key,
                     )
-                    .map_err(|_| DepositServiceError::InvalidPublicKey)?,
+                    .map_err(|_| ServiceError::InvalidPublicKey)?,
                     signing_keyshare,
                     status: node
                         .status
                         .parse()
-                        .map_err(|_| DepositServiceError::UnknownStatus(node.status.clone()))?,
+                        .map_err(|_| ServiceError::UnknownStatus(node.status.clone()))?,
                 })
             })
-            .collect::<Result<Vec<_>, DepositServiceError>>()?;
+            .collect::<Result<Vec<_>, ServiceError>>()?;
 
         Ok(nodes)
     }
@@ -396,10 +381,10 @@ where
         signing_public_key: PublicKey,
         leaf_id: &TreeNodeId,
         is_static: bool,
-    ) -> Result<DepositAddress, DepositServiceError> {
+    ) -> Result<DepositAddress, ServiceError> {
         let resp = self
             .client
-            .generate_deposit_address(GenerateDepositAddressRequest {
+            .generate_deposit_address(operator_rpc::spark::GenerateDepositAddressRequest {
                 signing_public_key: signing_public_key.serialize().to_vec(),
                 identity_public_key: self.identity_public_key.serialize().to_vec(),
                 network: self.spark_network() as i32,
@@ -409,7 +394,7 @@ where
             .await?;
 
         let Some(deposit_address) = resp.deposit_address else {
-            return Err(DepositServiceError::MissingDepositAddress);
+            return Err(ServiceError::MissingDepositAddress);
         };
 
         let address =
@@ -421,7 +406,7 @@ where
     pub async fn get_unused_deposit_address(
         &self,
         address: &Address,
-    ) -> Result<Option<DepositAddress>, DepositServiceError> {
+    ) -> Result<Option<DepositAddress>, ServiceError> {
         // TODO: unused deposit addresses could be cached in the wallet, so they don't have to be queried from the server every time.
         Ok(self
             .query_unused_deposit_addresses()
@@ -432,11 +417,11 @@ where
 
     pub async fn query_unused_deposit_addresses(
         &self,
-    ) -> Result<Vec<DepositAddress>, DepositServiceError> {
+    ) -> Result<Vec<DepositAddress>, ServiceError> {
         let resp = self
             .client
             .query_unused_deposit_addresses(
-                spark_protos::spark::QueryUnusedDepositAddressesRequest {
+                operator_rpc::spark::QueryUnusedDepositAddressesRequest {
                     identity_public_key: self.identity_public_key.serialize().to_vec(),
                     network: self.spark_network() as i32,
                 },
@@ -450,28 +435,28 @@ where
                 let address: Address<NetworkUnchecked> = addr
                     .deposit_address
                     .parse()
-                    .map_err(|_| DepositServiceError::InvalidDepositAddress)?;
+                    .map_err(|_| ServiceError::InvalidDepositAddress)?;
 
                 Ok(DepositAddress {
                     address: address
                         .require_network(self.network.into())
-                        .map_err(|_| DepositServiceError::InvalidDepositAddressNetwork)?,
+                        .map_err(|_| ServiceError::InvalidDepositAddressNetwork)?,
                     // TODO: Is it possible addresses do not have a leaf_id?
                     leaf_id: addr
                         .leaf_id
-                        .ok_or(DepositServiceError::MissingLeafId)?
+                        .ok_or(ServiceError::MissingLeafId)?
                         .parse()
-                        .map_err(DepositServiceError::InvalidNodeId)?,
+                        .map_err(ServiceError::InvalidNodeId)?,
                     user_signing_public_key: PublicKey::from_slice(&addr.user_signing_public_key)
                         .map_err(|_| {
-                        DepositServiceError::InvalidDepositAddressProof
+                        ServiceError::InvalidDepositAddressProof
                     })?,
                     verifying_public_key: PublicKey::from_slice(&addr.verifying_public_key)
-                        .map_err(|_| DepositServiceError::InvalidDepositAddressProof)?,
+                        .map_err(|_| ServiceError::InvalidDepositAddressProof)?,
                 })
             })
-            .collect::<Result<Vec<_>, DepositServiceError>>()
-            .map_err(|_| DepositServiceError::InvalidDepositAddress)?;
+            .collect::<Result<Vec<_>, ServiceError>>()
+            .map_err(|_| ServiceError::InvalidDepositAddress)?;
 
         Ok(addresses)
     }
@@ -489,29 +474,29 @@ where
 
     fn validate_deposit_address(
         &self,
-        deposit_address: spark_protos::spark::Address,
+        deposit_address: crate::operator::rpc::spark::Address,
         user_signing_public_key: PublicKey,
         leaf_id: &TreeNodeId,
-    ) -> Result<DepositAddress, DepositServiceError> {
+    ) -> Result<DepositAddress, ServiceError> {
         let address: Address<NetworkUnchecked> = deposit_address
             .address
             .parse()
-            .map_err(|_| DepositServiceError::InvalidDepositAddress)?;
+            .map_err(|_| ServiceError::InvalidDepositAddress)?;
         let address = address
             .require_network(self.network.into())
-            .map_err(|_| DepositServiceError::InvalidDepositAddressNetwork)?;
+            .map_err(|_| ServiceError::InvalidDepositAddressNetwork)?;
 
         let Some(proof) = deposit_address.deposit_address_proof else {
-            return Err(DepositServiceError::MissingDepositAddressProof);
+            return Err(ServiceError::MissingDepositAddressProof);
         };
 
         let verifying_public_key = PublicKey::from_slice(&deposit_address.verifying_key)
-            .map_err(|_| DepositServiceError::InvalidDepositAddressProof)?;
+            .map_err(|_| ServiceError::InvalidDepositAddressProof)?;
 
         let operator_public_key = self
             .bitcoin_service
             .subtract_public_keys(&verifying_public_key, &user_signing_public_key)
-            .map_err(|_| DepositServiceError::InvalidDepositAddressProof)?;
+            .map_err(|_| ServiceError::InvalidDepositAddressProof)?;
         let taproot_key = self
             .bitcoin_service
             .compute_taproot_key_no_script(&operator_public_key);
@@ -521,13 +506,13 @@ where
         let msg = Message::from_digest(msg.to_byte_array());
         let proof_of_possession_signature =
             schnorr::Signature::from_slice(&proof.proof_of_possession_signature)
-                .map_err(|_| DepositServiceError::InvalidDepositAddressProof)?;
+                .map_err(|_| ServiceError::InvalidDepositAddressProof)?;
         if !self.bitcoin_service.is_valid_schnorr_signature(
             &proof_of_possession_signature,
             &msg,
             &taproot_key,
         ) {
-            return Err(DepositServiceError::InvalidDepositAddressProof);
+            return Err(ServiceError::InvalidDepositAddressProof);
         }
 
         let address_hash = sha256::Hash::hash(address.to_string().as_bytes());
@@ -538,11 +523,11 @@ where
                 .address_signatures
                 .get(&hex::encode(operator.identifier.serialize()))
             else {
-                return Err(DepositServiceError::InvalidDepositAddressProof);
+                return Err(ServiceError::InvalidDepositAddressProof);
             };
 
             let Ok(operator_sig) = ecdsa::Signature::from_der(operator_sig) else {
-                return Err(DepositServiceError::InvalidDepositAddressProof);
+                return Err(ServiceError::InvalidDepositAddressProof);
             };
 
             if !self.bitcoin_service.is_valid_ecdsa_signature(
@@ -550,7 +535,7 @@ where
                 &address_hash_message,
                 &operator.identity_public_key,
             ) {
-                return Err(DepositServiceError::InvalidDepositAddressProof);
+                return Err(ServiceError::InvalidDepositAddressProof);
             }
         }
 
@@ -568,68 +553,4 @@ fn ephemeral_anchor_output() -> TxOut {
         script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]), // Pay-to-anchor (P2A) ephemeral anchor output
         value: Amount::from_sat(0),
     }
-}
-
-fn marshal_frost_commitment(
-    commitments: &SigningCommitments,
-) -> Result<common::SigningCommitment, DepositServiceError> {
-    let hiding = commitments.hiding().serialize().unwrap();
-    let binding = commitments.binding().serialize().unwrap();
-
-    Ok(common::SigningCommitment { hiding, binding })
-}
-
-fn map_public_keys(
-    source: HashMap<String, Vec<u8>>,
-) -> Result<BTreeMap<Identifier, PublicKey>, DepositServiceError> {
-    let mut public_keys = BTreeMap::new();
-    for (identifier, public_key) in source {
-        let identifier = Identifier::deserialize(
-            &hex::decode(identifier).map_err(|_| DepositServiceError::InvalidIdentifier)?,
-        )
-        .map_err(|_| DepositServiceError::InvalidIdentifier)?;
-        let public_key = PublicKey::from_slice(&public_key)
-            .map_err(|_| DepositServiceError::InvalidPublicKey)?;
-        public_keys.insert(identifier, public_key);
-    }
-
-    Ok(public_keys)
-}
-
-fn map_signature_shares(
-    source: HashMap<String, Vec<u8>>,
-) -> Result<BTreeMap<Identifier, SignatureShare>, DepositServiceError> {
-    let mut signature_shares = BTreeMap::new();
-    for (identifier, signature_share) in source {
-        let identifier = Identifier::deserialize(
-            &hex::decode(identifier).map_err(|_| DepositServiceError::InvalidIdentifier)?,
-        )
-        .map_err(|_| DepositServiceError::InvalidIdentifier)?;
-        let signature_share = SignatureShare::deserialize(&signature_share)
-            .map_err(|_| DepositServiceError::InvalidSignatureShare)?;
-        signature_shares.insert(identifier, signature_share);
-    }
-
-    Ok(signature_shares)
-}
-
-fn map_signing_nonce_commitments(
-    source: HashMap<String, common::SigningCommitment>,
-) -> Result<BTreeMap<Identifier, SigningCommitments>, DepositServiceError> {
-    let mut nonce_commitments = BTreeMap::new();
-    for (identifier, commitment) in source {
-        let identifier = Identifier::deserialize(
-            &hex::decode(identifier).map_err(|_| DepositServiceError::InvalidIdentifier)?,
-        )
-        .map_err(|_| DepositServiceError::InvalidIdentifier)?;
-        let commitments = SigningCommitments::new(
-            NonceCommitment::deserialize(&commitment.hiding)
-                .map_err(|_| DepositServiceError::InvalidSignatureShare)?,
-            NonceCommitment::deserialize(&commitment.binding)
-                .map_err(|_| DepositServiceError::InvalidSignatureShare)?,
-        );
-        nonce_commitments.insert(identifier, commitments);
-    }
-
-    Ok(nonce_commitments)
 }

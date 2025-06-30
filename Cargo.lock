@@ -2582,15 +2582,16 @@ dependencies = [
  "hex",
  "lightning-invoice",
  "prost",
+ "prost-types",
  "reqwest",
  "rustls",
  "serde",
  "serde_json",
  "serde_with",
- "spark-protos",
  "thiserror",
  "tokio",
  "tonic",
+ "tonic-build",
  "tracing",
  "uuid",
 ]
@@ -2608,16 +2609,6 @@ dependencies = [
  "spark-wallet",
  "tokio",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "spark-protos"
-version = "0.1.0"
-dependencies = [
- "prost",
- "prost-types",
- "tonic",
- "tonic-build",
 ]
 
 [[package]]

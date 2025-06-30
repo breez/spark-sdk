@@ -18,10 +18,14 @@ rustls = { version = "0.23.28", features = ["ring"] }
 serde.workspace = true
 serde_json.workspace = true
 serde_with.workspace = true
-spark-protos.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tonic.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 lightning-invoice.workspace = true
+prost-types.workspace = true
+
+[build-dependencies]
+tonic.workspace = true
+tonic-build.workspace = true

@@ -1,13 +1,13 @@
 use super::OperatorRpcError;
 use super::error::Result;
-use crate::Network;
-use crate::signer::Signer;
-use prost::Message;
-use spark_protos::spark::spark_service_client::SparkServiceClient;
-use spark_protos::spark_authn::{
+use super::spark::spark_service_client::SparkServiceClient;
+use super::spark_authn::{
     GetChallengeRequest, VerifyChallengeRequest,
     spark_authn_service_client::SparkAuthnServiceClient,
 };
+use crate::Network;
+use crate::signer::Signer;
+use prost::Message;
 use tokio::sync::Mutex;
 use tonic::Request;
 use tonic::Status;
