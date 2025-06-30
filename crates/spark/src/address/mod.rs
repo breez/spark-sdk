@@ -2,12 +2,12 @@ pub mod error;
 
 use std::str::FromStr;
 
+use crate::operator::rpc::spark::SparkAddress as ProtoSparkAddress;
 use bitcoin::{
     bech32::{self, Bech32m, Hrp},
     secp256k1::PublicKey,
 };
 use prost::Message;
-use spark_protos::spark::SparkAddress as ProtoSparkAddress;
 
 use error::AddressError;
 

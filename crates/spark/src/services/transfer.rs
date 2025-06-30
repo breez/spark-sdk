@@ -1,12 +1,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use bitcoin::{
-    Transaction,
-    hashes::{Hash, sha256},
-    secp256k1::PublicKey,
-};
-use spark_protos::spark::{SendLeafKeyTweak, TransferPackage};
+use crate::operator::rpc::{self as operator_rpc};
+use bitcoin::{Transaction, secp256k1::PublicKey};
 use uuid::Uuid;
 
 use crate::{
@@ -298,10 +294,11 @@ impl<S: Signer> TransferService<S> {
             })
             .collect::<Result<Vec<_>, ServiceError>>()?;
 
-        let leaves_tweaks_map: HashMap<String, Vec<SendLeafKeyTweak>> = HashMap::new();
+        let leaves_tweaks_map: HashMap<String, Vec<operator_rpc::spark::SendLeafKeyTweak>> =
+            HashMap::new();
         // TODO: build the map
 
-        let transfer_package = TransferPackage {
+        let transfer_package = operator_rpc::spark::TransferPackage {
             leaves_to_send: todo!(),
             key_tweak_package: todo!(), // built from the leaves_tweaks_map
             user_signature: todo!(),

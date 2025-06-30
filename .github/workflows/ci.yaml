@@ -31,8 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         crate:
-          - spark
-          - spark-protos
+          - spark          
           - spark-wallet
         target:
           - x86_64-unknown-linux-gnu
@@ -81,7 +80,6 @@ jobs:
       matrix:
         crate:
           - spark
-          - spark-protos
           - spark-wallet
   
   wasm-clippy:
