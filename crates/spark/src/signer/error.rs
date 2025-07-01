@@ -12,6 +12,8 @@ pub enum SignerError {
     KeyDerivationError(String),
     #[error("failed to create nonce: {0}")]
     NonceCreationError(String),
+    #[error("secret sharing error: {0}")]
+    SecretSharingError(String),
     #[error("serialization error: {0}")]
     SerializationError(String),
     #[error("unknown key")]

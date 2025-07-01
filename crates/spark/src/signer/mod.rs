@@ -1,6 +1,7 @@
 mod default_signer;
 mod error;
 mod models;
+mod secret_sharing;
 
 use std::collections::BTreeMap;
 
@@ -11,7 +12,7 @@ use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::Signatu
 
 pub use default_signer::DefaultSigner;
 pub use error::SignerError;
-pub use models::VerifiableSecretShare;
+pub use models::{SecretShare, VerifiableSecretShare};
 
 pub enum Secret {
     PublicKey(PublicKey),
