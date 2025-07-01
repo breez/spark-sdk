@@ -1,6 +1,5 @@
 use crate::core::Network;
 use bitcoin::{consensus::Encodable, secp256k1::PublicKey};
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
 use frost_secp256k1_tr::{
@@ -13,6 +12,8 @@ use crate::{ssp::BitcoinNetwork, utils::refund::SignedTx};
 
 use super::ServiceError;
 use crate::operator::rpc as operator_rpc;
+
+pub use crate::ssp::LightningSendRequestStatus;
 
 impl From<crate::Network> for operator_rpc::spark::Network {
     fn from(network: crate::Network) -> Self {
@@ -32,25 +33,6 @@ impl From<BitcoinNetwork> for Network {
             BitcoinNetwork::Testnet => Network::Testnet,
             BitcoinNetwork::Signet => Network::Signet,
             BitcoinNetwork::Regtest => Network::Regtest,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum RequestStatus {
-    Pending,
-    InProgress,
-    Completed,
-    Failed,
-}
-
-impl From<crate::ssp::RequestStatus> for RequestStatus {
-    fn from(value: crate::ssp::RequestStatus) -> Self {
-        match value {
-            crate::ssp::RequestStatus::Pending => RequestStatus::Pending,
-            crate::ssp::RequestStatus::InProgress => RequestStatus::InProgress,
-            crate::ssp::RequestStatus::Completed => RequestStatus::Completed,
-            crate::ssp::RequestStatus::Failed => RequestStatus::Failed,
         }
     }
 }
