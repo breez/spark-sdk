@@ -115,8 +115,8 @@ pub struct LightningService<S>
 where
     S: Signer,
 {
-    spark_coordinator_client: Arc<SparkRpcClient<S>>,
-    spark_operator_clients: Vec<Arc<SparkRpcClient<S>>>,
+    coordinator_client: Arc<SparkRpcClient<S>>,
+    operator_clients: Vec<Arc<SparkRpcClient<S>>>,
     ssp_client: Arc<ServiceProvider<S>>,
     network: Network,
     signer: S,
@@ -128,16 +128,16 @@ where
     S: Signer,
 {
     pub fn new(
-        spark_coordinator_client: Arc<SparkRpcClient<S>>,
-        spark_operator_clients: Vec<Arc<SparkRpcClient<S>>>,
+        coordinator_client: Arc<SparkRpcClient<S>>,
+        operator_clients: Vec<Arc<SparkRpcClient<S>>>,
         ssp_client: Arc<ServiceProvider<S>>,
         network: Network,
         signer: S,
         split_secret_threshold: u32,
     ) -> Self {
         LightningService {
-            spark_coordinator_client,
-            spark_operator_clients,
+            coordinator_client,
+            operator_clients,
             ssp_client,
             network,
             signer,
@@ -184,13 +184,13 @@ where
             .split_secret_with_proofs(
                 preimage,
                 self.split_secret_threshold,
-                self.spark_operator_clients.len() as u32,
+                self.operator_clients.len() as u32,
             )
             .await?;
 
         let identity_pubkey = self.signer.get_identity_public_key()?;
         let requests = self
-            .spark_operator_clients
+            .operator_clients
             .iter()
             .zip(shares)
             .map(|(operator, share)| {
@@ -363,7 +363,7 @@ where
             .map(|l| l.node.id.clone().to_string())
             .collect();
         let spark_commitments = self
-            .spark_coordinator_client
+            .coordinator_client
             .get_signing_commitments(GetSigningCommitmentsRequest { node_ids })
             .await?;
 
@@ -420,7 +420,7 @@ where
         };
 
         let response = self
-            .spark_coordinator_client
+            .coordinator_client
             .initiate_preimage_swap(request_data)
             .await?;
 
