@@ -9,7 +9,7 @@ use super::fragments::{
 const LIGHTNING_SEND_FEE_ESTIMATE: &str = r#"
 query LightningSendFeeEstimate(
   $encoded_invoice: String!
-  amount_sats: Long
+  $amount_sats: Long
 ) {
   lightning_send_fee_estimate(input: {
     encoded_invoice: $encoded_invoice,

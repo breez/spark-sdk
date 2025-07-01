@@ -6,7 +6,10 @@ use spark::{
     address::SparkAddress,
     bitcoin::BitcoinService,
     operator::rpc::{ConnectionManager, SparkRpcClient},
-    services::{DepositService, LightningSendPayment, LightningService, Transfer, TransferService},
+    services::{
+        DepositService, LightningReceivePayment, LightningSendPayment, LightningService, Transfer,
+        TransferService,
+    },
     signer::Signer,
     ssp::ServiceProvider,
     tree::{TreeNode, TreeNodeId, TreeService, TreeState},
@@ -30,19 +33,14 @@ where
 
 impl<S: Signer + Clone> SparkWallet<S> {
     pub async fn new(config: SparkWalletConfig, signer: S) -> Result<Self, SparkWalletError> {
+        config.validate()?;
         let identity_public_key = signer.get_identity_public_key()?;
         let connection_manager = ConnectionManager::new();
 
-        // spark operator
-        let spark_service_channel = connection_manager
-            .get_channel(config.operator_pool.get_coordinator())
-            .await?;
+        let (signing_operators_clients, coordinator_client) =
+            Self::init_operator_clients(&config, &connection_manager, signer.clone()).await?;
+
         let bitcoin_service = BitcoinService::new(config.network);
-        let spark_rpc_client = Arc::new(SparkRpcClient::new(
-            spark_service_channel,
-            config.network,
-            signer.clone(),
-        ));
         let _service_provider = Arc::new(ServiceProvider::new(
             config.service_provider_config.clone(),
             config.network,
@@ -50,14 +48,16 @@ impl<S: Signer + Clone> SparkWallet<S> {
         ));
 
         let lightning_service = Arc::new(LightningService::new(
-            spark_rpc_client.clone(),
+            coordinator_client.clone(),
+            signing_operators_clients,
             _service_provider.clone(),
             config.network,
             signer.clone(),
+            config.split_secret_threshold,
         ));
         let deposit_service = DepositService::new(
             bitcoin_service,
-            spark_rpc_client.clone(),
+            coordinator_client.clone(),
             identity_public_key,
             config.network,
             config.operator_pool.clone(),
@@ -78,19 +78,38 @@ impl<S: Signer + Clone> SparkWallet<S> {
         })
     }
 
+    async fn init_operator_clients(
+        config: &SparkWalletConfig,
+        connection_manager: &ConnectionManager,
+        signer: S,
+    ) -> Result<(Vec<Arc<SparkRpcClient<S>>>, Arc<SparkRpcClient<S>>), SparkWalletError> {
+        let mut signing_operators_clients = vec![];
+        for operator in config.operator_pool.get_signing_operators() {
+            let channel = connection_manager.get_channel(operator).await?;
+            let client = Arc::new(SparkRpcClient::new(channel, config.network, signer.clone()));
+            signing_operators_clients.push(client);
+        }
+        let channel = connection_manager
+            .get_channel(config.operator_pool.get_coordinator())
+            .await?;
+        let coordinator_client =
+            Arc::new(SparkRpcClient::new(channel, config.network, signer.clone()));
+        Ok((signing_operators_clients, coordinator_client))
+    }
+
     pub async fn pay_lightning_invoice(
         &self,
-        invoice: &String,
+        invoice: &str,
+        max_fee_sat: Option<u64>,
     ) -> Result<LightningSendPayment, SparkWalletError> {
-        let decoded_invoice = self.lightning_service.validate_payment(invoice)?;
-        let invoice_amount_sat = decoded_invoice
-            .amount_milli_satoshis()
-            .map(|msats| msats.div_ceil(1000))
-            .ok_or(SparkWalletError::ValidationError(invoice.to_string()))?;
+        let total_amount_sat = self
+            .lightning_service
+            .validate_payment(invoice, max_fee_sat)
+            .await?;
 
         let leaves = self
             .tree_service
-            .select_leaves_by_amount(invoice_amount_sat)
+            .select_leaves_by_amount(total_amount_sat)
             .await?;
 
         // start the lightning swap with the operator
@@ -109,6 +128,47 @@ impl<S: Signer + Clone> SparkWallet<S> {
         Ok(self
             .lightning_service
             .finalize_lightning_swap(&swap)
+            .await?)
+    }
+
+    pub async fn create_lightning_invoice(
+        &self,
+        amount_sat: u64,
+        description: Option<String>,
+    ) -> Result<LightningReceivePayment, SparkWalletError> {
+        Ok(self
+            .lightning_service
+            .create_lightning_invoice(amount_sat, description, None, None)
+            .await?)
+    }
+
+    pub async fn fetch_lightning_send_fee_estimate(
+        &self,
+        invoice: &str,
+    ) -> Result<u64, SparkWalletError> {
+        Ok(self
+            .lightning_service
+            .fetch_lightning_send_fee_estimate(invoice)
+            .await?)
+    }
+
+    pub async fn fetch_lightning_send_payment(
+        &self,
+        id: &str,
+    ) -> Result<LightningSendPayment, SparkWalletError> {
+        Ok(self
+            .lightning_service
+            .get_lightning_send_payment(id)
+            .await?)
+    }
+
+    pub async fn fetch_lightning_receive_payment(
+        &self,
+        id: &str,
+    ) -> Result<LightningReceivePayment, SparkWalletError> {
+        Ok(self
+            .lightning_service
+            .get_lightning_receive_payment(id)
             .await?)
     }
     // TODO: In the js sdk this function calls an electrum server to fetch the transaction hex based on a txid.

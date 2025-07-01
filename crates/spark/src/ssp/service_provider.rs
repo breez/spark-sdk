@@ -52,10 +52,11 @@ where
     pub async fn get_lightning_send_fee_estimate(
         &self,
         encoded_invoice: &str,
+        amount_sats: u64,
     ) -> ServiceProviderResult<LightningSendFeeEstimateOutput> {
         Ok(self
             .gql_client
-            .get_lightning_send_fee_estimate(encoded_invoice)
+            .get_lightning_send_fee_estimate(encoded_invoice, amount_sats)
             .await?)
     }
 

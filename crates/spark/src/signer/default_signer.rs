@@ -24,6 +24,8 @@ use crate::{
     signer::{Signer, SignerError},
 };
 
+use super::VerifiableSecretShare;
+
 const PURPOSE: u32 = 8797555;
 fn coin_type(network: Network) -> ChildNumber {
     let coin_type: u32 = match network {
@@ -218,6 +220,15 @@ impl Signer for DefaultSigner {
         //     ),
         // )?;
         // Ok(signature_share)
+    }
+
+    async fn split_secret_with_proofs(
+        &self,
+        secret: Vec<u8>,
+        threshold: u32,
+        num_shares: u32,
+    ) -> Result<Vec<VerifiableSecretShare>, SignerError> {
+        todo!()
     }
 }
 
