@@ -32,3 +32,16 @@ impl From<ServiceProviderConfig> for GraphQLClientConfig {
         }
     }
 }
+
+// TODO: handle the case where the currency is not sats
+impl CurrencyAmount {
+    pub fn as_sats(&self) -> Result<u64, ServiceProviderError> {
+        match self.original_unit.as_str() {
+            "MILLISATOSHI" => Ok(self.original_value.div_ceil(1000)),
+            "SATOSHI" => Ok(self.original_value),
+            _ => Err(ServiceProviderError::ParseError(
+                "Unsupported currency unit".to_string(),
+            )),
+        }
+    }
+}

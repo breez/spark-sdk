@@ -27,6 +27,9 @@ pub enum ServiceProviderError {
     /// Error during serialization or deserialization
     #[error("serialization error: {0}")]
     Serialization(String),
+
+    #[error("parse error: {0}")]
+    ParseError(String),
 }
 
 impl From<GraphQLError> for ServiceProviderError {

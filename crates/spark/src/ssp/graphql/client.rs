@@ -81,10 +81,20 @@ where
             .headers(headers.clone())
             .json(&graphql_query)
             .send()
-            .await?
-            .error_for_status()?;
+            .await?;
 
-        let json: GraphQLResponse<T> = response.json().await?;
+        let status_code = response.status();
+        let text = response.text().await?;
+        tracing::debug!("Response: {}", text);
+        if status_code.is_client_error() {
+            return Err(GraphQLError::Network {
+                reason: text,
+                code: Some(status_code.as_u16()),
+            });
+        }
+
+        let json: GraphQLResponse<T> =
+            serde_json::from_str(&text).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
         if let Some(errors) = json.errors {
             if !errors.is_empty() {
                 return Err(GraphQLError::from_graphql_errors(&errors));
@@ -237,9 +247,11 @@ where
     pub async fn get_lightning_send_fee_estimate(
         &self,
         encoded_invoice: &str,
+        amount_sats: u64,
     ) -> GraphQLResult<LightningSendFeeEstimateOutput> {
         let vars = serde_json::json!({
-            "encoded_invoice": encoded_invoice
+            "encoded_invoice": encoded_invoice,
+            "amount_sats": amount_sats
         });
 
         #[derive(Deserialize)]

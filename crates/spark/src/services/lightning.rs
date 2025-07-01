@@ -300,7 +300,7 @@ where
 
         let fee_estimate = self
             .ssp_client
-            .get_lightning_send_fee_estimate(invoice)
+            .get_lightning_send_fee_estimate(invoice, amount_sats)
             .await?;
 
         let fee_sat = fee_estimate
@@ -321,8 +321,11 @@ where
         &self,
         invoice: &str,
     ) -> Result<u64, ServiceError> {
+        let decoded_invoice = Bolt11Invoice::from_str(invoice)
+            .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
+        let amount_sat = get_invoice_amount_sats(&decoded_invoice)?;
         self.ssp_client
-            .get_lightning_send_fee_estimate(invoice)
+            .get_lightning_send_fee_estimate(invoice, amount_sat)
             .await?
             .fee_estimate
             .as_sats()

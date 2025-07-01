@@ -172,10 +172,10 @@ pub struct LightningInvoice {
 /// Currency amount structure
 #[derive(Debug, Clone, Deserialize)]
 pub struct CurrencyAmount {
-    pub original_value: String,
+    pub original_value: u64,
     pub original_unit: String,
     pub preferred_currency_unit: String,
-    pub preferred_currency_value_rounded: String,
+    pub preferred_currency_value_rounded: u64,
     pub preferred_currency_value_approx: f64,
 }
 
