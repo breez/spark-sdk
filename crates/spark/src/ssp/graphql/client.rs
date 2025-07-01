@@ -275,13 +275,13 @@ where
         });
 
         #[derive(Deserialize)]
-        struct Response {
-            complete_coop_exit: CompleteCoopExitResponse,
+        struct CompleteCoopExitResponse {
+            request: CoopExitRequest,
         }
 
         #[derive(Deserialize)]
-        struct CompleteCoopExitResponse {
-            request: CoopExitRequest,
+        struct Response {
+            complete_coop_exit: CompleteCoopExitResponse,
         }
 
         let response: Response = self
@@ -300,13 +300,13 @@ where
             serde_json::to_value(input).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
 
         #[derive(Deserialize)]
-        struct Response {
-            request_coop_exit: RequestCoopExitResponse,
+        struct RequestCoopExitResponse {
+            request: CoopExitRequest,
         }
 
         #[derive(Deserialize)]
-        struct RequestCoopExitResponse {
-            request: CoopExitRequest,
+        struct Response {
+            request_coop_exit: RequestCoopExitResponse,
         }
 
         let response: Response = self
@@ -325,13 +325,13 @@ where
             serde_json::to_value(input).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
 
         #[derive(Deserialize)]
-        struct Response {
-            request_lightning_receive: RequestLightningReceiveResponse,
+        struct RequestLightningReceiveResponse {
+            request: LightningReceiveRequest,
         }
 
         #[derive(Deserialize)]
-        struct RequestLightningReceiveResponse {
-            request: LightningReceiveRequest,
+        struct Response {
+            request_lightning_receive: RequestLightningReceiveResponse,
         }
 
         let response: Response = self
@@ -350,13 +350,13 @@ where
             serde_json::to_value(input).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
 
         #[derive(Deserialize)]
-        struct Response {
-            request_lightning_send: RequestLightningSendResponse,
+        struct RequestLightningSendResponse {
+            request: LightningSendRequest,
         }
 
         #[derive(Deserialize)]
-        struct RequestLightningSendResponse {
-            request: LightningSendRequest,
+        struct Response {
+            request_lightning_send: RequestLightningSendResponse,
         }
 
         let response: Response = self
@@ -364,6 +364,138 @@ where
             .await?;
 
         Ok(response.request_lightning_send.request)
+    }
+
+    /// Request a leaves swap
+    pub async fn request_leaves_swap(
+        &self,
+        input: RequestLeavesSwapInput,
+    ) -> GraphQLResult<LeavesSwapRequest> {
+        let vars =
+            serde_json::to_value(input).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
+
+        #[derive(Deserialize)]
+        struct RequestLeavesSwapResponse {
+            request: LeavesSwapRequest,
+        }
+
+        #[derive(Deserialize)]
+        struct Response {
+            request_leaves_swap: RequestLeavesSwapResponse,
+        }
+
+        let response: Response = self
+            .execute_raw_query(&mutations::request_leaves_swap(), vars, true)
+            .await?;
+
+        Ok(response.request_leaves_swap.request)
+    }
+
+    /// Complete a leaves swap
+    pub async fn complete_leaves_swap(
+        &self,
+        adaptor_secret_key: &str,
+        user_outbound_transfer_external_id: &str,
+        leaves_swap_request_id: &str,
+    ) -> GraphQLResult<LeavesSwapRequest> {
+        let vars = serde_json::json!({
+            "adaptor_secret_key": adaptor_secret_key,
+            "user_outbound_transfer_external_id": user_outbound_transfer_external_id,
+            "leaves_swap_request_id": leaves_swap_request_id
+        });
+
+        #[derive(Deserialize)]
+        struct CompleteLeavesSwapResponse {
+            request: LeavesSwapRequest,
+        }
+
+        #[derive(Deserialize)]
+        struct Response {
+            complete_leaves_swap: CompleteLeavesSwapResponse,
+        }
+
+        let response: Response = self
+            .execute_raw_query(&mutations::complete_leaves_swap(), vars, true)
+            .await?;
+        Ok(response.complete_leaves_swap.request)
+    }
+
+    /// Get a lightning receive request by ID
+    pub async fn get_lightning_receive_request(
+        &self,
+        id: &str,
+    ) -> GraphQLResult<LightningReceiveRequest> {
+        let vars = serde_json::json!({
+            "request_id": id
+        });
+
+        #[derive(Deserialize)]
+        struct Response {
+            user_request: LightningReceiveRequest,
+        }
+
+        let response: Response = self
+            .execute_raw_query(&queries::user_request(), vars, true)
+            .await?;
+
+        Ok(response.user_request)
+    }
+
+    /// Get a lightning send request by ID
+    pub async fn get_lightning_send_request(
+        &self,
+        id: &str,
+    ) -> GraphQLResult<LightningSendRequest> {
+        let vars = serde_json::json!({
+            "request_id": id
+        });
+
+        #[derive(Deserialize)]
+        struct Response {
+            user_request: LightningSendRequest,
+        }
+
+        let response: Response = self
+            .execute_raw_query(&queries::user_request(), vars, true)
+            .await?;
+
+        Ok(response.user_request)
+    }
+
+    /// Get a leaves swap request by ID
+    pub async fn get_leaves_swap_request(&self, id: &str) -> GraphQLResult<LeavesSwapRequest> {
+        let vars = serde_json::json!({
+            "request_id": id
+        });
+
+        #[derive(Deserialize)]
+        struct Response {
+            user_request: LeavesSwapRequest,
+        }
+
+        let response: Response = self
+            .execute_raw_query(&queries::user_request(), vars, true)
+            .await?;
+
+        Ok(response.user_request)
+    }
+
+    /// Get a cooperative exit request by ID
+    pub async fn get_coop_exit_request(&self, id: &str) -> GraphQLResult<CoopExitRequest> {
+        let vars = serde_json::json!({
+            "request_id": id
+        });
+
+        #[derive(Deserialize)]
+        struct Response {
+            user_request: CoopExitRequest,
+        }
+
+        let response: Response = self
+            .execute_raw_query(&queries::user_request(), vars, true)
+            .await?;
+
+        Ok(response.user_request)
     }
 
     /// Get claim deposit quote
@@ -391,63 +523,39 @@ where
         Ok(response.static_deposit_quote)
     }
 
-    /// Get a lightning receive request by ID
-    pub async fn get_lightning_receive_request(
+    /// Claim static deposit
+    pub async fn claim_static_deposit(
         &self,
-        id: &str,
-    ) -> GraphQLResult<Option<LightningReceiveRequest>> {
-        let vars = serde_json::json!({
-            "request_id": id
-        });
+        input: ClaimStaticDepositInput,
+    ) -> GraphQLResult<ClaimStaticDepositOutput> {
+        let vars =
+            serde_json::to_value(input).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
 
         #[derive(Deserialize)]
         struct Response {
-            user_request: Option<LightningReceiveRequest>,
+            claim_static_deposit: ClaimStaticDepositOutput,
         }
 
         let response: Response = self
-            .execute_raw_query(&queries::user_request(), vars, true)
+            .execute_raw_query(&mutations::claim_static_deposit(), vars, true)
             .await?;
-
-        Ok(response.user_request)
+        Ok(response.claim_static_deposit)
     }
 
-    /// Get a lightning send request by ID
-    pub async fn get_lightning_send_request(
-        &self,
-        id: &str,
-    ) -> GraphQLResult<Option<LightningSendRequest>> {
+    /// Get a transfer by ID
+    pub async fn get_transfer(&self, transfer_spark_id: &str) -> GraphQLResult<Transfer> {
         let vars = serde_json::json!({
-            "request_id": id
+            "transfer_spark_id": transfer_spark_id
         });
 
         #[derive(Deserialize)]
         struct Response {
-            user_request: Option<LightningSendRequest>,
+            transfer: Transfer,
         }
 
         let response: Response = self
-            .execute_raw_query(&queries::user_request(), vars, true)
+            .execute_raw_query(&queries::get_transfer(), vars, true)
             .await?;
-
-        Ok(response.user_request)
-    }
-
-    /// Get a cooperative exit request by ID
-    pub async fn get_coop_exit_request(&self, id: &str) -> GraphQLResult<Option<CoopExitRequest>> {
-        let vars = serde_json::json!({
-            "request_id": id
-        });
-
-        #[derive(Deserialize)]
-        struct Response {
-            user_request: Option<CoopExitRequest>,
-        }
-
-        let response: Response = self
-            .execute_raw_query(&queries::user_request(), vars, true)
-            .await?;
-
-        Ok(response.user_request)
+        Ok(response.transfer)
     }
 }

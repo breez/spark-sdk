@@ -2588,6 +2588,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "spark-macros",
  "thiserror",
  "tokio",
  "tonic",
@@ -2609,6 +2610,14 @@ dependencies = [
  "spark-wallet",
  "tokio",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "spark-macros"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn",
 ]
 
 [[package]]

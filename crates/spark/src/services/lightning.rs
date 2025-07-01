@@ -21,7 +21,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::LeafKeyTweak;
-use super::models::{RequestStatus, map_signing_nonce_commitments};
+use super::models::{LightningSendRequestStatus, map_signing_nonce_commitments};
 
 pub struct LightningSwap {
     pub transfer_id: Uuid,
@@ -39,7 +39,7 @@ pub struct LightningSendPayment {
     pub encoded_invoice: String,
     pub fee_msat: u64,
     pub idempotency_key: String,
-    pub status: RequestStatus,
+    pub status: LightningSendRequestStatus,
     pub transfer_id: Option<String>,
     pub payment_preimage: Option<String>,
 }
@@ -60,7 +60,7 @@ impl TryFrom<crate::ssp::LightningSendRequest> for LightningSendPayment {
                 .parse()
                 .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))?,
             idempotency_key: value.idempotency_key,
-            status: value.status.into(),
+            status: value.status,
             transfer_id: value.transfer.and_then(|t| t.spark_id),
             payment_preimage: value.payment_preimage,
         })
