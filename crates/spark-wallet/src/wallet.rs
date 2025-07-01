@@ -33,6 +33,7 @@ where
 
 impl<S: Signer + Clone> SparkWallet<S> {
     pub async fn new(config: SparkWalletConfig, signer: S) -> Result<Self, SparkWalletError> {
+        config.validate()?;
         let identity_public_key = signer.get_identity_public_key()?;
         let connection_manager = ConnectionManager::new();
 
