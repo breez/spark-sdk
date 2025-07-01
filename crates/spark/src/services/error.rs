@@ -48,6 +48,8 @@ pub enum ServiceError {
     SSPswapError(String),
     #[error("perimage share store failed")]
     PerimageShareStoreFailed,
+    #[error("payment not found")]
+    PaymentNotFound,
 
     // Transfer related errors
     #[error("Failed to extend time lock: {0}")]

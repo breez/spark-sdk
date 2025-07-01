@@ -1,5 +1,4 @@
 use crate::core::Network;
-use crate::operator::OperatorPool;
 use crate::operator::rpc::SparkRpcClient;
 use crate::operator::rpc::spark::initiate_preimage_swap_request::Reason;
 use crate::operator::rpc::spark::{
@@ -29,7 +28,7 @@ pub struct LightningSwap {
     pub transfer_id: Uuid,
     pub leaves: Vec<LeafKeyTweak>,
     pub receiver_identity_public_key: PublicKey,
-    pub bolt11_invoice: Bolt11Invoice,
+    pub bolt11_invoice: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -58,8 +57,7 @@ impl TryFrom<crate::ssp::LightningSendRequest> for LightningSendPayment {
             encoded_invoice: value.encoded_invoice,
             fee_msat: value
                 .fee
-                .original_value
-                .parse()
+                .as_sats()
                 .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))?,
             idempotency_key: value.idempotency_key,
             status: value.status.into(),
@@ -69,7 +67,7 @@ impl TryFrom<crate::ssp::LightningSendRequest> for LightningSendPayment {
     }
 }
 
-pub struct LightningReceiveRequest {
+pub struct LightningReceivePayment {
     pub id: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -81,7 +79,7 @@ pub struct LightningReceiveRequest {
     pub payment_preimage: Option<String>,
 }
 
-impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceiveRequest {
+impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
     type Error = ServiceError;
 
     fn try_from(value: crate::ssp::LightningReceiveRequest) -> Result<Self, Self::Error> {
@@ -96,8 +94,7 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceiveRequest {
             transfer_amount_sat: match value.transfer {
                 Some(t) => Some(
                     t.total_amount
-                        .original_value
-                        .parse()
+                        .as_sats()
                         .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))?,
                 ),
                 None => None,
@@ -147,7 +144,7 @@ where
         memo: Option<String>,
         preimage: Vec<u8>,
         expiry_secs: Option<i32>,
-    ) -> Result<LightningReceiveRequest, ServiceError> {
+    ) -> Result<LightningReceivePayment, ServiceError> {
         let payment_hash = sha256::Hash::hash(&preimage);
         let invoice = self
             .ssp_client
@@ -208,16 +205,10 @@ where
         invoice: &str,
         leaves: &Vec<TreeNode>,
     ) -> Result<LightningSwap, ServiceError> {
-        let invoice = self.validate_payment(invoice)?;
-        let amount_sats = get_invoice_amount_sats(&invoice)?;
-        let payment_hash = invoice.payment_hash();
-
-        let leaves_amount: u64 = leaves.iter().map(|l| l.value).sum();
-        if leaves_amount != amount_sats {
-            return Err(ServiceError::ValidationError(
-                "Amount must match the invoice amount".to_string(),
-            ));
-        }
+        let decoded_invoice = Bolt11Invoice::from_str(&invoice)
+            .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
+        let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
+        let payment_hash = decoded_invoice.payment_hash();
 
         // prepare leaf tweaks
         let mut leaf_tweaks = Vec::with_capacity(leaves.len());
@@ -238,7 +229,7 @@ where
                 &leaf_tweaks,
                 &self.ssp_client.identity_public_key(),
                 payment_hash,
-                &invoice,
+                invoice,
                 amount_sats,
                 0, // TODO: this must use the estimated fee.
                 false,
@@ -257,7 +248,7 @@ where
             })?,
             leaves: leaf_tweaks,
             receiver_identity_public_key: self.ssp_client.identity_public_key(),
-            bolt11_invoice: invoice.clone(),
+            bolt11_invoice: invoice.to_string(),
         })
     }
 
@@ -265,30 +256,70 @@ where
         &self,
         swap: &LightningSwap,
     ) -> Result<LightningSendPayment, ServiceError> {
+        let decoded_invoice = Bolt11Invoice::from_str(&swap.bolt11_invoice)
+            .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
         let res = self
             .ssp_client
             .request_lightning_send(RequestLightningSendInput {
                 encoded_invoice: swap.bolt11_invoice.to_string(),
-                idempotency_key: Some(swap.bolt11_invoice.payment_hash().encode_hex()),
+                idempotency_key: Some(decoded_invoice.payment_hash().encode_hex()),
             })
             .await?;
 
         res.try_into()
     }
 
-    pub fn validate_payment(&self, invoice: &str) -> Result<Bolt11Invoice, ServiceError> {
-        let invoice = Bolt11Invoice::from_str(invoice)
+    pub async fn validate_payment(
+        &self,
+        invoice: &str,
+        max_fee_sat: Option<u64>,
+    ) -> Result<u64, ServiceError> {
+        let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
 
         // get the invoice amount in sats, then validate the amount
-        let amount_sats = get_invoice_amount_sats(&invoice)?;
+        let amount_sats = get_invoice_amount_sats(&decoded_invoice)?;
         if amount_sats == 0 {
             return Err(ServiceError::ValidationError(
                 "Amount must be greater than 0".to_string(),
             ));
         }
 
-        Ok(invoice)
+        let fee_estimate = self
+            .ssp_client
+            .get_lightning_send_fee_estimate(invoice)
+            .await?;
+
+        let fee_sat = fee_estimate
+            .fee_estimate
+            .as_sats()
+            .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))?;
+        if let Some(max_fee_sat) = max_fee_sat {
+            if fee_sat > max_fee_sat {
+                return Err(ServiceError::ValidationError(
+                    "Fee exceeds maximum allowed fee".to_string(),
+                ));
+            }
+        }
+        Ok(fee_sat + amount_sats)
+    }
+
+    pub async fn get_lightning_send_payment(
+        &self,
+        id: &str,
+    ) -> Result<LightningSendPayment, ServiceError> {
+        let res = self.ssp_client.get_lightning_send_request(id).await?;
+
+        res.ok_or(ServiceError::PaymentNotFound)?.try_into()
+    }
+
+    pub async fn get_lightning_receive_payment(
+        &self,
+        id: &str,
+    ) -> Result<LightningReceivePayment, ServiceError> {
+        let res = self.ssp_client.get_lightning_receive_request(id).await?;
+
+        res.ok_or(ServiceError::PaymentNotFound)?.try_into()
     }
 
     async fn swap_nodes_for_preimage(
@@ -296,7 +327,7 @@ where
         leaves: &Vec<LeafKeyTweak>,
         receiver_pubkey: &PublicKey,
         payment_hash: &sha256::Hash,
-        invoice: &Bolt11Invoice,
+        invoice: &str,
         invoice_amount_sats: u64,
         fee_sats: u64,
         is_inbound_payment: bool,

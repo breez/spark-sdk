@@ -97,17 +97,17 @@ impl<S: Signer + Clone> SparkWallet<S> {
 
     pub async fn pay_lightning_invoice(
         &self,
-        invoice: &String,
+        invoice: &str,
+        max_fee_sat: Option<u64>,
     ) -> Result<LightningSendPayment, SparkWalletError> {
-        let decoded_invoice = self.lightning_service.validate_payment(invoice)?;
-        let invoice_amount_sat = decoded_invoice
-            .amount_milli_satoshis()
-            .map(|msats| msats.div_ceil(1000))
-            .ok_or(SparkWalletError::ValidationError(invoice.to_string()))?;
+        let total_amount_sat = self
+            .lightning_service
+            .validate_payment(invoice, max_fee_sat)
+            .await?;
 
         let leaves = self
             .tree_service
-            .select_leaves_by_amount(invoice_amount_sat)
+            .select_leaves_by_amount(total_amount_sat)
             .await?;
 
         // start the lightning swap with the operator
