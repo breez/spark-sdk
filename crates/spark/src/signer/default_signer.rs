@@ -21,6 +21,7 @@ use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
+use crate::signer::secret_sharing;
 use crate::tree::TreeNodeId;
 use crate::{
     Network,
@@ -471,11 +472,18 @@ impl Signer for DefaultSigner {
 
     async fn split_secret_with_proofs(
         &self,
-        _secret: Vec<u8>,
-        _threshold: u32,
-        _num_shares: u32,
+        secret: Vec<u8>,
+        threshold: u32,
+        num_shares: u32,
     ) -> Result<Vec<VerifiableSecretShare>, SignerError> {
-        todo!()
+        let secret_as_scalar = secret_sharing::from_bytes_to_scalar(&secret)?;
+        let shares = secret_sharing::split_secret_with_proofs(
+            &secret_as_scalar,
+            threshold as usize,
+            num_shares as usize,
+        )?;
+
+        Ok(shares)
     }
 }
 

@@ -1,6 +1,7 @@
 mod default_signer;
 mod error;
 mod models;
+mod secret_sharing;
 
 use std::collections::BTreeMap;
 
