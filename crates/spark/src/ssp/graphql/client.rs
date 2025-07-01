@@ -119,7 +119,7 @@ where
     {
         if needs_auth && !self.auth_provider.is_authorized()? {
             self.authenticate().await?;
-            tracing::debug!("Authenticated succesfully with ssp");
+            tracing::debug!("Authenticated successfully with ssp");
         }
 
         let full_url = self.get_full_url();
