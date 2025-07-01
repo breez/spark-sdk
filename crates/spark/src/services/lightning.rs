@@ -115,8 +115,8 @@ pub struct LightningService<S>
 where
     S: Signer,
 {
-    coordinator_spark_client: Arc<SparkRpcClient<S>>,
-    operators_spark_clients: Vec<Arc<SparkRpcClient<S>>>,
+    spark_coordinator_client: Arc<SparkRpcClient<S>>,
+    spark_operator_clients: Vec<Arc<SparkRpcClient<S>>>,
     ssp_client: Arc<ServiceProvider<S>>,
     network: Network,
     signer: S,
@@ -128,16 +128,16 @@ where
     S: Signer,
 {
     pub fn new(
-        coordinator_spark_client: Arc<SparkRpcClient<S>>,
-        operators_spark_clients: Vec<Arc<SparkRpcClient<S>>>,
+        spark_coordinator_client: Arc<SparkRpcClient<S>>,
+        spark_operator_clients: Vec<Arc<SparkRpcClient<S>>>,
         ssp_client: Arc<ServiceProvider<S>>,
         network: Network,
         signer: S,
         split_secret_threshold: u32,
     ) -> Self {
         LightningService {
-            coordinator_spark_client,
-            operators_spark_clients,
+            spark_coordinator_client,
+            spark_operator_clients,
             ssp_client,
             network,
             signer,
@@ -184,13 +184,13 @@ where
             .split_secret_with_proofs(
                 preimage,
                 self.split_secret_threshold,
-                self.operators_spark_clients.len() as u32,
+                self.spark_operator_clients.len() as u32,
             )
             .await?;
 
         let identity_pubkey = self.signer.get_identity_public_key()?;
         let requests = self
-            .operators_spark_clients
+            .spark_operator_clients
             .iter()
             .zip(shares)
             .map(|(operator, share)| {
@@ -208,7 +208,7 @@ where
 
         futures::future::try_join_all(requests)
             .await
-            .map_err(|_| ServiceError::PerimageShareStoreFailed)?;
+            .map_err(|_| ServiceError::PreimageShareStoreFailed)?;
 
         invoice.try_into()
     }
@@ -363,7 +363,7 @@ where
             .map(|l| l.node.id.clone().to_string())
             .collect();
         let spark_commitments = self
-            .coordinator_spark_client
+            .spark_coordinator_client
             .get_signing_commitments(GetSigningCommitmentsRequest { node_ids })
             .await?;
 
@@ -420,7 +420,7 @@ where
         };
 
         let response = self
-            .coordinator_spark_client
+            .spark_coordinator_client
             .initiate_preimage_swap(request_data)
             .await?;
 
