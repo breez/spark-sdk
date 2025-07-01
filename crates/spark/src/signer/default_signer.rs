@@ -12,7 +12,9 @@ use bitcoin::{
     secp256k1::PublicKey,
 };
 use frost_core::round1::Nonce;
-use frost_secp256k1_tr::keys::{PublicKeyPackage, SigningShare, VerifyingShare};
+use frost_secp256k1_tr::keys::{
+    EvenY, KeyPackage, PublicKeyPackage, SigningShare, Tweak, VerifyingShare,
+};
 use frost_secp256k1_tr::round1::{SigningCommitments, SigningNonces};
 use frost_secp256k1_tr::round2::SignatureShare;
 use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
@@ -399,12 +401,27 @@ impl Signer for DefaultSigner {
 
         // Create a key package containing all the necessary cryptographic material
         // for the user's participation in the threshold signing protocol
-        let key_package = frost_secp256k1_tr::keys::KeyPackage::new(
+        let untweaked_key_package = KeyPackage::new(
             user_identifier,
             signing_share,
             verifying_share,
             verifying_key,
             1, // Minimum signers required (set to 1 for this user's perspective)
+        );
+
+        // We don't want to tweak the key with merkle root, but we need to make sure the key is even.
+        // Then the total verifying key will need to tweak with the merkle root.
+        let merkle_root = Vec::new(); // For taproot signatures, we provide an empty merkle root
+        let tweaked_key_package = untweaked_key_package.clone().tweak(Some(&merkle_root));
+        let even_y_key_package = untweaked_key_package
+            .clone()
+            .into_even_y(Some(verifying_key.has_even_y()));
+        let key_package = KeyPackage::new(
+            *even_y_key_package.identifier(),
+            *even_y_key_package.signing_share(),
+            *even_y_key_package.verifying_share(),
+            *tweaked_key_package.verifying_key(),
+            *tweaked_key_package.min_signers(),
         );
 
         // Generate the user's signature share using the FROST round2 signing algorithm
@@ -417,12 +434,12 @@ impl Signer for DefaultSigner {
         // from the statechain participants to form a complete threshold signature
         return Ok(signature_share);
     }
-    
+
     async fn split_secret_with_proofs(
         &self,
-        secret: Vec<u8>,
-        threshold: u32,
-        num_shares: u32,
+        _secret: Vec<u8>,
+        _threshold: u32,
+        _num_shares: u32,
     ) -> Result<Vec<VerifiableSecretShare>, SignerError> {
         todo!()
     }
