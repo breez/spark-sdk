@@ -194,6 +194,8 @@ impl Signer for DefaultSigner {
         self_signature: &SignatureShare,
         adaptor_public_key: Option<&PublicKey>,
     ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
+        tracing::trace!("default_signer::aggregate_frost");
+
         // Derive an identifier for the local user
         let user_identifier =
             Identifier::derive("user".as_bytes()).map_err(|_| SignerError::IdentifierError)?;
@@ -218,7 +220,7 @@ impl Signer for DefaultSigner {
             let verifying_key =
                 VerifyingShare::deserialize(pk.serialize().as_slice()).map_err(|e| {
                     SignerError::SerializationError(format!(
-                        "Failed to deserialize public key for participant {id:?}: {e}"
+                        "Failed to deserialize public key for participant {id:?}: {e} (culprit: {:?})", e.culprit()
                     ))
                 })?;
             verifying_shares.insert(*id, verifying_key);
@@ -229,8 +231,8 @@ impl Signer for DefaultSigner {
             user_identifier,
             VerifyingShare::deserialize(public_key.serialize().as_slice()).map_err(|e| {
                 SignerError::SerializationError(format!(
-                    "Failed to deserialize user public key: {}",
-                    e
+                    "Failed to deserialize user public key: {e} (culprit: {:?})",
+                    e.culprit()
                 ))
             })?,
         );
@@ -238,12 +240,17 @@ impl Signer for DefaultSigner {
         let verifying_key = VerifyingKey::deserialize(verifying_key.serialize().as_slice())
             .map_err(|e| {
                 SignerError::SerializationError(format!(
-                    "Failed to deserialize group verifying key: {e}"
+                    "Failed to deserialize group verifying key: {e} (culprit: {:?})",
+                    e.culprit()
                 ))
             })?;
 
         // Create a public key package with all verifying shares and the group's verifying key
         let public_key_package = PublicKeyPackage::new(verifying_shares, verifying_key);
+
+        tracing::trace!("signing_package: {:?}", signing_package);
+        tracing::trace!("signature_shares: {:?}", signature_shares);
+        tracing::trace!("public_key_package: {:?}", public_key_package);
 
         // For taproot signatures, we provide an empty merkle root
         let merkle_root = Vec::new();
@@ -255,8 +262,14 @@ impl Signer for DefaultSigner {
             &public_key_package,
             Some(&merkle_root),
         )
-        .map_err(|e| SignerError::FrostError(format!("Failed to aggregate signatures: {}", e)))?;
+        .map_err(|e| {
+            SignerError::FrostError(format!(
+                "Failed to aggregate signatures: {e} (culprit: {:?})",
+                e.culprit()
+            ))
+        })?;
 
+        tracing::info!("signature: {:?}", signature);
         Ok(signature)
     }
 
@@ -341,6 +354,8 @@ impl Signer for DefaultSigner {
         statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
         adaptor_public_key: Option<&PublicKey>,
     ) -> Result<SignatureShare, SignerError> {
+        tracing::trace!("default_signer::sign_frost");
+
         // Derive a deterministic identifier for the local user from the string "user"
         let user_identifier =
             Identifier::derive("user".as_bytes()).map_err(|_| SignerError::IdentifierError)?;
@@ -357,7 +372,10 @@ impl Signer for DefaultSigner {
 
         // Serialize the commitment to look up the corresponding nonces in our storage
         let serialized_commitment = self_commitment.serialize().map_err(|e| {
-            SignerError::SerializationError(format!("failed to serialize self commitment: {e}",))
+            SignerError::SerializationError(format!(
+                "failed to serialize self commitment: {e} (culprit: {:?})",
+                e.culprit()
+            ))
         })?;
 
         // Retrieve the nonces that were previously generated and stored when creating the commitment
@@ -380,7 +398,10 @@ impl Signer for DefaultSigner {
         // Convert the Bitcoin secret key to FROST SigningShare format
         // This allows it to be used with the FROST API for creating signature shares
         let signing_share = SigningShare::deserialize(&secret_key.secret_bytes()).map_err(|e| {
-            SignerError::SerializationError(format!("Failed to deserialize secret key: {e}"))
+            SignerError::SerializationError(format!(
+                "Failed to deserialize secret key: {e} (culprit: {:?})",
+                e.culprit()
+            ))
         })?;
 
         // Convert the Bitcoin public key to FROST VerifyingShare format
@@ -388,7 +409,8 @@ impl Signer for DefaultSigner {
         let verifying_share = VerifyingShare::deserialize(public_key.serialize().as_slice())
             .map_err(|e| {
                 SignerError::SerializationError(format!(
-                    "Failed to deserialize private as public key: {e}"
+                    "Failed to deserialize private as public key: {e} (culprit: {:?})",
+                    e.culprit()
                 ))
             })?;
 
@@ -396,7 +418,10 @@ impl Signer for DefaultSigner {
         // This is the aggregate public key that will verify the final threshold signature
         let verifying_key = VerifyingKey::deserialize(verifying_key.serialize().as_slice())
             .map_err(|e| {
-                SignerError::SerializationError(format!("Failed to deserialize verifying key: {e}"))
+                SignerError::SerializationError(format!(
+                    "Failed to deserialize verifying key: {e} (culprit: {:?})",
+                    e.culprit()
+                ))
             })?;
 
         // Create a key package containing all the necessary cryptographic material
@@ -424,11 +449,20 @@ impl Signer for DefaultSigner {
             *tweaked_key_package.min_signers(),
         );
 
+        tracing::trace!("signing_package: {:?}", signing_package);
+        tracing::trace!("signing_nonces: {:?}", signing_nonces);
+        tracing::trace!("key_package: {:?}", key_package);
+
         // Generate the user's signature share using the FROST round2 signing algorithm
         // This combines the message, nonces, and key package to produce a partial signature
         let signature_share =
             frost_secp256k1_tr::round2::sign(&signing_package, signing_nonces, &key_package)
-                .map_err(|e| SignerError::FrostError(format!("Failed to sign: {}", e)))?;
+                .map_err(|e| {
+                    SignerError::FrostError(format!(
+                        "Failed to sign: {e} (culprit: {:?})",
+                        e.culprit()
+                    ))
+                })?;
 
         // Return the generated signature share to be combined with other shares
         // from the statechain participants to form a complete threshold signature
