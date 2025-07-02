@@ -4,10 +4,10 @@ mod models;
 
 use std::collections::BTreeMap;
 
+use crate::tree::TreeNodeId;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::ecdsa::Signature;
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
-use crate::tree::TreeNodeId;
 
 pub use default_signer::DefaultSigner;
 pub use error::SignerError;
