@@ -5,6 +5,7 @@ use crate::Network;
 use crate::operator::rpc::spark::transfer_filter::Participant;
 use crate::operator::rpc::spark::{TransferFilter, TransferType};
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
+use crate::services::ProofMap;
 use crate::services::models::{
     LeafKeyTweak, Transfer, map_public_keys, map_signature_shares, map_signing_nonce_commitments,
 };
@@ -271,7 +272,11 @@ impl<S: Signer> TransferService<S> {
                 leaf_id: leaf.node.id.to_string(),
                 secret_share_tweak: Some(operator_rpc::spark::SecretShare {
                     secret_share: share.secret_share.share.to_bytes().to_vec(),
-                    proofs: share.proofs.clone(),
+                    proofs: share
+                        .proofs
+                        .iter()
+                        .map(|p| p.to_sec1_bytes().to_vec())
+                        .collect(),
                 }),
                 pubkey_shares_tweak: pubkey_shares_tweak.clone(),
                 secret_cipher: secret_cipher.clone(),
@@ -616,7 +621,7 @@ impl<S: Signer> TransferService<S> {
         &self,
         transfer: &Transfer,
         leaves: &[LeafKeyTweak],
-    ) -> Result<HashMap<TreeNodeId, Vec<u8>>, ServiceError> {
+    ) -> Result<ProofMap, ServiceError> {
         let (leaves_tweaks_map, proof_map) = self.prepare_claim_leaves_key_tweaks(leaves).await?;
 
         // Send claim transfer tweak keys to all signing operators in parallel
@@ -656,7 +661,7 @@ impl<S: Signer> TransferService<S> {
     ) -> Result<
         (
             HashMap<Identifier, Vec<operator_rpc::spark::ClaimLeafKeyTweak>>,
-            HashMap<TreeNodeId, Vec<u8>>,
+            ProofMap,
         ),
         ServiceError,
     > {
@@ -664,8 +669,8 @@ impl<S: Signer> TransferService<S> {
         let mut proof_map = HashMap::new();
 
         for leaf in leaves {
-            let (leaf_key_tweaks, proofs) = self.prepare_claim_leaf_key_tweaks(leaf).await?;
-            proof_map.insert(leaf.node.id.clone(), proofs);
+            let (leaf_key_tweaks, proof) = self.prepare_claim_leaf_key_tweaks(leaf).await?;
+            proof_map.insert(leaf.node.id.clone(), proof);
 
             for (identifier, leaf_tweak) in leaf_key_tweaks {
                 leaf_data_map
@@ -685,7 +690,7 @@ impl<S: Signer> TransferService<S> {
     ) -> Result<
         (
             HashMap<Identifier, operator_rpc::spark::ClaimLeafKeyTweak>,
-            Vec<u8>,
+            k256::PublicKey,
         ),
         ServiceError,
     > {
@@ -734,7 +739,11 @@ impl<S: Signer> TransferService<S> {
                 leaf_id: leaf.node.id.to_string(),
                 secret_share_tweak: Some(operator_rpc::spark::SecretShare {
                     secret_share: share.secret_share.share.to_bytes().to_vec(),
-                    proofs: share.proofs.clone(),
+                    proofs: share
+                        .proofs
+                        .iter()
+                        .map(|p| p.to_sec1_bytes().to_vec())
+                        .collect(),
                 }),
                 pubkey_shares_tweak: pubkey_shares_tweak.clone(),
             };
@@ -742,13 +751,12 @@ impl<S: Signer> TransferService<S> {
             leaf_tweaks_map.insert(operator.identifier, claim_leaf_key_tweak);
         }
 
-        let proofs = shares
+        let proof = shares
             .first()
             .and_then(|s| s.proofs.first())
-            .map(|p| p.clone())
-            .unwrap_or_default();
+            .ok_or(ServiceError::Generic("No proof found".to_string()))?;
 
-        Ok((leaf_tweaks_map, proofs))
+        Ok((leaf_tweaks_map, proof.clone()))
     }
 
     /// Claims transfer by signing refunds with the coordinator
@@ -757,7 +765,7 @@ impl<S: Signer> TransferService<S> {
         transfer: &Transfer,
         leaf_keys: &[LeafKeyTweak],
         // TODO: do something with proofs? Currently not used in js implementation
-        _proof_map: Option<&HashMap<TreeNodeId, Vec<u8>>>,
+        _proof_map: Option<&ProofMap>,
     ) -> Result<Vec<operator_rpc::spark::NodeSignatures>, ServiceError> {
         // Prepare leaf data map with refund signing information
         let mut leaf_data_map = HashMap::new();

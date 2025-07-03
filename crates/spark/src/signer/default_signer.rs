@@ -22,6 +22,7 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 
 use crate::signer::Secret;
+use crate::signer::secret_sharing;
 use crate::tree::TreeNodeId;
 use crate::{
     Network,
@@ -372,16 +373,6 @@ impl Signer for DefaultSigner {
         todo!()
     }
 
-    fn split_secret_with_proofs(
-        &self,
-        secret: &Secret,
-        threshold: u32,
-        num_shares: usize,
-    ) -> Result<Vec<super::VerifiableSecretShare>, SignerError> {
-        // TODO: Implement threshold secret sharing with proofs
-        todo!()
-    }
-
     fn encrypt_leaf_private_key_ecies(
         &self,
         receiver_public_key: &PublicKey,
@@ -543,6 +534,26 @@ impl Signer for DefaultSigner {
         // Return the generated signature share to be combined with other shares
         // from the statechain participants to form a complete threshold signature
         return Ok(signature_share);
+    }
+
+    fn split_secret_with_proofs(
+        &self,
+        secret: &Secret,
+        threshold: u32,
+        num_shares: usize,
+    ) -> Result<Vec<VerifiableSecretShare>, SignerError> {
+        let secret_bytes = match secret {
+            Secret::PublicKey(pk) => pk.serialize().to_vec(),
+            Secret::Other(bytes) => bytes.clone(),
+        };
+        let secret_as_scalar = secret_sharing::from_bytes_to_scalar(&secret_bytes)?;
+        let shares = secret_sharing::split_secret_with_proofs(
+            &secret_as_scalar,
+            threshold as usize,
+            num_shares,
+        )?;
+
+        Ok(shares)
     }
 }
 

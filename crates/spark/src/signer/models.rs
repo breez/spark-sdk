@@ -1,4 +1,4 @@
-use k256::Scalar;
+use k256::{PublicKey, Scalar};
 
 #[derive(Debug, Clone)]
 pub struct SecretShare {
@@ -18,5 +18,5 @@ pub struct VerifiableSecretShare {
     pub secret_share: SecretShare,
 
     /// Cryptographic proofs for share verification
-    pub proofs: Vec<Vec<u8>>,
+    pub proofs: Vec<PublicKey>,
 }
