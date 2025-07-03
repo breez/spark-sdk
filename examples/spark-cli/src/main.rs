@@ -1,17 +1,13 @@
 use std::{fs::canonicalize, path::PathBuf};
 
 use bip39::Mnemonic;
-use bitcoin::{
-    Address, OutPoint, Transaction, Txid, address::NetworkUnchecked,
-    consensus::encode::deserialize_hex,
-};
+use bitcoin::{Address, Transaction, consensus::encode::deserialize_hex, params::Params};
 use clap::Parser;
 use figment::{
     Figment,
     providers::{Env, Format, Yaml},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use spark_wallet::{DefaultSigner, SparkWalletConfig};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -104,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let tx = get_transaction(&config, txid).await?;
             println!("2");
             // TODO: Look for correct output index
-            let leaves = wallet.claim_deposit(tx, 1).await?;
+            let leaves = wallet.claim_deposit(tx, 0).await?;
             println!("3");
             println!(
                 "Claimed deposit: {}",
@@ -114,6 +110,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         command::Command::GenerateDepositAddress => {
             let address = wallet.generate_deposit_address(false).await?;
             println!("{}", address);
+        }
+        command::Command::GenerateAndClaimDeposit => {
+            let address = wallet.generate_deposit_address(false).await?;
+            println!("{}", address);
+            let mut rl = rustyline::DefaultEditor::new().unwrap();
+            println!("Get funds from the faucet at https://app.lightspark.com/regtest-faucet");
+            let line = rl.readline("paste txid> ")?;
+            let txid = line.trim();
+            let tx = get_transaction(&config, txid.to_string()).await?;
+            let params: Params = config.spark_config.network.into();
+            for (vout, output) in tx.output.iter().enumerate() {
+                let Ok(output_address) = Address::from_script(&output.script_pubkey, &params)
+                else {
+                    continue;
+                };
+
+                if output_address != address {
+                    continue;
+                }
+
+                let leaves = wallet.claim_deposit(tx, vout as u32).await?;
+                println!(
+                    "Claimed deposit: {}",
+                    serde_json::to_string_pretty(&leaves)?
+                );
+                break;
+            }
         }
         command::Command::PayLightningInvoice {
             invoice,

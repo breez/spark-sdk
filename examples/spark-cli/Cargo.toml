@@ -9,6 +9,7 @@ bitcoin.workspace = true
 clap = { workspace = true, features = ["derive"] }
 figment = { workspace = true, features = ["env", "yaml"] }
 reqwest.workspace = true
+rustyline.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 spark-wallet.workspace = true

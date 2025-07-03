@@ -11,6 +11,8 @@ pub enum Command {
     /// Generate a new onchain deposit address.
     GenerateDepositAddress,
 
+    GenerateAndClaimDeposit,
+
     /// Pay a lightning invoice.
     PayLightningInvoice {
         invoice: String,
@@ -24,11 +26,17 @@ pub enum Command {
     },
 
     /// Fetch a lightning send fee estimate.
-    FetchLightningSendFeeEstimate { invoice: String },
+    FetchLightningSendFeeEstimate {
+        invoice: String,
+    },
 
     /// Fetch a lightning send payment.
-    FetchLightningSendPayment { id: String },
+    FetchLightningSendPayment {
+        id: String,
+    },
 
     /// Fetch a lightning receive payment.
-    FetchLightningReceivePayment { id: String },
+    FetchLightningReceivePayment {
+        id: String,
+    },
 }
