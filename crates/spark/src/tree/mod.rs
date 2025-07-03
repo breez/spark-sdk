@@ -3,6 +3,7 @@ mod service;
 mod state;
 
 pub use error::TreeServiceError;
+use serde::{Deserialize, Serialize};
 pub use service::TreeService;
 pub use state::TreeState;
 
@@ -84,7 +85,7 @@ pub struct TreeNode {
     // pub network: Network,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TreeNodeId(String);
 
 impl TreeNodeId {
