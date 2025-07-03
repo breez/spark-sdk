@@ -8,3 +8,5 @@ pub mod ssp;
 pub mod tree;
 mod utils;
 pub use core::Network;
+
+pub use utils::keypair_generator::*;
