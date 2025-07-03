@@ -670,9 +670,7 @@ impl<S: Signer> TransferService<S> {
 
         for leaf in leaves {
             let (leaf_key_tweaks, proof) = self.prepare_claim_leaf_key_tweaks(leaf).await?;
-            if let Some(proof) = proof {
-                proof_map.insert(leaf.node.id.clone(), proof);
-            }
+            proof_map.insert(leaf.node.id.clone(), proof);
 
             for (identifier, leaf_tweak) in leaf_key_tweaks {
                 leaf_data_map
@@ -692,7 +690,7 @@ impl<S: Signer> TransferService<S> {
     ) -> Result<
         (
             HashMap<Identifier, operator_rpc::spark::ClaimLeafKeyTweak>,
-            Option<k256::PublicKey>,
+            k256::PublicKey,
         ),
         ServiceError,
     > {
@@ -756,9 +754,9 @@ impl<S: Signer> TransferService<S> {
         let proof = shares
             .first()
             .and_then(|s| s.proofs.first())
-            .map(|p| p.clone());
+            .ok_or(ServiceError::Generic("No proof found".to_string()))?;
 
-        Ok((leaf_tweaks_map, proof))
+        Ok((leaf_tweaks_map, proof.clone()))
     }
 
     /// Claims transfer by signing refunds with the coordinator
