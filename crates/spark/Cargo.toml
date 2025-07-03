@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true
-bip32.workspace = true
 bitcoin = { workspace = true, features = ["rand"] }
 chrono = { workspace = true, features = ["serde"] }
 ecies.workspace = true

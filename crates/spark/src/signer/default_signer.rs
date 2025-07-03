@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
-use bip32::{ChildNumber, XPrv};
+use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
 use bitcoin::secp256k1::{self, Message, SecretKey};
@@ -31,22 +31,51 @@ use crate::{
 use super::VerifiableSecretShare;
 
 const PURPOSE: u32 = 8797555;
+
+fn identity_derivation_path(network: Network) -> DerivationPath {
+    DerivationPath::from(vec![
+        purpose(),
+        coin_type(network),
+        ChildNumber::from_hardened_idx(0).expect("Hardened zero is invalid"),
+    ])
+}
+
+fn signing_derivation_path(network: Network) -> DerivationPath {
+    DerivationPath::from(vec![
+        purpose(),
+        coin_type(network),
+        ChildNumber::from_hardened_idx(1).expect("Hardened one is invalid"),
+    ])
+}
+
+fn deposit_derivation_path(network: Network) -> DerivationPath {
+    DerivationPath::from(vec![
+        purpose(),
+        coin_type(network),
+        ChildNumber::from_hardened_idx(2).expect("Hardened two is invalid"),
+    ])
+}
+
+fn static_deposit_derivation_path(network: Network) -> DerivationPath {
+    DerivationPath::from(vec![
+        purpose(),
+        coin_type(network),
+        ChildNumber::from_hardened_idx(3).expect("Hardened three is invalid"),
+    ])
+}
+
 fn coin_type(network: Network) -> ChildNumber {
     let coin_type: u32 = match network {
         Network::Mainnet => 0,
         _ => 1,
     };
-    ChildNumber::new(coin_type, true)
+    ChildNumber::from_hardened_idx(coin_type)
         .expect(format!("Hardened coin type {} is invalid", coin_type).as_str())
 }
 
 fn purpose() -> ChildNumber {
-    ChildNumber::new(PURPOSE, true)
+    ChildNumber::from_hardened_idx(PURPOSE)
         .expect(format!("Hardened purpose {} is invalid", PURPOSE).as_str())
-}
-
-fn zero() -> ChildNumber {
-    ChildNumber::new(0, true).expect("Hardened zero is invalid")
 }
 
 fn frost_signing_package(
@@ -99,11 +128,12 @@ fn frost_signing_package(
 #[derive(Clone)]
 pub struct DefaultSigner {
     identity_key: SecretKey,
-    master_key: XPrv,
+    master_key: Xpriv,
     network: Network,
     nonce_commitments: Arc<Mutex<HashMap<Vec<u8>, SigningNonces>>>, // TODO: Nonce commitments are never cleared, is this okay?
     private_key_map: Arc<Mutex<HashMap<PublicKey, SecretKey>>>,     // TODO: Is this really the way?
     secp: Secp256k1<All>,
+    signing_master_key: Xpriv,
 }
 
 #[derive(Debug, Error)]
@@ -115,33 +145,36 @@ pub enum DefaultSignerError {
     KeyDerivationError(String),
 }
 
-impl From<bip32::Error> for DefaultSignerError {
-    fn from(e: bip32::Error) -> Self {
-        DefaultSignerError::KeyDerivationError(e.to_string())
-    }
-}
-
 impl From<secp256k1::Error> for DefaultSignerError {
     fn from(e: secp256k1::Error) -> Self {
         DefaultSignerError::KeyDerivationError(e.to_string())
     }
 }
 
+impl From<bitcoin::bip32::Error> for DefaultSignerError {
+    fn from(e: bitcoin::bip32::Error) -> Self {
+        DefaultSignerError::KeyDerivationError(e.to_string())
+    }
+}
+
 impl DefaultSigner {
-    pub fn new(seed: [u8; 32], network: Network) -> Result<Self, DefaultSignerError> {
-        let master_key = XPrv::new(seed).map_err(|_| DefaultSignerError::InvalidSeed)?;
-        let extended_identity_key = master_key
-            .derive_child(purpose())?
-            .derive_child(coin_type(network))?
-            .derive_child(zero())?;
-        let identity_key = SecretKey::from_slice(&extended_identity_key.private_key().to_bytes())?;
+    pub fn new(seed: &[u8], network: Network) -> Result<Self, DefaultSignerError> {
+        let master_key =
+            Xpriv::new_master(network, seed).map_err(|_| DefaultSignerError::InvalidSeed)?;
+        let secp = Secp256k1::new();
+        let identity_key = master_key
+            .derive_priv(&secp, &identity_derivation_path(network))?
+            .private_key;
+        let signing_master_key =
+            master_key.derive_priv(&secp, &signing_derivation_path(network))?;
         Ok(DefaultSigner {
             identity_key,
             master_key,
             network,
             nonce_commitments: Arc::new(Mutex::new(HashMap::new())),
             private_key_map: Arc::new(Mutex::new(HashMap::new())),
-            secp: Secp256k1::new(),
+            secp,
+            signing_master_key,
         })
     }
 }
@@ -152,13 +185,15 @@ impl DefaultSigner {
             .try_into()
             .map_err(|_| SignerError::InvalidHash)?;
         let index = u32::from_be_bytes(u32_bytes) % 0x80000000;
-        let child_number = ChildNumber::new(index, true).map_err(|_| SignerError::InvalidHash)?;
-        let child = self.master_key.derive_child(child_number).map_err(|e| {
-            SignerError::KeyDerivationError(format!("failed to derive child: {}", e))
-        })?;
-        SecretKey::from_slice(&child.private_key().to_bytes()).map_err(|e| {
-            SignerError::KeyDerivationError(format!("failed to create private key: {}", e))
-        })
+        let child_number =
+            ChildNumber::from_hardened_idx(index).map_err(|_| SignerError::InvalidHash)?;
+        let derivation_path = DerivationPath::from(vec![child_number]);
+        let child = self
+            .signing_master_key
+            .derive_priv(&self.secp, &derivation_path)
+            .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {}", e)))?
+            .private_key;
+        Ok(child)
     }
 }
 
@@ -510,23 +545,33 @@ impl Signer for DefaultSigner {
 mod test {
     use crate::{
         Network,
-        signer::default_signer::{coin_type, purpose, zero},
+        signer::default_signer::{
+            deposit_derivation_path, identity_derivation_path, signing_derivation_path,
+            static_deposit_derivation_path,
+        },
     };
 
     /// Ensure constants are defined correctly and don't panic.
     #[test]
-    fn test_constants() {
-        assert_eq!(coin_type(Network::Mainnet).index(), 0);
-        assert_eq!(coin_type(Network::Mainnet).is_hardened(), true);
-        assert_eq!(coin_type(Network::Testnet).index(), 1);
-        assert_eq!(coin_type(Network::Testnet).is_hardened(), true);
-        assert_eq!(coin_type(Network::Regtest).index(), 1);
-        assert_eq!(coin_type(Network::Regtest).is_hardened(), true);
-        assert_eq!(coin_type(Network::Signet).index(), 1);
-        assert_eq!(coin_type(Network::Signet).is_hardened(), true);
-        assert_eq!(purpose().index(), 8797555u32);
-        assert_eq!(purpose().is_hardened(), true);
-        assert_eq!(zero().index(), 0u32);
-        assert_eq!(zero().is_hardened(), true);
+    fn test_constant_derivation_paths() {
+        identity_derivation_path(Network::Mainnet);
+        identity_derivation_path(Network::Testnet);
+        identity_derivation_path(Network::Regtest);
+        identity_derivation_path(Network::Signet);
+
+        signing_derivation_path(Network::Mainnet);
+        signing_derivation_path(Network::Testnet);
+        signing_derivation_path(Network::Regtest);
+        signing_derivation_path(Network::Signet);
+
+        deposit_derivation_path(Network::Mainnet);
+        deposit_derivation_path(Network::Testnet);
+        deposit_derivation_path(Network::Regtest);
+        deposit_derivation_path(Network::Signet);
+
+        static_deposit_derivation_path(Network::Mainnet);
+        static_deposit_derivation_path(Network::Testnet);
+        static_deposit_derivation_path(Network::Regtest);
+        static_deposit_derivation_path(Network::Signet);
     }
 }

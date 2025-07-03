@@ -6,7 +6,6 @@ members = ["crates/spark", "crates/spark-wallet", "examples/spark-cli"]
 [workspace.dependencies]
 async-trait = "0.1.88"
 base64 = "0.22.1"
-bip32 = "0.5.3"
 bip39 = "2.2.0"
 bitcoin = "0.32.6"
 chrono = { version = "0.4.37", features = ["serde"] }
