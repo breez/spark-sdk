@@ -198,7 +198,11 @@ where
                     payment_hash: payment_hash.to_byte_array().to_vec(),
                     preimage_share: Some(SecretShare {
                         secret_share: share.secret_share.share.to_bytes().to_vec(),
-                        proofs: share.proofs,
+                        proofs: share
+                            .proofs
+                            .iter()
+                            .map(|p| p.to_sec1_bytes().to_vec())
+                            .collect(),
                     }),
                     threshold: share.secret_share.threshold as u32,
                     invoice_string: invoice.clone().invoice.encoded_invoice,
