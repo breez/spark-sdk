@@ -94,11 +94,14 @@ pub async fn sign_refunds<S: Signer>(
         let self_commitment = signer.generate_frost_signing_commitments().await?;
         let spark_commitment = spark_commitments[i].clone();
 
+        let signing_public_key =
+            signer.get_public_key_from_private_key_source(&leaf.signing_key)?;
+
         let user_signature_share = signer
             .sign_frost(
                 sighash.to_raw_hash().to_byte_array().as_ref(),
-                &leaf.signing_public_key,
-                &leaf.signing_public_key,
+                &signing_public_key,
+                &leaf.signing_key,
                 &leaf.node.verifying_public_key,
                 &self_commitment,
                 spark_commitment.clone(),
@@ -108,7 +111,7 @@ pub async fn sign_refunds<S: Signer>(
 
         signed_refunds.push(SignedTx {
             node_id: leaf.node.id.clone().to_string(),
-            signing_public_key: leaf.signing_public_key.clone(),
+            signing_public_key,
             tx: new_refund_tx,
             user_signature: user_signature_share,
             user_signature_commitment: self_commitment,

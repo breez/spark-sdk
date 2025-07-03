@@ -9,7 +9,7 @@ use crate::services::ProofMap;
 use crate::services::models::{
     LeafKeyTweak, Transfer, map_public_keys, map_signature_shares, map_signing_nonce_commitments,
 };
-use crate::signer::{Secret, VerifiableSecretShare};
+use crate::signer::{PrivateKeySource, Secret, VerifiableSecretShare};
 use crate::utils::refund::{create_refund_tx, sign_refunds};
 
 use bitcoin::Transaction;
@@ -29,38 +29,16 @@ use crate::{
 
 use super::ServiceError;
 
-/// Helper struct for claim leaf data during the claim process
-// TODO: is this needed? Maybe LeafRefundSigningData is enough?
-#[derive(Debug, Clone)]
-pub struct ClaimLeafData {
-    pub signing_public_key: PublicKey,
-    pub tx: Transaction,
-    pub refund_tx: Option<Transaction>,
-    pub signing_nonce_commitment: SigningCommitments,
-    pub vout: u32,
-}
-
 /// Helper struct for leaf refund signing data
 #[derive(Debug, Clone)]
 pub struct LeafRefundSigningData {
+    pub signing_private_key: PrivateKeySource,
     pub signing_public_key: PublicKey,
-    pub receiving_pubkey: PublicKey,
+    pub receiving_public_key: PublicKey,
     pub tx: Transaction,
     pub refund_tx: Option<Transaction>,
     pub signing_nonce_commitment: SigningCommitments,
     pub vout: u32,
-}
-
-impl From<LeafRefundSigningData> for ClaimLeafData {
-    fn from(data: LeafRefundSigningData) -> Self {
-        Self {
-            signing_public_key: data.signing_public_key,
-            tx: data.tx,
-            refund_tx: data.refund_tx,
-            signing_nonce_commitment: data.signing_nonce_commitment,
-            vout: data.vout,
-        }
-    }
 }
 
 /// Configuration for claiming transfers
@@ -122,13 +100,13 @@ impl<S: Signer> TransferService<S> {
         let leaf_key_tweaks = leaves
             .iter()
             .map(|leaf| {
-                let signing_public_key = self.signer.get_public_key_for_node(&leaf.id)?;
-                let new_signing_public_key = self.signer.generate_random_public_key()?;
+                let our_key = PrivateKeySource::Derived(leaf.id.clone());
+                let ephemeral_key = self.signer.generate_random_key()?;
 
                 Ok(LeafKeyTweak {
                     node: leaf.clone(),
-                    signing_public_key,
-                    new_signing_public_key,
+                    signing_key: our_key,
+                    new_signing_key: ephemeral_key,
                 })
             })
             .collect::<Result<Vec<_>, ServiceError>>()?;
@@ -219,20 +197,19 @@ impl<S: Signer> TransferService<S> {
             .collect();
 
         // Calculate the public key tweak by subtracting private keys given public keys
-        let pubkey_tweak = self.signer.subtract_private_keys_given_public_keys(
-            &leaf.signing_public_key,
-            &leaf.new_signing_public_key,
-        )?;
+        let privkey_tweak = self
+            .signer
+            .subtract_private_keys(&leaf.signing_key, &leaf.new_signing_key)?;
 
         // Split the secret into threshold shares with proofs
         let shares = self.signer.split_secret_with_proofs(
-            &Secret::PublicKey(pubkey_tweak),
+            &Secret::PrivateKey(privkey_tweak),
             self.split_secret_threshold,
             signing_operators.len(),
         )?;
 
         // Create pubkey shares tweak map
-        let mut pubkey_shares_tweak: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut pubkey_shares_tweak = HashMap::new();
         for operator in &signing_operators {
             let operator_identifier = hex::encode(operator.identifier.serialize());
 
@@ -246,10 +223,17 @@ impl<S: Signer> TransferService<S> {
             );
         }
 
-        // Encrypt the leaf private key using ECIES
-        let secret_cipher = self
-            .signer
-            .encrypt_leaf_private_key_ecies(&receiver_public_key, &leaf.new_signing_public_key)?;
+        // Encrypt the leaf private key for the receiver
+        let secret_cipher = match &leaf.new_signing_key {
+            PrivateKeySource::Derived(_) => {
+                return Err(ServiceError::Generic(
+                    "Trying to share derived private key".to_string(),
+                ));
+            }
+            PrivateKeySource::Encrypted(private_key) => self
+                .signer
+                .encrypt_private_key_for_receiver(private_key, receiver_public_key)?,
+        };
 
         // Create the signing payload: leaf_id || transfer_id || secret_cipher
         let mut payload = Vec::new();
@@ -460,8 +444,8 @@ impl<S: Signer> TransferService<S> {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             }
 
-            // Verify the pending transfer and get leaf pubkey map
-            let leaf_pubkey_map = match self.verify_pending_transfer(transfer).await {
+            // Verify the pending transfer and get leaf key map
+            let leaf_key_map = match self.verify_pending_transfer(transfer).await {
                 Ok(map) => map,
                 Err(_) => {
                     retry_count += 1;
@@ -471,7 +455,7 @@ impl<S: Signer> TransferService<S> {
 
             // Prepare leaves to claim
             let leaves_to_claim = match self
-                .prepare_leaves_for_claiming(transfer, &leaf_pubkey_map)
+                .prepare_leaves_for_claiming(transfer, &leaf_key_map)
                 .await
             {
                 Ok(leaves) => leaves,
@@ -507,19 +491,19 @@ impl<S: Signer> TransferService<S> {
     async fn prepare_leaves_for_claiming(
         &self,
         transfer: &Transfer,
-        leaf_pubkey_map: &HashMap<TreeNodeId, PublicKey>,
+        leaf_key_map: &HashMap<TreeNodeId, PrivateKeySource>,
     ) -> Result<Vec<LeafKeyTweak>, ServiceError> {
         let mut leaves_to_claim = Vec::new();
 
         for leaf in &transfer.leaves {
-            let Some(leaf_pubkey) = leaf_pubkey_map.get(&leaf.leaf.id) else {
+            let Some(leaf_key) = leaf_key_map.get(&leaf.leaf.id) else {
                 continue;
             };
 
             leaves_to_claim.push(LeafKeyTweak {
                 node: leaf.leaf.clone(),
-                signing_public_key: *leaf_pubkey,
-                new_signing_public_key: self.signer.get_public_key_for_node(&leaf.leaf.id)?,
+                signing_key: leaf_key.clone(),
+                new_signing_key: PrivateKeySource::Derived(leaf.leaf.id.clone()),
             });
         }
 
@@ -701,14 +685,13 @@ impl<S: Signer> TransferService<S> {
             .collect();
 
         // Calculate the public key tweak by subtracting private keys given public keys
-        let pubkey_tweak = self.signer.subtract_private_keys_given_public_keys(
-            &leaf.signing_public_key,
-            &leaf.new_signing_public_key,
-        )?;
+        let privkey_tweak = self
+            .signer
+            .subtract_private_keys(&leaf.signing_key, &leaf.new_signing_key)?;
 
         // Split the secret into threshold shares with proofs
         let shares = self.signer.split_secret_with_proofs(
-            &Secret::PublicKey(pubkey_tweak),
+            &Secret::PrivateKey(privkey_tweak),
             self.split_secret_threshold,
             signing_operators.len(),
         )?;
@@ -775,8 +758,13 @@ impl<S: Signer> TransferService<S> {
             leaf_data_map.insert(
                 leaf_key.node.id.clone(),
                 LeafRefundSigningData {
-                    signing_public_key: leaf_key.new_signing_public_key,
-                    receiving_pubkey: leaf_key.new_signing_public_key,
+                    signing_private_key: leaf_key.new_signing_key.clone(),
+                    signing_public_key: self
+                        .signer
+                        .get_public_key_from_private_key_source(&leaf_key.new_signing_key)?,
+                    receiving_public_key: self
+                        .signer
+                        .get_public_key_from_private_key_source(&leaf_key.new_signing_key)?,
                     tx: leaf_key.node.node_tx.clone(),
                     refund_tx: None,
                     signing_nonce_commitment,
@@ -828,13 +816,14 @@ impl<S: Signer> TransferService<S> {
         let mut signing_jobs = Vec::new();
 
         for leaf in leaves {
-            let refund_signing_data = leaf_data_map.get_mut(&leaf.node.id).ok_or_else(|| {
-                ServiceError::Generic(format!("Leaf data not found for leaf {}", leaf.node.id))
-            })?;
+            let refund_signing_data: &mut LeafRefundSigningData =
+                leaf_data_map.get_mut(&leaf.node.id).ok_or_else(|| {
+                    ServiceError::Generic(format!("Leaf data not found for leaf {}", leaf.node.id))
+                })?;
 
             let refund_tx = create_refund_tx(
                 &leaf.node,
-                &refund_signing_data.receiving_pubkey,
+                &refund_signing_data.receiving_public_key,
                 self.network,
                 is_for_claim,
             )?;
@@ -867,7 +856,7 @@ impl<S: Signer> TransferService<S> {
     /// Signs refund transactions using FROST threshold signatures
     async fn sign_refunds(
         &self,
-        leaf_data_map: &HashMap<TreeNodeId, ClaimLeafData>,
+        leaf_data_map: &HashMap<TreeNodeId, LeafRefundSigningData>,
         operator_signing_results: &[operator_rpc::spark::LeafRefundTxSigningResult],
         adaptor_pubkey: Option<&PublicKey>,
     ) -> Result<Vec<operator_rpc::spark::NodeSignatures>, ServiceError> {
@@ -915,7 +904,7 @@ impl<S: Signer> TransferService<S> {
                 .sign_frost(
                     &refund_tx_sighash.to_byte_array(),
                     &leaf_data.signing_public_key,
-                    &leaf_data.signing_public_key,
+                    &leaf_data.signing_private_key,
                     &verifying_key,
                     &leaf_data.signing_nonce_commitment,
                     signing_nonce_commitments.clone(),
@@ -974,8 +963,8 @@ impl<S: Signer> TransferService<S> {
     pub async fn verify_pending_transfer(
         &self,
         transfer: &Transfer,
-    ) -> Result<HashMap<TreeNodeId, PublicKey>, ServiceError> {
-        let mut leaf_pubkey_map = HashMap::new();
+    ) -> Result<HashMap<TreeNodeId, PrivateKeySource>, ServiceError> {
+        let mut leaf_key_map = HashMap::new();
         let secp = bitcoin::secp256k1::Secp256k1::new();
 
         for transfer_leaf in &transfer.leaves {
@@ -1002,14 +991,12 @@ impl<S: Signer> TransferService<S> {
 
             // Decrypt the secret cipher and get the corresponding public key
             // The signer persists the private key internally and returns the public key
-            let public_key = self
-                .signer
-                .decrypt_leaf_private_key_ecies(&transfer_leaf.secret_cipher)?;
+            let private_key = PrivateKeySource::new_encrypted(transfer_leaf.secret_cipher.clone());
 
-            leaf_pubkey_map.insert(transfer_leaf.leaf.id.clone(), public_key);
+            leaf_key_map.insert(transfer_leaf.leaf.id.clone(), private_key);
         }
 
-        Ok(leaf_pubkey_map)
+        Ok(leaf_key_map)
     }
 
     pub async fn transfer_leaves_to_self(

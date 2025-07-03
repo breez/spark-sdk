@@ -19,7 +19,7 @@ use crate::{
     core::initial_sequence,
     operator::{OperatorPool, rpc as operator_rpc},
     services::{PagingFilter, PagingResult},
-    signer::Signer,
+    signer::{PrivateKeySource, Signer},
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
 };
 
@@ -92,12 +92,9 @@ where
             .get_unused_deposit_address(&address)
             .await?
             .ok_or(ServiceError::DepositAddressUsed)?;
-        let signing_public_key = self
-            .signer
-            .get_public_key_for_node(&deposit_address.leaf_id)?;
         let nodes = self
             .create_tree_root(
-                &signing_public_key,
+                &deposit_address.leaf_id,
                 &deposit_address.verifying_public_key,
                 deposit_tx,
                 vout,
@@ -108,11 +105,16 @@ where
 
     async fn create_tree_root(
         &self,
-        signing_public_key: &PublicKey,
+        deposit_leaf_id: &TreeNodeId,
         verifying_public_key: &PublicKey,
         deposit_tx: Transaction,
         vout: u32,
     ) -> Result<Vec<TreeNode>, ServiceError> {
+        let signing_private_key = PrivateKeySource::Derived(deposit_leaf_id.clone());
+        let signing_public_key = self
+            .signer
+            .get_public_key_from_private_key_source(&signing_private_key)?;
+
         let deposit_txid = deposit_tx.compute_txid();
         let deposit_output = deposit_tx
             .output
@@ -254,8 +256,8 @@ where
             .signer
             .sign_frost(
                 &root_tx_sighash.to_byte_array(),
-                signing_public_key,
-                signing_public_key,
+                &signing_public_key,
+                &signing_private_key,
                 verifying_public_key,
                 &root_nonce_commitment,
                 node_tx_signing_nonce_commitments.clone(),
@@ -266,8 +268,8 @@ where
             .signer
             .sign_frost(
                 &refund_tx_sighash.to_byte_array(),
-                signing_public_key,
-                signing_public_key,
+                &signing_public_key,
+                &signing_private_key,
                 verifying_public_key,
                 &refund_nonce_commitment,
                 refund_tx_signing_nonce_commitments.clone(),
@@ -284,7 +286,7 @@ where
                 verifying_public_key,
                 node_tx_signing_nonce_commitments,
                 &root_nonce_commitment,
-                signing_public_key,
+                &signing_public_key,
                 &root_sig,
                 None,
             )
@@ -298,7 +300,7 @@ where
                 verifying_public_key,
                 refund_tx_signing_nonce_commitments,
                 &refund_nonce_commitment,
-                signing_public_key,
+                &signing_public_key,
                 &refund_sig,
                 None,
             )

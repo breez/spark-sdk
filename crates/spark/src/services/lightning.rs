@@ -7,7 +7,7 @@ use crate::operator::rpc::spark::{
     StorePreimageShareRequest,
 };
 use crate::services::ServiceError;
-use crate::signer::Secret;
+use crate::signer::{PrivateKeySource, Secret};
 use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
     ServiceProvider,
@@ -228,13 +228,12 @@ where
         // prepare leaf tweaks
         let mut leaf_tweaks = Vec::with_capacity(leaves.len());
         for tree_node in leaves {
-            let signing_public_key = self.signer.get_public_key_for_node(&tree_node.id)?;
-            let new_signing_public_key = self.signer.generate_random_public_key()?;
+            let new_signing_key = self.signer.generate_random_key()?;
             // derive the signing key
             let leaf_tweak = LeafKeyTweak {
                 node: tree_node.clone(),
-                signing_public_key,
-                new_signing_public_key,
+                signing_key: PrivateKeySource::Derived(tree_node.id.clone()),
+                new_signing_key,
             };
             leaf_tweaks.push(leaf_tweak);
         }
