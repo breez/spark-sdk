@@ -21,6 +21,7 @@ use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
+use crate::signer::Secret;
 use crate::tree::TreeNodeId;
 use crate::{
     Network,
@@ -322,6 +323,41 @@ impl Signer for DefaultSigner {
         Ok(self.identity_key.public_key(&self.secp))
     }
 
+    fn subtract_private_keys_given_public_keys(
+        &self,
+        signing_public_key: &PublicKey,
+        new_signing_public_key: &PublicKey,
+    ) -> Result<PublicKey, SignerError> {
+        // TODO: Implement private key subtraction
+        todo!()
+    }
+
+    fn split_secret_with_proofs(
+        &self,
+        secret: &Secret,
+        threshold: u32,
+        num_shares: usize,
+    ) -> Result<Vec<super::VerifiableSecretShare>, SignerError> {
+        // TODO: Implement threshold secret sharing with proofs
+        todo!()
+    }
+
+    fn encrypt_leaf_private_key_ecies(
+        &self,
+        receiver_public_key: &PublicKey,
+        public_key: &PublicKey,
+    ) -> Result<Vec<u8>, SignerError> {
+        // TODO: Implement ECIES encryption of leaf private key
+        todo!()
+    }
+
+    fn decrypt_leaf_private_key_ecies(
+        &self,
+        encrypted_data: &[u8],
+    ) -> Result<PublicKey, SignerError> {
+        todo!()
+    }
+
     /// Creates a FROST signature share for threshold signing
     ///
     /// This function generates a partial signature (signature share) that will be combined
@@ -467,15 +503,6 @@ impl Signer for DefaultSigner {
         // Return the generated signature share to be combined with other shares
         // from the statechain participants to form a complete threshold signature
         return Ok(signature_share);
-    }
-
-    async fn split_secret_with_proofs(
-        &self,
-        _secret: Vec<u8>,
-        _threshold: u32,
-        _num_shares: u32,
-    ) -> Result<Vec<VerifiableSecretShare>, SignerError> {
-        todo!()
     }
 }
 

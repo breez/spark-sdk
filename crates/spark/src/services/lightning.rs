@@ -7,6 +7,7 @@ use crate::operator::rpc::spark::{
     StorePreimageShareRequest,
 };
 use crate::services::ServiceError;
+use crate::signer::Secret;
 use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
     ServiceProvider,
@@ -179,14 +180,11 @@ where
             })
             .await?;
 
-        let shares = self
-            .signer
-            .split_secret_with_proofs(
-                preimage,
-                self.split_secret_threshold,
-                self.operator_clients.len() as u32,
-            )
-            .await?;
+        let shares = self.signer.split_secret_with_proofs(
+            &Secret::Other(preimage),
+            self.split_secret_threshold,
+            self.operator_clients.len(),
+        )?;
 
         let identity_pubkey = self.signer.get_identity_public_key()?;
         let requests = self

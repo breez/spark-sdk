@@ -7,4 +7,5 @@ mod transfer;
 pub use deposit::*;
 pub use error::*;
 pub use lightning::{LightningReceivePayment, LightningSendPayment, LightningService};
+pub use models::*;
 pub use transfer::*;

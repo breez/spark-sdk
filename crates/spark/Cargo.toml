@@ -9,8 +9,10 @@ base64.workspace = true
 bip32.workspace = true
 bitcoin = { workspace = true, features = ["rand"] }
 chrono = { workspace = true, features = ["serde"] }
+ecies.workspace = true
 frost-core.workspace = true
 frost-secp256k1-tr.workspace = true
+futures.workspace = true
 hex.workspace = true
 k256 = { workspace = true, features = ["arithmetic", "schnorr", "ecdsa"] }
 prost.workspace = true
@@ -27,7 +29,6 @@ tracing.workspace = true
 uuid.workspace = true
 lightning-invoice.workspace = true
 prost-types.workspace = true
-futures.workspace = true
 rand.workspace = true
 
 [build-dependencies]

@@ -2,6 +2,7 @@ use super::auth::OperatorAuth;
 use super::error::Result;
 use super::spark::*;
 use crate::Network;
+use crate::operator::Operator;
 use crate::signer::Signer;
 use tonic::transport::Channel;
 
@@ -10,15 +11,17 @@ where
     S: Signer,
 {
     auth: OperatorAuth<S>,
+    pub operator: Operator,
 }
 
 impl<S> SparkRpcClient<S>
 where
     S: Signer,
 {
-    pub fn new(channel: Channel, network: Network, signer: S) -> Self {
+    pub fn new(channel: Channel, network: Network, signer: S, operator: Operator) -> Self {
         Self {
             auth: OperatorAuth::new(channel, network, signer),
+            operator,
         }
     }
 

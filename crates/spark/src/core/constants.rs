@@ -25,6 +25,10 @@ pub fn next_sequence(current_sequence: Sequence) -> Option<Sequence> {
         return None;
     };
 
+    if new_blocks < TIME_LOCK_INTERVAL as u16 {
+        return None;
+    }
+
     let new_locktime = LockTime::Blocks(Height::from_height(new_blocks));
     Some(new_locktime.to_sequence())
 }
