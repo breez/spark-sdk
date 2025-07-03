@@ -39,4 +39,7 @@ pub enum Command {
     FetchLightningReceivePayment {
         id: String,
     },
+
+    /// List all leaves in the wallet.
+    ListLeaves,
 }

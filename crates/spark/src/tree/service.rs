@@ -1,20 +1,61 @@
 use std::sync::Arc;
 
-use crate::{services::TransferService, signer::Signer, tree::TreeNodeStatus};
+use crate::{
+    Network,
+    operator::rpc::{SparkRpcClient, spark::QueryNodesRequest},
+    services::{PagingFilter, PagingResult, TransferService},
+    signer::Signer,
+    tree::TreeNodeStatus,
+};
 
 use super::{TreeNode, error::TreeServiceError, state::TreeState};
 
 pub struct TreeService<S: Signer> {
+    client: Arc<SparkRpcClient<S>>,
+    network: Network,
     state: TreeState,
     transfer_service: Arc<TransferService<S>>,
 }
 
 impl<S: Signer> TreeService<S> {
-    pub fn new(state: TreeState, transfer_service: Arc<TransferService<S>>) -> Self {
+    pub fn new(
+        client: Arc<SparkRpcClient<S>>,
+        network: Network,
+        state: TreeState,
+        transfer_service: Arc<TransferService<S>>,
+    ) -> Self {
         TreeService {
+            client,
+            network,
             state,
             transfer_service,
         }
+    }
+
+    pub async fn get_leaves(
+        &self,
+        paging: &PagingFilter,
+    ) -> Result<PagingResult<TreeNode>, TreeServiceError> {
+        let nodes = self
+            .client
+            .query_nodes(QueryNodesRequest {
+                include_parents: false,
+                limit: paging.limit as i64,
+                offset: paging.offset as i64,
+                network: self.network.to_proto_network().into(),
+                source: None,
+            })
+            .await
+            .unwrap();
+
+        Ok(PagingResult {
+            items: nodes
+                .nodes
+                .into_iter()
+                .map(|(_, node)| TreeNode::try_from(node))
+                .collect::<Result<Vec<_>, _>>()?,
+            next: paging.next_from_offset(nodes.offset),
+        })
     }
 
     /// Refreshes the tree state by fetching the latest tree from the coordinator/operators?

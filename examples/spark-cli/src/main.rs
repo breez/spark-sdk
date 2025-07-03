@@ -8,7 +8,7 @@ use figment::{
     providers::{Env, Format, Yaml},
 };
 use serde::{Deserialize, Serialize};
-use spark_wallet::{DefaultSigner, SparkWalletConfig};
+use spark_wallet::{DefaultSigner, PagingFilter, SparkWalletConfig};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod command;
@@ -165,6 +165,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         command::Command::FetchLightningSendFeeEstimate { invoice } => {
             let fee = wallet.fetch_lightning_send_fee_estimate(&invoice).await?;
             println!("{}", fee);
+        }
+        command::Command::ListLeaves => {
+            let leaves = wallet.list_leaves(&PagingFilter::default()).await?;
+            println!("{}", serde_json::to_string_pretty(&leaves)?);
         }
     }
 
