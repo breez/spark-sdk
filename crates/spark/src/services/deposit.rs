@@ -289,7 +289,7 @@ where
         let refund_aggregate = self
             .signer
             .aggregate_frost(
-                &root_tx_sighash.to_byte_array(),
+                &refund_tx_sighash.to_byte_array(),
                 refund_tx_signature_shares,
                 refund_tx_statechain_public_keys,
                 verifying_public_key,

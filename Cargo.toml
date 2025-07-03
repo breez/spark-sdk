@@ -13,8 +13,11 @@ chrono = { version = "0.4.37", features = ["serde"] }
 clap = "4.5.40"
 electrum-client = "0.23.1"
 figment = "0.10.19"
-frost-core = "2.1.0"
-frost-secp256k1-tr = "2.1.0"
+# frost-core = "2.1.0"
+frost-core = { package = "frost-core-unofficial", version = "2.2.0" }
+# frost-secp256k1-tr = "2.1.0"
+frost-secp256k1-tr = { package = "frost-secp256k1-tr-unofficial", version = "2.2.0" }
+k256 = { version = "0.13.0", features = ["arithmetic", "schnorr", "ecdsa"] }
 hex = "0.4.3"
 prost = "0.13.4"
 prost-types = "0.13.4"

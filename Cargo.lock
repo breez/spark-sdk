@@ -910,10 +910,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "frost-core"
-version = "2.1.0"
+name = "frost-core-unofficial"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1858230cabb6792a5020daf4b0074f57b7d1e2a520ac544c77f102babee62ff4"
+checksum = "579bf9770b82531690aa948a39dcd77f098f86389d5b45b76252257420ff263d"
 dependencies = [
  "byteorder",
  "const-crc32-nostd",
@@ -933,27 +933,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "frost-rerandomized"
-version = "2.1.0"
+name = "frost-rerandomized-unofficial"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8a3b10d9c1e9f298522510940b5b8c3d55040420517ec8d2bb86c4c2d1ae3ee"
+checksum = "1a3736da210f3df297cd1c2b58cf2934510f8f39d9ff6248bae8f1f6457fde98"
 dependencies = [
  "derive-getters",
  "document-features",
- "frost-core",
+ "frost-core-unofficial",
  "hex",
  "rand_core",
 ]
 
 [[package]]
-name = "frost-secp256k1-tr"
-version = "2.1.0"
+name = "frost-secp256k1-tr-unofficial"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be31fe5caf49ffddb2a823b078567bebf9ab844d750d69fdac7d614e4a3eb44a"
+checksum = "e5279a0a375d505f5ec711521284d183ab6fea98edfdf798d65434b16c59a251"
 dependencies = [
  "document-features",
- "frost-core",
- "frost-rerandomized",
+ "frost-core-unofficial",
+ "frost-rerandomized-unofficial",
  "k256",
  "rand_core",
  "sha2",
@@ -2620,8 +2620,8 @@ dependencies = [
  "bip32",
  "bitcoin",
  "chrono",
- "frost-core",
- "frost-secp256k1-tr",
+ "frost-core-unofficial",
+ "frost-secp256k1-tr-unofficial",
  "futures",
  "hex",
  "k256",
