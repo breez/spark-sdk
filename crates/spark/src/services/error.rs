@@ -62,6 +62,8 @@ pub enum ServiceError {
     NoLeavesToClaim,
     #[error("Claim transfer failed: {0}")]
     ClaimTransferError(String),
+    #[error("Signature verification failed: {0}")]
+    SignatureVerificationFailed(String),
 
     // Common errors
     #[error("bitcoin error: {0}")]

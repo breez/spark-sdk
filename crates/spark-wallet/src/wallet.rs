@@ -49,7 +49,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
 
         let lightning_service = Arc::new(LightningService::new(
             coordinator_client.clone(),
-            signing_operators_clients,
+            signing_operators_clients.clone(),
             _service_provider.clone(),
             config.network,
             signer.clone(),
@@ -64,7 +64,13 @@ impl<S: Signer + Clone> SparkWallet<S> {
             signer.clone(),
         );
 
-        let transfer_service = Arc::new(TransferService::new(signer.clone()));
+        let transfer_service = Arc::new(TransferService::new(
+            signer.clone(),
+            config.network,
+            config.split_secret_threshold,
+            coordinator_client,
+            signing_operators_clients,
+        ));
         let tree_state = TreeState::new();
         let tree_service = TreeService::new(tree_state, Arc::clone(&transfer_service));
 
@@ -86,14 +92,22 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let mut signing_operators_clients = vec![];
         for operator in config.operator_pool.get_signing_operators() {
             let channel = connection_manager.get_channel(operator).await?;
-            let client = Arc::new(SparkRpcClient::new(channel, config.network, signer.clone()));
+            let client = Arc::new(SparkRpcClient::new(
+                channel,
+                config.network,
+                signer.clone(),
+                operator.clone(),
+            ));
             signing_operators_clients.push(client);
         }
-        let channel = connection_manager
-            .get_channel(config.operator_pool.get_coordinator())
-            .await?;
-        let coordinator_client =
-            Arc::new(SparkRpcClient::new(channel, config.network, signer.clone()));
+        let coordinator = config.operator_pool.get_coordinator().clone();
+        let channel = connection_manager.get_channel(&coordinator).await?;
+        let coordinator_client = Arc::new(SparkRpcClient::new(
+            channel,
+            config.network,
+            signer.clone(),
+            coordinator,
+        ));
         Ok((signing_operators_clients, coordinator_client))
     }
 

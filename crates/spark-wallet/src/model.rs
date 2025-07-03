@@ -3,7 +3,8 @@ use std::time::SystemTime;
 use bitcoin::{PublicKey, Transaction};
 use spark::{
     Network,
-    services::{Transfer, TransferStatus, TransferType},
+    operator::rpc::spark::{TransferStatus, TransferType},
+    services::Transfer,
     tree::SigningKeyshare,
 };
 

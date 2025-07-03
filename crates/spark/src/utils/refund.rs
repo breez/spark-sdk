@@ -30,6 +30,7 @@ pub fn create_refund_tx(
     leaf: &TreeNode,
     receiving_pubkey: &PublicKey,
     network: Network,
+    is_for_claim: bool,
 ) -> Result<bitcoin::Transaction, SignerError> {
     let node_tx = leaf.node_tx.clone();
     let refund_tx = leaf.refund_tx.clone();
@@ -42,7 +43,12 @@ pub fn create_refund_tx(
     };
 
     let old_sequence = refund_tx.input[0].sequence;
-    let sequence = next_sequence(old_sequence).unwrap_or_default();
+    let sequence = if is_for_claim {
+        // TODO: verify this is correct
+        old_sequence
+    } else {
+        next_sequence(old_sequence).unwrap_or_default()
+    };
 
     new_refund_tx.input.push(bitcoin::TxIn {
         previous_output: bitcoin::OutPoint {
@@ -69,7 +75,7 @@ pub fn create_refund_tx(
 
 pub async fn sign_refunds<S: Signer>(
     signer: &S,
-    leaves: &Vec<LeafKeyTweak>,
+    leaves: &[LeafKeyTweak],
     spark_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
     receiver_pubkey: &PublicKey,
     network: Network,
@@ -80,7 +86,7 @@ pub async fn sign_refunds<S: Signer>(
     for (i, leaf) in leaves.iter().enumerate() {
         let node_tx = leaf.node.node_tx.clone();
 
-        let new_refund_tx = create_refund_tx(&leaf.node, receiver_pubkey, network)?;
+        let new_refund_tx = create_refund_tx(&leaf.node, receiver_pubkey, network, false)?;
 
         let sighash = sighash_from_tx(&new_refund_tx, 0, &node_tx.output[0])
             .map_err(|e| SignerError::Generic(e.to_string()))?;

@@ -11,7 +11,12 @@ use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::Signatu
 
 pub use default_signer::DefaultSigner;
 pub use error::SignerError;
-pub use models::*;
+pub use models::VerifiableSecretShare;
+
+pub enum Secret {
+    PublicKey(PublicKey),
+    Other(Vec<u8>),
+}
 
 #[async_trait::async_trait]
 pub trait Signer {
@@ -36,6 +41,39 @@ pub trait Signer {
     fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError>;
     fn generate_random_public_key(&self) -> Result<PublicKey, SignerError>;
     fn get_identity_public_key(&self) -> Result<PublicKey, SignerError>;
+
+    /// Subtract two private keys given their public keys, returning the public key of the difference
+    fn subtract_private_keys_given_public_keys(
+        &self,
+        signing_public_key: &PublicKey,
+        new_signing_public_key: &PublicKey,
+    ) -> Result<PublicKey, SignerError>;
+
+    /// Split a secret into threshold shares with proofs
+    ///
+    /// If secret is a public key, the private key that matches the provided public key is used as secret.
+    fn split_secret_with_proofs(
+        &self,
+        secret: &Secret,
+        threshold: u32,
+        num_shares: usize,
+    ) -> Result<Vec<VerifiableSecretShare>, SignerError>;
+
+    /// Encrypt the private key that matches the provided public key using ECIES for the receiver
+    fn encrypt_leaf_private_key_ecies(
+        &self,
+        receiver_public_key: &PublicKey,
+        public_key: &PublicKey,
+    ) -> Result<Vec<u8>, SignerError>;
+
+    /// Decrypt ECIES encrypted private key using the identity private key
+    ///
+    /// Persists the private key and returns matching public key
+    fn decrypt_leaf_private_key_ecies(
+        &self,
+        encrypted_data: &[u8],
+    ) -> Result<PublicKey, SignerError>;
+
     async fn sign_frost(
         &self,
         message: &[u8],
@@ -46,10 +84,4 @@ pub trait Signer {
         statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
         adaptor_public_key: Option<&PublicKey>,
     ) -> Result<SignatureShare, SignerError>;
-    async fn split_secret_with_proofs(
-        &self,
-        secret: Vec<u8>,
-        threshold: u32,
-        num_shares: u32,
-    ) -> Result<Vec<VerifiableSecretShare>, SignerError>;
 }

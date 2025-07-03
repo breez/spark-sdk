@@ -1,6 +1,8 @@
 use bitcoin::params::Params;
 use serde::{Deserialize, Serialize};
 
+use crate::operator::rpc as operator_rpc;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Network {
     #[serde(rename = "mainnet")]
@@ -11,6 +13,17 @@ pub enum Network {
     Testnet,
     #[serde(rename = "signet")]
     Signet,
+}
+
+impl Network {
+    pub(crate) fn to_proto_network(&self) -> operator_rpc::spark::Network {
+        match self {
+            Network::Mainnet => operator_rpc::spark::Network::Mainnet,
+            Network::Regtest => operator_rpc::spark::Network::Regtest,
+            Network::Testnet => operator_rpc::spark::Network::Testnet,
+            Network::Signet => operator_rpc::spark::Network::Signet,
+        }
+    }
 }
 
 impl From<Network> for bitcoin::Network {
