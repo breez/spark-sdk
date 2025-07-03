@@ -131,7 +131,7 @@ pub struct DefaultSigner {
     master_key: Xpriv,
     network: Network,
     nonce_commitments: Arc<Mutex<HashMap<Vec<u8>, SigningNonces>>>, // TODO: Nonce commitments are never cleared, is this okay?
-    private_key_map: Arc<Mutex<HashMap<PublicKey, SecretKey>>>,     // TODO: Is this really the way?
+    private_key_map: Arc<std::sync::Mutex<HashMap<PublicKey, SecretKey>>>, // TODO: Is this really the way?
     secp: Secp256k1<All>,
     signing_master_key: Xpriv,
 }
@@ -172,7 +172,7 @@ impl DefaultSigner {
             master_key,
             network,
             nonce_commitments: Arc::new(Mutex::new(HashMap::new())),
-            private_key_map: Arc::new(Mutex::new(HashMap::new())),
+            private_key_map: Arc::new(std::sync::Mutex::new(HashMap::new())),
             secp,
             signing_master_key,
         })
@@ -346,7 +346,12 @@ impl Signer for DefaultSigner {
     fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError> {
         let hash = sha256::Hash::hash(id.to_string().as_bytes());
         let signing_key = self.derive_signing_key(hash)?;
-        Ok(signing_key.public_key(&self.secp))
+        let public_key = signing_key.public_key(&self.secp);
+        self.private_key_map
+            .lock()
+            .unwrap()
+            .insert(public_key, signing_key);
+        Ok(public_key)
     }
     fn generate_random_public_key(&self) -> Result<PublicKey, SignerError> {
         let (_secret_key, public_key) = self.secp.generate_keypair(&mut thread_rng());
@@ -461,7 +466,7 @@ impl Signer for DefaultSigner {
         let secret_key = self
             .private_key_map
             .lock()
-            .await
+            .unwrap()
             .get(private_as_public_key)
             .cloned()
             .ok_or(SignerError::UnknownKey)?;
