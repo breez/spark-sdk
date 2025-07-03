@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
 use crate::core::Network;
-use crate::tree::{SigningKeyshare, TreeNode};
+use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
 use bitcoin::Transaction;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::{
@@ -23,6 +23,8 @@ use super::ServiceError;
 use crate::operator::rpc as operator_rpc;
 
 pub use crate::ssp::LightningSendRequestStatus;
+
+pub(crate) type ProofMap = HashMap<TreeNodeId, k256::PublicKey>;
 
 impl From<crate::Network> for operator_rpc::spark::Network {
     fn from(network: crate::Network) -> Self {
