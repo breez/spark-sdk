@@ -94,17 +94,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
         .init();
 
-    let seed = config.mnemonic.to_seed(config.passphrase);
-    let network = config.spark_config.network;
-    let signer = DefaultSigner::new(
-        seed.into_iter()
-            .take(32)
-            .collect::<Vec<u8>>()
-            .try_into()
-            .unwrap(),
-        network,
-    )?;
-    let wallet = spark_wallet::SparkWallet::new(config.spark_config, signer).await?;
+    let seed = config.mnemonic.to_seed(config.passphrase.clone());
+    let network = config.spark_config.network.clone();
+    let signer = DefaultSigner::new(&seed, network)?;
+    let wallet = spark_wallet::SparkWallet::new(config.spark_config.clone(), signer).await?;
     match args.command {
         command::Command::ClaimDeposit { txid } => {
             println!("1");

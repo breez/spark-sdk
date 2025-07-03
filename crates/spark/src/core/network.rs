@@ -51,6 +51,15 @@ impl TryFrom<bitcoin::Network> for Network {
     }
 }
 
+impl From<Network> for bitcoin::NetworkKind {
+    fn from(network: Network) -> Self {
+        match network {
+            Network::Mainnet => bitcoin::NetworkKind::Main,
+            _ => bitcoin::NetworkKind::Test,
+        }
+    }
+}
+
 impl From<Network> for Params {
     fn from(value: Network) -> Self {
         let network: bitcoin::Network = value.into();

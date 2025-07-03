@@ -11,6 +11,7 @@ use bitcoin::{
     transaction::Version,
 };
 use frost_secp256k1_tr::Identifier;
+use tracing::trace;
 
 use crate::{
     Network,
@@ -37,6 +38,7 @@ where
     signer: S,
 }
 
+#[derive(Debug)]
 pub struct DepositAddress {
     pub address: Address,
     pub leaf_id: TreeNodeId,
@@ -408,11 +410,14 @@ where
         address: &Address,
     ) -> Result<Option<DepositAddress>, ServiceError> {
         // TODO: unused deposit addresses could be cached in the wallet, so they don't have to be queried from the server every time.
-        Ok(self
-            .query_unused_deposit_addresses()
-            .await?
-            .into_iter()
-            .find(|d| &d.address == address))
+        let unused = self.query_unused_deposit_addresses().await?;
+
+        trace!(
+            "query_unused_deposit_addresses: found {} addresses: {:?}",
+            unused.len(),
+            unused
+        );
+        Ok(unused.into_iter().find(|d| &d.address == address))
     }
 
     pub async fn query_unused_deposit_addresses(
