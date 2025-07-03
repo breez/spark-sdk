@@ -20,7 +20,7 @@ struct Polynomial {
     coefficients: Vec<Scalar>,
 
     /// Proofs for each coefficient (public keys derived from the coefficients)
-    pub proofs: Vec<Vec<u8>>,
+    pub proofs: Vec<PublicKey>,
 }
 
 impl Polynomial {
@@ -98,8 +98,7 @@ pub fn split_secret_with_proofs(
     }
 
     // Generate the polynomial using the secret as the constant term
-    // The polynomial degree is threshold-1 (t-1)
-    let polynomial = generate_polynomial_for_secret_sharing(secret_scalar, threshold - 1)?;
+    let polynomial = generate_polynomial_for_secret_sharing(secret_scalar, threshold)?;
 
     // Generate the shares by evaluating the polynomial at distinct non-zero points
     let mut shares = Vec::with_capacity(number_of_shares);
@@ -123,24 +122,26 @@ pub fn split_secret_with_proofs(
 ///
 /// # Arguments
 /// * `secret` - The secret to be shared (becomes the constant term of the polynomial)
-/// * `degree` - The degree of the polynomial (should be threshold-1)
+/// * `threshold` - The minimum number of shares needed to reconstruct the secret (t)
 ///
 /// # Returns
 /// * `Ok(Polynomial)` - The generated polynomial with corresponding proofs
 /// * `Err(SignerError)` - If polynomial generation fails
 fn generate_polynomial_for_secret_sharing(
     secret: &Scalar,
-    degree: usize,
+    threshold: usize,
 ) -> Result<Polynomial, SignerError> {
     let mut rng = rand::thread_rng();
-    let mut coefficients = Vec::with_capacity(degree + 1);
-    let mut proofs = Vec::with_capacity(degree + 1);
+    let mut coefficients = Vec::with_capacity(threshold);
+    let mut proofs = Vec::with_capacity(threshold);
+    // The degree of the polynomial (t-1)
+    let degree = threshold - 1;
 
     // Set the constant term (secret)
     coefficients.push(*secret);
 
     // Generate proof for secret
-    proofs.push(scalar_to_pubkey(secret)?.to_sec1_bytes().to_vec());
+    proofs.push(scalar_to_pubkey(secret)?);
 
     // Generate random coefficients for higher terms
     for _ in 1..=degree {
@@ -150,7 +151,7 @@ fn generate_polynomial_for_secret_sharing(
         // Convert to scalar and ensure it's within field modulus
         let random_scalar = from_bytes_to_scalar(&random_bytes)?;
         coefficients.push(random_scalar);
-        proofs.push(scalar_to_pubkey(&random_scalar)?.to_sec1_bytes().to_vec());
+        proofs.push(scalar_to_pubkey(&random_scalar)?);
     }
 
     Ok(Polynomial {
@@ -255,21 +256,21 @@ mod tests {
         let secret_bytes = [1u8; 32];
         let secret = from_bytes_to_scalar(&secret_bytes).unwrap();
 
-        // Generate a polynomial of degree 2 (threshold 3)
-        let degree = 2;
-        let poly_result = generate_polynomial_for_secret_sharing(&secret, degree);
+        // Generate a polynomial of threshold 3 (degree 2)
+        let threshold = 3;
+        let poly_result = generate_polynomial_for_secret_sharing(&secret, threshold);
 
         assert!(poly_result.is_ok());
         let poly = poly_result.unwrap();
 
         // Check polynomial properties
-        assert_eq!(poly.coefficients.len(), degree + 1);
+        assert_eq!(poly.coefficients.len(), threshold);
         assert_eq!(poly.coefficients[0], secret); // Constant term should be the secret
-        assert_eq!(poly.proofs.len(), degree + 1);
+        assert_eq!(poly.proofs.len(), threshold);
 
         // Verify each proof corresponds to its coefficient
         for (i, coeff) in poly.coefficients.iter().enumerate() {
-            let generated_proof = scalar_to_pubkey(coeff).unwrap().to_sec1_bytes().to_vec();
+            let generated_proof = scalar_to_pubkey(coeff).unwrap();
             assert_eq!(&poly.proofs[i], &generated_proof);
         }
     }
@@ -297,7 +298,7 @@ mod tests {
             assert_eq!(share.proofs.len(), threshold); // t coefficients in polynomial
 
             // First coefficient proof should match the public key of the secret
-            let secret_pubkey = scalar_to_pubkey(&secret).unwrap().to_sec1_bytes().to_vec();
+            let secret_pubkey = scalar_to_pubkey(&secret).unwrap();
             assert_eq!(&share.proofs[0], &secret_pubkey);
         }
     }
