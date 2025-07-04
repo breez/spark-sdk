@@ -202,7 +202,7 @@ pub struct LightningInvoice {
     pub payment_hash: String,
     pub amount: CurrencyAmount,
     pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
+    pub invoice_expired_at: DateTime<Utc>,
     pub memo: Option<String>,
 }
 
@@ -266,10 +266,10 @@ pub struct LightningReceiveRequest {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub network: BitcoinNetwork,
-    pub status: LightningReceiveRequestStatus,
+    pub lightning_request_status: LightningReceiveRequestStatus,
     pub invoice: LightningInvoice,
     pub transfer: Option<Transfer>,
-    pub payment_preimage: Option<String>,
+    pub lightning_receive_payment_preimage: Option<String>,
 }
 
 /// LightningSendRequest structure
@@ -286,7 +286,7 @@ pub struct LightningSendRequest {
     pub idempotency_key: String,
     pub status: LightningSendRequestStatus,
     pub transfer: Option<Transfer>,
-    pub payment_preimage: Option<String>,
+    pub lightning_send_payment_preimage: Option<String>,
 }
 
 /// SwapLeaf structure
@@ -318,14 +318,14 @@ pub struct LeavesSwapRequest {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub network: BitcoinNetwork,
-    pub status: SparkLeavesSwapRequestStatus,
+    pub swap_status: SparkLeavesSwapRequestStatus,
     pub total_amount: CurrencyAmount,
     pub target_amount: CurrencyAmount,
     pub fee: CurrencyAmount,
     pub inbound_transfer: Transfer,
     pub swap_leaves: Vec<SwapLeaf>,
     pub outbound_transfer: Option<Transfer>,
-    pub expires_at: Option<DateTime<Utc>>,
+    pub swap_expired_at: Option<DateTime<Utc>>,
 }
 
 /// CoopExitRequest structure
@@ -340,8 +340,8 @@ pub struct CoopExitRequest {
     pub network: BitcoinNetwork,
     pub fee: CurrencyAmount,
     pub l1_broadcast_fee: CurrencyAmount,
-    pub status: SparkCoopExitRequestStatus,
-    pub expires_at: DateTime<Utc>,
+    pub exit_status: SparkCoopExitRequestStatus,
+    pub exit_expired_at: DateTime<Utc>,
     pub raw_connector_transaction: String,
     pub raw_coop_exit_transaction: String,
     pub coop_exit_txid: String,

@@ -76,7 +76,7 @@ impl TryFrom<crate::ssp::LightningSendRequest> for LightningSendPayment {
             idempotency_key: value.idempotency_key,
             status: value.status,
             transfer_id,
-            payment_preimage: value.payment_preimage,
+            payment_preimage: value.lightning_send_payment_preimage,
         })
     }
 }
@@ -112,7 +112,7 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
             created_at: value.created_at.timestamp(),
             updated_at: value.updated_at.timestamp(),
             network: value.network.into(),
-            status: value.status.into(),
+            status: value.lightning_request_status.into(),
             invoice: value.invoice.encoded_invoice,
             transfer_id,
             transfer_amount_sat: match value.transfer {
@@ -123,7 +123,7 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
                 ),
                 None => None,
             },
-            payment_preimage: value.payment_preimage,
+            payment_preimage: value.lightning_receive_payment_preimage,
         })
     }
 }

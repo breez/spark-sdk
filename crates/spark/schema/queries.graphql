@@ -6,7 +6,7 @@ fragment ClaimStaticDepositFragment on ClaimStaticDeposit {
   created_at
   updated_at
   network
-  status
+  deposit_status: status
   credit_amount {
     ...CurrencyAmountFragment
   }
@@ -34,14 +34,14 @@ fragment CoopExitRequestFragment on CoopExitRequest {
   created_at
   updated_at
   network
-  status
+  exit_status: status
   fee {
     ...CurrencyAmountFragment
   }
   l1_broadcast_fee {
     ...CurrencyAmountFragment
   }
-  expires_at
+  exit_expired_at: expires_at
   raw_connector_transaction
   raw_coop_exit_transaction
   coop_exit_txid
@@ -65,7 +65,7 @@ fragment LeavesSwapRequestFragment on LeavesSwapRequest {
   created_at
   updated_at
   network
-  status
+  swap_status: status
   total_amount {
     ...CurrencyAmountFragment
   }
@@ -81,7 +81,7 @@ fragment LeavesSwapRequestFragment on LeavesSwapRequest {
   outbound_transfer {
     ...TransferFragment
   }
-  expires_at
+  swap_expired_at: expires_at
   swap_leaves {
     ...SwapLeafFragment
   }
@@ -96,7 +96,7 @@ fragment InvoiceFragment on Invoice {
     ...CurrencyAmountFragment
   }
   created_at
-  expires_at
+  invoice_expired_at: expires_at
   memo
 }
 
@@ -106,14 +106,14 @@ fragment LightningReceiveRequestFragment on LightningReceiveRequest {
   created_at
   updated_at
   network
-  status
+  lightning_request_status: status
   invoice {
     ...InvoiceFragment
   }
   transfer {
     ...TransferFragment
   }
-  payment_preimage
+  lightning_receive_payment_preimage: payment_preimage
   receiver_identity_public_key
 }
 
@@ -132,7 +132,7 @@ fragment LightningSendRequestFragment on LightningSendRequest {
   transfer {
     ...TransferFragment
   }
-  payment_preimage
+  lightning_send_payment_preimage: payment_preimage
 }
 
 fragment SwapLeafFragment on SwapLeaf {
