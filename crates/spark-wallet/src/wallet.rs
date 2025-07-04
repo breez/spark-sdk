@@ -7,8 +7,8 @@ use spark::{
     bitcoin::BitcoinService,
     operator::rpc::{ConnectionManager, SparkRpcClient},
     services::{
-        DepositService, LightningReceivePayment, LightningSendPayment, LightningService,
-        PagingFilter, PagingResult, Transfer, TransferService,
+        DepositService, LightningReceivePayment, LightningSendPayment, LightningService, Transfer,
+        TransferService,
     },
     signer::Signer,
     ssp::ServiceProvider,
@@ -117,12 +117,10 @@ impl<S: Signer + Clone> SparkWallet<S> {
         Ok((signing_operators_clients, coordinator_client))
     }
 
-    pub async fn list_leaves(
-        &self,
-        paging: &PagingFilter,
-    ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
-        let leaves = self.tree_service.get_leaves(paging).await?;
-        Ok(leaves.items.into_iter().map(WalletLeaf::from).collect())
+    pub async fn list_leaves(&self) -> Result<Vec<WalletLeaf>, SparkWalletError> {
+        self.tree_service.refresh_leaves().await?;
+        let leaves = self.tree_service.list_leaves().await?;
+        Ok(leaves.into_iter().map(WalletLeaf::from).collect())
     }
 
     pub async fn pay_lightning_invoice(

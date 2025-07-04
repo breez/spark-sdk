@@ -8,7 +8,7 @@ use figment::{
     providers::{Env, Format, Yaml},
 };
 use serde::{Deserialize, Serialize};
-use spark_wallet::{DefaultSigner, PagingFilter, SparkWalletConfig};
+use spark_wallet::{DefaultSigner, SparkWalletConfig};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod command;
@@ -167,7 +167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", fee);
         }
         command::Command::ListLeaves => {
-            let leaves = wallet.list_leaves(&PagingFilter::default()).await?;
+            let leaves = wallet.list_leaves().await?;
             println!("{}", serde_json::to_string_pretty(&leaves)?);
         }
     }

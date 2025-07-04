@@ -40,7 +40,7 @@ impl<S: Signer> TreeService<S> {
         }
     }
 
-    pub async fn get_leaves(
+    async fn fetch_leaves(
         &self,
         paging: &PagingFilter,
     ) -> Result<PagingResult<TreeNode>, TreeServiceError> {
@@ -55,8 +55,7 @@ impl<S: Signer> TreeService<S> {
                     self.identity_pubkey.serialize().to_vec(),
                 )),
             })
-            .await
-            .unwrap();
+            .await?;
 
         Ok(PagingResult {
             items: nodes
@@ -68,12 +67,39 @@ impl<S: Signer> TreeService<S> {
         })
     }
 
+    /// Lists all leaves from the local cache.
+    ///
+    /// This method retrieves the current set of tree nodes stored in the local state
+    /// without making any network calls. To update the cache with the latest data
+    /// from the server, call [`refresh_leaves`] first.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<Vec<TreeNode>, TreeServiceError>` - A vector of tree nodes representing
+    ///   the leaves in the local cache, or an error if the operation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # async fn example(tree_service: &TreeService<impl Signer>) -> Result<(), TreeServiceError> {
+    /// // First refresh to get the latest data
+    /// tree_service.refresh_leaves().await?;
+    ///
+    /// // Then list the leaves
+    /// let leaves = tree_service.list_leaves().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn list_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+        Ok(self.state.get_leaves().await)
+    }
+
     /// Refreshes the tree state by fetching the latest tree from the coordinator/operators?
     pub async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
         self.state.clear_leaves().await;
         let mut paging = PagingFilter::default();
         loop {
-            let leaves = self.get_leaves(&paging).await?;
+            let leaves = self.fetch_leaves(&paging).await?;
             if leaves.items.is_empty() {
                 break;
             }
