@@ -9,7 +9,7 @@ use crate::services::ProofMap;
 use crate::services::models::{
     LeafKeyTweak, Transfer, map_public_keys, map_signature_shares, map_signing_nonce_commitments,
 };
-use crate::signer::{PrivateKeySource, Secret, VerifiableSecretShare};
+use crate::signer::{PrivateKeySource, SplitSecretWithProofSecretType, VerifiableSecretShare};
 use crate::utils::refund::{create_refund_tx, sign_refunds};
 
 use bitcoin::Transaction;
@@ -203,7 +203,7 @@ impl<S: Signer> TransferService<S> {
 
         // Split the secret into threshold shares with proofs
         let shares = self.signer.split_secret_with_proofs(
-            &Secret::PrivateKey(privkey_tweak),
+            &SplitSecretWithProofSecretType::PrivateKey(privkey_tweak),
             self.split_secret_threshold,
             signing_operators.len(),
         )?;
@@ -691,7 +691,7 @@ impl<S: Signer> TransferService<S> {
 
         // Split the secret into threshold shares with proofs
         let shares = self.signer.split_secret_with_proofs(
-            &Secret::PrivateKey(privkey_tweak),
+            &SplitSecretWithProofSecretType::PrivateKey(privkey_tweak),
             self.split_secret_threshold,
             signing_operators.len(),
         )?;

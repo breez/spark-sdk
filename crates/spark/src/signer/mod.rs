@@ -12,37 +12,7 @@ use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::Signatu
 
 pub use default_signer::DefaultSigner;
 pub use error::SignerError;
-pub use models::{SecretShare, VerifiableSecretShare};
-
-pub enum Secret {
-    PrivateKey(PrivateKeySource),
-    Other(Vec<u8>),
-}
-
-#[derive(Clone, Debug)]
-pub struct EncryptedPrivateKey(Vec<u8>);
-
-impl EncryptedPrivateKey {
-    pub fn new(ciphertext: Vec<u8>) -> Self {
-        Self(ciphertext)
-    }
-
-    pub fn as_slice(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum PrivateKeySource {
-    Derived(TreeNodeId),
-    Encrypted(EncryptedPrivateKey),
-}
-
-impl PrivateKeySource {
-    pub fn new_encrypted(ciphertext: Vec<u8>) -> Self {
-        Self::Encrypted(EncryptedPrivateKey::new(ciphertext))
-    }
-}
+pub use models::*;
 
 #[async_trait::async_trait]
 pub trait Signer {
@@ -71,7 +41,7 @@ pub trait Signer {
     /// Split a secret into threshold shares with proofs
     fn split_secret_with_proofs(
         &self,
-        secret: &Secret,
+        secret: &SplitSecretWithProofSecretType,
         threshold: u32,
         num_shares: usize,
     ) -> Result<Vec<VerifiableSecretShare>, SignerError>;
