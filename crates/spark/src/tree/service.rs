@@ -94,7 +94,35 @@ impl<S: Signer> TreeService<S> {
         Ok(self.state.get_leaves().await)
     }
 
-    /// Refreshes the tree state by fetching the latest tree from the coordinator/operators?
+    /// Refreshes the tree state by fetching the latest leaves from the server.
+    ///
+    /// This method clears the current local cache of leaves and fetches all available
+    /// leaves from the coordinator, storing them in the local state. It handles pagination
+    /// internally and will continue fetching until all leaves have been retrieved.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), TreeServiceError>` - Ok if the refresh was successful, or an error
+    ///   if any part of the operation fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TreeServiceError` if:
+    /// * Communication with the server fails
+    /// * Deserialization of leaf data fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # async fn example(tree_service: &TreeService<impl Signer>) -> Result<(), TreeServiceError> {
+    /// // Refresh the local cache with the latest leaves from the server
+    /// tree_service.refresh_leaves().await?;
+    /// 
+    /// // Now you can work with the updated leaves
+    /// let leaves = tree_service.list_leaves().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
         self.state.clear_leaves().await;
         let mut paging = PagingFilter::default();
