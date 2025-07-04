@@ -170,6 +170,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let leaves = wallet.list_leaves().await?;
             println!("{}", serde_json::to_string_pretty(&leaves)?);
         }
+        command::Command::SparkAddress => {
+            let spark_address = wallet.get_spark_address().await?;
+            println!("{}", spark_address.to_address_string()?);
+        }
     }
 
     Ok(())

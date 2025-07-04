@@ -42,4 +42,7 @@ pub enum Command {
 
     /// List all leaves in the wallet.
     ListLeaves,
+
+    /// Prints the wallet's Spark address.
+    SparkAddress,
 }
