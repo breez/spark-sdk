@@ -5,8 +5,6 @@ fn main() {
             &[
                 "protos/spark/common.proto",
                 "protos/spark/spark.proto",
-                "protos/spark/spark_tree.proto",
-                "protos/spark/frost.proto",
                 "protos/spark/spark_authn.proto",
             ],
             &["protos"],

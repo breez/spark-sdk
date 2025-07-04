@@ -18,14 +18,17 @@ service SparkService {
     rpc finalize_node_signatures(FinalizeNodeSignaturesRequest) returns (FinalizeNodeSignaturesResponse) {}
 
     rpc start_transfer(StartTransferRequest) returns (StartTransferResponse) {}
-    rpc finalize_transfer(FinalizeTransferRequest) returns (FinalizeTransferResponse) {}
+    // This is deprecated, please use finalize_transfer_with_transfer_package instead.
+    rpc finalize_transfer(FinalizeTransferRequest) returns (FinalizeTransferResponse) {
+        option deprecated = true;
+    }
+    rpc finalize_transfer_with_transfer_package(FinalizeTransferWithTransferPackageRequest) returns (FinalizeTransferResponse) {}
     rpc cancel_transfer(CancelTransferRequest) returns (CancelTransferResponse) {}
 
     rpc query_pending_transfers(TransferFilter) returns (QueryTransfersResponse) {}
     rpc query_all_transfers(TransferFilter) returns (QueryTransfersResponse) {}
     rpc claim_transfer_tweak_keys(ClaimTransferTweakKeysRequest) returns (google.protobuf.Empty) {}
     rpc claim_transfer_sign_refunds(ClaimTransferSignRefundsRequest) returns (ClaimTransferSignRefundsResponse) {}
-    rpc aggregate_nodes(AggregateNodesRequest) returns (AggregateNodesResponse) {}
     rpc store_preimage_share(StorePreimageShareRequest) returns (google.protobuf.Empty) {}
     rpc get_signing_commitments(GetSigningCommitmentsRequest) returns (GetSigningCommitmentsResponse) {}
     rpc cooperative_exit(CooperativeExitRequest) returns (CooperativeExitResponse) {}
@@ -219,6 +222,10 @@ message SigningKeyshare {
     uint32 threshold = 2;
     // The public key of the keyshare.
     bytes public_key = 3;
+    // The public shares of the keyshare.
+    map<string, bytes> public_shares = 4;
+    // The latest update time of the keyshare.
+    google.protobuf.Timestamp updated_time = 5;
 }
 
 /**
@@ -334,6 +341,17 @@ message TokenMintInput {
     // TODO: Consider whether implementing generic idempotency controls and/or a
     // random nonce would be favorable to populating this field.
     uint64 issuer_provided_timestamp = 2;
+    optional bytes token_identifier = 3 [(validate.rules).bytes.len = 32];
+}
+
+message TokenCreateInput {
+    bytes issuer_public_key = 1 [(validate.rules).bytes.len = 33];
+    string token_name = 2 [(validate.rules).string = {min_len: 3, max_len: 20}];
+    string token_ticker = 3 [(validate.rules).string = {min_len: 3, max_len: 6}];
+    uint32 decimals = 4 [(validate.rules).uint32.lte = 255];
+    bytes max_supply = 5 [(validate.rules).bytes.len = 16]; // Decoded uint128
+    bool is_freezable = 6;
+    optional bytes creation_entity_public_key = 7 [(validate.rules).bytes.len = 33];
 }
 
 // This proto is constructed by the wallet to specify outputs it wants to create
@@ -345,7 +363,8 @@ message TokenOutput {
     optional bytes revocation_commitment = 3 [(validate.rules).bytes.len = 33];
     optional uint64 withdraw_bond_sats = 4;
     optional uint64 withdraw_relative_block_locktime = 5;
-    bytes token_public_key = 6 [(validate.rules).bytes.len = 33];
+    optional bytes token_public_key = 6 [(validate.rules).bytes = {len: 33}]; 
+    optional bytes token_identifier = 8 [(validate.rules).bytes.len = 32];
     bytes token_amount = 7 [(validate.rules).bytes.len = 16];  // Decoded uint128
 }
 
@@ -353,21 +372,20 @@ message TokenOutput {
 // This proto is deterministically hashed to generate the token_transaction_hash that
 // is cooperatively signed by the SO group to confirm a token transaction.
 message TokenTransaction {
-    // For mint transactions issuer_public_key will be specified without any outputs_to_spend.
-    // For transfer transactions the token amount in the input leaves must match the token amount in the output leaves.
     oneof token_inputs {
         TokenMintInput mint_input = 1;
         TokenTransferInput transfer_input = 2;
-    }
+        TokenCreateInput create_input = 5;
+    }   
     repeated TokenOutput token_outputs = 3;
     repeated bytes spark_operator_identity_public_keys = 4 [(validate.rules).repeated.items.bytes.len = 33];
     Network network = 10 [(validate.rules).enum = {not_in: [0]}];
 }
 
-
 enum TokenTransactionStatus {
     TOKEN_TRANSACTION_STARTED = 0;
     TOKEN_TRANSACTION_SIGNED = 1;
+    TOKEN_TRANSACTION_REVEALED = 5;
     TOKEN_TRANSACTION_FINALIZED = 2;
     TOKEN_TRANSACTION_STARTED_CANCELLED = 3;
     TOKEN_TRANSACTION_SIGNED_CANCELLED = 4;
@@ -399,7 +417,7 @@ message SignatureWithIndex {
 
 message TokenTransactionSignatures {
       // Filled by signing the partial token transaction hash with the owner/issuer private key.
-      // For mint transactions this will be one signature for the input issuer_public_key
+      // For mint transactions this will be one signature for the input token_public_key
       // For transfer transactions this will be one for each output for the output owner_public_key
       repeated SignatureWithIndex owner_signatures = 1;
 }
@@ -409,6 +427,7 @@ message StartTokenTransactionRequest {
     TokenTransaction partial_token_transaction = 2;
     // List of ecdsa signatures authorizing movement of tokens from the token input.
     TokenTransactionSignatures token_transaction_signatures = 3;
+    string spark_payment_intent = 4;
 }
 
 message StartTokenTransactionResponse {
@@ -461,6 +480,7 @@ message FinalizeTokenTransactionRequest {
     // token transaction.
     repeated RevocationSecretWithIndex revocation_secrets = 2;
     bytes identity_public_key = 3 [(validate.rules).bytes.len = 33];
+    string spark_payment_intent = 4;
 }
 
 message FreezeTokensPayload {
@@ -470,6 +490,7 @@ message FreezeTokensPayload {
     bytes operator_identity_public_key = 4 [(validate.rules).bytes.len = 33];
     // Set to false when requesting a freeze.
     bool should_unfreeze = 5;
+    optional bytes token_identifier = 6 [(validate.rules).bytes.len = 32];
 }
 
 message FreezeTokensRequest {
@@ -487,6 +508,7 @@ message QueryTokenOutputsRequest {
     repeated bytes owner_public_keys = 1 [(validate.rules).repeated.items.bytes.len = 33];
     // Optionally provide token public keys. If not set return leaves for all tokens.
     repeated bytes token_public_keys = 2 [(validate.rules).repeated.items.bytes.len = 33];
+    repeated bytes token_identifiers = 4 [(validate.rules).repeated.items.bytes.len = 32];
     Network network = 3; // defaults to mainnet when no network is provided.
 }
 
@@ -498,6 +520,8 @@ message QueryTokenTransactionsRequest {
     repeated bytes owner_public_keys = 2 [(validate.rules).repeated.items.bytes.len = 33];
     // Returns transactions that related to this token public key.
     repeated bytes token_public_keys = 3 [(validate.rules).repeated.items.bytes.len = 33];
+    // Returns transactions that related to this token identifier.
+    repeated bytes token_identifiers = 7 [(validate.rules).repeated.items.bytes.len = 32];
     // Returns transactions that match the provided transaction hashes.
     repeated bytes token_transaction_hashes = 4 [(validate.rules).repeated.items.bytes.len = 32];
     int64 limit = 5;
@@ -547,6 +571,12 @@ message TreeNode {
     string status = 11;
     // The network of the node.
     Network network = 12;
+    // The creation time of the node.
+    google.protobuf.Timestamp created_time = 13;
+    // The latest update time of the node.
+    google.protobuf.Timestamp updated_time = 14;
+    // The signing public key of the owner of the node.
+    bytes owner_signing_public_key = 15;
 }
 
 /**
@@ -619,14 +649,16 @@ message StartUserSignedTransferRequest {
 
 
 message StartTransferRequest {
+    reserved 6;
+
     string transfer_id = 1;
     bytes owner_identity_public_key = 2;
     repeated LeafRefundTxSigningJob leaves_to_send = 3 [deprecated = true];
     bytes receiver_identity_public_key = 4;
     google.protobuf.Timestamp expiry_time = 5;
-    map<string, SecretProof> key_tweak_proofs = 6 [deprecated = true];
     // If this field is set, the leaves_to_send and key_tweak_proofs will be ignored.
     TransferPackage transfer_package = 7;
+    string spark_payment_intent = 9;
 }
 
 message StartTransferResponse {
@@ -666,6 +698,13 @@ message FinalizeTransferRequest {
     string transfer_id = 1;
     bytes owner_identity_public_key = 2;
     repeated SendLeafKeyTweak leaves_to_send = 3;
+    string spark_payment_intent = 4;
+}
+
+message FinalizeTransferWithTransferPackageRequest {
+    string transfer_id = 1;
+    bytes owner_identity_public_key = 2;
+    TransferPackage transfer_package = 3;
 }
 
 message FinalizeTransferResponse {
@@ -677,7 +716,7 @@ enum TransferStatus {
     TRANSFER_STATUS_SENDER_KEY_TWEAK_PENDING = 1;
     TRANSFER_STATUS_SENDER_KEY_TWEAKED = 2;
     TRANSFER_STATUS_RECEIVER_KEY_TWEAKED = 3;
-    TRANSFER_STATUSR_RECEIVER_REFUND_SIGNED = 4;
+    TRANSFER_STATUS_RECEIVER_REFUND_SIGNED = 4;
     TRANSFER_STATUS_COMPLETED = 5;
     TRANSFER_STATUS_EXPIRED = 6;
     TRANSFER_STATUS_RETURNED = 7;
@@ -728,6 +767,7 @@ message TransferFilter {
     int64 offset = 50;
     repeated TransferType types = 70;
     Network network = 4; // defaults to mainnet when no network is provided.
+    repeated TransferStatus statuses = 80;
 }
 
 message QueryTransfersResponse {
@@ -756,20 +796,6 @@ message ClaimTransferSignRefundsRequest {
 
 message ClaimTransferSignRefundsResponse {
     repeated LeafRefundTxSigningResult signing_results = 1;
-}
-
-message AggregateNodesRequest {
-    repeated string node_ids = 1;
-    SigningJob signing_job = 2;
-    // Serves as a temporary identity public key, this should be get from auth process.
-    bytes owner_identity_public_key = 3;
-}
-
-message AggregateNodesResponse {
-    SigningResult aggregate_signature = 1;
-    bytes verifying_key = 2;
-    bytes parent_node_tx = 3;
-    uint32 parent_node_vout = 4;
 }
 
 message StorePreimageShareRequest {
@@ -1024,6 +1050,8 @@ message CancelTransferResponse {
 message QueryUnusedDepositAddressesRequest {
     bytes identity_public_key = 1;
     Network network = 2; // defaults to mainnet when no network is provided.
+    int64 limit = 3; // defaults to 100 if not set.
+    int64 offset = 4; // defaults to 0 if not set.
 }
 
 message QueryStaticDepositAddressesRequest {
@@ -1042,7 +1070,9 @@ message DepositAddressQueryResult {
 
 message QueryUnusedDepositAddressesResponse {
     repeated DepositAddressQueryResult deposit_addresses = 1;
+    int64 offset = 2; // defaults to -1 if there are no more results
 }
+
 message QueryStaticDepositAddressesResponse {
     repeated DepositAddressQueryResult deposit_addresses = 1;
 }
@@ -1059,6 +1089,14 @@ message QueryBalanceResponse {
 
 message SparkAddress {
     bytes identity_public_key = 1;
+    PaymentIntentFields payment_intent_fields = 2;
+}
+
+message PaymentIntentFields {
+    bytes id = 1 [(validate.rules).bytes.len = 16]; 
+    optional bytes asset_identifier = 2;
+    bytes asset_amount = 3 [(validate.rules).bytes.max_len = 16]; // variable length uint128
+    optional string memo = 4 [(validate.rules).string.max_bytes = 120];
 }
 
 /**
