@@ -3,6 +3,7 @@ use std::fmt::Debug;
 use std::str::FromStr;
 
 use crate::core::Network;
+use crate::signer::PrivateKeySource;
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
 use bitcoin::Transaction;
 use bitcoin::secp256k1::ecdsa::Signature;
@@ -180,8 +181,8 @@ pub(crate) fn map_signing_nonce_commitments(
 
 pub struct LeafKeyTweak {
     pub node: TreeNode,
-    pub signing_public_key: PublicKey,
-    pub new_signing_public_key: PublicKey,
+    pub signing_key: PrivateKeySource,
+    pub new_signing_key: PrivateKeySource,
 }
 
 // TODO: verify if the optional times should be optional
