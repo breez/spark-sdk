@@ -1,4 +1,5 @@
 use clap::Subcommand;
+use spark_wallet::SparkAddress;
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum Command {
@@ -45,4 +46,11 @@ pub enum Command {
 
     /// Prints the wallet's Spark address.
     SparkAddress,
+
+    Transfer {
+        /// The amount to transfer in satoshis.
+        amount_sat: u64,
+        /// The receiver's Spark address.
+        receiver_address: SparkAddress,
+    },
 }

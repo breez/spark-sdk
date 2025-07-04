@@ -1,14 +1,35 @@
 use std::time::SystemTime;
 
 use bitcoin::{PublicKey, Transaction};
-use spark::{
-    Network,
-    operator::rpc::spark::{TransferStatus, TransferType},
-    services::Transfer,
-    tree::SigningKeyshare,
-};
+use serde::{Deserialize, Serialize};
+use spark::{Network, services::Transfer, tree::SigningKeyshare};
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum TransferStatus {
+    SenderInitiated,
+    SenderKeyTweakPending,
+    SenderKeyTweaked,
+    ReceiverKeyTweaked,
+    ReceiverRefundSigned,
+    Completed,
+    Expired,
+    Returned,
+    SenderInitiatedCoordinator,
+    ReceiverKeyTweakLocked,
+    ReceiverKeyTweakApplied,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum TransferType {
+    PreimageSwap,
+    CooperativeExit,
+    Transfer,
+    UtxoSwap,
+    Swap,
+    CounterSwap,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WalletTransfer {
     pub id: String,
     pub sender_id: PublicKey,
@@ -29,7 +50,7 @@ impl From<Transfer> for WalletTransfer {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WalletTransferLeaf {
     pub leaf: Option<WalletLeaf>,
     pub secret_cipher: String,
@@ -37,7 +58,7 @@ pub struct WalletTransferLeaf {
     pub intermediate_refund_tx: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WalletLeaf {
     pub id: String,
     pub tree_id: String,
@@ -53,7 +74,7 @@ pub struct WalletLeaf {
     pub network: Network,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum TransferDirection {
     Incoming,
     Outgoing,

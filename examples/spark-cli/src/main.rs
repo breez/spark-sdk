@@ -174,6 +174,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let spark_address = wallet.get_spark_address().await?;
             println!("{}", spark_address.to_address_string()?);
         }
+        command::Command::Transfer {
+            amount_sat,
+            receiver_address,
+        } => {
+            let result = wallet.transfer(amount_sat, &receiver_address).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
     }
 
     Ok(())

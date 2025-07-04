@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::operator::rpc as operator_rpc;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum Network {
     #[serde(rename = "mainnet")]
     Mainnet,

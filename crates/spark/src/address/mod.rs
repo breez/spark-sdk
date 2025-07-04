@@ -18,6 +18,7 @@ const HRP_TESTNET: &str = "spt";
 const HRP_REGTEST: &str = "sprt";
 const HRP_SIGNET: &str = "sps";
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SparkAddress {
     pub identity_public_key: PublicKey,
     pub network: Network,

@@ -6,5 +6,5 @@ mod wallet;
 
 pub use config::*;
 pub use error::*;
-pub use spark::{Network, signer::DefaultSigner};
+pub use spark::{Network, address::SparkAddress, signer::DefaultSigner};
 pub use wallet::SparkWallet;
