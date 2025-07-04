@@ -188,7 +188,7 @@ pub struct LeafKeyTweak {
 
 // TODO: verify if the optional times should be optional
 pub struct Transfer {
-    pub id: Uuid,
+    pub id: TransferId,
     pub sender_identity_public_key: PublicKey,
     pub receiver_identity_public_key: PublicKey,
     pub status: operator_rpc::spark::TransferStatus,
@@ -204,7 +204,7 @@ impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
     type Error = ServiceError;
 
     fn try_from(transfer: operator_rpc::spark::Transfer) -> Result<Self, Self::Error> {
-        let id = Uuid::from_str(&transfer.id)
+        let id = TransferId::from_str(&transfer.id)
             .map_err(|_| ServiceError::Generic("Invalid transfer id".to_string()))?;
 
         let sender_identity_public_key =
