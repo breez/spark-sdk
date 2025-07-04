@@ -41,7 +41,7 @@ pub trait Signer {
     /// Split a secret into threshold shares with proofs
     fn split_secret_with_proofs(
         &self,
-        secret: &SplitSecretWithProofSecretType,
+        secret: &SecretToSplit,
         threshold: u32,
         num_shares: usize,
     ) -> Result<Vec<VerifiableSecretShare>, SignerError>;

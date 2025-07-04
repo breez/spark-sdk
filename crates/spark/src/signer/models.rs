@@ -48,7 +48,7 @@ impl PrivateKeySource {
     }
 }
 
-pub enum SplitSecretWithProofSecretType {
+pub enum SecretToSplit {
     PrivateKey(PrivateKeySource),
-    Other(Vec<u8>),
+    Preimage(Vec<u8>),
 }

@@ -22,7 +22,7 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 
 use crate::signer::{EncryptedPrivateKey, secret_sharing};
-use crate::signer::{PrivateKeySource, SplitSecretWithProofSecretType};
+use crate::signer::{PrivateKeySource, SecretToSplit};
 use crate::tree::TreeNodeId;
 use crate::{
     Network,
@@ -315,15 +315,15 @@ impl Signer for DefaultSigner {
 
     fn split_secret_with_proofs(
         &self,
-        secret: &SplitSecretWithProofSecretType,
+        secret: &SecretToSplit,
         threshold: u32,
         num_shares: usize,
     ) -> Result<Vec<VerifiableSecretShare>, SignerError> {
         let secret_bytes = match secret {
-            SplitSecretWithProofSecretType::PrivateKey(privkey_source) => {
+            SecretToSplit::PrivateKey(privkey_source) => {
                 privkey_source.to_secret_key(self)?.secret_bytes().to_vec()
             }
-            SplitSecretWithProofSecretType::Other(bytes) => bytes.clone(),
+            SecretToSplit::Preimage(bytes) => bytes.clone(),
         };
         let secret_as_scalar = secret_sharing::from_bytes_to_scalar(&secret_bytes)?;
         let shares = secret_sharing::split_secret_with_proofs(
