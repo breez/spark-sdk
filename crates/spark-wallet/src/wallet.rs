@@ -74,6 +74,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let tree_state = TreeState::new();
         let tree_service = TreeService::new(
             coordinator_client,
+            identity_public_key,
             config.network,
             tree_state,
             Arc::clone(&transfer_service),
