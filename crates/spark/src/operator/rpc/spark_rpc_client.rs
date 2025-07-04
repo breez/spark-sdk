@@ -5,6 +5,7 @@ use crate::Network;
 use crate::operator::Operator;
 use crate::signer::Signer;
 use tonic::transport::Channel;
+use tracing::trace;
 
 pub struct SparkRpcClient<S>
 where
@@ -78,6 +79,7 @@ where
     }
 
     pub async fn start_transfer(&self, req: StartTransferRequest) -> Result<StartTransferResponse> {
+        trace!("Calling start_transfer with request: {:?}", req);
         Ok(self
             .auth
             .spark_service_client()

@@ -96,7 +96,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         signer: S,
     ) -> Result<(Vec<Arc<SparkRpcClient<S>>>, Arc<SparkRpcClient<S>>), SparkWalletError> {
         let mut signing_operators_clients = vec![];
-        for operator in config.operator_pool.get_signing_operators() {
+        for operator in config.operator_pool.get_all_operators() {
             let channel = connection_manager.get_channel(operator).await?;
             let client = Arc::new(SparkRpcClient::new(
                 channel,
