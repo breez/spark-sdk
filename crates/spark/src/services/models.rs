@@ -18,6 +18,7 @@ use frost_secp256k1_tr::{
     round2::SignatureShare,
 };
 use serde::{Deserialize, Serialize};
+use tracing::trace;
 use uuid::Uuid;
 
 use crate::{ssp::BitcoinNetwork, utils::refund::SignedTx};
@@ -251,7 +252,7 @@ impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
 pub struct TransferLeaf {
     pub leaf: TreeNode,
     pub secret_cipher: Vec<u8>,
-    pub signature: Signature,
+    pub signature: Option<Signature>,
     pub intermediate_refund_tx: Transaction,
 }
 
@@ -268,8 +269,14 @@ impl TryFrom<operator_rpc::spark::TransferLeaf> for TransferLeaf {
             ServiceError::Generic("Invalid intermediate refund transaction".to_string())
         })?;
 
-        let signature = bitcoin::secp256k1::ecdsa::Signature::from_compact(&leaf.signature)
-            .map_err(|_| ServiceError::Generic("Invalid signature format".to_string()))?;
+        trace!("leaf signature: {:?}", leaf.signature);
+        let signature = match leaf.signature.is_empty() {
+            true => None,
+            false => Some(
+                bitcoin::secp256k1::ecdsa::Signature::from_der(&leaf.signature)
+                    .map_err(|_| ServiceError::Generic("Invalid signature format".to_string()))?,
+            ),
+        };
 
         Ok(TransferLeaf {
             leaf: tree_node,

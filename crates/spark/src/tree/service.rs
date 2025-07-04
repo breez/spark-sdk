@@ -167,6 +167,7 @@ impl<S: Signer> TreeService<S> {
         let mut amount = 0;
         let mut nodes = vec![];
         let mut leaves = self.list_leaves().await?;
+        leaves.retain(|leaf| leaf.status == TreeNodeStatus::Available);
         leaves.sort_by(|a, b| b.value.cmp(&a.value));
 
         let mut aggregated_amount: u64 = 0;

@@ -208,6 +208,11 @@ impl<S: Signer> TransferService<S> {
             signing_operators.len(),
         )?;
 
+        trace!(
+            "prepare transfer: Split secret into {} shares",
+            shares.len()
+        );
+
         // Create pubkey shares tweak map
         let mut pubkey_shares_tweak = HashMap::new();
         for operator in &signing_operators {
@@ -217,6 +222,7 @@ impl<S: Signer> TransferService<S> {
                 ServiceError::Generic(format!("Share not found for operator {}", operator.id))
             })?;
 
+            trace!("Found share for operator {}: {:?}", operator.id, share);
             pubkey_shares_tweak.insert(
                 operator_identifier,
                 share.secret_share.share.to_bytes().to_vec(),
@@ -243,6 +249,13 @@ impl<S: Signer> TransferService<S> {
 
         // Sign the hash with identity key
         let signature = self.signer.sign_message_ecdsa_with_identity_key(&payload)?;
+
+        trace!(
+            "Prepared leaf key tweak for transfer: leaf_id={}, transfer_id={}, signature={}",
+            leaf.node.id,
+            transfer_id,
+            hex::encode(signature.serialize_compact())
+        );
 
         // Create leaf tweaks map for each signing operator
         let mut leaf_tweaks_map = HashMap::new();
@@ -387,7 +400,7 @@ impl<S: Signer> TransferService<S> {
 
         // Create a new transfer package with the signature
         let mut signed_package = transfer_package;
-        signed_package.user_signature = signature.serialize_compact().to_vec();
+        signed_package.user_signature = signature.serialize_der().to_vec();
 
         Ok(signed_package)
     }
@@ -398,7 +411,7 @@ impl<S: Signer> TransferService<S> {
         transfer_id: &TransferId,
         transfer_package: &operator_rpc::spark::TransferPackage,
     ) -> Result<Vec<u8>, ServiceError> {
-        let transfer_id_bytes = transfer_id.to_bytes().to_vec();
+        let transfer_id_bytes = hex::decode(&transfer_id.to_string().replace("-", "")).unwrap();
         // Get the encrypted payload and convert to sorted key-value pairs
         let encrypted_payload = &transfer_package.key_tweak_package;
         let mut pairs: Vec<(String, Vec<u8>)> = encrypted_payload
@@ -696,6 +709,8 @@ impl<S: Signer> TransferService<S> {
             signing_operators.len(),
         )?;
 
+        trace!("prepare claim: Split secret into {} shares", shares.len());
+
         // Create pubkey shares tweak map
         let mut pubkey_shares_tweak = HashMap::new();
         for operator in &signing_operators {
@@ -710,6 +725,8 @@ impl<S: Signer> TransferService<S> {
                 share.secret_share.share.to_bytes().to_vec(),
             );
         }
+
+        trace!("Creating leaf tweaks map for each operator");
 
         // Create leaf tweaks map for each signing operator
         let mut leaf_tweaks_map = HashMap::new();
@@ -981,13 +998,17 @@ impl<S: Signer> TransferService<S> {
             let digest = sha256::Hash::hash(&payload);
             let message = bitcoin::secp256k1::Message::from_digest(digest.to_byte_array());
 
+            let signature = match transfer_leaf.signature {
+                Some(signature) => signature,
+                None => {
+                    return Err(ServiceError::Generic(
+                        "Transfer leaf signature is missing".to_string(),
+                    ));
+                }
+            };
             // Verify the signature (signature is already a Signature type in TransferLeaf)
-            secp.verify_ecdsa(
-                &message,
-                &transfer_leaf.signature,
-                &transfer.sender_identity_public_key,
-            )
-            .map_err(|e| ServiceError::SignatureVerificationFailed(e.to_string()))?;
+            secp.verify_ecdsa(&message, &signature, &transfer.sender_identity_public_key)
+                .map_err(|e| ServiceError::SignatureVerificationFailed(e.to_string()))?;
 
             // Decrypt the secret cipher and get the corresponding public key
             // The signer persists the private key internally and returns the public key
@@ -1088,8 +1109,11 @@ fn find_share(
 
     for share in shares {
         if share.secret_share.index == target_share_index {
+            trace!("{:?} == {:?}", share.secret_share.index, target_share_index);
             return Some(share);
         }
+
+        trace!("{:?} != {:?}", share.secret_share.index, target_share_index);
     }
 
     trace!(

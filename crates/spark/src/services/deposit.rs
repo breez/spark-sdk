@@ -11,7 +11,7 @@ use bitcoin::{
     transaction::Version,
 };
 use frost_secp256k1_tr::Identifier;
-use tracing::trace;
+use tracing::{error, trace};
 
 use crate::{
     Network,
@@ -537,6 +537,10 @@ where
             &msg,
             &taproot_key,
         ) {
+            error!(
+                "Deposit address {} has invalid proof of possession signature for operator {}",
+                address, operator_public_key
+            );
             return Err(ServiceError::InvalidDepositAddressProof);
         }
 
@@ -548,10 +552,18 @@ where
                 .address_signatures
                 .get(&hex::encode(operator.identifier.serialize()))
             else {
+                error!(
+                    "Deposit address {} misses signature for operator {}",
+                    address, operator.id
+                );
                 return Err(ServiceError::InvalidDepositAddressProof);
             };
 
             let Ok(operator_sig) = ecdsa::Signature::from_der(operator_sig) else {
+                error!(
+                    "Failed to parse ECDSA signature for operator {}",
+                    operator.id
+                );
                 return Err(ServiceError::InvalidDepositAddressProof);
             };
 
@@ -560,6 +572,10 @@ where
                 &address_hash_message,
                 &operator.identity_public_key,
             ) {
+                error!(
+                    "Deposit address {} has invalid signature for operator {}",
+                    address, operator.id
+                );
                 return Err(ServiceError::InvalidDepositAddressProof);
             }
         }

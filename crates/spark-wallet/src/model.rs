@@ -1,8 +1,11 @@
 use std::time::SystemTime;
 
-use bitcoin::{PublicKey, Transaction};
+use bitcoin::{Transaction, secp256k1::PublicKey};
 use serde::{Deserialize, Serialize};
-use spark::{Network, services::Transfer, tree::SigningKeyshare};
+use spark::{
+    services::{Transfer, TransferId, TransferLeaf},
+    tree::{SigningKeyshare, TreeNode, TreeNodeId},
+};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum TransferStatus {
@@ -31,7 +34,7 @@ pub enum TransferType {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WalletTransfer {
-    pub id: String,
+    pub id: TransferId,
     pub sender_id: PublicKey,
     pub receiver_id: PublicKey,
     pub status: TransferStatus,
@@ -46,24 +49,47 @@ pub struct WalletTransfer {
 
 impl From<Transfer> for WalletTransfer {
     fn from(value: Transfer) -> Self {
-        todo!()
+        WalletTransfer {
+            id: value.id,
+            sender_id: value.sender_identity_public_key,
+            receiver_id: value.receiver_identity_public_key,
+            status: TransferStatus::Completed,
+            total_value_sat: value.total_value,
+            expiry_time: None,
+            leaves: value.leaves.into_iter().map(Into::into).collect(),
+            created_at: None,
+            updated_at: None,
+            transfer_type: TransferType::Transfer,
+            direction: TransferDirection::Outgoing,
+        }
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WalletTransferLeaf {
-    pub leaf: Option<WalletLeaf>,
-    pub secret_cipher: String,
-    pub signature: String,
-    pub intermediate_refund_tx: String,
+    pub leaf: WalletLeaf,
+    // pub secret_cipher: String,
+    // pub signature: String,
+    // pub intermediate_refund_tx: String,
+}
+
+impl From<TransferLeaf> for WalletTransferLeaf {
+    fn from(value: TransferLeaf) -> Self {
+        WalletTransferLeaf {
+            leaf: value.leaf.into(),
+            // secret_cipher: value.secret_cipher,
+            // signature: value.signature,
+            // intermediate_refund_tx: value.intermediate_refund_tx,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WalletLeaf {
-    pub id: String,
+    pub id: TreeNodeId,
     pub tree_id: String,
     pub value: u64,
-    pub parent_node_id: Option<String>,
+    pub parent_node_id: Option<TreeNodeId>,
     pub node_tx: Transaction,
     pub refund_tx: Transaction,
     pub vout: u32,
@@ -71,7 +97,24 @@ pub struct WalletLeaf {
     pub owner_identity_public_key: PublicKey,
     pub signing_keyshare: Option<SigningKeyshare>,
     pub status: String,
-    pub network: Network,
+}
+
+impl From<TreeNode> for WalletLeaf {
+    fn from(value: TreeNode) -> Self {
+        WalletLeaf {
+            id: value.id,
+            tree_id: value.tree_id,
+            value: value.value,
+            parent_node_id: value.parent_node_id,
+            node_tx: value.node_tx,
+            refund_tx: value.refund_tx,
+            vout: value.vout,
+            verifying_public_key: value.verifying_public_key,
+            owner_identity_public_key: value.owner_identity_public_key,
+            signing_keyshare: Some(value.signing_keyshare),
+            status: format!("{:?}", value.status),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
