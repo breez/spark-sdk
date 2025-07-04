@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
+use tokio::sync::Mutex;
 
 use crate::{
     Network,
@@ -19,7 +20,7 @@ pub struct TreeService<S: Signer> {
     client: Arc<SparkRpcClient<S>>,
     identity_pubkey: PublicKey,
     network: Network,
-    state: TreeState,
+    state: Mutex<TreeState>,
     transfer_service: Arc<TransferService<S>>,
 }
 
@@ -35,7 +36,7 @@ impl<S: Signer> TreeService<S> {
             client,
             identity_pubkey,
             network,
-            state,
+            state: Mutex::new(state),
             transfer_service,
         }
     }
@@ -91,7 +92,7 @@ impl<S: Signer> TreeService<S> {
     /// # }
     /// ```
     pub async fn list_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
-        Ok(self.state.get_leaves().await)
+        Ok(self.state.lock().await.get_leaves())
     }
 
     /// Refreshes the tree state by fetching the latest leaves from the server.
@@ -117,28 +118,32 @@ impl<S: Signer> TreeService<S> {
     /// # async fn example(tree_service: &TreeService<impl Signer>) -> Result<(), TreeServiceError> {
     /// // Refresh the local cache with the latest leaves from the server
     /// tree_service.refresh_leaves().await?;
-    /// 
+    ///
     /// // Now you can work with the updated leaves
     /// let leaves = tree_service.list_leaves().await?;
     /// # Ok(())
     /// # }
     /// ```
     pub async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
-        self.state.clear_leaves().await;
         let mut paging = PagingFilter::default();
+        let mut new_leaves = Vec::new();
         loop {
             let leaves = self.fetch_leaves(&paging).await?;
             if leaves.items.is_empty() {
                 break;
             }
 
-            self.state.add_leaves(&leaves.items).await;
+            new_leaves.extend(leaves.items);
 
             match leaves.next {
                 None => break,
                 Some(next) => paging = next,
             }
         }
+
+        let mut state = self.state.lock().await;
+        state.clear_leaves();
+        state.add_leaves(&new_leaves);
 
         Ok(())
     }
@@ -155,7 +160,7 @@ impl<S: Signer> TreeService<S> {
 
         let mut amount = 0;
         let mut nodes = vec![];
-        let mut leaves = self.state.get_leaves().await;
+        let mut leaves = self.list_leaves().await?;
         leaves.sort_by(|a, b| b.value.cmp(&a.value));
 
         let mut aggregated_amount: u64 = 0;

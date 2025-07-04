@@ -1,10 +1,8 @@
-use tokio::sync::Mutex;
-
 use crate::tree::TreeNode;
 
 // TODO: Implement proper tree state logic.
 pub struct TreeState {
-    leaves: Mutex<Vec<TreeNode>>,
+    leaves: Vec<TreeNode>,
 }
 
 impl Default for TreeState {
@@ -15,44 +13,37 @@ impl Default for TreeState {
 
 impl TreeState {
     pub fn new() -> Self {
-        TreeState {
-            leaves: Mutex::new(Vec::new()),
-        }
+        TreeState { leaves: Vec::new() }
     }
 
-    pub async fn add_leaf(&self, leaf: TreeNode) {
-        let mut leaves = self.leaves.lock().await;
-        leaves.push(leaf);
+    pub fn add_leaf(&mut self, leaf: TreeNode) {
+        self.leaves.push(leaf);
     }
 
-    pub async fn add_leaves(&self, leaves: &[TreeNode]) {
-        let mut leafmap = self.leaves.lock().await;
-        leafmap.extend_from_slice(leaves);
+    pub fn add_leaves(&mut self, leaves: &[TreeNode]) {
+        self.leaves.extend_from_slice(leaves);
     }
 
-    pub async fn get_leaves(&self) -> Vec<TreeNode> {
-        let leaves = self.leaves.lock().await;
-        leaves.clone()
+    pub fn get_leaves(&self) -> Vec<TreeNode> {
+        self.leaves.clone()
     }
 
-    pub async fn clear_leaves(&self) {
-        let mut leaves = self.leaves.lock().await;
-        leaves.clear();
+    pub fn clear_leaves(&mut self) {
+        self.leaves.clear();
     }
 
-    pub async fn remove_leaf(&self, leaf: &TreeNode) -> bool {
-        let mut leaves = self.leaves.lock().await;
-        if let Some(pos) = leaves.iter().position(|x| x.id == leaf.id) {
-            leaves.remove(pos);
+    pub fn remove_leaf(&mut self, leaf: &TreeNode) -> bool {
+        if let Some(pos) = self.leaves.iter().position(|x| x.id == leaf.id) {
+            self.leaves.remove(pos);
             true
         } else {
             false
         }
     }
 
-    pub async fn remove_leaves(&self, leaves: &[TreeNode]) {
+    pub fn remove_leaves(&mut self, leaves: &[TreeNode]) {
         for leaf in leaves {
-            self.remove_leaf(leaf).await;
+            self.remove_leaf(leaf);
         }
     }
 }
