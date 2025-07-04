@@ -118,7 +118,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
     }
 
     pub async fn list_leaves(&self) -> Result<Vec<WalletLeaf>, SparkWalletError> {
-        self.tree_service.refresh_leaves().await?;
         let leaves = self.tree_service.list_leaves().await?;
         Ok(leaves.into_iter().map(WalletLeaf::from).collect())
     }
@@ -301,5 +300,10 @@ impl<S: Signer + Clone> SparkWallet<S> {
             identity_public_key: self.signer.get_identity_public_key()?,
             network: self.config.network,
         })
+    }
+
+    pub async fn load(&self) -> Result<(), SparkWalletError> {
+        self.tree_service.refresh_leaves().await?;
+        Ok(())
     }
 }

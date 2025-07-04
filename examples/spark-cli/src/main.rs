@@ -94,6 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let network = config.spark_config.network.clone();
     let signer = DefaultSigner::new(&seed, network)?;
     let wallet = spark_wallet::SparkWallet::new(config.spark_config.clone(), signer).await?;
+    wallet.load().await?;
     match args.command {
         command::Command::ClaimDeposit { txid } => {
             println!("1");
