@@ -60,7 +60,23 @@ impl<S: Signer> TreeService<S> {
 
     /// Refreshes the tree state by fetching the latest tree from the coordinator/operators?
     pub async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
-        todo!()
+        self.state.clear_leaves().await;
+        let mut paging = PagingFilter::default();
+        loop {
+            let leaves = self.get_leaves(&paging).await?;
+            if leaves.items.is_empty() {
+                break;
+            }
+
+            self.state.add_leaves(&leaves.items).await;
+
+            match leaves.next {
+                None => break,
+                Some(next) => paging = next,
+            }
+        }
+
+        Ok(())
     }
 
     /// Selects leaves from the tree that sum up to the target amount.
