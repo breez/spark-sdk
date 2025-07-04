@@ -18,6 +18,7 @@ use crate::{
     bitcoin::{BitcoinService, sighash_from_tx},
     core::initial_sequence,
     operator::{OperatorPool, rpc as operator_rpc},
+    services::{PagingFilter, PagingResult},
     signer::Signer,
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
 };
@@ -410,25 +411,39 @@ where
         address: &Address,
     ) -> Result<Option<DepositAddress>, ServiceError> {
         // TODO: unused deposit addresses could be cached in the wallet, so they don't have to be queried from the server every time.
-        let unused = self.query_unused_deposit_addresses().await?;
+        let mut paging = PagingFilter::default();
+        loop {
+            let unused = self.query_unused_deposit_addresses(&paging).await?;
+            trace!(
+                "query_unused_deposit_addresses: found {} addresses: {:?}",
+                unused.items.len(),
+                unused
+            );
 
-        trace!(
-            "query_unused_deposit_addresses: found {} addresses: {:?}",
-            unused.len(),
-            unused
-        );
-        Ok(unused.into_iter().find(|d| &d.address == address))
+            if let Some(deposit_address) = unused.items.into_iter().find(|d| &d.address == address)
+            {
+                return Ok(Some(deposit_address));
+            }
+
+            match unused.next {
+                Some(next) => paging = next,
+                None => return Ok(None),
+            }
+        }
     }
 
     pub async fn query_unused_deposit_addresses(
         &self,
-    ) -> Result<Vec<DepositAddress>, ServiceError> {
+        paging: &PagingFilter,
+    ) -> Result<PagingResult<DepositAddress>, ServiceError> {
         let resp = self
             .client
             .query_unused_deposit_addresses(
                 operator_rpc::spark::QueryUnusedDepositAddressesRequest {
                     identity_public_key: self.identity_public_key.serialize().to_vec(),
                     network: self.spark_network() as i32,
+                    offset: paging.offset as i64,
+                    limit: paging.limit as i64,
                 },
             )
             .await?;
@@ -463,7 +478,10 @@ where
             .collect::<Result<Vec<_>, ServiceError>>()
             .map_err(|_| ServiceError::InvalidDepositAddress)?;
 
-        Ok(addresses)
+        Ok(PagingResult {
+            items: addresses,
+            next: paging.next_from_offset(resp.offset),
+        })
     }
 
     fn proof_of_possession_message_hash(

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Debug;
 use std::str::FromStr;
 
 use crate::core::Network;
@@ -23,6 +24,9 @@ use super::ServiceError;
 use crate::operator::rpc as operator_rpc;
 
 pub use crate::ssp::LightningSendRequestStatus;
+
+const DEFAULT_PAGING_LIMIT: u64 = 100;
+const DEFAULT_PAGING_OFFSET: u64 = 0;
 
 pub(crate) type ProofMap = HashMap<TreeNodeId, k256::PublicKey>;
 
@@ -349,5 +353,51 @@ impl TryFrom<operator_rpc::spark::SigningKeyshare> for SigningKeyshare {
             owner_identifiers,
             threshold: keyshare.threshold,
         })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PagingFilter {
+    pub offset: u64,
+    pub limit: u64,
+}
+
+impl PagingFilter {
+    pub fn next(&self) -> Self {
+        Self {
+            offset: self.offset + self.limit,
+            limit: self.limit,
+        }
+    }
+
+    pub fn next_from_offset(&self, offset: i64) -> Option<Self> {
+        if offset < 0 {
+            return None;
+        }
+
+        Some(self.next())
+    }
+}
+
+impl Default for PagingFilter {
+    fn default() -> Self {
+        Self {
+            offset: DEFAULT_PAGING_OFFSET,
+            limit: DEFAULT_PAGING_LIMIT,
+        }
+    }
+}
+
+pub struct PagingResult<T> {
+    pub items: Vec<T>,
+    pub next: Option<PagingFilter>,
+}
+
+impl<T: Debug> Debug for PagingResult<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PagingResult")
+            .field("items", &self.items)
+            .field("next", &self.next)
+            .finish()
     }
 }
