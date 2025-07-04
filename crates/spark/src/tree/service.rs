@@ -82,6 +82,9 @@ impl<S: Signer> TreeService<S> {
     /// # Examples
     ///
     /// ```
+    /// use spark::tree::{TreeService, TreeServiceError};
+    /// use spark::signer::Signer;
+    ///
     /// # async fn example(tree_service: &TreeService<impl Signer>) -> Result<(), TreeServiceError> {
     /// // First refresh to get the latest data
     /// tree_service.refresh_leaves().await?;
@@ -115,6 +118,9 @@ impl<S: Signer> TreeService<S> {
     /// # Examples
     ///
     /// ```
+    /// use spark::tree::{TreeService, TreeServiceError};
+    /// use spark::signer::Signer;
+    ///
     /// # async fn example(tree_service: &TreeService<impl Signer>) -> Result<(), TreeServiceError> {
     /// // Refresh the local cache with the latest leaves from the server
     /// tree_service.refresh_leaves().await?;
