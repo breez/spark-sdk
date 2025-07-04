@@ -1,8 +1,6 @@
 mod auth_provider;
 mod client;
 mod error;
-mod fragments;
-mod mutations;
 mod queries;
 pub(crate) mod types;
 

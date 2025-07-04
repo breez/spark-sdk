@@ -4,15 +4,12 @@ use crate::{
     Network,
     signer::Signer,
     ssp::{
-        BitcoinNetwork, ClaimStaticDepositInput, ClaimStaticDepositOutput, LeavesSwapRequest,
-        RequestLeavesSwapInput, ServiceProviderConfig, Transfer,
+        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositRequest, CoopExitFeeEstimates,
+        CurrencyAmount, LeavesSwapRequest, RequestCoopExit, RequestLeavesSwap,
+        RequestLightningReceive, RequestLightningSend, ServiceProviderConfig, StaticDepositQuote,
+        Transfer,
         error::ServiceProviderResult,
-        graphql::{
-            CoopExitFeeEstimatesOutput, CoopExitRequest, GraphQLClient,
-            LeavesSwapFeeEstimateOutput, LightningReceiveRequest, LightningSendFeeEstimateOutput,
-            LightningSendRequest, RequestCoopExitInput, RequestLightningReceiveInput,
-            RequestLightningSendInput, StaticDepositQuoteOutput,
-        },
+        graphql::{CoopExitRequest, GraphQLClient, LightningReceiveRequest, LightningSendRequest},
     },
 };
 
@@ -44,7 +41,7 @@ where
     pub async fn get_swap_fee_estimate(
         &self,
         amount_sats: u64,
-    ) -> ServiceProviderResult<LeavesSwapFeeEstimateOutput> {
+    ) -> ServiceProviderResult<CurrencyAmount> {
         Ok(self.gql_client.get_swap_fee_estimate(amount_sats).await?)
     }
 
@@ -52,8 +49,8 @@ where
     pub async fn get_lightning_send_fee_estimate(
         &self,
         encoded_invoice: &str,
-        amount_sats: u64,
-    ) -> ServiceProviderResult<LightningSendFeeEstimateOutput> {
+        amount_sats: Option<u64>,
+    ) -> ServiceProviderResult<CurrencyAmount> {
         Ok(self
             .gql_client
             .get_lightning_send_fee_estimate(encoded_invoice, amount_sats)
@@ -61,14 +58,14 @@ where
     }
 
     /// Get a coop exit fee estimate
-    pub async fn get_coop_exit_fee_estimate(
+    pub async fn get_coop_exit_fee_estimates(
         &self,
         leaf_external_ids: Vec<String>,
         withdrawal_address: &str,
-    ) -> ServiceProviderResult<CoopExitFeeEstimatesOutput> {
+    ) -> ServiceProviderResult<CoopExitFeeEstimates> {
         Ok(self
             .gql_client
-            .get_coop_exit_fee_estimate(leaf_external_ids, withdrawal_address)
+            .get_coop_exit_fee_estimates(leaf_external_ids, withdrawal_address)
             .await?)
     }
 
@@ -87,7 +84,7 @@ where
     /// Request a cooperative exit
     pub async fn request_coop_exit(
         &self,
-        input: RequestCoopExitInput,
+        input: RequestCoopExit,
     ) -> ServiceProviderResult<CoopExitRequest> {
         Ok(self.gql_client.request_coop_exit(input).await?)
     }
@@ -95,7 +92,7 @@ where
     /// Request lightning receive
     pub async fn request_lightning_receive(
         &self,
-        input: RequestLightningReceiveInput,
+        input: RequestLightningReceive,
     ) -> ServiceProviderResult<LightningReceiveRequest> {
         Ok(self.gql_client.request_lightning_receive(input).await?)
     }
@@ -103,7 +100,7 @@ where
     /// Request lightning send
     pub async fn request_lightning_send(
         &self,
-        input: RequestLightningSendInput,
+        input: RequestLightningSend,
     ) -> ServiceProviderResult<LightningSendRequest> {
         Ok(self.gql_client.request_lightning_send(input).await?)
     }
@@ -111,7 +108,7 @@ where
     /// Request leaves swap
     pub async fn request_leaves_swap(
         &self,
-        input: RequestLeavesSwapInput,
+        input: RequestLeavesSwap,
     ) -> ServiceProviderResult<LeavesSwapRequest> {
         Ok(self.gql_client.request_leaves_swap(input).await?)
     }
@@ -137,9 +134,9 @@ where
     pub async fn get_claim_deposit_quote(
         &self,
         transaction_id: String,
-        output_index: i32,
+        output_index: u32,
         network: BitcoinNetwork,
-    ) -> ServiceProviderResult<StaticDepositQuoteOutput> {
+    ) -> ServiceProviderResult<StaticDepositQuote> {
         Ok(self
             .gql_client
             .get_claim_deposit_quote(transaction_id, output_index, network)
@@ -149,42 +146,54 @@ where
     /// Get a lightning receive request by ID
     pub async fn get_lightning_receive_request(
         &self,
-        id: &str,
-    ) -> ServiceProviderResult<LightningReceiveRequest> {
-        Ok(self.gql_client.get_lightning_receive_request(id).await?)
+        request_id: &str,
+    ) -> ServiceProviderResult<Option<LightningReceiveRequest>> {
+        Ok(self
+            .gql_client
+            .get_lightning_receive_request(request_id)
+            .await?)
     }
 
     /// Get a lightning send request by ID
     pub async fn get_lightning_send_request(
         &self,
-        id: &str,
-    ) -> ServiceProviderResult<LightningSendRequest> {
-        Ok(self.gql_client.get_lightning_send_request(id).await?)
+        request_id: &str,
+    ) -> ServiceProviderResult<Option<LightningSendRequest>> {
+        Ok(self
+            .gql_client
+            .get_lightning_send_request(request_id)
+            .await?)
     }
 
     /// Get a leaves swap request by ID
     pub async fn get_leaves_swap_request(
         &self,
-        id: &str,
-    ) -> ServiceProviderResult<LeavesSwapRequest> {
-        Ok(self.gql_client.get_leaves_swap_request(id).await?)
+        request_id: &str,
+    ) -> ServiceProviderResult<Option<LeavesSwapRequest>> {
+        Ok(self.gql_client.get_leaves_swap_request(request_id).await?)
     }
 
     /// Get a cooperative exit request by ID
-    pub async fn get_coop_exit_request(&self, id: &str) -> ServiceProviderResult<CoopExitRequest> {
-        Ok(self.gql_client.get_coop_exit_request(id).await?)
+    pub async fn get_coop_exit_request(
+        &self,
+        request_id: &str,
+    ) -> ServiceProviderResult<Option<CoopExitRequest>> {
+        Ok(self.gql_client.get_coop_exit_request(request_id).await?)
     }
 
     /// Claim static deposit
     pub async fn claim_static_deposit(
         &self,
-        input: ClaimStaticDepositInput,
-    ) -> ServiceProviderResult<ClaimStaticDepositOutput> {
+        input: ClaimStaticDepositRequest,
+    ) -> ServiceProviderResult<ClaimStaticDeposit> {
         Ok(self.gql_client.claim_static_deposit(input).await?)
     }
 
     /// Get transfer by ID
-    pub async fn get_transfer(&self, transfer_spark_id: &str) -> ServiceProviderResult<Transfer> {
+    pub async fn get_transfer(
+        &self,
+        transfer_spark_id: &str,
+    ) -> ServiceProviderResult<Option<Transfer>> {
         Ok(self.gql_client.get_transfer(transfer_spark_id).await?)
     }
 }

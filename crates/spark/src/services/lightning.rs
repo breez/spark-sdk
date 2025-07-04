@@ -9,8 +9,7 @@ use crate::operator::rpc::spark::{
 use crate::services::{ServiceError, TransferId};
 use crate::signer::{PrivateKeySource, SecretToSplit};
 use crate::ssp::{
-    LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
-    ServiceProvider,
+    LightningReceiveRequestStatus, RequestLightningReceive, RequestLightningSend, ServiceProvider,
 };
 use crate::utils::refund as refund_utils;
 use crate::{signer::Signer, tree::TreeNode};
@@ -179,7 +178,7 @@ where
         let payment_hash = sha256::Hash::hash(&preimage);
         let invoice = self
             .ssp_client
-            .request_lightning_receive(RequestLightningReceiveInput {
+            .request_lightning_receive(RequestLightningReceive {
                 receiver_identity_pubkey: Some(
                     self.signer
                         .get_identity_public_key()?
@@ -189,7 +188,7 @@ where
                 ),
                 amount_sats,
                 network: self.network.into(),
-                payment_hash: Some(payment_hash.encode_hex()),
+                payment_hash: payment_hash.encode_hex(),
                 description_hash: None,
                 expiry_secs: Some(expiry),
                 memo: memo,
@@ -291,9 +290,10 @@ where
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
         let res = self
             .ssp_client
-            .request_lightning_send(RequestLightningSendInput {
+            .request_lightning_send(RequestLightningSend {
                 encoded_invoice: swap.bolt11_invoice.to_string(),
-                idempotency_key: Some(decoded_invoice.payment_hash().encode_hex()),
+                idempotency_key: decoded_invoice.payment_hash().encode_hex(),
+                amount_sats: None,
             })
             .await?;
 
@@ -318,11 +318,10 @@ where
 
         let fee_estimate = self
             .ssp_client
-            .get_lightning_send_fee_estimate(invoice, amount_sats)
+            .get_lightning_send_fee_estimate(invoice, Some(amount_sats))
             .await?;
 
         let fee_sat = fee_estimate
-            .fee_estimate
             .as_sats()
             .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))?;
         if let Some(max_fee_sat) = max_fee_sat {
@@ -343,9 +342,8 @@ where
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
         let amount_sat = get_invoice_amount_sats(&decoded_invoice)?;
         self.ssp_client
-            .get_lightning_send_fee_estimate(invoice, amount_sat)
+            .get_lightning_send_fee_estimate(invoice, Some(amount_sat))
             .await?
-            .fee_estimate
             .as_sats()
             .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))
     }
@@ -353,19 +351,25 @@ where
     pub async fn get_lightning_send_payment(
         &self,
         id: &str,
-    ) -> Result<LightningSendPayment, ServiceError> {
+    ) -> Result<Option<LightningSendPayment>, ServiceError> {
         let res = self.ssp_client.get_lightning_send_request(id).await?;
 
-        res.try_into()
+        match res {
+            Some(request) => Ok(Some(request.try_into()?)),
+            None => Ok(None),
+        }
     }
 
     pub async fn get_lightning_receive_payment(
         &self,
         id: &str,
-    ) -> Result<LightningReceivePayment, ServiceError> {
+    ) -> Result<Option<LightningReceivePayment>, ServiceError> {
         let res = self.ssp_client.get_lightning_receive_request(id).await?;
 
-        res.try_into()
+        match res {
+            Some(request) => Ok(Some(request.try_into()?)),
+            None => Ok(None),
+        }
     }
 
     async fn swap_nodes_for_preimage(
