@@ -19,6 +19,7 @@ use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments};
 use k256::Scalar;
 use prost::Message as ProstMessage;
+use tracing::trace;
 
 use crate::{
     bitcoin::sighash_from_tx,
@@ -1091,5 +1092,9 @@ fn find_share(
         }
     }
 
+    trace!(
+        "Found no share for operator id: {}, shares: {:?}",
+        operator_id, shares
+    );
     None
 }
