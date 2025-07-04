@@ -6,7 +6,7 @@ use crate::operator::rpc::spark::{
     InvoiceAmount, InvoiceAmountProof, SecretShare, StartUserSignedTransferRequest,
     StorePreimageShareRequest,
 };
-use crate::services::ServiceError;
+use crate::services::{ServiceError, TransferId};
 use crate::signer::{PrivateKeySource, SecretToSplit};
 use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
@@ -24,7 +24,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use uuid::Uuid;
 
 use super::LeafKeyTweak;
 use super::models::{LightningSendRequestStatus, map_signing_nonce_commitments};
@@ -32,7 +31,7 @@ use super::models::{LightningSendRequestStatus, map_signing_nonce_commitments};
 const DEFAULT_EXPIRY_SECS: u32 = 60 * 60 * 24 * 30;
 
 pub struct LightningSwap {
-    pub transfer_id: Uuid,
+    pub transfer_id: TransferId,
     pub leaves: Vec<LeafKeyTweak>,
     pub receiver_identity_public_key: PublicKey,
     pub bolt11_invoice: String,
@@ -48,7 +47,7 @@ pub struct LightningSendPayment {
     pub fee_msat: u64,
     pub idempotency_key: String,
     pub status: LightningSendRequestStatus,
-    pub transfer_id: Option<String>,
+    pub transfer_id: Option<TransferId>,
     pub payment_preimage: Option<String>,
 }
 
@@ -56,6 +55,15 @@ impl TryFrom<crate::ssp::LightningSendRequest> for LightningSendPayment {
     type Error = ServiceError;
 
     fn try_from(value: crate::ssp::LightningSendRequest) -> Result<Self, Self::Error> {
+        let transfer_id = match &value.transfer {
+            Some(transfer) => match &transfer.spark_id {
+                Some(id) => Some(TransferId::from_str(&id).map_err(|_| {
+                    ServiceError::SSPswapError("Invalid transfer id format".to_string())
+                })?),
+                None => None,
+            },
+            None => None,
+        };
         Ok(Self {
             id: value.id,
             created_at: value.created_at.timestamp(),
@@ -68,7 +76,7 @@ impl TryFrom<crate::ssp::LightningSendRequest> for LightningSendPayment {
                 .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))?,
             idempotency_key: value.idempotency_key,
             status: value.status,
-            transfer_id: value.transfer.and_then(|t| t.spark_id),
+            transfer_id,
             payment_preimage: value.payment_preimage,
         })
     }
@@ -82,7 +90,7 @@ pub struct LightningReceivePayment {
     pub network: Network,
     pub status: LightningReceiveRequestStatus,
     pub invoice: String,
-    pub transfer_id: Option<String>,
+    pub transfer_id: Option<TransferId>,
     pub transfer_amount_sat: Option<u64>,
     pub payment_preimage: Option<String>,
 }
@@ -91,6 +99,15 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
     type Error = ServiceError;
 
     fn try_from(value: crate::ssp::LightningReceiveRequest) -> Result<Self, Self::Error> {
+        let transfer_id = match &value.transfer {
+            Some(transfer) => match &transfer.spark_id {
+                Some(id) => Some(TransferId::from_str(&id).map_err(|_| {
+                    ServiceError::SSPswapError("Invalid transfer id format".to_string())
+                })?),
+                None => None,
+            },
+            None => None,
+        };
         Ok(Self {
             id: value.id,
             created_at: value.created_at.timestamp(),
@@ -98,7 +115,7 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
             network: value.network.into(),
             status: value.status.into(),
             invoice: value.invoice.encoded_invoice,
-            transfer_id: value.transfer.as_ref().and_then(|t| t.spark_id.clone()),
+            transfer_id,
             transfer_amount_sat: match value.transfer {
                 Some(t) => Some(
                     t.total_amount
@@ -255,7 +272,7 @@ where
         ))?;
 
         Ok(LightningSwap {
-            transfer_id: Uuid::from_str(&transfer.id).map_err(|_| {
+            transfer_id: TransferId::from_str(&transfer.id).map_err(|_| {
                 ServiceError::SSPswapError(
                     "Swap response did not contain a valid transfer id".to_string(),
                 )
@@ -389,7 +406,7 @@ where
         )
         .await?;
 
-        let transfer_id = Uuid::now_v7().to_string();
+        let transfer_id = TransferId::generate();
         let reason = if is_inbound_payment {
             Reason::Receive
         } else {
@@ -406,7 +423,7 @@ where
                 value_sats: invoice_amount_sats,
             }),
             transfer: Some(StartUserSignedTransferRequest {
-                transfer_id: transfer_id.clone(),
+                transfer_id: transfer_id.to_string(),
                 owner_identity_public_key: self
                     .signer
                     .get_identity_public_key()?

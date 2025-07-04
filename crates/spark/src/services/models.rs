@@ -17,6 +17,7 @@ use frost_secp256k1_tr::{
     round1::{NonceCommitment, SigningCommitments},
     round2::SignatureShare,
 };
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{ssp::BitcoinNetwork, utils::refund::SignedTx};
@@ -400,5 +401,57 @@ impl<T: Debug> Debug for PagingResult<T> {
             .field("items", &self.items)
             .field("next", &self.next)
             .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TransferId(Uuid);
+
+impl TransferId {
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    pub fn to_bytes(&self) -> [u8; 16] {
+        self.0.to_bytes_le()
+    }
+}
+
+impl std::fmt::Display for TransferId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for TransferId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err("TransferId cannot be empty".to_string());
+        }
+
+        // Validate the format of the transfer id
+        let uuid = Uuid::from_str(s).map_err(|_| "Invalid TransferId format".to_string())?;
+        Ok(TransferId(uuid))
+    }
+}
+
+impl Serialize for TransferId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for TransferId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        TransferId::from_str(&s).map_err(serde::de::Error::custom)
     }
 }

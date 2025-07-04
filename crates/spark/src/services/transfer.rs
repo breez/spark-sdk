@@ -5,10 +5,10 @@ use crate::Network;
 use crate::operator::rpc::spark::transfer_filter::Participant;
 use crate::operator::rpc::spark::{TransferFilter, TransferType};
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
-use crate::services::ProofMap;
 use crate::services::models::{
     LeafKeyTweak, Transfer, map_public_keys, map_signature_shares, map_signing_nonce_commitments,
 };
+use crate::services::{ProofMap, TransferId};
 use crate::signer::{PrivateKeySource, SecretToSplit, VerifiableSecretShare};
 use crate::utils::refund::{create_refund_tx, sign_refunds};
 
@@ -19,7 +19,6 @@ use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments};
 use k256::Scalar;
 use prost::Message as ProstMessage;
-use uuid::Uuid;
 
 use crate::{
     bitcoin::sighash_from_tx,
@@ -123,7 +122,7 @@ impl<S: Signer> TransferService<S> {
         leaf_key_tweaks: &[LeafKeyTweak],
         receiver_id: &PublicKey,
     ) -> Result<Transfer, ServiceError> {
-        let transfer_id = uuid::Uuid::now_v7();
+        let transfer_id = TransferId::generate();
 
         let key_tweak_input_map = self
             .prepare_send_transfer_key_tweaks(&transfer_id, receiver_id, &leaf_key_tweaks)
@@ -160,7 +159,7 @@ impl<S: Signer> TransferService<S> {
 
     async fn prepare_send_transfer_key_tweaks(
         &self,
-        transfer_id: &Uuid,
+        transfer_id: &TransferId,
         receiver_public_key: &PublicKey,
         leaves: &[LeafKeyTweak],
     ) -> Result<HashMap<Identifier, Vec<operator_rpc::spark::SendLeafKeyTweak>>, ServiceError> {
@@ -186,7 +185,7 @@ impl<S: Signer> TransferService<S> {
     /// Prepares a single leaf key tweak for transfer
     async fn prepare_single_send_transfer_key_tweak(
         &self,
-        transfer_id: &Uuid,
+        transfer_id: &TransferId,
         leaf: &LeafKeyTweak,
         receiver_public_key: &PublicKey,
     ) -> Result<HashMap<Identifier, operator_rpc::spark::SendLeafKeyTweak>, ServiceError> {
@@ -276,7 +275,7 @@ impl<S: Signer> TransferService<S> {
 
     async fn prepare_transfer_package(
         &self,
-        transfer_id: &Uuid,
+        transfer_id: &TransferId,
         key_tweak_input_map: HashMap<Identifier, Vec<operator_rpc::spark::SendLeafKeyTweak>>,
         leaf_key_tweaks: &[LeafKeyTweak],
         receiver_public_key: &PublicKey,
@@ -374,7 +373,7 @@ impl<S: Signer> TransferService<S> {
 
     fn sign_transfer_package(
         &self,
-        transfer_id: &Uuid,
+        transfer_id: &TransferId,
         transfer_package: operator_rpc::spark::TransferPackage,
     ) -> Result<operator_rpc::spark::TransferPackage, ServiceError> {
         let signing_payload =
@@ -395,10 +394,10 @@ impl<S: Signer> TransferService<S> {
     /// Creates the signing payload for a transfer package by hashing the transfer ID and encrypted payload
     fn get_transfer_package_signing_payload(
         &self,
-        transfer_id: &Uuid,
+        transfer_id: &TransferId,
         transfer_package: &operator_rpc::spark::TransferPackage,
     ) -> Result<Vec<u8>, ServiceError> {
-        let transfer_id_bytes = transfer_id.to_bytes_le().to_vec();
+        let transfer_id_bytes = transfer_id.to_bytes().to_vec();
         // Get the encrypted payload and convert to sorted key-value pairs
         let encrypted_payload = &transfer_package.key_tweak_package;
         let mut pairs: Vec<(String, Vec<u8>)> = encrypted_payload
@@ -1056,7 +1055,7 @@ impl<S: Signer> TransferService<S> {
 
     pub async fn query_transfer(
         &self,
-        transfer_id: &Uuid,
+        transfer_id: &TransferId,
     ) -> Result<Option<Transfer>, ServiceError> {
         let response = self
             .coordinator_client
