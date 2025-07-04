@@ -295,4 +295,11 @@ impl<S: Signer + Clone> SparkWallet<S> {
 
         Ok(result_nodes)
     }
+
+    pub async fn get_spark_address(&self) -> Result<SparkAddress, SparkWalletError> {
+        Ok(SparkAddress {
+            identity_public_key: self.signer.get_identity_public_key()?,
+            network: self.config.network,
+        })
+    }
 }
