@@ -89,13 +89,13 @@ where
 
     pub async fn finalize_transfer(
         &self,
-        req: FinalizeTransferRequest,
+        req: FinalizeTransferWithTransferPackageRequest,
     ) -> Result<FinalizeTransferResponse> {
         Ok(self
             .auth
             .spark_service_client()
             .await?
-            .finalize_transfer(req)
+            .finalize_transfer_with_transfer_package(req)
             .await?
             .into_inner())
     }
@@ -158,19 +158,6 @@ where
             .spark_service_client()
             .await?
             .claim_transfer_sign_refunds(req)
-            .await?
-            .into_inner())
-    }
-
-    pub async fn aggregate_nodes(
-        &self,
-        req: AggregateNodesRequest,
-    ) -> Result<AggregateNodesResponse> {
-        Ok(self
-            .auth
-            .spark_service_client()
-            .await?
-            .aggregate_nodes(req)
             .await?
             .into_inner())
     }

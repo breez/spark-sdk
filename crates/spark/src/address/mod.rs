@@ -47,6 +47,7 @@ impl SparkAddress {
     pub fn to_address_string(&self) -> Result<String, AddressError> {
         let proto_address = ProtoSparkAddress {
             identity_public_key: self.identity_public_key.serialize().to_vec(),
+            payment_intent_fields: None, // TODO: Add payment intent fields
         };
 
         let payload_bytes = proto_address.encode_to_vec();
@@ -192,6 +193,7 @@ mod tests {
         let public_key = create_test_public_key();
         let proto_address = ProtoSparkAddress {
             identity_public_key: public_key.serialize().to_vec(),
+            payment_intent_fields: None,
         };
         let payload_bytes = proto_address.encode_to_vec();
 
