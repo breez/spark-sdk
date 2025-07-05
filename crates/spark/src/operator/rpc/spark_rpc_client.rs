@@ -119,6 +119,7 @@ where
         &self,
         req: TransferFilter,
     ) -> Result<QueryTransfersResponse> {
+        trace!("Querying pending transfers with filter: {:?}", req);
         Ok(self
             .auth
             .spark_service_client()

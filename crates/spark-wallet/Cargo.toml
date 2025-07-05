@@ -10,4 +10,5 @@ serde = { workspace = true, features = ["derive"] }
 spark.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }
+tracing.workspace = true
 uuid.workspace = true

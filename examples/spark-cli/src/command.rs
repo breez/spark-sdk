@@ -53,4 +53,7 @@ pub enum Command {
         /// The receiver's Spark address.
         receiver_address: SparkAddress,
     },
+
+    /// Claims all pending transfers
+    ClaimPendingTransfers,
 }

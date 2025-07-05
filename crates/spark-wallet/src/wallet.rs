@@ -14,6 +14,7 @@ use spark::{
     ssp::ServiceProvider,
     tree::{TreeNode, TreeNodeId, TreeService, TreeState},
 };
+use tracing::trace;
 
 use crate::{leaf::WalletLeaf, model::WalletTransfer};
 
@@ -268,8 +269,9 @@ impl<S: Signer + Clone> SparkWallet<S> {
 
     /// Claims all pending transfers.
     pub async fn claim_pending_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+        trace!("Claiming all pending transfers");
         let transfers = self.transfer_service.query_pending_transfers().await?;
-
+        trace!("There are {} pending transfers", transfers.len());
         for transfer in &transfers {
             self.claim_transfer(transfer, false, false).await?;
         }
@@ -283,8 +285,10 @@ impl<S: Signer + Clone> SparkWallet<S> {
         _emit: bool,
         _optimize: bool,
     ) -> Result<Vec<TreeNode>, SparkWalletError> {
+        trace!("Claiming transfer with id: {}", transfer.id);
         let result_nodes = self.transfer_service.claim_transfer(transfer, None).await?;
 
+        trace!("Refreshing leaves after claiming transfer");
         // update local tree state (may be optimized to only add leaves that were received)
         self.tree_service.refresh_leaves().await?;
 

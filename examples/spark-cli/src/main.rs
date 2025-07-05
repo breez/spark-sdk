@@ -182,6 +182,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let result = wallet.transfer(amount_sat, &receiver_address).await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
+        command::Command::ClaimPendingTransfers => {
+            let transfers = wallet.claim_pending_transfers().await?;
+            println!(
+                "Claimed transfers: {}",
+                serde_json::to_string_pretty(&transfers)?
+            );
+        }
     }
 
     Ok(())

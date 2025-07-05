@@ -19,7 +19,7 @@ use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments};
 use k256::Scalar;
 use prost::Message as ProstMessage;
-use tracing::trace;
+use tracing::{debug, error, trace};
 
 use crate::{
     bitcoin::sighash_from_tx,
@@ -460,7 +460,8 @@ impl<S: Signer> TransferService<S> {
             // Verify the pending transfer and get leaf key map
             let leaf_key_map = match self.verify_pending_transfer(transfer).await {
                 Ok(map) => map,
-                Err(_) => {
+                Err(e) => {
+                    error!("Failed to verify pending transfer: {}", e);
                     retry_count += 1;
                     continue;
                 }
@@ -473,9 +474,11 @@ impl<S: Signer> TransferService<S> {
             {
                 Ok(leaves) => leaves,
                 Err(ServiceError::NoLeavesToClaim) => {
+                    debug!("There are no leaves to claim for this transfer");
                     return Ok(Vec::new());
                 }
-                Err(_) => {
+                Err(e) => {
+                    error!("Failed to prepare leaves for claiming: {}", e);
                     retry_count += 1;
                     continue;
                 }
@@ -487,7 +490,8 @@ impl<S: Signer> TransferService<S> {
                 .await
             {
                 Ok(res) => res,
-                Err(_) => {
+                Err(e) => {
+                    error!("Failed to claim transfer with leaves: {}", e);
                     retry_count += 1;
                     continue;
                 }
@@ -1035,6 +1039,10 @@ impl<S: Signer> TransferService<S> {
         limit: Option<u64>,
         offset: Option<u64>,
     ) -> Result<Vec<Transfer>, ServiceError> {
+        trace!(
+            "Querying all transfers with limit: {:?}, offset: {:?}",
+            limit, offset
+        );
         let response = self
             .coordinator_client
             .query_all_transfers(TransferFilter {
@@ -1063,6 +1071,7 @@ impl<S: Signer> TransferService<S> {
 
     /// Queries pending transfers from the operator
     pub async fn query_pending_transfers(&self) -> Result<Vec<Transfer>, ServiceError> {
+        trace!("Querying all pending transfers");
         let response = self
             .coordinator_client
             .query_pending_transfers(operator_rpc::spark::TransferFilter::default())
@@ -1079,6 +1088,7 @@ impl<S: Signer> TransferService<S> {
         &self,
         transfer_id: &TransferId,
     ) -> Result<Option<Transfer>, ServiceError> {
+        trace!("Querying transfer with id: {}", transfer_id);
         let response = self
             .coordinator_client
             .query_all_transfers(TransferFilter {
