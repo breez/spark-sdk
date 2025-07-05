@@ -1,8 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{
-    DeriveInput, Ident, Result, Type, parse::Parse, parse::ParseStream, parse_macro_input,
-};
+use syn::{DeriveInput, Ident, Result, Type, parse::Parse, parse::ParseStream, parse_macro_input};
 
 struct FromAttr {
     source_type: Ident,
