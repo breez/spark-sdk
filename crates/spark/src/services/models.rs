@@ -269,10 +269,13 @@ impl TryFrom<operator_rpc::spark::TransferLeaf> for TransferLeaf {
             ServiceError::Generic("Invalid intermediate refund transaction".to_string())
         })?;
 
-        trace!("leaf signature: {:?}", leaf.signature);
-        let signature = match leaf.signature.is_empty() {
-            true => None,
-            false => Some(
+        let signature = match leaf.signature.len() {
+            0 => None,
+            64 => Some(
+                bitcoin::secp256k1::ecdsa::Signature::from_compact(&leaf.signature)
+                    .map_err(|_| ServiceError::Generic("Invalid signature format".to_string()))?,
+            ),
+            _ => Some(
                 bitcoin::secp256k1::ecdsa::Signature::from_der(&leaf.signature)
                     .map_err(|_| ServiceError::Generic("Invalid signature format".to_string()))?,
             ),
