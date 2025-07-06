@@ -43,7 +43,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let bitcoin_service = BitcoinService::new(config.network);
         let _service_provider = Arc::new(ServiceProvider::new(
             config.service_provider_config.clone(),
-            config.network,
             signer.clone(),
         ));
 

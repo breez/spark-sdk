@@ -1,9 +1,9 @@
 mod auth_provider;
 mod client;
 mod error;
+pub(crate) mod models;
 mod queries;
-pub(crate) mod types;
 
 pub(crate) use client::GraphQLClient;
 pub(crate) use error::GraphQLError;
-pub use types::*;
+pub use models::*;

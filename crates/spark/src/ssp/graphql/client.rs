@@ -5,11 +5,9 @@ use reqwest::header::HeaderMap;
 use serde::Serialize;
 use std::sync::Arc;
 
-use crate::core::Network;
 use crate::signer::Signer;
 use crate::ssp::graphql::auth_provider::AuthProvider;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
-use crate::ssp::graphql::queries::request_leaves_swap::UserLeafInput;
 use crate::ssp::graphql::queries::{
     self, claim_static_deposit, complete_coop_exit, complete_leaves_swap, coop_exit_fee_estimates,
     get_challenge, leaves_swap_fee_estimate, lightning_send_fee_estimate, request_coop_exit,
@@ -17,10 +15,13 @@ use crate::ssp::graphql::queries::{
     transfer, user_request, verify_challenge,
 };
 use crate::ssp::graphql::{
-    BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositRequest, CoopExitFeeEstimates,
-    CoopExitRequest, CurrencyAmount, GraphQLClientConfig, LeavesSwapRequest,
-    LightningReceiveRequest, LightningSendRequest, RequestCoopExit, RequestLeavesSwap,
-    RequestLightningReceive, RequestLightningSend, StaticDepositQuote, Transfer,
+    BitcoinNetwork, ClaimStaticDeposit, CoopExitFeeEstimates, CoopExitRequest, CurrencyAmount,
+    GraphQLClientConfig, LeavesSwapRequest, LightningReceiveRequest, LightningSendRequest,
+    StaticDepositQuote, Transfer,
+};
+use crate::ssp::{
+    ClaimStaticDepositInput, RequestCoopExitInput, RequestLeavesSwapInput,
+    RequestLightningReceiveInput, RequestLightningSendInput,
 };
 
 /// GraphQL client for interacting with the Spark server
@@ -32,7 +33,6 @@ where
     base_url: String,
     schema_endpoint: String,
     auth_provider: Arc<AuthProvider>,
-    network: Network,
     signer: S,
 }
 
@@ -40,8 +40,8 @@ impl<S> GraphQLClient<S>
 where
     S: Signer,
 {
-    /// Create a new GraphQLClient with the given configuration, network, and signer
-    pub fn new(config: GraphQLClientConfig, network: Network, signer: S) -> Self {
+    /// Create a new GraphQLClient with the given configuration, and signer
+    pub fn new(config: GraphQLClientConfig, signer: S) -> Self {
         let schema_endpoint = config
             .schema_endpoint
             .unwrap_or_else(|| String::from("graphql/spark/2025-03-19"));
@@ -54,7 +54,6 @@ where
             base_url: config.base_url,
             schema_endpoint,
             auth_provider: Arc::new(AuthProvider::new()),
-            network,
             signer,
         }
     }
@@ -286,19 +285,9 @@ where
     /// Request a cooperative exit
     pub async fn request_coop_exit(
         &self,
-        input: RequestCoopExit,
+        input: RequestCoopExitInput,
     ) -> GraphQLResult<CoopExitRequest> {
-        let vars = request_coop_exit::Variables {
-            input: request_coop_exit::RequestCoopExitInput {
-                leaf_external_ids: input.leaf_external_ids,
-                withdrawal_address: input.withdrawal_address,
-                idempotency_key: input.idempotency_key,
-                exit_speed: input.exit_speed,
-                withdraw_all: input.withdraw_all.unwrap_or(true),
-                fee_leaf_external_ids: input.fee_leaf_external_ids,
-                fee_quote_id: input.fee_quote_id,
-            },
-        };
+        let vars = request_coop_exit::Variables { input };
 
         let response = self
             .post_query::<queries::RequestCoopExit, _>(vars, true)
@@ -310,20 +299,9 @@ where
     /// Request lightning receive
     pub async fn request_lightning_receive(
         &self,
-        input: RequestLightningReceive,
+        input: RequestLightningReceiveInput,
     ) -> GraphQLResult<LightningReceiveRequest> {
-        let vars = request_lightning_receive::Variables {
-            input: request_lightning_receive::RequestLightningReceiveInput {
-                amount_sats: input.amount_sats,
-                network: input.network,
-                payment_hash: input.payment_hash,
-                expiry_secs: input.expiry_secs.map(|s| s as i64),
-                memo: input.memo,
-                include_spark_address: input.include_spark_address.unwrap_or(false),
-                receiver_identity_pubkey: input.receiver_identity_pubkey,
-                description_hash: input.description_hash,
-            },
-        };
+        let vars = request_lightning_receive::Variables { input };
 
         let response = self
             .post_query::<queries::RequestLightningReceive, _>(vars, true)
@@ -335,15 +313,9 @@ where
     /// Request lightning send
     pub async fn request_lightning_send(
         &self,
-        input: RequestLightningSend,
+        input: RequestLightningSendInput,
     ) -> GraphQLResult<LightningSendRequest> {
-        let vars = request_lightning_send::Variables {
-            input: request_lightning_send::RequestLightningSendInput {
-                encoded_invoice: input.encoded_invoice,
-                idempotency_key: input.idempotency_key,
-                amount_sats: input.amount_sats,
-            },
-        };
+        let vars = request_lightning_send::Variables { input };
 
         let response = self
             .post_query::<queries::RequestLightningSend, _>(vars, true)
@@ -355,27 +327,9 @@ where
     /// Request a leaves swap
     pub async fn request_leaves_swap(
         &self,
-        input: RequestLeavesSwap,
+        input: RequestLeavesSwapInput,
     ) -> GraphQLResult<LeavesSwapRequest> {
-        let vars = request_leaves_swap::Variables {
-            input: request_leaves_swap::RequestLeavesSwapInput {
-                adaptor_pubkey: input.adaptor_pubkey,
-                total_amount_sats: input.total_amount_sats,
-                target_amount_sats: input.target_amount_sats,
-                fee_sats: input.fee_sats,
-                user_leaves: input
-                    .user_leaves
-                    .into_iter()
-                    .map(|l| UserLeafInput {
-                        leaf_id: l.leaf_id,
-                        raw_unsigned_refund_transaction: l.raw_unsigned_refund_transaction,
-                        adaptor_added_signature: l.adaptor_added_signature,
-                    })
-                    .collect(),
-                idempotency_key: input.idempotency_key,
-                target_amount_sats_list: input.target_amount_sats_list,
-            },
-        };
+        let vars = request_leaves_swap::Variables { input };
 
         let response = self
             .post_query::<queries::RequestLeavesSwap, _>(vars, true)
@@ -524,21 +478,9 @@ where
     /// Claim static deposit
     pub async fn claim_static_deposit(
         &self,
-        input: ClaimStaticDepositRequest,
+        input: ClaimStaticDepositInput,
     ) -> GraphQLResult<ClaimStaticDeposit> {
-        let vars = claim_static_deposit::Variables {
-            input: claim_static_deposit::ClaimStaticDepositInput {
-                transaction_id: input.transaction_id,
-                output_index: input.output_index as i64,
-                network: input.network,
-                request_type: input.request_type,
-                credit_amount_sats: input.credit_amount_sats,
-                max_fee_sats: input.max_fee_sats,
-                deposit_secret_key: input.deposit_secret_key,
-                signature: input.signature,
-                quote_signature: input.quote_signature,
-            },
-        };
+        let vars = claim_static_deposit::Variables { input };
 
         let response = self
             .post_query::<queries::ClaimStaticDeposit, _>(vars, true)

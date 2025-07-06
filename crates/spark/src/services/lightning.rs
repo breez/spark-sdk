@@ -9,7 +9,8 @@ use crate::operator::rpc::spark::{
 use crate::services::{ServiceError, TransferId};
 use crate::signer::{PrivateKeySource, SecretToSplit};
 use crate::ssp::{
-    LightningReceiveRequestStatus, RequestLightningReceive, RequestLightningSend, ServiceProvider,
+    LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
+    ServiceProvider,
 };
 use crate::utils::refund as refund_utils;
 use crate::{signer::Signer, tree::TreeNode};
@@ -178,7 +179,7 @@ where
         let payment_hash = sha256::Hash::hash(&preimage);
         let invoice = self
             .ssp_client
-            .request_lightning_receive(RequestLightningReceive {
+            .request_lightning_receive(RequestLightningReceiveInput {
                 receiver_identity_pubkey: Some(
                     self.signer
                         .get_identity_public_key()?
@@ -190,9 +191,9 @@ where
                 network: self.network.into(),
                 payment_hash: payment_hash.encode_hex(),
                 description_hash: None,
-                expiry_secs: Some(expiry),
+                expiry_secs: Some(expiry.into()),
                 memo: memo,
-                include_spark_address: Some(false),
+                include_spark_address: false,
             })
             .await?;
 
@@ -290,7 +291,7 @@ where
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
         let res = self
             .ssp_client
-            .request_lightning_send(RequestLightningSend {
+            .request_lightning_send(RequestLightningSendInput {
                 encoded_invoice: swap.bolt11_invoice.to_string(),
                 idempotency_key: decoded_invoice.payment_hash().encode_hex(),
                 amount_sats: None,

@@ -1,13 +1,12 @@
 use bitcoin::secp256k1::PublicKey;
 
 use crate::{
-    Network,
     signer::Signer,
     ssp::{
-        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositRequest, CoopExitFeeEstimates,
-        CurrencyAmount, LeavesSwapRequest, RequestCoopExit, RequestLeavesSwap,
-        RequestLightningReceive, RequestLightningSend, ServiceProviderConfig, StaticDepositQuote,
-        Transfer,
+        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CoopExitFeeEstimates,
+        CurrencyAmount, LeavesSwapRequest, RequestCoopExitInput, RequestLeavesSwapInput,
+        RequestLightningReceiveInput, RequestLightningSendInput, ServiceProviderConfig,
+        StaticDepositQuote, Transfer,
         error::ServiceProviderResult,
         graphql::{CoopExitRequest, GraphQLClient, LightningReceiveRequest, LightningSendRequest},
     },
@@ -25,11 +24,11 @@ impl<S> ServiceProvider<S>
 where
     S: Signer,
 {
-    /// Create a new GraphQLClient with the given configuration, network, and signer
-    pub fn new(config: ServiceProviderConfig, network: Network, signer: S) -> Self {
+    /// Create a new GraphQLClient with the given configuration and signer
+    pub fn new(config: ServiceProviderConfig, signer: S) -> Self {
         Self {
             identity_public_key: config.identity_public_key,
-            gql_client: GraphQLClient::new(config.into(), network, signer),
+            gql_client: GraphQLClient::new(config.into(), signer),
         }
     }
 
@@ -84,7 +83,7 @@ where
     /// Request a cooperative exit
     pub async fn request_coop_exit(
         &self,
-        input: RequestCoopExit,
+        input: RequestCoopExitInput,
     ) -> ServiceProviderResult<CoopExitRequest> {
         Ok(self.gql_client.request_coop_exit(input).await?)
     }
@@ -92,7 +91,7 @@ where
     /// Request lightning receive
     pub async fn request_lightning_receive(
         &self,
-        input: RequestLightningReceive,
+        input: RequestLightningReceiveInput,
     ) -> ServiceProviderResult<LightningReceiveRequest> {
         Ok(self.gql_client.request_lightning_receive(input).await?)
     }
@@ -100,7 +99,7 @@ where
     /// Request lightning send
     pub async fn request_lightning_send(
         &self,
-        input: RequestLightningSend,
+        input: RequestLightningSendInput,
     ) -> ServiceProviderResult<LightningSendRequest> {
         Ok(self.gql_client.request_lightning_send(input).await?)
     }
@@ -108,7 +107,7 @@ where
     /// Request leaves swap
     pub async fn request_leaves_swap(
         &self,
-        input: RequestLeavesSwap,
+        input: RequestLeavesSwapInput,
     ) -> ServiceProviderResult<LeavesSwapRequest> {
         Ok(self.gql_client.request_leaves_swap(input).await?)
     }
@@ -184,7 +183,7 @@ where
     /// Claim static deposit
     pub async fn claim_static_deposit(
         &self,
-        input: ClaimStaticDepositRequest,
+        input: ClaimStaticDepositInput,
     ) -> ServiceProviderResult<ClaimStaticDeposit> {
         Ok(self.gql_client.claim_static_deposit(input).await?)
     }

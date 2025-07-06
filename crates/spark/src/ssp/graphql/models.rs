@@ -65,6 +65,13 @@ use crate::ssp::graphql::queries::user_request::{
     UserRequestFragment as UserRequestUserRequestFragment,
 };
 
+pub use crate::ssp::graphql::queries::claim_static_deposit::ClaimStaticDepositInput;
+pub use crate::ssp::graphql::queries::request_coop_exit::RequestCoopExitInput;
+pub use crate::ssp::graphql::queries::request_leaves_swap::RequestLeavesSwapInput;
+pub use crate::ssp::graphql::queries::request_leaves_swap::UserLeafInput;
+pub use crate::ssp::graphql::queries::request_lightning_receive::RequestLightningReceiveInput;
+pub use crate::ssp::graphql::queries::request_lightning_send::RequestLightningSendInput;
+
 /// Config for creating a GraphQLClient
 #[derive(Debug, Clone)]
 pub(crate) struct GraphQLClientConfig {
@@ -300,14 +307,6 @@ pub struct SwapLeaf {
     pub adaptor_signed_signature: String,
 }
 
-/// UserLeaf structure
-#[derive(Debug, Clone, Serialize)]
-pub struct UserLeaf {
-    pub leaf_id: String,
-    pub raw_unsigned_refund_transaction: String,
-    pub adaptor_added_signature: String,
-}
-
 /// LeavesSwapRequest structure
 #[derive(Debug, Clone, Deserialize)]
 #[spark_macros::derive_from(CompleteLeavesSwapLeavesSwapRequestFragment)]
@@ -348,12 +347,6 @@ pub struct CoopExitRequest {
     pub transfer: Option<Transfer>,
 }
 
-/// Lightning send fee estimate output
-#[derive(Debug, Clone, Deserialize)]
-pub struct LightningSendFeeEstimateOutput {
-    pub fee_estimate: CurrencyAmount,
-}
-
 /// CoopExitFeeEstimate structure
 #[derive(Debug, Clone, Deserialize)]
 #[spark_macros::derive_from(CoopExitFeeEstimateFragment)]
@@ -369,12 +362,6 @@ pub struct CoopExitFeeEstimates {
     pub speed_fast: Option<CoopExitFeeEstimate>,
     pub speed_medium: Option<CoopExitFeeEstimate>,
     pub speed_slow: Option<CoopExitFeeEstimate>,
-}
-
-/// Leaves swap fee estimate output
-#[derive(Debug, Clone, Deserialize)]
-pub struct LeavesSwapFeeEstimateOutput {
-    pub fee_estimate: CurrencyAmount,
 }
 
 /// Static deposit quote output
@@ -393,63 +380,4 @@ pub struct StaticDepositQuote {
 #[spark_macros::derive_from(ClaimStaticDepositClaimStaticDeposit)]
 pub struct ClaimStaticDeposit {
     pub transfer_id: String,
-}
-
-/// Request lightning receive input
-#[derive(Debug, Clone)]
-pub struct RequestLightningReceive {
-    pub amount_sats: u64,
-    pub network: BitcoinNetwork,
-    pub payment_hash: String,
-    pub expiry_secs: Option<u32>,
-    pub memo: Option<String>,
-    pub include_spark_address: Option<bool>,
-    pub receiver_identity_pubkey: Option<String>,
-    pub description_hash: Option<String>,
-}
-
-/// Request lightning send input
-#[derive(Debug, Clone)]
-pub struct RequestLightningSend {
-    pub encoded_invoice: String,
-    pub idempotency_key: String,
-    pub amount_sats: Option<u64>,
-}
-
-/// Request leaves swap input
-#[derive(Debug, Clone)]
-pub struct RequestLeavesSwap {
-    pub adaptor_pubkey: String,
-    pub total_amount_sats: u64,
-    pub target_amount_sats: u64,
-    pub fee_sats: u64,
-    pub user_leaves: Vec<UserLeaf>,
-    pub idempotency_key: String,
-    pub target_amount_sats_list: Option<Vec<u64>>,
-}
-
-/// Request cooperative exit input
-#[derive(Debug, Clone)]
-pub struct RequestCoopExit {
-    pub leaf_external_ids: Vec<String>,
-    pub withdrawal_address: String,
-    pub idempotency_key: String,
-    pub exit_speed: ExitSpeed,
-    pub withdraw_all: Option<bool>,
-    pub fee_leaf_external_ids: Option<Vec<String>>,
-    pub fee_quote_id: Option<String>,
-}
-
-/// Claim static deposit input
-#[derive(Debug, Clone)]
-pub struct ClaimStaticDepositRequest {
-    pub transaction_id: String,
-    pub output_index: u32,
-    pub network: BitcoinNetwork,
-    pub request_type: ClaimStaticDepositRequestType,
-    pub credit_amount_sats: Option<u64>,
-    pub max_fee_sats: Option<u64>,
-    pub deposit_secret_key: String,
-    pub signature: String,
-    pub quote_signature: String,
 }
