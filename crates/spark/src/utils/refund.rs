@@ -36,7 +36,7 @@ pub fn create_refund_tx(
     let refund_tx = leaf.refund_tx.clone();
 
     let mut new_refund_tx = bitcoin::Transaction {
-        version: Version::TWO,
+        version: Version::non_standard(3),
         lock_time: LockTime::ZERO,
         input: vec![],
         output: vec![],
@@ -126,6 +126,6 @@ pub async fn sign_refunds<S: Signer>(
 fn ephemeral_anchor_output() -> bitcoin::TxOut {
     bitcoin::TxOut {
         value: bitcoin::Amount::from_sat(0),
-        script_pubkey: bitcoin::ScriptBuf::from_bytes(vec![bitcoin::opcodes::OP_TRUE.to_u8()]),
+        script_pubkey: bitcoin::ScriptBuf::from_bytes(vec![0x51, 0x02, 0x4e, 0x73]),
     }
 }
