@@ -41,7 +41,7 @@ spark_config:
       -
         id: 2
         identifier: 0000000000000000000000000000000000000000000000000000000000000003
-        address: https://2.spark.lightspark.com
+        address: https://2.spark.flashnet.xyz
         identity_public_key: 022eda13465a59205413086130a65dc0ed1b8f8e51937043161f8be0c369b1a410
 
   service_provider_config:
