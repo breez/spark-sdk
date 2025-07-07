@@ -1145,11 +1145,8 @@ fn find_share(
 
     for share in shares {
         if share.secret_share.index == target_share_index {
-            trace!("{:?} == {:?}", share.secret_share.index, target_share_index);
             return Some(share);
         }
-
-        trace!("{:?} != {:?}", share.secret_share.index, target_share_index);
     }
 
     trace!(
