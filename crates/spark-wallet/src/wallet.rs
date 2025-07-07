@@ -16,7 +16,10 @@ use spark::{
 };
 use tracing::trace;
 
-use crate::{leaf::WalletLeaf, model::WalletTransfer};
+use crate::{
+    leaf::WalletLeaf,
+    model::{WalletInfo, WalletTransfer},
+};
 
 use super::{SparkWalletConfig, SparkWalletError};
 
@@ -296,6 +299,13 @@ impl<S: Signer + Clone> SparkWallet<S> {
         // TODO: Optimize leaves if optimize is true and the transfer type is not counter swap
 
         Ok(result_nodes)
+    }
+
+    pub async fn get_info(&self) -> Result<WalletInfo, SparkWalletError> {
+        Ok(WalletInfo {
+            identity_public_key: self.signer.get_identity_public_key()?,
+            network: self.config.network,
+        })
     }
 
     pub async fn get_spark_address(&self) -> Result<SparkAddress, SparkWalletError> {

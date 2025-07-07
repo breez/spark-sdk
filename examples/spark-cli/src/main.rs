@@ -61,6 +61,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         command::Command::Deposit(deposit_command) => {
             deposit::handle_command(&config, &wallet, deposit_command).await?
         }
+        command::Command::Info => {
+            let info = wallet.get_info().await?;
+            println!("{}", serde_json::to_string_pretty(&info)?);
+        }
         command::Command::Leaves(leaves_command) => {
             leaves::handle_command(&config, &wallet, leaves_command).await?
         }

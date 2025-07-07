@@ -5,6 +5,8 @@ use spark_wallet::SparkAddress;
 pub enum Command {
     #[command(subcommand)]
     Deposit(DepositCommand),
+    /// Prints the wallet's info.
+    Info,
     #[command(subcommand)]
     Leaves(LeavesCommand),
     #[command(subcommand)]

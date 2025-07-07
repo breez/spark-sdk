@@ -3,6 +3,7 @@ use std::time::SystemTime;
 use bitcoin::{Transaction, secp256k1::PublicKey};
 use serde::{Deserialize, Serialize};
 use spark::{
+    Network,
     services::{Transfer, TransferId, TransferLeaf},
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
 };
@@ -30,6 +31,12 @@ pub enum TransferType {
     UtxoSwap,
     Swap,
     CounterSwap,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct WalletInfo {
+    pub identity_public_key: PublicKey,
+    pub network: Network,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
