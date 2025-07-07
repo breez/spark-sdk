@@ -1,0 +1,297 @@
+# Fragments
+
+fragment ClaimStaticDepositFragment on ClaimStaticDeposit {
+  __typename
+  id
+  created_at
+  updated_at
+  network
+  deposit_status: status
+  credit_amount {
+    ...CurrencyAmountFragment
+  }
+  max_fee {
+    ...CurrencyAmountFragment
+  }
+  transaction_id
+  output_index
+  bitcoin_network
+  transfer_spark_id
+}
+
+fragment CoopExitFeeEstimateFragment on CoopExitFeeEstimate {
+  user_fee {
+    ...CurrencyAmountFragment
+  }
+  l1_broadcast_fee {
+    ...CurrencyAmountFragment
+  }
+}
+
+fragment CoopExitRequestFragment on CoopExitRequest {
+  __typename
+  id
+  created_at
+  updated_at
+  network
+  exit_status: status
+  fee {
+    ...CurrencyAmountFragment
+  }
+  l1_broadcast_fee {
+    ...CurrencyAmountFragment
+  }
+  exit_expired_at: expires_at
+  raw_connector_transaction
+  raw_coop_exit_transaction
+  coop_exit_txid
+  transfer {
+    ...TransferFragment
+  }
+}
+
+fragment CurrencyAmountFragment on CurrencyAmount {
+  __typename
+  original_value
+  original_unit
+  preferred_currency_unit
+  preferred_currency_value_rounded
+  preferred_currency_value_approx
+}
+
+fragment LeavesSwapRequestFragment on LeavesSwapRequest {
+  __typename
+  id
+  created_at
+  updated_at
+  network
+  swap_status: status
+  total_amount {
+    ...CurrencyAmountFragment
+  }
+  target_amount {
+    ...CurrencyAmountFragment
+  }
+  fee {
+    ...CurrencyAmountFragment
+  }
+  inbound_transfer {
+    ...TransferFragment
+  }
+  outbound_transfer {
+    ...TransferFragment
+  }
+  swap_expired_at: expires_at
+  swap_leaves {
+    ...SwapLeafFragment
+  }
+}
+
+fragment InvoiceFragment on Invoice {
+  __typename
+  encoded_invoice
+  bitcoin_network
+  payment_hash
+  amount {
+    ...CurrencyAmountFragment
+  }
+  created_at
+  invoice_expired_at: expires_at
+  memo
+}
+
+fragment LightningReceiveRequestFragment on LightningReceiveRequest {
+  __typename
+  id
+  created_at
+  updated_at
+  network
+  lightning_request_status: status
+  invoice {
+    ...InvoiceFragment
+  }
+  transfer {
+    ...TransferFragment
+  }
+  lightning_receive_payment_preimage: payment_preimage
+  receiver_identity_public_key
+}
+
+fragment LightningSendRequestFragment on LightningSendRequest {
+  __typename
+  id
+  created_at
+  updated_at
+  network
+  status
+  encoded_invoice
+  fee {
+    ...CurrencyAmountFragment
+  }
+  idempotency_key
+  transfer {
+    ...TransferFragment
+  }
+  lightning_send_payment_preimage: payment_preimage
+}
+
+fragment SwapLeafFragment on SwapLeaf {
+  __typename
+  leaf_id
+  raw_unsigned_refund_transaction
+  adaptor_signed_signature
+}
+
+fragment TransferFragment on Transfer {
+  __typename
+  total_amount {
+    ...CurrencyAmountFragment
+  }
+  spark_id
+  user_request {
+   ...UserRequestFragment
+  }
+}
+
+fragment UserRequestFragment on UserRequest {
+  __typename
+  id
+}
+
+# Mutations
+
+mutation ClaimStaticDeposit($input: ClaimStaticDepositInput!) {
+  claim_static_deposit(input: $input) {
+    transfer_id
+  }
+}
+
+mutation CompleteCoopExit($input: CompleteCoopExitInput!) {
+  complete_coop_exit(input: $input) {
+    request {
+      ...CoopExitRequestFragment
+    }
+  }
+}
+
+mutation CompleteLeavesSwap($input: CompleteLeavesSwapInput!) {
+  complete_leaves_swap(input: $input) {
+    request {
+      ...LeavesSwapRequestFragment
+    }
+  }
+}
+
+mutation GetChallenge($input: GetChallengeInput!) {
+  get_challenge(input: $input) {
+    protected_challenge
+  }
+}
+
+mutation RequestCoopExit($input: RequestCoopExitInput!) {
+  request_coop_exit(input: $input) {
+    request {
+      ...CoopExitRequestFragment
+    }
+  }
+}
+
+mutation RequestLeavesSwap($input: RequestLeavesSwapInput!) {
+  request_leaves_swap(input: $input) {
+    request {
+      ...LeavesSwapRequestFragment
+    }
+  }
+}
+
+mutation RequestLightningReceive($input: RequestLightningReceiveInput!) {
+  request_lightning_receive(input: $input) {
+    request {
+      ...LightningReceiveRequestFragment
+    }
+  }
+}
+
+mutation RequestLightningSend($input: RequestLightningSendInput!) {
+  request_lightning_send(input: $input) {
+    request {
+      ...LightningSendRequestFragment
+    }
+  }
+}
+
+mutation VerifyChallenge($input: VerifyChallengeInput!) {
+  verify_challenge(input: $input) {
+    valid_until
+    session_token
+  }
+}
+
+# Queries
+
+query CoopExitFeeEstimates($input: CoopExitFeeEstimatesInput!) {
+  coop_exit_fee_estimates(input: $input) {
+    speed_fast {
+      ...CoopExitFeeEstimateFragment
+    }
+    speed_medium {
+      ...CoopExitFeeEstimateFragment
+    }
+    speed_slow {
+      ...CoopExitFeeEstimateFragment
+    }
+  }
+}
+
+query LeavesSwapFeeEstimate($input: LeavesSwapFeeEstimateInput!) {
+  leaves_swap_fee_estimate(input: $input) {
+    fee_estimate {
+      ...CurrencyAmountFragment
+    }
+  }
+}
+
+query LightningSendFeeEstimate($input: LightningSendFeeEstimateInput!) {
+  lightning_send_fee_estimate(input: $input) {
+    fee_estimate {
+      ...CurrencyAmountFragment
+    }
+  }
+}
+
+query StaticDepositQuote($input: StaticDepositQuoteInput!) {
+  static_deposit_quote(input: $input) {
+    transaction_id
+    output_index
+    network
+    credit_amount_sats
+    signature
+  }
+}
+
+query Transfer($transfer_spark_id: UUID!) {
+  transfer(transfer_spark_id: $transfer_spark_id) {
+    ...TransferFragment
+  }
+}
+
+query UserRequest($request_id: ID!) {
+  user_request(request_id: $request_id) {
+    __typename
+    ... on ClaimStaticDeposit {
+      ...ClaimStaticDepositFragment
+    }
+    ... on CoopExitRequest {
+      ...CoopExitRequestFragment
+    }
+    ... on LeavesSwapRequest {
+      ...LeavesSwapRequestFragment
+    }
+    ... on LightningReceiveRequest {
+      ...LightningReceiveRequestFragment
+    }
+    ... on LightningSendRequest {
+      ...LightningSendRequestFragment
+    }
+  }
+}

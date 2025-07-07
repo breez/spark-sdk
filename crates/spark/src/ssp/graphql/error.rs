@@ -2,8 +2,6 @@ use thiserror::Error;
 
 use crate::signer::SignerError;
 
-use super::types::GraphQLErrorObject;
-
 /// Alias for Result with GraphQLError as the error type
 pub type GraphQLResult<T> = std::result::Result<T, GraphQLError>;
 
@@ -43,7 +41,7 @@ impl GraphQLError {
     }
 
     /// Creates a new GraphQL error from GraphQL error objects
-    pub fn from_graphql_errors(errors: &[GraphQLErrorObject]) -> Self {
+    pub fn from_graphql_errors(errors: &Vec<graphql_client::Error>) -> Self {
         let error_messages: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
         Self::GraphQL(error_messages.join(", "))
     }

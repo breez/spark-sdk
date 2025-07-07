@@ -77,7 +77,7 @@ impl TryFrom<crate::ssp::LightningSendRequest> for LightningSendPayment {
             idempotency_key: value.idempotency_key,
             status: value.status,
             transfer_id,
-            payment_preimage: value.payment_preimage,
+            payment_preimage: value.lightning_send_payment_preimage,
         })
     }
 }
@@ -113,7 +113,7 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
             created_at: value.created_at.timestamp(),
             updated_at: value.updated_at.timestamp(),
             network: value.network.into(),
-            status: value.status.into(),
+            status: value.lightning_request_status.into(),
             invoice: value.invoice.encoded_invoice,
             transfer_id,
             transfer_amount_sat: match value.transfer {
@@ -124,7 +124,7 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
                 ),
                 None => None,
             },
-            payment_preimage: value.payment_preimage,
+            payment_preimage: value.lightning_receive_payment_preimage,
         })
     }
 }
@@ -189,11 +189,11 @@ where
                 ),
                 amount_sats,
                 network: self.network.into(),
-                payment_hash: Some(payment_hash.encode_hex()),
+                payment_hash: payment_hash.encode_hex(),
                 description_hash: None,
-                expiry_secs: Some(expiry),
+                expiry_secs: Some(expiry.into()),
                 memo: memo,
-                include_spark_address: Some(false),
+                include_spark_address: false,
             })
             .await?;
 
@@ -293,7 +293,8 @@ where
             .ssp_client
             .request_lightning_send(RequestLightningSendInput {
                 encoded_invoice: swap.bolt11_invoice.to_string(),
-                idempotency_key: Some(decoded_invoice.payment_hash().encode_hex()),
+                idempotency_key: decoded_invoice.payment_hash().encode_hex(),
+                amount_sats: None,
             })
             .await?;
 
@@ -318,11 +319,10 @@ where
 
         let fee_estimate = self
             .ssp_client
-            .get_lightning_send_fee_estimate(invoice, amount_sats)
+            .get_lightning_send_fee_estimate(invoice, Some(amount_sats))
             .await?;
 
         let fee_sat = fee_estimate
-            .fee_estimate
             .as_sats()
             .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))?;
         if let Some(max_fee_sat) = max_fee_sat {
@@ -343,9 +343,8 @@ where
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
         let amount_sat = get_invoice_amount_sats(&decoded_invoice)?;
         self.ssp_client
-            .get_lightning_send_fee_estimate(invoice, amount_sat)
+            .get_lightning_send_fee_estimate(invoice, Some(amount_sat))
             .await?
-            .fee_estimate
             .as_sats()
             .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))
     }
@@ -353,19 +352,25 @@ where
     pub async fn get_lightning_send_payment(
         &self,
         id: &str,
-    ) -> Result<LightningSendPayment, ServiceError> {
+    ) -> Result<Option<LightningSendPayment>, ServiceError> {
         let res = self.ssp_client.get_lightning_send_request(id).await?;
 
-        res.try_into()
+        match res {
+            Some(request) => Ok(Some(request.try_into()?)),
+            None => Ok(None),
+        }
     }
 
     pub async fn get_lightning_receive_payment(
         &self,
         id: &str,
-    ) -> Result<LightningReceivePayment, ServiceError> {
+    ) -> Result<Option<LightningReceivePayment>, ServiceError> {
         let res = self.ssp_client.get_lightning_receive_request(id).await?;
 
-        res.try_into()
+        match res {
+            Some(request) => Ok(Some(request.try_into()?)),
+            None => Ok(None),
+        }
     }
 
     async fn swap_nodes_for_preimage(

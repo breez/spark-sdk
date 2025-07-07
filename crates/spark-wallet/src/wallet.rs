@@ -43,7 +43,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let bitcoin_service = BitcoinService::new(config.network);
         let _service_provider = Arc::new(ServiceProvider::new(
             config.service_provider_config.clone(),
-            config.network,
             signer.clone(),
         ));
 
@@ -180,7 +179,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
     pub async fn fetch_lightning_send_payment(
         &self,
         id: &str,
-    ) -> Result<LightningSendPayment, SparkWalletError> {
+    ) -> Result<Option<LightningSendPayment>, SparkWalletError> {
         Ok(self
             .lightning_service
             .get_lightning_send_payment(id)
@@ -190,7 +189,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
     pub async fn fetch_lightning_receive_payment(
         &self,
         id: &str,
-    ) -> Result<LightningReceivePayment, SparkWalletError> {
+    ) -> Result<Option<LightningReceivePayment>, SparkWalletError> {
         Ok(self
             .lightning_service
             .get_lightning_receive_payment(id)

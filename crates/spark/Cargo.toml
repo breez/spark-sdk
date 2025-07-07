@@ -12,6 +12,7 @@ ecies.workspace = true
 frost-core.workspace = true
 frost-secp256k1-tr.workspace = true
 futures.workspace = true
+graphql_client.workspace = true
 hex.workspace = true
 k256 = { workspace = true, features = ["arithmetic", "schnorr", "ecdsa"] }
 prost.workspace = true

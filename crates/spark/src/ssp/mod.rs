@@ -6,7 +6,7 @@ mod service_provider;
 
 use bitcoin::secp256k1::PublicKey;
 pub use error::ServiceProviderError;
-pub use graphql::types::*;
+pub use graphql::models::*;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 pub use service_provider::ServiceProvider;
@@ -36,9 +36,9 @@ impl From<ServiceProviderConfig> for GraphQLClientConfig {
 // TODO: handle the case where the currency is not sats
 impl CurrencyAmount {
     pub fn as_sats(&self) -> Result<u64, ServiceProviderError> {
-        match self.original_unit.as_str() {
-            "MILLISATOSHI" => Ok(self.original_value.div_ceil(1000)),
-            "SATOSHI" => Ok(self.original_value),
+        match self.original_unit {
+            CurrencyUnit::Millisatoshi => Ok(self.original_value.div_ceil(1000)),
+            CurrencyUnit::Satoshi => Ok(self.original_value),
             _ => Err(ServiceProviderError::ParseError(
                 "Unsupported currency unit".to_string(),
             )),
