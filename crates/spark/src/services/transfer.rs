@@ -2,13 +2,13 @@ use std::time::Duration;
 use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use crate::Network;
+use crate::operator::rpc::spark::TransferFilter;
 use crate::operator::rpc::spark::transfer_filter::Participant;
-use crate::operator::rpc::spark::{TransferFilter, TransferType};
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{
     LeafKeyTweak, Transfer, map_public_keys, map_signature_shares, map_signing_nonce_commitments,
 };
-use crate::services::{ProofMap, TransferId};
+use crate::services::{ProofMap, TransferId, TransferStatus};
 use crate::signer::{PrivateKeySource, SecretToSplit, VerifiableSecretShare};
 use crate::utils::refund::{create_refund_tx, sign_refunds};
 
@@ -597,8 +597,7 @@ impl<S: Signer> TransferService<S> {
     ) -> Result<Vec<TreeNode>, ServiceError> {
         trace!("Claiming transfer with leaves: {:?}", leaves_to_claim);
         // Check if we need to apply key tweaks first
-        let proof_map = if transfer.status == operator_rpc::spark::TransferStatus::SenderKeyTweaked
-        {
+        let proof_map = if transfer.status == TransferStatus::SenderKeyTweaked {
             Some(
                 self.claim_transfer_tweak_keys(transfer, &leaves_to_claim)
                     .await?,
@@ -1054,10 +1053,10 @@ impl<S: Signer> TransferService<S> {
                 limit: limit.unwrap_or(100) as i64,
                 offset: offset.unwrap_or(0) as i64,
                 types: vec![
-                    TransferType::Transfer.into(),
-                    TransferType::PreimageSwap.into(),
-                    TransferType::CooperativeExit.into(),
-                    TransferType::UtxoSwap.into(),
+                    operator_rpc::spark::TransferType::Transfer.into(),
+                    operator_rpc::spark::TransferType::PreimageSwap.into(),
+                    operator_rpc::spark::TransferType::CooperativeExit.into(),
+                    operator_rpc::spark::TransferType::UtxoSwap.into(),
                 ],
                 ..Default::default()
             })
