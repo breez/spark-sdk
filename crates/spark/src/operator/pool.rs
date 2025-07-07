@@ -42,8 +42,10 @@ impl OperatorPool {
     }
 
     /// Returns an iterator over all operators except the coordinator.
-    pub fn get_signing_operators(&self) -> impl Iterator<Item = &Operator> {
-        self.operators.iter()
+    pub fn get_non_coordinator_operators(&self) -> impl Iterator<Item = &Operator> {
+        self.operators
+            .iter()
+            .filter(|op| op.id != self.coordinator_index)
     }
 
     /// Returns the operator at the given index.
