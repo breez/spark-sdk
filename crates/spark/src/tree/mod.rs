@@ -13,7 +13,7 @@ use bitcoin::{Sequence, Transaction, secp256k1::PublicKey};
 use frost_secp256k1_tr::Identifier;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum TreeNodeStatus {
     /// Creating is the status of a tree node that is under creation.
     Creating,

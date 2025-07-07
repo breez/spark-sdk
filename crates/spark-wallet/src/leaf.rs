@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
-use spark::tree::{TreeNode, TreeNodeId};
+use spark::tree::{TreeNode, TreeNodeId, TreeNodeStatus};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WalletLeaf {
     pub id: TreeNodeId,
     pub value: u64,
+    pub status: TreeNodeStatus,
 }
 
 impl From<TreeNode> for WalletLeaf {
@@ -12,6 +13,7 @@ impl From<TreeNode> for WalletLeaf {
         Self {
             id: node.id,
             value: node.value,
+            status: node.status,
         }
     }
 }
