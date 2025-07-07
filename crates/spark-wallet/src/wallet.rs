@@ -273,7 +273,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
     /// Claims all pending transfers.
     pub async fn claim_pending_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
         trace!("Claiming all pending transfers");
-        let transfers = self.transfer_service.query_pending_transfers().await?;
+        let transfers = self.transfer_service.query_pending_receiver_transfers().await?;
         trace!("There are {} pending transfers", transfers.len());
         for transfer in &transfers {
             self.claim_transfer(transfer, false, false).await?;

@@ -1085,6 +1085,26 @@ impl<S: Signer> TransferService<S> {
             .collect::<Result<Vec<Transfer>, _>>()?)
     }
 
+        /// Queries pending transfers from the operator
+    pub async fn query_pending_receiver_transfers(&self) -> Result<Vec<Transfer>, ServiceError> {
+        trace!("Querying all pending receiver transfers");
+        let response = self
+            .coordinator_client
+            .query_pending_transfers(operator_rpc::spark::TransferFilter {
+                participant: Some(Participant::ReceiverIdentityPublicKey(
+                    self.signer.get_identity_public_key()?.serialize().to_vec(),
+                )),
+                ..Default::default()
+            })
+            .await?;
+
+        Ok(response
+            .transfers
+            .into_iter()
+            .map(|t| t.try_into())
+            .collect::<Result<Vec<Transfer>, _>>()?)
+    }
+
     pub async fn query_transfer(
         &self,
         transfer_id: &TransferId,
