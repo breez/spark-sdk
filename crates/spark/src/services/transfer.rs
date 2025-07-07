@@ -1069,7 +1069,10 @@ impl<S: Signer> TransferService<S> {
     }
 
     /// Queries pending transfers from the operator
-    pub async fn query_pending_transfers(&self) -> Result<Vec<Transfer>, ServiceError> {
+    pub async fn query_pending_transfers(
+        &self,
+        paging: &PagingFilter,
+    ) -> Result<Vec<Transfer>, ServiceError> {
         trace!("Querying all pending transfers");
         let response = self
             .coordinator_client
@@ -1077,6 +1080,8 @@ impl<S: Signer> TransferService<S> {
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
                 )),
+                offset: paging.offset as i64,
+                limit: paging.limit as i64,
                 ..Default::default()
             })
             .await?;
@@ -1089,7 +1094,10 @@ impl<S: Signer> TransferService<S> {
     }
 
     /// Queries pending transfers from the operator
-    pub async fn query_pending_receiver_transfers(&self) -> Result<Vec<Transfer>, ServiceError> {
+    pub async fn query_pending_receiver_transfers(
+        &self,
+        paging: &PagingFilter,
+    ) -> Result<Vec<Transfer>, ServiceError> {
         trace!("Querying all pending receiver transfers");
         let response = self
             .coordinator_client
@@ -1097,6 +1105,8 @@ impl<S: Signer> TransferService<S> {
                 participant: Some(Participant::ReceiverIdentityPublicKey(
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
                 )),
+                offset: paging.offset as i64,
+                limit: paging.limit as i64,
                 ..Default::default()
             })
             .await?;
