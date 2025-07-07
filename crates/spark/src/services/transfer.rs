@@ -1075,7 +1075,12 @@ impl<S: Signer> TransferService<S> {
         trace!("Querying all pending transfers");
         let response = self
             .coordinator_client
-            .query_pending_transfers(operator_rpc::spark::TransferFilter::default())
+            .query_pending_transfers(operator_rpc::spark::TransferFilter {
+                participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
+                    self.signer.get_identity_public_key()?.serialize().to_vec(),
+                )),
+                ..Default::default()
+            })
             .await?;
 
         Ok(response
