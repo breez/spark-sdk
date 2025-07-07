@@ -227,7 +227,7 @@ where
 
         futures::future::try_join_all(requests)
             .await
-            .map_err(|_| ServiceError::PreimageShareStoreFailed)?;
+            .map_err(|e| ServiceError::PreimageShareStoreFailed(e.to_string()))?;
 
         invoice.try_into()
     }
