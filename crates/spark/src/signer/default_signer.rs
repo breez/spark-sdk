@@ -67,7 +67,7 @@ fn static_deposit_derivation_path(network: Network) -> DerivationPath {
 
 fn coin_type(network: Network) -> ChildNumber {
     let coin_type: u32 = match network {
-        Network::Mainnet => 0,
+        Network::Regtest => 0,
         _ => 1,
     };
     ChildNumber::from_hardened_idx(coin_type)
