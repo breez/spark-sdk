@@ -8,7 +8,7 @@ use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{
     LeafKeyTweak, Transfer, map_public_keys, map_signature_shares, map_signing_nonce_commitments,
 };
-use crate::services::{ProofMap, TransferId, TransferStatus};
+use crate::services::{PagingFilter, ProofMap, TransferId, TransferStatus};
 use crate::signer::{PrivateKeySource, SecretToSplit, VerifiableSecretShare};
 use crate::utils::refund::{create_refund_tx, sign_refunds};
 
@@ -1036,12 +1036,11 @@ impl<S: Signer> TransferService<S> {
     /// By default, returns the first 100 transfers
     pub async fn query_all_transfers(
         &self,
-        limit: Option<u64>,
-        offset: Option<u64>,
+        paging: &PagingFilter,
     ) -> Result<Vec<Transfer>, ServiceError> {
         trace!(
             "Querying all transfers with limit: {:?}, offset: {:?}",
-            limit, offset
+            paging.limit, paging.offset
         );
         let response = self
             .coordinator_client
@@ -1050,8 +1049,8 @@ impl<S: Signer> TransferService<S> {
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
                 )),
                 network: self.network.to_proto_network() as i32,
-                limit: limit.unwrap_or(100) as i64,
-                offset: offset.unwrap_or(0) as i64,
+                limit: paging.limit as i64,
+                offset: paging.offset as i64,
                 types: vec![
                     operator_rpc::spark::TransferType::Transfer.into(),
                     operator_rpc::spark::TransferType::PreimageSwap.into(),
