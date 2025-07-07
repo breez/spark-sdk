@@ -595,6 +595,7 @@ impl<S: Signer> TransferService<S> {
         transfer: &Transfer,
         leaves_to_claim: Vec<LeafKeyTweak>,
     ) -> Result<Vec<TreeNode>, ServiceError> {
+        trace!("Claiming transfer with leaves: {:?}", leaves_to_claim);
         // Check if we need to apply key tweaks first
         let proof_map = if transfer.status == operator_rpc::spark::TransferStatus::SenderKeyTweaked
         {

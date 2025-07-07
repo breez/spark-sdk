@@ -181,6 +181,7 @@ pub(crate) fn map_signing_nonce_commitments(
     Ok(nonce_commitments)
 }
 
+#[derive(Debug)]
 pub struct LeafKeyTweak {
     pub node: TreeNode,
     pub signing_key: PrivateKeySource,
