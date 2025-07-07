@@ -1090,7 +1090,7 @@ impl<S: Signer> TransferService<S> {
             .collect::<Result<Vec<Transfer>, _>>()?)
     }
 
-        /// Queries pending transfers from the operator
+    /// Queries pending transfers from the operator
     pub async fn query_pending_receiver_transfers(&self) -> Result<Vec<Transfer>, ServiceError> {
         trace!("Querying all pending receiver transfers");
         let response = self
