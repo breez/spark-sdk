@@ -3,7 +3,7 @@ use spark_wallet::SparkWallet;
 use crate::{command::TransferCommand, config::Config};
 
 pub async fn handle_command<S>(
-    config: &Config,
+    _config: &Config,
     wallet: &SparkWallet<S>,
     command: TransferCommand,
 ) -> Result<(), Box<dyn std::error::Error>>

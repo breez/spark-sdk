@@ -1,14 +1,11 @@
 use std::{fs::canonicalize, path::PathBuf};
 
-use bip39::Mnemonic;
-use bitcoin::{Address, Transaction, consensus::encode::deserialize_hex, params::Params};
 use clap::Parser;
 use figment::{
     Figment,
     providers::{Env, Format, Yaml},
 };
-use serde::{Deserialize, Serialize};
-use spark_wallet::{DefaultSigner, SparkWalletConfig};
+use spark_wallet::DefaultSigner;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::config::{Config, DEFAULT_CONFIG};
