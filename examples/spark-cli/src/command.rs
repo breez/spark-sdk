@@ -59,7 +59,7 @@ pub enum TransferCommand {
     ClaimPending,
 
     /// Lists all pending transfers
-    // ListPending,
+    ListPending,
 
     /// Transfer funds to another wallet.
     Transfer {

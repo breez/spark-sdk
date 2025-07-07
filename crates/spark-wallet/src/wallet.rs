@@ -305,6 +305,11 @@ impl<S: Signer + Clone> SparkWallet<S> {
         })
     }
 
+    pub async fn list_pending_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+        let transfers = self.transfer_service.query_pending_transfers().await?;
+        Ok(transfers.into_iter().map(WalletTransfer::from).collect())
+    }
+
     pub async fn load(&self) -> Result<(), SparkWalletError> {
         self.tree_service.refresh_leaves().await?;
         Ok(())

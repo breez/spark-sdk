@@ -18,13 +18,13 @@ where
                 serde_json::to_string_pretty(&transfers)?
             );
         }
-        // TransferCommand::ListPending => {
-        //     let transfers = wallet.list_pending_transfers().await?;
-        //     println!(
-        //         "Pending transfers: {}",
-        //         serde_json::to_string_pretty(&transfers)?
-        //     );
-        // },
+        TransferCommand::ListPending => {
+            let transfers = wallet.list_pending_transfers().await?;
+            println!(
+                "Pending transfers: {}",
+                serde_json::to_string_pretty(&transfers)?
+            );
+        }
         TransferCommand::Transfer {
             amount_sat,
             receiver_address,
