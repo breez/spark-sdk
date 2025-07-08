@@ -2,13 +2,13 @@ use std::time::Duration;
 use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use crate::Network;
+use crate::operator::rpc::spark::TransferFilter;
 use crate::operator::rpc::spark::transfer_filter::Participant;
-use crate::operator::rpc::spark::{TransferFilter, TransferType};
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{
     LeafKeyTweak, Transfer, map_public_keys, map_signature_shares, map_signing_nonce_commitments,
 };
-use crate::services::{ProofMap, TransferId};
+use crate::services::{PagingFilter, ProofMap, TransferId, TransferStatus};
 use crate::signer::{PrivateKeySource, SecretToSplit, VerifiableSecretShare};
 use crate::utils::refund::{create_refund_tx, sign_refunds};
 
@@ -597,8 +597,7 @@ impl<S: Signer> TransferService<S> {
     ) -> Result<Vec<TreeNode>, ServiceError> {
         trace!("Claiming transfer with leaves: {:?}", leaves_to_claim);
         // Check if we need to apply key tweaks first
-        let proof_map = if transfer.status == operator_rpc::spark::TransferStatus::SenderKeyTweaked
-        {
+        let proof_map = if transfer.status == TransferStatus::SenderKeyTweaked {
             Some(
                 self.claim_transfer_tweak_keys(transfer, &leaves_to_claim)
                     .await?,
@@ -1037,12 +1036,11 @@ impl<S: Signer> TransferService<S> {
     /// By default, returns the first 100 transfers
     pub async fn query_all_transfers(
         &self,
-        limit: Option<u64>,
-        offset: Option<u64>,
+        paging: &PagingFilter,
     ) -> Result<Vec<Transfer>, ServiceError> {
         trace!(
             "Querying all transfers with limit: {:?}, offset: {:?}",
-            limit, offset
+            paging.limit, paging.offset
         );
         let response = self
             .coordinator_client
@@ -1051,13 +1049,13 @@ impl<S: Signer> TransferService<S> {
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
                 )),
                 network: self.network.to_proto_network() as i32,
-                limit: limit.unwrap_or(100) as i64,
-                offset: offset.unwrap_or(0) as i64,
+                limit: paging.limit as i64,
+                offset: paging.offset as i64,
                 types: vec![
-                    TransferType::Transfer.into(),
-                    TransferType::PreimageSwap.into(),
-                    TransferType::CooperativeExit.into(),
-                    TransferType::UtxoSwap.into(),
+                    operator_rpc::spark::TransferType::Transfer.into(),
+                    operator_rpc::spark::TransferType::PreimageSwap.into(),
+                    operator_rpc::spark::TransferType::CooperativeExit.into(),
+                    operator_rpc::spark::TransferType::UtxoSwap.into(),
                 ],
                 ..Default::default()
             })
@@ -1071,7 +1069,10 @@ impl<S: Signer> TransferService<S> {
     }
 
     /// Queries pending transfers from the operator
-    pub async fn query_pending_transfers(&self) -> Result<Vec<Transfer>, ServiceError> {
+    pub async fn query_pending_transfers(
+        &self,
+        paging: &PagingFilter,
+    ) -> Result<Vec<Transfer>, ServiceError> {
         trace!("Querying all pending transfers");
         let response = self
             .coordinator_client
@@ -1079,6 +1080,9 @@ impl<S: Signer> TransferService<S> {
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
                 )),
+                offset: paging.offset as i64,
+                limit: paging.limit as i64,
+                network: self.network.to_proto_network() as i32,
                 ..Default::default()
             })
             .await?;
@@ -1091,7 +1095,10 @@ impl<S: Signer> TransferService<S> {
     }
 
     /// Queries pending transfers from the operator
-    pub async fn query_pending_receiver_transfers(&self) -> Result<Vec<Transfer>, ServiceError> {
+    pub async fn query_pending_receiver_transfers(
+        &self,
+        paging: &PagingFilter,
+    ) -> Result<Vec<Transfer>, ServiceError> {
         trace!("Querying all pending receiver transfers");
         let response = self
             .coordinator_client
@@ -1099,6 +1106,8 @@ impl<S: Signer> TransferService<S> {
                 participant: Some(Participant::ReceiverIdentityPublicKey(
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
                 )),
+                offset: paging.offset as i64,
+                limit: paging.limit as i64,
                 ..Default::default()
             })
             .await?;

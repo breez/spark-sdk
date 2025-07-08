@@ -18,6 +18,10 @@ where
                 serde_json::to_string_pretty(&transfers)?
             );
         }
+        TransferCommand::List => {
+            let transfers = wallet.list_transfers().await?;
+            println!("Transfers: {}", serde_json::to_string_pretty(&transfers)?);
+        }
         TransferCommand::ListPending => {
             let transfers = wallet.list_pending_transfers().await?;
             println!(

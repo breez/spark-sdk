@@ -60,6 +60,9 @@ pub enum TransferCommand {
     /// Claims all pending transfers
     ClaimPending,
 
+    /// Lists all transfers
+    List,
+
     /// Lists all pending transfers
     ListPending,
 

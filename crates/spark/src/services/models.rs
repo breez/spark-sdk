@@ -193,13 +193,13 @@ pub struct Transfer {
     pub id: TransferId,
     pub sender_identity_public_key: PublicKey,
     pub receiver_identity_public_key: PublicKey,
-    pub status: operator_rpc::spark::TransferStatus,
+    pub status: TransferStatus,
     pub total_value: u64,
     pub expiry_time: Option<u64>,
     pub leaves: Vec<TransferLeaf>,
     pub created_time: Option<u64>,
     pub updated_time: Option<u64>,
-    pub transfer_type: operator_rpc::spark::TransferType,
+    pub transfer_type: TransferType,
 }
 
 impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
@@ -219,9 +219,9 @@ impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
                 ServiceError::Generic("Invalid receiver identity public key".to_string())
             })?;
 
-        let status = transfer.status();
+        let status = transfer.status().into();
 
-        let transfer_type = transfer.r#type();
+        let transfer_type = transfer.r#type().into();
 
         let leaves = transfer
             .leaves
@@ -464,5 +464,75 @@ impl<'de> Deserialize<'de> for TransferId {
     {
         let s = String::deserialize(deserializer)?;
         TransferId::from_str(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TransferStatus {
+    SenderInitiated,
+    SenderKeyTweakPending,
+    SenderKeyTweaked,
+    ReceiverKeyTweaked,
+    ReceiverRefundSigned,
+    Completed,
+    Expired,
+    Returned,
+    SenderInitiatedCoordinator,
+    ReceiverKeyTweakLocked,
+    ReceiverKeyTweakApplied,
+}
+
+impl From<operator_rpc::spark::TransferStatus> for TransferStatus {
+    fn from(status: operator_rpc::spark::TransferStatus) -> Self {
+        match status {
+            operator_rpc::spark::TransferStatus::SenderInitiated => TransferStatus::SenderInitiated,
+            operator_rpc::spark::TransferStatus::SenderKeyTweakPending => {
+                TransferStatus::SenderKeyTweakPending
+            }
+            operator_rpc::spark::TransferStatus::SenderKeyTweaked => {
+                TransferStatus::SenderKeyTweaked
+            }
+            operator_rpc::spark::TransferStatus::ReceiverKeyTweaked => {
+                TransferStatus::ReceiverKeyTweaked
+            }
+            operator_rpc::spark::TransferStatus::ReceiverRefundSigned => {
+                TransferStatus::ReceiverRefundSigned
+            }
+            operator_rpc::spark::TransferStatus::Completed => TransferStatus::Completed,
+            operator_rpc::spark::TransferStatus::Expired => TransferStatus::Expired,
+            operator_rpc::spark::TransferStatus::Returned => TransferStatus::Returned,
+            operator_rpc::spark::TransferStatus::SenderInitiatedCoordinator => {
+                TransferStatus::SenderInitiatedCoordinator
+            }
+            operator_rpc::spark::TransferStatus::ReceiverKeyTweakLocked => {
+                TransferStatus::ReceiverKeyTweakLocked
+            }
+            operator_rpc::spark::TransferStatus::ReceiverKeyTweakApplied => {
+                TransferStatus::ReceiverKeyTweakApplied
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TransferType {
+    PreimageSwap,
+    CooperativeExit,
+    Transfer,
+    UtxoSwap,
+    Swap,
+    CounterSwap,
+}
+
+impl From<operator_rpc::spark::TransferType> for TransferType {
+    fn from(transfer_type: operator_rpc::spark::TransferType) -> Self {
+        match transfer_type {
+            operator_rpc::spark::TransferType::PreimageSwap => TransferType::PreimageSwap,
+            operator_rpc::spark::TransferType::CooperativeExit => TransferType::CooperativeExit,
+            operator_rpc::spark::TransferType::Transfer => TransferType::Transfer,
+            operator_rpc::spark::TransferType::UtxoSwap => TransferType::UtxoSwap,
+            operator_rpc::spark::TransferType::Swap => TransferType::Swap,
+            operator_rpc::spark::TransferType::CounterSwap => TransferType::CounterSwap,
+        }
     }
 }
