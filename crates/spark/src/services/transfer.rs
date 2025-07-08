@@ -1082,6 +1082,7 @@ impl<S: Signer> TransferService<S> {
                 )),
                 offset: paging.offset as i64,
                 limit: paging.limit as i64,
+                network: self.network.to_proto_network() as i32,
                 ..Default::default()
             })
             .await?;
