@@ -318,6 +318,10 @@ impl<S: Signer + Clone> SparkWallet<S> {
         })
     }
 
+    pub async fn get_balance(&self) -> Result<u64, SparkWalletError> {
+        Ok(self.tree_service.get_available_balance().await?)
+    }
+
     pub async fn list_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
         let transfers = self
             .transfer_service

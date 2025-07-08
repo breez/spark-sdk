@@ -62,6 +62,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let info = wallet.get_info().await?;
             println!("{}", serde_json::to_string_pretty(&info)?);
         }
+        command::Command::Balance => {
+            let balance = wallet.get_balance().await?;
+            println!("Balance: {} sats", balance);
+        }
         command::Command::Leaves(leaves_command) => {
             leaves::handle_command(&config, &wallet, leaves_command).await?
         }

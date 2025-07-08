@@ -7,6 +7,8 @@ pub enum Command {
     Deposit(DepositCommand),
     /// Prints the wallet's info.
     Info,
+    /// Prints the wallet's available balance.
+    Balance,
     #[command(subcommand)]
     Leaves(LeavesCommand),
     #[command(subcommand)]
