@@ -310,8 +310,14 @@ impl TryFrom<operator_rpc::spark::TreeNode> for TreeNode {
         let node_tx = deserialize(&node.node_tx)
             .map_err(|_| ServiceError::Generic("Invalid node transaction".to_string()))?;
 
-        let refund_tx = deserialize(&node.refund_tx)
-            .map_err(|_| ServiceError::Generic("Invalid refund transaction".to_string()))?;
+        let refund_tx = if node.refund_tx.is_empty() {
+            None
+        } else {
+            Some(
+                deserialize(&node.refund_tx)
+                    .map_err(|_| ServiceError::Generic("Invalid refund transaction".to_string()))?,
+            )
+        };
 
         let verifying_public_key = PublicKey::from_slice(&node.verifying_public_key)
             .map_err(|_| ServiceError::Generic("Invalid verifying public key".to_string()))?;

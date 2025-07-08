@@ -89,7 +89,7 @@ impl From<TreeNode> for WalletLeaf {
             value: value.value,
             parent_node_id: value.parent_node_id,
             node_tx: value.node_tx,
-            refund_tx: value.refund_tx,
+            refund_tx: value.refund_tx.unwrap(),
             vout: value.vout,
             verifying_public_key: value.verifying_public_key,
             owner_identity_public_key: value.owner_identity_public_key,
