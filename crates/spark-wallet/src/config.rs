@@ -13,7 +13,7 @@ pub struct SparkWalletConfig {
 
 impl SparkWalletConfig {
     pub fn validate(&self) -> Result<(), SparkWalletError> {
-        if self.split_secret_threshold > self.operator_pool.get_signing_operators().count() as u32 {
+        if self.split_secret_threshold > self.operator_pool.get_all_operators().count() as u32 {
             return Err(SparkWalletError::ValidationError(
                 "split_secret_threshold must be less than or equal to the number of signing operators".to_string(),
             ));

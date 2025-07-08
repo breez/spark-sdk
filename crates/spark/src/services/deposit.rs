@@ -548,7 +548,7 @@ where
 
         let address_hash = sha256::Hash::hash(address.to_string().as_bytes());
         let address_hash_message = Message::from_digest(address_hash.to_byte_array());
-        for operator in self.operator_pool.get_signing_operators() {
+        for operator in self.operator_pool.get_non_coordinator_operators() {
             // TODO: rather than using hex::encode here, we should define our own type for the frost identifier, and use a hashmap with the identifier as key here.
             let Some(operator_sig) = proof
                 .address_signatures

@@ -46,8 +46,8 @@ pub enum ServiceError {
     InvoiceDecodingError(String),
     #[error("SSP swap error: {0}")]
     SSPswapError(String),
-    #[error("preimage share store failed")]
-    PreimageShareStoreFailed,
+    #[error("preimage share store failed: {0}")]
+    PreimageShareStoreFailed(String),
     #[error("payment not found")]
     PaymentNotFound,
 

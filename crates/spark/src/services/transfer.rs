@@ -15,6 +15,7 @@ use crate::utils::refund::{create_refund_tx, sign_refunds};
 use bitcoin::Transaction;
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::{Hash, sha256};
+use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::{PublicKey, SecretKey};
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments};
 use k256::Scalar;
@@ -723,6 +724,7 @@ impl<S: Signer> TransferService<S> {
 
         // Create pubkey shares tweak map
         let mut pubkey_shares_tweak = HashMap::new();
+        let secp = Secp256k1::new();
         for operator in &signing_operators {
             let operator_identifier = hex::encode(operator.identifier.serialize());
 
@@ -730,10 +732,10 @@ impl<S: Signer> TransferService<S> {
                 ServiceError::Generic(format!("Share not found for operator {}", operator.id))
             })?;
 
-            pubkey_shares_tweak.insert(
-                operator_identifier,
-                share.secret_share.share.to_bytes().to_vec(),
-            );
+            let pubkey_tweak = SecretKey::from_slice(&share.secret_share.share.to_bytes())
+                .map_err(|_| ServiceError::Generic("Invalid secret share".to_string()))?
+                .public_key(&secp);
+            pubkey_shares_tweak.insert(operator_identifier, pubkey_tweak.serialize().to_vec());
         }
 
         trace!("Creating leaf tweaks map for each operator");
@@ -912,7 +914,7 @@ impl<S: Signer> TransferService<S> {
                 .as_ref()
                 .ok_or_else(|| ServiceError::Generic("Missing refund transaction".to_string()))?;
 
-            let refund_tx_sighash = sighash_from_tx(refund_tx, 0, &refund_tx.output[0])?;
+            let refund_tx_sighash = sighash_from_tx(refund_tx, 0, &leaf_data.tx.output[0])?;
 
             // Map operator signing commitments and signature shares
             let signing_nonce_commitments = map_signing_nonce_commitments(
