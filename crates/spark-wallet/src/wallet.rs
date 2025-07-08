@@ -7,8 +7,8 @@ use spark::{
     bitcoin::BitcoinService,
     operator::rpc::{ConnectionManager, SparkRpcClient},
     services::{
-        DepositService, LightningReceivePayment, LightningSendPayment, LightningService, Transfer,
-        TransferService,
+        DepositService, LightningReceivePayment, LightningSendPayment, LightningService,
+        PagingFilter, Transfer, TransferService,
     },
     signer::Signer,
     ssp::ServiceProvider,
@@ -280,7 +280,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         trace!("Claiming all pending transfers");
         let transfers = self
             .transfer_service
-            .query_pending_receiver_transfers()
+            .query_pending_receiver_transfers(&PagingFilter::default())
             .await?;
         trace!("There are {} pending transfers", transfers.len());
         for transfer in &transfers {
@@ -323,8 +323,19 @@ impl<S: Signer + Clone> SparkWallet<S> {
         })
     }
 
+    pub async fn list_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+        let transfers = self
+            .transfer_service
+            .query_all_transfers(&PagingFilter::default())
+            .await?;
+        Ok(transfers.into_iter().map(WalletTransfer::from).collect())
+    }
+
     pub async fn list_pending_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
-        let transfers = self.transfer_service.query_pending_transfers().await?;
+        let transfers = self
+            .transfer_service
+            .query_pending_transfers(&PagingFilter::default())
+            .await?;
         Ok(transfers.into_iter().map(WalletTransfer::from).collect())
     }
 

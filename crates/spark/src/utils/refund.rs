@@ -42,7 +42,10 @@ pub fn create_refund_tx(
         output: vec![],
     };
 
-    let old_sequence = refund_tx.input[0].sequence;
+    let old_sequence = refund_tx
+        .ok_or(SignerError::Generic("No refund transaction".to_string()))?
+        .input[0]
+        .sequence;
     let sequence = if is_for_claim {
         // TODO: verify this is correct
         old_sequence

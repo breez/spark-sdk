@@ -73,7 +73,8 @@ pub struct TreeNode {
     pub value: u64,
     pub parent_node_id: Option<TreeNodeId>,
     pub node_tx: Transaction,
-    pub refund_tx: Transaction,
+    // TODO: improve model to only allow empty refunds txs on expected cases
+    pub refund_tx: Option<Transaction>,
     /// This vout is the vout to spend the previous transaction, which is in the
     /// parent node.
     pub vout: u32,

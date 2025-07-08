@@ -4,34 +4,9 @@ use bitcoin::{Transaction, secp256k1::PublicKey};
 use serde::{Deserialize, Serialize};
 use spark::{
     Network,
-    services::{Transfer, TransferId, TransferLeaf},
+    services::{Transfer, TransferId, TransferLeaf, TransferStatus, TransferType},
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
 };
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum TransferStatus {
-    SenderInitiated,
-    SenderKeyTweakPending,
-    SenderKeyTweaked,
-    ReceiverKeyTweaked,
-    ReceiverRefundSigned,
-    Completed,
-    Expired,
-    Returned,
-    SenderInitiatedCoordinator,
-    ReceiverKeyTweakLocked,
-    ReceiverKeyTweakApplied,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum TransferType {
-    PreimageSwap,
-    CooperativeExit,
-    Transfer,
-    UtxoSwap,
-    Swap,
-    CounterSwap,
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WalletInfo {
@@ -60,14 +35,14 @@ impl From<Transfer> for WalletTransfer {
             id: value.id,
             sender_id: value.sender_identity_public_key,
             receiver_id: value.receiver_identity_public_key,
-            status: TransferStatus::Completed,
+            status: value.status,
             total_value_sat: value.total_value,
             expiry_time: None,
             leaves: value.leaves.into_iter().map(Into::into).collect(),
             created_at: None,
             updated_at: None,
-            transfer_type: TransferType::Transfer,
-            direction: TransferDirection::Outgoing,
+            transfer_type: value.transfer_type,
+            direction: TransferDirection::default(), // TODO: Set to actual direction
         }
     }
 }
@@ -98,7 +73,7 @@ pub struct WalletLeaf {
     pub value: u64,
     pub parent_node_id: Option<TreeNodeId>,
     pub node_tx: Transaction,
-    pub refund_tx: Transaction,
+    pub refund_tx: Option<Transaction>,
     pub vout: u32,
     pub verifying_public_key: PublicKey,
     pub owner_identity_public_key: PublicKey,
@@ -124,8 +99,10 @@ impl From<TreeNode> for WalletLeaf {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub enum TransferDirection {
+    #[default]
+    Unknown,
     Incoming,
     Outgoing,
 }

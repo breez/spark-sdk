@@ -360,8 +360,10 @@ where
                     },
                     node_tx: deserialize(&node.node_tx)
                         .map_err(|_| ServiceError::InvalidTransaction)?,
-                    refund_tx: deserialize(&node.refund_tx)
-                        .map_err(|_| ServiceError::InvalidTransaction)?,
+                    refund_tx: Some(
+                        deserialize(&node.refund_tx)
+                            .map_err(|_| ServiceError::InvalidTransaction)?,
+                    ),
                     vout: node.vout,
                     verifying_public_key: PublicKey::from_slice(&node.verifying_public_key)
                         .map_err(|_| ServiceError::InvalidVerifyingKey)?,

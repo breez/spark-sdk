@@ -2,13 +2,13 @@ use std::time::Duration;
 use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use crate::Network;
+use crate::operator::rpc::spark::TransferFilter;
 use crate::operator::rpc::spark::transfer_filter::Participant;
-use crate::operator::rpc::spark::{TransferFilter, TransferType};
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{
     LeafKeyTweak, Transfer, map_public_keys, map_signature_shares, map_signing_nonce_commitments,
 };
-use crate::services::{ProofMap, TransferId};
+use crate::services::{PagingFilter, ProofMap, TransferId, TransferStatus};
 use crate::signer::{PrivateKeySource, SecretToSplit, VerifiableSecretShare};
 use crate::utils::refund::{create_refund_tx, sign_refunds};
 
@@ -97,6 +97,10 @@ impl<S: Signer> TransferService<S> {
         leaves: &[TreeNode],
         receiver_id: &PublicKey,
     ) -> Result<Transfer, ServiceError> {
+        // check if we need to refresh or extend timelocks
+        let leaves = self.check_refresh_timelock_nodes(leaves).await?;
+        let leaves = self.check_extend_timelock_nodes(leaves).await?;
+
         // build leaf key tweaks with new signing keys that we will send to the receiver
         let leaf_key_tweaks = leaves
             .iter()
@@ -197,7 +201,7 @@ impl<S: Signer> TransferService<S> {
             .map(|c| c.operator.clone())
             .collect();
 
-        // Calculate the public key tweak by subtracting private keys given public keys
+        // Calculate the key tweak by subtracting keys
         let privkey_tweak = self
             .signer
             .subtract_private_keys(&leaf.signing_key, &leaf.new_signing_key)?;
@@ -214,6 +218,8 @@ impl<S: Signer> TransferService<S> {
             shares.len()
         );
 
+        // TODO: move secp to a field of self to avoid creating it every time
+        let secp = bitcoin::secp256k1::Secp256k1::new();
         // Create pubkey shares tweak map
         let mut pubkey_shares_tweak = HashMap::new();
         for operator in &signing_operators {
@@ -222,12 +228,12 @@ impl<S: Signer> TransferService<S> {
             let share = find_share(&shares, operator.id).ok_or_else(|| {
                 ServiceError::Generic(format!("Share not found for operator {}", operator.id))
             })?;
-
             trace!("Found share for operator {}: {:?}", operator.id, share);
-            pubkey_shares_tweak.insert(
-                operator_identifier,
-                share.secret_share.share.to_bytes().to_vec(),
-            );
+
+            let pubkey_tweak = SecretKey::from_slice(&share.secret_share.share.to_bytes())
+                .map_err(|_| ServiceError::Generic("Invalid secret share".to_string()))?
+                .public_key(&secp);
+            pubkey_shares_tweak.insert(operator_identifier, pubkey_tweak.serialize().to_vec());
         }
 
         // Encrypt the leaf private key for the receiver
@@ -541,7 +547,7 @@ impl<S: Signer> TransferService<S> {
         let mut result = nodes;
 
         if config.should_refresh_timelocks {
-            result = self.check_refresh_timelock_nodes(result).await?;
+            result = self.check_refresh_timelock_nodes(&result).await?;
         }
 
         if config.should_extend_timelocks {
@@ -554,11 +560,11 @@ impl<S: Signer> TransferService<S> {
     /// Checks and refreshes timelock nodes if needed
     async fn check_refresh_timelock_nodes(
         &self,
-        nodes: Vec<TreeNode>,
+        nodes: &[TreeNode],
     ) -> Result<Vec<TreeNode>, ServiceError> {
         // TODO: Implement timelock refresh logic
         // For now, return nodes unchanged
-        Ok(nodes)
+        Ok(nodes.to_vec())
     }
 
     /// Refreshes timelocks on a chain of connected nodes to prevent expiration.
@@ -598,8 +604,7 @@ impl<S: Signer> TransferService<S> {
     ) -> Result<Vec<TreeNode>, ServiceError> {
         trace!("Claiming transfer with leaves: {:?}", leaves_to_claim);
         // Check if we need to apply key tweaks first
-        let proof_map = if transfer.status == operator_rpc::spark::TransferStatus::SenderKeyTweaked
-        {
+        let proof_map = if transfer.status == TransferStatus::SenderKeyTweaked {
             Some(
                 self.claim_transfer_tweak_keys(transfer, &leaves_to_claim)
                     .await?,
@@ -1039,12 +1044,11 @@ impl<S: Signer> TransferService<S> {
     /// By default, returns the first 100 transfers
     pub async fn query_all_transfers(
         &self,
-        limit: Option<u64>,
-        offset: Option<u64>,
+        paging: &PagingFilter,
     ) -> Result<Vec<Transfer>, ServiceError> {
         trace!(
             "Querying all transfers with limit: {:?}, offset: {:?}",
-            limit, offset
+            paging.limit, paging.offset
         );
         let response = self
             .coordinator_client
@@ -1053,13 +1057,13 @@ impl<S: Signer> TransferService<S> {
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
                 )),
                 network: self.network.to_proto_network() as i32,
-                limit: limit.unwrap_or(100) as i64,
-                offset: offset.unwrap_or(0) as i64,
+                limit: paging.limit as i64,
+                offset: paging.offset as i64,
                 types: vec![
-                    TransferType::Transfer.into(),
-                    TransferType::PreimageSwap.into(),
-                    TransferType::CooperativeExit.into(),
-                    TransferType::UtxoSwap.into(),
+                    operator_rpc::spark::TransferType::Transfer.into(),
+                    operator_rpc::spark::TransferType::PreimageSwap.into(),
+                    operator_rpc::spark::TransferType::CooperativeExit.into(),
+                    operator_rpc::spark::TransferType::UtxoSwap.into(),
                 ],
                 ..Default::default()
             })
@@ -1073,7 +1077,10 @@ impl<S: Signer> TransferService<S> {
     }
 
     /// Queries pending transfers from the operator
-    pub async fn query_pending_transfers(&self) -> Result<Vec<Transfer>, ServiceError> {
+    pub async fn query_pending_transfers(
+        &self,
+        paging: &PagingFilter,
+    ) -> Result<Vec<Transfer>, ServiceError> {
         trace!("Querying all pending transfers");
         let response = self
             .coordinator_client
@@ -1081,6 +1088,9 @@ impl<S: Signer> TransferService<S> {
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
                 )),
+                offset: paging.offset as i64,
+                limit: paging.limit as i64,
+                network: self.network.to_proto_network() as i32,
                 ..Default::default()
             })
             .await?;
@@ -1093,7 +1103,10 @@ impl<S: Signer> TransferService<S> {
     }
 
     /// Queries pending transfers from the operator
-    pub async fn query_pending_receiver_transfers(&self) -> Result<Vec<Transfer>, ServiceError> {
+    pub async fn query_pending_receiver_transfers(
+        &self,
+        paging: &PagingFilter,
+    ) -> Result<Vec<Transfer>, ServiceError> {
         trace!("Querying all pending receiver transfers");
         let response = self
             .coordinator_client
@@ -1101,6 +1114,8 @@ impl<S: Signer> TransferService<S> {
                 participant: Some(Participant::ReceiverIdentityPublicKey(
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
                 )),
+                offset: paging.offset as i64,
+                limit: paging.limit as i64,
                 ..Default::default()
             })
             .await?;
