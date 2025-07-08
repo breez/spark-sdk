@@ -73,7 +73,7 @@ pub struct WalletLeaf {
     pub value: u64,
     pub parent_node_id: Option<TreeNodeId>,
     pub node_tx: Transaction,
-    pub refund_tx: Transaction,
+    pub refund_tx: Option<Transaction>,
     pub vout: u32,
     pub verifying_public_key: PublicKey,
     pub owner_identity_public_key: PublicKey,
