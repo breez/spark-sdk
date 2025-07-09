@@ -16,6 +16,7 @@ use bitcoin::Transaction;
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::key::Secp256k1;
+use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, SecretKey};
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments};
 use k256::Scalar;
@@ -131,7 +132,12 @@ impl<S: Signer> TransferService<S> {
         let transfer_id = TransferId::generate();
 
         let key_tweak_input_map = self
-            .prepare_send_transfer_key_tweaks(&transfer_id, receiver_id, &leaf_key_tweaks)
+            .prepare_send_transfer_key_tweaks(
+                &transfer_id,
+                receiver_id,
+                &leaf_key_tweaks,
+                HashMap::new(),
+            )
             .await?;
 
         let transfer_package = self
@@ -172,12 +178,19 @@ impl<S: Signer> TransferService<S> {
         transfer_id: &TransferId,
         receiver_public_key: &PublicKey,
         leaves: &[LeafKeyTweak],
+        refund_signatures: HashMap<TreeNodeId, Signature>,
     ) -> Result<HashMap<Identifier, Vec<operator_rpc::spark::SendLeafKeyTweak>>, ServiceError> {
         let mut leaves_tweaks_map = HashMap::new();
 
         for leaf in leaves {
+            let refund_signature = refund_signatures.get(&leaf.node.id).cloned();
             let leaf_tweaks_map = self
-                .prepare_single_send_transfer_key_tweak(transfer_id, leaf, receiver_public_key)
+                .prepare_single_send_transfer_key_tweak(
+                    transfer_id,
+                    leaf,
+                    receiver_public_key,
+                    refund_signature,
+                )
                 .await?;
 
             // Merge the leaf tweaks into the main map
@@ -198,6 +211,7 @@ impl<S: Signer> TransferService<S> {
         transfer_id: &TransferId,
         leaf: &LeafKeyTweak,
         receiver_public_key: &PublicKey,
+        refund_signature: Option<Signature>,
     ) -> Result<HashMap<Identifier, operator_rpc::spark::SendLeafKeyTweak>, ServiceError> {
         let signing_operators: Vec<_> = self
             .operator_clients
@@ -289,7 +303,10 @@ impl<S: Signer> TransferService<S> {
                 pubkey_shares_tweak: pubkey_shares_tweak.clone(),
                 secret_cipher: secret_cipher.clone(),
                 signature: signature.serialize_compact().to_vec(),
-                refund_signature: Vec::new(),
+                refund_signature: refund_signature
+                    .clone()
+                    .map(|s| s.serialize_compact().to_vec())
+                    .unwrap_or_default(),
             };
 
             leaf_tweaks_map.insert(operator.identifier, send_leaf_key_tweak);
@@ -1155,6 +1172,53 @@ impl<S: Signer> TransferService<S> {
                 Ok(Some(transfer))
             }
             None => Ok(None),
+        }
+    }
+
+    pub async fn deliver_transfer_package(
+        &self,
+        transfer: &Transfer,
+        leaves: &Vec<LeafKeyTweak>,
+        refund_signature_map: HashMap<TreeNodeId, Signature>,
+    ) -> Result<Transfer, ServiceError> {
+        let key_tweak_input_map = self
+            .prepare_send_transfer_key_tweaks(
+                &transfer.id,
+                &transfer.receiver_identity_public_key,
+                &leaves,
+                refund_signature_map,
+            )
+            .await?;
+
+        let transfer_package = self
+            .prepare_transfer_package(
+                &transfer.id,
+                key_tweak_input_map,
+                &leaves,
+                &transfer.receiver_identity_public_key,
+            )
+            .await?;
+
+        let response = self
+            .coordinator_client
+            .finalize_transfer(
+                operator_rpc::spark::FinalizeTransferWithTransferPackageRequest {
+                    transfer_id: transfer.id.to_string(),
+                    owner_identity_public_key: self
+                        .signer
+                        .get_identity_public_key()?
+                        .serialize()
+                        .to_vec(),
+                    transfer_package: Some(transfer_package),
+                },
+            )
+            .await?;
+
+        match response.transfer {
+            Some(transfer) => Ok(transfer.try_into()?),
+            None => Err(ServiceError::ServiceConnectionError(
+                OperatorRpcError::Unexpected("No transfer response from operator".to_string()),
+            )),
         }
     }
 }

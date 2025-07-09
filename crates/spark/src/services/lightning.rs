@@ -6,7 +6,7 @@ use crate::operator::rpc::spark::{
     InvoiceAmount, InvoiceAmountProof, SecretShare, StartUserSignedTransferRequest,
     StorePreimageShareRequest,
 };
-use crate::services::{ServiceError, TransferId};
+use crate::services::{ServiceError, Transfer, TransferId};
 use crate::signer::{PrivateKeySource, SecretToSplit};
 use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
@@ -31,7 +31,7 @@ use super::models::{LightningSendRequestStatus, map_signing_nonce_commitments};
 const DEFAULT_EXPIRY_SECS: u32 = 60 * 60 * 24 * 30;
 
 pub struct LightningSwap {
-    pub transfer_id: TransferId,
+    pub transfer: Transfer,
     pub leaves: Vec<LeafKeyTweak>,
     pub receiver_identity_public_key: PublicKey,
     pub bolt11_invoice: String,
@@ -272,11 +272,7 @@ where
         ))?;
 
         Ok(LightningSwap {
-            transfer_id: TransferId::from_str(&transfer.id).map_err(|_| {
-                ServiceError::SSPswapError(
-                    "Swap response did not contain a valid transfer id".to_string(),
-                )
-            })?,
+            transfer: transfer.try_into()?,
             leaves: leaf_tweaks,
             receiver_identity_public_key: self.ssp_client.identity_public_key(),
             bolt11_invoice: invoice.to_string(),
@@ -449,7 +445,6 @@ where
             .coordinator_client
             .initiate_preimage_swap(request_data)
             .await?;
-
         Ok(response)
     }
 }

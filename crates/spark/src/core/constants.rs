@@ -29,6 +29,7 @@ pub fn next_sequence(current_sequence: Sequence) -> Option<Sequence> {
         return None;
     }
 
-    let new_locktime = LockTime::Blocks(Height::from_height(new_blocks));
-    Some(new_locktime.to_sequence())
+    Some(Sequence(
+        (current_sequence.0 & 0xFFFF0000) | (new_blocks as u32),
+    ))
 }
