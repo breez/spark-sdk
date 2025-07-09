@@ -10,7 +10,7 @@ use crate::{
         SparkRpcClient,
         spark::{QueryNodesRequest, query_nodes_request::Source},
     },
-    services::{PagingFilter, PagingResult, TransferService},
+    services::{PagingFilter, PagingResult, TimelockManager, TransferService},
     signer::Signer,
     tree::TreeNodeStatus,
 };
@@ -22,7 +22,8 @@ pub struct TreeService<S: Signer> {
     identity_pubkey: PublicKey,
     network: Network,
     state: Mutex<TreeState>,
-    transfer_service: Arc<TransferService<S>>,
+    timelock_manager: TimelockManager<S>,
+    transfer_service: TransferService<S>,
 }
 
 impl<S: Signer> TreeService<S> {
@@ -31,13 +32,15 @@ impl<S: Signer> TreeService<S> {
         identity_pubkey: PublicKey,
         network: Network,
         state: TreeState,
-        transfer_service: Arc<TransferService<S>>,
+        timelock_manager: TimelockManager<S>,
+        transfer_service: TransferService<S>,
     ) -> Self {
         TreeService {
             client,
             identity_pubkey,
             network,
             state: Mutex::new(state),
+            timelock_manager,
             transfer_service,
         }
     }
@@ -207,7 +210,7 @@ impl<S: Signer> TreeService<S> {
                 continue;
             }
 
-            let nodes = self.transfer_service.extend_time_lock(&node).await?;
+            let nodes = self.timelock_manager.extend_time_lock(&node).await?;
 
             for n in nodes {
                 if n.status != TreeNodeStatus::Available {
