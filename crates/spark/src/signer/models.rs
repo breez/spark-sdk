@@ -1,4 +1,8 @@
-use k256::{PublicKey, Scalar};
+use std::collections::BTreeMap;
+
+use bitcoin::secp256k1::PublicKey;
+use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
+use k256::{PublicKey as k256PublicKey, Scalar};
 
 use crate::tree::TreeNodeId;
 
@@ -20,7 +24,7 @@ pub struct VerifiableSecretShare {
     pub secret_share: SecretShare,
 
     /// Cryptographic proofs for share verification
-    pub proofs: Vec<PublicKey>,
+    pub proofs: Vec<k256PublicKey>,
 }
 
 #[derive(Clone, Debug)]
@@ -51,4 +55,26 @@ impl PrivateKeySource {
 pub enum SecretToSplit {
     PrivateKey(PrivateKeySource),
     Preimage(Vec<u8>),
+}
+
+pub struct SignFrostRequest<'a> {
+    pub message: &'a [u8],
+    pub public_key: &'a PublicKey,
+    pub private_key: &'a PrivateKeySource,
+    pub verifying_key: &'a PublicKey,
+    pub self_commitment: &'a SigningCommitments,
+    pub statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
+    pub adaptor_public_key: Option<&'a PublicKey>,
+}
+
+pub struct AggregateFrostRequest<'a> {
+    pub message: &'a [u8],
+    pub statechain_signatures: BTreeMap<Identifier, SignatureShare>,
+    pub statechain_public_keys: BTreeMap<Identifier, PublicKey>,
+    pub verifying_key: &'a PublicKey,
+    pub statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
+    pub self_commitment: &'a SigningCommitments,
+    pub public_key: &'a PublicKey,
+    pub self_signature: &'a SignatureShare,
+    pub adaptor_public_key: Option<&'a PublicKey>,
 }

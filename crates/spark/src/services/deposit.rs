@@ -19,7 +19,7 @@ use crate::{
     core::initial_sequence,
     operator::{OperatorPool, rpc as operator_rpc},
     services::{PagingFilter, PagingResult},
-    signer::{PrivateKeySource, Signer},
+    signer::{AggregateFrostRequest, PrivateKeySource, SignFrostRequest, Signer},
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
 };
 
@@ -254,56 +254,56 @@ where
 
         let root_sig = self
             .signer
-            .sign_frost(
-                &root_tx_sighash.to_byte_array(),
-                &signing_public_key,
-                &signing_private_key,
-                verifying_public_key,
-                &root_nonce_commitment,
-                node_tx_signing_nonce_commitments.clone(),
-                None,
-            )
+            .sign_frost(SignFrostRequest {
+                message: root_tx_sighash.as_byte_array(),
+                public_key: &signing_public_key,
+                private_key: &signing_private_key,
+                verifying_key: verifying_public_key,
+                self_commitment: &root_nonce_commitment,
+                statechain_commitments: node_tx_signing_nonce_commitments.clone(),
+                adaptor_public_key: None,
+            })
             .await?;
         let refund_sig = self
             .signer
-            .sign_frost(
-                &refund_tx_sighash.to_byte_array(),
-                &signing_public_key,
-                &signing_private_key,
-                verifying_public_key,
-                &refund_nonce_commitment,
-                refund_tx_signing_nonce_commitments.clone(),
-                None,
-            )
+            .sign_frost(SignFrostRequest {
+                message: refund_tx_sighash.as_byte_array(),
+                public_key: &signing_public_key,
+                private_key: &signing_private_key,
+                verifying_key: verifying_public_key,
+                self_commitment: &refund_nonce_commitment,
+                statechain_commitments: refund_tx_signing_nonce_commitments.clone(),
+                adaptor_public_key: None,
+            })
             .await?;
 
         let root_aggregate = self
             .signer
-            .aggregate_frost(
-                &root_tx_sighash.to_byte_array(),
-                node_tx_signature_shares,
-                node_tx_statechain_public_keys,
-                verifying_public_key,
-                node_tx_signing_nonce_commitments,
-                &root_nonce_commitment,
-                &signing_public_key,
-                &root_sig,
-                None,
-            )
+            .aggregate_frost(AggregateFrostRequest {
+                message: root_tx_sighash.as_byte_array(),
+                statechain_signatures: node_tx_signature_shares,
+                statechain_public_keys: node_tx_statechain_public_keys,
+                verifying_key: verifying_public_key,
+                statechain_commitments: node_tx_signing_nonce_commitments,
+                self_commitment: &root_nonce_commitment,
+                public_key: &signing_public_key,
+                self_signature: &root_sig,
+                adaptor_public_key: None,
+            })
             .await?;
         let refund_aggregate = self
             .signer
-            .aggregate_frost(
-                &refund_tx_sighash.to_byte_array(),
-                refund_tx_signature_shares,
-                refund_tx_statechain_public_keys,
-                verifying_public_key,
-                refund_tx_signing_nonce_commitments,
-                &refund_nonce_commitment,
-                &signing_public_key,
-                &refund_sig,
-                None,
-            )
+            .aggregate_frost(AggregateFrostRequest {
+                message: refund_tx_sighash.as_byte_array(),
+                statechain_signatures: refund_tx_signature_shares,
+                statechain_public_keys: refund_tx_statechain_public_keys,
+                verifying_key: verifying_public_key,
+                statechain_commitments: refund_tx_signing_nonce_commitments,
+                self_commitment: &refund_nonce_commitment,
+                public_key: &signing_public_key,
+                self_signature: &refund_sig,
+                adaptor_public_key: None,
+            })
             .await?;
 
         let finalize_resp = self
