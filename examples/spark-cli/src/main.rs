@@ -53,8 +53,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let network = config.spark_config.network.clone();
     let signer = DefaultSigner::new(&seed, network)?;
     let wallet = spark_wallet::SparkWallet::new(config.spark_config.clone(), signer).await?;
-    wallet.load().await?;
+    wallet.sync().await?;
     match args.command {
+        command::Command::Balance => {
+            let balance = wallet.get_balance().await?;
+            println!("Balance: {} sats", balance);
+        }
         command::Command::Deposit(deposit_command) => {
             deposit::handle_command(&config, &wallet, deposit_command).await?
         }
@@ -71,6 +75,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         command::Command::SparkAddress => {
             let spark_address = wallet.get_spark_address().await?;
             println!("{}", spark_address.to_address_string()?);
+        }
+        command::Command::Sync => {
+            wallet.sync().await?;
+            println!("Wallet synced successfully.");
         }
         command::Command::Transfer(transfer_command) => {
             transfer::handle_command(&config, &wallet, transfer_command).await?

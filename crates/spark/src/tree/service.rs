@@ -225,4 +225,41 @@ impl<S: Signer> TreeService<S> {
         // TODO: add/remove nodes to/from the tree state as needed.
         Ok(resulting_nodes)
     }
+
+    /// Returns the total balance of all available leaves in the tree.
+    ///
+    /// This method calculates the sum of all leaf values that have a status of
+    /// `TreeNodeStatus::Available`. It first retrieves all leaves from the local cache
+    /// and filters out any that are not available before calculating the total.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<u64, TreeServiceError>` - The total balance in satoshis if successful,
+    ///   or an error if the operation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use spark::tree::{TreeService, TreeServiceError};
+    /// use spark::signer::Signer;
+    ///
+    /// # async fn example(tree_service: &TreeService<impl Signer>) -> Result<(), TreeServiceError> {
+    /// // Ensure the cache is up to date
+    /// tree_service.refresh_leaves().await?;
+    ///
+    /// // Get the available balance
+    /// let balance = tree_service.get_available_balance().await?;
+    /// println!("Available balance: {} sats", balance);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
+        Ok(self
+            .list_leaves()
+            .await?
+            .into_iter()
+            .filter(|leaf| leaf.status == TreeNodeStatus::Available)
+            .map(|leaf| leaf.value)
+            .sum::<u64>())
+    }
 }

@@ -3,6 +3,8 @@ use spark_wallet::SparkAddress;
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum Command {
+    /// Prints the wallet's available balance.
+    Balance,
     #[command(subcommand)]
     Deposit(DepositCommand),
     /// Prints the wallet's info.
@@ -13,6 +15,8 @@ pub enum Command {
     Lightning(LightningCommand),
     /// Prints the wallet's Spark address.
     SparkAddress,
+    /// Syncs the wallet with the latest state.
+    Sync,
     #[command(subcommand)]
     Transfer(TransferCommand),
 }

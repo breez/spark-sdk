@@ -318,6 +318,10 @@ impl<S: Signer + Clone> SparkWallet<S> {
         })
     }
 
+    pub async fn get_balance(&self) -> Result<u64, SparkWalletError> {
+        Ok(self.tree_service.get_available_balance().await?)
+    }
+
     pub async fn list_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
         let transfers = self
             .transfer_service
@@ -334,7 +338,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         Ok(transfers.into_iter().map(WalletTransfer::from).collect())
     }
 
-    pub async fn load(&self) -> Result<(), SparkWalletError> {
+    pub async fn sync(&self) -> Result<(), SparkWalletError> {
         self.tree_service.refresh_leaves().await?;
         Ok(())
     }
