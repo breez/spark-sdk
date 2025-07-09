@@ -151,6 +151,10 @@ impl<S: Signer> TransferService<S> {
             transfer_package: Some(transfer_package),
             ..Default::default()
         };
+        trace!(
+            "About to send start_transfer_request: {:?}",
+            start_transfer_request
+        );
         let transfer = self
             .coordinator_client
             .start_transfer(start_transfer_request)
@@ -1111,6 +1115,7 @@ impl<S: Signer> TransferService<S> {
         let response = self
             .coordinator_client
             .query_pending_transfers(operator_rpc::spark::TransferFilter {
+                network: self.network.to_proto_network() as i32,
                 participant: Some(Participant::ReceiverIdentityPublicKey(
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
                 )),
