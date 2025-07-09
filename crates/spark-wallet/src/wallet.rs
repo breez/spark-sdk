@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use bitcoin::{Address, Transaction};
 
@@ -149,7 +149,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         // send the leaves to the operator
         let _ = self
             .transfer_service
-            .send_transfer_with_key_tweaks(&swap.leaves, &swap.receiver_identity_public_key)
+            .deliver_transfer_package(&swap.transfer, &swap.leaves, HashMap::new())
             .await?;
 
         // finalize the lightning swap with the ssp - send the actual lightning payment
