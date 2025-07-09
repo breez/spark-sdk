@@ -15,6 +15,7 @@ pub struct Config {
     pub passphrase: String,
     pub spark_config: SparkWalletConfig,
 }
+
 pub const DEFAULT_CONFIG: &str = r#"
 mempool_url: "https://regtest-mempool.us-west-2.sparkinfra.net/api"
 mempool_username: "spark-sdk"

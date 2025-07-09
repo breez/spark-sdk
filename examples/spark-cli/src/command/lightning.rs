@@ -1,6 +1,27 @@
+use clap::Subcommand;
 use spark_wallet::SparkWallet;
 
-use crate::{command::LightningCommand, config::Config};
+use crate::config::Config;
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum LightningCommand {
+    /// Create a lightning invoice.
+    CreateInvoice {
+        amount_sat: u64,
+        description: Option<String>,
+    },
+    /// Fetch a lightning receive payment.
+    FetchReceivePayment { id: String },
+    /// Fetch a lightning send fee estimate.
+    FetchSendFeeEstimate { invoice: String },
+    /// Fetch a lightning send payment.
+    FetchSendPayment { id: String },
+    /// Pay a lightning invoice.
+    PayInvoice {
+        invoice: String,
+        max_fee_sat: Option<u64>,
+    },
+}
 
 pub async fn handle_command<S>(
     _config: &Config,

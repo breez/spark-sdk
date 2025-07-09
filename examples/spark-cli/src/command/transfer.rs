@@ -1,6 +1,27 @@
-use spark_wallet::SparkWallet;
+use clap::Subcommand;
+use spark_wallet::{SparkAddress, SparkWallet};
 
-use crate::{command::TransferCommand, config::Config};
+use crate::config::Config;
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum TransferCommand {
+    /// Claims all pending transfers
+    ClaimPending,
+
+    /// Lists all transfers
+    List,
+
+    /// Lists all pending transfers
+    ListPending,
+
+    /// Transfer funds to another wallet.
+    Transfer {
+        /// The amount to transfer in satoshis.
+        amount_sat: u64,
+        /// The receiver's Spark address.
+        receiver_address: SparkAddress,
+    },
+}
 
 pub async fn handle_command<S>(
     _config: &Config,
