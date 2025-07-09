@@ -1,9 +1,24 @@
 use bitcoin::{Address, Transaction, consensus::encode::deserialize_hex, params::Params};
+use clap::Subcommand;
+use rustyline::{Editor, history::DefaultHistory};
 use spark_wallet::SparkWallet;
 
-use crate::{command::DepositCommand, config::Config};
+use crate::{CliHelper, config::Config};
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum DepositCommand {
+    /// Claim a deposit after it has been confirmed onchain.
+    Claim {
+        /// The transaction ID of the deposit transaction.
+        txid: String,
+    },
+    /// Generate a new onchain deposit address.
+    NewAddress,
+    NewAddressAndClaim,
+}
 
 pub async fn handle_command<S>(
+    rl: &mut Editor<CliHelper, DefaultHistory>,
     config: &Config,
     wallet: &SparkWallet<S>,
     command: DepositCommand,
@@ -14,12 +29,11 @@ where
     match command {
         DepositCommand::NewAddress => {
             let address = wallet.generate_deposit_address(false).await?;
-            println!("{}", address);
+            println!("{address}");
         }
         DepositCommand::NewAddressAndClaim => {
             let address = wallet.generate_deposit_address(false).await?;
-            println!("{}", address);
-            let mut rl = rustyline::DefaultEditor::new().unwrap();
+            println!("{address}");
             println!("Get funds from the faucet at https://app.lightspark.com/regtest-faucet");
             let line = rl.readline("paste txid> ")?;
             let txid = line.trim();

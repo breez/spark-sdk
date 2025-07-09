@@ -1,6 +1,13 @@
+use clap::Subcommand;
 use spark_wallet::SparkWallet;
 
-use crate::{command::LeavesCommand, config::Config};
+use crate::config::Config;
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum LeavesCommand {
+    /// List all leaves in the wallet.
+    List,
+}
 
 pub async fn handle_command<S>(
     _config: &Config,
