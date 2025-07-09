@@ -319,8 +319,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
     }
 
     pub async fn get_balance(&self) -> Result<u64, SparkWalletError> {
-        // update local tree state
-        self.tree_service.refresh_leaves().await?;
         Ok(self.tree_service.get_available_balance().await?)
     }
 
@@ -340,7 +338,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         Ok(transfers.into_iter().map(WalletTransfer::from).collect())
     }
 
-    pub async fn load(&self) -> Result<(), SparkWalletError> {
+    pub async fn sync(&self) -> Result<(), SparkWalletError> {
         self.tree_service.refresh_leaves().await?;
         Ok(())
     }
