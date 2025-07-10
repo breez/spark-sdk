@@ -72,7 +72,7 @@ impl Default for ClaimTransferConfig {
     }
 }
 
-pub struct TransferService<S: Signer> {
+pub struct TransferService<S> {
     signer: S,
     network: Network,
     split_secret_threshold: u32,

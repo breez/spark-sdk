@@ -17,10 +17,7 @@ use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 
-pub struct OperatorAuth<S>
-where
-    S: Signer,
-{
+pub struct OperatorAuth<S> {
     channel: Channel,
     signer: S,
     network: Network,
