@@ -7,10 +7,7 @@ use crate::signer::PrivateKeySource;
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
 use bitcoin::Transaction;
 use bitcoin::secp256k1::ecdsa::Signature;
-use bitcoin::{
-    consensus::{Encodable, deserialize},
-    secp256k1::PublicKey,
-};
+use bitcoin::{consensus::deserialize, secp256k1::PublicKey};
 
 use frost_secp256k1_tr::{
     Identifier,
@@ -18,7 +15,6 @@ use frost_secp256k1_tr::{
     round2::SignatureShare,
 };
 use serde::{Deserialize, Serialize};
-use tracing::trace;
 use uuid::Uuid;
 
 use crate::{ssp::BitcoinNetwork, utils::refund::SignedTx};

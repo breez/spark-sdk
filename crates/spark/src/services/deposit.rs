@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bitcoin::{
-    Address, Amount, OutPoint, ScriptBuf, Transaction, TxIn, TxOut,
+    Address, OutPoint, ScriptBuf, Transaction, TxIn, TxOut,
     absolute::LockTime,
     address::NetworkUnchecked,
     consensus::{deserialize, serialize},

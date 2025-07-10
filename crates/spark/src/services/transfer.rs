@@ -20,7 +20,6 @@ use crate::utils::anchor::ephemeral_anchor_output;
 use crate::utils::refund::{create_refund_tx, sign_refunds};
 
 use bitcoin::absolute::LockTime;
-use bitcoin::consensus::Encodable;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::{PublicKey, SecretKey};
