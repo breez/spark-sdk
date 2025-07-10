@@ -18,7 +18,7 @@ use crate::signer::SignerError;
 use crate::signer::{SignFrostRequest, Signer};
 
 pub struct SignedTx {
-    pub node_id: String,
+    pub node_id: TreeNodeId,
     pub signing_public_key: PublicKey,
     pub tx: Transaction,
     pub user_signature: SignatureShare<Secp256K1Sha256TR>,
@@ -118,7 +118,7 @@ pub async fn sign_refunds<S: Signer>(
             .await?;
 
         signed_refunds.push(SignedTx {
-            node_id: leaf.node.id.clone().to_string(),
+            node_id: leaf.node.id.clone(),
             signing_public_key,
             tx: new_refund_tx,
             user_signature: user_signature_share,

@@ -107,7 +107,7 @@ impl TryFrom<SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
 
     fn try_from(signed_tx: SignedTx) -> Result<Self, Self::Error> {
         Ok(operator_rpc::spark::UserSignedTxSigningJob {
-            leaf_id: signed_tx.node_id.clone(),
+            leaf_id: signed_tx.node_id.to_string(),
             signing_public_key: signed_tx.signing_public_key.serialize().to_vec(),
             raw_tx: bitcoin::consensus::serialize(&signed_tx.tx),
             signing_nonce_commitment: Some(signed_tx.user_signature_commitment.try_into()?),
