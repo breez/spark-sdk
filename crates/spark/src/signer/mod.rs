@@ -13,6 +13,7 @@ use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::Signatu
 pub use default_signer::DefaultSigner;
 pub use error::SignerError;
 pub use models::*;
+pub(crate) use secret_sharing::from_bytes_to_scalar;
 
 #[async_trait::async_trait]
 pub trait Signer {

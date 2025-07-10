@@ -65,6 +65,12 @@ pub enum ServiceError {
     #[error("Signature verification failed: {0}")]
     SignatureVerificationFailed(String),
 
+    // Swap related errors
+    #[error("illegal amount")]
+    IllegalAmount,
+    #[error("insufficient funds")]
+    InsufficientFunds,
+
     // Common errors
     #[error("bitcoin error: {0}")]
     BitcoinError(#[from] crate::bitcoin::BitcoinError),

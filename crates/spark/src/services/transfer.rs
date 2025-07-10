@@ -2,6 +2,7 @@ use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::Network;
+use crate::bitcoin::sighash_from_tx;
 use crate::core::{initial_sequence, next_sequence};
 use crate::operator::rpc::common::SignatureIntent;
 use crate::operator::rpc::spark::transfer_filter::Participant;
@@ -9,10 +10,10 @@ use crate::operator::rpc::spark::{
     ExtendLeafRequest, FinalizeNodeSignaturesRequest, NodeSignatures, SigningJob, TransferFilter,
 };
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
-use crate::services::models::{
-    LeafKeyTweak, Transfer, map_public_keys, map_signature_shares, map_signing_nonce_commitments,
+use crate::services::models::{LeafKeyTweak, Transfer, map_signing_nonce_commitments};
+use crate::services::{
+    PagingFilter, ProofMap, TransferId, TransferStatus, map_public_keys, map_signature_shares,
 };
-use crate::services::{PagingFilter, ProofMap, TransferId, TransferStatus};
 use crate::signer::{
     AggregateFrostRequest, PrivateKeySource, SecretToSplit, SignFrostRequest, VerifiableSecretShare,
 };
@@ -34,7 +35,6 @@ use prost::Message as ProstMessage;
 use tracing::{debug, error, trace};
 
 use crate::{
-    bitcoin::sighash_from_tx,
     signer::Signer,
     tree::{TreeNode, TreeNodeId},
 };

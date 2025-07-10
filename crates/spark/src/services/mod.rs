@@ -2,6 +2,7 @@ mod deposit;
 mod error;
 mod lightning;
 mod models;
+mod swap;
 mod transfer;
 
 pub use deposit::*;
