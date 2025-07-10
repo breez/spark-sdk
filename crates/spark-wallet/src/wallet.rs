@@ -266,8 +266,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .select_leaves_by_amount(amount_sat)
             .await?;
 
-        // TODO: do we need to refresh and or extend timelocks? js sdk does this
-
         let transfer = self
             .transfer_service
             .transfer_leaves_to(&leaves, &receiver_pubkey)
