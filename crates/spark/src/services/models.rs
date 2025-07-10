@@ -110,13 +110,10 @@ impl TryFrom<SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
     type Error = ServiceError;
 
     fn try_from(signed_tx: SignedTx) -> Result<Self, Self::Error> {
-        let mut buf = Vec::new();
-        signed_tx.tx.consensus_encode(&mut buf)?;
-
         Ok(operator_rpc::spark::UserSignedTxSigningJob {
             leaf_id: signed_tx.node_id.clone(),
             signing_public_key: signed_tx.signing_public_key.serialize().to_vec(),
-            raw_tx: buf,
+            raw_tx: bitcoin::consensus::serialize(&signed_tx.tx),
             signing_nonce_commitment: Some(signed_tx.user_signature_commitment.try_into()?),
             signing_commitments: Some(operator_rpc::spark::SigningCommitments {
                 signing_commitments: to_proto_signing_commitments(&signed_tx.signing_commitments)?,

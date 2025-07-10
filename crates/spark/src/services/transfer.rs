@@ -661,25 +661,13 @@ impl<S: Signer> TransferService<S> {
 
         let new_node_signing_job = SigningJob {
             signing_public_key: signing_public_key.serialize().to_vec(),
-            raw_tx: {
-                let mut buf = Vec::new();
-                new_node_tx
-                    .consensus_encode(&mut buf)
-                    .map_err(|e| ServiceError::BitcoinIOError(e))?;
-                buf
-            },
+            raw_tx: bitcoin::consensus::serialize(&new_node_tx),
             signing_nonce_commitment: Some(new_node_signing_commitments.try_into()?),
         };
 
         let new_refund_signing_job = SigningJob {
             signing_public_key: signing_public_key.serialize().to_vec(),
-            raw_tx: {
-                let mut buf = Vec::new();
-                new_refund_tx
-                    .consensus_encode(&mut buf)
-                    .map_err(|e| ServiceError::BitcoinIOError(e))?;
-                buf
-            },
+            raw_tx: bitcoin::consensus::serialize(&new_refund_tx),
             signing_nonce_commitment: Some(new_refund_signing_commitments.try_into()?),
         };
 
@@ -1105,13 +1093,7 @@ impl<S: Signer> TransferService<S> {
                 leaf_id: leaf.node.id.to_string(),
                 refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
                     signing_public_key: refund_signing_data.signing_public_key.serialize().to_vec(),
-                    raw_tx: {
-                        let mut buf = Vec::new();
-                        refund_tx
-                            .consensus_encode(&mut buf)
-                            .map_err(|e| ServiceError::BitcoinIOError(e))?;
-                        buf
-                    },
+                    raw_tx: bitcoin::consensus::serialize(&refund_tx),
                     signing_nonce_commitment: Some(
                         refund_signing_data.signing_nonce_commitment.try_into()?,
                     ),
