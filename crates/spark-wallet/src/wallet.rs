@@ -230,6 +230,18 @@ impl<S: Signer + Clone> SparkWallet<S> {
         Ok(address.address)
     }
 
+    pub async fn list_unused_deposit_addresses(&self) -> Result<Vec<Address>, SparkWalletError> {
+        let deposit_addresses = self
+            .deposit_service
+            .query_unused_deposit_addresses(&PagingFilter::default())
+            .await?;
+        Ok(deposit_addresses
+            .items
+            .into_iter()
+            .map(|addr| addr.address)
+            .collect())
+    }
+
     /// Sends a transfer to another Spark user.
     pub async fn transfer(
         &self,
