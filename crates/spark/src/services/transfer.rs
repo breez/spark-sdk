@@ -17,7 +17,7 @@ use crate::signer::{
     AggregateFrostRequest, PrivateKeySource, SecretToSplit, SignFrostRequest, VerifiableSecretShare,
 };
 use crate::utils::anchor::ephemeral_anchor_output;
-use crate::utils::refund::{create_refund_tx, sign_refunds};
+use crate::utils::refund::{create_refund_tx, prepare_refund_so_signing_jobs, sign_refunds};
 
 use bitcoin::absolute::LockTime;
 use bitcoin::hashes::{Hash, sha256};
@@ -1033,7 +1033,7 @@ impl<S: Signer> TransferService<S> {
 
         // Prepare refund signing jobs for the coordinator
         let signing_jobs =
-            self.prepare_refund_so_signing_jobs(leaf_keys, &mut leaf_data_map, true)?;
+            prepare_refund_so_signing_jobs(self.network, leaf_keys, &mut leaf_data_map, true)?;
 
         // Call the coordinator to get signing results
         let response = self
@@ -1062,66 +1062,6 @@ impl<S: Signer> TransferService<S> {
             .await?;
 
         Ok(node_signatures)
-    }
-
-    /// Prepares refund signing jobs for claim operations
-    fn prepare_refund_so_signing_jobs(
-        &self,
-        leaves: &[LeafKeyTweak],
-        leaf_data_map: &mut HashMap<TreeNodeId, LeafRefundSigningData>,
-        is_for_claim: bool,
-    ) -> Result<Vec<operator_rpc::spark::LeafRefundTxSigningJob>, ServiceError> {
-        let mut signing_jobs = Vec::new();
-
-        for leaf in leaves {
-            let refund_signing_data: &mut LeafRefundSigningData =
-                leaf_data_map.get_mut(&leaf.node.id).ok_or_else(|| {
-                    ServiceError::Generic(format!("Leaf data not found for leaf {}", leaf.node.id))
-                })?;
-
-            let old_sequence = leaf
-                .node
-                .refund_tx
-                .as_ref()
-                .ok_or(ServiceError::Generic("No refund transaction".to_string()))?
-                .input[0]
-                .sequence;
-            let sequence = if is_for_claim {
-                old_sequence // TODO: is this correct?
-            } else {
-                next_sequence(old_sequence).ok_or(ServiceError::Generic(
-                    "Failed to get next sequence".to_string(),
-                ))?
-            };
-
-            let refund_tx = create_refund_tx(
-                sequence,
-                bitcoin::OutPoint {
-                    txid: leaf.node.node_tx.compute_txid(),
-                    vout: 0,
-                },
-                leaf.node.value,
-                &refund_signing_data.receiving_public_key,
-                self.network,
-            )?;
-
-            let signing_job = operator_rpc::spark::LeafRefundTxSigningJob {
-                leaf_id: leaf.node.id.to_string(),
-                refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
-                    signing_public_key: refund_signing_data.signing_public_key.serialize().to_vec(),
-                    raw_tx: bitcoin::consensus::serialize(&refund_tx),
-                    signing_nonce_commitment: Some(
-                        refund_signing_data.signing_nonce_commitment.try_into()?,
-                    ),
-                }),
-            };
-
-            refund_signing_data.refund_tx = Some(refund_tx);
-
-            signing_jobs.push(signing_job);
-        }
-
-        Ok(signing_jobs)
     }
 
     /// Signs refund transactions using FROST threshold signatures
