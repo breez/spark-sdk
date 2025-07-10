@@ -21,7 +21,7 @@ use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
-use crate::signer::{EncryptedPrivateKey, secret_sharing};
+use crate::signer::{AggregateFrostRequest, EncryptedPrivateKey, SignFrostRequest, secret_sharing};
 use crate::signer::{PrivateKeySource, SecretToSplit};
 use crate::tree::TreeNodeId;
 use crate::{
@@ -335,15 +335,9 @@ impl Signer for DefaultSigner {
         Ok(shares)
     }
 
-    async fn sign_frost(
+    async fn sign_frost<'a>(
         &self,
-        message: &[u8],
-        public_key: &PublicKey,
-        private_key: &PrivateKeySource,
-        verifying_key: &PublicKey,
-        self_commitment: &SigningCommitments,
-        statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
-        adaptor_public_key: Option<&PublicKey>,
+        request: SignFrostRequest<'a>,
     ) -> Result<SignatureShare, SignerError> {
         tracing::trace!("default_signer::sign_frost");
 
@@ -355,14 +349,14 @@ impl Signer for DefaultSigner {
         // This is used by the FROST protocol to coordinate the multi-party signing process
         let signing_package = frost_signing_package(
             user_identifier,
-            message,
-            statechain_commitments,
-            self_commitment,
-            adaptor_public_key,
+            request.message,
+            request.statechain_commitments,
+            request.self_commitment,
+            request.adaptor_public_key,
         )?;
 
         // Serialize the commitment to look up the corresponding nonces in our storage
-        let serialized_commitment = self_commitment.serialize().map_err(|e| {
+        let serialized_commitment = request.self_commitment.serialize().map_err(|e| {
             SignerError::SerializationError(format!(
                 "failed to serialize self commitment: {e} (culprit: {:?})",
                 e.culprit()
@@ -376,7 +370,7 @@ impl Signer for DefaultSigner {
             .get(&serialized_commitment)
             .ok_or(SignerError::UnknownNonceCommitment)?;
 
-        let secret_key = private_key.to_secret_key(self)?;
+        let secret_key = request.private_key.to_secret_key(self)?;
 
         // Convert the Bitcoin secret key to FROST SigningShare format
         // This allows it to be used with the FROST API for creating signature shares
@@ -389,17 +383,19 @@ impl Signer for DefaultSigner {
 
         // Convert the Bitcoin public key to FROST VerifyingShare format
         // This represents the user's public verification key in the threshold scheme
-        let verifying_share = VerifyingShare::deserialize(public_key.serialize().as_slice())
-            .map_err(|e| {
-                SignerError::SerializationError(format!(
-                    "Failed to deserialize private as public key: {e} (culprit: {:?})",
-                    e.culprit()
-                ))
-            })?;
+        let verifying_share = VerifyingShare::deserialize(
+            request.public_key.serialize().as_slice(),
+        )
+        .map_err(|e| {
+            SignerError::SerializationError(format!(
+                "Failed to deserialize private as public key: {e} (culprit: {:?})",
+                e.culprit()
+            ))
+        })?;
 
         // Convert the group's Bitcoin public key to FROST VerifyingKey format
         // This is the aggregate public key that will verify the final threshold signature
-        let verifying_key = VerifyingKey::deserialize(verifying_key.serialize().as_slice())
+        let verifying_key = VerifyingKey::deserialize(request.verifying_key.serialize().as_slice())
             .map_err(|e| {
                 SignerError::SerializationError(format!(
                     "Failed to deserialize verifying key: {e} (culprit: {:?})",
@@ -452,17 +448,9 @@ impl Signer for DefaultSigner {
         return Ok(signature_share);
     }
 
-    async fn aggregate_frost(
+    async fn aggregate_frost<'a>(
         &self,
-        message: &[u8],
-        statechain_signatures: BTreeMap<Identifier, SignatureShare>,
-        statechain_public_keys: BTreeMap<Identifier, PublicKey>,
-        verifying_key: &PublicKey,
-        statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
-        self_commitment: &SigningCommitments,
-        public_key: &PublicKey,
-        self_signature: &SignatureShare,
-        adaptor_public_key: Option<&PublicKey>,
+        request: AggregateFrostRequest<'a>,
     ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
         tracing::trace!("default_signer::aggregate_frost");
 
@@ -473,20 +461,20 @@ impl Signer for DefaultSigner {
         // Create a signing package containing commitments, participant groups, message and adaptor
         let signing_package = frost_signing_package(
             user_identifier,
-            message,
-            statechain_commitments,
-            self_commitment,
-            adaptor_public_key,
+            request.message,
+            request.statechain_commitments,
+            request.self_commitment,
+            request.adaptor_public_key,
         )?;
 
         // Combine all signature shares (statechain + user)
-        let mut signature_shares = statechain_signatures.clone();
-        signature_shares.insert(user_identifier, *self_signature);
+        let mut signature_shares = request.statechain_signatures.clone();
+        signature_shares.insert(user_identifier, *request.self_signature);
 
         // Build a map of verifying shares for all participants
         let mut verifying_shares = BTreeMap::new();
         // Convert statechain public keys to verifying shares
-        for (id, pk) in statechain_public_keys.iter() {
+        for (id, pk) in request.statechain_public_keys.iter() {
             let verifying_key =
                 VerifyingShare::deserialize(pk.serialize().as_slice()).map_err(|e| {
                     SignerError::SerializationError(format!(
@@ -499,15 +487,17 @@ impl Signer for DefaultSigner {
         // Add the user's public key as a verifying share
         verifying_shares.insert(
             user_identifier,
-            VerifyingShare::deserialize(public_key.serialize().as_slice()).map_err(|e| {
-                SignerError::SerializationError(format!(
-                    "Failed to deserialize user public key: {e} (culprit: {:?})",
-                    e.culprit()
-                ))
-            })?,
+            VerifyingShare::deserialize(request.public_key.serialize().as_slice()).map_err(
+                |e| {
+                    SignerError::SerializationError(format!(
+                        "Failed to deserialize user public key: {e} (culprit: {:?})",
+                        e.culprit()
+                    ))
+                },
+            )?,
         );
 
-        let verifying_key = VerifyingKey::deserialize(verifying_key.serialize().as_slice())
+        let verifying_key = VerifyingKey::deserialize(request.verifying_key.serialize().as_slice())
             .map_err(|e| {
                 SignerError::SerializationError(format!(
                     "Failed to deserialize group verifying key: {e} (culprit: {:?})",

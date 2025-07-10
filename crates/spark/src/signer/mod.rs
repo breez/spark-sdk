@@ -80,15 +80,9 @@ pub trait Signer {
     /// * `UnknownNonceCommitment` - If the provided commitment doesn't match any stored nonce
     /// * `UnknownKey` - If the public key doesn't correspond to any known private key
     /// * `SerializationError` - If there are issues serializing cryptographic components
-    async fn sign_frost(
+    async fn sign_frost<'a>(
         &self,
-        message: &[u8],
-        public_key: &PublicKey,
-        private_key: &PrivateKeySource,
-        verifying_key: &PublicKey,
-        self_commitment: &SigningCommitments,
-        statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
-        adaptor_public_key: Option<&PublicKey>,
+        request: SignFrostRequest<'a>,
     ) -> Result<SignatureShare, SignerError>;
 
     /// Aggregates FROST (Flexible Round-Optimized Schnorr Threshold) signature shares into a complete signature
@@ -110,16 +104,8 @@ pub trait Signer {
     ///
     /// # Returns
     /// A complete FROST signature that can be verified against the group's public key
-    async fn aggregate_frost(
+    async fn aggregate_frost<'a>(
         &self,
-        message: &[u8],
-        statechain_signatures: BTreeMap<Identifier, SignatureShare>,
-        statechain_public_keys: BTreeMap<Identifier, PublicKey>,
-        verifying_key: &PublicKey,
-        statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
-        self_commitment: &SigningCommitments,
-        public_key: &PublicKey,
-        self_signature: &SignatureShare,
-        adaptor_public_key: Option<&PublicKey>,
+        request: AggregateFrostRequest<'a>,
     ) -> Result<frost_secp256k1_tr::Signature, SignerError>;
 }

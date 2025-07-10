@@ -7,10 +7,7 @@ use crate::signer::PrivateKeySource;
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
 use bitcoin::Transaction;
 use bitcoin::secp256k1::ecdsa::Signature;
-use bitcoin::{
-    consensus::{Encodable, deserialize},
-    secp256k1::PublicKey,
-};
+use bitcoin::{consensus::deserialize, secp256k1::PublicKey};
 
 use frost_secp256k1_tr::{
     Identifier,
@@ -18,7 +15,6 @@ use frost_secp256k1_tr::{
     round2::SignatureShare,
 };
 use serde::{Deserialize, Serialize};
-use tracing::trace;
 use uuid::Uuid;
 
 use crate::{ssp::BitcoinNetwork, utils::refund::SignedTx};
@@ -110,13 +106,10 @@ impl TryFrom<SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
     type Error = ServiceError;
 
     fn try_from(signed_tx: SignedTx) -> Result<Self, Self::Error> {
-        let mut buf = Vec::new();
-        signed_tx.tx.consensus_encode(&mut buf)?;
-
         Ok(operator_rpc::spark::UserSignedTxSigningJob {
             leaf_id: signed_tx.node_id.clone(),
             signing_public_key: signed_tx.signing_public_key.serialize().to_vec(),
-            raw_tx: buf,
+            raw_tx: bitcoin::consensus::serialize(&signed_tx.tx),
             signing_nonce_commitment: Some(signed_tx.user_signature_commitment.try_into()?),
             signing_commitments: Some(operator_rpc::spark::SigningCommitments {
                 signing_commitments: to_proto_signing_commitments(&signed_tx.signing_commitments)?,

@@ -2,22 +2,30 @@ use std::time::Duration;
 use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use crate::Network;
-use crate::operator::rpc::spark::TransferFilter;
+use crate::core::{initial_sequence, next_sequence};
+use crate::operator::rpc::common::SignatureIntent;
 use crate::operator::rpc::spark::transfer_filter::Participant;
+use crate::operator::rpc::spark::{
+    ExtendLeafRequest, FinalizeNodeSignaturesRequest, NodeSignatures, SigningJob, TransferFilter,
+};
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{
     LeafKeyTweak, Transfer, map_public_keys, map_signature_shares, map_signing_nonce_commitments,
 };
 use crate::services::{PagingFilter, ProofMap, TransferId, TransferStatus};
-use crate::signer::{PrivateKeySource, SecretToSplit, VerifiableSecretShare};
+use crate::signer::{
+    AggregateFrostRequest, PrivateKeySource, SecretToSplit, SignFrostRequest, VerifiableSecretShare,
+};
+use crate::utils::anchor::ephemeral_anchor_output;
 use crate::utils::refund::{create_refund_tx, sign_refunds};
 
-use bitcoin::Transaction;
-use bitcoin::consensus::Encodable;
+use bitcoin::absolute::LockTime;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, SecretKey};
+use bitcoin::transaction::Version;
+use bitcoin::{OutPoint, Transaction, TxIn};
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments};
 use k256::Scalar;
 use prost::Message as ProstMessage;
@@ -614,7 +622,207 @@ impl<S: Signer> TransferService<S> {
     /// and a corresponding refund transaction. This is more comprehensive than refreshing
     /// as it creates entirely new transactions rather than just updating sequence numbers.
     pub async fn extend_time_lock(&self, node: &TreeNode) -> Result<Vec<TreeNode>, ServiceError> {
-        todo!()
+        let signing_key = PrivateKeySource::Derived(node.id.clone());
+        let signing_public_key = self
+            .signer
+            .get_public_key_from_private_key_source(&signing_key)?;
+
+        let refund_tx = node
+            .refund_tx
+            .clone()
+            .ok_or(ServiceError::Generic("No refund tx".to_string()))?;
+
+        let new_node_sequence = next_sequence(refund_tx.input[0].sequence).ok_or(
+            ServiceError::Generic("Failed to get next sequence".to_string()),
+        )?;
+
+        let mut new_node_tx = bitcoin::Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        new_node_tx.input.push(TxIn {
+            previous_output: OutPoint {
+                txid: node.node_tx.compute_txid(),
+                vout: 0,
+            },
+            sequence: new_node_sequence,
+            ..Default::default()
+        });
+
+        // TODO: js references applying a fee here, but is commented out. To do so, instead of cloning the output, we create a new one with the fee applied
+        new_node_tx.output.push(node.node_tx.output[0].clone());
+        new_node_tx.output.push(ephemeral_anchor_output());
+
+        let new_refund_tx = create_refund_tx(
+            initial_sequence(),
+            OutPoint {
+                txid: new_node_tx.compute_txid(),
+                vout: 0,
+            },
+            new_node_tx.output[0].value.to_sat(),
+            &signing_public_key,
+            self.network,
+        )
+        .map_err(|e| ServiceError::Generic(e.to_string()))?;
+
+        let node_sighash = sighash_from_tx(&new_node_tx, 0, &node.node_tx.output[0])?;
+        let refund_sighash = sighash_from_tx(&new_refund_tx, 0, &new_node_tx.output[0])?;
+
+        let new_node_signing_commitments = self.signer.generate_frost_signing_commitments().await?;
+        let new_refund_signing_commitments =
+            self.signer.generate_frost_signing_commitments().await?;
+
+        let new_node_signing_job = SigningJob {
+            signing_public_key: signing_public_key.serialize().to_vec(),
+            raw_tx: bitcoin::consensus::serialize(&new_node_tx),
+            signing_nonce_commitment: Some(new_node_signing_commitments.try_into()?),
+        };
+
+        let new_refund_signing_job = SigningJob {
+            signing_public_key: signing_public_key.serialize().to_vec(),
+            raw_tx: bitcoin::consensus::serialize(&new_refund_tx),
+            signing_nonce_commitment: Some(new_refund_signing_commitments.try_into()?),
+        };
+
+        let response = self
+            .coordinator_client
+            .extend_leaf(ExtendLeafRequest {
+                leaf_id: node.id.to_string(),
+                owner_identity_public_key: self
+                    .signer
+                    .get_identity_public_key()?
+                    .serialize()
+                    .to_vec(),
+                node_tx_signing_job: Some(new_node_signing_job),
+                refund_tx_signing_job: Some(new_refund_signing_job),
+            })
+            .await?;
+
+        let node_tx_signing_result =
+            response
+                .node_tx_signing_result
+                .ok_or(ServiceError::Generic(
+                    "Node tx signing result is none".to_string(),
+                ))?;
+        let refund_tx_signing_result =
+            response
+                .refund_tx_signing_result
+                .ok_or(ServiceError::Generic(
+                    "Refund tx signing result is none".to_string(),
+                ))?;
+
+        let new_node_tx_verifying_key =
+            PublicKey::from_slice(&node_tx_signing_result.verifying_key)
+                .map_err(|_| ServiceError::ValidationError("Invalid verifying key".to_string()))?;
+        let new_refund_tx_verifying_key =
+            PublicKey::from_slice(&refund_tx_signing_result.verifying_key)
+                .map_err(|_| ServiceError::ValidationError("Invalid verifying key".to_string()))?;
+
+        let new_node_tx_signing_result =
+            node_tx_signing_result
+                .signing_result
+                .ok_or(ServiceError::Generic(
+                    "Node tx signing result is none".to_string(),
+                ))?;
+        let new_refund_tx_signing_result =
+            refund_tx_signing_result
+                .signing_result
+                .ok_or(ServiceError::Generic(
+                    "Refund tx signing result is none".to_string(),
+                ))?;
+
+        let new_node_statechain_commitments =
+            map_signing_nonce_commitments(new_node_tx_signing_result.signing_nonce_commitments)?;
+        let new_refund_statechain_commitments =
+            map_signing_nonce_commitments(new_refund_tx_signing_result.signing_nonce_commitments)?;
+
+        let new_node_statechain_signatures =
+            map_signature_shares(new_node_tx_signing_result.signature_shares)?;
+        let new_refund_statechain_signatures =
+            map_signature_shares(new_refund_tx_signing_result.signature_shares)?;
+
+        let new_node_statechain_public_keys =
+            map_public_keys(new_node_tx_signing_result.public_keys)?;
+        let new_refund_statechain_public_keys =
+            map_public_keys(new_refund_tx_signing_result.public_keys)?;
+
+        // sign node and refund txs
+        let node_user_signature = self
+            .signer
+            .sign_frost(SignFrostRequest {
+                message: node_sighash.as_byte_array(),
+                public_key: &signing_public_key,
+                private_key: &signing_key,
+                verifying_key: &new_node_tx_verifying_key,
+                self_commitment: &new_node_signing_commitments,
+                statechain_commitments: new_node_statechain_commitments.clone(),
+                adaptor_public_key: None,
+            })
+            .await?;
+
+        let refund_user_signature = self
+            .signer
+            .sign_frost(SignFrostRequest {
+                message: refund_sighash.as_byte_array(),
+                public_key: &signing_public_key,
+                private_key: &signing_key,
+                verifying_key: &new_refund_tx_verifying_key,
+                self_commitment: &new_refund_signing_commitments,
+                statechain_commitments: new_refund_statechain_commitments.clone(),
+                adaptor_public_key: None,
+            })
+            .await?;
+
+        let node_signature = self
+            .signer
+            .aggregate_frost(AggregateFrostRequest {
+                message: node_sighash.as_byte_array(),
+                statechain_signatures: new_node_statechain_signatures,
+                statechain_public_keys: new_node_statechain_public_keys,
+                verifying_key: &new_node_tx_verifying_key,
+                statechain_commitments: new_node_statechain_commitments,
+                self_commitment: &new_node_signing_commitments,
+                public_key: &signing_public_key,
+                self_signature: &node_user_signature,
+                adaptor_public_key: None,
+            })
+            .await?;
+
+        let refund_signature = self
+            .signer
+            .aggregate_frost(AggregateFrostRequest {
+                message: refund_sighash.as_byte_array(),
+                statechain_signatures: new_refund_statechain_signatures,
+                statechain_public_keys: new_refund_statechain_public_keys,
+                verifying_key: &new_refund_tx_verifying_key,
+                statechain_commitments: new_refund_statechain_commitments,
+                self_commitment: &new_refund_signing_commitments,
+                public_key: &signing_public_key,
+                self_signature: &refund_user_signature,
+                adaptor_public_key: None,
+            })
+            .await?;
+
+        let nodes = self
+            .coordinator_client
+            .finalize_node_signatures(FinalizeNodeSignaturesRequest {
+                intent: SignatureIntent::Extend.into(),
+                node_signatures: vec![NodeSignatures {
+                    node_id: response.leaf_id,
+                    node_tx_signature: node_signature.serialize()?.to_vec(),
+                    refund_tx_signature: refund_signature.serialize()?.to_vec(),
+                }],
+            })
+            .await?
+            .nodes;
+
+        Ok(nodes
+            .into_iter()
+            .map(|n| n.try_into())
+            .collect::<Result<Vec<TreeNode>, _>>()?)
     }
 
     /// Low-level claim transfer operation
@@ -871,24 +1079,37 @@ impl<S: Signer> TransferService<S> {
                     ServiceError::Generic(format!("Leaf data not found for leaf {}", leaf.node.id))
                 })?;
 
+            let old_sequence = leaf
+                .node
+                .refund_tx
+                .as_ref()
+                .ok_or(ServiceError::Generic("No refund transaction".to_string()))?
+                .input[0]
+                .sequence;
+            let sequence = if is_for_claim {
+                old_sequence // TODO: is this correct?
+            } else {
+                next_sequence(old_sequence).ok_or(ServiceError::Generic(
+                    "Failed to get next sequence".to_string(),
+                ))?
+            };
+
             let refund_tx = create_refund_tx(
-                &leaf.node,
+                sequence,
+                bitcoin::OutPoint {
+                    txid: leaf.node.node_tx.compute_txid(),
+                    vout: 0,
+                },
+                leaf.node.value,
                 &refund_signing_data.receiving_public_key,
                 self.network,
-                is_for_claim,
             )?;
 
             let signing_job = operator_rpc::spark::LeafRefundTxSigningJob {
                 leaf_id: leaf.node.id.to_string(),
                 refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
                     signing_public_key: refund_signing_data.signing_public_key.serialize().to_vec(),
-                    raw_tx: {
-                        let mut buf = Vec::new();
-                        refund_tx
-                            .consensus_encode(&mut buf)
-                            .map_err(|e| ServiceError::BitcoinIOError(e))?;
-                        buf
-                    },
+                    raw_tx: bitcoin::consensus::serialize(&refund_tx),
                     signing_nonce_commitment: Some(
                         refund_signing_data.signing_nonce_commitment.try_into()?,
                     ),
@@ -951,31 +1172,31 @@ impl<S: Signer> TransferService<S> {
             // Sign with FROST
             let user_signature = self
                 .signer
-                .sign_frost(
-                    &refund_tx_sighash.to_byte_array(),
-                    &leaf_data.signing_public_key,
-                    &leaf_data.signing_private_key,
-                    &verifying_key,
-                    &leaf_data.signing_nonce_commitment,
-                    signing_nonce_commitments.clone(),
-                    adaptor_pubkey,
-                )
+                .sign_frost(SignFrostRequest {
+                    message: refund_tx_sighash.as_byte_array(),
+                    public_key: &leaf_data.signing_public_key,
+                    private_key: &leaf_data.signing_private_key,
+                    verifying_key: &verifying_key,
+                    self_commitment: &leaf_data.signing_nonce_commitment,
+                    statechain_commitments: signing_nonce_commitments.clone(),
+                    adaptor_public_key: adaptor_pubkey,
+                })
                 .await?;
 
             // Aggregate FROST signatures
             let refund_aggregate = self
                 .signer
-                .aggregate_frost(
-                    &refund_tx_sighash.to_byte_array(),
-                    signature_shares,
-                    public_keys,
-                    &verifying_key,
-                    signing_nonce_commitments,
-                    &leaf_data.signing_nonce_commitment,
-                    &leaf_data.signing_public_key,
-                    &user_signature,
-                    adaptor_pubkey,
-                )
+                .aggregate_frost(AggregateFrostRequest {
+                    message: refund_tx_sighash.as_byte_array(),
+                    statechain_signatures: signature_shares,
+                    statechain_public_keys: public_keys,
+                    verifying_key: &verifying_key,
+                    statechain_commitments: signing_nonce_commitments,
+                    self_commitment: &leaf_data.signing_nonce_commitment,
+                    public_key: &leaf_data.signing_public_key,
+                    self_signature: &user_signature,
+                    adaptor_public_key: adaptor_pubkey,
+                })
                 .await?;
 
             node_signatures.push(operator_rpc::spark::NodeSignatures {
@@ -1057,7 +1278,40 @@ impl<S: Signer> TransferService<S> {
         &self,
         leaves: Vec<TreeNode>,
     ) -> Result<Vec<TreeNode>, ServiceError> {
-        todo!()
+        let leaf_key_tweaks = leaves
+            .iter()
+            .map(|leaf| {
+                let current_signing_key =
+                    PrivateKeySource::Derived(leaf.parent_node_id.clone().ok_or(
+                        ServiceError::Generic("Leaf has no parent node id".to_string()),
+                    )?);
+                let ephemeral_key = self.signer.generate_random_key()?;
+
+                Ok(LeafKeyTweak {
+                    node: leaf.clone(),
+                    signing_key: current_signing_key,
+                    new_signing_key: ephemeral_key,
+                })
+            })
+            .collect::<Result<Vec<_>, ServiceError>>()?;
+
+        let transfer = self
+            .send_transfer_with_key_tweaks(
+                &leaf_key_tweaks,
+                &self.signer.get_identity_public_key()?,
+            )
+            .await?;
+
+        let pending_transfer =
+            self.query_transfer(&transfer.id)
+                .await?
+                .ok_or(ServiceError::Generic(
+                    "Pending transfer not found".to_string(),
+                ))?;
+
+        let resulting_nodes = self.claim_transfer(&pending_transfer, None).await?;
+
+        Ok(resulting_nodes)
     }
 
     /// Queries all transfers for the current identity

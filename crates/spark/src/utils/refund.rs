@@ -1,20 +1,19 @@
 use std::collections::BTreeMap;
 
-use crate::{
-    Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak, tree::TreeNode,
-};
-use bitcoin::Transaction;
+use crate::utils::anchor::ephemeral_anchor_output;
+use crate::{Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak};
 use bitcoin::absolute::LockTime;
 use bitcoin::blockdata::transaction::Version;
 use bitcoin::hashes::Hash;
+use bitcoin::{OutPoint, Sequence, Transaction};
 use bitcoin::{key::Secp256k1, secp256k1::PublicKey};
 use frost_core::round2::SignatureShare;
 use frost_secp256k1_tr::round1::SigningCommitments;
 
 use frost_secp256k1_tr::{Identifier, Secp256K1Sha256TR};
 
-use crate::signer::Signer;
 use crate::signer::SignerError;
+use crate::signer::{SignFrostRequest, Signer};
 
 pub struct SignedTx {
     pub node_id: String,
@@ -27,14 +26,12 @@ pub struct SignedTx {
 }
 
 pub fn create_refund_tx(
-    leaf: &TreeNode,
+    sequence: Sequence,
+    node_outpoint: OutPoint,
+    amount_sat: u64,
     receiving_pubkey: &PublicKey,
     network: Network,
-    is_for_claim: bool,
 ) -> Result<bitcoin::Transaction, SignerError> {
-    let node_tx = leaf.node_tx.clone();
-    let refund_tx = leaf.refund_tx.clone();
-
     let mut new_refund_tx = bitcoin::Transaction {
         version: Version::non_standard(3),
         lock_time: LockTime::ZERO,
@@ -42,22 +39,8 @@ pub fn create_refund_tx(
         output: vec![],
     };
 
-    let old_sequence = refund_tx
-        .ok_or(SignerError::Generic("No refund transaction".to_string()))?
-        .input[0]
-        .sequence;
-    let sequence = if is_for_claim {
-        // TODO: verify this is correct
-        old_sequence
-    } else {
-        next_sequence(old_sequence).unwrap_or_default()
-    };
-
     new_refund_tx.input.push(bitcoin::TxIn {
-        previous_output: bitcoin::OutPoint {
-            txid: node_tx.compute_txid(),
-            vout: 0,
-        },
+        previous_output: node_outpoint,
         script_sig: bitcoin::ScriptBuf::default(),
         sequence,
         witness: bitcoin::Witness::default(),
@@ -68,7 +51,7 @@ pub fn create_refund_tx(
     let addr = bitcoin::Address::p2tr(&secp, receiving_pubkey.x_only_public_key().0, None, network);
 
     new_refund_tx.output.push(bitcoin::TxOut {
-        value: node_tx.output[0].value,
+        value: bitcoin::Amount::from_sat(amount_sat),
         script_pubkey: addr.script_pubkey(),
     });
     new_refund_tx.output.push(ephemeral_anchor_output());
@@ -89,7 +72,27 @@ pub async fn sign_refunds<S: Signer>(
     for (i, leaf) in leaves.iter().enumerate() {
         let node_tx = leaf.node.node_tx.clone();
 
-        let new_refund_tx = create_refund_tx(&leaf.node, receiver_pubkey, network, false)?;
+        let old_sequence = leaf
+            .node
+            .refund_tx
+            .as_ref()
+            .ok_or(SignerError::Generic("No refund transaction".to_string()))?
+            .input[0]
+            .sequence;
+        let sequence = next_sequence(old_sequence).ok_or(SignerError::Generic(
+            "Failed to get next sequence".to_string(),
+        ))?;
+
+        let new_refund_tx = create_refund_tx(
+            sequence,
+            OutPoint {
+                txid: node_tx.compute_txid(),
+                vout: 0,
+            },
+            leaf.node.value,
+            receiver_pubkey,
+            network,
+        )?;
 
         let sighash = sighash_from_tx(&new_refund_tx, 0, &node_tx.output[0])
             .map_err(|e| SignerError::Generic(e.to_string()))?;
@@ -101,15 +104,15 @@ pub async fn sign_refunds<S: Signer>(
             signer.get_public_key_from_private_key_source(&leaf.signing_key)?;
 
         let user_signature_share = signer
-            .sign_frost(
-                sighash.to_raw_hash().to_byte_array().as_ref(),
-                &signing_public_key,
-                &leaf.signing_key,
-                &leaf.node.verifying_public_key,
-                &self_commitment,
-                spark_commitment.clone(),
-                None,
-            )
+            .sign_frost(SignFrostRequest {
+                message: sighash.to_raw_hash().to_byte_array().as_ref(),
+                public_key: &signing_public_key,
+                private_key: &leaf.signing_key,
+                verifying_key: &leaf.node.verifying_public_key,
+                self_commitment: &self_commitment,
+                statechain_commitments: spark_commitment.clone(),
+                adaptor_public_key: None,
+            })
             .await?;
 
         signed_refunds.push(SignedTx {
@@ -124,11 +127,4 @@ pub async fn sign_refunds<S: Signer>(
     }
 
     Ok(signed_refunds)
-}
-
-fn ephemeral_anchor_output() -> bitcoin::TxOut {
-    bitcoin::TxOut {
-        value: bitcoin::Amount::from_sat(0),
-        script_pubkey: bitcoin::ScriptBuf::from_bytes(vec![0x51, 0x02, 0x4e, 0x73]),
-    }
 }

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
 use tokio::sync::Mutex;
+use tracing::warn;
 
 use crate::{
     Network,
@@ -200,6 +201,7 @@ impl<S: Signer> TreeService<S> {
         let mut resulting_nodes = Vec::new();
         for node in nodes.into_iter() {
             if node.status != TreeNodeStatus::Available {
+                warn!("Leaf is not available: {node:?}");
                 // TODO: Handle other statuses appropriately.
                 resulting_nodes.push(node);
                 continue;
@@ -209,6 +211,7 @@ impl<S: Signer> TreeService<S> {
 
             for n in nodes {
                 if n.status != TreeNodeStatus::Available {
+                    warn!("Leaf resulting from extend_time_lock is not available: {n:?}",);
                     // TODO: Handle other statuses appropriately.
                     resulting_nodes.push(n);
                     continue;

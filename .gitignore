@@ -12,3 +12,6 @@
 
 # in project js reference to help LLMs
 js_reference/
+
+# Example CLI files
+*.spark/

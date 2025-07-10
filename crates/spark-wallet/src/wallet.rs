@@ -14,7 +14,7 @@ use spark::{
     ssp::ServiceProvider,
     tree::{TreeNode, TreeNodeId, TreeService, TreeState},
 };
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::{
     leaf::WalletLeaf,
@@ -199,6 +199,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .get_lightning_receive_payment(id)
             .await?)
     }
+
     // TODO: In the js sdk this function calls an electrum server to fetch the transaction hex based on a txid.
     // Intuitively this function is being called when you've already learned about a transaction, so it could be passed in directly.
     /// Claims a deposit by finding the first unused deposit address in the transaction outputs.
@@ -210,7 +211,9 @@ impl<S: Signer + Clone> SparkWallet<S> {
         // TODO: This entire function happens inside a txid mutex in the js sdk. It seems unnecessary here?
 
         let deposit_nodes = self.deposit_service.claim_deposit(tx, vout).await?;
+        debug!("Claimed deposit nodes: {:?}", deposit_nodes);
         let optimized_nodes = self.tree_service.collect_leaves(deposit_nodes).await?;
+        debug!("Optimized nodes: {:?}", optimized_nodes);
         Ok(optimized_nodes.into_iter().map(WalletLeaf::from).collect())
     }
 
