@@ -15,6 +15,8 @@ pub enum DepositCommand {
     /// Generate a new onchain deposit address.
     NewAddress,
     NewAddressAndClaim,
+    /// List unused deposit addresses.
+    ListUnusedAddresses,
 }
 
 pub async fn handle_command<S>(
@@ -65,6 +67,10 @@ where
                 "Claimed deposit: {}",
                 serde_json::to_string_pretty(&leaves)?
             );
+        }
+        DepositCommand::ListUnusedAddresses => {
+            let addresses = wallet.list_unused_deposit_addresses().await?;
+            println!("{}", serde_json::to_string_pretty(&addresses)?);
         }
     }
 
