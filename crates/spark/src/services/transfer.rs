@@ -16,6 +16,7 @@ use crate::services::{PagingFilter, ProofMap, TransferId, TransferStatus};
 use crate::signer::{
     AggregateFrostRequest, PrivateKeySource, SecretToSplit, SignFrostRequest, VerifiableSecretShare,
 };
+use crate::utils::anchor::ephemeral_anchor_output;
 use crate::utils::refund::{create_refund_tx, sign_refunds};
 
 use bitcoin::absolute::LockTime;
@@ -637,6 +638,7 @@ impl<S: Signer> TransferService<S> {
 
         // TODO: js references applying a fee here, but is commented out. To do so, instead of cloning the output, we create a new one with the fee applied
         new_node_tx.output.push(node.node_tx.output[0].clone());
+        new_node_tx.output.push(ephemeral_anchor_output());
 
         let new_refund_tx = create_refund_tx(
             initial_sequence(),

@@ -21,6 +21,7 @@ use crate::{
     services::{PagingFilter, PagingResult},
     signer::{AggregateFrostRequest, PrivateKeySource, SignFrostRequest, Signer},
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
+    utils::anchor::ephemeral_anchor_output,
 };
 
 use super::{
@@ -588,12 +589,5 @@ where
             user_signing_public_key,
             verifying_public_key,
         })
-    }
-}
-
-fn ephemeral_anchor_output() -> TxOut {
-    TxOut {
-        script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]), // Pay-to-anchor (P2A) ephemeral anchor output
-        value: Amount::from_sat(0),
     }
 }
