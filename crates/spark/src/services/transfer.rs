@@ -1,5 +1,5 @@
 use std::time::Duration;
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::Network;
 use crate::core::{initial_sequence, next_sequence};
@@ -17,7 +17,9 @@ use crate::signer::{
     AggregateFrostRequest, PrivateKeySource, SecretToSplit, SignFrostRequest, VerifiableSecretShare,
 };
 use crate::utils::anchor::ephemeral_anchor_output;
-use crate::utils::refund::{create_refund_tx, prepare_refund_so_signing_jobs, sign_refunds};
+use crate::utils::refund::{
+    create_refund_tx, prepare_refund_so_signing_jobs, sign_aggregate_refunds, sign_refunds,
+};
 
 use bitcoin::absolute::LockTime;
 use bitcoin::hashes::{Hash, sha256};
@@ -1050,101 +1052,16 @@ impl<S: Signer> TransferService<S> {
             .await?;
 
         // Sign the refunds using FROST
-        let node_signatures = self
-            .sign_refunds(
-                &leaf_data_map
-                    .into_iter()
-                    .map(|(key, data)| (key, data.into()))
-                    .collect(),
-                &response.signing_results,
-                None,
-            )
-            .await?;
-
-        Ok(node_signatures)
-    }
-
-    /// Signs refund transactions using FROST threshold signatures
-    async fn sign_refunds(
-        &self,
-        leaf_data_map: &HashMap<TreeNodeId, LeafRefundSigningData>,
-        operator_signing_results: &[operator_rpc::spark::LeafRefundTxSigningResult],
-        adaptor_pubkey: Option<&PublicKey>,
-    ) -> Result<Vec<operator_rpc::spark::NodeSignatures>, ServiceError> {
-        let mut node_signatures = Vec::new();
-
-        for operator_signing_result in operator_signing_results {
-            let leaf_id = TreeNodeId::from_str(&operator_signing_result.leaf_id)
-                .map_err(|e| ServiceError::ValidationError(e))?;
-
-            let leaf_data = leaf_data_map.get(&leaf_id).ok_or_else(|| {
-                ServiceError::Generic(format!(
-                    "Leaf data not found for leaf {}",
-                    operator_signing_result.leaf_id
-                ))
-            })?;
-
-            let refund_tx_signing_result = operator_signing_result
-                .refund_tx_signing_result
-                .as_ref()
-                .ok_or_else(|| {
-                    ServiceError::ValidationError("Missing refund tx signing result".to_string())
-                })?;
-
-            let refund_tx = leaf_data
-                .refund_tx
-                .as_ref()
-                .ok_or_else(|| ServiceError::Generic("Missing refund transaction".to_string()))?;
-
-            let refund_tx_sighash = sighash_from_tx(refund_tx, 0, &leaf_data.tx.output[0])?;
-
-            // Map operator signing commitments and signature shares
-            let signing_nonce_commitments = map_signing_nonce_commitments(
-                refund_tx_signing_result.signing_nonce_commitments.clone(),
-            )?;
-            let signature_shares =
-                map_signature_shares(refund_tx_signing_result.signature_shares.clone())?;
-            let public_keys = map_public_keys(refund_tx_signing_result.public_keys.clone())?;
-
-            let verifying_key = PublicKey::from_slice(&operator_signing_result.verifying_key)
-                .map_err(|_| ServiceError::ValidationError("Invalid verifying key".to_string()))?;
-
-            // Sign with FROST
-            let user_signature = self
-                .signer
-                .sign_frost(SignFrostRequest {
-                    message: refund_tx_sighash.as_byte_array(),
-                    public_key: &leaf_data.signing_public_key,
-                    private_key: &leaf_data.signing_private_key,
-                    verifying_key: &verifying_key,
-                    self_commitment: &leaf_data.signing_nonce_commitment,
-                    statechain_commitments: signing_nonce_commitments.clone(),
-                    adaptor_public_key: adaptor_pubkey,
-                })
-                .await?;
-
-            // Aggregate FROST signatures
-            let refund_aggregate = self
-                .signer
-                .aggregate_frost(AggregateFrostRequest {
-                    message: refund_tx_sighash.as_byte_array(),
-                    statechain_signatures: signature_shares,
-                    statechain_public_keys: public_keys,
-                    verifying_key: &verifying_key,
-                    statechain_commitments: signing_nonce_commitments,
-                    self_commitment: &leaf_data.signing_nonce_commitment,
-                    public_key: &leaf_data.signing_public_key,
-                    self_signature: &user_signature,
-                    adaptor_public_key: adaptor_pubkey,
-                })
-                .await?;
-
-            node_signatures.push(operator_rpc::spark::NodeSignatures {
-                node_id: operator_signing_result.leaf_id.clone(),
-                refund_tx_signature: refund_aggregate.serialize()?.to_vec(),
-                node_tx_signature: Vec::new(),
-            });
-        }
+        let node_signatures = sign_aggregate_refunds(
+            &self.signer,
+            &leaf_data_map
+                .into_iter()
+                .map(|(key, data)| (key, data.into()))
+                .collect(),
+            &response.signing_results,
+            None,
+        )
+        .await?;
 
         Ok(node_signatures)
     }
