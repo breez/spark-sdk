@@ -2,6 +2,7 @@ use bitcoin::{
     Sequence,
     relative::{Height, LockTime},
 };
+use tracing::trace;
 
 pub const INITIAL_TIME_LOCK: u16 = 2000;
 pub const TIME_LOCK_INTERVAL: u16 = 100;
@@ -13,22 +14,42 @@ pub fn initial_sequence() -> Sequence {
 
 pub fn next_sequence(current_sequence: Sequence) -> Option<Sequence> {
     if !current_sequence.is_height_locked() {
+        trace!(
+            "Current sequence {} is not height locked, cannot calculate next sequence",
+            current_sequence
+        );
         return None;
     }
 
     let Some(current_locktime) = current_sequence.to_relative_lock_time() else {
+        trace!(
+            "Current sequence {} is not a relative lock time, cannot calculate next sequence",
+            current_sequence
+        );
         return None;
     };
 
     let LockTime::Blocks(blocks) = current_locktime else {
+        trace!(
+            "Current sequence locktime {} is not expressed in blocks, cannot calculate next sequence",
+            current_sequence
+        );
         return None;
     };
 
     let Some(new_blocks) = blocks.value().checked_sub(TIME_LOCK_INTERVAL) else {
+        trace!(
+            "Current sequence locktime {} is too low to calculate next sequence",
+            current_sequence
+        );
         return None;
     };
 
     if new_blocks < TIME_LOCK_INTERVAL {
+        trace!(
+            "new_blocks {} is less than TIME_LOCK_INTERVAL {}, cannot calculate next sequence for {}",
+            new_blocks, TIME_LOCK_INTERVAL, current_sequence
+        );
         return None;
     }
 
