@@ -369,7 +369,7 @@ mod tests {
 
                     let xj = shares[j].secret_share.index;
                     numerator *= xj;
-                    denominator *= (xj - xi);
+                    denominator *= xj - xi;
                 }
 
                 // Calculate the term yi * L_i(0) and add it to the result
