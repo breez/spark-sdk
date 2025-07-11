@@ -155,39 +155,70 @@ impl<S: Signer> TreeService<S> {
         Ok(())
     }
 
-    /// Selects leaves from the tree that sum up to the target amount.
-    /// If necessary, performs swap to get set of leaves matching target amount.
+    /// Selects leaves from the tree that sum up to exactly the target amount.
+    /// If such a combination of leaves does not exist, it returns `None`.
     pub async fn select_leaves_by_amount(
         &self,
         target_amount_sat: u64,
-    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+    ) -> Result<Option<Vec<TreeNode>>, TreeServiceError> {
         if target_amount_sat == 0 {
             return Err(TreeServiceError::InvalidAmount);
         }
 
-        let mut amount = 0;
-        let mut nodes = vec![];
         let mut leaves = self.list_leaves().await?;
+
+        // Only consider leaves that are available.
         leaves.retain(|leaf| leaf.status == TreeNodeStatus::Available);
-        leaves.sort_by(|a, b| b.value.cmp(&a.value));
 
-        let mut aggregated_amount: u64 = 0;
+        if leaves.iter().map(|leaf| leaf.value).sum::<u64>() < target_amount_sat {
+            return Err(TreeServiceError::InsufficientFunds);
+        }
+
+        // Try to find a single leaf that matches the exact amount
+        if let Some(leaf) = find_exact_single_match(&leaves, target_amount_sat) {
+            return Ok(Some(vec![leaf]));
+        }
+
+        // Try to find a set of leaves that sum exactly to the target amount
+        if let Some(selected_leaves) = find_exact_multiple_match(&leaves, target_amount_sat) {
+            return Ok(Some(selected_leaves));
+        }
+
+        Ok(None)
+    }
+
+    /// Selects leaves from the tree that sum up to at least the target amount.
+    pub async fn select_leaves_by_minimum_amount(
+        &self,
+        target_amount_sat: u64,
+    ) -> Result<Option<Vec<TreeNode>>, TreeServiceError> {
+        if target_amount_sat == 0 {
+            return Err(TreeServiceError::InvalidAmount);
+        }
+
+        let mut leaves = self.list_leaves().await?;
+
+        // Only consider leaves that are available.
+        leaves.retain(|leaf| leaf.status == TreeNodeStatus::Available);
+
+        // Sort leaves by value in ascending order, to prefer spending smaller leaves first.
+        leaves.sort_by(|a, b| a.value.cmp(&b.value));
+
+        let mut result = Vec::new();
+        let mut sum = 0;
         for leaf in leaves {
-            aggregated_amount += leaf.value;
-            if target_amount_sat.saturating_sub(amount) >= leaf.value {
-                amount += leaf.value;
-                nodes.push(leaf);
+            sum += leaf.value;
+            result.push(leaf);
+            if sum >= target_amount_sat {
+                break;
             }
         }
-        if amount < target_amount_sat {
-            match aggregated_amount > target_amount_sat {
-                true => return Err(TreeServiceError::UnselectableAmount),
-                false => return Err(TreeServiceError::InsufficientFunds),
-            }
-        }
-        // TODO: if necessary, perform swap to get set of leaves matching target amount
 
-        Ok(nodes)
+        if sum < target_amount_sat {
+            return Ok(None);
+        }
+
+        Ok(Some(result))
     }
 
     pub async fn collect_leaves(
@@ -264,5 +295,192 @@ impl<S: Signer> TreeService<S> {
             .filter(|leaf| leaf.status == TreeNodeStatus::Available)
             .map(|leaf| leaf.value)
             .sum::<u64>())
+    }
+}
+
+fn find_exact_single_match(leaves: &[TreeNode], target_amount_sat: u64) -> Option<TreeNode> {
+    leaves
+        .iter()
+        .find(|leaf| leaf.value == target_amount_sat)
+        .cloned()
+}
+
+fn find_exact_multiple_match(leaves: &[TreeNode], target_amount_sat: u64) -> Option<Vec<TreeNode>> {
+    use std::collections::HashMap;
+
+    // Early return if target is 0 or if there are no leaves
+    if target_amount_sat == 0 {
+        return Some(Vec::new());
+    }
+    if leaves.is_empty() {
+        return None;
+    }
+
+    // Use dynamic programming with HashMap for space efficiency
+    // dp[amount] = (leaf_idx, prev_amount) represents that we can achieve 'amount'
+    // by using leaf at leaf_idx and then achieve prev_amount
+    let mut dp: HashMap<u64, (usize, u64)> = HashMap::new();
+    dp.insert(0, (usize::MAX, 0)); // Special marker for zero sum
+
+    // Fill dp table
+    for (leaf_idx, leaf) in leaves.iter().enumerate() {
+        // Consider all amounts we can currently achieve
+        let current_amounts: Vec<u64> = dp.keys().cloned().collect();
+
+        for &current_amount in &current_amounts {
+            let new_amount = current_amount + leaf.value;
+
+            // If this new amount doesn't exceed our target and we haven't found a way to achieve it yet
+            if new_amount <= target_amount_sat && !dp.contains_key(&new_amount) {
+                dp.insert(new_amount, (leaf_idx, current_amount));
+            }
+        }
+
+        // Early exit if we've found our target
+        if dp.contains_key(&target_amount_sat) {
+            break;
+        }
+    }
+
+    // If target amount cannot be reached
+    if !dp.contains_key(&target_amount_sat) {
+        return None;
+    }
+
+    // Reconstruct the solution by backtracking through the dp table
+    let mut result = Vec::new();
+    let mut current_amount = target_amount_sat;
+
+    while current_amount > 0 {
+        let (leaf_idx, prev_amount) = *dp.get(&current_amount).unwrap();
+        if leaf_idx == usize::MAX {
+            break; // Reached the special zero marker
+        }
+
+        result.push(leaves[leaf_idx].clone());
+        current_amount = prev_amount;
+    }
+
+    Some(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::{Transaction, absolute::LockTime, transaction::Version};
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus};
+
+    // Helper function to create test leaves with specific values
+    fn create_test_leaves(values: &[u64]) -> Vec<TreeNode> {
+        values
+            .iter()
+            .map(|&value| TreeNode {
+                id: TreeNodeId::generate(),
+                tree_id: Uuid::now_v7().to_string(),
+                value,
+                parent_node_id: None,
+                node_tx: Transaction {
+                    version: Version::TWO,
+                    lock_time: LockTime::ZERO,
+                    input: vec![],
+                    output: vec![],
+                },
+                refund_tx: None,
+                vout: 0,
+                verifying_public_key: PublicKey::from_slice(&[2; 33]).unwrap(),
+                owner_identity_public_key: PublicKey::from_slice(&[2; 33]).unwrap(),
+                signing_keyshare: SigningKeyshare {
+                    owner_identifiers: Vec::new(),
+                    threshold: 0,
+                },
+                status: TreeNodeStatus::Available,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_find_exact_single_match() {
+        let leaves = create_test_leaves(&[10000, 5000, 3000, 1000]);
+
+        // Should find an exact match
+        let result = find_exact_single_match(&leaves, 5000);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().value, 5000);
+
+        // Should not find a match
+        let result = find_exact_single_match(&leaves, 7000);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_exact_multiple_match_simple_case() {
+        let leaves = create_test_leaves(&[10000, 5000, 3000, 1000]);
+
+        // Should find 5000 + 1000
+        let result = find_exact_multiple_match(&leaves, 6000);
+        assert!(result.is_some());
+
+        let selected = result.unwrap();
+        let total: u64 = selected.iter().map(|leaf| leaf.value).sum();
+        assert_eq!(total, 6000);
+
+        // Verify we're using the correct leaves (we know our implementation will
+        // select 5000 + 1000 rather than 3000 + 3000 because leaves are processed in order)
+        let values: Vec<u64> = selected.iter().map(|leaf| leaf.value).collect();
+        assert!(values.contains(&5000));
+        assert!(values.contains(&1000));
+    }
+
+    #[test]
+    fn test_find_exact_multiple_match_complex_case() {
+        let leaves = create_test_leaves(&[10000, 7000, 5000, 3000, 2000, 1000]);
+
+        // Should find a combination adding up to 12000
+        let result = find_exact_multiple_match(&leaves, 12000);
+        assert!(result.is_some());
+
+        let selected = result.unwrap();
+        let total: u64 = selected.iter().map(|leaf| leaf.value).sum();
+        assert_eq!(total, 12000);
+    }
+
+    #[test]
+    fn test_find_exact_multiple_match_edge_cases() {
+        // Empty leaves
+        let leaves = Vec::<TreeNode>::new();
+        assert!(find_exact_multiple_match(&leaves, 1000).is_none());
+
+        // Zero target
+        let leaves = create_test_leaves(&[1000, 500]);
+        assert_eq!(find_exact_multiple_match(&leaves, 0).unwrap().len(), 0);
+
+        // Impossible combination
+        let leaves = create_test_leaves(&[10000, 5000, 3000]);
+        assert!(find_exact_multiple_match(&leaves, 7000).is_none());
+
+        // Target equals single leaf value
+        let leaves = create_test_leaves(&[10000, 5000, 3000]);
+        let result = find_exact_multiple_match(&leaves, 5000);
+        assert!(result.is_some());
+        let result = result.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].value, 5000);
+    }
+
+    #[test]
+    fn test_find_exact_multiple_match_large_values() {
+        // Test with larger values to ensure our algorithm scales properly
+        let leaves =
+            create_test_leaves(&[100_000_000, 50_000_000, 30_000_000, 10_000_000, 5_000_000]);
+
+        // Should find a combination adding up to 65_000_000
+        let result = find_exact_multiple_match(&leaves, 65_000_000);
+        assert!(result.is_some());
+
+        let selected = result.unwrap();
+        let total: u64 = selected.iter().map(|leaf| leaf.value).sum();
+        assert_eq!(total, 65_000_000);
     }
 }
