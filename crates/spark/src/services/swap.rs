@@ -124,26 +124,6 @@ where
             false,
         )?;
 
-        // let key_tweak_input_map = prepare_send_transfer_key_tweaks(
-        //     &self.operator_clients,
-        //     &self.signer,
-        //     &transfer_id,
-        //     &receiver_public_key,
-        //     &leaf_key_tweaks,
-        //     HashMap::new(),
-        //     self.split_secret_threshold,
-        // ).await?;
-        // let transfer_package = prepare_transfer_package(
-        //     self.coordinator_client.clone(),
-        //     key_tweak_input_map,
-        //     &leaf_key_tweaks,
-        //     self.network,
-        //     &self.operator_clients,
-        //     &receiver_public_key,
-        //     &self.signer,
-        //     &transfer_id,
-        // ).await?;
-
         // TODO: Migrate to new transfer package format. leaves_to_send is deprecated.
         let response = self
             .coordinator_client
