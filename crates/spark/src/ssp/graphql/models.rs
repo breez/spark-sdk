@@ -95,10 +95,14 @@ pub enum BitcoinNetwork {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CurrencyUnit {
+    Bitcoin,
     Satoshi,
     Millisatoshi,
-    Bitcoin,
-    Fiat,
+    Usd,
+    Mxn,
+    Php,
+    Eur,
+    Gbp,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -123,16 +127,14 @@ pub enum SparkCoopExitRequestStatus {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SparkLeavesSwapRequestStatus {
-    InvoiceCreated,
-    TransferCreated,
-    TransferCreationFailed,
-    RefundSigningCommitmentsQueryingFailed,
-    RefundSigningFailed,
-    PaymentPreimageRecovered,
-    PaymentPreimageRecoveringFailed,
-    LightningPaymentReceived,
-    TransferFailed,
-    TransferCompleted,
+    Created,
+    Initiated,
+    LeavesLocked,
+    RefundTxAdaptorSigned,
+    InboundTransferClaimed,
+    Succeeded,
+    Expired,
+    Failed,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -174,8 +176,9 @@ pub enum LightningSendRequestStatus {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ExitSpeed {
-    Normal,
     Fast,
+    Medium,
+    Slow,
 }
 
 /// Claim static deposit request type enum
@@ -183,7 +186,7 @@ pub enum ExitSpeed {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClaimStaticDepositRequestType {
     FixedAmount,
-    FullAmount,
+    MaxFee,
 }
 
 /// GetChallengeOutput response
