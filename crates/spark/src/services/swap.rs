@@ -67,7 +67,7 @@ where
     /// Swaps the specified leaves for new leaves with the target amounts. Returns a transfer object that should be claimed to obtain the new leaves.
     pub async fn swap_leaves(
         &self,
-        leaves: Vec<TreeNode>,
+        leaves: &[TreeNode],
         target_amounts: Vec<u64>,
     ) -> Result<Transfer, ServiceError> {
         if target_amounts.is_empty() {

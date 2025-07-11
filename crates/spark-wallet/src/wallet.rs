@@ -268,12 +268,21 @@ impl<S: Signer + Clone> SparkWallet<S> {
         if leaves.len() != leaf_ids.len() {
             return Err(SparkWalletError::LeavesNotFound);
         }
+        let leaves = self.swap_leaves_internal(&leaves, target_amounts).await?;
+        Ok(leaves.into_iter().map(WalletLeaf::from).collect())
+    }
+
+    async fn swap_leaves_internal(
+        &self,
+        leaves: &[TreeNode],
+        target_amounts: Vec<u64>,
+    ) -> Result<Vec<TreeNode>, SparkWalletError> {
         let transfer = self
             .swap_service
             .swap_leaves(leaves, target_amounts)
             .await?;
         let leaves = self.claim_transfer(&transfer, false, false).await?;
-        Ok(leaves.into_iter().map(WalletLeaf::from).collect())
+        Ok(leaves)
     }
 
     /// Sends a transfer to another Spark user.
@@ -386,19 +395,33 @@ impl<S: Signer + Clone> SparkWallet<S> {
         &self,
         target_amount_sat: u64,
     ) -> Result<Vec<TreeNode>, SparkWalletError> {
-        let leaves = self.tree_service.select_leaves_by_amount(target_amount_sat).await?;
+        let leaves = self
+            .tree_service
+            .select_leaves_by_amount(target_amount_sat)
+            .await?;
         if let Some(leaves) = leaves {
-            return Ok(leaves)
+            return Ok(leaves);
         }
 
-        let leaves = self.tree_service.select_leaves_by_minimum_amount(target_amount_sat).await?;
+        // If no exact match is found, try to find leaves with a minimum amount that can be swapped
+        // to match the target amount.
+        let leaves = self
+            .tree_service
+            .select_leaves_by_minimum_amount(target_amount_sat)
+            .await?;
         let Some(leaves) = leaves else {
-            return Err(SparkWalletError::InsufficientFunds)
+            return Err(SparkWalletError::InsufficientFunds);
         };
 
-        self.swap_leaves(leaves.into_iter().map(|leaf|leaf.id).collect(), vec![target_amount_sat]).await?;
-        
-        let leaves = self.tree_service.select_leaves_by_amount(target_amount_sat).await?;
+        // Swap the leaves to match the target amount.
+        self.swap_leaves_internal(&leaves, vec![target_amount_sat])
+            .await?;
+
+        // Now the leaves should contain the exact amount.
+        let leaves = self
+            .tree_service
+            .select_leaves_by_amount(target_amount_sat)
+            .await?;
         let leaves = leaves.ok_or(SparkWalletError::InsufficientFunds)?;
 
         Ok(leaves)
