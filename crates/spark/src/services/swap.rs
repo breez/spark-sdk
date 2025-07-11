@@ -4,11 +4,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use bitcoin::{
-    consensus::serialize,
-    key::Secp256k1,
-    secp256k1::{All, ecdsa},
-};
+use bitcoin::{consensus::serialize, secp256k1::ecdsa};
 use prost_types::Timestamp;
 
 use crate::{
@@ -128,8 +124,8 @@ where
                     .to_vec(),
                 receiver_identity_public_key: receiver_public_key.serialize().to_vec(),
                 expiry_time: Some(Timestamp::from(SystemTime::now() + SWAP_EXPIRY_DURATION)),
+                #[allow(deprecated)]
                 leaves_to_send: signing_jobs,
-                // transfer_package: Some(transfer_package),
                 ..Default::default()
             })
             .await?;

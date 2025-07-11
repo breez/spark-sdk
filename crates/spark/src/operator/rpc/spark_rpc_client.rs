@@ -1,7 +1,6 @@
 use super::auth::OperatorAuth;
 use super::error::Result;
 use super::spark::*;
-use crate::Network;
 use crate::operator::Operator;
 use crate::signer::Signer;
 use tonic::transport::Channel;

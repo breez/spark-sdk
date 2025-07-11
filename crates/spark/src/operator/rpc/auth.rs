@@ -5,7 +5,6 @@ use super::spark_authn::{
     GetChallengeRequest, VerifyChallengeRequest,
     spark_authn_service_client::SparkAuthnServiceClient,
 };
-use crate::Network;
 use crate::signer::Signer;
 use prost::Message;
 use tokio::sync::Mutex;
