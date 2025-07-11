@@ -146,10 +146,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .validate_payment(invoice, max_fee_sat)
             .await?;
 
-        let leaves = self
-            .tree_service
-            .select_leaves_by_amount(total_amount_sat)
-            .await?;
+        let leaves = self.select_leaves(total_amount_sat).await?;
 
         // start the lightning swap with the operator
         let swap = self
@@ -295,10 +292,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let is_self_transfer = receiver_pubkey == self.signer.get_identity_public_key()?;
 
         // get leaves to transfer
-        let leaves = self
-            .tree_service
-            .select_leaves_by_amount(amount_sat)
-            .await?;
+        let leaves = self.select_leaves(amount_sat).await?;
 
         let transfer = self
             .transfer_service
@@ -383,6 +377,31 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .query_pending_transfers(&PagingFilter::default())
             .await?;
         Ok(transfers.into_iter().map(WalletTransfer::from).collect())
+    }
+
+    /// Selects leaves from the tree that sum up to exactly the target amount.
+    /// If such a combination of leaves does not exist, it performs a swap to get a set of leaves matching the target amount.
+    /// If no leaves can be selected, returns an error
+    async fn select_leaves(
+        &self,
+        target_amount_sat: u64,
+    ) -> Result<Vec<TreeNode>, SparkWalletError> {
+        let leaves = self.tree_service.select_leaves_by_amount(target_amount_sat).await?;
+        if let Some(leaves) = leaves {
+            return Ok(leaves)
+        }
+
+        let leaves = self.tree_service.select_leaves_by_minimum_amount(target_amount_sat).await?;
+        let Some(leaves) = leaves else {
+            return Err(SparkWalletError::InsufficientFunds)
+        };
+
+        self.swap_leaves(leaves.into_iter().map(|leaf|leaf.id).collect(), vec![target_amount_sat]).await?;
+        
+        let leaves = self.tree_service.select_leaves_by_amount(target_amount_sat).await?;
+        let leaves = leaves.ok_or(SparkWalletError::InsufficientFunds)?;
+
+        Ok(leaves)
     }
 
     pub async fn sync(&self) -> Result<(), SparkWalletError> {

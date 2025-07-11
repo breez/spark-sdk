@@ -5,6 +5,9 @@ pub enum SparkWalletError {
     #[error("Validation error: {0}")]
     ValidationError(String),
 
+    #[error("Insufficient funds")]
+    InsufficientFunds,
+
     #[error("Invalid network")]
     InvalidNetwork,
 
