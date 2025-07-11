@@ -129,6 +129,16 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
     }
 }
 
+struct SwapNodesForPreimageRequest<'a> {
+    leaves: &'a [LeafKeyTweak],
+    receiver_pubkey: &'a PublicKey,
+    payment_hash: &'a sha256::Hash,
+    invoice: &'a str,
+    invoice_amount_sats: u64,
+    fee_sats: u64,
+    is_inbound_payment: bool,
+}
+
 pub struct LightningService<S>
 where
     S: Signer,
@@ -256,15 +266,15 @@ where
         }
 
         let swap_response = self
-            .swap_nodes_for_preimage(
-                &leaf_tweaks,
-                &self.ssp_client.identity_public_key(),
+            .swap_nodes_for_preimage(SwapNodesForPreimageRequest {
+                leaves: &leaf_tweaks,
+                receiver_pubkey: &self.ssp_client.identity_public_key(),
                 payment_hash,
                 invoice,
-                amount_sats,
-                0, // TODO: this must use the estimated fee.
-                false,
-            )
+                invoice_amount_sats: amount_sats,
+                fee_sats: 0, // TODO: this must use the estimated fee.
+                is_inbound_payment: false,
+            })
             .await?;
 
         let transfer = swap_response.transfer.ok_or(ServiceError::SSPswapError(
@@ -371,16 +381,11 @@ where
 
     async fn swap_nodes_for_preimage(
         &self,
-        leaves: &[LeafKeyTweak],
-        receiver_pubkey: &PublicKey,
-        payment_hash: &sha256::Hash,
-        invoice: &str,
-        invoice_amount_sats: u64,
-        fee_sats: u64,
-        is_inbound_payment: bool,
+        req: SwapNodesForPreimageRequest<'_>,
     ) -> Result<InitiatePreimageSwapResponse, ServiceError> {
         // get signing commitments
-        let node_ids: Vec<String> = leaves
+        let node_ids: Vec<String> = req
+            .leaves
             .iter()
             .map(|l| l.node.id.clone().to_string())
             .collect();
@@ -400,28 +405,28 @@ where
 
         let user_signed_refunds = refund_utils::sign_refunds(
             &self.signer,
-            leaves,
+            req.leaves,
             signing_commitments,
-            receiver_pubkey,
+            req.receiver_pubkey,
             self.network,
         )
         .await?;
 
         let transfer_id = TransferId::generate();
-        let reason = if is_inbound_payment {
+        let reason = if req.is_inbound_payment {
             Reason::Receive
         } else {
             Reason::Send
         };
 
         let request_data = InitiatePreimageSwapRequest {
-            payment_hash: payment_hash.to_byte_array().to_vec(),
+            payment_hash: req.payment_hash.to_byte_array().to_vec(),
             reason: reason as i32,
             invoice_amount: Some(InvoiceAmount {
                 invoice_amount_proof: Some(InvoiceAmountProof {
-                    bolt11_invoice: invoice.to_string(),
+                    bolt11_invoice: req.invoice.to_string(),
                 }),
-                value_sats: invoice_amount_sats,
+                value_sats: req.invoice_amount_sats,
             }),
             transfer: Some(StartUserSignedTransferRequest {
                 transfer_id: transfer_id.to_string(),
@@ -430,15 +435,15 @@ where
                     .get_identity_public_key()?
                     .serialize()
                     .to_vec(),
-                receiver_identity_public_key: receiver_pubkey.serialize().to_vec(),
+                receiver_identity_public_key: req.receiver_pubkey.serialize().to_vec(),
                 expiry_time: Default::default(),
                 leaves_to_send: user_signed_refunds
                     .into_iter()
                     .map(|l| l.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
             }),
-            receiver_identity_public_key: receiver_pubkey.serialize().to_vec(),
-            fee_sats,
+            receiver_identity_public_key: req.receiver_pubkey.serialize().to_vec(),
+            fee_sats: req.fee_sats,
         };
 
         let response = self
