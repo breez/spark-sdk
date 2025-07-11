@@ -94,8 +94,6 @@ where
             })
             .collect::<Result<Vec<_>, ServiceError>>()?;
 
-        // expiry: new Date(Date.now() + 2 * 60 * 1000),
-        // receiver ssp identity
         let transfer_id = TransferId::generate();
         let receiver_public_key = self.ssp_client.identity_public_key();
         // Prepare leaf data map with refund signing information
