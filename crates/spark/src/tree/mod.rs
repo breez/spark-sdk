@@ -61,7 +61,7 @@ impl std::str::FromStr for TreeNodeStatus {
             "INVESTIGATION" => Ok(TreeNodeStatus::Investigation),
             "LOST" => Ok(TreeNodeStatus::Lost),
             "REIMBURSED" => Ok(TreeNodeStatus::Reimbursed),
-            _ => Err(format!("Unknown TreeNodeStatus: {}", s)),
+            _ => Err(format!("Unknown TreeNodeStatus: {s}")),
         }
     }
 }

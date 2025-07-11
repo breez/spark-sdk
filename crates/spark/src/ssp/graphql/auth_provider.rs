@@ -24,7 +24,7 @@ impl AuthProvider {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
         if let Some(token) = self.session_token.lock().unwrap().as_ref() {
-            let auth_value = format!("Bearer {}", token);
+            let auth_value = format!("Bearer {token}");
             headers.insert(
                 AUTHORIZATION,
                 HeaderValue::from_str(&auth_value)

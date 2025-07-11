@@ -55,7 +55,7 @@ impl SparkAddress {
 
         let hrp_str = Self::network_to_hrp(&self.network);
         let hrp = Hrp::parse(hrp_str)
-            .map_err(|e| AddressError::Other(format!("Failed to parse HRP: {}", e)))?;
+            .map_err(|e| AddressError::Other(format!("Failed to parse HRP: {e}")))?;
 
         let address = bech32::encode::<Bech32m>(hrp, &payload_bytes)
             .map_err(|e| AddressError::Bech32EncodeError(e.to_string()))?;

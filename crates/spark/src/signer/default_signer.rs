@@ -71,12 +71,12 @@ fn coin_type(network: Network) -> ChildNumber {
         _ => 1,
     };
     ChildNumber::from_hardened_idx(coin_type)
-        .expect(format!("Hardened coin type {} is invalid", coin_type).as_str())
+        .unwrap_or_else(|_| panic!("Hardened coin type {coin_type} is invalid"))
 }
 
 fn purpose() -> ChildNumber {
     ChildNumber::from_hardened_idx(PURPOSE)
-        .expect(format!("Hardened purpose {} is invalid", PURPOSE).as_str())
+        .unwrap_or_else(|_| panic!("Hardened purpose {PURPOSE} is invalid"))
 }
 
 fn frost_signing_package(
@@ -191,7 +191,7 @@ impl DefaultSigner {
         let child = self
             .signing_master_key
             .derive_priv(&self.secp, &derivation_path)
-            .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {}", e)))?
+            .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {e}")))?
             .private_key;
         Ok(child)
     }
@@ -205,15 +205,15 @@ impl DefaultSigner {
             &receiver_public_key.serialize(),
             &private_key.secret_bytes(),
         )
-        .map_err(|e| SignerError::Generic(format!("failed to encrypt: {}", e)))?;
+        .map_err(|e| SignerError::Generic(format!("failed to encrypt: {e}")))?;
         Ok(ciphertext)
     }
 
     fn decrypt_private_key_ecies(&self, ciphertext: &[u8]) -> Result<SecretKey, SignerError> {
         let plaintext = ecies::decrypt(&self.identity_key.secret_bytes(), ciphertext)
-            .map_err(|e| SignerError::Generic(format!("failed to decrypt: {}", e)))?;
+            .map_err(|e| SignerError::Generic(format!("failed to decrypt: {e}")))?;
         let secret_key = SecretKey::from_slice(&plaintext).map_err(|e| {
-            SignerError::Generic(format!("failed to deserialize secret key: {}", e))
+            SignerError::Generic(format!("failed to deserialize secret key: {e}"))
         })?;
         Ok(secret_key)
     }
@@ -247,7 +247,7 @@ impl Signer for DefaultSigner {
         let nonces = SigningNonces::from_nonces(hiding, binding);
         let commitments = nonces.commitments();
         let commitment_bytes = commitments.serialize().map_err(|e| {
-            SignerError::SerializationError(format!("failed to serialize commitments: {}", e))
+            SignerError::SerializationError(format!("failed to serialize commitments: {e}"))
         })?;
 
         nonce_commitments.insert(commitment_bytes, nonces.clone());
@@ -288,7 +288,7 @@ impl Signer for DefaultSigner {
 
         let res = signing_key
             .add_tweak(&new_signing_key.negate().into())
-            .map_err(|e| SignerError::Generic(format!("failed to add tweak: {}", e)))?;
+            .map_err(|e| SignerError::Generic(format!("failed to add tweak: {e}")))?;
 
         let ciphertext = self.encrypt_private_key_ecies(&res, &self.get_identity_public_key()?)?;
 

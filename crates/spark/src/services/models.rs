@@ -297,7 +297,7 @@ impl TryFrom<operator_rpc::spark::TreeNode> for TreeNode {
 
         let parent_node_id = match node.parent_node_id {
             Some(parent_id) => Some(parent_id.parse().map_err(|_| {
-                ServiceError::Generic(format!("Invalid parent node id: {}", parent_id))
+                ServiceError::Generic(format!("Invalid parent node id: {parent_id}"))
             })?),
             None => None,
         };

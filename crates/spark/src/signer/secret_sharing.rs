@@ -92,8 +92,7 @@ pub fn split_secret_with_proofs(
     // Validate inputs
     if threshold == 0 || threshold > number_of_shares {
         return Err(SignerError::SecretSharingError(format!(
-            "Threshold ({}) must be greater than 0 and less than or equal to the number of shares ({})",
-            threshold, number_of_shares
+            "Threshold ({threshold}) must be greater than 0 and less than or equal to the number of shares ({number_of_shares})"
         )));
     }
 
@@ -369,8 +368,8 @@ mod tests {
                     }
 
                     let xj = shares[j].secret_share.index;
-                    numerator = numerator * xj;
-                    denominator = denominator * (xj - xi);
+                    numerator *= xj;
+                    denominator *= (xj - xi);
                 }
 
                 // Calculate the term yi * L_i(0) and add it to the result

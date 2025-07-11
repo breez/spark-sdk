@@ -146,7 +146,7 @@ pub async fn sign_aggregate_refunds<S: Signer>(
 
     for operator_signing_result in operator_signing_results {
         let leaf_id = TreeNodeId::from_str(&operator_signing_result.leaf_id)
-            .map_err(|e| ServiceError::ValidationError(e))?;
+            .map_err(ServiceError::ValidationError)?;
 
         let leaf_data = leaf_data_map.get(&leaf_id).ok_or_else(|| {
             ServiceError::Generic(format!(

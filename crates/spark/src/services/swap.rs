@@ -7,7 +7,7 @@ use std::{
 use bitcoin::{
     consensus::serialize,
     key::Secp256k1,
-    secp256k1::{All, ecdsa, schnorr::Signature},
+    secp256k1::{All, ecdsa},
 };
 use prost_types::Timestamp;
 
@@ -175,10 +175,10 @@ where
         let mut user_leaves = Vec::new();
         user_leaves.push(UserLeafInput {
             leaf_id: first_leaf_id,
-            raw_unsigned_refund_transaction: hex::encode(&serialize(
+            raw_unsigned_refund_transaction: hex::encode(serialize(
                 &first_leaf.intermediate_refund_tx,
             )),
-            adaptor_added_signature: hex::encode(&adaptor_signature.to_bytes()),
+            adaptor_added_signature: hex::encode(adaptor_signature.to_bytes()),
         });
 
         for leaf in transfer.leaves.iter().skip(1) {
@@ -194,16 +194,16 @@ where
             )?;
             user_leaves.push(UserLeafInput {
                 leaf_id: leaf.leaf.id.to_string(),
-                raw_unsigned_refund_transaction: hex::encode(&serialize(
+                raw_unsigned_refund_transaction: hex::encode(serialize(
                     &leaf.intermediate_refund_tx,
                 )),
-                adaptor_added_signature: hex::encode(&signature.to_bytes()),
+                adaptor_added_signature: hex::encode(signature.to_bytes()),
             });
         }
         let swap_response = self
             .ssp_client
             .request_leaves_swap(RequestLeavesSwapInput {
-                adaptor_pubkey: hex::encode(&adaptor_private_key.public_key().to_sec1_bytes()),
+                adaptor_pubkey: hex::encode(adaptor_private_key.public_key().to_sec1_bytes()),
                 total_amount_sats: leaf_sum,
                 target_amount_sats: target_sum,
                 fee_sats: 0, // TODO: Request fee estimate from SSP
@@ -237,7 +237,7 @@ where
         let complete_response = self
             .ssp_client
             .complete_leaves_swap(
-                &hex::encode(&adaptor_private_key.to_bytes()),
+                &hex::encode(adaptor_private_key.to_bytes()),
                 &transfer.id.to_string(),
                 &swap_response.id,
             )
@@ -267,7 +267,7 @@ where
                 .ok_or(ServiceError::ServiceConnectionError(
                     OperatorRpcError::Unexpected("transfer not found".to_string()),
                 ))?;
-        Ok(transfer.try_into()?)
+        transfer.try_into()
     }
 }
 
@@ -309,6 +309,6 @@ fn generate_signature_from_existing_adaptor(
     let mut new_signature_bytes = signature[..32].to_vec();
     new_signature_bytes.extend_from_slice(&new_s.to_bytes());
     let ns: &[u8] = &new_signature_bytes;
-    Ok(k256::schnorr::Signature::try_from(ns)
-        .map_err(|_| ServiceError::Generic("failed to adapt signature".to_string()))?)
+    k256::schnorr::Signature::try_from(ns)
+        .map_err(|_| ServiceError::Generic("failed to adapt signature".to_string()))
 }

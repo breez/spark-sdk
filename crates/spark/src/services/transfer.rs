@@ -145,7 +145,7 @@ impl<S: Signer> TransferService<S> {
             .prepare_send_transfer_key_tweaks(
                 &transfer_id,
                 receiver_id,
-                &leaf_key_tweaks,
+                leaf_key_tweaks,
                 HashMap::new(),
             )
             .await?;
@@ -154,7 +154,7 @@ impl<S: Signer> TransferService<S> {
             .prepare_transfer_package(
                 &transfer_id,
                 key_tweak_input_map,
-                &leaf_key_tweaks,
+                leaf_key_tweaks,
                 receiver_id,
             )
             .await?;
@@ -180,7 +180,7 @@ impl<S: Signer> TransferService<S> {
                 OperatorRpcError::Unexpected("No transfer from operator".to_string()),
             ))?;
 
-        Ok(transfer.try_into()?)
+        transfer.try_into()
     }
 
     async fn prepare_send_transfer_key_tweaks(
@@ -314,7 +314,6 @@ impl<S: Signer> TransferService<S> {
                 secret_cipher: secret_cipher.clone(),
                 signature: signature.serialize_compact().to_vec(),
                 refund_signature: refund_signature
-                    .clone()
                     .map(|s| s.serialize_compact().to_vec())
                     .unwrap_or_default(),
             };
@@ -403,7 +402,7 @@ impl<S: Signer> TransferService<S> {
                 &proto_to_encrypt_binary,
             )?;
 
-            encrypted_key_tweaks.insert(key.clone(), encrypted_proto);
+            encrypted_key_tweaks.insert(*key, encrypted_proto);
         }
 
         Ok(encrypted_key_tweaks)
@@ -420,7 +419,7 @@ impl<S: Signer> TransferService<S> {
 
         // Use ECIES to encrypt the data
         ecies::encrypt(&public_key_bytes, data)
-            .map_err(|e| ServiceError::Generic(format!("ECIES encryption failed: {}", e)))
+            .map_err(|e| ServiceError::Generic(format!("ECIES encryption failed: {e}")))
     }
 
     fn sign_transfer_package(
@@ -434,7 +433,7 @@ impl<S: Signer> TransferService<S> {
         let signature = self
             .signer
             .sign_message_ecdsa_with_identity_key(&signing_payload)
-            .map_err(|e| ServiceError::SignerError(e))?;
+            .map_err(ServiceError::SignerError)?;
 
         // Create a new transfer package with the signature
         let mut signed_package = transfer_package;
@@ -449,7 +448,7 @@ impl<S: Signer> TransferService<S> {
         transfer_id: &TransferId,
         transfer_package: &operator_rpc::spark::TransferPackage,
     ) -> Result<Vec<u8>, ServiceError> {
-        let transfer_id_bytes = hex::decode(&transfer_id.to_string().replace("-", "")).unwrap();
+        let transfer_id_bytes = hex::decode(transfer_id.to_string().replace("-", "")).unwrap();
         // Get the encrypted payload and convert to sorted key-value pairs
         let encrypted_payload = &transfer_package.key_tweak_package;
         let mut pairs: Vec<(String, Vec<u8>)> = encrypted_payload
@@ -821,10 +820,10 @@ impl<S: Signer> TransferService<S> {
             .await?
             .nodes;
 
-        Ok(nodes
+        nodes
             .into_iter()
             .map(|n| n.try_into())
-            .collect::<Result<Vec<TreeNode>, _>>()?)
+            .collect::<Result<Vec<TreeNode>, _>>()
     }
 
     /// Low-level claim transfer operation
@@ -999,7 +998,7 @@ impl<S: Signer> TransferService<S> {
             .and_then(|s| s.proofs.first())
             .ok_or(ServiceError::Generic("No proof found".to_string()))?;
 
-        Ok((leaf_tweaks_map, proof.clone()))
+        Ok((leaf_tweaks_map, *proof))
     }
 
     /// Claims transfer by signing refunds with the coordinator
@@ -1056,7 +1055,6 @@ impl<S: Signer> TransferService<S> {
             &self.signer,
             &leaf_data_map
                 .into_iter()
-                .map(|(key, data)| (key, data.into()))
                 .collect(),
             &response.signing_results,
             None,
@@ -1201,11 +1199,11 @@ impl<S: Signer> TransferService<S> {
             })
             .await?;
 
-        Ok(response
+        response
             .transfers
             .into_iter()
             .map(|t| t.try_into())
-            .collect::<Result<Vec<Transfer>, _>>()?)
+            .collect::<Result<Vec<Transfer>, _>>()
     }
 
     /// Queries pending transfers from the operator
@@ -1227,11 +1225,11 @@ impl<S: Signer> TransferService<S> {
             })
             .await?;
 
-        Ok(response
+        response
             .transfers
             .into_iter()
             .map(|t| t.try_into())
-            .collect::<Result<Vec<Transfer>, _>>()?)
+            .collect::<Result<Vec<Transfer>, _>>()
     }
 
     /// Queries pending transfers from the operator
@@ -1253,11 +1251,11 @@ impl<S: Signer> TransferService<S> {
             })
             .await?;
 
-        Ok(response
+        response
             .transfers
             .into_iter()
             .map(|t| t.try_into())
-            .collect::<Result<Vec<Transfer>, _>>()?)
+            .collect::<Result<Vec<Transfer>, _>>()
     }
 
     pub async fn query_transfer(
@@ -1296,7 +1294,7 @@ impl<S: Signer> TransferService<S> {
             .prepare_send_transfer_key_tweaks(
                 &transfer.id,
                 &transfer.receiver_identity_public_key,
-                &leaves,
+                leaves,
                 refund_signature_map,
             )
             .await?;
@@ -1305,7 +1303,7 @@ impl<S: Signer> TransferService<S> {
             .prepare_transfer_package(
                 &transfer.id,
                 key_tweak_input_map,
-                &leaves,
+                leaves,
                 &transfer.receiver_identity_public_key,
             )
             .await?;

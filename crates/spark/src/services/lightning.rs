@@ -57,7 +57,7 @@ impl TryFrom<crate::ssp::LightningSendRequest> for LightningSendPayment {
     fn try_from(value: crate::ssp::LightningSendRequest) -> Result<Self, Self::Error> {
         let transfer_id = match &value.transfer {
             Some(transfer) => match &transfer.spark_id {
-                Some(id) => Some(TransferId::from_str(&id).map_err(|_| {
+                Some(id) => Some(TransferId::from_str(id).map_err(|_| {
                     ServiceError::SSPswapError("Invalid transfer id format".to_string())
                 })?),
                 None => None,
@@ -101,7 +101,7 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
     fn try_from(value: crate::ssp::LightningReceiveRequest) -> Result<Self, Self::Error> {
         let transfer_id = match &value.transfer {
             Some(transfer) => match &transfer.spark_id {
-                Some(id) => Some(TransferId::from_str(&id).map_err(|_| {
+                Some(id) => Some(TransferId::from_str(id).map_err(|_| {
                     ServiceError::SSPswapError("Invalid transfer id format".to_string())
                 })?),
                 None => None,
@@ -113,7 +113,7 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
             created_at: value.created_at.timestamp(),
             updated_at: value.updated_at.timestamp(),
             network: value.network.into(),
-            status: value.lightning_request_status.into(),
+            status: value.lightning_request_status,
             invoice: value.invoice.encoded_invoice,
             transfer_id,
             transfer_amount_sat: match value.transfer {
@@ -192,7 +192,7 @@ where
                 payment_hash: payment_hash.encode_hex(),
                 description_hash: None,
                 expiry_secs: Some(expiry.into()),
-                memo: memo,
+                memo,
                 include_spark_address: false,
             })
             .await?;
@@ -237,7 +237,7 @@ where
         invoice: &str,
         leaves: &Vec<TreeNode>,
     ) -> Result<LightningSwap, ServiceError> {
-        let decoded_invoice = Bolt11Invoice::from_str(&invoice)
+        let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
         let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
         let payment_hash = decoded_invoice.payment_hash();
