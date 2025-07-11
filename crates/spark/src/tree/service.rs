@@ -61,7 +61,9 @@ impl<S: Signer> TreeService<S> {
 
         Ok(PagingResult {
             items: nodes
-                .nodes.into_values().map(TreeNode::try_from)
+                .nodes
+                .into_values()
+                .map(TreeNode::try_from)
                 .collect::<Result<Vec<_>, _>>()?,
             next: paging.next_from_offset(nodes.offset),
         })

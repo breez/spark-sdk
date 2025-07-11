@@ -1053,9 +1053,7 @@ impl<S: Signer> TransferService<S> {
         // Sign the refunds using FROST
         let node_signatures = sign_aggregate_refunds(
             &self.signer,
-            &leaf_data_map
-                .into_iter()
-                .collect(),
+            &leaf_data_map.into_iter().collect(),
             &response.signing_results,
             None,
         )

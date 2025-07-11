@@ -3,7 +3,6 @@ mod error;
 mod models;
 mod secret_sharing;
 
-
 use crate::tree::TreeNodeId;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::ecdsa::Signature;

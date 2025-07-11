@@ -212,9 +212,8 @@ impl DefaultSigner {
     fn decrypt_private_key_ecies(&self, ciphertext: &[u8]) -> Result<SecretKey, SignerError> {
         let plaintext = ecies::decrypt(&self.identity_key.secret_bytes(), ciphertext)
             .map_err(|e| SignerError::Generic(format!("failed to decrypt: {e}")))?;
-        let secret_key = SecretKey::from_slice(&plaintext).map_err(|e| {
-            SignerError::Generic(format!("failed to deserialize secret key: {e}"))
-        })?;
+        let secret_key = SecretKey::from_slice(&plaintext)
+            .map_err(|e| SignerError::Generic(format!("failed to deserialize secret key: {e}")))?;
         Ok(secret_key)
     }
 }
