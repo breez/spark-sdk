@@ -66,8 +66,8 @@ pub enum ServiceError {
     SignatureVerificationFailed(String),
 
     // Swap related errors
-    #[error("illegal amount")]
-    IllegalAmount,
+    #[error("invalid amount")]
+    InvalidAmount,
     #[error("insufficient funds")]
     InsufficientFunds,
 

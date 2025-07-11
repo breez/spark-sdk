@@ -71,7 +71,7 @@ where
         target_amounts: Vec<u64>,
     ) -> Result<Transfer, ServiceError> {
         if target_amounts.is_empty() {
-            return Err(ServiceError::IllegalAmount);
+            return Err(ServiceError::InvalidAmount);
         }
 
         let target_sum: u64 = target_amounts.iter().sum();
