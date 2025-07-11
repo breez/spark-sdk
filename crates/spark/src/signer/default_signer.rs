@@ -129,8 +129,6 @@ fn frost_signing_package(
 #[derive(Clone)]
 pub struct DefaultSigner {
     identity_key: SecretKey,
-    master_key: Xpriv,
-    network: Network,
     nonce_commitments: Arc<Mutex<HashMap<Vec<u8>, SigningNonces>>>, // TODO: Nonce commitments are never cleared, is this okay?
     secp: Secp256k1<All>,
     signing_master_key: Xpriv,
@@ -169,8 +167,6 @@ impl DefaultSigner {
             master_key.derive_priv(&secp, &signing_derivation_path(network))?;
         Ok(DefaultSigner {
             identity_key,
-            master_key,
-            network,
             nonce_commitments: Arc::new(Mutex::new(HashMap::new())),
             secp,
             signing_master_key,
@@ -632,7 +628,6 @@ mod test {
     #[test]
     fn test_subtract_private_keys_success() {
         let signer = create_test_signer();
-        let secp = Secp256k1::new();
         let mut rng = thread_rng();
 
         // Generate two different private keys

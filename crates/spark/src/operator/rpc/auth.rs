@@ -20,7 +20,6 @@ use tonic::transport::Channel;
 pub struct OperatorAuth<S> {
     channel: Channel,
     signer: S,
-    network: Network,
     session: Mutex<Option<OperationSession>>,
 }
 
@@ -34,11 +33,10 @@ impl<S> OperatorAuth<S>
 where
     S: Signer,
 {
-    pub fn new(channel: Channel, network: Network, signer: S) -> Self {
+    pub fn new(channel: Channel, signer: S) -> Self {
         Self {
             channel,
             signer,
-            network,
             session: Mutex::new(None),
         }
     }

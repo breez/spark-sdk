@@ -31,10 +31,7 @@ const SWAP_EXPIRY_DURATION: Duration = Duration::from_secs(2 * 60);
 pub struct Swap<S> {
     coordinator_client: Arc<SparkRpcClient<S>>,
     network: Network,
-    operator_clients: Vec<Arc<SparkRpcClient<S>>>,
-    secp: Secp256k1<All>,
     signer: S,
-    split_secret_threshold: u32,
     ssp_client: Arc<ServiceProvider<S>>,
     transfer_service: Arc<TransferService<S>>,
 }
@@ -46,19 +43,14 @@ where
     pub fn new(
         coordinator_client: Arc<SparkRpcClient<S>>,
         network: Network,
-        operator_clients: Vec<Arc<SparkRpcClient<S>>>,
         signer: S,
-        split_secret_threshold: u32,
         ssp_client: Arc<ServiceProvider<S>>,
         transfer_service: Arc<TransferService<S>>,
     ) -> Self {
         Swap {
             coordinator_client,
             network,
-            operator_clients,
-            secp: Secp256k1::new(),
             signer,
-            split_secret_threshold,
             ssp_client,
             transfer_service,
         }

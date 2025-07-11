@@ -602,7 +602,7 @@ impl<S: Signer> TransferService<S> {
     /// in a coordinated manner across the entire chain.
     async fn refresh_timelock_nodes(
         &self,
-        nodes: Vec<TreeNode>,
+        _nodes: Vec<TreeNode>,
     ) -> Result<Vec<TreeNode>, ServiceError> {
         todo!()
     }

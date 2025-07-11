@@ -87,9 +87,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let swap_service = Arc::new(Swap::new(
             coordinator_client.clone(),
             config.network,
-            signing_operators_clients,
             signer.clone(),
-            config.split_secret_threshold,
             Arc::clone(&service_provider),
             Arc::clone(&transfer_service),
         ));
@@ -114,7 +112,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
             let channel = connection_manager.get_channel(operator).await?;
             let client = Arc::new(SparkRpcClient::new(
                 channel,
-                config.network,
                 signer.clone(),
                 operator.clone(),
             ));
@@ -124,7 +121,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let channel = connection_manager.get_channel(&coordinator).await?;
         let coordinator_client = Arc::new(SparkRpcClient::new(
             channel,
-            config.network,
             signer.clone(),
             coordinator,
         ));

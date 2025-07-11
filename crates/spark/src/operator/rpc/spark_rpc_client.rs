@@ -16,9 +16,9 @@ impl<S> SparkRpcClient<S>
 where
     S: Signer,
 {
-    pub fn new(channel: Channel, network: Network, signer: S, operator: Operator) -> Self {
+    pub fn new(channel: Channel, signer: S, operator: Operator) -> Self {
         Self {
-            auth: OperatorAuth::new(channel, network, signer),
+            auth: OperatorAuth::new(channel, signer),
             operator,
         }
     }
