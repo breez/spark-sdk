@@ -8,7 +8,7 @@ use spark::{
     operator::rpc::{ConnectionManager, SparkRpcClient},
     services::{
         DepositService, LightningReceivePayment, LightningSendPayment, LightningService,
-        PagingFilter, Transfer, TransferService,
+        PagingFilter, Swap, Transfer, TransferService,
     },
     signer::Signer,
     ssp::ServiceProvider,
@@ -30,6 +30,7 @@ where
     config: SparkWalletConfig,
     deposit_service: DepositService<S>,
     signer: S,
+    swap_service: Arc<Swap<S>>,
     tree_service: TreeService<S>,
     transfer_service: Arc<TransferService<S>>,
     lightning_service: Arc<LightningService<S>>,
@@ -45,7 +46,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
             Self::init_operator_clients(&config, &connection_manager, signer.clone()).await?;
 
         let bitcoin_service = BitcoinService::new(config.network);
-        let _service_provider = Arc::new(ServiceProvider::new(
+        let service_provider = Arc::new(ServiceProvider::new(
             config.service_provider_config.clone(),
             signer.clone(),
         ));
@@ -53,7 +54,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let lightning_service = Arc::new(LightningService::new(
             coordinator_client.clone(),
             signing_operators_clients.clone(),
-            _service_provider.clone(),
+            service_provider.clone(),
             config.network,
             signer.clone(),
             config.split_secret_threshold,
@@ -72,21 +73,31 @@ impl<S: Signer + Clone> SparkWallet<S> {
             config.network,
             config.split_secret_threshold,
             coordinator_client.clone(),
-            signing_operators_clients,
+            signing_operators_clients.clone(),
         ));
         let tree_state = TreeState::new();
         let tree_service = TreeService::new(
-            coordinator_client,
+            coordinator_client.clone(),
             identity_public_key,
             config.network,
             tree_state,
             Arc::clone(&transfer_service),
         );
 
+        let swap_service = Arc::new(Swap::new(
+            coordinator_client.clone(),
+            config.network,
+            signing_operators_clients,
+            signer.clone(),
+            config.split_secret_threshold,
+            Arc::clone(&service_provider),
+            Arc::clone(&transfer_service),
+        ));
         Ok(SparkWallet {
             config,
             deposit_service,
             signer,
+            swap_service,
             tree_service,
             transfer_service,
             lightning_service,
@@ -245,6 +256,29 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .collect())
     }
 
+    pub async fn swap_leaves(
+        &self,
+        leaf_ids: Vec<TreeNodeId>,
+        target_amounts: Vec<u64>,
+    ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
+        let leaves: Vec<_> = self
+            .tree_service
+            .list_leaves()
+            .await?
+            .into_iter()
+            .filter(|leaf| leaf_ids.contains(&leaf.id))
+            .collect();
+        if leaves.len() != leaf_ids.len() {
+            return Err(SparkWalletError::LeavesNotFound);
+        }
+        let transfer = self
+            .swap_service
+            .swap_leaves(leaves, target_amounts)
+            .await?;
+        let leaves = self.claim_transfer(&transfer, false, false).await?;
+        Ok(leaves.into_iter().map(WalletLeaf::from).collect())
+    }
+
     /// Sends a transfer to another Spark user.
     pub async fn transfer(
         &self,
@@ -265,8 +299,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .tree_service
             .select_leaves_by_amount(amount_sat)
             .await?;
-
-        // TODO: do we need to refresh and or extend timelocks? js sdk does this
 
         let transfer = self
             .transfer_service

@@ -12,10 +12,7 @@ use crate::{
     },
 };
 
-pub struct ServiceProvider<S>
-where
-    S: Signer,
-{
+pub struct ServiceProvider<S> {
     identity_public_key: PublicKey,
     gql_client: GraphQLClient<S>,
 }

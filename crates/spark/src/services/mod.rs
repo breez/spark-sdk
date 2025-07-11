@@ -2,10 +2,12 @@ mod deposit;
 mod error;
 mod lightning;
 mod models;
+mod swap;
 mod transfer;
 
 pub use deposit::*;
 pub use error::*;
 pub use lightning::{LightningReceivePayment, LightningSendPayment, LightningService};
 pub use models::*;
+pub use swap::*;
 pub use transfer::*;

@@ -25,10 +25,7 @@ use crate::ssp::{
 };
 
 /// GraphQL client for interacting with the Spark server
-pub struct GraphQLClient<S>
-where
-    S: Signer,
-{
+pub struct GraphQLClient<S> {
     client: Client,
     base_url: String,
     schema_endpoint: String,

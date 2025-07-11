@@ -10,5 +10,6 @@ pub use spark::{
     Network,
     address::SparkAddress,
     signer::{DefaultSigner, Signer},
+    tree::TreeNodeId,
 };
 pub use wallet::SparkWallet;

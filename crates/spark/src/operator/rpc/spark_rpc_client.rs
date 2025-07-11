@@ -7,10 +7,7 @@ use crate::signer::Signer;
 use tonic::transport::Channel;
 use tracing::trace;
 
-pub struct SparkRpcClient<S>
-where
-    S: Signer,
-{
+pub struct SparkRpcClient<S> {
     auth: OperatorAuth<S>,
     pub operator: Operator,
 }

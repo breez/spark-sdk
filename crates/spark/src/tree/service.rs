@@ -162,7 +162,7 @@ impl<S: Signer> TreeService<S> {
         target_amount_sat: u64,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
         if target_amount_sat == 0 {
-            return Err(TreeServiceError::IllegalAmount);
+            return Err(TreeServiceError::InvalidAmount);
         }
 
         let mut amount = 0;

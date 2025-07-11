@@ -16,6 +16,6 @@ pub enum TreeServiceError {
     #[error("transfer service error: {0}")]
     TransferServiceError(#[from] crate::services::ServiceError),
 
-    #[error("illegal amount")]
-    IllegalAmount,
+    #[error("invalid amount")]
+    InvalidAmount,
 }
