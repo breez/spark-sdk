@@ -119,11 +119,8 @@ impl<S: Signer + Clone> SparkWallet<S> {
         }
         let coordinator = config.operator_pool.get_coordinator().clone();
         let channel = connection_manager.get_channel(&coordinator).await?;
-        let coordinator_client = Arc::new(SparkRpcClient::new(
-            channel,
-            signer.clone(),
-            coordinator,
-        ));
+        let coordinator_client =
+            Arc::new(SparkRpcClient::new(channel, signer.clone(), coordinator));
         Ok((signing_operators_clients, coordinator_client))
     }
 
