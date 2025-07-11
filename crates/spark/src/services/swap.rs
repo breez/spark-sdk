@@ -80,11 +80,7 @@ where
             return Err(ServiceError::InsufficientFunds);
         }
 
-        if leaf_sum > target_sum {
-            return Err(ServiceError::IllegalAmount);
-        }
-
-        // The target amounts are equal to the leaf values. Continue with split/aggregate.
+        // The target amounts are more than or equal to the leaf values. Continue with split.
 
         // Build leaf key tweaks with new signing keys that will be swapped to the ssp.
         let leaf_key_tweaks = leaves
@@ -239,6 +235,7 @@ where
             })
             .await?;
 
+        // TODO: Validate the amounts in swap_response match the leaf sum, and the target amounts are met.
         // TODO: javascript SDK applies adaptor to signature here for every leaf, but it seems to not do anything?
         let refund_signature_map = signed_refunds
             .into_iter()
@@ -293,8 +290,6 @@ where
                     OperatorRpcError::Unexpected("transfer not found".to_string()),
                 ))?;
         Ok(transfer.try_into()?)
-
-        // TODO: claim the incoming transfer
     }
 }
 
