@@ -55,17 +55,17 @@ where
             println!("Balance: {balance} sats")
         }
         Command::Deposit(deposit_command) => {
-            deposit::handle_command(rl, &config, &wallet, deposit_command).await?
+            deposit::handle_command(rl, config, wallet, deposit_command).await?
         }
         Command::Info => {
             let info = wallet.get_info().await?;
             println!("{}", serde_json::to_string_pretty(&info)?)
         }
         Command::Leaves(leaves_command) => {
-            leaves::handle_command(&config, &wallet, leaves_command).await?
+            leaves::handle_command(config, wallet, leaves_command).await?
         }
         Command::Lightning(lightning_command) => {
-            lightning::handle_command(&config, &wallet, lightning_command).await?
+            lightning::handle_command(config, wallet, lightning_command).await?
         }
         Command::SparkAddress => {
             let spark_address = wallet.get_spark_address().await?;
@@ -76,7 +76,7 @@ where
             println!("Wallet synced successfully.")
         }
         Command::Transfer(transfer_command) => {
-            transfer::handle_command(&config, &wallet, transfer_command).await?
+            transfer::handle_command(config, wallet, transfer_command).await?
         }
     }
 

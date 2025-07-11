@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let seed = config.mnemonic.to_seed(config.passphrase.clone());
-    let network = config.spark_config.network.clone();
+    let network = config.spark_config.network;
     let signer = DefaultSigner::new(&seed, network)?;
     let wallet = spark_wallet::SparkWallet::new(config.spark_config.clone(), signer).await?;
     wallet.sync().await?;
@@ -117,5 +117,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    Ok(rl.save_history(HISTORY_FILE_NAME).unwrap())
+    rl.save_history(HISTORY_FILE_NAME).unwrap();
+    Ok(())
 }

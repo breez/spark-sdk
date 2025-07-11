@@ -39,7 +39,7 @@ where
             println!("Get funds from the faucet at https://app.lightspark.com/regtest-faucet");
             let line = rl.readline("paste txid> ")?;
             let txid = line.trim();
-            let tx = get_transaction(&config, txid.to_string()).await?;
+            let tx = get_transaction(config, txid.to_string()).await?;
             let params: Params = config.spark_config.network.into();
             for (vout, output) in tx.output.iter().enumerate() {
                 let Ok(output_address) = Address::from_script(&output.script_pubkey, &params)
@@ -60,7 +60,7 @@ where
             }
         }
         DepositCommand::Claim { txid } => {
-            let tx = get_transaction(&config, txid).await?;
+            let tx = get_transaction(config, txid).await?;
             // TODO: Look for correct output index
             let leaves = wallet.claim_deposit(tx, 0).await?;
             println!(

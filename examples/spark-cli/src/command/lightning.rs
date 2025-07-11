@@ -47,7 +47,7 @@ where
         }
         LightningCommand::FetchSendFeeEstimate { invoice } => {
             let fee = wallet.fetch_lightning_send_fee_estimate(&invoice).await?;
-            println!("{}", fee);
+            println!("{fee}");
         }
         LightningCommand::FetchSendPayment { id } => {
             let payment = wallet.fetch_lightning_send_payment(&id).await?;
