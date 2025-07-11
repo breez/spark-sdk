@@ -1285,7 +1285,7 @@ impl<S: Signer> TransferService<S> {
     pub async fn deliver_transfer_package(
         &self,
         transfer: &Transfer,
-        leaves: &Vec<LeafKeyTweak>,
+        leaves: &[LeafKeyTweak],
         refund_signature_map: HashMap<TreeNodeId, Signature>,
     ) -> Result<Transfer, ServiceError> {
         let key_tweak_input_map = self

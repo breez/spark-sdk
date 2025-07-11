@@ -371,7 +371,7 @@ where
 
     async fn swap_nodes_for_preimage(
         &self,
-        leaves: &Vec<LeafKeyTweak>,
+        leaves: &[LeafKeyTweak],
         receiver_pubkey: &PublicKey,
         payment_hash: &sha256::Hash,
         invoice: &str,

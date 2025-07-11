@@ -41,7 +41,7 @@ impl GraphQLError {
     }
 
     /// Creates a new GraphQL error from GraphQL error objects
-    pub fn from_graphql_errors(errors: &Vec<graphql_client::Error>) -> Self {
+    pub fn from_graphql_errors(errors: &[graphql_client::Error]) -> Self {
         let error_messages: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
         Self::GraphQL(error_messages.join(", "))
     }
