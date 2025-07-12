@@ -1,14 +1,12 @@
 use std::sync::Arc;
 
 use bitcoin::{
-    Address, OutPoint, ScriptBuf, Transaction, TxIn, TxOut,
-    absolute::LockTime,
+    Address, OutPoint, Transaction, TxOut,
     address::NetworkUnchecked,
     consensus::{deserialize, serialize},
     hashes::{Hash, sha256},
     params::Params,
     secp256k1::{Message, PublicKey, ecdsa, schnorr},
-    transaction::Version,
 };
 use frost_secp256k1_tr::Identifier;
 use tracing::{error, trace};
@@ -21,7 +19,7 @@ use crate::{
     services::{PagingFilter, PagingResult},
     signer::{AggregateFrostRequest, PrivateKeySource, SignFrostRequest, Signer},
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
-    utils::{anchor::ephemeral_anchor_output, transactions::create_refund_tx},
+    utils::transactions::{create_node_tx, create_refund_tx},
 };
 
 use super::{
@@ -123,26 +121,15 @@ where
             .ok_or(ServiceError::InvalidOutputIndex)?;
         let deposit_value = deposit_output.value;
 
-        let root_tx = Transaction {
-            version: Version(3),
-            lock_time: LockTime::ZERO,
-            input: vec![TxIn {
-                previous_output: OutPoint {
-                    txid: deposit_txid,
-                    vout,
-                },
-                script_sig: ScriptBuf::new(),
-                sequence: Default::default(),
-                witness: Default::default(),
-            }],
-            output: vec![
-                TxOut {
-                    script_pubkey: deposit_output.script_pubkey.clone(),
-                    value: deposit_value,
-                },
-                ephemeral_anchor_output(),
-            ],
-        };
+        let root_tx = create_node_tx(
+            Default::default(),
+            OutPoint {
+                txid: deposit_txid,
+                vout,
+            },
+            deposit_value,
+            deposit_output.script_pubkey.clone(),
+        );
 
         // Get random signing commitment for root nonce
         let root_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
