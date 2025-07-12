@@ -11,7 +11,7 @@ use crate::{Network, bitcoin::sighash_from_tx, core::next_sequence, services::Le
 use bitcoin::absolute::LockTime;
 use bitcoin::blockdata::transaction::Version;
 use bitcoin::hashes::Hash;
-use bitcoin::{OutPoint, Sequence, Transaction};
+use bitcoin::{OutPoint, Sequence, Transaction, TxIn, TxOut};
 use bitcoin::{key::Secp256k1, secp256k1::PublicKey};
 use frost_core::round2::SignatureShare;
 use frost_secp256k1_tr::round1::SigningCommitments;
@@ -37,30 +37,28 @@ pub fn create_refund_tx(
     amount_sat: u64,
     receiving_pubkey: &PublicKey,
     network: Network,
-) -> Result<bitcoin::Transaction, SignerError> {
-    let mut new_refund_tx = bitcoin::Transaction {
-        version: Version::non_standard(3),
-        lock_time: LockTime::ZERO,
-        input: vec![],
-        output: vec![],
-    };
-
-    new_refund_tx.input.push(bitcoin::TxIn {
-        previous_output: node_outpoint,
-        script_sig: bitcoin::ScriptBuf::default(),
-        sequence,
-        witness: bitcoin::Witness::default(),
-    });
-
+) -> Result<Transaction, SignerError> {
     let secp = Secp256k1::new();
     let network: bitcoin::Network = network.into();
     let addr = bitcoin::Address::p2tr(&secp, receiving_pubkey.x_only_public_key().0, None, network);
 
-    new_refund_tx.output.push(bitcoin::TxOut {
-        value: bitcoin::Amount::from_sat(amount_sat),
-        script_pubkey: addr.script_pubkey(),
-    });
-    new_refund_tx.output.push(ephemeral_anchor_output());
+    let new_refund_tx = Transaction {
+        version: Version::non_standard(3),
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: node_outpoint,
+            script_sig: bitcoin::ScriptBuf::default(),
+            sequence,
+            witness: bitcoin::Witness::default(),
+        }],
+        output: vec![
+            TxOut {
+                value: bitcoin::Amount::from_sat(amount_sat),
+                script_pubkey: addr.script_pubkey(),
+            },
+            ephemeral_anchor_output(),
+        ],
+    };
 
     Ok(new_refund_tx)
 }
