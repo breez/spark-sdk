@@ -3,7 +3,7 @@ use bitcoin::{
     key::Secp256k1, secp256k1::PublicKey, transaction::Version,
 };
 
-use crate::{Network, utils::anchor::ephemeral_anchor_output};
+use crate::Network;
 
 fn create_spark_tx(previous_output: OutPoint, sequence: Sequence, output: TxOut) -> Transaction {
     Transaction {
@@ -54,4 +54,11 @@ pub fn create_refund_tx(
             script_pubkey: addr.script_pubkey(),
         },
     )
+}
+
+fn ephemeral_anchor_output() -> TxOut {
+    TxOut {
+        script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]), // Pay-to-anchor (P2A) ephemeral anchor output
+        value: Amount::from_sat(0),
+    }
 }
