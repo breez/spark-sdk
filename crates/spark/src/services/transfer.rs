@@ -18,9 +18,8 @@ use crate::signer::{
     AggregateFrostRequest, PrivateKeySource, SecretToSplit, SignFrostRequest, VerifiableSecretShare,
 };
 use crate::utils::anchor::ephemeral_anchor_output;
-use crate::utils::refund::{
-    create_refund_tx, prepare_refund_so_signing_jobs, sign_aggregate_refunds, sign_refunds,
-};
+use crate::utils::refund::{prepare_refund_so_signing_jobs, sign_aggregate_refunds, sign_refunds};
+use crate::utils::transactions::create_refund_tx;
 
 use bitcoin::absolute::LockTime;
 use bitcoin::hashes::{Hash, sha256};
@@ -666,8 +665,7 @@ impl<S: Signer> TransferService<S> {
             new_node_tx.output[0].value.to_sat(),
             &signing_public_key,
             self.network,
-        )
-        .map_err(|e| ServiceError::Generic(e.to_string()))?;
+        );
 
         let node_sighash = sighash_from_tx(&new_node_tx, 0, &node.node_tx.output[0])?;
         let refund_sighash = sighash_from_tx(&new_refund_tx, 0, &new_node_tx.output[0])?;

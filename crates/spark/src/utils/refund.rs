@@ -6,13 +6,11 @@ use crate::services::{
     map_signing_nonce_commitments,
 };
 use crate::tree::TreeNodeId;
-use crate::utils::anchor::ephemeral_anchor_output;
+use crate::utils::transactions::create_refund_tx;
 use crate::{Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak};
-use bitcoin::absolute::LockTime;
-use bitcoin::blockdata::transaction::Version;
 use bitcoin::hashes::Hash;
-use bitcoin::{OutPoint, Sequence, Transaction, TxIn, TxOut};
-use bitcoin::{key::Secp256k1, secp256k1::PublicKey};
+use bitcoin::secp256k1::PublicKey;
+use bitcoin::{OutPoint, Transaction};
 use frost_core::round2::SignatureShare;
 use frost_secp256k1_tr::round1::SigningCommitments;
 
@@ -29,39 +27,6 @@ pub struct SignedTx {
     pub signing_commitments: BTreeMap<Identifier, SigningCommitments>,
     pub user_signature_commitment: SigningCommitments,
     pub network: Network,
-}
-
-pub fn create_refund_tx(
-    sequence: Sequence,
-    node_outpoint: OutPoint,
-    amount_sat: u64,
-    receiving_pubkey: &PublicKey,
-    network: Network,
-) -> Result<Transaction, SignerError> {
-    // TODO: Isolate secp256k1 initialization to avoid multiple initializations
-    let secp = Secp256k1::new();
-    let network: bitcoin::Network = network.into();
-    let addr = bitcoin::Address::p2tr(&secp, receiving_pubkey.x_only_public_key().0, None, network);
-
-    let new_refund_tx = Transaction {
-        version: Version::non_standard(3),
-        lock_time: LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: node_outpoint,
-            script_sig: bitcoin::ScriptBuf::default(),
-            sequence,
-            witness: bitcoin::Witness::default(),
-        }],
-        output: vec![
-            TxOut {
-                value: bitcoin::Amount::from_sat(amount_sat),
-                script_pubkey: addr.script_pubkey(),
-            },
-            ephemeral_anchor_output(),
-        ],
-    };
-
-    Ok(new_refund_tx)
 }
 
 pub async fn sign_refunds<S: Signer>(
@@ -97,7 +62,7 @@ pub async fn sign_refunds<S: Signer>(
             leaf.node.value,
             receiver_pubkey,
             network,
-        )?;
+        );
 
         let sighash = sighash_from_tx(&new_refund_tx, 0, &node_tx.output[0])
             .map_err(|e| SignerError::Generic(e.to_string()))?;
@@ -256,7 +221,7 @@ pub fn prepare_refund_so_signing_jobs(
             leaf.node.value,
             &refund_signing_data.receiving_public_key,
             network,
-        )?;
+        );
 
         let signing_job = crate::operator::rpc::spark::LeafRefundTxSigningJob {
             leaf_id: leaf.node.id.to_string(),

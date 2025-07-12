@@ -21,7 +21,7 @@ use crate::{
     services::{PagingFilter, PagingResult},
     signer::{AggregateFrostRequest, PrivateKeySource, SignFrostRequest, Signer},
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
-    utils::{anchor::ephemeral_anchor_output, refund::create_refund_tx},
+    utils::{anchor::ephemeral_anchor_output, transactions::create_refund_tx},
 };
 
 use super::{
@@ -161,7 +161,7 @@ where
             deposit_value.to_sat(),
             &signing_public_key,
             self.network,
-        )?;
+        );
 
         // Get random signing commitment for refund nonce
         let refund_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
