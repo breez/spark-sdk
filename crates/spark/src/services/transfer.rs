@@ -17,17 +17,14 @@ use crate::services::{
 use crate::signer::{
     AggregateFrostRequest, PrivateKeySource, SecretToSplit, SignFrostRequest, VerifiableSecretShare,
 };
-use crate::utils::anchor::ephemeral_anchor_output;
 use crate::utils::refund::{prepare_refund_so_signing_jobs, sign_aggregate_refunds, sign_refunds};
-use crate::utils::transactions::create_refund_tx;
+use crate::utils::transactions::{create_node_tx, create_refund_tx};
 
-use bitcoin::absolute::LockTime;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, SecretKey};
-use bitcoin::transaction::Version;
-use bitcoin::{OutPoint, Transaction, TxIn};
+use bitcoin::{OutPoint, Transaction};
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments};
 use k256::Scalar;
 use prost::Message as ProstMessage;
@@ -636,25 +633,15 @@ impl<S: Signer> TransferService<S> {
             ServiceError::Generic("Failed to get next sequence".to_string()),
         )?;
 
-        let mut new_node_tx = bitcoin::Transaction {
-            version: Version::non_standard(3),
-            lock_time: LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        };
-
-        new_node_tx.input.push(TxIn {
-            previous_output: OutPoint {
+        let new_node_tx = create_node_tx(
+            new_node_sequence,
+            OutPoint {
                 txid: node.node_tx.compute_txid(),
                 vout: 0,
             },
-            sequence: new_node_sequence,
-            ..Default::default()
-        });
-
-        // TODO: js references applying a fee here, but is commented out. To do so, instead of cloning the output, we create a new one with the fee applied
-        new_node_tx.output.push(node.node_tx.output[0].clone());
-        new_node_tx.output.push(ephemeral_anchor_output());
+            node.node_tx.output[0].value,
+            node.node_tx.output[0].script_pubkey.clone(),
+        );
 
         let new_refund_tx = create_refund_tx(
             initial_sequence(),

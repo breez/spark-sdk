@@ -1,9 +1,38 @@
 use bitcoin::{
-    Address, Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness,
-    absolute::LockTime, key::Secp256k1, secp256k1::PublicKey, transaction::Version,
+    Address, Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, absolute::LockTime,
+    key::Secp256k1, secp256k1::PublicKey, transaction::Version,
 };
 
 use crate::{Network, utils::anchor::ephemeral_anchor_output};
+
+fn create_spark_tx(previous_output: OutPoint, sequence: Sequence, output: TxOut) -> Transaction {
+    Transaction {
+        version: Version::non_standard(3),
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output,
+            sequence,
+            ..Default::default()
+        }],
+        output: vec![output, ephemeral_anchor_output()],
+    }
+}
+
+pub fn create_node_tx(
+    sequence: Sequence,
+    parent_outpoint: OutPoint,
+    value: Amount,
+    script_pubkey: ScriptBuf,
+) -> Transaction {
+    create_spark_tx(
+        parent_outpoint,
+        sequence,
+        TxOut {
+            value,
+            script_pubkey,
+        },
+    )
+}
 
 pub fn create_refund_tx(
     sequence: Sequence,
@@ -17,23 +46,12 @@ pub fn create_refund_tx(
     let network: bitcoin::Network = network.into();
     let addr = Address::p2tr(&secp, receiving_pubkey.x_only_public_key().0, None, network);
 
-    let new_refund_tx = Transaction {
-        version: Version::non_standard(3),
-        lock_time: LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: node_outpoint,
-            script_sig: ScriptBuf::default(),
-            sequence,
-            witness: Witness::default(),
-        }],
-        output: vec![
-            TxOut {
-                value: Amount::from_sat(amount_sat),
-                script_pubkey: addr.script_pubkey(),
-            },
-            ephemeral_anchor_output(),
-        ],
-    };
-
-    new_refund_tx
+    create_spark_tx(
+        node_outpoint,
+        sequence,
+        TxOut {
+            value: Amount::from_sat(amount_sat),
+            script_pubkey: addr.script_pubkey(),
+        },
+    )
 }
