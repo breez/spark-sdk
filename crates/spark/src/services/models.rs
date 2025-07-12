@@ -120,7 +120,7 @@ impl TryFrom<SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
 }
 
 pub(crate) fn map_public_keys(
-    source: HashMap<String, Vec<u8>>,
+    source: &HashMap<String, Vec<u8>>,
 ) -> Result<BTreeMap<Identifier, PublicKey>, ServiceError> {
     let mut public_keys = BTreeMap::new();
     for (identifier, public_key) in source {
@@ -137,7 +137,7 @@ pub(crate) fn map_public_keys(
 }
 
 pub(crate) fn map_signature_shares(
-    source: HashMap<String, Vec<u8>>,
+    source: &HashMap<String, Vec<u8>>,
 ) -> Result<BTreeMap<Identifier, SignatureShare>, ServiceError> {
     let mut signature_shares = BTreeMap::new();
     for (identifier, signature_share) in source {
@@ -154,7 +154,7 @@ pub(crate) fn map_signature_shares(
 }
 
 pub(crate) fn map_signing_nonce_commitments(
-    source: HashMap<String, operator_rpc::common::SigningCommitment>,
+    source: &HashMap<String, operator_rpc::common::SigningCommitment>,
 ) -> Result<BTreeMap<Identifier, SigningCommitments>, ServiceError> {
     let mut nonce_commitments = BTreeMap::new();
     for (identifier, commitment) in source {
@@ -363,9 +363,13 @@ impl TryFrom<operator_rpc::spark::SigningKeyshare> for SigningKeyshare {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        let public_key = PublicKey::from_slice(&keyshare.public_key)
+            .map_err(|_| ServiceError::Generic("Invalid public key".to_string()))?;
+
         Ok(SigningKeyshare {
             owner_identifiers,
             threshold: keyshare.threshold,
+            public_key,
         })
     }
 }

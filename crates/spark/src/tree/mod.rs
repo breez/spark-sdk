@@ -13,6 +13,8 @@ use bitcoin::{Sequence, Transaction, secp256k1::PublicKey};
 use frost_secp256k1_tr::Identifier;
 use uuid::Uuid;
 
+use crate::core::TIME_LOCK_INTERVAL;
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum TreeNodeStatus {
     /// Creating is the status of a tree node that is under creation.
@@ -86,6 +88,61 @@ pub struct TreeNode {
     // pub network: Network,
 }
 
+impl TreeNode {
+    /// Checks if the node needs a timelock extension by checking if the node tx's timelock can be further reduced
+    pub fn needs_timelock_extension(&self) -> Result<bool, TreeServiceError> {
+        println!("Node tx sequence: {:?}", self.node_tx.input[0].sequence);
+        // TODO: adjust next_sequence so it could be used here
+        let current_timelock = self.node_tx.input[0]
+            .sequence
+            .to_relative_lock_time()
+            .ok_or(TreeServiceError::Generic(
+                "Failed to get current timelock".to_string(),
+            ))?;
+
+        let bitcoin::relative::LockTime::Blocks(blocks) = current_timelock else {
+            return Err(TreeServiceError::Generic(
+                "Current timelock is not expressed in blocks".to_string(),
+            ));
+        };
+
+        let current_timelock_value = blocks.value();
+        let next_timelock = current_timelock_value.saturating_sub(TIME_LOCK_INTERVAL);
+
+        Ok(next_timelock <= TIME_LOCK_INTERVAL)
+    }
+
+    /// Checks if the node needs a timelock refresh by checking if the refund tx's timelock can be further reduced
+    pub fn needs_timelock_refresh(&self) -> Result<bool, TreeServiceError> {
+        println!(
+            "Refund tx sequence: {:?}",
+            self.refund_tx.as_ref().unwrap().input[0].sequence
+        );
+        // TODO: adjust next_sequence so it could be used here
+        let current_refund_timelock = self
+            .refund_tx
+            .as_ref()
+            .ok_or(TreeServiceError::Generic("No refund tx".to_string()))?
+            .input[0]
+            .sequence
+            .to_relative_lock_time()
+            .ok_or(TreeServiceError::Generic(
+                "Failed to get current refund timelock".to_string(),
+            ))?;
+
+        let bitcoin::relative::LockTime::Blocks(blocks) = current_refund_timelock else {
+            return Err(TreeServiceError::Generic(
+                "Current refund timelock is not expressed in blocks".to_string(),
+            ));
+        };
+
+        let current_timelock_value = blocks.value();
+        let next_timelock = current_timelock_value.saturating_sub(TIME_LOCK_INTERVAL);
+
+        Ok(next_timelock <= TIME_LOCK_INTERVAL)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TreeNodeId(String);
 
@@ -117,10 +174,11 @@ pub struct TreeNodeTransactionSequence {
     pub needs_refresh: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct SigningKeyshare {
     /// The identifiers of the owners of the keyshare.
     pub owner_identifiers: Vec<Identifier>,
     /// The threshold of the keyshare.
     pub threshold: u32,
+    pub public_key: PublicKey,
 }

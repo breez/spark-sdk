@@ -1,9 +1,18 @@
+use std::collections::HashMap;
+
 use super::auth::OperatorAuth;
 use super::error::Result;
 use super::spark::*;
+use crate::operator::rpc::spark::query_nodes_request::Source;
 use crate::signer::Signer;
 use tonic::transport::Channel;
 use tracing::trace;
+
+pub struct QueryAllNodesRequest {
+    pub include_parents: bool,
+    pub network: Network,
+    pub source: Option<Source>,
+}
 
 pub struct SparkRpcClient<S> {
     auth: OperatorAuth<S>,
@@ -300,6 +309,41 @@ where
             .get_signing_operator_list(())
             .await?
             .into_inner())
+    }
+
+    // TODO: move this to an upper layer where we can handle paging for all queries where it makes sense
+    pub async fn query_all_nodes(&self, req: QueryAllNodesRequest) -> Result<QueryNodesResponse> {
+        let mut aggregated_nodes: HashMap<String, TreeNode> = HashMap::new();
+        let page_size = 100;
+        let mut offset = 0;
+
+        loop {
+            let query_request = QueryNodesRequest {
+                source: req.source.clone(),
+                include_parents: req.include_parents,
+                limit: page_size,
+                offset,
+                network: req.network as i32,
+            };
+
+            let response = self.query_nodes(query_request).await?;
+
+            // Check if we received fewer nodes than requested (this is the last page)
+            let received = response.nodes.len() as i64;
+
+            // Merge nodes from this page, deduplicating by node id
+            for (node_id, node) in response.nodes {
+                aggregated_nodes.insert(node_id, node);
+            }
+            if received < page_size {
+                return Ok(QueryNodesResponse {
+                    nodes: aggregated_nodes,
+                    offset: response.offset,
+                });
+            }
+
+            offset += page_size;
+        }
     }
 
     pub async fn query_nodes(&self, req: QueryNodesRequest) -> Result<QueryNodesResponse> {

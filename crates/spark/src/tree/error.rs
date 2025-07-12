@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::operator::rpc::OperatorRpcError;
+use crate::{operator::rpc::OperatorRpcError, signer::SignerError};
 
 #[derive(Debug, Error)]
 pub enum TreeServiceError {
@@ -13,9 +13,12 @@ pub enum TreeServiceError {
     #[error("unselectable amount")]
     UnselectableAmount,
 
-    #[error("transfer service error: {0}")]
-    TransferServiceError(#[from] crate::services::ServiceError),
-
     #[error("invalid amount")]
     InvalidAmount,
+
+    #[error("Signer error: {0}")]
+    SignerError(#[from] SignerError),
+
+    #[error("generic error: {0}")]
+    Generic(String),
 }
