@@ -50,10 +50,6 @@ impl<S> DepositService<S>
 where
     S: Signer,
 {
-    fn spark_network(&self) -> operator_rpc::spark::Network {
-        self.network.into()
-    }
-
     pub fn new(
         bitcoin_service: BitcoinService,
         client: Arc<operator_rpc::SparkRpcClient<S>>,
@@ -167,7 +163,7 @@ where
                 on_chain_utxo: Some(operator_rpc::spark::Utxo {
                     raw_tx: serialize(&deposit_tx),
                     vout,
-                    network: self.spark_network() as i32,
+                    network: self.network.to_proto_network() as i32,
                     txid: deposit_txid.as_byte_array().to_vec(),
                 }),
                 root_tx_signing_job: Some(operator_rpc::spark::SigningJob {
@@ -367,7 +363,7 @@ where
             .generate_deposit_address(operator_rpc::spark::GenerateDepositAddressRequest {
                 signing_public_key: signing_public_key.serialize().to_vec(),
                 identity_public_key: self.identity_public_key.serialize().to_vec(),
-                network: self.spark_network() as i32,
+                network: self.network.to_proto_network() as i32,
                 leaf_id: Some(leaf_id.to_string()),
                 is_static: Some(is_static),
             })
@@ -418,7 +414,7 @@ where
             .query_unused_deposit_addresses(
                 operator_rpc::spark::QueryUnusedDepositAddressesRequest {
                     identity_public_key: self.identity_public_key.serialize().to_vec(),
-                    network: self.spark_network() as i32,
+                    network: self.network.to_proto_network() as i32,
                     offset: paging.offset as i64,
                     limit: paging.limit as i64,
                 },
