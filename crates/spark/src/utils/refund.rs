@@ -38,6 +38,7 @@ pub fn create_refund_tx(
     receiving_pubkey: &PublicKey,
     network: Network,
 ) -> Result<Transaction, SignerError> {
+    // TODO: Isolate secp256k1 initialization to avoid multiple initializations
     let secp = Secp256k1::new();
     let network: bitcoin::Network = network.into();
     let addr = bitcoin::Address::p2tr(&secp, receiving_pubkey.x_only_public_key().0, None, network);

@@ -21,7 +21,7 @@ use crate::{
     services::{PagingFilter, PagingResult},
     signer::{AggregateFrostRequest, PrivateKeySource, SignFrostRequest, Signer},
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
-    utils::anchor::ephemeral_anchor_output,
+    utils::{anchor::ephemeral_anchor_output, refund::create_refund_tx},
 };
 
 use super::{
@@ -152,31 +152,16 @@ where
         let root_txid = root_tx.compute_txid();
 
         // Create refund transaction
-        let refund_address = self
-            .bitcoin_service
-            .p2tr_address(signing_public_key.x_only_public_key().0, None);
-        let refund_script = refund_address.script_pubkey();
-
-        let refund_tx = Transaction {
-            version: Version(3),
-            lock_time: LockTime::ZERO,
-            input: vec![TxIn {
-                previous_output: OutPoint {
-                    txid: root_txid,
-                    vout: 0,
-                },
-                script_sig: ScriptBuf::new(),
-                sequence: initial_sequence(),
-                witness: Default::default(),
-            }],
-            output: vec![
-                TxOut {
-                    script_pubkey: refund_script,
-                    value: deposit_value,
-                },
-                ephemeral_anchor_output(),
-            ],
-        };
+        let refund_tx = create_refund_tx(
+            initial_sequence(),
+            OutPoint {
+                txid: root_txid,
+                vout: 0,
+            },
+            deposit_value.to_sat(),
+            &signing_public_key,
+            self.network,
+        )?;
 
         // Get random signing commitment for refund nonce
         let refund_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
