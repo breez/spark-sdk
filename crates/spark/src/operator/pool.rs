@@ -7,13 +7,16 @@ use tonic::transport::Uri;
 use super::OperatorError;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct OperatorPool {
+pub struct OperatorPoolConfig {
     coordinator_index: usize,
-    operators: Vec<Operator>,
+    operators: Vec<OperatorConfig>,
 }
 
-impl OperatorPool {
-    pub fn new(coordinator_index: usize, operators: Vec<Operator>) -> Result<Self, OperatorError> {
+impl OperatorPoolConfig {
+    pub fn new(
+        coordinator_index: usize,
+        operators: Vec<OperatorConfig>,
+    ) -> Result<Self, OperatorError> {
         if coordinator_index >= operators.len() {
             return Err(OperatorError::InvalidCoordinatorIndex);
         }
@@ -32,31 +35,31 @@ impl OperatorPool {
     }
 
     /// Returns the coordinator operator.
-    pub fn get_coordinator(&self) -> &Operator {
+    pub fn get_coordinator(&self) -> &OperatorConfig {
         self.operators.get(self.coordinator_index).unwrap()
     }
 
     /// Returns an iterator over all operators, including the coordinator.
-    pub fn get_all_operators(&self) -> impl Iterator<Item = &Operator> {
+    pub fn get_all_operators(&self) -> impl Iterator<Item = &OperatorConfig> {
         self.operators.iter()
     }
 
     /// Returns an iterator over all operators except the coordinator.
-    pub fn get_non_coordinator_operators(&self) -> impl Iterator<Item = &Operator> {
+    pub fn get_non_coordinator_operators(&self) -> impl Iterator<Item = &OperatorConfig> {
         self.operators
             .iter()
             .filter(|op| op.id != self.coordinator_index)
     }
 
     /// Returns the operator at the given index.
-    pub fn get_operator_by_id(&self, id: usize) -> Option<&Operator> {
+    pub fn get_operator_by_id(&self, id: usize) -> Option<&OperatorConfig> {
         self.operators.get(id)
     }
 }
 
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Operator {
+pub struct OperatorConfig {
     pub id: usize,
     pub identifier: Identifier,
     #[serde_as(as = "DisplayFromStr")]
@@ -65,4 +68,4 @@ pub struct Operator {
     pub identity_public_key: PublicKey,
 }
 
-impl Operator {}
+impl OperatorConfig {}

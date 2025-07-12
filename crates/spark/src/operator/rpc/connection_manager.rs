@@ -3,7 +3,7 @@ use tokio::sync::Mutex;
 use tonic::transport::{Channel, ClientTlsConfig};
 use tracing::debug;
 
-use crate::operator::Operator;
+use crate::operator::OperatorConfig;
 
 use super::error::{OperatorRpcError, Result};
 
@@ -28,7 +28,7 @@ impl ConnectionManager {
         }
     }
 
-    pub async fn get_channel(&self, operator: &Operator) -> Result<Channel> {
+    pub async fn get_channel(&self, operator: &OperatorConfig) -> Result<Channel> {
         let mut map = self.connections_map.lock().await;
         let operator_connection = map.get(&operator.address.to_string());
         match operator_connection {

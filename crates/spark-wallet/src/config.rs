@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
-use spark::{Network, operator::OperatorPool, ssp::ServiceProviderConfig};
+use spark::{Network, operator::OperatorPoolConfig, ssp::ServiceProviderConfig};
 
 use crate::SparkWalletError;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SparkWalletConfig {
     pub network: Network,
-    pub operator_pool: OperatorPool,
+    pub operator_pool: OperatorPoolConfig,
     pub service_provider_config: ServiceProviderConfig,
     pub split_secret_threshold: u32,
 }

@@ -15,7 +15,7 @@ use crate::{
     Network,
     bitcoin::{BitcoinService, sighash_from_tx},
     core::initial_sequence,
-    operator::{OperatorPool, rpc as operator_rpc},
+    operator::{OperatorPoolConfig, rpc as operator_rpc},
     services::{PagingFilter, PagingResult},
     signer::{AggregateFrostRequest, PrivateKeySource, SignFrostRequest, Signer},
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
@@ -34,7 +34,7 @@ where
     client: Arc<operator_rpc::SparkRpcClient<S>>,
     identity_public_key: PublicKey,
     network: Network,
-    operator_pool: OperatorPool,
+    operator_pool: OperatorPoolConfig,
     signer: S,
 }
 
@@ -55,7 +55,7 @@ where
         client: Arc<operator_rpc::SparkRpcClient<S>>,
         identity_public_key: PublicKey,
         network: impl Into<Network>,
-        operator_pool: OperatorPool,
+        operator_pool: OperatorPoolConfig,
         signer: S,
     ) -> Self {
         DepositService {
