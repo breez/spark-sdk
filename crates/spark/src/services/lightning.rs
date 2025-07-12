@@ -1,5 +1,5 @@
 use crate::core::Network;
-use crate::operator::rpc::SparkRpcClient;
+use crate::operator::OperatorPool;
 use crate::operator::rpc::spark::initiate_preimage_swap_request::Reason;
 use crate::operator::rpc::spark::{
     GetSigningCommitmentsRequest, InitiatePreimageSwapRequest, InitiatePreimageSwapResponse,
@@ -143,8 +143,7 @@ pub struct LightningService<S>
 where
     S: Signer,
 {
-    coordinator_client: Arc<SparkRpcClient<S>>,
-    operator_clients: Vec<Arc<SparkRpcClient<S>>>,
+    operator_pool: Arc<OperatorPool<S>>,
     ssp_client: Arc<ServiceProvider<S>>,
     network: Network,
     signer: S,
@@ -156,16 +155,14 @@ where
     S: Signer,
 {
     pub fn new(
-        coordinator_client: Arc<SparkRpcClient<S>>,
-        operator_clients: Vec<Arc<SparkRpcClient<S>>>,
+        operator_pool: Arc<OperatorPool<S>>,
         ssp_client: Arc<ServiceProvider<S>>,
         network: Network,
         signer: S,
         split_secret_threshold: u32,
     ) -> Self {
         LightningService {
-            coordinator_client,
-            operator_clients,
+            operator_pool,
             ssp_client,
             network,
             signer,
@@ -210,30 +207,32 @@ where
         let shares = self.signer.split_secret_with_proofs(
             &SecretToSplit::Preimage(preimage),
             self.split_secret_threshold,
-            self.operator_clients.len(),
+            self.operator_pool.len(),
         )?;
 
         let identity_pubkey = self.signer.get_identity_public_key()?;
-        let requests = self
-            .operator_clients
-            .iter()
-            .zip(shares)
-            .map(|(operator, share)| {
-                operator.store_preimage_share(StorePreimageShareRequest {
-                    payment_hash: payment_hash.to_byte_array().to_vec(),
-                    preimage_share: Some(SecretShare {
-                        secret_share: share.secret_share.share.to_bytes().to_vec(),
-                        proofs: share
-                            .proofs
-                            .iter()
-                            .map(|p| p.to_sec1_bytes().to_vec())
-                            .collect(),
-                    }),
-                    threshold: share.secret_share.threshold as u32,
-                    invoice_string: invoice.clone().invoice.encoded_invoice,
-                    user_identity_public_key: identity_pubkey.serialize().to_vec(),
-                })
-            });
+        let requests =
+            self.operator_pool
+                .get_all_operators()
+                .zip(shares)
+                .map(|(operator, share)| {
+                    operator
+                        .client
+                        .store_preimage_share(StorePreimageShareRequest {
+                            payment_hash: payment_hash.to_byte_array().to_vec(),
+                            preimage_share: Some(SecretShare {
+                                secret_share: share.secret_share.share.to_bytes().to_vec(),
+                                proofs: share
+                                    .proofs
+                                    .iter()
+                                    .map(|p| p.to_sec1_bytes().to_vec())
+                                    .collect(),
+                            }),
+                            threshold: share.secret_share.threshold as u32,
+                            invoice_string: invoice.clone().invoice.encoded_invoice,
+                            user_identity_public_key: identity_pubkey.serialize().to_vec(),
+                        })
+                });
 
         futures::future::try_join_all(requests)
             .await
@@ -390,7 +389,9 @@ where
             .map(|l| l.node.id.clone().to_string())
             .collect();
         let spark_commitments = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .get_signing_commitments(GetSigningCommitmentsRequest { node_ids })
             .await?;
 
@@ -447,7 +448,9 @@ where
         };
 
         let response = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .initiate_preimage_swap(request_data)
             .await?;
         Ok(response)

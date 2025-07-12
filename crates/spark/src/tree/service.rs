@@ -6,9 +6,9 @@ use tracing::warn;
 
 use crate::{
     Network,
-    operator::rpc::{
-        SparkRpcClient,
-        spark::{QueryNodesRequest, query_nodes_request::Source},
+    operator::{
+        OperatorPool,
+        rpc::spark::{QueryNodesRequest, query_nodes_request::Source},
     },
     services::{PagingFilter, PagingResult, TransferService},
     signer::Signer,
@@ -18,25 +18,25 @@ use crate::{
 use super::{TreeNode, error::TreeServiceError, state::TreeState};
 
 pub struct TreeService<S: Signer> {
-    client: Arc<SparkRpcClient<S>>,
     identity_pubkey: PublicKey,
     network: Network,
+    operator_pool: Arc<OperatorPool<S>>,
     state: Mutex<TreeState>,
     transfer_service: Arc<TransferService<S>>,
 }
 
 impl<S: Signer> TreeService<S> {
     pub fn new(
-        client: Arc<SparkRpcClient<S>>,
         identity_pubkey: PublicKey,
         network: Network,
+        operator_pool: Arc<OperatorPool<S>>,
         state: TreeState,
         transfer_service: Arc<TransferService<S>>,
     ) -> Self {
         TreeService {
-            client,
             identity_pubkey,
             network,
+            operator_pool,
             state: Mutex::new(state),
             transfer_service,
         }
@@ -47,6 +47,8 @@ impl<S: Signer> TreeService<S> {
         paging: &PagingFilter,
     ) -> Result<PagingResult<TreeNode>, TreeServiceError> {
         let nodes = self
+            .operator_pool
+            .get_coordinator()
             .client
             .query_nodes(QueryNodesRequest {
                 include_parents: false,

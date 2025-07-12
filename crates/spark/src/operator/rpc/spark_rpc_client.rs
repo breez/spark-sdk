@@ -1,24 +1,21 @@
 use super::auth::OperatorAuth;
 use super::error::Result;
 use super::spark::*;
-use crate::operator::OperatorConfig;
 use crate::signer::Signer;
 use tonic::transport::Channel;
 use tracing::trace;
 
 pub struct SparkRpcClient<S> {
     auth: OperatorAuth<S>,
-    pub operator: OperatorConfig,
 }
 
 impl<S> SparkRpcClient<S>
 where
     S: Signer,
 {
-    pub fn new(channel: Channel, signer: S, operator: OperatorConfig) -> Self {
+    pub fn new(channel: Channel, signer: S) -> Self {
         Self {
             auth: OperatorAuth::new(channel, signer),
-            operator,
         }
     }
 

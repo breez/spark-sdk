@@ -9,9 +9,12 @@ use prost_types::Timestamp;
 
 use crate::{
     Network,
-    operator::rpc::{
-        OperatorRpcError, SparkRpcClient,
-        spark::{StartTransferRequest, TransferFilter, transfer_filter::Participant},
+    operator::{
+        OperatorPool,
+        rpc::{
+            OperatorRpcError,
+            spark::{StartTransferRequest, TransferFilter, transfer_filter::Participant},
+        },
     },
     services::{
         LeafKeyTweak, LeafRefundSigningData, ServiceError, Transfer, TransferId, TransferService,
@@ -25,8 +28,8 @@ use crate::{
 const SWAP_EXPIRY_DURATION: Duration = Duration::from_secs(2 * 60);
 
 pub struct Swap<S> {
-    coordinator_client: Arc<SparkRpcClient<S>>,
     network: Network,
+    operator_pool: Arc<OperatorPool<S>>,
     signer: S,
     ssp_client: Arc<ServiceProvider<S>>,
     transfer_service: Arc<TransferService<S>>,
@@ -37,15 +40,15 @@ where
     S: Signer,
 {
     pub fn new(
-        coordinator_client: Arc<SparkRpcClient<S>>,
         network: Network,
+        operator_pool: Arc<OperatorPool<S>>,
         signer: S,
         ssp_client: Arc<ServiceProvider<S>>,
         transfer_service: Arc<TransferService<S>>,
     ) -> Self {
         Swap {
-            coordinator_client,
             network,
+            operator_pool,
             signer,
             ssp_client,
             transfer_service,
@@ -114,7 +117,9 @@ where
 
         // TODO: Migrate to new transfer package format. leaves_to_send is deprecated.
         let response = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .start_leaf_swap(StartTransferRequest {
                 transfer_id: transfer_id.to_string(),
                 owner_identity_public_key: self
@@ -236,7 +241,9 @@ where
             )),
         )?;
         let transfers = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .query_all_transfers(TransferFilter {
                 participant: Some(Participant::ReceiverIdentityPublicKey(
                     self.signer.get_identity_public_key()?.serialize().to_vec(),

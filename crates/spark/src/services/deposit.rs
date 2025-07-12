@@ -15,7 +15,7 @@ use crate::{
     Network,
     bitcoin::{BitcoinService, sighash_from_tx},
     core::initial_sequence,
-    operator::{OperatorPoolConfig, rpc as operator_rpc},
+    operator::{OperatorPool, rpc as operator_rpc},
     services::{PagingFilter, PagingResult},
     signer::{AggregateFrostRequest, PrivateKeySource, SignFrostRequest, Signer},
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
@@ -31,10 +31,9 @@ where
     S: Signer,
 {
     bitcoin_service: BitcoinService,
-    client: Arc<operator_rpc::SparkRpcClient<S>>,
     identity_public_key: PublicKey,
     network: Network,
-    operator_pool: OperatorPoolConfig,
+    operator_pool: Arc<OperatorPool<S>>,
     signer: S,
 }
 
@@ -52,15 +51,13 @@ where
 {
     pub fn new(
         bitcoin_service: BitcoinService,
-        client: Arc<operator_rpc::SparkRpcClient<S>>,
         identity_public_key: PublicKey,
         network: impl Into<Network>,
-        operator_pool: OperatorPoolConfig,
+        operator_pool: Arc<OperatorPool<S>>,
         signer: S,
     ) -> Self {
         DepositService {
             bitcoin_service,
-            client,
             identity_public_key,
             network: network.into(),
             operator_pool,
@@ -142,6 +139,8 @@ where
         let refund_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
 
         let tree_resp = self
+            .operator_pool
+            .get_coordinator()
             .client
             .start_deposit_tree_creation(operator_rpc::spark::StartDepositTreeCreationRequest {
                 identity_public_key: self.identity_public_key.serialize().to_vec(),
@@ -264,6 +263,8 @@ where
             .await?;
 
         let finalize_resp = self
+            .operator_pool
+            .get_coordinator()
             .client
             .finalize_node_signatures(operator_rpc::spark::FinalizeNodeSignaturesRequest {
                 intent: operator_rpc::common::SignatureIntent::Creation as i32,
@@ -347,6 +348,8 @@ where
         is_static: bool,
     ) -> Result<DepositAddress, ServiceError> {
         let resp = self
+            .operator_pool
+            .get_coordinator()
             .client
             .generate_deposit_address(operator_rpc::spark::GenerateDepositAddressRequest {
                 signing_public_key: signing_public_key.serialize().to_vec(),
@@ -398,6 +401,8 @@ where
         paging: &PagingFilter,
     ) -> Result<PagingResult<DepositAddress>, ServiceError> {
         let resp = self
+            .operator_pool
+            .get_coordinator()
             .client
             .query_unused_deposit_addresses(
                 operator_rpc::spark::QueryUnusedDepositAddressesRequest {

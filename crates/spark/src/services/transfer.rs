@@ -4,6 +4,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::Network;
 use crate::bitcoin::sighash_from_tx;
 use crate::core::{initial_sequence, next_sequence};
+use crate::operator::OperatorPool;
 use crate::operator::rpc::common::SignatureIntent;
 use crate::operator::rpc::spark::transfer_filter::Participant;
 use crate::operator::rpc::spark::{
@@ -74,8 +75,7 @@ pub struct TransferService<S> {
     signer: S,
     network: Network,
     split_secret_threshold: u32,
-    coordinator_client: Arc<operator_rpc::SparkRpcClient<S>>,
-    operator_clients: Vec<Arc<operator_rpc::SparkRpcClient<S>>>,
+    operator_pool: Arc<OperatorPool<S>>,
 }
 
 impl<S: Signer> TransferService<S> {
@@ -83,15 +83,13 @@ impl<S: Signer> TransferService<S> {
         signer: S,
         network: Network,
         split_secret_threshold: u32,
-        coordinator_client: Arc<operator_rpc::SparkRpcClient<S>>,
-        operator_clients: Vec<Arc<operator_rpc::SparkRpcClient<S>>>,
+        operator_pool: Arc<OperatorPool<S>>,
     ) -> Self {
         Self {
             signer,
             network,
             split_secret_threshold,
-            coordinator_client,
-            operator_clients,
+            operator_pool,
         }
     }
 
@@ -168,7 +166,9 @@ impl<S: Signer> TransferService<S> {
             start_transfer_request
         );
         let transfer = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .start_transfer(start_transfer_request)
             .await?
             .transfer
@@ -219,12 +219,6 @@ impl<S: Signer> TransferService<S> {
         receiver_public_key: &PublicKey,
         refund_signature: Option<Signature>,
     ) -> Result<HashMap<Identifier, operator_rpc::spark::SendLeafKeyTweak>, ServiceError> {
-        let signing_operators: Vec<_> = self
-            .operator_clients
-            .iter()
-            .map(|c| c.operator.clone())
-            .collect();
-
         // Calculate the key tweak by subtracting keys
         let privkey_tweak = self
             .signer
@@ -234,7 +228,7 @@ impl<S: Signer> TransferService<S> {
         let shares = self.signer.split_secret_with_proofs(
             &SecretToSplit::PrivateKey(privkey_tweak),
             self.split_secret_threshold,
-            signing_operators.len(),
+            self.operator_pool.len(),
         )?;
 
         trace!(
@@ -246,7 +240,7 @@ impl<S: Signer> TransferService<S> {
         let secp = bitcoin::secp256k1::Secp256k1::new();
         // Create pubkey shares tweak map
         let mut pubkey_shares_tweak = HashMap::new();
-        for operator in &signing_operators {
+        for operator in self.operator_pool.get_all_operators() {
             let operator_identifier = hex::encode(operator.identifier.serialize());
 
             let share = find_share(&shares, operator.id).ok_or_else(|| {
@@ -291,7 +285,7 @@ impl<S: Signer> TransferService<S> {
         // Create leaf tweaks map for each signing operator
         let mut leaf_tweaks_map = HashMap::new();
 
-        for operator in &signing_operators {
+        for operator in self.operator_pool.get_all_operators() {
             let share = find_share(&shares, operator.id).ok_or_else(|| {
                 ServiceError::Generic(format!("Share not found for operator {}", operator.id))
             })?;
@@ -328,7 +322,9 @@ impl<S: Signer> TransferService<S> {
         receiver_public_key: &PublicKey,
     ) -> Result<operator_rpc::spark::TransferPackage, ServiceError> {
         let signing_commitments = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .get_signing_commitments(operator_rpc::spark::GetSigningCommitmentsRequest {
                 node_ids: leaf_key_tweaks
                     .iter()
@@ -387,14 +383,13 @@ impl<S: Signer> TransferService<S> {
 
             // Get the operator by identifier
             let operator_client = self
-                .operator_clients
-                .iter()
-                .find(|c| c.operator.identifier == *key)
+                .operator_pool
+                .get_operator_by_identifier(key)
                 .ok_or_else(|| ServiceError::Generic("Operator not found".to_string()))?;
 
             // Encrypt the binary data using the operator's identity public key
             let encrypted_proto = self.encrypt_with_public_key(
-                &operator_client.operator.identity_public_key,
+                &operator_client.identity_public_key,
                 &proto_to_encrypt_binary,
             )?;
 
@@ -674,7 +669,9 @@ impl<S: Signer> TransferService<S> {
         };
 
         let response = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .extend_leaf(ExtendLeafRequest {
                 leaf_id: node.id.to_string(),
                 owner_identity_public_key: self
@@ -793,7 +790,9 @@ impl<S: Signer> TransferService<S> {
             .await?;
 
         let nodes = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .finalize_node_signatures(FinalizeNodeSignaturesRequest {
                 intent: SignatureIntent::Extend.into(),
                 node_signatures: vec![NodeSignatures {
@@ -850,15 +849,16 @@ impl<S: Signer> TransferService<S> {
         // Send claim transfer tweak keys to all signing operators in parallel
         let mut tasks = Vec::new();
 
-        for operator_client in &self.operator_clients {
-            let leaves_to_receive = leaves_tweaks_map.get(&operator_client.operator.identifier);
+        for operator in self.operator_pool.get_all_operators() {
+            let leaves_to_receive = leaves_tweaks_map.get(&operator.identifier);
             if let Some(leaves_to_receive) = leaves_to_receive {
                 let identity_public_key =
                     self.signer.get_identity_public_key()?.serialize().to_vec();
                 let leaves_to_receive = leaves_to_receive.clone();
 
                 let task = async move {
-                    operator_client
+                    operator
+                        .client
                         .claim_transfer_tweak_keys(
                             operator_rpc::spark::ClaimTransferTweakKeysRequest {
                                 transfer_id: transfer.id.to_string(),
@@ -917,12 +917,6 @@ impl<S: Signer> TransferService<S> {
         ),
         ServiceError,
     > {
-        let signing_operators: Vec<_> = self
-            .operator_clients
-            .iter()
-            .map(|c| c.operator.clone())
-            .collect();
-
         // Calculate the public key tweak by subtracting private keys given public keys
         let privkey_tweak = self
             .signer
@@ -932,7 +926,7 @@ impl<S: Signer> TransferService<S> {
         let shares = self.signer.split_secret_with_proofs(
             &SecretToSplit::PrivateKey(privkey_tweak),
             self.split_secret_threshold,
-            signing_operators.len(),
+            self.operator_pool.len(),
         )?;
 
         trace!("prepare claim: Split secret into {} shares", shares.len());
@@ -940,7 +934,7 @@ impl<S: Signer> TransferService<S> {
         // Create pubkey shares tweak map
         let mut pubkey_shares_tweak = HashMap::new();
         let secp = Secp256k1::new();
-        for operator in &signing_operators {
+        for operator in self.operator_pool.get_all_operators() {
             let operator_identifier = hex::encode(operator.identifier.serialize());
 
             let share = find_share(&shares, operator.id).ok_or_else(|| {
@@ -957,7 +951,7 @@ impl<S: Signer> TransferService<S> {
 
         // Create leaf tweaks map for each signing operator
         let mut leaf_tweaks_map = HashMap::new();
-        for operator in &signing_operators {
+        for operator in self.operator_pool.get_all_operators() {
             let share = find_share(&shares, operator.id).ok_or_else(|| {
                 ServiceError::Generic(format!("Share not found for operator {}", operator.id))
             })?;
@@ -1023,7 +1017,9 @@ impl<S: Signer> TransferService<S> {
 
         // Call the coordinator to get signing results
         let response = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .claim_transfer_sign_refunds(operator_rpc::spark::ClaimTransferSignRefundsRequest {
                 transfer_id: transfer.id.to_string(),
                 owner_identity_public_key: self
@@ -1053,7 +1049,9 @@ impl<S: Signer> TransferService<S> {
         node_signatures: &[operator_rpc::spark::NodeSignatures],
     ) -> Result<Vec<TreeNode>, ServiceError> {
         let response = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .finalize_node_signatures(operator_rpc::spark::FinalizeNodeSignaturesRequest {
                 intent: operator_rpc::common::SignatureIntent::Transfer as i32,
                 node_signatures: node_signatures.to_vec(),
@@ -1164,7 +1162,9 @@ impl<S: Signer> TransferService<S> {
             paging.limit, paging.offset
         );
         let response = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .query_all_transfers(TransferFilter {
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
@@ -1196,7 +1196,9 @@ impl<S: Signer> TransferService<S> {
     ) -> Result<Vec<Transfer>, ServiceError> {
         trace!("Querying all pending transfers");
         let response = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .query_pending_transfers(operator_rpc::spark::TransferFilter {
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
@@ -1222,7 +1224,9 @@ impl<S: Signer> TransferService<S> {
     ) -> Result<Vec<Transfer>, ServiceError> {
         trace!("Querying all pending receiver transfers");
         let response = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .query_pending_transfers(operator_rpc::spark::TransferFilter {
                 network: self.network.to_proto_network() as i32,
                 participant: Some(Participant::ReceiverIdentityPublicKey(
@@ -1247,7 +1251,9 @@ impl<S: Signer> TransferService<S> {
     ) -> Result<Option<Transfer>, ServiceError> {
         trace!("Querying transfer with id: {}", transfer_id);
         let response = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .query_all_transfers(TransferFilter {
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
@@ -1292,7 +1298,9 @@ impl<S: Signer> TransferService<S> {
             .await?;
 
         let response = self
-            .coordinator_client
+            .operator_pool
+            .get_coordinator()
+            .client
             .finalize_transfer(
                 operator_rpc::spark::FinalizeTransferWithTransferPackageRequest {
                     transfer_id: transfer.id.to_string(),

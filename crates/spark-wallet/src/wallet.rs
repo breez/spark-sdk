@@ -5,7 +5,7 @@ use bitcoin::{Address, Transaction};
 use spark::{
     address::SparkAddress,
     bitcoin::BitcoinService,
-    operator::rpc::{ConnectionManager, SparkRpcClient},
+    operator::rpc::ConnectionManager,
     services::{
         DepositService, LightningReceivePayment, LightningSendPayment, LightningService,
         PagingFilter, Swap, Transfer, TransferService,
@@ -42,18 +42,20 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let identity_public_key = signer.get_identity_public_key()?;
         let connection_manager = ConnectionManager::new();
 
-        let (signing_operators_clients, coordinator_client) =
-            Self::init_operator_clients(&config, &connection_manager, signer.clone()).await?;
-
         let bitcoin_service = BitcoinService::new(config.network);
         let service_provider = Arc::new(ServiceProvider::new(
             config.service_provider_config.clone(),
             signer.clone(),
         ));
 
+        let operator_pool = Arc::new(
+            config
+                .operator_pool
+                .connect(&connection_manager, &signer)
+                .await?,
+        );
         let lightning_service = Arc::new(LightningService::new(
-            coordinator_client.clone(),
-            signing_operators_clients.clone(),
+            operator_pool.clone(),
             service_provider.clone(),
             config.network,
             signer.clone(),
@@ -61,10 +63,9 @@ impl<S: Signer + Clone> SparkWallet<S> {
         ));
         let deposit_service = DepositService::new(
             bitcoin_service,
-            coordinator_client.clone(),
             identity_public_key,
             config.network,
-            config.operator_pool.clone(),
+            operator_pool.clone(),
             signer.clone(),
         );
 
@@ -72,21 +73,20 @@ impl<S: Signer + Clone> SparkWallet<S> {
             signer.clone(),
             config.network,
             config.split_secret_threshold,
-            coordinator_client.clone(),
-            signing_operators_clients.clone(),
+            operator_pool.clone(),
         ));
         let tree_state = TreeState::new();
         let tree_service = TreeService::new(
-            coordinator_client.clone(),
             identity_public_key,
             config.network,
+            operator_pool.clone(),
             tree_state,
             Arc::clone(&transfer_service),
         );
 
         let swap_service = Arc::new(Swap::new(
-            coordinator_client.clone(),
             config.network,
+            operator_pool.clone(),
             signer.clone(),
             Arc::clone(&service_provider),
             Arc::clone(&transfer_service),
@@ -100,28 +100,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
             transfer_service,
             lightning_service,
         })
-    }
-
-    async fn init_operator_clients(
-        config: &SparkWalletConfig,
-        connection_manager: &ConnectionManager,
-        signer: S,
-    ) -> Result<(Vec<Arc<SparkRpcClient<S>>>, Arc<SparkRpcClient<S>>), SparkWalletError> {
-        let mut signing_operators_clients = vec![];
-        for operator in config.operator_pool.get_all_operators() {
-            let channel = connection_manager.get_channel(operator).await?;
-            let client = Arc::new(SparkRpcClient::new(
-                channel,
-                signer.clone(),
-                operator.clone(),
-            ));
-            signing_operators_clients.push(client);
-        }
-        let coordinator = config.operator_pool.get_coordinator().clone();
-        let channel = connection_manager.get_channel(&coordinator).await?;
-        let coordinator_client =
-            Arc::new(SparkRpcClient::new(channel, signer.clone(), coordinator));
-        Ok((signing_operators_clients, coordinator_client))
     }
 
     pub async fn list_leaves(&self) -> Result<Vec<WalletLeaf>, SparkWalletError> {
