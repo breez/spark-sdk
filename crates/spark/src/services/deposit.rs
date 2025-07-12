@@ -115,7 +115,6 @@ where
             .output
             .get(vout as usize)
             .ok_or(ServiceError::InvalidOutputIndex)?;
-        let deposit_value = deposit_output.value;
 
         let root_tx = create_node_tx(
             Default::default(),
@@ -123,38 +122,24 @@ where
                 txid: deposit_txid,
                 vout,
             },
-            deposit_value,
+            deposit_output.value,
             deposit_output.script_pubkey.clone(),
         );
 
-        // Get random signing commitment for root nonce
-        let root_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
-
-        // Calculate sighash for root transaction
-        let root_tx_sighash = sighash_from_tx(&root_tx, 0, deposit_output)?;
-        let root_txid = root_tx.compute_txid();
-
-        // Create refund transaction
         let refund_tx = create_refund_tx(
             initial_sequence(),
             OutPoint {
-                txid: root_txid,
+                txid: root_tx.compute_txid(),
                 vout: 0,
             },
-            deposit_value.to_sat(),
+            deposit_output.value.to_sat(),
             &signing_public_key,
             self.network,
         );
 
-        // Get random signing commitment for refund nonce
+        // Get random signing commitments
+        let root_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
         let refund_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
-
-        // Calculate sighash for refund transaction
-        let refund_tx_sighash = sighash_from_tx(&refund_tx, 0, &root_tx.output[0])?;
-
-        // Get spark client
-        let root_tx_bytes = serialize(&root_tx);
-        let refund_tx_bytes = serialize(&refund_tx);
 
         let tree_resp = self
             .client
@@ -168,12 +153,12 @@ where
                 }),
                 root_tx_signing_job: Some(operator_rpc::spark::SigningJob {
                     signing_public_key: signing_public_key.serialize().to_vec(),
-                    raw_tx: root_tx_bytes.clone(),
+                    raw_tx: serialize(&root_tx),
                     signing_nonce_commitment: Some(root_nonce_commitment.try_into()?),
                 }),
                 refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
                     signing_public_key: signing_public_key.serialize().to_vec(),
-                    raw_tx: refund_tx_bytes.clone(),
+                    raw_tx: serialize(&refund_tx),
                     signing_nonce_commitment: Some(refund_nonce_commitment.try_into()?),
                 }),
             })
@@ -221,6 +206,7 @@ where
             return Err(ServiceError::InvalidVerifyingKey);
         }
 
+        let root_tx_sighash = sighash_from_tx(&root_tx, 0, deposit_output)?;
         let root_sig = self
             .signer
             .sign_frost(SignFrostRequest {
@@ -233,6 +219,8 @@ where
                 adaptor_public_key: None,
             })
             .await?;
+
+        let refund_tx_sighash = sighash_from_tx(&refund_tx, 0, &root_tx.output[0])?;
         let refund_sig = self
             .signer
             .sign_frost(SignFrostRequest {
