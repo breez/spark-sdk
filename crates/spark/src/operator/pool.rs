@@ -95,6 +95,7 @@ pub struct OperatorConfig {
     pub identifier: Identifier,
     #[serde_as(as = "DisplayFromStr")]
     pub address: Uri,
+    #[serde_as(as = "DisplayFromStr")]
     pub identity_public_key: PublicKey,
 }
 
