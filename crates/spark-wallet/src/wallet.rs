@@ -5,7 +5,7 @@ use bitcoin::{Address, Transaction};
 use spark::{
     address::SparkAddress,
     bitcoin::BitcoinService,
-    operator::rpc::ConnectionManager,
+    operator::{OperatorPool, rpc::ConnectionManager},
     services::{
         DepositService, LightningReceivePayment, LightningSendPayment, LightningService,
         PagingFilter, Swap, Transfer, TransferService,
@@ -49,10 +49,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         ));
 
         let operator_pool = Arc::new(
-            config
-                .operator_pool
-                .connect(&connection_manager, &signer)
-                .await?,
+            OperatorPool::connect(&config.operator_pool, &connection_manager, &signer).await?,
         );
         let lightning_service = Arc::new(LightningService::new(
             operator_pool.clone(),

@@ -39,32 +39,6 @@ impl OperatorPoolConfig {
         })
     }
 
-    pub async fn connect<S>(
-        &self,
-        connection_manager: &ConnectionManager,
-        signer: &S,
-    ) -> Result<OperatorPool<S>, OperatorRpcError>
-    where
-        S: Signer + Clone,
-    {
-        let mut operators = Vec::new();
-        for operator in &self.operators {
-            let channel = connection_manager.get_channel(operator).await?;
-            let client = SparkRpcClient::new(channel, signer.clone());
-            operators.push(Operator {
-                client,
-                id: operator.id,
-                identifier: operator.identifier,
-                identity_public_key: operator.identity_public_key,
-            });
-        }
-
-        Ok(OperatorPool {
-            coordinator_index: self.coordinator_index,
-            operators,
-        })
-    }
-
     /// Returns the coordinator operator.
     pub fn get_coordinator(&self) -> &OperatorConfig {
         self.operators.get(self.coordinator_index).unwrap()
@@ -114,6 +88,31 @@ pub struct OperatorPool<S> {
 }
 
 impl<S> OperatorPool<S> {
+    pub async fn connect(
+        config: &OperatorPoolConfig,
+        connection_manager: &ConnectionManager,
+        signer: &S,
+    ) -> Result<Self, OperatorRpcError>
+    where
+        S: Signer + Clone,
+    {
+        let mut operators = Vec::new();
+        for operator in &config.operators {
+            let channel = connection_manager.get_channel(operator).await?;
+            let client = SparkRpcClient::new(channel, signer.clone());
+            operators.push(Operator {
+                client,
+                id: operator.id,
+                identifier: operator.identifier,
+                identity_public_key: operator.identity_public_key,
+            });
+        }
+
+        Ok(Self {
+            coordinator_index: config.coordinator_index,
+            operators,
+        })
+    }
     /// Returns the coordinator operator.
     pub fn get_coordinator(&self) -> &Operator<S> {
         self.operators.get(self.coordinator_index).unwrap()
