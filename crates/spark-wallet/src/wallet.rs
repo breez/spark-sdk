@@ -12,7 +12,7 @@ use spark::{
     },
     signer::Signer,
     ssp::ServiceProvider,
-    tree::{TreeNode, TreeNodeId, TreeService, TreeState},
+    tree::{LeavesReservation, TreeNode, TreeNodeId, TreeService, TreeState},
 };
 use tracing::{debug, trace};
 
@@ -31,7 +31,7 @@ where
     deposit_service: DepositService<S>,
     signer: S,
     swap_service: Arc<Swap<S>>,
-    tree_service: TreeService<S>,
+    tree_service: Arc<TreeService<S>>,
     transfer_service: Arc<TransferService<S>>,
     lightning_service: Arc<LightningService<S>>,
     timelock_manager: Arc<TimelockManager<S>>,
@@ -82,14 +82,14 @@ impl<S: Signer + Clone> SparkWallet<S> {
         ));
 
         let tree_state = TreeState::new();
-        let tree_service = TreeService::new(
+        let tree_service = Arc::new(TreeService::new(
             identity_public_key,
             config.network,
             operator_pool.clone(),
             tree_state,
             Arc::clone(&timelock_manager),
             signer.clone(),
-        );
+        ));
 
         let swap_service = Arc::new(Swap::new(
             config.network,
@@ -112,7 +112,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
     }
 
     pub async fn list_leaves(&self) -> Result<Vec<WalletLeaf>, SparkWalletError> {
-        let leaves = self.tree_service.list_leaves().await?;
+        let leaves = self.tree_service.list_leaves()?;
         Ok(leaves.into_iter().map(WalletLeaf::from).collect())
     }
 
@@ -126,15 +126,25 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .validate_payment(invoice, max_fee_sat)
             .await?;
 
-        let leaves = self.select_leaves(total_amount_sat).await?;
+        let leaves_reservation = self.select_leaves(total_amount_sat).await?;
 
-        let leaves = self.timelock_manager.check_timelock_nodes(leaves).await?;
+        let leaves = self
+            .timelock_manager
+            .check_timelock_nodes(leaves_reservation.leaves.clone())
+            .await?;
 
         // start the lightning swap with the operator
-        let swap = self
-            .lightning_service
-            .start_lightning_swap(invoice, &leaves)
-            .await?;
+        let swap = with_pending_leaves(
+            self.tree_service.clone(),
+            async {
+                Ok(self
+                    .lightning_service
+                    .start_lightning_swap(invoice, &leaves)
+                    .await?)
+            },
+            &leaves_reservation,
+        )
+        .await?;
 
         // send the leaves to the operator
         let _ = self
@@ -235,25 +245,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .collect())
     }
 
-    pub async fn swap_leaves(
-        &self,
-        leaf_ids: Vec<TreeNodeId>,
-        target_amounts: Vec<u64>,
-    ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
-        let leaves: Vec<_> = self
-            .tree_service
-            .list_leaves()
-            .await?
-            .into_iter()
-            .filter(|leaf| leaf_ids.contains(&leaf.id))
-            .collect();
-        if leaves.len() != leaf_ids.len() {
-            return Err(SparkWalletError::LeavesNotFound);
-        }
-        let leaves = self.swap_leaves_internal(&leaves, target_amounts).await?;
-        Ok(leaves.into_iter().map(WalletLeaf::from).collect())
-    }
-
     async fn swap_leaves_internal(
         &self,
         leaves: &[TreeNode],
@@ -283,24 +274,31 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let is_self_transfer = receiver_pubkey == self.signer.get_identity_public_key()?;
 
         // get leaves to transfer
-        let leaves = self.select_leaves(amount_sat).await?;
+        let leaves_reservation = self.select_leaves(amount_sat).await?;
 
         // check if we need to refresh or extend timelocks before transferring
-        let leaves = self.timelock_manager.check_timelock_nodes(leaves).await?;
-
-        let transfer = self
-            .transfer_service
-            .transfer_leaves_to(leaves, &receiver_pubkey)
+        let leaves = self
+            .timelock_manager
+            .check_timelock_nodes(leaves_reservation.leaves.clone())
             .await?;
+
+        let transfer = with_pending_leaves(
+            self.tree_service.clone(),
+            async {
+                Ok(self
+                    .transfer_service
+                    .transfer_leaves_to(leaves, &receiver_pubkey)
+                    .await?)
+            },
+            &leaves_reservation,
+        )
+        .await?;
 
         // if self-transfer, claim it immediately
         if is_self_transfer {
             // TODO: do we need to re-fetch the transfer? js sdk does this
             self.claim_transfer(&transfer, false, false).await?;
         }
-
-        // update local tree state (may be optimized to only drop leaves that were transferred + potentially add new leaves if self-transfer)
-        self.tree_service.refresh_leaves().await?;
 
         Ok(transfer.into())
     }
@@ -333,9 +331,8 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .check_timelock_nodes(claimed_nodes)
             .await?;
 
-        trace!("Refreshing leaves after claiming transfer");
-        // update local tree state (may be optimized to only add leaves that were received)
-        self.tree_service.refresh_leaves().await?;
+        trace!("Inserting claimed leaves after claiming transfer");
+        self.tree_service.insert_leaves(result_nodes.clone());
 
         // TODO: Emit events if emit is true
         // TODO: Optimize leaves if optimize is true and the transfer type is not counter swap
@@ -358,7 +355,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
     }
 
     pub async fn get_balance(&self) -> Result<u64, SparkWalletError> {
-        Ok(self.tree_service.get_available_balance().await?)
+        Ok(self.tree_service.get_available_balance()?)
     }
 
     pub async fn list_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
@@ -383,34 +380,25 @@ impl<S: Signer + Clone> SparkWallet<S> {
     async fn select_leaves(
         &self,
         target_amount_sat: u64,
-    ) -> Result<Vec<TreeNode>, SparkWalletError> {
-        let leaves = self
-            .tree_service
-            .select_leaves_by_amount(target_amount_sat)
-            .await?;
-        if let Some(leaves) = leaves {
-            return Ok(leaves);
-        }
-
-        // If no exact match is found, try to find leaves with a minimum amount that can be swapped
-        // to match the target amount.
-        let leaves = self
-            .tree_service
-            .select_leaves_by_minimum_amount(target_amount_sat)
-            .await?;
-        let Some(leaves) = leaves else {
+    ) -> Result<LeavesReservation, SparkWalletError> {
+        let selection = self.tree_service.reserve_leaves(target_amount_sat, false)?;
+        let Some(selection) = selection else {
             return Err(SparkWalletError::InsufficientFunds);
         };
+        if selection.sum() == target_amount_sat {
+            return Ok(selection);
+        }
 
         // Swap the leaves to match the target amount.
-        self.swap_leaves_internal(&leaves, vec![target_amount_sat])
-            .await?;
+        with_pending_leaves(
+            self.tree_service.clone(),
+            self.swap_leaves_internal(&selection.leaves, vec![target_amount_sat]),
+            &selection,
+        )
+        .await?;
 
         // Now the leaves should contain the exact amount.
-        let leaves = self
-            .tree_service
-            .select_leaves_by_amount(target_amount_sat)
-            .await?;
+        let leaves = self.tree_service.reserve_leaves(target_amount_sat, true)?;
         let leaves = leaves.ok_or(SparkWalletError::InsufficientFunds)?;
 
         Ok(leaves)
@@ -419,10 +407,31 @@ impl<S: Signer + Clone> SparkWallet<S> {
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
         self.tree_service.refresh_leaves().await?;
 
-        let leaves = self.tree_service.list_leaves().await?;
+        let leaves = self.tree_service.list_leaves()?;
         let _ = self.timelock_manager.check_timelock_nodes(leaves).await?;
 
         self.tree_service.refresh_leaves().await?;
         Ok(())
+    }
+}
+
+async fn with_pending_leaves<F, R, S>(
+    tree_service: Arc<TreeService<S>>,
+    f: F,
+    leaves: &LeavesReservation,
+) -> Result<R, SparkWalletError>
+where
+    F: Future<Output = Result<R, SparkWalletError>>,
+    S: Signer,
+{
+    match f.await {
+        Ok(r) => {
+            tree_service.finalize_reservation(leaves.id.clone());
+            Ok(r)
+        }
+        Err(e) => {
+            tree_service.cancel_reservation(leaves.id.clone());
+            Err(e.into())
+        }
     }
 }

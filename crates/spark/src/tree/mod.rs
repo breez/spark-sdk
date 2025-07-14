@@ -182,3 +182,20 @@ pub struct SigningKeyshare {
     pub threshold: u32,
     pub public_key: PublicKey,
 }
+
+type LeavesReservationId = String;
+
+pub struct LeavesReservation {
+    pub id: LeavesReservationId,
+    pub leaves: Vec<TreeNode>,
+}
+
+impl LeavesReservation {
+    pub fn new(leaves: Vec<TreeNode>, id: LeavesReservationId) -> Self {
+        Self { leaves, id }
+    }
+
+    pub fn sum(&self) -> u64 {
+        self.leaves.iter().map(|leaf| leaf.value).sum()
+    }
+}
