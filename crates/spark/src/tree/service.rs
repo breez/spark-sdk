@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use bitcoin::secp256k1::PublicKey;
 use tokio::sync::Mutex;
@@ -8,21 +8,25 @@ use crate::{
     Network,
     operator::{
         OperatorPool,
-        rpc::spark::{QueryNodesRequest, query_nodes_request::Source},
+        rpc::{
+            SparkRpcClient,
+            spark::{QueryNodesRequest, query_nodes_request::Source},
+        },
     },
-    services::{PagingFilter, PagingResult, TransferService},
+    services::{PagingFilter, PagingResult, TimelockManager},
     signer::Signer,
-    tree::TreeNodeStatus,
+    tree::{TreeNodeId, TreeNodeStatus},
 };
 
 use super::{TreeNode, error::TreeServiceError, state::TreeState};
 
-pub struct TreeService<S: Signer> {
+pub struct TreeService<S> {
     identity_pubkey: PublicKey,
     network: Network,
     operator_pool: Arc<OperatorPool<S>>,
     state: Mutex<TreeState>,
-    transfer_service: Arc<TransferService<S>>,
+    timelock_manager: Arc<TimelockManager<S>>,
+    signer: S,
 }
 
 impl<S: Signer> TreeService<S> {
@@ -31,25 +35,49 @@ impl<S: Signer> TreeService<S> {
         network: Network,
         operator_pool: Arc<OperatorPool<S>>,
         state: TreeState,
-        transfer_service: Arc<TransferService<S>>,
+        timelock_manager: Arc<TimelockManager<S>>,
+        signer: S,
     ) -> Self {
         TreeService {
             identity_pubkey,
             network,
             operator_pool,
             state: Mutex::new(state),
-            transfer_service,
+            timelock_manager,
+            signer,
         }
     }
 
-    async fn fetch_leaves(
+    // TODO: move this to a middle layer where we can handle paging for all queries where it makes sense
+    async fn fetch_all_leaves_using_client(
         &self,
+        client: &SparkRpcClient<S>,
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let mut paging = PagingFilter::default();
+        let mut all_leaves = Vec::new();
+        loop {
+            let leaves = self.fetch_leaves_using_client(client, &paging).await?;
+            if leaves.items.is_empty() {
+                break;
+            }
+
+            all_leaves.extend(leaves.items);
+
+            match leaves.next {
+                None => break,
+                Some(next) => paging = next,
+            }
+        }
+        Ok(all_leaves)
+    }
+
+    // TODO: move this to a middle layer where we can handle paging for all queries where it makes sense
+    async fn fetch_leaves_using_client(
+        &self,
+        client: &SparkRpcClient<S>,
         paging: &PagingFilter,
     ) -> Result<PagingResult<TreeNode>, TreeServiceError> {
-        let nodes = self
-            .operator_pool
-            .get_coordinator()
-            .client
+        let nodes = client
             .query_nodes(QueryNodesRequest {
                 include_parents: false,
                 limit: paging.limit as i64,
@@ -66,7 +94,10 @@ impl<S: Signer> TreeService<S> {
                 .nodes
                 .into_values()
                 .map(TreeNode::try_from)
-                .collect::<Result<Vec<_>, _>>()?,
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| {
+                    TreeServiceError::Generic(format!("Failed to deserialize leaves: {e:?}"))
+                })?,
             next: paging.next_from_offset(nodes.offset),
         })
     }
@@ -134,21 +165,67 @@ impl<S: Signer> TreeService<S> {
     /// # }
     /// ```
     pub async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
-        let mut paging = PagingFilter::default();
-        let mut new_leaves = Vec::new();
-        loop {
-            let leaves = self.fetch_leaves(&paging).await?;
-            if leaves.items.is_empty() {
-                break;
-            }
+        let coordinator_leaves = self
+            .fetch_all_leaves_using_client(&self.operator_pool.get_coordinator().client)
+            .await?;
 
-            new_leaves.extend(leaves.items);
+        let mut leaves_to_ignore: HashSet<TreeNodeId> = HashSet::new();
 
-            match leaves.next {
-                None => break,
-                Some(next) => paging = next,
+        // TODO: on js sdk, leaves missing from operators are not ignored when checking balance
+        // TODO: we can optimize this by fetching leaves from all operators in parallel
+        for operator in self.operator_pool.get_non_coordinator_operators() {
+            let operator_leaves = self.fetch_all_leaves_using_client(&operator.client).await?;
+
+            for leaf in &coordinator_leaves {
+                match operator_leaves.iter().find(|l| l.id == leaf.id) {
+                    Some(operator_leaf) => {
+                        // TODO: move this logic to TreeNode method
+                        if operator_leaf.status != leaf.status
+                            || operator_leaf.signing_keyshare.public_key
+                                != leaf.signing_keyshare.public_key
+                            || operator_leaf.node_tx != leaf.node_tx
+                            || operator_leaf.refund_tx != leaf.refund_tx
+                        {
+                            warn!(
+                                "Ignoring leaf due to mismatch between coordinator and operator {}. Coordinator: {:?}, Operator: {:?}",
+                                operator.id, leaf, operator_leaf
+                            );
+                            leaves_to_ignore.insert(leaf.id.clone());
+                        }
+                    }
+                    None => {
+                        warn!(
+                            "Ignoring leaf due to missing from operator {}: {:?}",
+                            operator.id, leaf.id
+                        );
+                        leaves_to_ignore.insert(leaf.id.clone());
+                    }
+                }
             }
         }
+
+        for leaf in &coordinator_leaves {
+            let our_node_pubkey = self.signer.get_public_key_for_node(&leaf.id)?;
+            let other_node_pubkey = leaf.signing_keyshare.public_key;
+            let verifying_pubkey = leaf.verifying_public_key;
+
+            let combined_pubkey = our_node_pubkey.combine(&other_node_pubkey).map_err(|_| {
+                TreeServiceError::Generic("Failed to combine public keys".to_string())
+            })?;
+
+            if combined_pubkey != verifying_pubkey {
+                warn!(
+                    "Leaf {}'s verifying public key does not match the expected value",
+                    leaf.id
+                );
+                leaves_to_ignore.insert(leaf.id.clone());
+            }
+        }
+
+        let new_leaves = coordinator_leaves
+            .into_iter()
+            .filter(|leaf| !leaves_to_ignore.contains(&leaf.id))
+            .collect::<Vec<_>>();
 
         let mut state = self.state.lock().await;
         state.clear_leaves();
@@ -223,6 +300,9 @@ impl<S: Signer> TreeService<S> {
         Ok(Some(result))
     }
 
+    // TODO: right now, this looks tighly coupled to claiming a deposit.
+    //  We should either move this to the deposit service or make it more general.
+    //  If made more general, should also be moved to timelock manager.
     pub async fn collect_leaves(
         &self,
         nodes: Vec<TreeNode>,
@@ -240,7 +320,13 @@ impl<S: Signer> TreeService<S> {
                 continue;
             }
 
-            let nodes = self.transfer_service.extend_time_lock(&node).await?;
+            let nodes = self
+                .timelock_manager
+                .extend_time_lock(&node)
+                .await
+                .map_err(|e| {
+                    TreeServiceError::Generic(format!("Failed to extend time lock: {e:?}"))
+                })?;
 
             for n in nodes {
                 if n.status != TreeNodeStatus::Available {
@@ -251,9 +337,14 @@ impl<S: Signer> TreeService<S> {
                 }
 
                 let transfer = self
-                    .transfer_service
+                    .timelock_manager
                     .transfer_leaves_to_self(vec![n])
-                    .await?;
+                    .await
+                    .map_err(|e| {
+                        TreeServiceError::Generic(format!(
+                            "Failed to transfer leaves to self: {e:?}"
+                        ))
+                    })?;
                 resulting_nodes.extend(transfer.into_iter());
             }
         }
@@ -396,6 +487,7 @@ mod tests {
                 signing_keyshare: SigningKeyshare {
                     owner_identifiers: Vec::new(),
                     threshold: 0,
+                    public_key: PublicKey::from_slice(&[2; 33]).unwrap(),
                 },
                 status: TreeNodeStatus::Available,
             })

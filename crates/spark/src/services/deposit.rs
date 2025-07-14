@@ -8,7 +8,6 @@ use bitcoin::{
     params::Params,
     secp256k1::{Message, PublicKey, ecdsa, schnorr},
 };
-use frost_secp256k1_tr::Identifier;
 use tracing::{error, trace};
 
 use crate::{
@@ -18,7 +17,7 @@ use crate::{
     operator::{OperatorPool, rpc as operator_rpc},
     services::{PagingFilter, PagingResult},
     signer::{AggregateFrostRequest, PrivateKeySource, SignFrostRequest, Signer},
-    tree::{SigningKeyshare, TreeNode, TreeNodeId},
+    tree::{TreeNode, TreeNodeId},
     utils::transactions::{create_node_tx, create_refund_tx},
 };
 
@@ -26,10 +25,7 @@ use super::{
     ServiceError,
     models::{map_public_keys, map_signature_shares, map_signing_nonce_commitments},
 };
-pub struct DepositService<S>
-where
-    S: Signer,
-{
+pub struct DepositService<S> {
     bitcoin_service: BitcoinService,
     identity_public_key: PublicKey,
     network: Network,
@@ -178,10 +174,10 @@ where
         }
 
         let node_tx_signing_nonce_commitments =
-            map_signing_nonce_commitments(node_tx_signing_result.signing_nonce_commitments)?;
+            map_signing_nonce_commitments(&node_tx_signing_result.signing_nonce_commitments)?;
         let node_tx_signature_shares =
-            map_signature_shares(node_tx_signing_result.signature_shares)?;
-        let node_tx_statechain_public_keys = map_public_keys(node_tx_signing_result.public_keys)?;
+            map_signature_shares(&node_tx_signing_result.signature_shares)?;
+        let node_tx_statechain_public_keys = map_public_keys(&node_tx_signing_result.public_keys)?;
 
         if refund_tx_signing_result
             .signing_nonce_commitments
@@ -191,11 +187,11 @@ where
         }
 
         let refund_tx_signing_nonce_commitments =
-            map_signing_nonce_commitments(refund_tx_signing_result.signing_nonce_commitments)?;
+            map_signing_nonce_commitments(&refund_tx_signing_result.signing_nonce_commitments)?;
         let refund_tx_signature_shares =
-            map_signature_shares(refund_tx_signing_result.signature_shares)?;
+            map_signature_shares(&refund_tx_signing_result.signature_shares)?;
         let refund_tx_statechain_public_keys =
-            map_public_keys(refund_tx_signing_result.public_keys)?;
+            map_public_keys(&refund_tx_signing_result.public_keys)?;
 
         let tree_resp_verifying_key =
             PublicKey::from_slice(&root_node_signature_shares.verifying_key)
@@ -291,19 +287,6 @@ where
                 let signing_keyshare = node
                     .signing_keyshare
                     .ok_or(ServiceError::MissingSigningKeyshare)?;
-                let signing_keyshare = SigningKeyshare {
-                    owner_identifiers: signing_keyshare
-                        .owner_identifiers
-                        .into_iter()
-                        .map(|id| {
-                            Identifier::deserialize(
-                                &hex::decode(&id).map_err(|_| ServiceError::InvalidIdentifier)?,
-                            )
-                            .map_err(|_| ServiceError::InvalidIdentifier)
-                        })
-                        .collect::<Result<Vec<_>, ServiceError>>()?,
-                    threshold: signing_keyshare.threshold,
-                };
 
                 Ok(TreeNode {
                     id: node
@@ -329,7 +312,7 @@ where
                         &node.owner_identity_public_key,
                     )
                     .map_err(|_| ServiceError::InvalidPublicKey)?,
-                    signing_keyshare,
+                    signing_keyshare: signing_keyshare.try_into()?,
                     status: node
                         .status
                         .parse()

@@ -88,6 +88,8 @@ pub enum ServiceError {
     SignerError(#[from] crate::signer::SignerError),
     #[error("service connection error: {0}")]
     ServiceConnectionError(#[from] OperatorRpcError),
+    #[error("tree service error: {0}")]
+    TreeServiceError(#[from] crate::tree::TreeServiceError),
     #[error("unknown status: {0}")]
     UnknownStatus(String),
     #[error("generic error: {0}")]

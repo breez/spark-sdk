@@ -134,12 +134,10 @@ pub async fn sign_aggregate_refunds<S: Signer>(
         let refund_tx_sighash = sighash_from_tx(refund_tx, 0, &leaf_data.tx.output[0])?;
 
         // Map operator signing commitments and signature shares
-        let signing_nonce_commitments = map_signing_nonce_commitments(
-            refund_tx_signing_result.signing_nonce_commitments.clone(),
-        )?;
-        let signature_shares =
-            map_signature_shares(refund_tx_signing_result.signature_shares.clone())?;
-        let public_keys = map_public_keys(refund_tx_signing_result.public_keys.clone())?;
+        let signing_nonce_commitments =
+            map_signing_nonce_commitments(&refund_tx_signing_result.signing_nonce_commitments)?;
+        let signature_shares = map_signature_shares(&refund_tx_signing_result.signature_shares)?;
+        let public_keys = map_public_keys(&refund_tx_signing_result.public_keys)?;
 
         let verifying_key = PublicKey::from_slice(&operator_signing_result.verifying_key)
             .map_err(|_| ServiceError::ValidationError("Invalid verifying key".to_string()))?;
@@ -187,7 +185,7 @@ pub fn prepare_refund_so_signing_jobs(
     network: Network,
     leaves: &[LeafKeyTweak],
     leaf_data_map: &mut HashMap<TreeNodeId, LeafRefundSigningData>,
-    is_for_claim: bool,
+    _is_for_claim: bool,
 ) -> Result<Vec<crate::operator::rpc::spark::LeafRefundTxSigningJob>, ServiceError> {
     let mut signing_jobs = Vec::new();
 
@@ -204,13 +202,20 @@ pub fn prepare_refund_so_signing_jobs(
             .ok_or(ServiceError::Generic("No refund transaction".to_string()))?
             .input[0]
             .sequence;
-        let sequence = if is_for_claim {
-            old_sequence // TODO: is this correct?
+        // TODO: js sdk seems to use old_sequence for claim, but if we do so we don't decrement the refund tx sequence
+        // when claiming, and in practice we can see that the js sdk does decrement it. It's unclear where but it's being done.
+        // In rust rs-v0, the sequence is always decremented like being done here now
+        // Previous implementation:
+        /*let sequence = if is_for_claim {
+            old_sequence
         } else {
             next_sequence(old_sequence).ok_or(ServiceError::Generic(
                 "Failed to get next sequence".to_string(),
             ))?
-        };
+        };*/
+        let sequence = next_sequence(old_sequence).ok_or(ServiceError::Generic(
+            "Failed to get next sequence".to_string(),
+        ))?;
 
         let refund_tx = create_refund_tx(
             sequence,

@@ -8,7 +8,7 @@ use spark::{
     operator::{OperatorPool, rpc::ConnectionManager},
     services::{
         DepositService, LightningReceivePayment, LightningSendPayment, LightningService,
-        PagingFilter, Swap, Transfer, TransferService,
+        PagingFilter, Swap, TimelockManager, Transfer, TransferService,
     },
     signer::Signer,
     ssp::ServiceProvider,
@@ -34,6 +34,7 @@ where
     tree_service: TreeService<S>,
     transfer_service: Arc<TransferService<S>>,
     lightning_service: Arc<LightningService<S>>,
+    timelock_manager: Arc<TimelockManager<S>>,
 }
 
 impl<S: Signer + Clone> SparkWallet<S> {
@@ -72,13 +73,22 @@ impl<S: Signer + Clone> SparkWallet<S> {
             config.split_secret_threshold,
             operator_pool.clone(),
         ));
+
+        let timelock_manager = Arc::new(TimelockManager::new(
+            signer.clone(),
+            config.network,
+            operator_pool.clone(),
+            Arc::clone(&transfer_service),
+        ));
+
         let tree_state = TreeState::new();
         let tree_service = TreeService::new(
             identity_public_key,
             config.network,
             operator_pool.clone(),
             tree_state,
-            Arc::clone(&transfer_service),
+            Arc::clone(&timelock_manager),
+            signer.clone(),
         );
 
         let swap_service = Arc::new(Swap::new(
@@ -88,6 +98,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
             Arc::clone(&service_provider),
             Arc::clone(&transfer_service),
         ));
+
         Ok(SparkWallet {
             config,
             deposit_service,
@@ -96,6 +107,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
             tree_service,
             transfer_service,
             lightning_service,
+            timelock_manager,
         })
     }
 
@@ -115,6 +127,8 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .await?;
 
         let leaves = self.select_leaves(total_amount_sat).await?;
+
+        let leaves = self.timelock_manager.check_timelock_nodes(leaves).await?;
 
         // start the lightning swap with the operator
         let swap = self
@@ -187,10 +201,10 @@ impl<S: Signer + Clone> SparkWallet<S> {
         // TODO: This entire function happens inside a txid mutex in the js sdk. It seems unnecessary here?
 
         let deposit_nodes = self.deposit_service.claim_deposit(tx, vout).await?;
-        debug!("Claimed deposit nodes: {:?}", deposit_nodes);
-        let optimized_nodes = self.tree_service.collect_leaves(deposit_nodes).await?;
-        debug!("Optimized nodes: {:?}", optimized_nodes);
-        Ok(optimized_nodes.into_iter().map(WalletLeaf::from).collect())
+        debug!("Claimed deposit root node: {:?}", deposit_nodes);
+        let collected_leaves = self.tree_service.collect_leaves(deposit_nodes).await?;
+        debug!("Collected deposit leaves: {:?}", collected_leaves);
+        Ok(collected_leaves.into_iter().map(WalletLeaf::from).collect())
     }
 
     pub async fn generate_deposit_address(
@@ -271,9 +285,12 @@ impl<S: Signer + Clone> SparkWallet<S> {
         // get leaves to transfer
         let leaves = self.select_leaves(amount_sat).await?;
 
+        // check if we need to refresh or extend timelocks before transferring
+        let leaves = self.timelock_manager.check_timelock_nodes(leaves).await?;
+
         let transfer = self
             .transfer_service
-            .transfer_leaves_to(&leaves, &receiver_pubkey)
+            .transfer_leaves_to(leaves, &receiver_pubkey)
             .await?;
 
         // if self-transfer, claim it immediately
@@ -310,7 +327,11 @@ impl<S: Signer + Clone> SparkWallet<S> {
         _optimize: bool,
     ) -> Result<Vec<TreeNode>, SparkWalletError> {
         trace!("Claiming transfer with id: {}", transfer.id);
-        let result_nodes = self.transfer_service.claim_transfer(transfer, None).await?;
+        let claimed_nodes = self.transfer_service.claim_transfer(transfer, None).await?;
+        let result_nodes = self
+            .timelock_manager
+            .check_timelock_nodes(claimed_nodes)
+            .await?;
 
         trace!("Refreshing leaves after claiming transfer");
         // update local tree state (may be optimized to only add leaves that were received)
@@ -396,6 +417,11 @@ impl<S: Signer + Clone> SparkWallet<S> {
     }
 
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
+        self.tree_service.refresh_leaves().await?;
+
+        let leaves = self.tree_service.list_leaves().await?;
+        let _ = self.timelock_manager.check_timelock_nodes(leaves).await?;
+
         self.tree_service.refresh_leaves().await?;
         Ok(())
     }

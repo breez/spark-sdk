@@ -7,7 +7,7 @@ members = ["crates/spark", "crates/spark-wallet", "examples/spark-cli"]
 async-trait = "0.1.88"
 base64 = "0.22.1"
 bip39 = "2.2.0"
-bitcoin = "0.32.6"
+bitcoin = { version =  "0.32.6", features = ["serde"] }
 chrono = { version = "0.4.37", features = ["serde"] }
 clap = "4.5.40"
 ecies = "0.2.0"

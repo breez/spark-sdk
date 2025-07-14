@@ -2,30 +2,20 @@ use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::Network;
-use crate::bitcoin::sighash_from_tx;
-use crate::core::{initial_sequence, next_sequence};
 use crate::operator::OperatorPool;
-use crate::operator::rpc::common::SignatureIntent;
+use crate::operator::rpc::spark::TransferFilter;
 use crate::operator::rpc::spark::transfer_filter::Participant;
-use crate::operator::rpc::spark::{
-    ExtendLeafRequest, FinalizeNodeSignaturesRequest, NodeSignatures, SigningJob, TransferFilter,
-};
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{LeafKeyTweak, Transfer, map_signing_nonce_commitments};
-use crate::services::{
-    PagingFilter, ProofMap, TransferId, TransferStatus, map_public_keys, map_signature_shares,
-};
-use crate::signer::{
-    AggregateFrostRequest, PrivateKeySource, SecretToSplit, SignFrostRequest, VerifiableSecretShare,
-};
+use crate::services::{PagingFilter, ProofMap, TransferId, TransferStatus};
+use crate::signer::{PrivateKeySource, SecretToSplit, VerifiableSecretShare};
 use crate::utils::refund::{prepare_refund_so_signing_jobs, sign_aggregate_refunds, sign_refunds};
-use crate::utils::transactions::{create_node_tx, create_refund_tx};
 
+use bitcoin::Transaction;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, SecretKey};
-use bitcoin::{OutPoint, Transaction};
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments};
 use k256::Scalar;
 use prost::Message as ProstMessage;
@@ -55,8 +45,6 @@ pub struct ClaimTransferConfig {
     pub max_retries: u32,
     pub base_delay_ms: u64,
     pub max_delay_ms: u64,
-    pub should_extend_timelocks: bool,
-    pub should_refresh_timelocks: bool,
 }
 
 impl Default for ClaimTransferConfig {
@@ -65,8 +53,6 @@ impl Default for ClaimTransferConfig {
             max_retries: 5,
             base_delay_ms: 1000,
             max_delay_ms: 10000,
-            should_extend_timelocks: true,
-            should_refresh_timelocks: true,
         }
     }
 }
@@ -99,13 +85,9 @@ impl<S: Signer> TransferService<S> {
     /// and proofs that are distributed to the statechain operators.
     pub async fn transfer_leaves_to(
         &self,
-        leaves: &[TreeNode],
+        leaves: Vec<TreeNode>,
         receiver_id: &PublicKey,
     ) -> Result<Transfer, ServiceError> {
-        // check if we need to refresh or extend timelocks
-        let leaves = self.check_refresh_timelock_nodes(leaves).await?;
-        let leaves = self.check_extend_timelock_nodes(leaves).await?;
-
         // build leaf key tweaks with new signing keys that we will send to the receiver
         let leaf_key_tweaks = leaves
             .iter()
@@ -334,7 +316,7 @@ impl<S: Signer> TransferService<S> {
             .await?
             .signing_commitments
             .iter()
-            .map(|sc| map_signing_nonce_commitments(sc.signing_nonce_commitments.clone()))
+            .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
             .collect::<Result<Vec<_>, _>>()?;
 
         let leaf_signing_jobs = sign_refunds(
@@ -525,9 +507,6 @@ impl<S: Signer> TransferService<S> {
                 }
             };
 
-            // Post-process the claimed nodes
-            let result = self.post_process_claimed_nodes(result, &config).await?;
-
             return Ok(result);
         }
     }
@@ -557,257 +536,6 @@ impl<S: Signer> TransferService<S> {
         }
 
         Ok(leaves_to_claim)
-    }
-
-    /// Post-processes claimed nodes (timelock operations)
-    async fn post_process_claimed_nodes(
-        &self,
-        nodes: Vec<TreeNode>,
-        config: &ClaimTransferConfig,
-    ) -> Result<Vec<TreeNode>, ServiceError> {
-        let mut result = nodes;
-
-        if config.should_refresh_timelocks {
-            result = self.check_refresh_timelock_nodes(&result).await?;
-        }
-
-        if config.should_extend_timelocks {
-            result = self.check_extend_timelock_nodes(result).await?;
-        }
-
-        Ok(result)
-    }
-
-    /// Checks and refreshes timelock nodes if needed
-    async fn check_refresh_timelock_nodes(
-        &self,
-        nodes: &[TreeNode],
-    ) -> Result<Vec<TreeNode>, ServiceError> {
-        // TODO: Implement timelock refresh logic
-        // For now, return nodes unchanged
-        Ok(nodes.to_vec())
-    }
-
-    /// Refreshes timelocks on a chain of connected nodes to prevent expiration.
-    /// Updates sequence numbers on both node transactions and refund transactions
-    /// in a coordinated manner across the entire chain.
-    async fn refresh_timelock_nodes(
-        &self,
-        _nodes: Vec<TreeNode>,
-    ) -> Result<Vec<TreeNode>, ServiceError> {
-        todo!()
-    }
-
-    /// Checks and extends timelock nodes if needed
-    async fn check_extend_timelock_nodes(
-        &self,
-        nodes: Vec<TreeNode>,
-    ) -> Result<Vec<TreeNode>, ServiceError> {
-        // if node needs to be extended, call extend_time_lock
-        // TODO: implement
-        // For now, return nodes unchanged
-        Ok(nodes)
-    }
-
-    /// Extends the timelock on a single node by creating new node and refund transactions.
-    /// Creates a new node transaction that spends the current node with an extended timelock,
-    /// and a corresponding refund transaction. This is more comprehensive than refreshing
-    /// as it creates entirely new transactions rather than just updating sequence numbers.
-    pub async fn extend_time_lock(&self, node: &TreeNode) -> Result<Vec<TreeNode>, ServiceError> {
-        let signing_key = PrivateKeySource::Derived(node.id.clone());
-        let signing_public_key = self
-            .signer
-            .get_public_key_from_private_key_source(&signing_key)?;
-
-        let refund_tx = node
-            .refund_tx
-            .clone()
-            .ok_or(ServiceError::Generic("No refund tx".to_string()))?;
-
-        let new_node_sequence = next_sequence(refund_tx.input[0].sequence).ok_or(
-            ServiceError::Generic("Failed to get next sequence".to_string()),
-        )?;
-
-        let new_node_tx = create_node_tx(
-            new_node_sequence,
-            OutPoint {
-                txid: node.node_tx.compute_txid(),
-                vout: 0,
-            },
-            node.node_tx.output[0].value,
-            node.node_tx.output[0].script_pubkey.clone(),
-        );
-
-        let new_refund_tx = create_refund_tx(
-            initial_sequence(),
-            OutPoint {
-                txid: new_node_tx.compute_txid(),
-                vout: 0,
-            },
-            new_node_tx.output[0].value.to_sat(),
-            &signing_public_key,
-            self.network,
-        );
-
-        let node_sighash = sighash_from_tx(&new_node_tx, 0, &node.node_tx.output[0])?;
-        let refund_sighash = sighash_from_tx(&new_refund_tx, 0, &new_node_tx.output[0])?;
-
-        let new_node_signing_commitments = self.signer.generate_frost_signing_commitments().await?;
-        let new_refund_signing_commitments =
-            self.signer.generate_frost_signing_commitments().await?;
-
-        let new_node_signing_job = SigningJob {
-            signing_public_key: signing_public_key.serialize().to_vec(),
-            raw_tx: bitcoin::consensus::serialize(&new_node_tx),
-            signing_nonce_commitment: Some(new_node_signing_commitments.try_into()?),
-        };
-
-        let new_refund_signing_job = SigningJob {
-            signing_public_key: signing_public_key.serialize().to_vec(),
-            raw_tx: bitcoin::consensus::serialize(&new_refund_tx),
-            signing_nonce_commitment: Some(new_refund_signing_commitments.try_into()?),
-        };
-
-        let response = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .extend_leaf(ExtendLeafRequest {
-                leaf_id: node.id.to_string(),
-                owner_identity_public_key: self
-                    .signer
-                    .get_identity_public_key()?
-                    .serialize()
-                    .to_vec(),
-                node_tx_signing_job: Some(new_node_signing_job),
-                refund_tx_signing_job: Some(new_refund_signing_job),
-            })
-            .await?;
-
-        let node_tx_signing_result =
-            response
-                .node_tx_signing_result
-                .ok_or(ServiceError::Generic(
-                    "Node tx signing result is none".to_string(),
-                ))?;
-        let refund_tx_signing_result =
-            response
-                .refund_tx_signing_result
-                .ok_or(ServiceError::Generic(
-                    "Refund tx signing result is none".to_string(),
-                ))?;
-
-        let new_node_tx_verifying_key =
-            PublicKey::from_slice(&node_tx_signing_result.verifying_key)
-                .map_err(|_| ServiceError::ValidationError("Invalid verifying key".to_string()))?;
-        let new_refund_tx_verifying_key =
-            PublicKey::from_slice(&refund_tx_signing_result.verifying_key)
-                .map_err(|_| ServiceError::ValidationError("Invalid verifying key".to_string()))?;
-
-        let new_node_tx_signing_result =
-            node_tx_signing_result
-                .signing_result
-                .ok_or(ServiceError::Generic(
-                    "Node tx signing result is none".to_string(),
-                ))?;
-        let new_refund_tx_signing_result =
-            refund_tx_signing_result
-                .signing_result
-                .ok_or(ServiceError::Generic(
-                    "Refund tx signing result is none".to_string(),
-                ))?;
-
-        let new_node_statechain_commitments =
-            map_signing_nonce_commitments(new_node_tx_signing_result.signing_nonce_commitments)?;
-        let new_refund_statechain_commitments =
-            map_signing_nonce_commitments(new_refund_tx_signing_result.signing_nonce_commitments)?;
-
-        let new_node_statechain_signatures =
-            map_signature_shares(new_node_tx_signing_result.signature_shares)?;
-        let new_refund_statechain_signatures =
-            map_signature_shares(new_refund_tx_signing_result.signature_shares)?;
-
-        let new_node_statechain_public_keys =
-            map_public_keys(new_node_tx_signing_result.public_keys)?;
-        let new_refund_statechain_public_keys =
-            map_public_keys(new_refund_tx_signing_result.public_keys)?;
-
-        // sign node and refund txs
-        let node_user_signature = self
-            .signer
-            .sign_frost(SignFrostRequest {
-                message: node_sighash.as_byte_array(),
-                public_key: &signing_public_key,
-                private_key: &signing_key,
-                verifying_key: &new_node_tx_verifying_key,
-                self_commitment: &new_node_signing_commitments,
-                statechain_commitments: new_node_statechain_commitments.clone(),
-                adaptor_public_key: None,
-            })
-            .await?;
-
-        let refund_user_signature = self
-            .signer
-            .sign_frost(SignFrostRequest {
-                message: refund_sighash.as_byte_array(),
-                public_key: &signing_public_key,
-                private_key: &signing_key,
-                verifying_key: &new_refund_tx_verifying_key,
-                self_commitment: &new_refund_signing_commitments,
-                statechain_commitments: new_refund_statechain_commitments.clone(),
-                adaptor_public_key: None,
-            })
-            .await?;
-
-        let node_signature = self
-            .signer
-            .aggregate_frost(AggregateFrostRequest {
-                message: node_sighash.as_byte_array(),
-                statechain_signatures: new_node_statechain_signatures,
-                statechain_public_keys: new_node_statechain_public_keys,
-                verifying_key: &new_node_tx_verifying_key,
-                statechain_commitments: new_node_statechain_commitments,
-                self_commitment: &new_node_signing_commitments,
-                public_key: &signing_public_key,
-                self_signature: &node_user_signature,
-                adaptor_public_key: None,
-            })
-            .await?;
-
-        let refund_signature = self
-            .signer
-            .aggregate_frost(AggregateFrostRequest {
-                message: refund_sighash.as_byte_array(),
-                statechain_signatures: new_refund_statechain_signatures,
-                statechain_public_keys: new_refund_statechain_public_keys,
-                verifying_key: &new_refund_tx_verifying_key,
-                statechain_commitments: new_refund_statechain_commitments,
-                self_commitment: &new_refund_signing_commitments,
-                public_key: &signing_public_key,
-                self_signature: &refund_user_signature,
-                adaptor_public_key: None,
-            })
-            .await?;
-
-        let nodes = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .finalize_node_signatures(FinalizeNodeSignaturesRequest {
-                intent: SignatureIntent::Extend.into(),
-                node_signatures: vec![NodeSignatures {
-                    node_id: response.leaf_id,
-                    node_tx_signature: node_signature.serialize()?.to_vec(),
-                    refund_tx_signature: refund_signature.serialize()?.to_vec(),
-                }],
-            })
-            .await?
-            .nodes;
-
-        nodes
-            .into_iter()
-            .map(|n| n.try_into())
-            .collect::<Result<Vec<TreeNode>, _>>()
     }
 
     /// Low-level claim transfer operation
@@ -1108,46 +836,6 @@ impl<S: Signer> TransferService<S> {
         }
 
         Ok(leaf_key_map)
-    }
-
-    pub async fn transfer_leaves_to_self(
-        &self,
-        leaves: Vec<TreeNode>,
-    ) -> Result<Vec<TreeNode>, ServiceError> {
-        let leaf_key_tweaks = leaves
-            .iter()
-            .map(|leaf| {
-                let current_signing_key =
-                    PrivateKeySource::Derived(leaf.parent_node_id.clone().ok_or(
-                        ServiceError::Generic("Leaf has no parent node id".to_string()),
-                    )?);
-                let ephemeral_key = self.signer.generate_random_key()?;
-
-                Ok(LeafKeyTweak {
-                    node: leaf.clone(),
-                    signing_key: current_signing_key,
-                    new_signing_key: ephemeral_key,
-                })
-            })
-            .collect::<Result<Vec<_>, ServiceError>>()?;
-
-        let transfer = self
-            .send_transfer_with_key_tweaks(
-                &leaf_key_tweaks,
-                &self.signer.get_identity_public_key()?,
-            )
-            .await?;
-
-        let pending_transfer =
-            self.query_transfer(&transfer.id)
-                .await?
-                .ok_or(ServiceError::Generic(
-                    "Pending transfer not found".to_string(),
-                ))?;
-
-        let resulting_nodes = self.claim_transfer(&pending_transfer, None).await?;
-
-        Ok(resulting_nodes)
     }
 
     /// Queries all transfers for the current identity

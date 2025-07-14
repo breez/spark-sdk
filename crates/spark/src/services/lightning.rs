@@ -139,10 +139,7 @@ struct SwapNodesForPreimageRequest<'a> {
     is_inbound_payment: bool,
 }
 
-pub struct LightningService<S>
-where
-    S: Signer,
-{
+pub struct LightningService<S> {
     operator_pool: Arc<OperatorPool<S>>,
     ssp_client: Arc<ServiceProvider<S>>,
     network: Network,
@@ -401,7 +398,7 @@ where
         > = spark_commitments
             .signing_commitments
             .iter()
-            .map(|sc| map_signing_nonce_commitments(sc.signing_nonce_commitments.clone()))
+            .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
             .collect::<Result<Vec<_>, _>>()?;
 
         let user_signed_refunds = refund_utils::sign_refunds(
