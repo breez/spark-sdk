@@ -139,8 +139,7 @@ struct SwapNodesForPreimageRequest<'a> {
     is_inbound_payment: bool,
 }
 
-pub struct LightningService<S>
-{
+pub struct LightningService<S> {
     operator_pool: Arc<OperatorPool<S>>,
     ssp_client: Arc<ServiceProvider<S>>,
     network: Network,

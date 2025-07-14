@@ -13,7 +13,7 @@ use crate::{
             spark::{QueryNodesRequest, query_nodes_request::Source},
         },
     },
-    services::{PagingFilter, PagingResult, TransferService},
+    services::{PagingFilter, PagingResult, TimelockManager},
     signer::Signer,
     tree::{TreeNodeId, TreeNodeStatus},
 };
@@ -25,7 +25,7 @@ pub struct TreeService<S> {
     network: Network,
     operator_pool: Arc<OperatorPool<S>>,
     state: Mutex<TreeState>,
-    transfer_service: Arc<TransferService<S>>,
+    timelock_manager: Arc<TimelockManager<S>>,
     signer: S,
 }
 
@@ -35,7 +35,7 @@ impl<S: Signer> TreeService<S> {
         network: Network,
         operator_pool: Arc<OperatorPool<S>>,
         state: TreeState,
-        transfer_service: Arc<TransferService<S>>,
+        timelock_manager: Arc<TimelockManager<S>>,
         signer: S,
     ) -> Self {
         TreeService {
@@ -43,7 +43,7 @@ impl<S: Signer> TreeService<S> {
             network,
             operator_pool,
             state: Mutex::new(state),
-            transfer_service,
+            timelock_manager,
             signer,
         }
     }
@@ -300,6 +300,9 @@ impl<S: Signer> TreeService<S> {
         Ok(Some(result))
     }
 
+    // TODO: right now, this looks tighly coupled to claiming a deposit.
+    //  We should either move this to the deposit service or make it more general.
+    //  If made more general, should also be moved to timelock manager.
     pub async fn collect_leaves(
         &self,
         nodes: Vec<TreeNode>,
@@ -318,7 +321,7 @@ impl<S: Signer> TreeService<S> {
             }
 
             let nodes = self
-                .transfer_service
+                .timelock_manager
                 .extend_time_lock(&node)
                 .await
                 .map_err(|e| {
@@ -334,7 +337,7 @@ impl<S: Signer> TreeService<S> {
                 }
 
                 let transfer = self
-                    .transfer_service
+                    .timelock_manager
                     .transfer_leaves_to_self(vec![n])
                     .await
                     .map_err(|e| {

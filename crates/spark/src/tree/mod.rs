@@ -89,29 +89,6 @@ pub struct TreeNode {
 }
 
 impl TreeNode {
-    /// Checks if the node needs a timelock extension by checking if the node tx's timelock can be further reduced
-    pub fn needs_timelock_extension(&self) -> Result<bool, TreeServiceError> {
-        println!("Node tx sequence: {:?}", self.node_tx.input[0].sequence);
-        // TODO: adjust next_sequence so it could be used here
-        let current_timelock = self.node_tx.input[0]
-            .sequence
-            .to_relative_lock_time()
-            .ok_or(TreeServiceError::Generic(
-                "Failed to get current timelock".to_string(),
-            ))?;
-
-        let bitcoin::relative::LockTime::Blocks(blocks) = current_timelock else {
-            return Err(TreeServiceError::Generic(
-                "Current timelock is not expressed in blocks".to_string(),
-            ));
-        };
-
-        let current_timelock_value = blocks.value();
-        let next_timelock = current_timelock_value.saturating_sub(TIME_LOCK_INTERVAL);
-
-        Ok(next_timelock <= TIME_LOCK_INTERVAL)
-    }
-
     /// Checks if the node needs a timelock refresh by checking if the refund tx's timelock can be further reduced
     pub fn needs_timelock_refresh(&self) -> Result<bool, TreeServiceError> {
         println!(
@@ -133,6 +110,29 @@ impl TreeNode {
         let bitcoin::relative::LockTime::Blocks(blocks) = current_refund_timelock else {
             return Err(TreeServiceError::Generic(
                 "Current refund timelock is not expressed in blocks".to_string(),
+            ));
+        };
+
+        let current_timelock_value = blocks.value();
+        let next_timelock = current_timelock_value.saturating_sub(TIME_LOCK_INTERVAL);
+
+        Ok(next_timelock <= TIME_LOCK_INTERVAL)
+    }
+
+    /// Checks if the node needs a timelock extension by checking if the node tx's timelock can be further reduced
+    pub fn needs_timelock_extension(&self) -> Result<bool, TreeServiceError> {
+        println!("Node tx sequence: {:?}", self.node_tx.input[0].sequence);
+        // TODO: adjust next_sequence so it could be used here
+        let current_timelock = self.node_tx.input[0]
+            .sequence
+            .to_relative_lock_time()
+            .ok_or(TreeServiceError::Generic(
+                "Failed to get current timelock".to_string(),
+            ))?;
+
+        let bitcoin::relative::LockTime::Blocks(blocks) = current_timelock else {
+            return Err(TreeServiceError::Generic(
+                "Current timelock is not expressed in blocks".to_string(),
             ));
         };
 

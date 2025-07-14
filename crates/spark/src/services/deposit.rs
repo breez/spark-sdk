@@ -8,7 +8,6 @@ use bitcoin::{
     params::Params,
     secp256k1::{Message, PublicKey, ecdsa, schnorr},
 };
-use frost_secp256k1_tr::Identifier;
 use tracing::{error, trace};
 
 use crate::{
@@ -18,7 +17,7 @@ use crate::{
     operator::{OperatorPool, rpc as operator_rpc},
     services::{PagingFilter, PagingResult},
     signer::{AggregateFrostRequest, PrivateKeySource, SignFrostRequest, Signer},
-    tree::{SigningKeyshare, TreeNode, TreeNodeId},
+    tree::{TreeNode, TreeNodeId},
     utils::transactions::{create_node_tx, create_refund_tx},
 };
 
@@ -26,8 +25,7 @@ use super::{
     ServiceError,
     models::{map_public_keys, map_signature_shares, map_signing_nonce_commitments},
 };
-pub struct DepositService<S>
-{
+pub struct DepositService<S> {
     bitcoin_service: BitcoinService,
     identity_public_key: PublicKey,
     network: Network,
