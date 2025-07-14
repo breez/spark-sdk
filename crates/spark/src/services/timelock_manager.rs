@@ -80,12 +80,12 @@ impl<S: Signer> TimelockManager<S> {
             return Ok(ready_nodes);
         }
 
-        // Use query_all_nodes to get the parent nodes
+        // Get the parent nodes
         let query_nodes_response = self
             .operator_pool
             .get_coordinator()
             .client
-            .query_all_nodes(QueryAllNodesRequest {
+            .query_nodes_all_pages(QueryAllNodesRequest {
                 include_parents: true,
                 network: self.network.into(),
                 source: Some(Source::NodeIds(TreeNodeIds {

@@ -312,7 +312,10 @@ where
     }
 
     // TODO: move this to an upper layer where we can handle paging for all queries where it makes sense
-    pub async fn query_all_nodes(&self, req: QueryAllNodesRequest) -> Result<QueryNodesResponse> {
+    pub async fn query_nodes_all_pages(
+        &self,
+        req: QueryAllNodesRequest,
+    ) -> Result<QueryNodesResponse> {
         let mut aggregated_nodes: HashMap<String, TreeNode> = HashMap::new();
         let page_size = 100;
         let mut offset = 0;
