@@ -61,6 +61,21 @@ fn to_sequence(blocks: u16) -> Sequence {
     Sequence::from_consensus(new_locktime.to_consensus_u32() | SPARK_SEQUENCE_FLAG)
 }
 
+pub fn validate_sequence(sequence: Sequence) -> bool {
+    if !sequence.is_height_locked() {
+        return false;
+    }
+
+    let Some(locktime) = sequence.to_relative_lock_time() else {
+        return false;
+    };
+
+    let LockTime::Blocks(_) = locktime else {
+        return false;
+    };
+
+    true
+}
 #[cfg(test)]
 mod test {
     use super::*;
