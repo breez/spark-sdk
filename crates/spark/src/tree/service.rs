@@ -1,7 +1,6 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bitcoin::secp256k1::PublicKey;
-use tokio::sync::Mutex;
 use tracing::warn;
 
 use crate::{
@@ -12,7 +11,7 @@ use crate::{
     },
     services::{PagingFilter, PagingResult, TransferService},
     signer::Signer,
-    tree::TreeNodeStatus,
+    tree::{PendingLeaves, PendingLeavesId, TreeNodeStatus},
 };
 
 use super::{TreeNode, error::TreeServiceError, state::TreeState};
@@ -58,7 +57,6 @@ impl<S: Signer> TreeService<S> {
                 )),
             })
             .await?;
-
         Ok(PagingResult {
             items: nodes
                 .nodes
@@ -95,8 +93,8 @@ impl<S: Signer> TreeService<S> {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn list_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
-        Ok(self.state.lock().await.get_leaves())
+    pub fn list_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+        Ok(self.state.lock().unwrap().get_leaves())
     }
 
     /// Refreshes the tree state by fetching the latest leaves from the server.
@@ -148,24 +146,56 @@ impl<S: Signer> TreeService<S> {
             }
         }
 
-        let mut state = self.state.lock().await;
-        state.clear_leaves();
-        state.add_leaves(&new_leaves);
+        let mut state = self.state.lock().unwrap();
+        state.set_leaves(&new_leaves);
 
         Ok(())
     }
 
+    pub fn select_leaves(
+        &self,
+        target_amount_sat: u64,
+    ) -> Result<Option<PendingLeaves>, TreeServiceError> {
+        let mut state = self.state.lock().unwrap();
+        let leaves = state.get_leaves();
+        let selected = self
+            .select_leaves_by_amount(leaves.clone(), target_amount_sat)
+            .or(self.select_leaves_by_minimum_amount(leaves.clone(), target_amount_sat))?;
+
+        match selected {
+            Some(leaves) => Ok(Some(PendingLeaves::new(
+                leaves.clone(),
+                state.mark_leaves_as_pending(&leaves),
+            ))),
+            None => Ok(None),
+        }
+    }
+
+    pub fn cancel_pending_leaves(&self, pending_leaves_id: PendingLeavesId) {
+        let mut state = self.state.lock().unwrap();
+        state.cancel_pending_leaves(pending_leaves_id);
+    }
+
+    pub fn finalize_pending_leaves(&self, pending_leaves_id: PendingLeavesId) {
+        let mut state = self.state.lock().unwrap();
+        state.finalize_pending_leaves(pending_leaves_id);
+    }
+
+    pub fn insert_leaves(&self, leaves: Vec<TreeNode>) {
+        let mut state = self.state.lock().unwrap();
+        state.add_leaves(&leaves);
+    }
+
     /// Selects leaves from the tree that sum up to exactly the target amount.
     /// If such a combination of leaves does not exist, it returns `None`.
-    pub async fn select_leaves_by_amount(
+    fn select_leaves_by_amount(
         &self,
+        mut leaves: Vec<TreeNode>,
         target_amount_sat: u64,
     ) -> Result<Option<Vec<TreeNode>>, TreeServiceError> {
         if target_amount_sat == 0 {
             return Err(TreeServiceError::InvalidAmount);
         }
-
-        let mut leaves = self.list_leaves().await?;
 
         // Only consider leaves that are available.
         leaves.retain(|leaf| leaf.status == TreeNodeStatus::Available);
@@ -188,15 +218,14 @@ impl<S: Signer> TreeService<S> {
     }
 
     /// Selects leaves from the tree that sum up to at least the target amount.
-    pub async fn select_leaves_by_minimum_amount(
+    fn select_leaves_by_minimum_amount(
         &self,
+        mut leaves: Vec<TreeNode>,
         target_amount_sat: u64,
     ) -> Result<Option<Vec<TreeNode>>, TreeServiceError> {
         if target_amount_sat == 0 {
             return Err(TreeServiceError::InvalidAmount);
         }
-
-        let mut leaves = self.list_leaves().await?;
 
         // Only consider leaves that are available.
         leaves.retain(|leaf| leaf.status == TreeNodeStatus::Available);
@@ -287,10 +316,9 @@ impl<S: Signer> TreeService<S> {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
+    pub fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
         Ok(self
-            .list_leaves()
-            .await?
+            .list_leaves()?
             .into_iter()
             .filter(|leaf| leaf.status == TreeNodeStatus::Available)
             .map(|leaf| leaf.value)

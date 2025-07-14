@@ -1,8 +1,13 @@
-use crate::tree::TreeNode;
+use std::collections::HashMap;
+
+use uuid::Uuid;
+
+use crate::tree::{PendingLeavesId, TreeNode, TreeNodeId};
 
 // TODO: Implement proper tree state logic.
 pub struct TreeState {
-    leaves: Vec<TreeNode>,
+    leaves: HashMap<TreeNodeId, TreeNode>,
+    leaves_in_use: HashMap<PendingLeavesId, Vec<TreeNode>>,
 }
 
 impl Default for TreeState {
@@ -13,37 +18,44 @@ impl Default for TreeState {
 
 impl TreeState {
     pub fn new() -> Self {
-        TreeState { leaves: Vec::new() }
-    }
-
-    pub fn add_leaf(&mut self, leaf: TreeNode) {
-        self.leaves.push(leaf);
+        TreeState {
+            leaves: HashMap::new(),
+            leaves_in_use: HashMap::new(),
+        }
     }
 
     pub fn add_leaves(&mut self, leaves: &[TreeNode]) {
-        self.leaves.extend_from_slice(leaves);
+        self.leaves
+            .extend(leaves.iter().map(|l| (l.id.clone(), l.clone())));
     }
 
     pub fn get_leaves(&self) -> Vec<TreeNode> {
-        self.leaves.clone()
+        self.leaves.values().cloned().collect()
     }
 
-    pub fn clear_leaves(&mut self) {
-        self.leaves.clear();
+    pub fn set_leaves(&mut self, leaves: &[TreeNode]) {
+        self.leaves = leaves.iter().map(|l| (l.id.clone(), l.clone())).collect();
     }
 
-    pub fn remove_leaf(&mut self, leaf: &TreeNode) -> bool {
-        if let Some(pos) = self.leaves.iter().position(|x| x.id == leaf.id) {
-            self.leaves.remove(pos);
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn remove_leaves(&mut self, leaves: &[TreeNode]) {
+    pub fn mark_leaves_as_pending(&mut self, leaves: &[TreeNode]) -> PendingLeavesId {
+        let pending_leaves_id = Uuid::now_v7().to_string();
+        self.leaves_in_use
+            .insert(pending_leaves_id.clone(), leaves.to_vec());
         for leaf in leaves {
-            self.remove_leaf(leaf);
+            self.leaves.remove(&leaf.id);
         }
+        pending_leaves_id
+    }
+
+    pub fn cancel_pending_leaves(&mut self, pending_leaves_id: PendingLeavesId) {
+        if let Some(leaves) = self.leaves_in_use.remove(&pending_leaves_id) {
+            for leaf in leaves {
+                self.leaves.insert(leaf.id.clone(), leaf.clone());
+            }
+        }
+    }
+
+    pub fn finalize_pending_leaves(&mut self, pending_leaves_id: PendingLeavesId) {
+        self.leaves_in_use.remove(&pending_leaves_id);
     }
 }

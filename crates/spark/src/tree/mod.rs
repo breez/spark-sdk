@@ -124,3 +124,23 @@ pub struct SigningKeyshare {
     /// The threshold of the keyshare.
     pub threshold: u32,
 }
+
+type PendingLeavesId = String;
+
+pub struct PendingLeaves {
+    pub leaves: Vec<TreeNode>,
+    pub pending_leaves_id: PendingLeavesId,
+}
+
+impl PendingLeaves {
+    pub fn new(leaves: Vec<TreeNode>, pending_leaves_id: PendingLeavesId) -> Self {
+        Self {
+            leaves,
+            pending_leaves_id,
+        }
+    }
+
+    pub fn sum(&self) -> u64 {
+        self.leaves.iter().map(|leaf| leaf.value).sum()
+    }
+}
