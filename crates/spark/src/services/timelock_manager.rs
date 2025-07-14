@@ -102,6 +102,7 @@ impl<S: Signer> TimelockManager<S> {
             );
         }
 
+        let mut refresh_tasks = Vec::new();
         for node in nodes_to_refresh {
             let parent_node = node_ids_to_nodes_map
                 .get(
@@ -114,10 +115,11 @@ impl<S: Signer> TimelockManager<S> {
                     "Parent node not found in queried nodes".to_string(),
                 ))?;
 
-            let refreshed_node = self.refresh_timelock_node(&node, &parent_node).await?;
-
-            ready_nodes.push(refreshed_node);
+            refresh_tasks.push(self.refresh_timelock_node(node, parent_node));
         }
+
+        let refreshed_nodes = futures::future::try_join_all(refresh_tasks).await?;
+        ready_nodes.extend(refreshed_nodes);
 
         // TODO: update local tree to avoid having to re-fetch after this
 
@@ -130,7 +132,7 @@ impl<S: Signer> TimelockManager<S> {
     /// Should be done when the refund tx timelock is about to expire.
     async fn refresh_timelock_node(
         &self,
-        node: &TreeNode,
+        node: TreeNode,
         parent_node: &TreeNode,
     ) -> Result<TreeNode, ServiceError> {
         trace!("Refreshing timelock node: {:?}", node.id);
@@ -346,11 +348,17 @@ impl<S: Signer> TimelockManager<S> {
             return Ok(ready_nodes);
         }
 
+        let mut extend_tasks = Vec::new();
         for node in nodes_to_extend {
-            let extended_nodes = self.extend_time_lock(&node).await?;
-            let our_extended_nodes = self.transfer_leaves_to_self(extended_nodes).await?;
-            ready_nodes.extend(our_extended_nodes);
+            extend_tasks.push(async move {
+                let extended_nodes = self.extend_time_lock(&node).await?;
+                let our_extended_nodes = self.transfer_leaves_to_self(extended_nodes).await?;
+                Ok::<Vec<TreeNode>, ServiceError>(our_extended_nodes)
+            });
         }
+
+        let extended_nodes = futures::future::try_join_all(extend_tasks).await?;
+        ready_nodes.extend(extended_nodes.into_iter().flatten().collect::<Vec<_>>());
 
         // TODO: update local tree to avoid having to re-fetch after this
 
