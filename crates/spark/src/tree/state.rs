@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::tree::{PendingLeavesId, TreeNode, TreeNodeId};
+use crate::tree::{LeavesReservationId, TreeNode, TreeNodeId};
 
 // TODO: Implement proper tree state logic.
 pub struct TreeState {
     leaves: HashMap<TreeNodeId, TreeNode>,
-    leaves_in_use: HashMap<PendingLeavesId, Vec<TreeNode>>,
+    leaves_reservations: HashMap<LeavesReservationId, Vec<TreeNode>>,
 }
 
 impl Default for TreeState {
@@ -20,7 +20,7 @@ impl TreeState {
     pub fn new() -> Self {
         TreeState {
             leaves: HashMap::new(),
-            leaves_in_use: HashMap::new(),
+            leaves_reservations: HashMap::new(),
         }
     }
 
@@ -37,25 +37,28 @@ impl TreeState {
         self.leaves = leaves.iter().map(|l| (l.id.clone(), l.clone())).collect();
     }
 
-    pub fn mark_leaves_as_pending(&mut self, leaves: &[TreeNode]) -> PendingLeavesId {
-        let pending_leaves_id = Uuid::now_v7().to_string();
-        self.leaves_in_use
-            .insert(pending_leaves_id.clone(), leaves.to_vec());
+    // move leaves from the main pool to the reserved pool
+    pub fn reserve_leaves(&mut self, leaves: &[TreeNode]) -> LeavesReservationId {
+        let id = Uuid::now_v7().to_string();
+        self.leaves_reservations.insert(id.clone(), leaves.to_vec());
         for leaf in leaves {
             self.leaves.remove(&leaf.id);
         }
-        pending_leaves_id
+        id
     }
 
-    pub fn cancel_pending_leaves(&mut self, pending_leaves_id: PendingLeavesId) {
-        if let Some(leaves) = self.leaves_in_use.remove(&pending_leaves_id) {
+    // move leaves back from the reserved pool to the main pool
+    pub fn cancel_reservation(&mut self, id: LeavesReservationId) {
+        if let Some(leaves) = self.leaves_reservations.remove(&id) {
             for leaf in leaves {
                 self.leaves.insert(leaf.id.clone(), leaf.clone());
             }
         }
     }
 
-    pub fn finalize_pending_leaves(&mut self, pending_leaves_id: PendingLeavesId) {
-        self.leaves_in_use.remove(&pending_leaves_id);
+    // remove the leaves from the reserved pool, they are now considered used and
+    // not available anymore.
+    pub fn finalize_reservation(&mut self, id: LeavesReservationId) {
+        self.leaves_reservations.remove(&id);
     }
 }

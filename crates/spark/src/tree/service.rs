@@ -11,7 +11,7 @@ use crate::{
     },
     services::{PagingFilter, PagingResult, TransferService},
     signer::Signer,
-    tree::{PendingLeaves, PendingLeavesId, TreeNodeStatus},
+    tree::{LeavesReservation, LeavesReservationId, TreeNodeStatus},
 };
 
 use super::{TreeNode, error::TreeServiceError, state::TreeState};
@@ -152,33 +152,35 @@ impl<S: Signer> TreeService<S> {
         Ok(())
     }
 
-    pub fn select_leaves(
+    pub fn reserve_leaves(
         &self,
         target_amount_sat: u64,
-    ) -> Result<Option<PendingLeaves>, TreeServiceError> {
+        exact_only: bool,
+    ) -> Result<Option<LeavesReservation>, TreeServiceError> {
         let mut state = self.state.lock().unwrap();
         let leaves = state.get_leaves();
-        let selected = self
-            .select_leaves_by_amount(leaves.clone(), target_amount_sat)
-            .or(self.select_leaves_by_minimum_amount(leaves.clone(), target_amount_sat))?;
+        let mut selected = self.select_leaves_by_amount(leaves.clone(), target_amount_sat)?;
+        if selected.is_none() && !exact_only {
+            selected = self.select_leaves_by_minimum_amount(leaves.clone(), target_amount_sat)?;
+        }
 
         match selected {
-            Some(leaves) => Ok(Some(PendingLeaves::new(
+            Some(leaves) => Ok(Some(LeavesReservation::new(
                 leaves.clone(),
-                state.mark_leaves_as_pending(&leaves),
+                state.reserve_leaves(&leaves),
             ))),
             None => Ok(None),
         }
     }
 
-    pub fn cancel_pending_leaves(&self, pending_leaves_id: PendingLeavesId) {
+    pub fn cancel_reservation(&self, id: LeavesReservationId) {
         let mut state = self.state.lock().unwrap();
-        state.cancel_pending_leaves(pending_leaves_id);
+        state.cancel_reservation(id);
     }
 
-    pub fn finalize_pending_leaves(&self, pending_leaves_id: PendingLeavesId) {
+    pub fn finalize_reservation(&self, id: LeavesReservationId) {
         let mut state = self.state.lock().unwrap();
-        state.finalize_pending_leaves(pending_leaves_id);
+        state.finalize_reservation(id);
     }
 
     pub fn insert_leaves(&self, leaves: Vec<TreeNode>) {

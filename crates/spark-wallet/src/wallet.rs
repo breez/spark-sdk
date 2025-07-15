@@ -12,7 +12,7 @@ use spark::{
     },
     signer::Signer,
     ssp::ServiceProvider,
-    tree::{PendingLeaves, TreeNode, TreeNodeId, TreeService, TreeState},
+    tree::{LeavesReservation, TreeNode, TreeNodeId, TreeService, TreeState},
 };
 use tracing::{debug, trace};
 
@@ -377,8 +377,8 @@ impl<S: Signer + Clone> SparkWallet<S> {
     async fn select_leaves(
         &self,
         target_amount_sat: u64,
-    ) -> Result<PendingLeaves, SparkWalletError> {
-        let selection = self.tree_service.select_leaves(target_amount_sat)?;
+    ) -> Result<LeavesReservation, SparkWalletError> {
+        let selection = self.tree_service.reserve_leaves(target_amount_sat, false)?;
         let Some(selection) = selection else {
             return Err(SparkWalletError::InsufficientFunds);
         };
@@ -395,7 +395,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         .await?;
 
         // Now the leaves should contain the exact amount.
-        let leaves = self.tree_service.select_leaves(target_amount_sat)?;
+        let leaves = self.tree_service.reserve_leaves(target_amount_sat, true)?;
         let leaves = leaves.ok_or(SparkWalletError::InsufficientFunds)?;
 
         Ok(leaves)
@@ -410,7 +410,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
 async fn with_pending_leaves<F, R, S>(
     tree_service: Arc<TreeService<S>>,
     f: F,
-    leaves: &PendingLeaves,
+    leaves: &LeavesReservation,
 ) -> Result<R, SparkWalletError>
 where
     F: Future<Output = Result<R, SparkWalletError>>,
@@ -418,11 +418,11 @@ where
 {
     match f.await {
         Ok(r) => {
-            tree_service.finalize_pending_leaves(leaves.pending_leaves_id.clone());
+            tree_service.finalize_reservation(leaves.id.clone());
             Ok(r)
         }
         Err(e) => {
-            tree_service.cancel_pending_leaves(leaves.pending_leaves_id.clone());
+            tree_service.cancel_reservation(leaves.id.clone());
             Err(e.into())
         }
     }

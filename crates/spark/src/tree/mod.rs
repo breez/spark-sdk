@@ -125,19 +125,16 @@ pub struct SigningKeyshare {
     pub threshold: u32,
 }
 
-type PendingLeavesId = String;
+type LeavesReservationId = String;
 
-pub struct PendingLeaves {
+pub struct LeavesReservation {
+    pub id: LeavesReservationId,
     pub leaves: Vec<TreeNode>,
-    pub pending_leaves_id: PendingLeavesId,
 }
 
-impl PendingLeaves {
-    pub fn new(leaves: Vec<TreeNode>, pending_leaves_id: PendingLeavesId) -> Self {
-        Self {
-            leaves,
-            pending_leaves_id,
-        }
+impl LeavesReservation {
+    pub fn new(leaves: Vec<TreeNode>, id: LeavesReservationId) -> Self {
+        Self { leaves, id }
     }
 
     pub fn sum(&self) -> u64 {
