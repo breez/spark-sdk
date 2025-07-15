@@ -227,13 +227,19 @@ impl<S: Signer> TreeService<S> {
             .filter(|leaf| !leaves_to_ignore.contains(&leaf.id))
             .collect::<Vec<_>>();
 
+        let refreshed_leaves = self
+            .timelock_manager
+            .check_timelock_nodes(new_leaves)
+            .await
+            .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))?;
+
         let mut state = self.state.lock().unwrap();
-        state.set_leaves(&new_leaves);
+        state.set_leaves(&refreshed_leaves);
 
         Ok(())
     }
 
-    pub fn reserve_leaves(
+    pub async fn reserve_leaves(
         &self,
         target_amount_sat: u64,
         exact_only: bool,
@@ -246,10 +252,20 @@ impl<S: Signer> TreeService<S> {
         }
 
         match selected {
-            Some(leaves) => Ok(Some(LeavesReservation::new(
-                leaves.clone(),
-                state.reserve_leaves(&leaves),
-            ))),
+            Some(leaves) => {
+                let reservation_id = state.reserve_leaves(&leaves);
+                drop(state);
+
+                // refresh/extend time locks before returning the reservation
+                let new_leaves = self
+                    .timelock_manager
+                    .check_timelock_nodes(leaves)
+                    .await
+                    .map_err(|e| {
+                        TreeServiceError::Generic(format!("Failed to check time lock: {e:?}"))
+                    })?;
+                Ok(Some(LeavesReservation::new(new_leaves, reservation_id)))
+            }
             None => Ok(None),
         }
     }
@@ -264,9 +280,18 @@ impl<S: Signer> TreeService<S> {
         state.finalize_reservation(id);
     }
 
-    pub fn insert_leaves(&self, leaves: Vec<TreeNode>) {
+    pub async fn insert_leaves(
+        &self,
+        leaves: Vec<TreeNode>,
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let result_nodes = self
+            .timelock_manager
+            .check_timelock_nodes(leaves)
+            .await
+            .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))?;
         let mut state = self.state.lock().unwrap();
-        state.add_leaves(&leaves);
+        state.add_leaves(&result_nodes);
+        Ok(result_nodes)
     }
 
     /// Selects leaves from the tree that sum up to exactly the target amount.

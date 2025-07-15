@@ -19,7 +19,7 @@ where
 {
     match command {
         LeavesCommand::List => {
-            let leaves = wallet.list_leaves()?;
+            let leaves = wallet.list_leaves().await?;
             println!("{}", serde_json::to_string_pretty(&leaves)?);
         }
     }

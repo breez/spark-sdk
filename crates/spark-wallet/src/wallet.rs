@@ -34,7 +34,6 @@ where
     tree_service: Arc<TreeService<S>>,
     transfer_service: Arc<TransferService<S>>,
     lightning_service: Arc<LightningService<S>>,
-    timelock_manager: Arc<TimelockManager<S>>,
 }
 
 impl<S: Signer + Clone> SparkWallet<S> {
@@ -107,7 +106,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
             tree_service,
             transfer_service,
             lightning_service,
-            timelock_manager,
         })
     }
 
@@ -128,18 +126,13 @@ impl<S: Signer + Clone> SparkWallet<S> {
 
         let leaves_reservation = self.select_leaves(total_amount_sat).await?;
 
-        let leaves = self
-            .timelock_manager
-            .check_timelock_nodes(leaves_reservation.leaves.clone())
-            .await?;
-
         // start the lightning swap with the operator
         let swap = with_pending_leaves(
             self.tree_service.clone(),
             async {
                 Ok(self
                     .lightning_service
-                    .start_lightning_swap(invoice, &leaves)
+                    .start_lightning_swap(invoice, &leaves_reservation.leaves)
                     .await?)
             },
             &leaves_reservation,
@@ -276,18 +269,12 @@ impl<S: Signer + Clone> SparkWallet<S> {
         // get leaves to transfer
         let leaves_reservation = self.select_leaves(amount_sat).await?;
 
-        // check if we need to refresh or extend timelocks before transferring
-        let leaves = self
-            .timelock_manager
-            .check_timelock_nodes(leaves_reservation.leaves.clone())
-            .await?;
-
         let transfer = with_pending_leaves(
             self.tree_service.clone(),
             async {
                 Ok(self
                     .transfer_service
-                    .transfer_leaves_to(leaves, &receiver_pubkey)
+                    .transfer_leaves_to(leaves_reservation.leaves.clone(), &receiver_pubkey)
                     .await?)
             },
             &leaves_reservation,
@@ -326,13 +313,12 @@ impl<S: Signer + Clone> SparkWallet<S> {
     ) -> Result<Vec<TreeNode>, SparkWalletError> {
         trace!("Claiming transfer with id: {}", transfer.id);
         let claimed_nodes = self.transfer_service.claim_transfer(transfer, None).await?;
-        let result_nodes = self
-            .timelock_manager
-            .check_timelock_nodes(claimed_nodes)
-            .await?;
 
         trace!("Inserting claimed leaves after claiming transfer");
-        self.tree_service.insert_leaves(result_nodes.clone());
+        let result_nodes = self
+            .tree_service
+            .insert_leaves(claimed_nodes.clone())
+            .await?;
 
         // TODO: Emit events if emit is true
         // TODO: Optimize leaves if optimize is true and the transfer type is not counter swap
@@ -381,7 +367,10 @@ impl<S: Signer + Clone> SparkWallet<S> {
         &self,
         target_amount_sat: u64,
     ) -> Result<LeavesReservation, SparkWalletError> {
-        let selection = self.tree_service.reserve_leaves(target_amount_sat, false)?;
+        let selection = self
+            .tree_service
+            .reserve_leaves(target_amount_sat, false)
+            .await?;
         let Some(selection) = selection else {
             return Err(SparkWalletError::InsufficientFunds);
         };
@@ -398,18 +387,16 @@ impl<S: Signer + Clone> SparkWallet<S> {
         .await?;
 
         // Now the leaves should contain the exact amount.
-        let leaves = self.tree_service.reserve_leaves(target_amount_sat, true)?;
+        let leaves = self
+            .tree_service
+            .reserve_leaves(target_amount_sat, true)
+            .await?;
         let leaves = leaves.ok_or(SparkWalletError::InsufficientFunds)?;
 
         Ok(leaves)
     }
 
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
-        self.tree_service.refresh_leaves().await?;
-
-        let leaves = self.tree_service.list_leaves()?;
-        let _ = self.timelock_manager.check_timelock_nodes(leaves).await?;
-
         self.tree_service.refresh_leaves().await?;
         Ok(())
     }
