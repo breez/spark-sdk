@@ -16,3 +16,4 @@ shellwords.workspace = true
 spark-wallet.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+qrcode-rs = { version = "0.1", default-features = false }
