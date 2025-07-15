@@ -75,7 +75,7 @@ impl TreeState {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
     use bitcoin::{Transaction, absolute::LockTime, secp256k1::PublicKey, transaction::Version};
     use frost_secp256k1_tr::Identifier;
