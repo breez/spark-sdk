@@ -127,7 +127,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let leaves_reservation = self.select_leaves(total_amount_sat).await?;
 
         // start the lightning swap with the operator
-        let swap = with_pending_leaves(
+        let swap = with_reserved_leaves(
             self.tree_service.clone(),
             async {
                 Ok(self
@@ -269,7 +269,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         // get leaves to transfer
         let leaves_reservation = self.select_leaves(amount_sat).await?;
 
-        let transfer = with_pending_leaves(
+        let transfer = with_reserved_leaves(
             self.tree_service.clone(),
             async {
                 Ok(self
@@ -379,7 +379,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         }
 
         // Swap the leaves to match the target amount.
-        with_pending_leaves(
+        with_reserved_leaves(
             self.tree_service.clone(),
             self.swap_leaves_internal(&selection.leaves, vec![target_amount_sat]),
             &selection,
@@ -402,7 +402,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
     }
 }
 
-async fn with_pending_leaves<F, R, S>(
+async fn with_reserved_leaves<F, R, S>(
     tree_service: Arc<TreeService<S>>,
     f: F,
     leaves: &LeavesReservation,
