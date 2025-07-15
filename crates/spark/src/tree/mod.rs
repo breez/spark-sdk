@@ -91,10 +91,6 @@ pub struct TreeNode {
 impl TreeNode {
     /// Checks if the node needs a timelock refresh by checking if the refund tx's timelock can be further reduced
     pub fn needs_timelock_refresh(&self) -> Result<bool, TreeServiceError> {
-        println!(
-            "Refund tx sequence: {:?}",
-            self.refund_tx.as_ref().unwrap().input[0].sequence
-        );
         // TODO: adjust next_sequence so it could be used here
         let current_refund_timelock = self
             .refund_tx
@@ -121,7 +117,6 @@ impl TreeNode {
 
     /// Checks if the node needs a timelock extension by checking if the node tx's timelock can be further reduced
     pub fn needs_timelock_extension(&self) -> Result<bool, TreeServiceError> {
-        println!("Node tx sequence: {:?}", self.node_tx.input[0].sequence);
         // TODO: adjust next_sequence so it could be used here
         let current_timelock = self.node_tx.input[0]
             .sequence

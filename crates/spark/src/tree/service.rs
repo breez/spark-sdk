@@ -244,27 +244,29 @@ impl<S: Signer> TreeService<S> {
         target_amount_sat: u64,
         exact_only: bool,
     ) -> Result<Option<LeavesReservation>, TreeServiceError> {
-        let mut state = self.state.lock().unwrap();
-        let leaves = state.get_leaves();
-        let mut selected = self.select_leaves_by_amount(leaves.clone(), target_amount_sat)?;
-        if selected.is_none() && !exact_only {
-            selected = self.select_leaves_by_minimum_amount(leaves.clone(), target_amount_sat)?;
-        }
+        let reservation = {
+            let mut state = self.state.lock().unwrap();
+            let leaves = state.get_leaves();
+            let mut selected = self.select_leaves_by_amount(leaves.clone(), target_amount_sat)?;
+            if selected.is_none() && !exact_only {
+                selected =
+                    self.select_leaves_by_minimum_amount(leaves.clone(), target_amount_sat)?;
+            }
+            selected
+                .map(|leaves| LeavesReservation::new(leaves.clone(), state.reserve_leaves(&leaves)))
+        };
 
-        match selected {
-            Some(leaves) => {
-                let reservation_id = state.reserve_leaves(&leaves);
-                drop(state);
-
+        match reservation {
+            Some(reservation) => {
                 // refresh/extend time locks before returning the reservation
                 let new_leaves = self
                     .timelock_manager
-                    .check_timelock_nodes(leaves)
+                    .check_timelock_nodes(reservation.leaves)
                     .await
                     .map_err(|e| {
                         TreeServiceError::Generic(format!("Failed to check time lock: {e:?}"))
                     })?;
-                Ok(Some(LeavesReservation::new(new_leaves, reservation_id)))
+                Ok(Some(LeavesReservation::new(new_leaves, reservation.id)))
             }
             None => Ok(None),
         }

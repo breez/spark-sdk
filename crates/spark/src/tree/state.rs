@@ -40,9 +40,9 @@ impl TreeState {
             reserved_leaves.retain(|l| self.leaves.contains_key(&l.id));
 
             //Replace every new leaf we got with the corresponding in the reserve pool
-            for i in 0..reserved_leaves.len() {
-                if let Some(leaf) = self.leaves.remove(&reserved_leaves[i].id) {
-                    reserved_leaves[i] = leaf;
+            for l in reserved_leaves {
+                if let Some(leaf) = self.leaves.remove(&l.id) {
+                    *l = leaf;
                 }
             }
         }
