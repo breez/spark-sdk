@@ -35,6 +35,17 @@ impl TreeState {
 
     pub fn set_leaves(&mut self, leaves: &[TreeNode]) {
         self.leaves = leaves.iter().map(|l| (l.id.clone(), l.clone())).collect();
+        for (_, reserved_leaves) in self.leaves_reservations.iter_mut() {
+            // remove leaves not existing in the main pool
+            reserved_leaves.retain(|l| self.leaves.contains_key(&l.id));
+
+            //Replace every new leaf we got with the corresponding in the reserve pool
+            for i in 0..reserved_leaves.len() {
+                if let Some(leaf) = self.leaves.remove(&reserved_leaves[i].id) {
+                    reserved_leaves[i] = leaf;
+                }
+            }
+        }
     }
 
     // move leaves from the main pool to the reserved pool
