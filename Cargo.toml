@@ -10,6 +10,7 @@ bip39 = "2.2.0"
 bitcoin = { version =  "0.32.6", features = ["serde"] }
 chrono = { version = "0.4.37", features = ["serde"] }
 clap = "4.5.40"
+dotenvy = "0.15.7"
 ecies = "0.2.0"
 figment = "0.10.19"
 # frost-core = "2.1.0"

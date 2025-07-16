@@ -7,6 +7,7 @@ edition = "2024"
 bip39.workspace = true
 bitcoin.workspace = true
 clap = { workspace = true, features = ["derive"] }
+dotenvy.workspace = true
 figment = { workspace = true, features = ["env", "yaml"] }
 reqwest.workspace = true
 rustyline = { workspace = true, features = ["derive"] }
