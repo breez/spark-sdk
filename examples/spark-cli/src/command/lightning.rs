@@ -1,4 +1,5 @@
 use clap::Subcommand;
+use qrcode_rs::{EcLevel, QrCode, render::unicode};
 use spark_wallet::SparkWallet;
 
 use crate::config::Config;
@@ -39,7 +40,14 @@ where
             let payment = wallet
                 .create_lightning_invoice(amount_sat, description)
                 .await?;
-            println!("{}", serde_json::to_string_pretty(&payment)?);
+            let qr = QrCode::with_error_correction_level(&payment.invoice, EcLevel::L)
+                .unwrap()
+                .render::<unicode::Dense1x2>()
+                .dark_color(unicode::Dense1x2::Light)
+                .light_color(unicode::Dense1x2::Dark)
+                .max_dimensions(50, 50)
+                .build();
+            println!("{}\n\n{}", serde_json::to_string_pretty(&payment)?, qr);
         }
         LightningCommand::FetchReceivePayment { id } => {
             let payment = wallet.fetch_lightning_receive_payment(&id).await?;

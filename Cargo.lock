@@ -2265,6 +2265,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "qrcode-rs"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2ead539a9857a2a4e45ec7285812734740c12014cb62e3d1567b1676106afcf"
+
+[[package]]
 name = "quote"
 version = "1.0.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2893,6 +2899,7 @@ dependencies = [
  "bitcoin",
  "clap",
  "figment",
+ "qrcode-rs",
  "reqwest",
  "rustyline",
  "serde",
