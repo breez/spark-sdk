@@ -252,9 +252,11 @@ impl<S: Signer> TreeService<S> {
                 selected =
                     self.select_leaves_by_minimum_amount(leaves.clone(), target_amount_sat)?;
             }
-            selected
-                .map(|leaves| LeavesReservation::new(leaves.clone(), state.reserve_leaves(&leaves)))
-        };
+            let reservation_id = state.reserve_leaves(&leaves)?;
+            Ok::<Option<LeavesReservation>, TreeServiceError>(
+                selected.map(|leaves| LeavesReservation::new(leaves.clone(), reservation_id)),
+            )
+        }?;
 
         match reservation {
             Some(reservation) => {

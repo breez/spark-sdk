@@ -19,6 +19,9 @@ pub enum TreeServiceError {
     #[error("Signer error: {0}")]
     SignerError(#[from] SignerError),
 
+    #[error("non reservable leaves")]
+    NonReservableLeaves,
+
     #[error("generic error: {0}")]
     Generic(String),
 }
