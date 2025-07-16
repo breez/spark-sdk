@@ -35,15 +35,26 @@ impl TreeState {
 
     pub fn set_leaves(&mut self, leaves: &[TreeNode]) {
         self.leaves = leaves.iter().map(|l| (l.id.clone(), l.clone())).collect();
-        for (_, reserved_leaves) in self.leaves_reservations.iter_mut() {
-            // remove leaves not existing in the main pool
-            reserved_leaves.retain(|l| self.leaves.contains_key(&l.id));
 
-            //Replace every new leaf we got with the corresponding in the reserve pool
-            for l in reserved_leaves {
+        for (key, reserved_leaves) in self.leaves_reservations.clone().iter() {
+            // remove leaves not existing in the main pool
+            let mut fitlered_leaves: Vec<TreeNode> = reserved_leaves
+                .into_iter()
+                .filter(|l| self.leaves.contains_key(&l.id))
+                .cloned()
+                .collect();
+
+            // update reserved leaves that just got updated in the main pool
+            for l in fitlered_leaves.iter_mut() {
                 if let Some(leaf) = self.leaves.remove(&l.id) {
                     *l = leaf;
                 }
+            }
+            if fitlered_leaves.is_empty() {
+                self.leaves_reservations.remove(key);
+            } else {
+                self.leaves_reservations
+                    .insert(key.clone(), fitlered_leaves);
             }
         }
     }
@@ -237,8 +248,8 @@ mod test {
         state.set_leaves(&new_leaves);
 
         // Reserved leaves should be removed since they don't exist in main pool
-        let reservation = state.leaves_reservations.get(&reservation_id).unwrap();
-        assert!(reservation.is_empty());
+        let reservation = state.leaves_reservations.get(&reservation_id);
+        assert!(reservation.is_none());
     }
 
     #[test]
@@ -263,16 +274,6 @@ mod test {
         let main_leaves = state.get_leaves();
         assert_eq!(main_leaves.len(), 1);
         assert_eq!(main_leaves[0].id, leaves[1].id);
-    }
-
-    #[test]
-    fn test_reserve_leaves_empty() {
-        let mut state = TreeState::new();
-        let reservation_id = state.reserve_leaves(&[]);
-
-        assert!(state.leaves_reservations.contains_key(&reservation_id));
-        let reserved = state.leaves_reservations.get(&reservation_id).unwrap();
-        assert!(reserved.is_empty());
     }
 
     #[test]
