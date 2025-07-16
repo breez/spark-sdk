@@ -269,8 +269,8 @@ query StaticDepositQuote($input: StaticDepositQuoteInput!) {
   }
 }
 
-query Transfer($transfer_spark_id: UUID!) {
-  transfer(transfer_spark_id: $transfer_spark_id) {
+query Transfers($transfer_spark_ids: [UUID!]!) {
+  transfers(transfer_spark_ids: $transfer_spark_ids) {
     ...TransferFragment
   }
 }

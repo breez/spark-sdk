@@ -121,6 +121,15 @@ type CompleteLeavesSwapOutput {
   request: LeavesSwapRequest!
 }
 
+input CompleteSeedReleaseInput {
+  phone_number: String!
+  code: String!
+}
+
+type CompleteSeedReleaseOutput {
+  seed: String!
+}
+
 interface Connection {
   """
   The total count of objects in this connection, using the current filters. It is different from the number of objects returned in the current page (in the `entities` field).
@@ -317,6 +326,9 @@ enum CurrencyUnit {
 
   """British Pound."""
   GBP
+
+  """Indian Rupee."""
+  INR
 
   """
   0.000000001 (10e-9) Bitcoin or a billionth of a Bitcoin. We recommend using the Satoshi unit instead when possible.
@@ -552,8 +564,14 @@ type Mutation {
   """For spark users to complete a leaves swap."""
   complete_leaves_swap(input: CompleteLeavesSwapInput!): CompleteLeavesSwapOutput!
 
+  """Complete the process to request releasing seed."""
+  complete_seed_release(input: CompleteSeedReleaseInput!): CompleteSeedReleaseOutput!
+
   """Get a new SSP authentication challenge."""
   get_challenge(input: GetChallengeInput!): GetChallengeOutput!
+
+  """Send SMS to receiver they received transfer."""
+  notify_receiver_transfer(input: NotifyReceiverTransferInput!): Void
 
   """For spark users to initiate coop exit."""
   request_coop_exit(input: RequestCoopExitInput!): RequestCoopExitOutput!
@@ -567,8 +585,26 @@ type Mutation {
   """For spark users to initiate a leaves swap."""
   request_leaves_swap(input: RequestLeavesSwapInput!): RequestLeavesSwapOutput!
 
+  """
+  This function sends regtest funds to a specified address. It is only available in test mode.
+  """
+  request_regtest_funds(input: RequestRegtestFundsInput!): RequestRegtestFundsOutput!
+
+  """
+  Start the process to request releasing seed. SSP will send an OTP code to the phone number.
+  """
+  start_seed_release(input: StartSeedReleaseInput!): Void
+
   """Verify a signed SSP authentication challenge."""
   verify_challenge(input: VerifyChallengeInput!): VerifyChallengeOutput!
+
+  """Get wallet's identity public key from phone number."""
+  wallet_user_identity_public_key(input: WalletUserIdentityPublicKeyInput!): WalletUserIdentityPublicKeyOutput!
+}
+
+input NotifyReceiverTransferInput {
+  phone_number: String!
+  amount_sats: Long!
 }
 
 """
@@ -620,7 +656,10 @@ type Query {
   user_request(request_id: ID!): UserRequest
 
   """Query the transfer of a given transfer spark id."""
-  transfer(transfer_spark_id: UUID!): Transfer
+  transfer(transfer_spark_id: UUID!): Transfer @deprecated(reason: "Use `transfers` query instead, which supports multiple transfers at once.")
+
+  """Query transfers of a given list of transfer spark ids."""
+  transfers(transfer_spark_ids: [UUID!]!): [Transfer!]!
 }
 
 input RequestCoopExitInput {
@@ -707,6 +746,20 @@ input RequestLightningSendInput {
 
 type RequestLightningSendOutput {
   request: LightningSendRequest!
+}
+
+input RequestRegtestFundsInput {
+  """
+  The amount of sats that are requested to be sent to the specified Regtest Bitcoin address.
+  """
+  amount_sats: Long!
+
+  """The Regtest Bitcoin address to which the funds will be sent."""
+  address: String!
+}
+
+type RequestRegtestFundsOutput {
+  transaction_hash: String!
 }
 
 enum SparkCoopExitRequestStatus {
@@ -797,6 +850,10 @@ type SparkWalletUserToUserRequestsConnection implements Connection {
   entities: [UserRequest!]!
 }
 
+input StartSeedReleaseInput {
+  phone_number: String!
+}
+
 input StaticDepositQuoteInput {
   """The transaction id of the deposit."""
   transaction_id: String!
@@ -881,4 +938,15 @@ input VerifyChallengeInput {
 type VerifyChallengeOutput {
   valid_until: DateTime!
   session_token: String!
+}
+
+"""Represents NULL values"""
+scalar Void
+
+input WalletUserIdentityPublicKeyInput {
+  phone_number: String!
+}
+
+type WalletUserIdentityPublicKeyOutput {
+  identity_public_key: PublicKey!
 }

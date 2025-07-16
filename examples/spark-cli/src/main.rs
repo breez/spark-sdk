@@ -76,6 +76,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let seed = config.mnemonic.to_seed(config.passphrase.clone());
     let network = config.spark_config.network;
+    if network == Network::Regtest
+        && (config.faucet_username.is_none() || config.faucet_password.is_none())
+    {
+        return Err("Faucet credentials are required for regtest network. Please set SPARK_FAUCET_USERNAME and SPARK_FAUCET_PASSWORD environment variables".into());
+    }
+
     let signer = DefaultSigner::new(&seed, network)?;
     let wallet = spark_wallet::SparkWallet::new(config.spark_config.clone(), signer).await?;
     wallet.sync().await?;

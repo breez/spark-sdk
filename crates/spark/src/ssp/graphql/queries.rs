@@ -7,6 +7,7 @@ use graphql_client::GraphQLQuery;
 
 // Define the types used as scalar types in the GraphQL schema
 type PublicKey = String;
+#[allow(clippy::upper_case_acronyms)]
 type UUID = String;
 type DateTime = chrono::DateTime<chrono::Utc>;
 type Hash32 = String;
@@ -140,6 +141,15 @@ pub struct RequestLightningSend;
 
 #[derive(GraphQLQuery)]
 #[graphql(
+    query_path = "schema/regtest.graphql",
+    schema_path = "schema/spark.graphql",
+    variables_derives = "Clone",
+    response_derives = "Debug"
+)]
+pub struct RequestRegtestFunds;
+
+#[derive(GraphQLQuery)]
+#[graphql(
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
@@ -156,7 +166,7 @@ pub struct StaticDepositQuote;
     response_derives = "Debug",
     extern_enums("CurrencyUnit")
 )]
-pub struct Transfer;
+pub struct Transfers;
 
 #[derive(GraphQLQuery)]
 #[graphql(
