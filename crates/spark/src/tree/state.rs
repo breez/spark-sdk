@@ -38,23 +38,23 @@ impl TreeState {
 
         for (key, reserved_leaves) in self.leaves_reservations.clone().iter() {
             // remove leaves not existing in the main pool
-            let mut fitlered_leaves: Vec<TreeNode> = reserved_leaves
+            let mut filtered_leaves: Vec<TreeNode> = reserved_leaves
                 .into_iter()
                 .filter(|l| self.leaves.contains_key(&l.id))
                 .cloned()
                 .collect();
 
             // update reserved leaves that just got updated in the main pool
-            for l in fitlered_leaves.iter_mut() {
+            for l in filtered_leaves.iter_mut() {
                 if let Some(leaf) = self.leaves.remove(&l.id) {
                     *l = leaf;
                 }
             }
-            if fitlered_leaves.is_empty() {
+            if filtered_leaves.is_empty() {
                 self.leaves_reservations.remove(key);
             } else {
                 self.leaves_reservations
-                    .insert(key.clone(), fitlered_leaves);
+                    .insert(key.clone(), filtered_leaves);
             }
         }
     }
