@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use tracing::{trace, warn};
 use uuid::Uuid;
 
 use crate::tree::{LeavesReservationId, TreeNode, TreeNodeId, TreeServiceError};
@@ -57,6 +58,7 @@ impl TreeState {
                     .insert(key.clone(), filtered_leaves);
             }
         }
+        trace!("Updated {:?} leaves in the local state", leaves.len());
     }
 
     // move leaves from the main pool to the reserved pool
@@ -77,6 +79,7 @@ impl TreeState {
         for leaf in leaves {
             self.leaves.remove(&leaf.id);
         }
+        trace!("New leaves reservation {}: {:?}", id, leaves);
         Ok(id)
     }
 
@@ -87,12 +90,16 @@ impl TreeState {
                 self.leaves.insert(leaf.id.clone(), leaf.clone());
             }
         }
+        trace!("Canceled leaves reservation: {}", id);
     }
 
     // remove the leaves from the reserved pool, they are now considered used and
     // not available anymore.
     pub fn finalize_reservation(&mut self, id: LeavesReservationId) {
-        self.leaves_reservations.remove(&id);
+        if self.leaves_reservations.remove(&id).is_none() {
+            warn!("Tried to finalize a non existing reservation");
+        }
+        trace!("Finalized leaves reservation: {}", id);
     }
 }
 
