@@ -18,7 +18,7 @@ use tracing::{debug, trace};
 
 use crate::{
     leaf::WalletLeaf,
-    model::{WalletInfo, WalletTransfer},
+    model::{PayLightningInvoiceResult, WalletInfo, WalletTransfer},
 };
 
 use super::{SparkWalletConfig, SparkWalletError};
@@ -117,22 +117,30 @@ impl<S: Signer + Clone> SparkWallet<S> {
     pub async fn pay_lightning_invoice(
         &self,
         invoice: &str,
+        amount_to_send: Option<u64>,
         max_fee_sat: Option<u64>,
-    ) -> Result<LightningSendPayment, SparkWalletError> {
-        let total_amount_sat = self
+        prefer_spark: bool,
+    ) -> Result<PayLightningInvoiceResult, SparkWalletError> {
+        let (total_amount_sat, receiver_spark_address) = self
             .lightning_service
-            .validate_payment(invoice, max_fee_sat)
+            .validate_payment(invoice, max_fee_sat, amount_to_send, prefer_spark)
             .await?;
 
-        let leaves_reservation = self.select_leaves(total_amount_sat).await?;
+        if let Some(receiver_spark_address) = receiver_spark_address {
+            return Ok(PayLightningInvoiceResult::Transfer(
+                self.transfer(total_amount_sat, &receiver_spark_address)
+                    .await?,
+            ));
+        }
 
+        let leaves_reservation = self.select_leaves(total_amount_sat).await?;
         // start the lightning swap with the operator
         let swap = with_reserved_leaves(
             self.tree_service.clone(),
             async {
                 Ok(self
                     .lightning_service
-                    .start_lightning_swap(invoice, &leaves_reservation.leaves)
+                    .start_lightning_swap(invoice, amount_to_send, &leaves_reservation.leaves)
                     .await?)
             },
             &leaves_reservation,
@@ -146,10 +154,11 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .await?;
 
         // finalize the lightning swap with the ssp - send the actual lightning payment
-        Ok(self
-            .lightning_service
-            .finalize_lightning_swap(&swap)
-            .await?)
+        Ok(PayLightningInvoiceResult::LightningPayment(
+            self.lightning_service
+                .finalize_lightning_swap(&swap)
+                .await?,
+        ))
     }
 
     pub async fn create_lightning_invoice(
@@ -166,10 +175,11 @@ impl<S: Signer + Clone> SparkWallet<S> {
     pub async fn fetch_lightning_send_fee_estimate(
         &self,
         invoice: &str,
+        amount_to_send: Option<u64>,
     ) -> Result<u64, SparkWalletError> {
         Ok(self
             .lightning_service
-            .fetch_lightning_send_fee_estimate(invoice)
+            .fetch_lightning_send_fee_estimate(invoice, amount_to_send)
             .await?)
     }
 
@@ -367,6 +377,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         &self,
         target_amount_sat: u64,
     ) -> Result<LeavesReservation, SparkWalletError> {
+        trace!("Selecting leaves for amount: {}", target_amount_sat);
         let selection = self
             .tree_service
             .reserve_leaves(target_amount_sat, false)
@@ -374,7 +385,13 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let Some(selection) = selection else {
             return Err(SparkWalletError::InsufficientFunds);
         };
+        trace!(
+            "Selected leaves got reservation: {:?} ({})",
+            selection.id,
+            selection.sum()
+        );
         if selection.sum() == target_amount_sat {
+            trace!("Selected leaves sum up to target amount");
             return Ok(selection);
         }
 
@@ -385,14 +402,18 @@ impl<S: Signer + Clone> SparkWallet<S> {
             &selection,
         )
         .await?;
-
+        trace!("Swapped leaves to match target amount");
         // Now the leaves should contain the exact amount.
         let leaves = self
             .tree_service
             .reserve_leaves(target_amount_sat, true)
             .await?;
         let leaves = leaves.ok_or(SparkWalletError::InsufficientFunds)?;
-
+        trace!(
+            "Selected leaves got reservation after swap: {:?} ({})",
+            leaves.id,
+            leaves.sum()
+        );
         Ok(leaves)
     }
 

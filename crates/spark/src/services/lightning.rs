@@ -1,3 +1,4 @@
+use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::OperatorPool;
 use crate::operator::rpc::spark::initiate_preimage_swap_request::Reason;
@@ -29,12 +30,14 @@ use super::LeafKeyTweak;
 use super::models::{LightningSendRequestStatus, map_signing_nonce_commitments};
 
 const DEFAULT_EXPIRY_SECS: u32 = 60 * 60 * 24 * 30;
+const RECEIVER_IDENTITY_PUBLIC_KEY_SHORT_CHANNEL_ID: u64 = 17592187092992000001;
 
 pub struct LightningSwap {
     pub transfer: Transfer,
     pub leaves: Vec<LeafKeyTweak>,
     pub receiver_identity_public_key: PublicKey,
     pub bolt11_invoice: String,
+    pub user_amount_sat: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -197,17 +200,30 @@ where
                 description_hash: None,
                 expiry_secs: Some(expiry.into()),
                 memo,
-                include_spark_address: false,
+                include_spark_address: true,
             })
             .await?;
+        let decoded_invoice = Bolt11Invoice::from_str(&invoice.invoice.encoded_invoice)
+            .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
+        let spark_address = self.extract_spark_address(&decoded_invoice);
+        let Some(spark_address) = spark_address else {
+            return Err(ServiceError::SSPswapError(
+                "Invalid invoice. Spark address not found".to_string(),
+            ));
+        };
 
+        let identity_pubkey = self.signer.get_identity_public_key()?;
+        if spark_address.identity_public_key != identity_pubkey {
+            return Err(ServiceError::SSPswapError(
+                "Invalid invoice. Spark address mismatch".to_string(),
+            ));
+        }
         let shares = self.signer.split_secret_with_proofs(
             &SecretToSplit::Preimage(preimage),
             self.split_secret_threshold,
             self.operator_pool.len(),
         )?;
 
-        let identity_pubkey = self.signer.get_identity_public_key()?;
         let requests =
             self.operator_pool
                 .get_all_operators()
@@ -241,11 +257,12 @@ where
     pub async fn start_lightning_swap(
         &self,
         invoice: &str,
+        amount_to_send: Option<u64>,
         leaves: &Vec<TreeNode>,
     ) -> Result<LightningSwap, ServiceError> {
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
-        let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
+        let amount_sats: u64 = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
         let payment_hash = decoded_invoice.payment_hash();
 
         // prepare leaf tweaks
@@ -282,6 +299,7 @@ where
             leaves: leaf_tweaks,
             receiver_identity_public_key: self.ssp_client.identity_public_key(),
             bolt11_invoice: invoice.to_string(),
+            user_amount_sat: amount_to_send,
         })
     }
 
@@ -296,7 +314,7 @@ where
             .request_lightning_send(RequestLightningSendInput {
                 encoded_invoice: swap.bolt11_invoice.to_string(),
                 idempotency_key: decoded_invoice.payment_hash().encode_hex(),
-                amount_sats: None,
+                amount_sats: swap.user_amount_sat,
             })
             .await?;
 
@@ -307,21 +325,29 @@ where
         &self,
         invoice: &str,
         max_fee_sat: Option<u64>,
-    ) -> Result<u64, ServiceError> {
+        amount_to_send: Option<u64>,
+        prefer_spark: bool,
+    ) -> Result<(u64, Option<SparkAddress>), ServiceError> {
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
 
-        // get the invoice amount in sats, then validate the amount
-        let amount_sats = get_invoice_amount_sats(&decoded_invoice)?;
-        if amount_sats == 0 {
+        if decoded_invoice.network() != self.network.into() {
             return Err(ServiceError::ValidationError(
-                "Amount must be greater than 0".to_string(),
+                "Invoice network does not match".to_string(),
             ));
+        }
+
+        // get the invoice amount in sats, then validate the amount
+        let to_pay_sat = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
+        if prefer_spark {
+            if let Some(receiver_address) = self.extract_spark_address(&decoded_invoice) {
+                return Ok((to_pay_sat, Some(receiver_address)));
+            }
         }
 
         let fee_estimate = self
             .ssp_client
-            .get_lightning_send_fee_estimate(invoice, Some(amount_sats))
+            .get_lightning_send_fee_estimate(invoice, Some(to_pay_sat))
             .await?;
 
         let fee_sat = fee_estimate
@@ -334,16 +360,32 @@ where
                 ));
             }
         }
-        Ok(fee_sat + amount_sats)
+
+        Ok((fee_sat + to_pay_sat, None))
+    }
+
+    fn extract_spark_address(&self, decoded_invoice: &Bolt11Invoice) -> Option<SparkAddress> {
+        for route_hint in decoded_invoice.route_hints() {
+            for node in route_hint.0 {
+                if node.short_channel_id == RECEIVER_IDENTITY_PUBLIC_KEY_SHORT_CHANNEL_ID {
+                    return Some(SparkAddress {
+                        identity_public_key: node.src_node_id,
+                        network: self.network,
+                    });
+                }
+            }
+        }
+        None
     }
 
     pub async fn fetch_lightning_send_fee_estimate(
         &self,
         invoice: &str,
+        amount_to_send: Option<u64>,
     ) -> Result<u64, ServiceError> {
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
-        let amount_sat = get_invoice_amount_sats(&decoded_invoice)?;
+        let amount_sat = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
         self.ssp_client
             .get_lightning_send_fee_estimate(invoice, Some(amount_sat))
             .await?
@@ -454,10 +496,31 @@ where
     }
 }
 
-fn get_invoice_amount_sats(invoice: &Bolt11Invoice) -> Result<u64, ServiceError> {
-    let invoice_amount_msats = invoice
+fn get_invoice_amount_sats(
+    invoice: &Bolt11Invoice,
+    amount_to_send: Option<u64>,
+) -> Result<u64, ServiceError> {
+    let invoice_amount_sats = invoice
         .amount_milli_satoshis()
-        .ok_or(ServiceError::InvoiceDecodingError(invoice.to_string()))?;
+        .unwrap_or_default()
+        .div_ceil(1000);
+    let to_pay_sat = amount_to_send.unwrap_or(invoice_amount_sats);
+    if to_pay_sat == 0 {
+        return Err(ServiceError::ValidationError(
+            "Amount must be provided for 0 amount invoice".to_string(),
+        ));
+    }
+    if to_pay_sat < invoice_amount_sats {
+        return Err(ServiceError::ValidationError(
+            "Amount must not be less than the invoice amount".to_string(),
+        ));
+    }
 
-    Ok(invoice_amount_msats.div_ceil(1000))
+    // it seems that spark currently don't support over payment
+    if invoice_amount_sats > 0 && to_pay_sat > invoice_amount_sats {
+        return Err(ServiceError::ValidationError(
+            "Overpayments are not allowed".to_string(),
+        ));
+    }
+    Ok(to_pay_sat)
 }
