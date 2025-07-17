@@ -182,7 +182,7 @@ pub struct LeafKeyTweak {
 }
 
 // TODO: verify if the optional times should be optional
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Transfer {
     pub id: TransferId,
     pub sender_identity_public_key: PublicKey,
@@ -244,7 +244,7 @@ impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TransferLeaf {
     pub leaf: TreeNode,
     pub secret_cipher: Vec<u8>,
