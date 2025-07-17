@@ -1,5 +1,5 @@
 use clap::Subcommand;
-use spark_wallet::{SparkWallet, TreeNodeId};
+use spark_wallet::SparkWallet;
 
 use crate::config::Config;
 

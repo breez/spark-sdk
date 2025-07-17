@@ -40,7 +40,7 @@ impl TreeState {
         for (key, reserved_leaves) in self.leaves_reservations.clone().iter() {
             // remove leaves not existing in the main pool
             let mut filtered_leaves: Vec<TreeNode> = reserved_leaves
-                .into_iter()
+                .iter()
                 .filter(|l| self.leaves.contains_key(&l.id))
                 .cloned()
                 .collect();
