@@ -97,7 +97,7 @@ impl<S: Signer> TimelockManager<S> {
         let mut node_ids_to_nodes_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
         for node in query_nodes_response.nodes.values() {
             node_ids_to_nodes_map.insert(
-                TreeNodeId::from_str(&node.id).map_err(|e| ServiceError::ValidationError(e))?,
+                TreeNodeId::from_str(&node.id).map_err(ServiceError::ValidationError)?,
                 node.clone().try_into()?,
             );
         }
@@ -324,7 +324,7 @@ impl<S: Signer> TimelockManager<S> {
             ));
         }
 
-        Ok(response.nodes[0].clone().try_into()?)
+        response.nodes[0].clone().try_into()
     }
 
     /// Checks and extends timelock nodes if needed

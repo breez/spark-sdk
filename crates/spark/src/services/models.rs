@@ -129,7 +129,7 @@ pub(crate) fn map_public_keys(
         )
         .map_err(|_| ServiceError::InvalidIdentifier)?;
         let public_key =
-            PublicKey::from_slice(&public_key).map_err(|_| ServiceError::InvalidPublicKey)?;
+            PublicKey::from_slice(public_key).map_err(|_| ServiceError::InvalidPublicKey)?;
         public_keys.insert(identifier, public_key);
     }
 
@@ -145,7 +145,7 @@ pub(crate) fn map_signature_shares(
             &hex::decode(identifier).map_err(|_| ServiceError::InvalidIdentifier)?,
         )
         .map_err(|_| ServiceError::InvalidIdentifier)?;
-        let signature_share = SignatureShare::deserialize(&signature_share)
+        let signature_share = SignatureShare::deserialize(signature_share)
             .map_err(|_| ServiceError::InvalidSignatureShare)?;
         signature_shares.insert(identifier, signature_share);
     }

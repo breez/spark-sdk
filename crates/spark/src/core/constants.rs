@@ -24,14 +24,6 @@ pub fn next_sequence(current_sequence: Sequence) -> Option<Sequence> {
         return None;
     };
 
-    if new_blocks < TIME_LOCK_INTERVAL {
-        trace!(
-            "new_blocks {} is less than TIME_LOCK_INTERVAL {}, cannot calculate next sequence for {}",
-            new_blocks, TIME_LOCK_INTERVAL, current_sequence
-        );
-        return None;
-    }
-
     Some(to_sequence(new_blocks))
 }
 
@@ -63,7 +55,7 @@ mod test {
     fn test_next_sequence() {
         let mut sequence = initial_sequence();
 
-        for i in 1u16..20 {
+        for i in 1u16..21 {
             let next = next_sequence(sequence);
             let next = next.unwrap();
             assert!(next.is_height_locked());
@@ -80,7 +72,7 @@ mod test {
             panic!("Expected a block height locktime");
         };
 
-        assert_eq!(height.value(), TIME_LOCK_INTERVAL);
+        assert_eq!(height.value(), 0);
         let next = next_sequence(sequence);
         assert!(next.is_none());
     }

@@ -6,6 +6,7 @@ pub use error::TreeServiceError;
 use serde::{Deserialize, Serialize};
 pub use service::TreeService;
 pub use state::TreeState;
+use tracing::{error, trace};
 
 use std::str::FromStr;
 
@@ -13,7 +14,7 @@ use bitcoin::{Sequence, Transaction, secp256k1::PublicKey};
 use frost_secp256k1_tr::Identifier;
 use uuid::Uuid;
 
-use crate::core::TIME_LOCK_INTERVAL;
+use crate::core::{TIME_LOCK_INTERVAL, next_sequence};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum TreeNodeStatus {
@@ -89,52 +90,35 @@ pub struct TreeNode {
 }
 
 impl TreeNode {
+    fn is_timelock_expiring(sequence: Sequence) -> Result<bool, TreeServiceError> {
+        let next_sequence = next_sequence(sequence).ok_or(TreeServiceError::Generic(
+            "Failed to get next sequence".to_string(),
+        ))?;
+        let next_sequence_num = next_sequence.to_consensus_u32();
+        Ok(next_sequence_num <= TIME_LOCK_INTERVAL as u32)
+    }
+
     /// Checks if the node needs a timelock refresh by checking if the refund tx's timelock can be further reduced
     pub fn needs_timelock_refresh(&self) -> Result<bool, TreeServiceError> {
-        // TODO: adjust next_sequence so it could be used here
-        let current_refund_timelock = self
+        let sequence = self
             .refund_tx
             .as_ref()
             .ok_or(TreeServiceError::Generic("No refund tx".to_string()))?
             .input[0]
-            .sequence
-            .to_relative_lock_time()
-            .ok_or(TreeServiceError::Generic(
-                "Failed to get current refund timelock".to_string(),
-            ))?;
-
-        let bitcoin::relative::LockTime::Blocks(blocks) = current_refund_timelock else {
-            return Err(TreeServiceError::Generic(
-                "Current refund timelock is not expressed in blocks".to_string(),
-            ));
-        };
-
-        let current_timelock_value = blocks.value();
-        let next_timelock = current_timelock_value.saturating_sub(TIME_LOCK_INTERVAL);
-
-        Ok(next_timelock <= TIME_LOCK_INTERVAL)
+            .sequence;
+        trace!("Refund tx sequence: {sequence:?}",);
+        TreeNode::is_timelock_expiring(sequence).inspect_err(|e| {
+            error!("Error checking timelock refresh expiration: {:?}", e);
+        })
     }
 
     /// Checks if the node needs a timelock extension by checking if the node tx's timelock can be further reduced
     pub fn needs_timelock_extension(&self) -> Result<bool, TreeServiceError> {
-        // TODO: adjust next_sequence so it could be used here
-        let current_timelock = self.node_tx.input[0]
-            .sequence
-            .to_relative_lock_time()
-            .ok_or(TreeServiceError::Generic(
-                "Failed to get current timelock".to_string(),
-            ))?;
-
-        let bitcoin::relative::LockTime::Blocks(blocks) = current_timelock else {
-            return Err(TreeServiceError::Generic(
-                "Current timelock is not expressed in blocks".to_string(),
-            ));
-        };
-
-        let current_timelock_value = blocks.value();
-        let next_timelock = current_timelock_value.saturating_sub(TIME_LOCK_INTERVAL);
-
-        Ok(next_timelock <= TIME_LOCK_INTERVAL)
+        let sequence = self.node_tx.input[0].sequence;
+        trace!("Node tx sequence: {:?}", sequence);
+        TreeNode::is_timelock_expiring(sequence).inspect_err(|e| {
+            error!("Error checking timelock extension expiration: {:?}", e);
+        })
     }
 }
 
