@@ -36,7 +36,6 @@ pub async fn sign_refunds<S: Signer>(
     receiver_pubkey: &PublicKey,
     network: Network,
 ) -> Result<Vec<SignedTx>, SignerError> {
-    // sign refunds. TODO: In JS SDK, this is the `sign_refunds` function
     let mut signed_refunds = Vec::with_capacity(leaves.len());
 
     for (i, leaf) in leaves.iter().enumerate() {
