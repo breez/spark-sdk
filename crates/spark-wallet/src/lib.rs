@@ -6,7 +6,7 @@ mod wallet;
 
 pub use config::*;
 pub use error::*;
-pub use model::TransferDirection;
+pub use model::*;
 pub use spark::{
     Network,
     address::SparkAddress,
