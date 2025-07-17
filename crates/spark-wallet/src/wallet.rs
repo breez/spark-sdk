@@ -127,8 +127,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .validate_payment(invoice, max_fee_sat, amount_to_send, prefer_spark)
             .await?;
 
-        let leaves_reservation = self.select_leaves(total_amount_sat).await?;
-
         if let Some(receiver_spark_address) = receiver_spark_address {
             return Ok(PayLightningInvoiceResult::Transfer(
                 self.transfer(total_amount_sat, &receiver_spark_address)
@@ -136,6 +134,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
             ));
         }
 
+        let leaves_reservation = self.select_leaves(total_amount_sat).await?;
         // start the lightning swap with the operator
         let swap = with_reserved_leaves(
             self.tree_service.clone(),
