@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use bitcoin::secp256k1::PublicKey;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
@@ -13,6 +14,7 @@ use crate::{
 };
 
 pub async fn subscribe_server_events<S>(
+    identity_public_key: PublicKey,
     operator: &Operator<S>,
     publisher: &EventPublisher,
     reconnect_interval: Duration,
@@ -36,7 +38,7 @@ pub async fn subscribe_server_events<S>(
         let mut stream = match operator
             .client
             .subscribe_to_events(SubscribeToEventsRequest {
-                identity_public_key: operator.identity_public_key.serialize().to_vec(),
+                identity_public_key: identity_public_key.serialize().to_vec(),
             })
             .await
         {

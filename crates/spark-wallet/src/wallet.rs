@@ -1,9 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc, time::Duration,
+    sync::Arc,
+    time::Duration,
 };
 
-use bitcoin::{Address, Transaction};
+use bitcoin::{Address, Transaction, secp256k1::PublicKey};
 
 use spark::{
     address::SparkAddress,
@@ -104,9 +105,11 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWalletBuilder<S> {
             Arc::clone(&transfer_service),
         ));
 
+        let identity_public_key = self.signer.get_identity_public_key()?;
         let wallet = SparkWallet::connect(WalletDeps {
             config: self.config.clone(),
             deposit_service,
+            identity_public_key,
             operator_pool,
             signer: self.signer.clone(),
             swap_service,
@@ -123,6 +126,7 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWalletBuilder<S> {
 struct WalletDeps<S> {
     config: SparkWalletConfig,
     deposit_service: DepositService<S>,
+    identity_public_key: PublicKey,
     operator_pool: Arc<OperatorPool<S>>,
     signer: S,
     swap_service: Arc<Swap<S>>,
@@ -137,6 +141,7 @@ pub struct SparkWallet<S> {
     cancel: watch::Sender<()>,
     config: SparkWalletConfig,
     deposit_service: DepositService<S>,
+    identity_public_key: PublicKey,
     operator_pool: Arc<OperatorPool<S>>,
     signer: S,
     swap_service: Arc<Swap<S>>,
@@ -152,6 +157,7 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
             cancel,
             config: deps.config,
             deposit_service: deps.deposit_service,
+            identity_public_key: deps.identity_public_key,
             operator_pool: deps.operator_pool,
             signer: deps.signer,
             swap_service: deps.swap_service,
@@ -188,9 +194,11 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
         let (event_tx, event_stream) = broadcast::channel(100);
         let coordinator = self.operator_pool.get_coordinator().clone();
         let reconnect_interval = Duration::from_secs(self.config.reconnect_interval_seconds);
+        let identity_public_key = self.identity_public_key;
         let mut token_clone = cancellation_token.clone();
         tokio::spawn(async move {
             subscribe_server_events(
+                identity_public_key,
                 &coordinator,
                 &event_tx,
                 reconnect_interval,
@@ -245,9 +253,7 @@ impl<S: Signer> SparkWallet<S> {
     }
 
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
-        self.tree_service
-            .insert_leaves(vec![deposit])
-            .await?;
+        self.tree_service.insert_leaves(vec![deposit]).await?;
         Ok(())
     }
 
