@@ -119,9 +119,8 @@ impl<S: Signer + Clone> SparkWallet<S> {
         invoice: &str,
         amount_to_send: Option<u64>,
         max_fee_sat: Option<u64>,
-        prefer_spark: Option<bool>,
+        prefer_spark: bool,
     ) -> Result<PayLightningInvoiceResult, SparkWalletError> {
-        let prefer_spark = prefer_spark.unwrap_or(true);
         let (total_amount_sat, receiver_spark_address) = self
             .lightning_service
             .validate_payment(invoice, max_fee_sat, amount_to_send, prefer_spark)

@@ -28,8 +28,12 @@ pub enum LightningCommand {
         max_fee_sat: Option<u64>,
         #[arg(long)]
         amount_to_send: Option<u64>,
-        #[arg(long)]
-        prefer_spark: Option<bool>,
+        #[arg(
+            long,
+            default_value_t = true,
+            help = "Prefer to pay to the spark address, default true"
+        )]
+        prefer_spark: bool,
     },
 }
 
