@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use bitcoin::{Address, Transaction, address::NetworkUnchecked};
+use bitcoin::{Address, Transaction};
 
 use spark::{
     address::SparkAddress,
@@ -29,7 +29,6 @@ where
 {
     config: SparkWalletConfig,
     signer: S,
-    ssp_client: Arc<ServiceProvider<S>>,
     deposit_service: DepositService<S>,
     swap_service: Arc<Swap<S>>,
     tree_service: Arc<TreeService<S>>,
@@ -102,7 +101,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
         Ok(SparkWallet {
             config,
             signer,
-            ssp_client,
             deposit_service,
             swap_service,
             tree_service,
@@ -401,35 +399,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
         self.tree_service.refresh_leaves().await?;
         Ok(())
-    }
-
-    pub async fn request_regtest_funds(
-        &self,
-        amount_sats: u64,
-        address: Address<NetworkUnchecked>,
-        faucet_username: &str,
-        faucet_password: &str,
-    ) -> Result<String, SparkWalletError> {
-        if self.config.network != spark::Network::Regtest {
-            return Err(SparkWalletError::InvalidNetwork);
-        }
-
-        let address = address
-            .require_network(self.config.network.into())
-            .map_err(|_| SparkWalletError::InvalidNetwork)?;
-
-        Ok(self
-            .ssp_client
-            .request_regtest_funds(
-                amount_sats,
-                &address.to_string(),
-                faucet_username,
-                faucet_password,
-            )
-            .await
-            .map_err(|e| {
-                SparkWalletError::Generic(format!("Error requesting regtest funds: {e}"))
-            })?)
     }
 }
 

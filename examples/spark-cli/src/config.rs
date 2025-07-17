@@ -9,8 +9,6 @@ pub struct Config {
     pub mempool_url: String,
     pub mempool_username: String,
     pub mempool_password: String,
-    pub faucet_username: Option<String>,
-    pub faucet_password: Option<String>,
     pub log_filter: String,
     pub log_path: PathBuf,
     pub mnemonic: Mnemonic,

@@ -34,6 +34,7 @@ where
             let tx = get_transaction(config, txid.clone()).await?;
             // TODO: Look for correct output index
             for (vout, _) in tx.output.iter().enumerate() {
+                println!("Checking output {vout} for txid: {txid}");
                 if let Ok(leaves) = wallet.claim_deposit(tx.clone(), vout as u32).await {
                     println!(
                         "Claimed deposit: {}",

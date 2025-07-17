@@ -192,18 +192,4 @@ where
     ) -> ServiceProviderResult<Vec<Transfer>> {
         Ok(self.gql_client.get_transfers(transfer_spark_ids).await?)
     }
-
-    /// Request regtest funds
-    pub async fn request_regtest_funds(
-        &self,
-        amount_sats: u64,
-        address: &str,
-        faucet_username: &str,
-        faucet_password: &str,
-    ) -> ServiceProviderResult<String> {
-        Ok(self
-            .gql_client
-            .request_regtest_funds(amount_sats, address, faucet_username, faucet_password)
-            .await?)
-    }
 }

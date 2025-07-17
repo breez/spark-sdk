@@ -141,15 +141,6 @@ pub struct RequestLightningSend;
 
 #[derive(GraphQLQuery)]
 #[graphql(
-    query_path = "schema/regtest.graphql",
-    schema_path = "schema/spark.graphql",
-    variables_derives = "Clone",
-    response_derives = "Debug"
-)]
-pub struct RequestRegtestFunds;
-
-#[derive(GraphQLQuery)]
-#[graphql(
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",

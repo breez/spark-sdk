@@ -11,8 +11,8 @@ use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
 use crate::ssp::graphql::queries::{
     self, claim_static_deposit, complete_coop_exit, complete_leaves_swap, coop_exit_fee_estimates,
     get_challenge, leaves_swap_fee_estimate, lightning_send_fee_estimate, request_coop_exit,
-    request_leaves_swap, request_lightning_receive, request_lightning_send, request_regtest_funds,
-    static_deposit_quote, transfers, user_request, verify_challenge,
+    request_leaves_swap, request_lightning_receive, request_lightning_send, static_deposit_quote,
+    transfers, user_request, verify_challenge,
 };
 use crate::ssp::graphql::{
     BitcoinNetwork, ClaimStaticDeposit, CoopExitFeeEstimates, CoopExitRequest, CurrencyAmount,
@@ -202,35 +202,6 @@ where
         )?;
 
         Ok(())
-    }
-
-    pub async fn request_regtest_funds(
-        &self,
-        amount_sats: u64,
-        address: &str,
-        faucet_username: &str,
-        faucet_password: &str,
-    ) -> GraphQLResult<String> {
-        let vars = request_regtest_funds::Variables {
-            input: request_regtest_funds::RequestRegtestFundsInput {
-                amount_sats,
-                address: address.to_string(),
-            },
-        };
-
-        let mut headers = HeaderMap::new();
-        self.auth_provider
-            .add_basic_auth_header(&mut headers, faucet_username, faucet_password)?;
-
-        let response = self
-            .post_query_inner::<queries::RequestRegtestFunds, _>(
-                &self.get_full_url(),
-                &headers,
-                vars,
-            )
-            .await?;
-
-        Ok(response.request_regtest_funds.transaction_hash)
     }
 
     /// Get a swap fee estimate

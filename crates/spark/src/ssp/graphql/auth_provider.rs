@@ -1,4 +1,3 @@
-use base64::Engine;
 use chrono::{DateTime, Utc};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use std::sync::Mutex;
@@ -33,26 +32,6 @@ impl AuthProvider {
             );
         }
 
-        Ok(())
-    }
-
-    /// Add basic authentication headers to a request
-    pub fn add_basic_auth_header(
-        &self,
-        headers: &mut HeaderMap,
-        username: &str,
-        password: &str,
-    ) -> Result<(), GraphQLError> {
-        let auth_value = format!(
-            "Basic {}",
-            base64::engine::general_purpose::STANDARD
-                .encode(format!("{username}:{password}").as_bytes(),)
-        );
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&auth_value)
-                .map_err(|_| GraphQLError::authentication("Invalid header"))?,
-        );
         Ok(())
     }
 

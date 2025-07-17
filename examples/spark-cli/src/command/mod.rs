@@ -38,13 +38,6 @@ pub enum Command {
     /// Transfer commands.
     #[command(subcommand)]
     Transfer(TransferCommand),
-    /// REGTEST ONLY: Request funds from the faucet.
-    RequestRegtestFunds {
-        /// Amount in sats to request.
-        amount_sats: u64,
-        /// Address to receive the funds.
-        address: String,
-    },
 }
 
 pub(crate) async fn handle_command<S>(
@@ -84,29 +77,6 @@ where
         }
         Command::Transfer(transfer_command) => {
             transfer::handle_command(config, wallet, transfer_command).await?
-        }
-        Command::RequestRegtestFunds {
-            amount_sats,
-            address,
-        } => {
-            let Some(faucet_username) = &config.faucet_username else {
-                return Err("Faucet username is required for regtest network. Please set SPARK_FAUCET_USERNAME environment variable".into());
-            };
-            let Some(faucet_password) = &config.faucet_password else {
-                return Err("Faucet password is required for regtest network. Please set SPARK_FAUCET_PASSWORD environment variable".into());
-            };
-            if amount_sats < 1000 || amount_sats > 50_000 {
-                return Err("Amount to request must be between 1000 and 50000 sats".into());
-            }
-            let txid = wallet
-                .request_regtest_funds(
-                    amount_sats,
-                    address.parse()?,
-                    faucet_username,
-                    faucet_password,
-                )
-                .await?;
-            println!("Requested regtest funds. Transaction ID: {txid}");
         }
     }
 

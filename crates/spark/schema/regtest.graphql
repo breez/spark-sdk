@@ -1,5 +1,0 @@
-mutation RequestRegtestFunds($input: RequestRegtestFundsInput!) {
-  request_regtest_funds(input: $input) {
-    transaction_hash
-  }
-}
