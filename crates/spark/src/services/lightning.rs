@@ -512,7 +512,7 @@ fn get_invoice_amount_sats(
     }
     if to_pay_sat < invoice_amount_sats {
         return Err(ServiceError::ValidationError(
-            "Amount to send must be greater than or equal to invoice amount".to_string(),
+            "Amount must not be less than the invoice amount".to_string(),
         ));
     }
 
