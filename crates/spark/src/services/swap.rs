@@ -1,10 +1,9 @@
 use std::{
-    collections::HashMap,
     sync::Arc,
     time::{Duration, SystemTime},
 };
 
-use bitcoin::{consensus::serialize, secp256k1::ecdsa};
+use bitcoin::consensus::serialize;
 use prost_types::Timestamp;
 
 use crate::{
@@ -13,13 +12,17 @@ use crate::{
         OperatorPool,
         rpc::spark::{StartTransferRequest, TransferFilter, transfer_filter::Participant},
     },
-    services::{
-        LeafKeyTweak, LeafRefundSigningData, ServiceError, Transfer, TransferId, TransferService,
-    },
+    services::{LeafKeyTweak, ServiceError, Transfer, TransferId, TransferService},
     signer::{PrivateKeySource, Signer, from_bytes_to_scalar},
     ssp::{RequestLeavesSwapInput, ServiceProvider, UserLeafInput},
-    tree::{TreeNode, TreeNodeId},
-    utils::refund::{prepare_refund_so_signing_jobs, sign_aggregate_refunds},
+    tree::TreeNode,
+    utils::{
+        self,
+        refund::{
+            prepare_leaf_refund_signing_data, prepare_refund_so_signing_jobs,
+            sign_aggregate_refunds,
+        },
+    },
 };
 
 const SWAP_EXPIRY_DURATION: Duration = Duration::from_secs(2 * 60);
@@ -85,25 +88,9 @@ where
         let transfer_id = TransferId::generate();
         let receiver_public_key = self.ssp_client.identity_public_key();
         // Prepare leaf data map with refund signing information
-        let mut leaf_data_map = HashMap::new();
-        for leaf_key in leaf_key_tweaks.iter() {
-            let signing_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
-
-            leaf_data_map.insert(
-                leaf_key.node.id.clone(),
-                LeafRefundSigningData {
-                    signing_public_key: self
-                        .signer
-                        .get_public_key_from_private_key_source(&leaf_key.signing_key)?,
-                    signing_private_key: leaf_key.signing_key.clone(),
-                    receiving_public_key: receiver_public_key,
-                    tx: leaf_key.node.node_tx.clone(),
-                    refund_tx: leaf_key.node.refund_tx.clone(),
-                    signing_nonce_commitment,
-                    vout: leaf_key.node.vout,
-                },
-            );
-        }
+        let mut leaf_data_map =
+            prepare_leaf_refund_signing_data(&self.signer, &leaf_key_tweaks, receiver_public_key)
+                .await?;
 
         let signing_jobs = prepare_refund_so_signing_jobs(
             self.network,
@@ -201,21 +188,7 @@ where
 
         // TODO: Validate the amounts in swap_response match the leaf sum, and the target amounts are met.
         // TODO: javascript SDK applies adaptor to signature here for every leaf, but it seems to not do anything?
-        let refund_signature_map = signed_refunds
-            .into_iter()
-            .map(|r| {
-                let node_id: TreeNodeId = match r.node_id.parse() {
-                    Ok(id) => id,
-                    Err(_) => return Err(ServiceError::Generic("invalid node_id".to_string())),
-                };
-                Ok((
-                    node_id,
-                    ecdsa::Signature::from_compact(&r.refund_tx_signature).map_err(|_| {
-                        ServiceError::Generic("invalid refund tx signature".to_string())
-                    })?,
-                ))
-            })
-            .collect::<Result<HashMap<_, _>, ServiceError>>()?;
+        let refund_signature_map = utils::refund::node_signatures_to_map(signed_refunds)?;
         let transfer = self
             .transfer_service
             .deliver_transfer_package(&transfer, &leaf_key_tweaks, refund_signature_map)

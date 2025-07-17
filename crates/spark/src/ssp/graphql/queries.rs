@@ -56,9 +56,9 @@ pub struct CompleteLeavesSwap;
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
     response_derives = "Debug",
-    extern_enums("CurrencyUnit")
+    extern_enums("BitcoinNetwork", "CurrencyUnit")
 )]
-pub struct CoopExitFeeEstimates;
+pub struct CoopExitFeeQuote;
 
 #[derive(GraphQLQuery)]
 #[graphql(

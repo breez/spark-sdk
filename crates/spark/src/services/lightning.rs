@@ -8,12 +8,12 @@ use crate::operator::rpc::spark::{
     StorePreimageShareRequest,
 };
 use crate::services::{ServiceError, Transfer, TransferId};
-use crate::signer::{PrivateKeySource, SecretToSplit};
+use crate::signer::SecretToSplit;
 use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
     ServiceProvider,
 };
-use crate::utils::refund as refund_utils;
+use crate::utils::{self, refund as refund_utils};
 use crate::{signer::Signer, tree::TreeNode};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
@@ -266,17 +266,8 @@ where
         let payment_hash = decoded_invoice.payment_hash();
 
         // prepare leaf tweaks
-        let mut leaf_tweaks = Vec::with_capacity(leaves.len());
-        for tree_node in leaves {
-            let new_signing_key = self.signer.generate_random_key()?;
-            // derive the signing key
-            let leaf_tweak = LeafKeyTweak {
-                node: tree_node.clone(),
-                signing_key: PrivateKeySource::Derived(tree_node.id.clone()),
-                new_signing_key,
-            };
-            leaf_tweaks.push(leaf_tweak);
-        }
+        let leaf_tweaks =
+            utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec())?;
 
         let swap_response = self
             .swap_nodes_for_preimage(SwapNodesForPreimageRequest {
@@ -368,10 +359,7 @@ where
         for route_hint in decoded_invoice.route_hints() {
             for node in route_hint.0 {
                 if node.short_channel_id == RECEIVER_IDENTITY_PUBLIC_KEY_SHORT_CHANNEL_ID {
-                    return Some(SparkAddress {
-                        identity_public_key: node.src_node_id,
-                        network: self.network,
-                    });
+                    return Some(SparkAddress::new(node.src_node_id, self.network, None));
                 }
             }
         }

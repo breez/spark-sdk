@@ -71,6 +71,10 @@ pub enum ServiceError {
     #[error("insufficient funds")]
     InsufficientFunds,
 
+    // Cooperative exit related errors
+    #[error("Fee exceeds withdrawal amount")]
+    InvalidFees,
+
     // Common errors
     #[error("bitcoin error: {0}")]
     BitcoinError(#[from] crate::bitcoin::BitcoinError),

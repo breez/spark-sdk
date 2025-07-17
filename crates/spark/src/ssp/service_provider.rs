@@ -3,7 +3,7 @@ use bitcoin::secp256k1::PublicKey;
 use crate::{
     signer::Signer,
     ssp::{
-        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CoopExitFeeEstimates,
+        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CoopExitFeeQuote,
         CurrencyAmount, LeavesSwapRequest, RequestCoopExitInput, RequestLeavesSwapInput,
         RequestLightningReceiveInput, RequestLightningSendInput, ServiceProviderConfig,
         StaticDepositQuote, Transfer,
@@ -53,15 +53,15 @@ where
             .await?)
     }
 
-    /// Get a coop exit fee estimate
-    pub async fn get_coop_exit_fee_estimates(
+    /// Get a coop exit fee quote
+    pub async fn get_coop_exit_fee_quote(
         &self,
         leaf_external_ids: Vec<String>,
         withdrawal_address: &str,
-    ) -> ServiceProviderResult<CoopExitFeeEstimates> {
+    ) -> ServiceProviderResult<CoopExitFeeQuote> {
         Ok(self
             .gql_client
-            .get_coop_exit_fee_estimates(leaf_external_ids, withdrawal_address)
+            .get_coop_exit_fee_quote(leaf_external_ids, withdrawal_address)
             .await?)
     }
 

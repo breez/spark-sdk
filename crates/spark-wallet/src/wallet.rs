@@ -6,6 +6,7 @@ use std::{
 
 use bitcoin::{
     Address, Transaction,
+    address::NetworkUnchecked,
     key::Secp256k1,
     secp256k1::{PublicKey, ecdsa::Signature},
 };
@@ -16,8 +17,9 @@ use spark::{
     events::{SparkEvent, subscribe_server_events},
     operator::{Operator, OperatorPool, rpc::ConnectionManager},
     services::{
-        DepositService, LightningReceivePayment, LightningSendPayment, LightningService,
-        PagingFilter, Swap, TimelockManager, Transfer, TransferId, TransferService,
+        CoopExitFeeQuote, CoopExitService, DepositService, ExitSpeed, LightningReceivePayment,
+        LightningSendPayment, LightningService, PagingFilter, Swap, TimelockManager, Transfer,
+        TransferId, TransferService,
     },
     signer::Signer,
     ssp::ServiceProvider,
@@ -43,6 +45,7 @@ pub struct SparkWallet<S> {
     signer: S,
     swap_service: Arc<Swap<S>>,
     tree_service: Arc<TreeService<S>>,
+    coop_exit_service: Arc<CoopExitService<S>>,
     transfer_service: Arc<TransferService<S>>,
     lightning_service: Arc<LightningService<S>>,
 }
@@ -106,6 +109,13 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
             signer.clone(),
         ));
 
+        let coop_exit_service = Arc::new(CoopExitService::new(
+            operator_pool.clone(),
+            service_provider.clone(),
+            Arc::clone(&transfer_service),
+            config.network,
+            signer.clone(),
+        ));
         let swap_service = Arc::new(Swap::new(
             config.network,
             operator_pool.clone(),
@@ -136,6 +146,7 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
             signer,
             swap_service,
             tree_service,
+            coop_exit_service,
             transfer_service,
             lightning_service,
         })
@@ -204,6 +215,35 @@ impl<S: Signer> SparkWallet<S> {
             .lightning_service
             .create_lightning_invoice(amount_sat, description, None, None)
             .await?)
+    }
+
+    pub async fn fetch_coop_exit_fee_quote(
+        &self,
+        withdrawal_address: Address<NetworkUnchecked>,
+        amount_sat: Option<u64>,
+    ) -> Result<CoopExitFeeQuote, SparkWalletError> {
+        // Validate withdrawal address
+        let withdrawal_address = withdrawal_address
+            .require_network(self.config.network.into())
+            .map_err(|_| SparkWalletError::InvalidNetwork)?;
+
+        // Selects leaves totaling `amount_sat` if provided, otherwise retrieves all available leaves.
+        let reservation = match amount_sat {
+            Some(amount_sat) => self.select_leaves(amount_sat).await?,
+            None => {
+                let balance = self.tree_service.get_available_balance()?;
+                self.select_leaves(balance).await?
+            }
+        };
+
+        // Fetches fee quote for the coop exit then cancels the reservation.
+        let fee_quote_res = self
+            .coop_exit_service
+            .fetch_coop_exit_fee_quote(reservation.leaves, withdrawal_address)
+            .await;
+        self.tree_service.cancel_reservation(reservation.id);
+
+        Ok(fee_quote_res?)
     }
 
     pub async fn fetch_lightning_send_fee_estimate(
@@ -339,10 +379,11 @@ impl<S: Signer> SparkWallet<S> {
     }
 
     pub async fn get_spark_address(&self) -> Result<SparkAddress, SparkWalletError> {
-        Ok(SparkAddress {
-            identity_public_key: self.identity_public_key,
-            network: self.config.network,
-        })
+        Ok(SparkAddress::new(
+            self.identity_public_key,
+            self.config.network,
+            None,
+        ))
     }
 
     pub async fn get_balance(&self) -> Result<u64, SparkWalletError> {
@@ -438,6 +479,49 @@ impl<S: Signer> SparkWallet<S> {
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
         self.tree_service.refresh_leaves().await?;
         Ok(())
+    }
+
+    pub async fn withdraw(
+        &self,
+        withdrawal_address: Address<NetworkUnchecked>,
+        exit_speed: ExitSpeed,
+        amount_sat: Option<u64>,
+        fee_quote: Option<CoopExitFeeQuote>,
+    ) -> Result<WalletTransfer, SparkWalletError> {
+        // Validate withdrawal address
+        let withdrawal_address = withdrawal_address
+            .require_network(self.config.network.into())
+            .map_err(|_| SparkWalletError::InvalidNetwork)?;
+
+        // Selects leaves totaling `amount_sat` if provided, otherwise retrieves all available leaves.
+        let leaves_reservation = match amount_sat {
+            Some(amount_sat) => self.select_leaves(amount_sat).await?,
+            None => {
+                let balance = self.tree_service.get_available_balance()?;
+                self.select_leaves(balance).await?
+            }
+        };
+
+        // Cooperative exit with the SSP
+        let transfer = with_reserved_leaves(
+            self.tree_service.clone(),
+            async {
+                Ok(self
+                    .coop_exit_service
+                    .coop_exit(
+                        leaves_reservation.leaves.clone(),
+                        &withdrawal_address,
+                        exit_speed.into(),
+                        amount_sat.is_none(),
+                        fee_quote,
+                    )
+                    .await?)
+            },
+            &leaves_reservation,
+        )
+        .await?;
+
+        Ok(transfer.into())
     }
 }
 

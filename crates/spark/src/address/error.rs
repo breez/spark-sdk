@@ -10,6 +10,8 @@ pub enum AddressError {
     ProtobufDecodeError(String),
     #[error("Invalid public key: {0}")]
     InvalidPublicKey(String),
+    #[error("Invalid payment intent: {0}")]
+    InvalidPaymentIntent(String),
     #[error("Other error: {0}")]
     Other(String),
 }

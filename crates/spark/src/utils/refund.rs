@@ -1,23 +1,23 @@
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
+use bitcoin::hashes::Hash;
+use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
+use bitcoin::{OutPoint, Transaction};
+use frost_core::round2::SignatureShare;
+use frost_secp256k1_tr::round1::SigningCommitments;
+use frost_secp256k1_tr::{Identifier, Secp256K1Sha256TR};
+
+use crate::operator::rpc::spark::NodeSignatures;
 use crate::services::{
     LeafRefundSigningData, ServiceError, map_public_keys, map_signature_shares,
     map_signing_nonce_commitments,
 };
+use crate::signer::{AggregateFrostRequest, SignerError};
+use crate::signer::{SignFrostRequest, Signer};
 use crate::tree::TreeNodeId;
 use crate::utils::transactions::create_refund_tx;
 use crate::{Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak};
-use bitcoin::hashes::Hash;
-use bitcoin::secp256k1::PublicKey;
-use bitcoin::{OutPoint, Transaction};
-use frost_core::round2::SignatureShare;
-use frost_secp256k1_tr::round1::SigningCommitments;
-
-use frost_secp256k1_tr::{Identifier, Secp256K1Sha256TR};
-
-use crate::signer::{AggregateFrostRequest, SignerError};
-use crate::signer::{SignFrostRequest, Signer};
 
 pub struct SignedTx {
     pub node_id: TreeNodeId,
@@ -27,6 +27,33 @@ pub struct SignedTx {
     pub signing_commitments: BTreeMap<Identifier, SigningCommitments>,
     pub user_signature_commitment: SigningCommitments,
     pub network: Network,
+}
+
+pub async fn prepare_leaf_refund_signing_data<S: Signer>(
+    signer: &S,
+    leaf_key_tweaks: &[LeafKeyTweak],
+    receiving_public_key: PublicKey,
+) -> Result<HashMap<TreeNodeId, LeafRefundSigningData>, SignerError> {
+    let mut leaf_data_map = HashMap::new();
+    for leaf_key in leaf_key_tweaks.iter() {
+        let signing_nonce_commitment = signer.generate_frost_signing_commitments().await?;
+
+        leaf_data_map.insert(
+            leaf_key.node.id.clone(),
+            LeafRefundSigningData {
+                signing_public_key: signer
+                    .get_public_key_from_private_key_source(&leaf_key.signing_key)?,
+                signing_private_key: leaf_key.signing_key.clone(),
+                receiving_public_key,
+                tx: leaf_key.node.node_tx.clone(),
+                refund_tx: leaf_key.node.refund_tx.clone(),
+                signing_nonce_commitment,
+                vout: leaf_key.node.vout,
+            },
+        );
+    }
+
+    Ok(leaf_data_map)
 }
 
 pub async fn sign_refunds<S: Signer>(
@@ -104,7 +131,7 @@ pub async fn sign_aggregate_refunds<S: Signer>(
     leaf_data_map: &HashMap<TreeNodeId, LeafRefundSigningData>,
     operator_signing_results: &[crate::operator::rpc::spark::LeafRefundTxSigningResult],
     adaptor_pubkey: Option<&PublicKey>,
-) -> Result<Vec<crate::operator::rpc::spark::NodeSignatures>, ServiceError> {
+) -> Result<Vec<NodeSignatures>, ServiceError> {
     let mut node_signatures = Vec::new();
 
     for operator_signing_result in operator_signing_results {
@@ -169,7 +196,7 @@ pub async fn sign_aggregate_refunds<S: Signer>(
             })
             .await?;
 
-        node_signatures.push(crate::operator::rpc::spark::NodeSignatures {
+        node_signatures.push(NodeSignatures {
             node_id: operator_signing_result.leaf_id.clone(),
             refund_tx_signature: refund_aggregate.serialize()?.to_vec(),
             node_tx_signature: Vec::new(),
@@ -247,4 +274,24 @@ pub fn prepare_refund_so_signing_jobs(
     }
 
     Ok(signing_jobs)
+}
+
+pub fn node_signatures_to_map(
+    node_signatures: Vec<NodeSignatures>,
+) -> Result<HashMap<TreeNodeId, Signature>, ServiceError> {
+    node_signatures
+        .into_iter()
+        .map(|ns| {
+            let node_id: TreeNodeId = match ns.node_id.parse() {
+                Ok(id) => id,
+                Err(_) => return Err(ServiceError::Generic("invalid node_id".to_string())),
+            };
+            Ok((
+                node_id,
+                Signature::from_compact(&ns.refund_tx_signature).map_err(|_| {
+                    ServiceError::Generic("invalid refund tx signature".to_string())
+                })?,
+            ))
+        })
+        .collect::<Result<HashMap<_, _>, ServiceError>>()
 }
