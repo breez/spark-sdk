@@ -381,6 +381,7 @@ impl<S: Signer> TreeService<S> {
             return Ok(Vec::new());
         }
 
+        let node_ids: Vec<_> = nodes.iter().map(|n| n.id.clone()).collect();
         let mut resulting_nodes = Vec::new();
         for node in nodes.into_iter() {
             if node.status != TreeNodeStatus::Available {
@@ -419,7 +420,9 @@ impl<S: Signer> TreeService<S> {
             }
         }
 
-        // TODO: add/remove nodes to/from the tree state as needed.
+        let mut state = self.state.lock().unwrap();
+        state.remove_leaves(&node_ids);
+        state.add_leaves(&resulting_nodes);
         Ok(resulting_nodes)
     }
 

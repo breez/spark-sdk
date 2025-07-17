@@ -61,6 +61,13 @@ impl TreeState {
         trace!("Updated {:?} leaves in the local state", leaves.len());
     }
 
+    pub fn remove_leaves(&mut self, leaf_ids: &[TreeNodeId]) {
+        for leaf_id in leaf_ids {
+            self.leaves.remove(leaf_id);
+        }
+        trace!("Removed {} leaves from the local state", leaf_ids.len());
+    }
+
     // move leaves from the main pool to the reserved pool
     pub fn reserve_leaves(
         &mut self,
