@@ -2906,6 +2906,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "figment",
+ "hex",
  "qrcode-rs",
  "reqwest",
  "rustyline",

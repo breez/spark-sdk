@@ -2,6 +2,7 @@ use std::borrow::Cow::{self, Owned};
 use std::fs::{OpenOptions, canonicalize};
 use std::path::PathBuf;
 
+use bitcoin::hashes::Hash;
 use clap::Parser;
 use figment::{
     Figment,
@@ -61,10 +62,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _ = dotenvy::dotenv();
     let config: Config = figment.merge(Env::prefixed("SPARK_")).extract()?;
+    let seed = config.mnemonic.to_seed(config.passphrase.clone());
+
+    let log_path = match config.log_path.to_str() {
+        Some(path) => match path {
+            "spark.log" => {
+                let seed_hash = bitcoin::hashes::sha256::Hash::hash(&seed);
+                let log_file_name = format!("spark.{}.log", hex::encode(&seed_hash[0..4]));
+                PathBuf::from(log_file_name)
+            }
+            _ => config.log_path.clone(),
+        },
+        None => config.log_path.clone(),
+    };
     let log_file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(config.log_path.clone())?;
+        .open(log_path.clone())?;
     tracing_subscriber::registry()
         .with(EnvFilter::new(&config.log_filter))
         .with(
@@ -75,7 +89,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let seed = config.mnemonic.to_seed(config.passphrase.clone());
     let network = config.spark_config.network;
     let signer = DefaultSigner::new(&seed, network)?;
     let wallet = spark_wallet::SparkWalletBuilder::new(config.spark_config.clone(), signer)?

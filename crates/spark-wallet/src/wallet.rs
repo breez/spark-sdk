@@ -1,22 +1,25 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc, time::Duration,
+};
 
 use bitcoin::{Address, Transaction};
 
 use spark::{
     address::SparkAddress,
     bitcoin::BitcoinService,
-    events::{SparkEvent, subscribe_server_events},
+    events::{EventStream, SparkEvent, subscribe_server_events},
     operator::{OperatorPool, rpc::ConnectionManager},
     services::{
         DepositService, LightningReceivePayment, LightningSendPayment, LightningService,
-        PagingFilter, Swap, TimelockManager, Transfer, TransferService,
+        PagingFilter, Swap, TimelockManager, Transfer, TransferId, TransferService,
     },
     signer::Signer,
     ssp::ServiceProvider,
     tree::{LeavesReservation, TreeNode, TreeNodeId, TreeService, TreeState},
 };
 use tokio::sync::{broadcast, watch};
-use tracing::{debug, trace};
+use tracing::{debug, error, info, trace};
 
 use crate::{
     leaf::WalletLeaf,
@@ -36,7 +39,7 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWalletBuilder<S> {
         Ok(SparkWalletBuilder { config, signer })
     }
 
-    pub async fn connect(self) -> Result<SparkWallet<S>, SparkWalletError> {
+    pub async fn connect(self) -> Result<Arc<SparkWallet<S>>, SparkWalletError> {
         let identity_public_key = self.signer.get_identity_public_key()?;
         let connection_manager = ConnectionManager::new();
 
@@ -101,42 +104,26 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWalletBuilder<S> {
             Arc::clone(&transfer_service),
         ));
 
-        let (cancel, mut token) = watch::channel(());
-        let (event_tx, event_stream) = broadcast::channel(100);
-
-        let coordinator = operator_pool.get_coordinator().clone();
-        tokio::spawn(async move {
-            subscribe_server_events(
-                &coordinator,
-                &event_tx,
-                self.config.reconnect_interval,
-                &mut token,
-            )
-            .await;
-        });
-
-        Ok(SparkWallet {
-            cancel,
-            config: self.config,
+        let wallet = SparkWallet::connect(WalletDeps {
+            config: self.config.clone(),
             deposit_service,
-            event_stream,
-            signer: self.signer,
+            operator_pool,
+            signer: self.signer.clone(),
             swap_service,
             tree_service,
             transfer_service,
             lightning_service,
         })
+        .await?;
+
+        Ok(wallet)
     }
 }
 
-pub struct SparkWallet<S>
-where
-    S: Signer + Clone,
-{
-    cancel: watch::Sender<()>,
+struct WalletDeps<S> {
     config: SparkWalletConfig,
     deposit_service: DepositService<S>,
-    event_stream: broadcast::Receiver<SparkEvent>,
+    operator_pool: Arc<OperatorPool<S>>,
     signer: S,
     swap_service: Arc<Swap<S>>,
     tree_service: Arc<TreeService<S>>,
@@ -144,7 +131,139 @@ where
     lightning_service: Arc<LightningService<S>>,
 }
 
-impl<S: Signer + Clone> SparkWallet<S> {
+pub struct SparkWallet<S> {
+    /// Cancellation token to stop the event subscription. If SparkWallet is dropped, this token will drop, so the event subscription will stop.
+    #[allow(dead_code)]
+    cancel: watch::Sender<()>,
+    config: SparkWalletConfig,
+    deposit_service: DepositService<S>,
+    operator_pool: Arc<OperatorPool<S>>,
+    signer: S,
+    swap_service: Arc<Swap<S>>,
+    tree_service: Arc<TreeService<S>>,
+    transfer_service: Arc<TransferService<S>>,
+    lightning_service: Arc<LightningService<S>>,
+}
+
+impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
+    async fn connect(deps: WalletDeps<S>) -> Result<Arc<Self>, SparkWalletError> {
+        let (cancel, mut token) = watch::channel(());
+        let wallet = Arc::new(Self {
+            cancel,
+            config: deps.config,
+            deposit_service: deps.deposit_service,
+            operator_pool: deps.operator_pool,
+            signer: deps.signer,
+            swap_service: deps.swap_service,
+            tree_service: deps.tree_service,
+            transfer_service: deps.transfer_service,
+            lightning_service: deps.lightning_service,
+        });
+
+        wallet.start(&mut token).await;
+        Ok(wallet)
+    }
+
+    async fn start(self: &Arc<Self>, cancellation_token: &mut watch::Receiver<()>) {
+        let event_stream = self.subscribe_server_events(cancellation_token);
+
+        let ignore_transfers = match self.claim_pending_transfers().await {
+            Ok(transfers) => {
+                debug!("Claimed {} pending transfers on startup", transfers.len());
+                transfers.into_iter().map(|t| t.id).collect()
+            }
+            Err(e) => {
+                debug!("Error claiming pending transfers on startup: {:?}", e);
+                HashSet::new()
+            }
+        };
+
+        self.start_processing_server_events(event_stream, ignore_transfers);
+    }
+
+    fn subscribe_server_events(
+        self: &Arc<Self>,
+        cancellation_token: &mut watch::Receiver<()>,
+    ) -> EventStream {
+        let (event_tx, event_stream) = broadcast::channel(100);
+        let coordinator = self.operator_pool.get_coordinator().clone();
+        let reconnect_interval = Duration::from_secs(self.config.reconnect_interval_seconds);
+        let mut token_clone = cancellation_token.clone();
+        tokio::spawn(async move {
+            subscribe_server_events(
+                &coordinator,
+                &event_tx,
+                reconnect_interval,
+                &mut token_clone,
+            )
+            .await;
+        });
+
+        event_stream
+    }
+
+    fn start_processing_server_events(
+        self: &Arc<Self>,
+        event_stream: EventStream,
+        ignore_transfers: HashSet<TransferId>,
+    ) {
+        let wallet_clone = Arc::clone(self);
+        tokio::spawn(async move {
+            wallet_clone
+                .process_events(event_stream, ignore_transfers)
+                .await;
+        });
+    }
+}
+
+impl<S: Signer> SparkWallet<S> {
+    async fn process_events(
+        &self,
+        mut event_stream: broadcast::Receiver<SparkEvent>,
+        ignore_transfers: HashSet<TransferId>,
+    ) {
+        while let Ok(event) = event_stream.recv().await {
+            debug!("Received event: {:?}", event);
+            let result = match event {
+                SparkEvent::Transfer(transfer) => {
+                    if ignore_transfers.contains(&transfer.id) {
+                        debug!("Ignoring transfer event: {:?}", transfer);
+                        continue;
+                    }
+
+                    self.process_transfer_event(transfer).await
+                }
+                SparkEvent::Deposit(deposit) => self.process_deposit_event(deposit).await,
+            };
+
+            if let Err(e) = result {
+                error!("Error processing event: {:?}", e);
+            }
+        }
+
+        info!("Event stream closed, stopping event processing");
+    }
+
+    async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
+        self.tree_service
+            .insert_leaves(vec![deposit])
+            .await?;
+        Ok(())
+    }
+
+    async fn process_transfer_event(&self, transfer: Transfer) -> Result<(), SparkWalletError> {
+        if transfer.transfer_type == spark::services::TransferType::CounterSwap {
+            debug!(
+                "Received counter swap transfer, not claiming: {:?}",
+                transfer
+            );
+            return Ok(());
+        }
+
+        self.claim_transfer(&transfer).await?;
+        Ok(())
+    }
+
     pub async fn list_leaves(&self) -> Result<Vec<WalletLeaf>, SparkWalletError> {
         let leaves = self.tree_service.list_leaves()?;
         Ok(leaves.into_iter().map(WalletLeaf::from).collect())
@@ -294,7 +413,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .swap_service
             .swap_leaves(leaves, target_amounts)
             .await?;
-        let leaves = self.claim_transfer(&transfer, false, false).await?;
+        let leaves = self.claim_transfer(&transfer).await?;
         Ok(leaves)
     }
 
@@ -309,9 +428,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
             return Err(SparkWalletError::InvalidNetwork);
         }
         let receiver_pubkey = receiver_address.identity_public_key;
-
-        // TODO: is there a good reason to allow self-transfers?
-        let is_self_transfer = receiver_pubkey == self.signer.get_identity_public_key()?;
 
         // get leaves to transfer
         let leaves_reservation = self.select_leaves(amount_sat).await?;
@@ -328,12 +444,6 @@ impl<S: Signer + Clone> SparkWallet<S> {
         )
         .await?;
 
-        // if self-transfer, claim it immediately
-        if is_self_transfer {
-            // TODO: do we need to re-fetch the transfer? js sdk does this
-            self.claim_transfer(&transfer, false, false).await?;
-        }
-
         Ok(transfer.into())
     }
 
@@ -346,18 +456,13 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .await?;
         trace!("There are {} pending transfers", transfers.len());
         for transfer in &transfers {
-            self.claim_transfer(transfer, false, false).await?;
+            self.claim_transfer(transfer).await?;
         }
 
         Ok(transfers.into_iter().map(WalletTransfer::from).collect())
     }
 
-    async fn claim_transfer(
-        &self,
-        transfer: &Transfer,
-        _emit: bool,
-        _optimize: bool,
-    ) -> Result<Vec<TreeNode>, SparkWalletError> {
+    async fn claim_transfer(&self, transfer: &Transfer) -> Result<Vec<TreeNode>, SparkWalletError> {
         trace!("Claiming transfer with id: {}", transfer.id);
         let claimed_nodes = self.transfer_service.claim_transfer(transfer, None).await?;
 

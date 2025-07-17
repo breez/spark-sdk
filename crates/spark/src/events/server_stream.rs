@@ -65,7 +65,7 @@ pub async fn subscribe_server_events<S>(
             let response = match message {
                 Ok(Some(event)) => event,
                 Ok(None) => {
-                    warn!("Server stream closed, reconnecting...");
+                    warn!("Server event stream closed, reconnecting...");
                     break;
                 }
                 Err(e) => {
@@ -111,7 +111,7 @@ pub async fn subscribe_server_events<S>(
                     SparkEvent::Deposit(deposit)
                 }
                 Event::Connected(_) => {
-                    info!("Connected to event stream");
+                    debug!("Received connected event");
                     continue; // No need to publish a connected event
                 }
             };

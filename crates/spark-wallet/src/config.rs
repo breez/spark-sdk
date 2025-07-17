@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use serde::{Deserialize, Serialize};
 use spark::{Network, operator::OperatorPoolConfig, ssp::ServiceProviderConfig};
 
@@ -9,7 +7,7 @@ use crate::SparkWalletError;
 pub struct SparkWalletConfig {
     pub network: Network,
     pub operator_pool: OperatorPoolConfig,
-    pub reconnect_interval: Duration,
+    pub reconnect_interval_seconds: u64,
     pub service_provider_config: ServiceProviderConfig,
     pub split_secret_threshold: u32,
 }

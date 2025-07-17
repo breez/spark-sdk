@@ -9,6 +9,7 @@ bitcoin.workspace = true
 clap = { workspace = true, features = ["derive"] }
 dotenvy.workspace = true
 figment = { workspace = true, features = ["env", "yaml"] }
+hex.workspace = true
 reqwest.workspace = true
 rustyline = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }

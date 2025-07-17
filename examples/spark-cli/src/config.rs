@@ -44,7 +44,7 @@ spark_config:
         identifier: 0000000000000000000000000000000000000000000000000000000000000003
         address: https://2.spark.loadtest.dev.sparkinfra.net/
         identity_public_key: 02a2c62aa3230d9a51759b3d67399f57223455656369d28120fb39ef062b4469c8
-
+  reconnect_interval_seconds: 1
   service_provider_config:
     base_url: "https://api.loadtest.dev.sparkinfra.net"
     schema_endpoint: "graphql/spark/rc"
