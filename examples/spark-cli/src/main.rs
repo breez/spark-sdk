@@ -92,10 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let network = config.spark_config.network;
     let signer = DefaultSigner::new(&seed, network)?;
-    let (_tx, rx) = watch::channel(());
-    let wallet = spark_wallet::SparkWallet::new(config.spark_config.clone(), signer)
-        .await?
-        .start_background_tasks(rx);
+    let wallet = spark_wallet::SparkWallet::connect(config.spark_config.clone(), signer).await?;
     wallet.sync().await?;
 
     let rl = &mut Editor::new()?;
