@@ -14,4 +14,4 @@ pub use spark::{
     signer::{DefaultSigner, Signer},
     tree::{SigningKeyshare, TreeNodeId},
 };
-pub use wallet::{SparkWallet, SparkWalletBuilder};
+pub use wallet::SparkWallet;

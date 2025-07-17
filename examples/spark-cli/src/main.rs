@@ -13,6 +13,7 @@ use rustyline::highlight::Highlighter;
 use rustyline::hint::HistoryHinter;
 use rustyline::{Completer, Editor, Helper, Hinter, Validator};
 use spark_wallet::{DefaultSigner, Network};
+use tokio::sync::watch;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::command::Command;
@@ -91,9 +92,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let network = config.spark_config.network;
     let signer = DefaultSigner::new(&seed, network)?;
-    let wallet = spark_wallet::SparkWalletBuilder::new(config.spark_config.clone(), signer)?
-        .connect()
-        .await?;
+    let (_tx, rx) = watch::channel(());
+    let wallet = spark_wallet::SparkWallet::new(config.spark_config.clone(), signer)
+        .await?
+        .start_background_tasks(rx);
     wallet.sync().await?;
 
     let rl = &mut Editor::new()?;

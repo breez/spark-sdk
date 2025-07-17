@@ -58,7 +58,7 @@ where
             deposit::handle_command(config, wallet, deposit_command).await?
         }
         Command::Info => {
-            let info = wallet.get_info().await?;
+            let info = wallet.get_info();
             println!("{}", serde_json::to_string_pretty(&info)?)
         }
         Command::Leaves(leaves_command) => {

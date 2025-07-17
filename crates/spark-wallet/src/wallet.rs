@@ -29,60 +29,63 @@ use crate::{
 
 use super::{SparkWalletConfig, SparkWalletError};
 
-pub struct SparkWalletBuilder<S> {
+pub struct SparkWallet<S> {
     config: SparkWalletConfig,
+    deposit_service: DepositService<S>,
+    identity_public_key: PublicKey,
+    operator_pool: Arc<OperatorPool<S>>,
     signer: S,
+    swap_service: Arc<Swap<S>>,
+    tree_service: Arc<TreeService<S>>,
+    transfer_service: Arc<TransferService<S>>,
+    lightning_service: Arc<LightningService<S>>,
 }
 
-impl<S: Signer + Clone + Send + Sync + 'static> SparkWalletBuilder<S> {
-    pub fn new(config: SparkWalletConfig, signer: S) -> Result<Self, SparkWalletError> {
+impl<S: Signer + Clone> SparkWallet<S> {
+    pub async fn new(config: SparkWalletConfig, signer: S) -> Result<Arc<Self>, SparkWalletError> {
         config.validate()?;
-        Ok(SparkWalletBuilder { config, signer })
-    }
-
-    pub async fn connect(self) -> Result<Arc<SparkWallet<S>>, SparkWalletError> {
-        let identity_public_key = self.signer.get_identity_public_key()?;
+        let identity_public_key = signer.get_identity_public_key()?;
         let connection_manager = ConnectionManager::new();
 
-        let bitcoin_service = BitcoinService::new(self.config.network);
+        let bitcoin_service = BitcoinService::new(config.network);
         let service_provider = Arc::new(ServiceProvider::new(
-            self.config.service_provider_config.clone(),
-            self.signer.clone(),
+            config.service_provider_config.clone(),
+            signer.clone(),
         ));
 
         let operator_pool = Arc::new(
             OperatorPool::connect(
-                &self.config.operator_pool,
+                &config.operator_pool,
                 &connection_manager,
-                Arc::new(self.signer.clone()),
+                Arc::new(signer.clone()),
             )
             .await?,
         );
         let lightning_service = Arc::new(LightningService::new(
             operator_pool.clone(),
             service_provider.clone(),
-            self.config.network,
-            self.signer.clone(),
-            self.config.split_secret_threshold,
+            config.network,
+            signer.clone(),
+            config.split_secret_threshold,
         ));
         let deposit_service = DepositService::new(
             bitcoin_service,
             identity_public_key,
-            self.config.network,
+            config.network,
             operator_pool.clone(),
-            self.signer.clone(),
+            signer.clone(),
         );
 
         let transfer_service = Arc::new(TransferService::new(
-            self.signer.clone(),
-            self.config.network,
-            self.config.split_secret_threshold,
+            signer.clone(),
+            config.network,
+            config.split_secret_threshold,
             operator_pool.clone(),
         ));
 
         let timelock_manager = Arc::new(TimelockManager::new(
-            self.signer.clone(),
-            self.config.network,
+            signer.clone(),
+            config.network,
             operator_pool.clone(),
             Arc::clone(&transfer_service),
         ));
@@ -90,87 +93,47 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWalletBuilder<S> {
         let tree_state = TreeState::new();
         let tree_service = Arc::new(TreeService::new(
             identity_public_key,
-            self.config.network,
+            config.network,
             operator_pool.clone(),
             tree_state,
             Arc::clone(&timelock_manager),
-            self.signer.clone(),
+            signer.clone(),
         ));
 
         let swap_service = Arc::new(Swap::new(
-            self.config.network,
+            config.network,
             operator_pool.clone(),
-            self.signer.clone(),
+            signer.clone(),
             Arc::clone(&service_provider),
             Arc::clone(&transfer_service),
         ));
 
-        let identity_public_key = self.signer.get_identity_public_key()?;
-        let wallet = SparkWallet::connect(WalletDeps {
-            config: self.config.clone(),
+        Ok(Arc::new(Self {
+            config,
             deposit_service,
             identity_public_key,
             operator_pool,
-            signer: self.signer.clone(),
+            signer,
             swap_service,
             tree_service,
             transfer_service,
             lightning_service,
-        })
-        .await?;
-
-        Ok(wallet)
+        }))
     }
-}
-
-struct WalletDeps<S> {
-    config: SparkWalletConfig,
-    deposit_service: DepositService<S>,
-    identity_public_key: PublicKey,
-    operator_pool: Arc<OperatorPool<S>>,
-    signer: S,
-    swap_service: Arc<Swap<S>>,
-    tree_service: Arc<TreeService<S>>,
-    transfer_service: Arc<TransferService<S>>,
-    lightning_service: Arc<LightningService<S>>,
-}
-
-pub struct SparkWallet<S> {
-    /// Cancellation token to stop the event subscription. If SparkWallet is dropped, this token will drop, so the event subscription will stop.
-    #[allow(dead_code)]
-    cancel: watch::Sender<()>,
-    config: SparkWalletConfig,
-    deposit_service: DepositService<S>,
-    identity_public_key: PublicKey,
-    operator_pool: Arc<OperatorPool<S>>,
-    signer: S,
-    swap_service: Arc<Swap<S>>,
-    tree_service: Arc<TreeService<S>>,
-    transfer_service: Arc<TransferService<S>>,
-    lightning_service: Arc<LightningService<S>>,
 }
 
 impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
-    async fn connect(deps: WalletDeps<S>) -> Result<Arc<Self>, SparkWalletError> {
-        let (cancel, mut token) = watch::channel(());
-        let wallet = Arc::new(Self {
-            cancel,
-            config: deps.config,
-            deposit_service: deps.deposit_service,
-            identity_public_key: deps.identity_public_key,
-            operator_pool: deps.operator_pool,
-            signer: deps.signer,
-            swap_service: deps.swap_service,
-            tree_service: deps.tree_service,
-            transfer_service: deps.transfer_service,
-            lightning_service: deps.lightning_service,
-        });
+    pub fn start_background_tasks(
+        self: &Arc<Self>,
+        mut cancellation_token: watch::Receiver<()>,
+    ) -> Arc<Self> {
+        let clone = Arc::clone(self);
 
-        wallet.start(&mut token).await;
-        Ok(wallet)
+        tokio::spawn(async move { clone.start_sync(&mut cancellation_token).await });
+        Arc::clone(self)
     }
 
-    async fn start(self: &Arc<Self>, cancellation_token: &mut watch::Receiver<()>) {
+    async fn start_sync(self: &Arc<Self>, cancellation_token: &mut watch::Receiver<()>) {
         let event_stream = self.subscribe_server_events(cancellation_token);
 
         let ignore_transfers = match self.claim_pending_transfers().await {
@@ -487,16 +450,16 @@ impl<S: Signer> SparkWallet<S> {
         Ok(result_nodes)
     }
 
-    pub async fn get_info(&self) -> Result<WalletInfo, SparkWalletError> {
-        Ok(WalletInfo {
-            identity_public_key: self.signer.get_identity_public_key()?,
+    pub fn get_info(&self) -> WalletInfo {
+        WalletInfo {
+            identity_public_key: self.identity_public_key,
             network: self.config.network,
-        })
+        }
     }
 
     pub async fn get_spark_address(&self) -> Result<SparkAddress, SparkWalletError> {
         Ok(SparkAddress {
-            identity_public_key: self.signer.get_identity_public_key()?,
+            identity_public_key: self.identity_public_key,
             network: self.config.network,
         })
     }
