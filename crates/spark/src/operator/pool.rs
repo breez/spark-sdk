@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::Identifier;
 use serde::{Deserialize, Serialize};
@@ -75,6 +77,7 @@ pub struct OperatorConfig {
 
 impl OperatorConfig {}
 
+#[derive(Clone, Debug)]
 pub struct Operator<S> {
     pub client: SparkRpcClient<S>,
     pub id: usize,
@@ -91,7 +94,7 @@ impl<S> OperatorPool<S> {
     pub async fn connect(
         config: &OperatorPoolConfig,
         connection_manager: &ConnectionManager,
-        signer: &S,
+        signer: Arc<S>,
     ) -> Result<Self, OperatorRpcError>
     where
         S: Signer + Clone,
@@ -99,7 +102,7 @@ impl<S> OperatorPool<S> {
         let mut operators = Vec::new();
         for operator in &config.operators {
             let channel = connection_manager.get_channel(operator).await?;
-            let client = SparkRpcClient::new(channel, signer.clone());
+            let client = SparkRpcClient::new(channel, Arc::clone(&signer));
             operators.push(Operator {
                 client,
                 id: operator.id,

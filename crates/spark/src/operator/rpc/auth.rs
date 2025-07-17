@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::OperatorRpcError;
 use super::error::Result;
 use super::spark::spark_service_client::SparkServiceClient;
@@ -16,13 +18,14 @@ use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 
+#[derive(Clone, Debug)]
 pub struct OperatorAuth<S> {
     channel: Channel,
-    signer: S,
-    session: Mutex<Option<OperationSession>>,
+    signer: Arc<S>,
+    session: Arc<Mutex<Option<OperationSession>>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OperationSession {
     token: MetadataValue<Ascii>,
     expiration: u64,
@@ -32,11 +35,11 @@ impl<S> OperatorAuth<S>
 where
     S: Signer,
 {
-    pub fn new(channel: Channel, signer: S) -> Self {
+    pub fn new(channel: Channel, signer: Arc<S>) -> Self {
         Self {
             channel,
             signer,
-            session: Mutex::new(None),
+            session: Arc::new(Mutex::new(None)),
         }
     }
 

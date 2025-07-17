@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::auth::OperatorAuth;
 use super::error::Result;
@@ -14,6 +15,7 @@ pub struct QueryAllNodesRequest {
     pub source: Option<Source>,
 }
 
+#[derive(Clone, Debug)]
 pub struct SparkRpcClient<S> {
     auth: OperatorAuth<S>,
 }
@@ -22,7 +24,7 @@ impl<S> SparkRpcClient<S>
 where
     S: Signer,
 {
-    pub fn new(channel: Channel, signer: S) -> Self {
+    pub fn new(channel: Channel, signer: Arc<S>) -> Self {
         Self {
             auth: OperatorAuth::new(channel, signer),
         }
