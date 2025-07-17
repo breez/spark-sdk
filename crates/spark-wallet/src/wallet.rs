@@ -510,9 +510,9 @@ async fn process_events<S: Signer>(
                     continue;
                 }
 
-                process_transfer_event(transfer, transfer_service, tree_service).await
+                process_transfer_event(*transfer, transfer_service, tree_service).await
             }
-            SparkEvent::Deposit(deposit) => process_deposit_event(deposit, tree_service).await,
+            SparkEvent::Deposit(deposit) => process_deposit_event(*deposit, tree_service).await,
         };
 
         if let Err(e) = result {

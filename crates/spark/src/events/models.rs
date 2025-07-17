@@ -7,6 +7,6 @@ pub type EventStream = broadcast::Receiver<SparkEvent>;
 
 #[derive(Clone, Debug)]
 pub enum SparkEvent {
-    Transfer(Transfer),
-    Deposit(TreeNode),
+    Transfer(Box<Transfer>),
+    Deposit(Box<TreeNode>),
 }

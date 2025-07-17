@@ -13,7 +13,6 @@ use rustyline::highlight::Highlighter;
 use rustyline::hint::HistoryHinter;
 use rustyline::{Completer, Editor, Helper, Hinter, Validator};
 use spark_wallet::{DefaultSigner, Network};
-use tokio::sync::watch;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::command::Command;
@@ -66,15 +65,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seed = config.mnemonic.to_seed(config.passphrase.clone());
 
     let log_path = match config.log_path.to_str() {
-        Some(path) => match path {
-            "spark.log" => {
-                let seed_hash = bitcoin::hashes::sha256::Hash::hash(&seed);
-                let log_file_name = format!("spark.{}.log", hex::encode(&seed_hash[0..4]));
-                PathBuf::from(log_file_name)
-            }
-            _ => config.log_path.clone(),
-        },
-        None => config.log_path.clone(),
+        Some("spark.log") => {
+            let seed_hash = bitcoin::hashes::sha256::Hash::hash(&seed);
+            let log_file_name = format!("spark.{}.log", hex::encode(&seed_hash[0..4]));
+            PathBuf::from(log_file_name)
+        }
+        _ => config.log_path.clone(),
     };
     let log_file = OpenOptions::new()
         .create(true)

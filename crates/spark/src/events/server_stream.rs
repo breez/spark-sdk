@@ -10,7 +10,9 @@ use crate::{
         Operator,
         rpc::spark::{SubscribeToEventsRequest, subscribe_to_events_response::Event},
     },
+    services::Transfer,
     signer::Signer,
+    tree::TreeNode,
 };
 
 pub async fn subscribe_server_events<S>(
@@ -88,14 +90,14 @@ pub async fn subscribe_server_events<S>(
                         warn!("Received empty transfer event, skipping");
                         continue;
                     };
-                    let transfer = match transfer.try_into() {
+                    let transfer: Transfer = match transfer.try_into() {
                         Ok(transfer) => transfer,
                         Err(e) => {
                             error!("Failed to convert transfer event: {}", e);
                             continue;
                         }
                     };
-                    SparkEvent::Transfer(transfer)
+                    SparkEvent::Transfer(Box::new(transfer))
                 }
                 Event::Deposit(deposit_event) => {
                     debug!("Received deposit event: {:?}", deposit_event);
@@ -103,14 +105,14 @@ pub async fn subscribe_server_events<S>(
                         warn!("Received empty deposit event, skipping");
                         continue;
                     };
-                    let deposit = match deposit.try_into() {
+                    let deposit: TreeNode = match deposit.try_into() {
                         Ok(deposit) => deposit,
                         Err(e) => {
                             error!("Failed to convert deposit event: {}", e);
                             continue;
                         }
                     };
-                    SparkEvent::Deposit(deposit)
+                    SparkEvent::Deposit(Box::new(deposit))
                 }
                 Event::Connected(_) => {
                     debug!("Received connected event");
