@@ -4,7 +4,9 @@ use bitcoin::{Transaction, secp256k1::PublicKey};
 use serde::{Deserialize, Serialize};
 use spark::{
     Network,
-    services::{Transfer, TransferId, TransferLeaf, TransferStatus, TransferType},
+    services::{
+        LightningSendPayment, Transfer, TransferId, TransferLeaf, TransferStatus, TransferType,
+    },
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
 };
 
@@ -45,6 +47,12 @@ impl From<Transfer> for WalletTransfer {
             direction: TransferDirection::default(), // TODO: Set to actual direction
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+pub enum PayLightningInvoiceResult {
+    LightningPayment(LightningSendPayment),
+    Transfer(WalletTransfer),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

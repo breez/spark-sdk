@@ -18,7 +18,7 @@ use tracing::{debug, trace};
 
 use crate::{
     leaf::WalletLeaf,
-    model::{WalletInfo, WalletTransfer},
+    model::{PayLightningInvoiceResult, WalletInfo, WalletTransfer},
 };
 
 use super::{SparkWalletConfig, SparkWalletError};
@@ -119,13 +119,22 @@ impl<S: Signer + Clone> SparkWallet<S> {
         invoice: &str,
         amount_to_send: Option<u64>,
         max_fee_sat: Option<u64>,
-    ) -> Result<LightningSendPayment, SparkWalletError> {
-        let total_amount_sat = self
+        prefer_spark: Option<bool>,
+    ) -> Result<PayLightningInvoiceResult, SparkWalletError> {
+        let prefer_spark = prefer_spark.unwrap_or(true);
+        let (total_amount_sat, receiver_spark_address) = self
             .lightning_service
-            .validate_payment(invoice, max_fee_sat, amount_to_send)
+            .validate_payment(invoice, max_fee_sat, amount_to_send, prefer_spark)
             .await?;
 
         let leaves_reservation = self.select_leaves(total_amount_sat).await?;
+
+        if let Some(receiver_spark_address) = receiver_spark_address {
+            return Ok(PayLightningInvoiceResult::Transfer(
+                self.transfer(total_amount_sat, &receiver_spark_address)
+                    .await?,
+            ));
+        }
 
         // start the lightning swap with the operator
         let swap = with_reserved_leaves(
@@ -147,10 +156,11 @@ impl<S: Signer + Clone> SparkWallet<S> {
             .await?;
 
         // finalize the lightning swap with the ssp - send the actual lightning payment
-        Ok(self
-            .lightning_service
-            .finalize_lightning_swap(&swap)
-            .await?)
+        Ok(PayLightningInvoiceResult::LightningPayment(
+            self.lightning_service
+                .finalize_lightning_swap(&swap)
+                .await?,
+        ))
     }
 
     pub async fn create_lightning_invoice(

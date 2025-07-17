@@ -22,9 +22,14 @@ pub enum LightningCommand {
     FetchSendPayment { id: String },
     /// Pay a lightning invoice.
     PayInvoice {
+        #[arg(long)]
         invoice: String,
+        #[arg(long)]
         max_fee_sat: Option<u64>,
+        #[arg(long)]
         amount_to_send: Option<u64>,
+        #[arg(long)]
+        prefer_spark: Option<bool>,
     },
 }
 
@@ -74,9 +79,10 @@ where
             invoice,
             max_fee_sat,
             amount_to_send,
+            prefer_spark,
         } => {
             let payment = wallet
-                .pay_lightning_invoice(&invoice, max_fee_sat, amount_to_send)
+                .pay_lightning_invoice(&invoice, max_fee_sat, amount_to_send, prefer_spark)
                 .await?;
             println!("{}", serde_json::to_string_pretty(&payment)?);
         }
