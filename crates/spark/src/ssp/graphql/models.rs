@@ -48,7 +48,7 @@ use crate::ssp::graphql::queries::request_lightning_send::{
     UserRequestFragment as RequestLightningSendUserRequestFragment,
 };
 use crate::ssp::graphql::queries::static_deposit_quote::StaticDepositQuoteStaticDepositQuote;
-use crate::ssp::graphql::queries::transfer::{
+use crate::ssp::graphql::queries::transfers::{
     CurrencyAmountFragment as TransferCurrencyAmountFragment,
     TransferFragment as TransferTransferFragment,
     UserRequestFragment as TransferUserRequestFragment,
@@ -103,6 +103,7 @@ pub enum CurrencyUnit {
     Php,
     Eur,
     Gbp,
+    Inr,
     #[serde(other, skip_serializing)]
     Unknown,
 }

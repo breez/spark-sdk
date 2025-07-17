@@ -7,6 +7,7 @@ use graphql_client::GraphQLQuery;
 
 // Define the types used as scalar types in the GraphQL schema
 type PublicKey = String;
+#[allow(clippy::upper_case_acronyms)]
 type UUID = String;
 type DateTime = chrono::DateTime<chrono::Utc>;
 type Hash32 = String;
@@ -156,7 +157,7 @@ pub struct StaticDepositQuote;
     response_derives = "Debug",
     extern_enums("CurrencyUnit")
 )]
-pub struct Transfer;
+pub struct Transfers;
 
 #[derive(GraphQLQuery)]
 #[graphql(

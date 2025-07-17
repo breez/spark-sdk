@@ -28,8 +28,8 @@ where
     S: Signer + Clone,
 {
     config: SparkWalletConfig,
-    deposit_service: DepositService<S>,
     signer: S,
+    deposit_service: DepositService<S>,
     swap_service: Arc<Swap<S>>,
     tree_service: Arc<TreeService<S>>,
     transfer_service: Arc<TransferService<S>>,
@@ -43,7 +43,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         let connection_manager = ConnectionManager::new();
 
         let bitcoin_service = BitcoinService::new(config.network);
-        let service_provider = Arc::new(ServiceProvider::new(
+        let ssp_client = Arc::new(ServiceProvider::new(
             config.service_provider_config.clone(),
             signer.clone(),
         ));
@@ -53,7 +53,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
         );
         let lightning_service = Arc::new(LightningService::new(
             operator_pool.clone(),
-            service_provider.clone(),
+            ssp_client.clone(),
             config.network,
             signer.clone(),
             config.split_secret_threshold,
@@ -94,14 +94,14 @@ impl<S: Signer + Clone> SparkWallet<S> {
             config.network,
             operator_pool.clone(),
             signer.clone(),
-            Arc::clone(&service_provider),
+            Arc::clone(&ssp_client),
             Arc::clone(&transfer_service),
         ));
 
         Ok(SparkWallet {
             config,
-            deposit_service,
             signer,
+            deposit_service,
             swap_service,
             tree_service,
             transfer_service,

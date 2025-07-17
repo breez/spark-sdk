@@ -3,6 +3,7 @@ use std::fs::{OpenOptions, canonicalize};
 use std::path::PathBuf;
 
 use clap::Parser;
+use dotenvy;
 use figment::{
     Figment,
     providers::{Env, Format, Yaml},
@@ -59,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::write(&args.config, DEFAULT_CONFIG)?;
     }
 
+    let _ = dotenvy::dotenv();
     let config: Config = figment.merge(Env::prefixed("SPARK_")).extract()?;
     let log_file = OpenOptions::new()
         .create(true)

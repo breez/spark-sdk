@@ -12,7 +12,7 @@ use crate::ssp::graphql::queries::{
     self, claim_static_deposit, complete_coop_exit, complete_leaves_swap, coop_exit_fee_estimates,
     get_challenge, leaves_swap_fee_estimate, lightning_send_fee_estimate, request_coop_exit,
     request_leaves_swap, request_lightning_receive, request_lightning_send, static_deposit_quote,
-    transfer, user_request, verify_challenge,
+    transfers, user_request, verify_challenge,
 };
 use crate::ssp::graphql::{
     BitcoinNetwork, ClaimStaticDeposit, CoopExitFeeEstimates, CoopExitRequest, CurrencyAmount,
@@ -486,14 +486,17 @@ where
         Ok(response.claim_static_deposit.into())
     }
 
-    /// Get a transfer by ID
-    pub async fn get_transfer(&self, transfer_spark_id: &str) -> GraphQLResult<Option<Transfer>> {
-        let vars = transfer::Variables {
-            transfer_spark_id: transfer_spark_id.to_string(),
+    /// Get transfers by IDs
+    pub async fn get_transfers(
+        &self,
+        transfer_spark_ids: Vec<&str>,
+    ) -> GraphQLResult<Vec<Transfer>> {
+        let vars = transfers::Variables {
+            transfer_spark_ids: transfer_spark_ids.into_iter().map(String::from).collect(),
         };
 
-        let response = self.post_query::<queries::Transfer, _>(vars, true).await?;
+        let response = self.post_query::<queries::Transfers, _>(vars, true).await?;
 
-        Ok(response.transfer.map(Into::into))
+        Ok(response.transfers.into_iter().map(Transfer::from).collect())
     }
 }

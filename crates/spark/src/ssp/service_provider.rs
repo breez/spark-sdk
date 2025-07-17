@@ -185,11 +185,11 @@ where
         Ok(self.gql_client.claim_static_deposit(input).await?)
     }
 
-    /// Get transfer by ID
-    pub async fn get_transfer(
+    /// Get transfers by IDs
+    pub async fn get_transfers(
         &self,
-        transfer_spark_id: &str,
-    ) -> ServiceProviderResult<Option<Transfer>> {
-        Ok(self.gql_client.get_transfer(transfer_spark_id).await?)
+        transfer_spark_ids: Vec<&str>,
+    ) -> ServiceProviderResult<Vec<Transfer>> {
+        Ok(self.gql_client.get_transfers(transfer_spark_ids).await?)
     }
 }

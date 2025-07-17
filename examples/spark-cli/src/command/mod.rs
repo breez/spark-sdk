@@ -41,7 +41,7 @@ pub enum Command {
 }
 
 pub(crate) async fn handle_command<S>(
-    rl: &mut Editor<CliHelper, DefaultHistory>,
+    _rl: &mut Editor<CliHelper, DefaultHistory>,
     config: &Config,
     wallet: &SparkWallet<S>,
     command: Command,
@@ -55,7 +55,7 @@ where
             println!("Balance: {balance} sats")
         }
         Command::Deposit(deposit_command) => {
-            deposit::handle_command(rl, config, wallet, deposit_command).await?
+            deposit::handle_command(config, wallet, deposit_command).await?
         }
         Command::Info => {
             let info = wallet.get_info().await?;
