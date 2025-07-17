@@ -35,6 +35,7 @@ pub struct LightningSwap {
     pub leaves: Vec<LeafKeyTweak>,
     pub receiver_identity_public_key: PublicKey,
     pub bolt11_invoice: String,
+    pub user_amount_sat: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -241,11 +242,12 @@ where
     pub async fn start_lightning_swap(
         &self,
         invoice: &str,
+        amount_to_send: Option<u64>,
         leaves: &Vec<TreeNode>,
     ) -> Result<LightningSwap, ServiceError> {
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
-        let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
+        let amount_sats: u64 = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
         let payment_hash = decoded_invoice.payment_hash();
 
         // prepare leaf tweaks
@@ -282,6 +284,7 @@ where
             leaves: leaf_tweaks,
             receiver_identity_public_key: self.ssp_client.identity_public_key(),
             bolt11_invoice: invoice.to_string(),
+            user_amount_sat: amount_to_send,
         })
     }
 
@@ -296,7 +299,7 @@ where
             .request_lightning_send(RequestLightningSendInput {
                 encoded_invoice: swap.bolt11_invoice.to_string(),
                 idempotency_key: decoded_invoice.payment_hash().encode_hex(),
-                amount_sats: None,
+                amount_sats: swap.user_amount_sat,
             })
             .await?;
 
@@ -307,21 +310,23 @@ where
         &self,
         invoice: &str,
         max_fee_sat: Option<u64>,
+        amount_to_send: Option<u64>,
     ) -> Result<u64, ServiceError> {
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
 
-        // get the invoice amount in sats, then validate the amount
-        let amount_sats = get_invoice_amount_sats(&decoded_invoice)?;
-        if amount_sats == 0 {
+        if decoded_invoice.network() != self.network.into() {
             return Err(ServiceError::ValidationError(
-                "Amount must be greater than 0".to_string(),
+                "Invoice network does not match".to_string(),
             ));
         }
 
+        // get the invoice amount in sats, then validate the amount
+        let to_pay_sat = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
+
         let fee_estimate = self
             .ssp_client
-            .get_lightning_send_fee_estimate(invoice, Some(amount_sats))
+            .get_lightning_send_fee_estimate(invoice, Some(to_pay_sat))
             .await?;
 
         let fee_sat = fee_estimate
@@ -334,16 +339,17 @@ where
                 ));
             }
         }
-        Ok(fee_sat + amount_sats)
+        Ok(fee_sat + to_pay_sat)
     }
 
     pub async fn fetch_lightning_send_fee_estimate(
         &self,
         invoice: &str,
+        amount_to_send: Option<u64>,
     ) -> Result<u64, ServiceError> {
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
-        let amount_sat = get_invoice_amount_sats(&decoded_invoice)?;
+        let amount_sat = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
         self.ssp_client
             .get_lightning_send_fee_estimate(invoice, Some(amount_sat))
             .await?
@@ -454,10 +460,31 @@ where
     }
 }
 
-fn get_invoice_amount_sats(invoice: &Bolt11Invoice) -> Result<u64, ServiceError> {
-    let invoice_amount_msats = invoice
+fn get_invoice_amount_sats(
+    invoice: &Bolt11Invoice,
+    amount_to_send: Option<u64>,
+) -> Result<u64, ServiceError> {
+    let invoice_amount_sats = invoice
         .amount_milli_satoshis()
-        .ok_or(ServiceError::InvoiceDecodingError(invoice.to_string()))?;
+        .unwrap_or_default()
+        .div_ceil(1000);
+    let to_pay_sat = amount_to_send.unwrap_or(invoice_amount_sats);
+    if to_pay_sat == 0 {
+        return Err(ServiceError::ValidationError(
+            "Amount must be provided for 0 amount invoice".to_string(),
+        ));
+    }
+    if to_pay_sat < invoice_amount_sats {
+        return Err(ServiceError::ValidationError(
+            "Amount to send must be greater than or equal to invoice amount".to_string(),
+        ));
+    }
 
-    Ok(invoice_amount_msats.div_ceil(1000))
+    // it seems that spark currently don't support over payment
+    if invoice_amount_sats > 0 && to_pay_sat > invoice_amount_sats {
+        return Err(ServiceError::ValidationError(
+            "Overpayments are not allowed".to_string(),
+        ));
+    }
+    Ok(to_pay_sat)
 }

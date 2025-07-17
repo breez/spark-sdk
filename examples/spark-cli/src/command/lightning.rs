@@ -14,13 +14,17 @@ pub enum LightningCommand {
     /// Fetch a lightning receive payment.
     FetchReceivePayment { id: String },
     /// Fetch a lightning send fee estimate.
-    FetchSendFeeEstimate { invoice: String },
+    FetchSendFeeEstimate {
+        invoice: String,
+        amount_to_send: Option<u64>,
+    },
     /// Fetch a lightning send payment.
     FetchSendPayment { id: String },
     /// Pay a lightning invoice.
     PayInvoice {
         invoice: String,
         max_fee_sat: Option<u64>,
+        amount_to_send: Option<u64>,
     },
 }
 
@@ -53,8 +57,13 @@ where
             let payment = wallet.fetch_lightning_receive_payment(&id).await?;
             println!("{}", serde_json::to_string_pretty(&payment)?);
         }
-        LightningCommand::FetchSendFeeEstimate { invoice } => {
-            let fee = wallet.fetch_lightning_send_fee_estimate(&invoice).await?;
+        LightningCommand::FetchSendFeeEstimate {
+            invoice,
+            amount_to_send,
+        } => {
+            let fee = wallet
+                .fetch_lightning_send_fee_estimate(&invoice, amount_to_send)
+                .await?;
             println!("{fee}");
         }
         LightningCommand::FetchSendPayment { id } => {
@@ -64,8 +73,11 @@ where
         LightningCommand::PayInvoice {
             invoice,
             max_fee_sat,
+            amount_to_send,
         } => {
-            let payment = wallet.pay_lightning_invoice(&invoice, max_fee_sat).await?;
+            let payment = wallet
+                .pay_lightning_invoice(&invoice, max_fee_sat, amount_to_send)
+                .await?;
             println!("{}", serde_json::to_string_pretty(&payment)?);
         }
     }
