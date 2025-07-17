@@ -174,13 +174,13 @@ impl<S: Signer> TimelockManager<S> {
         let signing_job = SigningJob {
             signing_public_key: signing_public_key.serialize().to_vec(),
             raw_tx: bitcoin::consensus::serialize(&new_node_tx),
-            signing_nonce_commitment: Some(new_node_signing_commitments.try_into()?),
+            signing_nonce_commitment: Some(new_node_signing_commitments.commitments.try_into()?),
         };
 
         let refund_signing_job = SigningJob {
             signing_public_key: signing_public_key.serialize().to_vec(),
             raw_tx: bitcoin::consensus::serialize(&new_refund_tx),
-            signing_nonce_commitment: Some(new_refund_signing_commitments.try_into()?),
+            signing_nonce_commitment: Some(new_refund_signing_commitments.commitments.try_into()?),
         };
 
         let response = self
@@ -254,7 +254,7 @@ impl<S: Signer> TimelockManager<S> {
                 public_key: &signing_public_key,
                 private_key: &signing_key,
                 verifying_key: &new_node_tx_verifying_key,
-                self_commitment: &new_node_signing_commitments,
+                self_nonce_commitment: &new_node_signing_commitments,
                 statechain_commitments: new_node_statechain_commitments.clone(),
                 adaptor_public_key: None,
             })
@@ -268,7 +268,7 @@ impl<S: Signer> TimelockManager<S> {
                 statechain_public_keys: new_node_statechain_public_keys,
                 verifying_key: &new_node_tx_verifying_key,
                 statechain_commitments: new_node_statechain_commitments,
-                self_commitment: &new_node_signing_commitments,
+                self_commitment: &new_node_signing_commitments.commitments,
                 public_key: &signing_public_key,
                 self_signature: &user_node_signature,
                 adaptor_public_key: None,
@@ -282,7 +282,7 @@ impl<S: Signer> TimelockManager<S> {
                 public_key: &signing_public_key,
                 private_key: &signing_key,
                 verifying_key: &new_refund_tx_verifying_key,
-                self_commitment: &new_refund_signing_commitments,
+                self_nonce_commitment: &new_refund_signing_commitments,
                 statechain_commitments: new_refund_statechain_commitments.clone(),
                 adaptor_public_key: None,
             })
@@ -296,7 +296,7 @@ impl<S: Signer> TimelockManager<S> {
                 statechain_public_keys: new_refund_statechain_public_keys,
                 verifying_key: &new_refund_tx_verifying_key,
                 statechain_commitments: new_refund_statechain_commitments,
-                self_commitment: &new_refund_signing_commitments,
+                self_commitment: &new_refund_signing_commitments.commitments,
                 public_key: &signing_public_key,
                 self_signature: &user_refund_signature,
                 adaptor_public_key: None,
@@ -415,13 +415,13 @@ impl<S: Signer> TimelockManager<S> {
         let new_node_signing_job = SigningJob {
             signing_public_key: signing_public_key.serialize().to_vec(),
             raw_tx: bitcoin::consensus::serialize(&new_node_tx),
-            signing_nonce_commitment: Some(new_node_signing_commitments.try_into()?),
+            signing_nonce_commitment: Some(new_node_signing_commitments.commitments.try_into()?),
         };
 
         let new_refund_signing_job = SigningJob {
             signing_public_key: signing_public_key.serialize().to_vec(),
             raw_tx: bitcoin::consensus::serialize(&new_refund_tx),
-            signing_nonce_commitment: Some(new_refund_signing_commitments.try_into()?),
+            signing_nonce_commitment: Some(new_refund_signing_commitments.commitments.try_into()?),
         };
 
         let response = self
@@ -496,7 +496,7 @@ impl<S: Signer> TimelockManager<S> {
                 public_key: &signing_public_key,
                 private_key: &signing_key,
                 verifying_key: &new_node_tx_verifying_key,
-                self_commitment: &new_node_signing_commitments,
+                self_nonce_commitment: &new_node_signing_commitments,
                 statechain_commitments: new_node_statechain_commitments.clone(),
                 adaptor_public_key: None,
             })
@@ -509,7 +509,7 @@ impl<S: Signer> TimelockManager<S> {
                 public_key: &signing_public_key,
                 private_key: &signing_key,
                 verifying_key: &new_refund_tx_verifying_key,
-                self_commitment: &new_refund_signing_commitments,
+                self_nonce_commitment: &new_refund_signing_commitments,
                 statechain_commitments: new_refund_statechain_commitments.clone(),
                 adaptor_public_key: None,
             })
@@ -523,7 +523,7 @@ impl<S: Signer> TimelockManager<S> {
                 statechain_public_keys: new_node_statechain_public_keys,
                 verifying_key: &new_node_tx_verifying_key,
                 statechain_commitments: new_node_statechain_commitments,
-                self_commitment: &new_node_signing_commitments,
+                self_commitment: &new_node_signing_commitments.commitments,
                 public_key: &signing_public_key,
                 self_signature: &node_user_signature,
                 adaptor_public_key: None,
@@ -538,7 +538,7 @@ impl<S: Signer> TimelockManager<S> {
                 statechain_public_keys: new_refund_statechain_public_keys,
                 verifying_key: &new_refund_tx_verifying_key,
                 statechain_commitments: new_refund_statechain_commitments,
-                self_commitment: &new_refund_signing_commitments,
+                self_commitment: &new_refund_signing_commitments.commitments,
                 public_key: &signing_public_key,
                 self_signature: &refund_user_signature,
                 adaptor_public_key: None,

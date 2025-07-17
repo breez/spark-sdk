@@ -1,5 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
 use bitcoin::secp256k1::ecdsa::Signature;
@@ -19,9 +18,11 @@ use frost_secp256k1_tr::round1::{SigningCommitments, SigningNonces};
 use frost_secp256k1_tr::round2::SignatureShare;
 use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
 use thiserror::Error;
-use tokio::sync::Mutex;
 
-use crate::signer::{AggregateFrostRequest, EncryptedPrivateKey, SignFrostRequest, secret_sharing};
+use crate::signer::{
+    AggregateFrostRequest, EncryptedPrivateKey, FrostSigningCommitmentsWithNonces,
+    SignFrostRequest, secret_sharing,
+};
 use crate::signer::{PrivateKeySource, SecretToSplit};
 use crate::tree::TreeNodeId;
 use crate::{
@@ -113,7 +114,6 @@ fn frost_signing_package(
 #[derive(Clone)]
 pub struct DefaultSigner {
     identity_key: SecretKey,
-    nonce_commitments: Arc<Mutex<HashMap<Vec<u8>, SigningNonces>>>, // TODO: Nonce commitments are never cleared, is this okay?
     secp: Secp256k1<All>,
     signing_master_key: Xpriv,
 }
@@ -151,7 +151,6 @@ impl DefaultSigner {
             master_key.derive_priv(&secp, &signing_derivation_path(network))?;
         Ok(DefaultSigner {
             identity_key,
-            nonce_commitments: Arc::new(Mutex::new(HashMap::new())),
             secp,
             signing_master_key,
         })
@@ -176,25 +175,54 @@ impl DefaultSigner {
         Ok(child)
     }
 
+    fn encrypt_message_ecies(
+        &self,
+        message: &[u8],
+        receiver_public_key: &PublicKey,
+    ) -> Result<Vec<u8>, SignerError> {
+        ecies::encrypt(&receiver_public_key.serialize(), message)
+            .map_err(|e| SignerError::Generic(format!("failed to encrypt: {e}")))
+    }
+
+    fn decrypt_message_ecies(&self, ciphertext: &[u8]) -> Result<Vec<u8>, SignerError> {
+        ecies::decrypt(&self.identity_key.secret_bytes(), ciphertext)
+            .map_err(|e| SignerError::Generic(format!("failed to decrypt: {e}")))
+    }
+
     fn encrypt_private_key_ecies(
         &self,
         private_key: &SecretKey,
         receiver_public_key: &PublicKey,
     ) -> Result<Vec<u8>, SignerError> {
-        let ciphertext = ecies::encrypt(
-            &receiver_public_key.serialize(),
-            &private_key.secret_bytes(),
-        )
-        .map_err(|e| SignerError::Generic(format!("failed to encrypt: {e}")))?;
+        let ciphertext =
+            self.encrypt_message_ecies(&private_key.secret_bytes(), receiver_public_key)?;
         Ok(ciphertext)
     }
 
     fn decrypt_private_key_ecies(&self, ciphertext: &[u8]) -> Result<SecretKey, SignerError> {
-        let plaintext = ecies::decrypt(&self.identity_key.secret_bytes(), ciphertext)
-            .map_err(|e| SignerError::Generic(format!("failed to decrypt: {e}")))?;
+        let plaintext = self.decrypt_message_ecies(ciphertext)?;
         let secret_key = SecretKey::from_slice(&plaintext)
             .map_err(|e| SignerError::Generic(format!("failed to deserialize secret key: {e}")))?;
         Ok(secret_key)
+    }
+
+    fn encrypt_nonces_ecies(
+        &self,
+        nonces: &SigningNonces,
+        receiver_public_key: &PublicKey,
+    ) -> Result<Vec<u8>, SignerError> {
+        let nonces_bytes = nonces.serialize().map_err(|e| {
+            SignerError::SerializationError(format!("failed to serialize nonces: {e}"))
+        })?;
+        self.encrypt_message_ecies(&nonces_bytes, receiver_public_key)
+    }
+
+    fn decrypt_nonces_ecies(&self, ciphertext: &[u8]) -> Result<SigningNonces, SignerError> {
+        let plaintext = self.decrypt_message_ecies(ciphertext)?;
+        let nonces = SigningNonces::deserialize(&plaintext).map_err(|e| {
+            SignerError::SerializationError(format!("failed to deserialize nonces: {e}"))
+        })?;
+        Ok(nonces)
     }
 }
 
@@ -212,8 +240,9 @@ impl Signer for DefaultSigner {
         Ok(sig)
     }
 
-    async fn generate_frost_signing_commitments(&self) -> Result<SigningCommitments, SignerError> {
-        let mut nonce_commitments = self.nonce_commitments.lock().await;
+    async fn generate_frost_signing_commitments(
+        &self,
+    ) -> Result<FrostSigningCommitmentsWithNonces, SignerError> {
         let mut rng = thread_rng();
 
         let binding_sk = SecretKey::new(&mut rng);
@@ -224,14 +253,14 @@ impl Signer for DefaultSigner {
             .map_err(|e| SignerError::NonceCreationError(e.to_string()))?;
 
         let nonces = SigningNonces::from_nonces(hiding, binding);
-        let commitments = nonces.commitments();
-        let commitment_bytes = commitments.serialize().map_err(|e| {
-            SignerError::SerializationError(format!("failed to serialize commitments: {e}"))
-        })?;
+        let nonces_ciphertext =
+            self.encrypt_nonces_ecies(&nonces, &self.get_identity_public_key()?)?;
+        let commitments = *nonces.commitments();
 
-        nonce_commitments.insert(commitment_bytes, nonces.clone());
-
-        Ok(*commitments)
+        Ok(FrostSigningCommitmentsWithNonces {
+            commitments,
+            nonces_ciphertext,
+        })
     }
 
     fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError> {
@@ -330,24 +359,14 @@ impl Signer for DefaultSigner {
             user_identifier,
             request.message,
             request.statechain_commitments,
-            request.self_commitment,
+            &request.self_nonce_commitment.commitments,
             request.adaptor_public_key,
         )?;
 
-        // Serialize the commitment to look up the corresponding nonces in our storage
-        let serialized_commitment = request.self_commitment.serialize().map_err(|e| {
-            SignerError::SerializationError(format!(
-                "failed to serialize self commitment: {e} (culprit: {:?})",
-                e.culprit()
-            ))
-        })?;
-
-        // Retrieve the nonces that were previously generated and stored when creating the commitment
+        // Decrypt the nonces that were previously generated when creating the commitment
         // These nonces are critical for the security of the Schnorr signature scheme
-        let nonce_commitments_guard = self.nonce_commitments.lock().await;
-        let signing_nonces = nonce_commitments_guard
-            .get(&serialized_commitment)
-            .ok_or(SignerError::UnknownNonceCommitment)?;
+        let signing_nonces =
+            self.decrypt_nonces_ecies(&request.self_nonce_commitment.nonces_ciphertext)?;
 
         let secret_key = request.private_key.to_secret_key(self)?;
 
@@ -414,7 +433,7 @@ impl Signer for DefaultSigner {
         // Generate the user's signature share using the FROST round2 signing algorithm
         // This combines the message, nonces, and key package to produce a partial signature
         let signature_share =
-            frost_secp256k1_tr::round2::sign(&signing_package, signing_nonces, &key_package)
+            frost_secp256k1_tr::round2::sign(&signing_package, &signing_nonces, &key_package)
                 .map_err(|e| {
                     SignerError::FrostError(format!(
                         "Failed to sign: {e} (culprit: {:?})",
@@ -749,5 +768,20 @@ mod test {
             .expect("Failed to get public key for node");
 
         assert_eq!(expected_public_key, result_public_key);
+    }
+
+    #[tokio::test]
+    async fn test_generate_frost_signing_commitments_nonces_round_trip() {
+        let signer = create_test_signer();
+        let commitments = signer
+            .generate_frost_signing_commitments()
+            .await
+            .expect("Failed to generate frost signing commitments");
+
+        let signing_nonces = signer
+            .decrypt_nonces_ecies(&commitments.nonces_ciphertext)
+            .expect("Failed to decrypt nonces");
+
+        assert_eq!(&commitments.commitments, signing_nonces.commitments());
     }
 }

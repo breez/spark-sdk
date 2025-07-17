@@ -78,7 +78,7 @@ pub async fn sign_refunds<S: Signer>(
                 public_key: &signing_public_key,
                 private_key: &leaf.signing_key,
                 verifying_key: &leaf.node.verifying_public_key,
-                self_commitment: &self_commitment,
+                self_nonce_commitment: &self_commitment,
                 statechain_commitments: spark_commitment.clone(),
                 adaptor_public_key: None,
             })
@@ -89,7 +89,7 @@ pub async fn sign_refunds<S: Signer>(
             signing_public_key,
             tx: new_refund_tx,
             user_signature: user_signature_share,
-            user_signature_commitment: self_commitment,
+            user_signature_commitment: self_commitment.commitments,
             signing_commitments: spark_commitment,
             network,
         });
@@ -148,7 +148,7 @@ pub async fn sign_aggregate_refunds<S: Signer>(
                 public_key: &leaf_data.signing_public_key,
                 private_key: &leaf_data.signing_private_key,
                 verifying_key: &verifying_key,
-                self_commitment: &leaf_data.signing_nonce_commitment,
+                self_nonce_commitment: &leaf_data.signing_nonce_commitment,
                 statechain_commitments: signing_nonce_commitments.clone(),
                 adaptor_public_key: adaptor_pubkey,
             })
@@ -162,7 +162,7 @@ pub async fn sign_aggregate_refunds<S: Signer>(
                 statechain_public_keys: public_keys,
                 verifying_key: &verifying_key,
                 statechain_commitments: signing_nonce_commitments,
-                self_commitment: &leaf_data.signing_nonce_commitment,
+                self_commitment: &leaf_data.signing_nonce_commitment.commitments,
                 public_key: &leaf_data.signing_public_key,
                 self_signature: &user_signature,
                 adaptor_public_key: adaptor_pubkey,
@@ -233,7 +233,10 @@ pub fn prepare_refund_so_signing_jobs(
                 signing_public_key: refund_signing_data.signing_public_key.serialize().to_vec(),
                 raw_tx: bitcoin::consensus::serialize(&refund_tx),
                 signing_nonce_commitment: Some(
-                    refund_signing_data.signing_nonce_commitment.try_into()?,
+                    refund_signing_data
+                        .signing_nonce_commitment
+                        .commitments
+                        .try_into()?,
                 ),
             }),
         };
