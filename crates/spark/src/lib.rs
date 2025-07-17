@@ -1,6 +1,7 @@
 pub mod address;
 pub mod bitcoin;
 pub mod core;
+pub mod events;
 pub mod operator;
 pub mod services;
 pub mod signer;
