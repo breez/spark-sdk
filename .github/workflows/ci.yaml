@@ -2,8 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
-  pull_request:    
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -31,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         crate:
-          - spark          
+          - spark
           - spark-wallet
         target:
           - x86_64-unknown-linux-gnu
@@ -81,9 +81,10 @@ jobs:
         crate:
           - spark
           - spark-wallet
-  
+
   wasm-clippy:
     name: Wasm clippy
+    if: false # TODO: Enable this when we start supporting wasm
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

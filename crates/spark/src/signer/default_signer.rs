@@ -49,6 +49,8 @@ fn signing_derivation_path(network: Network) -> DerivationPath {
     ])
 }
 
+// TODO: Is this needed?
+#[allow(unused)]
 fn deposit_derivation_path(network: Network) -> DerivationPath {
     DerivationPath::from(vec![
         purpose(),
@@ -57,6 +59,8 @@ fn deposit_derivation_path(network: Network) -> DerivationPath {
     ])
 }
 
+// TODO: Is this needed?
+#[allow(unused)]
 fn static_deposit_derivation_path(network: Network) -> DerivationPath {
     DerivationPath::from(vec![
         purpose(),

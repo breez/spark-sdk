@@ -5,7 +5,7 @@ use crate::Network;
 use crate::operator::OperatorPool;
 use crate::operator::rpc::spark::TransferFilter;
 use crate::operator::rpc::spark::transfer_filter::Participant;
-use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
+use crate::operator::rpc::{self as operator_rpc};
 use crate::services::models::{LeafKeyTweak, Transfer, map_signing_nonce_commitments};
 use crate::services::{PagingFilter, ProofMap, TransferId, TransferStatus};
 use crate::signer::{PrivateKeySource, SecretToSplit, VerifiableSecretShare};
@@ -154,8 +154,8 @@ impl<S: Signer> TransferService<S> {
             .start_transfer(start_transfer_request)
             .await?
             .transfer
-            .ok_or(ServiceError::ServiceConnectionError(
-                OperatorRpcError::Unexpected("No transfer from operator".to_string()),
+            .ok_or(ServiceError::Generic(
+                "No transfer from operator".to_string(),
             ))?;
 
         transfer.try_into()
@@ -1004,8 +1004,8 @@ impl<S: Signer> TransferService<S> {
 
         match response.transfer {
             Some(transfer) => Ok(transfer.try_into()?),
-            None => Err(ServiceError::ServiceConnectionError(
-                OperatorRpcError::Unexpected("No transfer response from operator".to_string()),
+            None => Err(ServiceError::Generic(
+                "No transfer response from operator".to_string(),
             )),
         }
     }

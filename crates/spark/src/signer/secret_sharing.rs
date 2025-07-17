@@ -362,12 +362,12 @@ mod tests {
                 let mut numerator = Scalar::ONE;
                 let mut denominator = Scalar::ONE;
 
-                for j in 0..threshold {
+                for (j, share) in shares.iter().enumerate().take(threshold) {
                     if i == j {
                         continue;
                     }
 
-                    let xj = shares[j].secret_share.index;
+                    let xj = share.secret_share.index;
                     numerator *= xj;
                     denominator *= xj - xi;
                 }

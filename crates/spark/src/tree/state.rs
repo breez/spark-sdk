@@ -423,10 +423,7 @@ mod test {
 
         let _ = state.reserve_leaves(&[leaf.clone()]).unwrap();
         let result = state.reserve_leaves(&[leaf.clone()]).unwrap_err();
-        assert_eq!(
-            matches!(result, TreeServiceError::NonReservableLeaves),
-            true
-        );
+        assert!(matches!(result, TreeServiceError::NonReservableLeaves));
     }
 
     #[test]

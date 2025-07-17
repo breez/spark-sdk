@@ -30,7 +30,7 @@ pub enum SparkWalletError {
     DepositAddressUsed,
 
     #[error("Operator RPC error: {0}")]
-    OperatorRpcError(#[from] spark::operator::rpc::OperatorRpcError),
+    OperatorRpcError(Box<spark::operator::rpc::OperatorRpcError>),
 
     #[error("Operator pool error: {0}")]
     OperatorPoolError(String),
@@ -46,4 +46,10 @@ pub enum SparkWalletError {
 
     #[error("Generic error: {0}")]
     Generic(String),
+}
+
+impl From<spark::operator::rpc::OperatorRpcError> for SparkWalletError {
+    fn from(error: spark::operator::rpc::OperatorRpcError) -> Self {
+        SparkWalletError::OperatorRpcError(Box::new(error))
+    }
 }
