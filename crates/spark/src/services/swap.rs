@@ -4,8 +4,13 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use bitcoin::{consensus::serialize, secp256k1::ecdsa};
+use bitcoin::{
+    Transaction,
+    consensus::{deserialize, serialize},
+    secp256k1::ecdsa,
+};
 use prost_types::Timestamp;
+use tracing::debug;
 
 use crate::{
     Network,
@@ -22,7 +27,10 @@ use crate::{
     signer::{PrivateKeySource, Signer, from_bytes_to_scalar},
     ssp::{RequestLeavesSwapInput, ServiceProvider, UserLeafInput},
     tree::{TreeNode, TreeNodeId},
-    utils::refund::{prepare_refund_so_signing_jobs, sign_aggregate_refunds},
+    utils::{
+        refund::{prepare_refund_so_signing_jobs, sign_aggregate_refunds},
+        transactions::validate_unsigned_refund_tx,
+    },
 };
 
 const SWAP_EXPIRY_DURATION: Duration = Duration::from_secs(2 * 60);
@@ -64,6 +72,11 @@ where
         if target_amounts.is_empty() {
             return Err(ServiceError::InvalidAmount);
         }
+
+        debug!(
+            "Request to swap leaves: {:?} for target amounts {:?}",
+            leaves, target_amounts
+        );
 
         let target_sum: u64 = target_amounts.iter().sum();
         let leaf_sum: u64 = leaves.iter().map(|leaf| leaf.value).sum();
@@ -135,6 +148,7 @@ where
             })
             .await?;
 
+        debug!("start_leaf_swap response: {:?}", response);
         let transfer = response
             .transfer
             .ok_or(ServiceError::ServiceConnectionError(
@@ -206,6 +220,45 @@ where
             })
             .await?;
 
+        debug!("request_leaves_swap response: {:?}", swap_response);
+
+        // Validate the created refund transactions
+        for swap_leaf in &swap_response.swap_leaves {
+            let raw_unsigned_refund_tx_bytes =
+                hex::decode(&swap_leaf.raw_unsigned_refund_transaction).map_err(|e| {
+                    ServiceError::ValidationError(
+                        "Invalid hex in raw_unsigned_refund_transaction".to_string(),
+                    )
+                })?;
+            let unsigned_refund_tx: Transaction = deserialize(&raw_unsigned_refund_tx_bytes)
+                .map_err(|e| {
+                    ServiceError::ValidationError(format!(
+                        "Failed to deserialize unsigned refund transaction: {}",
+                        e
+                    ))
+                })?;
+            let leaf_id = swap_leaf.leaf_id.parse().map_err(|e| {
+                ServiceError::ValidationError(format!("Failed to parse leaf_id: {}", e))
+            })?;
+            let private_key_source = PrivateKeySource::Derived(leaf_id);
+            let destination_pubkey = self
+                .signer
+                .get_public_key_from_private_key_source(&private_key_source)?;
+            validate_unsigned_refund_tx(
+                &unsigned_refund_tx,
+                self.network,
+                None,
+                Some(destination_pubkey),
+                None,
+            )
+            .map_err(|e| {
+                ServiceError::ValidationError(format!(
+                    "Failed to validate unsigned refund transaction: {}",
+                    e
+                ))
+            })?;
+        }
+
         // TODO: Validate the amounts in swap_response match the leaf sum, and the target amounts are met.
         // TODO: javascript SDK applies adaptor to signature here for every leaf, but it seems to not do anything?
         let refund_signature_map = signed_refunds
@@ -223,10 +276,13 @@ where
                 ))
             })
             .collect::<Result<HashMap<_, _>, ServiceError>>()?;
+
+        debug!("deliver transfer package request transfer: {:?}", transfer);
         let transfer = self
             .transfer_service
             .deliver_transfer_package(&transfer, &leaf_key_tweaks, refund_signature_map)
             .await?;
+        debug!("deliver transfer package response transfer: {:?}", transfer);
         let complete_response = self
             .ssp_client
             .complete_leaves_swap(
@@ -235,6 +291,7 @@ where
                 &swap_response.id,
             )
             .await?;
+        debug!("complete_leaves_swap response: {:?}", complete_response);
         let transfer_id = complete_response.inbound_transfer.spark_id.ok_or(
             ServiceError::ServiceConnectionError(OperatorRpcError::Unexpected(
                 "inbound transfer spark_id missing".to_string(),
@@ -253,7 +310,7 @@ where
                 ..Default::default()
             })
             .await?;
-
+        debug!("query_all_transfers transfer response: {:?}", transfers);
         let transfer =
             transfers
                 .transfers
