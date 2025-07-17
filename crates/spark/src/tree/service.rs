@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use bitcoin::secp256k1::PublicKey;
-use tracing::warn;
+use tracing::{trace, warn};
 
 use crate::{
     Network,
@@ -244,6 +244,7 @@ impl<S: Signer> TreeService<S> {
         target_amount_sat: u64,
         exact_only: bool,
     ) -> Result<Option<LeavesReservation>, TreeServiceError> {
+        trace!("Reserving leaves for amount: {}", target_amount_sat);
         let reservation = {
             let mut state = self.state.lock().unwrap();
             let leaves = state.get_leaves();
@@ -252,10 +253,17 @@ impl<S: Signer> TreeService<S> {
                 selected =
                     self.select_leaves_by_minimum_amount(leaves.clone(), target_amount_sat)?;
             }
-            let reservation_id = state.reserve_leaves(&leaves)?;
-            Ok::<Option<LeavesReservation>, TreeServiceError>(
-                selected.map(|leaves| LeavesReservation::new(leaves.clone(), reservation_id)),
-            )
+
+            match selected {
+                Some(selected_leaves) => {
+                    let reservation_id = state.reserve_leaves(&selected_leaves)?;
+                    Ok::<Option<LeavesReservation>, TreeServiceError>(Some(LeavesReservation::new(
+                        selected_leaves.clone(),
+                        reservation_id,
+                    )))
+                }
+                None => Ok(None),
+            }
         }?;
 
         match reservation {
