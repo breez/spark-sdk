@@ -215,6 +215,7 @@ impl<S: Signer + Clone> SparkWallet<S> {
 
         let deposit_nodes = self.deposit_service.claim_deposit(tx, vout).await?;
         debug!("Claimed deposit root node: {:?}", deposit_nodes);
+        // TODO: update local tree here, otherwise a failure in collect_leaves will result in out of date state.
         let collected_leaves = self.tree_service.collect_leaves(deposit_nodes).await?;
         debug!("Collected deposit leaves: {:?}", collected_leaves);
         Ok(collected_leaves.into_iter().map(WalletLeaf::from).collect())

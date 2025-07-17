@@ -55,6 +55,7 @@ impl<S: Signer> TimelockManager<S> {
     ) -> Result<Vec<TreeNode>, ServiceError> {
         trace!("Checking timelock nodes: {:?}", nodes);
         let nodes = self.check_refresh_timelock_nodes(nodes).await?;
+        // TODO: update local tree here, otherwise a failure to refresh will not be reflected in the tree.
         let nodes = self.check_extend_timelock_nodes(nodes).await?;
         Ok(nodes)
     }
@@ -120,8 +121,6 @@ impl<S: Signer> TimelockManager<S> {
 
         let refreshed_nodes = futures::future::try_join_all(refresh_tasks).await?;
         ready_nodes.extend(refreshed_nodes);
-
-        // TODO: update local tree to avoid having to re-fetch after this
 
         Ok(ready_nodes)
     }
@@ -359,8 +358,6 @@ impl<S: Signer> TimelockManager<S> {
 
         let extended_nodes = futures::future::try_join_all(extend_tasks).await?;
         ready_nodes.extend(extended_nodes.into_iter().flatten().collect::<Vec<_>>());
-
-        // TODO: update local tree to avoid having to re-fetch after this
 
         Ok(ready_nodes)
     }
