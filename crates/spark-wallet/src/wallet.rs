@@ -253,7 +253,10 @@ impl<S: Signer> SparkWallet<S> {
     }
 
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
-        self.tree_service.insert_leaves(vec![deposit]).await?;
+        self.tree_service
+            .insert_leaves(vec![deposit.clone()])
+            .await?;
+        self.tree_service.collect_leaves(vec![deposit]).await?;
         Ok(())
     }
 
