@@ -24,3 +24,5 @@ fmt-fix: $(SUBDIRS)
 fmt-check: $(SUBDIRS)
 
 test: $(SUBDIRS)
+
+wasm-clippy-check: $(SUBDIRS)

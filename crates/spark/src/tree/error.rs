@@ -8,7 +8,7 @@ pub enum TreeServiceError {
     InsufficientFunds,
 
     #[error("rpc error: {0}")]
-    RpcError(#[from] OperatorRpcError),
+    RpcError(Box<OperatorRpcError>),
 
     #[error("unselectable amount")]
     UnselectableAmount,
@@ -24,4 +24,10 @@ pub enum TreeServiceError {
 
     #[error("generic error: {0}")]
     Generic(String),
+}
+
+impl From<OperatorRpcError> for TreeServiceError {
+    fn from(error: OperatorRpcError) -> Self {
+        TreeServiceError::RpcError(Box::new(error))
+    }
 }

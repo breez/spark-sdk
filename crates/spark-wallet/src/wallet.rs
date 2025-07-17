@@ -440,7 +440,7 @@ where
         }
         Err(e) => {
             tree_service.cancel_reservation(leaves.id.clone());
-            Err(e.into())
+            Err(e)
         }
     }
 }

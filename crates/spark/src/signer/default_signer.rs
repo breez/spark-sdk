@@ -49,22 +49,6 @@ fn signing_derivation_path(network: Network) -> DerivationPath {
     ])
 }
 
-fn deposit_derivation_path(network: Network) -> DerivationPath {
-    DerivationPath::from(vec![
-        purpose(),
-        coin_type(network),
-        ChildNumber::from_hardened_idx(2).expect("Hardened two is invalid"),
-    ])
-}
-
-fn static_deposit_derivation_path(network: Network) -> DerivationPath {
-    DerivationPath::from(vec![
-        purpose(),
-        coin_type(network),
-        ChildNumber::from_hardened_idx(3).expect("Hardened three is invalid"),
-    ])
-}
-
 fn coin_type(network: Network) -> ChildNumber {
     let coin_type: u32 = match network {
         Network::Regtest => 0,
@@ -551,10 +535,7 @@ mod test {
     use crate::{
         Network,
         signer::default_signer::DefaultSigner,
-        signer::default_signer::{
-            deposit_derivation_path, identity_derivation_path, signing_derivation_path,
-            static_deposit_derivation_path,
-        },
+        signer::default_signer::{identity_derivation_path, signing_derivation_path},
     };
 
     /// Ensure constants are defined correctly and don't panic.
@@ -569,16 +550,6 @@ mod test {
         signing_derivation_path(Network::Testnet);
         signing_derivation_path(Network::Regtest);
         signing_derivation_path(Network::Signet);
-
-        deposit_derivation_path(Network::Mainnet);
-        deposit_derivation_path(Network::Testnet);
-        deposit_derivation_path(Network::Regtest);
-        deposit_derivation_path(Network::Signet);
-
-        static_deposit_derivation_path(Network::Mainnet);
-        static_deposit_derivation_path(Network::Testnet);
-        static_deposit_derivation_path(Network::Regtest);
-        static_deposit_derivation_path(Network::Signet);
     }
 
     fn create_test_signer() -> DefaultSigner {

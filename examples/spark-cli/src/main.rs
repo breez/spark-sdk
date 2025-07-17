@@ -3,7 +3,6 @@ use std::fs::{OpenOptions, canonicalize};
 use std::path::PathBuf;
 
 use clap::Parser;
-use dotenvy;
 use figment::{
     Figment,
     providers::{Env, Format, Yaml},

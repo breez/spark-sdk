@@ -79,7 +79,7 @@ pub enum ServiceError {
     #[error("bitcoin io error: {0}")]
     BitcoinIOError(#[from] bitcoin::io::Error),
     #[error("request error: {0}")]
-    RequestError(#[from] Status),
+    RequestError(Box<Status>),
     #[error("service provider error: {0}")]
     ServiceProviderError(#[from] crate::ssp::ServiceProviderError),
     #[error("validation error: {0}")]
@@ -87,11 +87,29 @@ pub enum ServiceError {
     #[error("signer error: {0}")]
     SignerError(#[from] crate::signer::SignerError),
     #[error("service connection error: {0}")]
-    ServiceConnectionError(#[from] OperatorRpcError),
+    ServiceConnectionError(Box<OperatorRpcError>),
     #[error("tree service error: {0}")]
-    TreeServiceError(#[from] crate::tree::TreeServiceError),
+    TreeServiceError(Box<crate::tree::TreeServiceError>),
     #[error("unknown status: {0}")]
     UnknownStatus(String),
     #[error("generic error: {0}")]
     Generic(String),
+}
+
+impl From<Status> for ServiceError {
+    fn from(status: Status) -> Self {
+        ServiceError::RequestError(Box::new(status))
+    }
+}
+
+impl From<OperatorRpcError> for ServiceError {
+    fn from(error: OperatorRpcError) -> Self {
+        ServiceError::ServiceConnectionError(Box::new(error))
+    }
+}
+
+impl From<crate::tree::TreeServiceError> for ServiceError {
+    fn from(error: crate::tree::TreeServiceError) -> Self {
+        ServiceError::TreeServiceError(Box::new(error))
+    }
 }

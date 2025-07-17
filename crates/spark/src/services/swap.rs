@@ -11,10 +11,7 @@ use crate::{
     Network,
     operator::{
         OperatorPool,
-        rpc::{
-            OperatorRpcError,
-            spark::{StartTransferRequest, TransferFilter, transfer_filter::Participant},
-        },
+        rpc::spark::{StartTransferRequest, TransferFilter, transfer_filter::Participant},
     },
     services::{
         LeafKeyTweak, LeafRefundSigningData, ServiceError, Transfer, TransferId, TransferService,
@@ -135,11 +132,9 @@ where
             })
             .await?;
 
-        let transfer = response
-            .transfer
-            .ok_or(ServiceError::ServiceConnectionError(
-                OperatorRpcError::Unexpected("response missing transfer".to_string()),
-            ))?;
+        let transfer = response.transfer.ok_or(ServiceError::Generic(
+            "response missing transfer".to_string(),
+        ))?;
         let transfer: Transfer = transfer.try_into()?;
 
         let signed_refunds = sign_aggregate_refunds(
@@ -152,15 +147,13 @@ where
         let first_leaf = transfer
             .leaves
             .first()
-            .ok_or(ServiceError::ServiceConnectionError(
-                OperatorRpcError::Unexpected("no leaves in transfer".to_string()),
-            ))?;
+            .ok_or(ServiceError::Generic("no leaves in transfer".to_string()))?;
         let first_leaf_id = first_leaf.leaf.id.to_string();
         let refund_signature = signed_refunds
             .iter()
             .find(|r| r.node_id == first_leaf_id)
-            .ok_or(ServiceError::ServiceConnectionError(
-                OperatorRpcError::Unexpected("refund signature not found".to_string()),
+            .ok_or(ServiceError::Generic(
+                "refund signature not found".to_string(),
             ))?;
         let (adaptor_signature, adaptor_private_key) =
             generate_adaptor_from_signature(&refund_signature.refund_tx_signature)?;
@@ -178,8 +171,8 @@ where
             let refund_signature = signed_refunds
                 .iter()
                 .find(|r| r.node_id == leaf.leaf.id.to_string())
-                .ok_or(ServiceError::ServiceConnectionError(
-                    OperatorRpcError::Unexpected("refund signature not found".to_string()),
+                .ok_or(ServiceError::Generic(
+                    "refund signature not found".to_string(),
                 ))?;
             let signature = generate_signature_from_existing_adaptor(
                 &refund_signature.refund_tx_signature,
@@ -235,11 +228,13 @@ where
                 &swap_response.id,
             )
             .await?;
-        let transfer_id = complete_response.inbound_transfer.spark_id.ok_or(
-            ServiceError::ServiceConnectionError(OperatorRpcError::Unexpected(
-                "inbound transfer spark_id missing".to_string(),
-            )),
-        )?;
+        let transfer_id =
+            complete_response
+                .inbound_transfer
+                .spark_id
+                .ok_or(ServiceError::Generic(
+                    "inbound transfer spark_id missing".to_string(),
+                ))?;
         let transfers = self
             .operator_pool
             .get_coordinator()
@@ -254,14 +249,11 @@ where
             })
             .await?;
 
-        let transfer =
-            transfers
-                .transfers
-                .into_iter()
-                .nth(0)
-                .ok_or(ServiceError::ServiceConnectionError(
-                    OperatorRpcError::Unexpected("transfer not found".to_string()),
-                ))?;
+        let transfer = transfers
+            .transfers
+            .into_iter()
+            .nth(0)
+            .ok_or(ServiceError::Generic("transfer not found".to_string()))?;
         transfer.try_into()
     }
 }
