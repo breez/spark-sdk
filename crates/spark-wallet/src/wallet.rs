@@ -220,7 +220,7 @@ impl<S: Signer> SparkWallet<S> {
     pub async fn fetch_coop_exit_fee_quote(
         &self,
         withdrawal_address: Address<NetworkUnchecked>,
-        amount_sat: Option<u64>,
+        amount_sats: Option<u64>,
     ) -> Result<CoopExitFeeQuote, SparkWalletError> {
         // Validate withdrawal address
         let withdrawal_address = withdrawal_address
@@ -228,8 +228,8 @@ impl<S: Signer> SparkWallet<S> {
             .map_err(|_| SparkWalletError::InvalidNetwork)?;
 
         // Selects leaves totaling `amount_sat` if provided, otherwise retrieves all available leaves.
-        let reservation = match amount_sat {
-            Some(amount_sat) => self.select_leaves(amount_sat).await?,
+        let reservation = match amount_sats {
+            Some(amount_sats) => self.select_leaves(amount_sats).await?,
             None => {
                 let balance = self.tree_service.get_available_balance()?;
                 self.select_leaves(balance).await?
@@ -484,42 +484,89 @@ impl<S: Signer> SparkWallet<S> {
     pub async fn withdraw(
         &self,
         withdrawal_address: Address<NetworkUnchecked>,
+        amount_sats: Option<u64>,
         exit_speed: ExitSpeed,
-        amount_sat: Option<u64>,
-        fee_quote: Option<CoopExitFeeQuote>,
+        fee_quote: CoopExitFeeQuote,
     ) -> Result<WalletTransfer, SparkWalletError> {
         // Validate withdrawal address
         let withdrawal_address = withdrawal_address
             .require_network(self.config.network.into())
             .map_err(|_| SparkWalletError::InvalidNetwork)?;
 
-        // Selects leaves totaling `amount_sat` if provided, otherwise retrieves all available leaves.
-        let leaves_reservation = match amount_sat {
-            Some(amount_sat) => self.select_leaves(amount_sat).await?,
+        // Calculate the fee based on the exit speed
+        let fee_sats = match exit_speed {
+            ExitSpeed::Fast => {
+                fee_quote.speed_fast.l1_broadcast_fee_sat + fee_quote.speed_fast.user_fee_sat
+            }
+            ExitSpeed::Medium => {
+                fee_quote.speed_medium.l1_broadcast_fee_sat + fee_quote.speed_medium.user_fee_sat
+            }
+            ExitSpeed::Slow => {
+                fee_quote.speed_slow.l1_broadcast_fee_sat + fee_quote.speed_slow.user_fee_sat
+            }
+        };
+        trace!("Calculated fee for exit speed {exit_speed:?}: {fee_sats} sats",);
+
+        // If amount is not provided, use the available balance
+        let (amount_sats, withdraw_all) = match amount_sats {
+            Some(amount_sats) => (amount_sats, false),
             None => {
                 let balance = self.tree_service.get_available_balance()?;
-                self.select_leaves(balance).await?
+                trace!(
+                    "Using available balance of {balance} sats for withdrawal and deducting fee from balance"
+                );
+                (balance, true)
             }
         };
 
-        // Cooperative exit with the SSP
-        let transfer = with_reserved_leaves(
+        // Check if the fee is greater than the amount when deducting the fee from it
+        if withdraw_all && fee_sats > amount_sats {
+            trace!(
+                "Insufficient funds for withdrawal: amount {amount_sats} sats, fee {fee_sats} sats"
+            );
+            return Err(SparkWalletError::InsufficientFunds);
+        }
+
+        // Select leaves for the withdrawal
+        let withdraw_leaves_reservation = self.select_leaves(amount_sats).await?;
+        let (fee_quote_id, fee_leaves_reservation) = if !withdraw_all {
+            // If we are not deducting the fee from the amount, select leaves for the fee
+            (
+                Some(fee_quote.id),
+                Some(self.select_leaves(fee_sats).await?),
+            )
+        } else {
+            (None, None)
+        };
+        let fee_leaves = fee_leaves_reservation.as_ref().map(|r| r.leaves.clone());
+
+        // Prepare a future that performs the cooperative exit with the SSP
+        let coop_exit_fut = with_reserved_leaves(
             self.tree_service.clone(),
             async {
                 Ok(self
                     .coop_exit_service
                     .coop_exit(
-                        leaves_reservation.leaves.clone(),
+                        withdraw_leaves_reservation.leaves.clone(),
                         &withdrawal_address,
+                        withdraw_all,
                         exit_speed.into(),
-                        amount_sat.is_none(),
-                        fee_quote,
+                        fee_quote_id,
+                        fee_leaves,
                     )
                     .await?)
             },
-            &leaves_reservation,
-        )
-        .await?;
+            &withdraw_leaves_reservation,
+        );
+        // If we have reserved leaves for the fee, we need to cancel or finalize the reservation
+        // after the cooperative exit future completes.
+        let transfer = match &fee_leaves_reservation {
+            Some(fee_reservation) => {
+                with_reserved_leaves(self.tree_service.clone(), coop_exit_fut, &fee_reservation)
+                    .await?
+            }
+            None => coop_exit_fut.await?,
+        };
 
         Ok(transfer.into())
     }

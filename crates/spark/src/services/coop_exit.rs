@@ -10,15 +10,13 @@ use crate::operator::OperatorPool;
 use crate::services::ServiceError;
 use crate::ssp::ServiceProvider;
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
-use crate::utils::transactions::create_refund_tx;
+use crate::utils::transactions::create_coop_exit_refund_tx;
 use crate::{signer::Signer, tree::TreeNode};
 use std::sync::Arc;
 
 use crate::address::SparkAddress;
 use crate::core::next_sequence;
 use crate::operator::rpc as operator_rpc;
-use crate::operator::rpc::spark::TransferFilter;
-use crate::operator::rpc::spark::transfer_filter::Participant;
 use crate::services::{
     ExitSpeed, LeafKeyTweak, LeafRefundSigningData, Transfer, TransferId, TransferService,
 };
@@ -36,7 +34,7 @@ const COOP_EXIT_EXPIRY_DURATION: Duration = Duration::from_secs(60 * 5); // 5 mi
 #[derive(Debug, Clone, Serialize)]
 pub struct CoopExitSpeedFeeQuote {
     pub user_fee_sat: u64,
-    pub broadcast_fee_sat: u64,
+    pub l1_broadcast_fee_sat: u64,
 }
 
 #[derive(Debug)]
@@ -49,31 +47,29 @@ struct CoopExitRefundSignatures {
 pub struct CoopExitFeeQuote {
     pub id: String,
     pub expires_at: i64,
-    pub leaf_external_ids: Vec<String>,
     pub speed_fast: CoopExitSpeedFeeQuote,
     pub speed_medium: CoopExitSpeedFeeQuote,
     pub speed_slow: CoopExitSpeedFeeQuote,
 }
 
-impl TryFrom<(crate::ssp::CoopExitFeeQuote, Vec<String>)> for CoopExitFeeQuote {
+impl TryFrom<crate::ssp::CoopExitFeeQuote> for CoopExitFeeQuote {
     type Error = ServiceError;
 
-    fn try_from(val: (crate::ssp::CoopExitFeeQuote, Vec<String>)) -> Result<Self, Self::Error> {
+    fn try_from(quote: crate::ssp::CoopExitFeeQuote) -> Result<Self, Self::Error> {
         Ok(Self {
-            id: val.0.id,
-            expires_at: val.0.expires_at.timestamp(),
-            leaf_external_ids: val.1,
+            id: quote.id,
+            expires_at: quote.expires_at.timestamp(),
             speed_fast: CoopExitSpeedFeeQuote {
-                user_fee_sat: val.0.user_fee_fast.as_sats()?,
-                broadcast_fee_sat: val.0.l1_broadcast_fee_fast.as_sats()?,
+                user_fee_sat: quote.user_fee_fast.as_sats()?,
+                l1_broadcast_fee_sat: quote.l1_broadcast_fee_fast.as_sats()?,
             },
             speed_medium: CoopExitSpeedFeeQuote {
-                user_fee_sat: val.0.user_fee_medium.as_sats()?,
-                broadcast_fee_sat: val.0.l1_broadcast_fee_medium.as_sats()?,
+                user_fee_sat: quote.user_fee_medium.as_sats()?,
+                l1_broadcast_fee_sat: quote.l1_broadcast_fee_medium.as_sats()?,
             },
             speed_slow: CoopExitSpeedFeeQuote {
-                user_fee_sat: val.0.user_fee_slow.as_sats()?,
-                broadcast_fee_sat: val.0.l1_broadcast_fee_slow.as_sats()?,
+                user_fee_sat: quote.user_fee_slow.as_sats()?,
+                l1_broadcast_fee_sat: quote.l1_broadcast_fee_slow.as_sats()?,
             },
         })
     }
@@ -115,52 +111,38 @@ where
         let leaf_external_ids: Vec<String> =
             leaves.iter().map(|leaf| leaf.id.to_string()).collect();
 
-        let quote = self
-            .ssp_client
-            .get_coop_exit_fee_quote(leaf_external_ids.clone(), &withdrawal_address.to_string())
-            .await?;
-
-        CoopExitFeeQuote::try_from((quote, leaf_external_ids))
+        self.ssp_client
+            .get_coop_exit_fee_quote(leaf_external_ids, &withdrawal_address.to_string())
+            .await?
+            .try_into()
     }
 
     pub async fn coop_exit(
         &self,
         leaves: Vec<TreeNode>,
         withdrawal_address: &Address,
-        exit_speed: ExitSpeed,
         withdraw_all: bool,
-        fee_quote: Option<CoopExitFeeQuote>,
+        exit_speed: ExitSpeed,
+        fee_quote_id: Option<String>,
+        fee_leaves: Option<Vec<TreeNode>>,
     ) -> Result<Transfer, ServiceError> {
-        debug!("Starting cooperative exit with leaves: {leaves:?}");
-        let fee_quote = match fee_quote {
-            Some(fq) => fq,
-            None => {
-                // If no fee quote is provided, fetch it
-                self.fetch_coop_exit_fee_quote(leaves.clone(), withdrawal_address.clone())
-                    .await?
-            }
-        };
-        // Validate the fee selection
-        let fee_estimate = match exit_speed {
-            ExitSpeed::Fast => fee_quote.speed_fast,
-            ExitSpeed::Medium => fee_quote.speed_medium,
-            ExitSpeed::Slow => fee_quote.speed_slow,
-        };
-        let fee_estimate = fee_estimate.broadcast_fee_sat + fee_estimate.user_fee_sat;
-        let leaves_value = leaves.iter().map(|leaf| leaf.value).sum::<u64>();
-        if fee_estimate > leaves_value {
-            return Err(ServiceError::InvalidFees);
-        }
+        debug!("Starting cooperative exit with leaves");
+        let leaf_external_ids = leaves.iter().map(|l| l.id.clone().to_string()).collect();
+        let fee_leaf_external_ids = fee_leaves.as_ref().map(|fee_leaves| {
+            fee_leaves
+                .iter()
+                .map(|l| l.id.clone().to_string())
+                .collect()
+        });
+        trace!("Leaf external IDs for cooperative exit: {leaf_external_ids:?}");
+        trace!("Fee leaf external IDs for cooperative exit: {fee_leaf_external_ids:?}");
 
-        // Build leaf key tweaks with new signing keys
-        trace!("Preparing leaf key tweaks for cooperative exit");
-        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves)?;
-        let leaf_external_ids: Vec<String> = leaf_key_tweaks
-            .iter()
-            .map(|l| l.node.id.clone().to_string())
-            .collect();
+        // Build leaf key tweaks for all leaves with new signing keys
+        let all_leaves = [leaves, fee_leaves.unwrap_or_default()].concat();
+        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, all_leaves)?;
 
-        trace!("Requesting cooperative exit with leaf external IDs: {leaf_external_ids:?}",);
+        // Request cooperative exit from the SSP
+        trace!("Requesting cooperative exit");
         let coop_exit_request = self
             .ssp_client
             .request_coop_exit(RequestCoopExitInput {
@@ -169,8 +151,8 @@ where
                 idempotency_key: uuid::Uuid::now_v7().to_string(),
                 exit_speed: exit_speed.into(),
                 withdraw_all,
-                fee_leaf_external_ids: Some(fee_quote.leaf_external_ids),
-                fee_quote_id: Some(fee_quote.id),
+                fee_leaf_external_ids,
+                fee_quote_id,
             })
             .await?;
 
@@ -190,44 +172,16 @@ where
         let coop_exit_refund_signatures = self
             .get_connector_refund_signatures(leaf_key_tweaks, connector_txid, coop_exit_input)
             .await?;
-
         trace!("Got connector refund signatures: {coop_exit_refund_signatures:?}",);
+        let transfer = coop_exit_refund_signatures.transfer;
+
         let complete_response = self
             .ssp_client
-            .complete_coop_exit(
-                &coop_exit_refund_signatures.transfer.id.to_string(),
-                &coop_exit_request.id,
-            )
+            .complete_coop_exit(&transfer.id.to_string(), &coop_exit_request.id)
             .await?;
         trace!("Completed cooperative exit: {complete_response:?}",);
-        let transfer_id =
-            complete_response
-                .transfer
-                .and_then(|t| t.spark_id)
-                .ok_or(ServiceError::Generic(
-                    "transfer spark_id missing".to_string(),
-                ))?;
-        let transfers = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .query_all_transfers(TransferFilter {
-                participant: Some(Participant::ReceiverIdentityPublicKey(
-                    self.signer.get_identity_public_key()?.serialize().to_vec(),
-                )),
-                transfer_ids: vec![transfer_id],
-                network: self.network.to_proto_network() as i32,
-                ..Default::default()
-            })
-            .await?;
 
-        let transfer = transfers
-            .transfers
-            .into_iter()
-            .nth(0)
-            .ok_or(ServiceError::Generic("transfer not found".to_string()))?;
-        trace!("Final transfer after cooperative exit: {transfer:?}",);
-        transfer.try_into()
+        Ok(transfer)
     }
 
     async fn get_connector_refund_signatures(
@@ -382,32 +336,25 @@ where
             )?;
 
             trace!(
-                "Creating refund transaction for leaf {} with sequence {sequence}",
+                "Creating refund transaction for leaf {} with sequence {sequence} and connector vout {i}",
                 leaf_key_tweak.node.id
             );
-            let mut connector_refund_tx = create_refund_tx(
+            let connector_refund_tx = create_coop_exit_refund_tx(
                 sequence,
                 refund_tx.input[0].previous_output,
+                OutPoint {
+                    txid: connector_txid,
+                    vout: i as u32,
+                },
                 leaf_key_tweak.node.value,
                 &refund_signing_data.receiving_public_key,
                 self.network,
             );
 
             trace!(
-                "Adding input to connector refund transaction for leaf {} with vout {i}",
-                leaf_key_tweak.node.id
-            );
-            connector_refund_tx.input.push(bitcoin::TxIn {
-                previous_output: OutPoint {
-                    txid: connector_txid,
-                    vout: i as u32,
-                },
-                ..Default::default()
-            });
-
-            trace!(
-                "Creating signing job for leaf {} with refund tx",
-                leaf_key_tweak.node.id
+                "Creating signing job for leaf {} with refund tx: {}",
+                leaf_key_tweak.node.id,
+                connector_refund_tx.compute_txid()
             );
             let signing_job = operator_rpc::spark::LeafRefundTxSigningJob {
                 leaf_id: leaf_key_tweak.node.id.to_string(),
