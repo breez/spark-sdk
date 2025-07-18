@@ -8,7 +8,9 @@ use crate::operator::rpc::spark::transfer_filter::Participant;
 use crate::operator::rpc::{self as operator_rpc};
 use crate::services::models::{LeafKeyTweak, Transfer, map_signing_nonce_commitments};
 use crate::services::{PagingFilter, ProofMap, TransferId, TransferStatus};
-use crate::signer::{PrivateKeySource, SecretToSplit, VerifiableSecretShare};
+use crate::signer::{
+    FrostSigningCommitmentsWithNonces, PrivateKeySource, SecretToSplit, VerifiableSecretShare,
+};
 use crate::utils::refund::{prepare_refund_so_signing_jobs, sign_aggregate_refunds, sign_refunds};
 
 use bitcoin::Transaction;
@@ -16,7 +18,7 @@ use bitcoin::hashes::{Hash, sha256};
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, SecretKey};
-use frost_secp256k1_tr::{Identifier, round1::SigningCommitments};
+use frost_secp256k1_tr::Identifier;
 use k256::Scalar;
 use prost::Message as ProstMessage;
 use tracing::{debug, error, trace};
@@ -36,7 +38,7 @@ pub struct LeafRefundSigningData {
     pub receiving_public_key: PublicKey,
     pub tx: Transaction,
     pub refund_tx: Option<Transaction>,
-    pub signing_nonce_commitment: SigningCommitments,
+    pub signing_nonce_commitment: FrostSigningCommitmentsWithNonces,
     pub vout: u32,
 }
 

@@ -57,12 +57,18 @@ pub enum SecretToSplit {
     Preimage(Vec<u8>),
 }
 
+#[derive(Debug, Clone)]
+pub struct FrostSigningCommitmentsWithNonces {
+    pub commitments: SigningCommitments,
+    pub nonces_ciphertext: Vec<u8>,
+}
+
 pub struct SignFrostRequest<'a> {
     pub message: &'a [u8],
     pub public_key: &'a PublicKey,
     pub private_key: &'a PrivateKeySource,
     pub verifying_key: &'a PublicKey,
-    pub self_commitment: &'a SigningCommitments,
+    pub self_nonce_commitment: &'a FrostSigningCommitmentsWithNonces,
     pub statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
     pub adaptor_public_key: Option<&'a PublicKey>,
 }

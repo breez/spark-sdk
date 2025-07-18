@@ -6,7 +6,7 @@ mod secret_sharing;
 use crate::tree::TreeNodeId;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::ecdsa::Signature;
-use frost_secp256k1_tr::{round1::SigningCommitments, round2::SignatureShare};
+use frost_secp256k1_tr::round2::SignatureShare;
 
 pub use default_signer::DefaultSigner;
 pub use error::SignerError;
@@ -20,7 +20,9 @@ pub trait Signer {
         message: T,
     ) -> Result<Signature, SignerError>;
 
-    async fn generate_frost_signing_commitments(&self) -> Result<SigningCommitments, SignerError>;
+    async fn generate_frost_signing_commitments(
+        &self,
+    ) -> Result<FrostSigningCommitmentsWithNonces, SignerError>;
 
     fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError>;
 

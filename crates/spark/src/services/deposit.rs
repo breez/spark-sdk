@@ -149,12 +149,12 @@ where
                 root_tx_signing_job: Some(operator_rpc::spark::SigningJob {
                     signing_public_key: signing_public_key.serialize().to_vec(),
                     raw_tx: serialize(&root_tx),
-                    signing_nonce_commitment: Some(root_nonce_commitment.try_into()?),
+                    signing_nonce_commitment: Some(root_nonce_commitment.commitments.try_into()?),
                 }),
                 refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
                     signing_public_key: signing_public_key.serialize().to_vec(),
                     raw_tx: serialize(&refund_tx),
-                    signing_nonce_commitment: Some(refund_nonce_commitment.try_into()?),
+                    signing_nonce_commitment: Some(refund_nonce_commitment.commitments.try_into()?),
                 }),
             })
             .await?;
@@ -209,7 +209,7 @@ where
                 public_key: &signing_public_key,
                 private_key: &signing_private_key,
                 verifying_key: verifying_public_key,
-                self_commitment: &root_nonce_commitment,
+                self_nonce_commitment: &root_nonce_commitment,
                 statechain_commitments: node_tx_signing_nonce_commitments.clone(),
                 adaptor_public_key: None,
             })
@@ -223,7 +223,7 @@ where
                 public_key: &signing_public_key,
                 private_key: &signing_private_key,
                 verifying_key: verifying_public_key,
-                self_commitment: &refund_nonce_commitment,
+                self_nonce_commitment: &refund_nonce_commitment,
                 statechain_commitments: refund_tx_signing_nonce_commitments.clone(),
                 adaptor_public_key: None,
             })
@@ -237,7 +237,7 @@ where
                 statechain_public_keys: node_tx_statechain_public_keys,
                 verifying_key: verifying_public_key,
                 statechain_commitments: node_tx_signing_nonce_commitments,
-                self_commitment: &root_nonce_commitment,
+                self_commitment: &root_nonce_commitment.commitments,
                 public_key: &signing_public_key,
                 self_signature: &root_sig,
                 adaptor_public_key: None,
@@ -251,7 +251,7 @@ where
                 statechain_public_keys: refund_tx_statechain_public_keys,
                 verifying_key: verifying_public_key,
                 statechain_commitments: refund_tx_signing_nonce_commitments,
-                self_commitment: &refund_nonce_commitment,
+                self_commitment: &refund_nonce_commitment.commitments,
                 public_key: &signing_public_key,
                 self_signature: &refund_sig,
                 adaptor_public_key: None,
