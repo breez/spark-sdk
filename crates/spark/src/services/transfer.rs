@@ -1,6 +1,7 @@
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
+use crate::Network;
 use crate::operator::OperatorPool;
 use crate::operator::rpc::spark::TransferFilter;
 use crate::operator::rpc::spark::transfer_filter::Participant;
@@ -10,8 +11,8 @@ use crate::services::{PagingFilter, ProofMap, TransferId, TransferStatus};
 use crate::signer::{
     FrostSigningCommitmentsWithNonces, PrivateKeySource, SecretToSplit, VerifiableSecretShare,
 };
+use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::refund::{prepare_refund_so_signing_jobs, sign_aggregate_refunds, sign_refunds};
-use crate::{Network, utils};
 
 use bitcoin::Transaction;
 use bitcoin::hashes::{Hash, sha256};
@@ -91,8 +92,7 @@ impl<S: Signer> TransferService<S> {
         receiver_id: &PublicKey,
     ) -> Result<Transfer, ServiceError> {
         // build leaf key tweaks with new signing keys that we will send to the receiver
-        let leaf_key_tweaks =
-            utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send(&self.signer, leaves)?;
+        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves)?;
         let transfer = self
             .send_transfer_with_key_tweaks(&leaf_key_tweaks, receiver_id)
             .await?;
@@ -731,7 +731,7 @@ impl<S: Signer> TransferService<S> {
 
         // Prepare refund signing jobs for the coordinator
         let signing_jobs =
-            prepare_refund_so_signing_jobs(self.network, leaf_keys, &mut leaf_data_map, true)?;
+            prepare_refund_so_signing_jobs(self.network, leaf_keys, &mut leaf_data_map)?;
 
         // Call the coordinator to get signing results
         let response = self

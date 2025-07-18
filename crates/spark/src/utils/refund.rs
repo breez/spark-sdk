@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
-use bitcoin::{OutPoint, Transaction};
+use bitcoin::{OutPoint, Sequence, Transaction};
 use frost_core::round2::SignatureShare;
 use frost_secp256k1_tr::round1::SigningCommitments;
 use frost_secp256k1_tr::{Identifier, Secp256K1Sha256TR};
@@ -15,7 +15,7 @@ use crate::services::{
 };
 use crate::signer::{AggregateFrostRequest, SignerError};
 use crate::signer::{SignFrostRequest, Signer};
-use crate::tree::TreeNodeId;
+use crate::tree::{TreeNode, TreeNodeId};
 use crate::utils::transactions::create_refund_tx;
 use crate::{Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak};
 
@@ -211,47 +211,57 @@ pub fn prepare_refund_so_signing_jobs(
     network: Network,
     leaves: &[LeafKeyTweak],
     leaf_data_map: &mut HashMap<TreeNodeId, LeafRefundSigningData>,
-    _is_for_claim: bool,
 ) -> Result<Vec<crate::operator::rpc::spark::LeafRefundTxSigningJob>, ServiceError> {
+    prepare_refund_so_signing_jobs_with_tx_constructor(
+        leaves,
+        leaf_data_map,
+        |node, _, _, sequence, receiving_pubkey| {
+            create_refund_tx(
+                sequence,
+                OutPoint {
+                    txid: node.node_tx.compute_txid(),
+                    vout: 0,
+                },
+                node.value,
+                receiving_pubkey,
+                network,
+            )
+        },
+    )
+}
+
+/// Prepares refund signing jobs for claim operations with a custom transaction constructor
+pub fn prepare_refund_so_signing_jobs_with_tx_constructor<F>(
+    leaves: &[LeafKeyTweak],
+    leaf_data_map: &mut HashMap<TreeNodeId, LeafRefundSigningData>,
+    refund_tx_constructor: F,
+) -> Result<Vec<crate::operator::rpc::spark::LeafRefundTxSigningJob>, ServiceError>
+where
+    F: Fn(&TreeNode, usize, Transaction, Sequence, &PublicKey) -> Transaction,
+{
     let mut signing_jobs = Vec::new();
 
-    for leaf in leaves {
+    for (i, leaf) in leaves.iter().enumerate() {
         let refund_signing_data: &mut LeafRefundSigningData =
             leaf_data_map.get_mut(&leaf.node.id).ok_or_else(|| {
                 ServiceError::Generic(format!("Leaf data not found for leaf {}", leaf.node.id))
             })?;
 
-        let old_sequence = leaf
+        let refund_tx = leaf
             .node
             .refund_tx
-            .as_ref()
-            .ok_or(ServiceError::Generic("No refund transaction".to_string()))?
-            .input[0]
-            .sequence;
-        // TODO: js sdk seems to use old_sequence for claim, but if we do so we don't decrement the refund tx sequence
-        // when claiming, and in practice we can see that the js sdk does decrement it. It's unclear where but it's being done.
-        // In rust rs-v0, the sequence is always decremented like being done here now
-        // Previous implementation:
-        /*let sequence = if is_for_claim {
-            old_sequence
-        } else {
-            next_sequence(old_sequence).ok_or(ServiceError::Generic(
-                "Failed to get next sequence".to_string(),
-            ))?
-        };*/
-        let sequence = next_sequence(old_sequence).ok_or(ServiceError::Generic(
+            .clone()
+            .ok_or(ServiceError::Generic("No refund tx".to_string()))?;
+        let sequence = next_sequence(refund_tx.input[0].sequence).ok_or(ServiceError::Generic(
             "Failed to get next sequence".to_string(),
         ))?;
 
-        let refund_tx = create_refund_tx(
+        let refund_tx = refund_tx_constructor(
+            &leaf.node,
+            i,
+            refund_tx,
             sequence,
-            bitcoin::OutPoint {
-                txid: leaf.node.node_tx.compute_txid(),
-                vout: 0,
-            },
-            leaf.node.value,
             &refund_signing_data.receiving_public_key,
-            network,
         );
 
         let signing_job = crate::operator::rpc::spark::LeafRefundTxSigningJob {

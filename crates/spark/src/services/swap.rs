@@ -16,12 +16,9 @@ use crate::{
     signer::{PrivateKeySource, Signer, from_bytes_to_scalar},
     ssp::{RequestLeavesSwapInput, ServiceProvider, UserLeafInput},
     tree::TreeNode,
-    utils::{
-        self,
-        refund::{
-            prepare_leaf_refund_signing_data, prepare_refund_so_signing_jobs,
-            sign_aggregate_refunds,
-        },
+    utils::refund::{
+        node_signatures_to_map, prepare_leaf_refund_signing_data, prepare_refund_so_signing_jobs,
+        sign_aggregate_refunds,
     },
 };
 
@@ -92,12 +89,8 @@ where
             prepare_leaf_refund_signing_data(&self.signer, &leaf_key_tweaks, receiver_public_key)
                 .await?;
 
-        let signing_jobs = prepare_refund_so_signing_jobs(
-            self.network,
-            &leaf_key_tweaks,
-            &mut leaf_data_map,
-            false,
-        )?;
+        let signing_jobs =
+            prepare_refund_so_signing_jobs(self.network, &leaf_key_tweaks, &mut leaf_data_map)?;
 
         // TODO: Migrate to new transfer package format. leaves_to_send is deprecated.
         let response = self
@@ -188,7 +181,7 @@ where
 
         // TODO: Validate the amounts in swap_response match the leaf sum, and the target amounts are met.
         // TODO: javascript SDK applies adaptor to signature here for every leaf, but it seems to not do anything?
-        let refund_signature_map = utils::refund::node_signatures_to_map(signed_refunds)?;
+        let refund_signature_map = node_signatures_to_map(signed_refunds)?;
         let transfer = self
             .transfer_service
             .deliver_transfer_package(&transfer, &leaf_key_tweaks, refund_signature_map)

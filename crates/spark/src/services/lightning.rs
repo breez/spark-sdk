@@ -13,7 +13,7 @@ use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
     ServiceProvider,
 };
-use crate::utils::{self, refund as refund_utils};
+use crate::utils::{leaf_key_tweak::prepare_leaf_key_tweaks_to_send, refund::sign_refunds};
 use crate::{signer::Signer, tree::TreeNode};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
@@ -266,8 +266,7 @@ where
         let payment_hash = decoded_invoice.payment_hash();
 
         // prepare leaf tweaks
-        let leaf_tweaks =
-            utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec())?;
+        let leaf_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec())?;
 
         let swap_response = self
             .swap_nodes_for_preimage(SwapNodesForPreimageRequest {
@@ -431,7 +430,7 @@ where
             .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let user_signed_refunds = refund_utils::sign_refunds(
+        let user_signed_refunds = sign_refunds(
             &self.signer,
             req.leaves,
             signing_commitments,

@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::{Address, OutPoint, Transaction, Txid};
@@ -5,28 +9,24 @@ use prost_types::Timestamp;
 use serde::Serialize;
 use tracing::{debug, trace};
 
+use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::OperatorPool;
-use crate::services::ServiceError;
-use crate::ssp::ServiceProvider;
-use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
-use crate::utils::transactions::create_coop_exit_refund_tx;
-use crate::{signer::Signer, tree::TreeNode};
-use std::sync::Arc;
-
-use crate::address::SparkAddress;
-use crate::core::next_sequence;
 use crate::operator::rpc as operator_rpc;
+use crate::services::ServiceError;
 use crate::services::{
     ExitSpeed, LeafKeyTweak, LeafRefundSigningData, Transfer, TransferId, TransferService,
 };
 use crate::ssp::RequestCoopExitInput;
+use crate::ssp::ServiceProvider;
 use crate::tree::TreeNodeId;
+use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::refund::{
-    node_signatures_to_map, prepare_leaf_refund_signing_data, sign_aggregate_refunds,
+    node_signatures_to_map, prepare_leaf_refund_signing_data,
+    prepare_refund_so_signing_jobs_with_tx_constructor, sign_aggregate_refunds,
 };
-use std::collections::HashMap;
-use std::time::{Duration, SystemTime};
+use crate::utils::transactions::create_coop_exit_refund_tx;
+use crate::{signer::Signer, tree::TreeNode};
 
 const COOP_EXIT_EXPIRY_DURATION_MAINNET: Duration = Duration::from_secs(24 * 60 * 60 * 2); // 48 hours
 const COOP_EXIT_EXPIRY_DURATION: Duration = Duration::from_secs(60 * 5); // 5 minutes
@@ -237,7 +237,6 @@ where
         )?;
 
         // Create the Spark payment intent
-        // TODO: Is the amount needed here?
         trace!("Creating Spark payment intent for cooperative exit");
         let spark_payment_intent =
             SparkAddress::new(self.signer.get_identity_public_key()?, self.network, None)
@@ -313,67 +312,22 @@ where
         connector_txid: Txid,
         leaf_data_map: &mut HashMap<TreeNodeId, LeafRefundSigningData>,
     ) -> Result<Vec<operator_rpc::spark::LeafRefundTxSigningJob>, ServiceError> {
-        debug!("Preparing refund signing jobs for connector_txid: {connector_txid}",);
-        let mut signing_jobs = Vec::new();
-        for (i, leaf_key_tweak) in leaf_key_tweaks.iter().enumerate() {
-            let refund_signing_data: &mut LeafRefundSigningData = leaf_data_map
-                .get_mut(&leaf_key_tweak.node.id)
-                .ok_or_else(|| {
-                    ServiceError::Generic(format!(
-                        "Leaf data not found for leaf {}",
-                        leaf_key_tweak.node.id
-                    ))
-                })?;
-
-            let refund_tx = leaf_key_tweak
-                .node
-                .refund_tx
-                .clone()
-                .ok_or(ServiceError::Generic("No refund tx".to_string()))?;
-
-            let sequence = next_sequence(refund_tx.input[0].sequence).ok_or(
-                ServiceError::Generic("Failed to get next sequence".to_string()),
-            )?;
-
-            trace!(
-                "Creating refund transaction for leaf {} with sequence {sequence} and connector vout {i}",
-                leaf_key_tweak.node.id
-            );
-            let connector_refund_tx = create_coop_exit_refund_tx(
-                sequence,
-                refund_tx.input[0].previous_output,
-                OutPoint {
-                    txid: connector_txid,
-                    vout: i as u32,
-                },
-                leaf_key_tweak.node.value,
-                &refund_signing_data.receiving_public_key,
-                self.network,
-            );
-
-            trace!(
-                "Creating signing job for leaf {} with refund tx: {}",
-                leaf_key_tweak.node.id,
-                connector_refund_tx.compute_txid()
-            );
-            let signing_job = operator_rpc::spark::LeafRefundTxSigningJob {
-                leaf_id: leaf_key_tweak.node.id.to_string(),
-                refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
-                    signing_public_key: refund_signing_data.signing_public_key.serialize().to_vec(),
-                    raw_tx: bitcoin::consensus::serialize(&connector_refund_tx),
-                    signing_nonce_commitment: Some(
-                        refund_signing_data
-                            .signing_nonce_commitment
-                            .commitments
-                            .try_into()?,
-                    ),
-                }),
-            };
-
-            refund_signing_data.refund_tx = Some(connector_refund_tx);
-            signing_jobs.push(signing_job);
-        }
-
-        Ok(signing_jobs)
+        prepare_refund_so_signing_jobs_with_tx_constructor(
+            leaf_key_tweaks,
+            leaf_data_map,
+            |node, index, refund_tx, sequence, receiving_pubkey| {
+                create_coop_exit_refund_tx(
+                    sequence,
+                    refund_tx.input[0].previous_output,
+                    OutPoint {
+                        txid: connector_txid,
+                        vout: index as u32,
+                    },
+                    node.value,
+                    receiving_pubkey,
+                    self.network,
+                )
+            },
+        )
     }
 }
