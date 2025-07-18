@@ -20,6 +20,19 @@ pub trait Signer {
         message: T,
     ) -> Result<Signature, SignerError>;
 
+    fn sign_message_recoverable_ecdsa_with_identity_key<T: AsRef<[u8]>>(
+        &self,
+        message: T,
+    ) -> Result<String, SignerError>;
+
+    /// Verifies the message was signed by the given public key and the signature is valid.
+    fn verify_recoverable_signature_ecdsa<T: AsRef<[u8]>>(
+        &self,
+        message: T,
+        signature: &str,
+        public_key: &PublicKey,
+    ) -> Result<(), SignerError>;
+
     async fn generate_frost_signing_commitments(
         &self,
     ) -> Result<FrostSigningCommitmentsWithNonces, SignerError>;

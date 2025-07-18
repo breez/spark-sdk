@@ -361,6 +361,23 @@ impl<S: Signer> SparkWallet<S> {
         Ok(transfers.into_iter().map(WalletTransfer::from).collect())
     }
 
+    pub async fn sign_message(&self, message: &str) -> Result<String, SparkWalletError> {
+        Ok(self
+            .signer
+            .sign_message_recoverable_ecdsa_with_identity_key(message)?)
+    }
+
+    pub async fn verify_message(
+        &self,
+        message: &str,
+        signature: &str,
+        public_key: &PublicKey,
+    ) -> Result<(), SparkWalletError> {
+        Ok(self
+            .signer
+            .verify_recoverable_signature_ecdsa(message, signature, public_key)?)
+    }
+
     /// Selects leaves from the tree that sum up to exactly the target amount.
     /// If such a combination of leaves does not exist, it performs a swap to get a set of leaves matching the target amount.
     /// If no leaves can be selected, returns an error
