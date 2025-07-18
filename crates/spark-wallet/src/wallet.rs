@@ -435,7 +435,7 @@ where
     }
 }
 
-pub async fn claim_pending_transfers<S: Signer>(
+async fn claim_pending_transfers<S: Signer>(
     transfer_service: &Arc<TransferService<S>>,
     tree_service: &Arc<TreeService<S>>,
 ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
