@@ -9,9 +9,12 @@ use bitcoin::secp256k1::ecdsa::Signature;
 use frost_secp256k1_tr::round2::SignatureShare;
 
 pub use default_signer::DefaultSigner;
+pub(crate) use default_signer::RecoverableSignatureEncodeExt;
 pub use error::SignerError;
 pub use models::*;
 pub(crate) use secret_sharing::from_bytes_to_scalar;
+
+pub(crate) const SPARK_MESSAGE_PREFIX: &[u8] = b"spark-message";
 
 #[async_trait::async_trait]
 pub trait Signer {
@@ -20,18 +23,13 @@ pub trait Signer {
         message: T,
     ) -> Result<Signature, SignerError>;
 
+    /// Signs a message with the identity key using recoverable ECDSA and returns a zbase32 encoded signature
+    ///
+    /// The message is prefixed with "spark-message".
     fn sign_message_recoverable_ecdsa_with_identity_key<T: AsRef<[u8]>>(
         &self,
         message: T,
     ) -> Result<String, SignerError>;
-
-    /// Verifies the message was signed by the given public key and the signature is valid.
-    fn verify_recoverable_signature_ecdsa<T: AsRef<[u8]>>(
-        &self,
-        message: T,
-        signature: &str,
-        public_key: &PublicKey,
-    ) -> Result<(), SignerError>;
 
     async fn generate_frost_signing_commitments(
         &self,

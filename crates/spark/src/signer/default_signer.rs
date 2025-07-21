@@ -21,7 +21,7 @@ use thiserror::Error;
 
 use crate::signer::{
     AggregateFrostRequest, EncryptedPrivateKey, FrostSigningCommitmentsWithNonces,
-    SignFrostRequest, secret_sharing,
+    SPARK_MESSAGE_PREFIX, SignFrostRequest, secret_sharing,
 };
 use crate::signer::{PrivateKeySource, SecretToSplit};
 use crate::tree::TreeNodeId;
@@ -244,38 +244,15 @@ impl Signer for DefaultSigner {
         &self,
         message: T,
     ) -> Result<String, SignerError> {
-        let digest = sha256::Hash::hash(message.as_ref());
-        let sig = self.secp.sign_ecdsa_recoverable(
-            &Message::from_digest(digest.to_byte_array()),
-            &self.identity_key,
+        let hashed_msg = Message::from_digest(
+            sha256::Hash::hash(&[SPARK_MESSAGE_PREFIX, message.as_ref()].concat()).to_byte_array(),
         );
-        let encoded_sig = sig.encode_compact();
-        Ok(hex::encode(encoded_sig))
-    }
 
-    fn verify_recoverable_signature_ecdsa<T: AsRef<[u8]>>(
-        &self,
-        message: T,
-        signature: &str,
-        public_key: &PublicKey,
-    ) -> Result<(), SignerError> {
-        let digest = sha256::Hash::hash(message.as_ref());
-
-        let sig =
-            RecoverableSignature::decode_compact(&hex::decode(signature).map_err(|e| {
-                SignerError::Generic(format!("Failed to decode signature hex: {e}"))
-            })?)
-            .map_err(|e| SignerError::Generic(format!("Failed to decode signature: {e}")))?;
-
-        let recovered_pubkey = self
+        let sig = self
             .secp
-            .recover_ecdsa(&Message::from_digest(digest.to_byte_array()), &sig)
-            .map_err(|e| SignerError::Generic(format!("Failed to recover public key: {e}")))?;
-        if recovered_pubkey != *public_key {
-            return Err(SignerError::Generic("Invalid signature".to_string()));
-        }
-
-        Ok(())
+            .sign_ecdsa_recoverable(&hashed_msg, &self.identity_key);
+        let encoded_sig = sig.encode_compact();
+        Ok(zbase32::encode_full_bytes(encoded_sig.as_slice()))
     }
 
     async fn generate_frost_signing_commitments(
@@ -581,7 +558,7 @@ impl PrivateKeySource {
     }
 }
 
-trait RecoverableSignatureEncodeExt {
+pub(crate) trait RecoverableSignatureEncodeExt {
     fn encode_compact(&self) -> Vec<u8>;
 
     fn decode_compact(data: &[u8]) -> Result<Self, secp256k1::Error>
@@ -621,6 +598,9 @@ mod test {
 
     use crate::signer::{EncryptedPrivateKey, PrivateKeySource, Signer, SignerError};
     use crate::tree::TreeNodeId;
+    use crate::utils::verify_signature::{
+        VerifySignatureError, verify_recoverable_signature_ecdsa,
+    };
     use crate::{
         Network,
         signer::default_signer::DefaultSigner,
@@ -647,53 +627,54 @@ mod test {
     }
 
     #[test]
-    fn test_verify_signature_ecdsa_with_identity_key() {
+    fn test_sign_verify_signature_ecdsa_round_trip() {
         let signer = create_test_signer();
         let message = "test message";
         let signature = signer
             .sign_message_recoverable_ecdsa_with_identity_key(message)
             .expect("Failed to sign message");
-        signer
-            .verify_recoverable_signature_ecdsa(
-                message,
-                &signature,
-                &signer.get_identity_public_key().unwrap(),
-            )
-            .expect("Failed to verify signature");
+
+        verify_recoverable_signature_ecdsa(
+            &signer.secp,
+            message,
+            &signature,
+            &signer.get_identity_public_key().unwrap(),
+        )
+        .expect("Failed to verify signature");
     }
 
     #[test]
-    fn test_verify_signature_ecdsa_with_identity_key_invalid_signature() {
+    fn test_verify_signature_ecdsa_invalid_signature() {
         let signer = create_test_signer();
         let signature = signer
             .sign_message_recoverable_ecdsa_with_identity_key("signed message")
             .expect("Failed to sign message");
 
         // Wrong message
-        let result = signer.verify_recoverable_signature_ecdsa(
+        let result = verify_recoverable_signature_ecdsa(
+            &signer.secp,
             "another message",
             &signature,
             &signer.get_identity_public_key().unwrap(),
         );
         assert!(result.is_err());
-        if let Err(SignerError::Generic(msg)) = result {
-            assert_eq!(msg, "Invalid signature");
-        } else {
-            panic!("Expected Generic error about invalid signature");
-        }
+        assert!(matches!(
+            result,
+            Err(VerifySignatureError::InvalidSignature)
+        ));
 
         // Wrong public key
-        let result = signer.verify_recoverable_signature_ecdsa(
+        let result = verify_recoverable_signature_ecdsa(
+            &signer.secp,
             "signed message",
             &signature,
             &PublicKey::from_secret_key(&Secp256k1::new(), &SecretKey::new(&mut thread_rng())),
         );
         assert!(result.is_err());
-        if let Err(SignerError::Generic(msg)) = result {
-            assert_eq!(msg, "Invalid signature");
-        } else {
-            panic!("Expected Generic error about invalid signature");
-        }
+        assert!(matches!(
+            result,
+            Err(VerifySignatureError::InvalidSignature)
+        ));
     }
 
     #[test]

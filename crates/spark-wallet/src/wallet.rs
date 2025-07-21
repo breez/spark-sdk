@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use bitcoin::{Address, Transaction, secp256k1::PublicKey};
+use bitcoin::{Address, Transaction, key::Secp256k1, secp256k1::PublicKey};
 
 use spark::{
     address::SparkAddress,
@@ -373,9 +373,13 @@ impl<S: Signer> SparkWallet<S> {
         signature: &str,
         public_key: &PublicKey,
     ) -> Result<(), SparkWalletError> {
-        Ok(self
-            .signer
-            .verify_recoverable_signature_ecdsa(message, signature, public_key)?)
+        spark::utils::verify_signature::verify_recoverable_signature_ecdsa(
+            &Secp256k1::new(),
+            message,
+            signature,
+            public_key,
+        )
+        .map_err(|e| SparkWalletError::ValidationError(e.to_string()))
     }
 
     /// Selects leaves from the tree that sum up to exactly the target amount.
