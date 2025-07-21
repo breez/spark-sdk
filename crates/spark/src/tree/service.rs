@@ -132,40 +132,6 @@ impl<S: Signer> TreeService<S> {
         Ok(self.state.lock().unwrap().get_leaves())
     }
 
-    /// Lists all leaves with 'Available' status from the local cache.
-    ///
-    /// This method retrieves all tree nodes from the local cache and filters out
-    /// any nodes that don't have a status of `TreeNodeStatus::Available`. To update
-    /// the cache with the latest data from the server, call [`refresh_leaves`] first.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<Vec<TreeNode>, TreeServiceError>` - A vector of available tree nodes
-    ///   from the local cache, or an error if the operation fails.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use spark::tree::{TreeService, TreeServiceError};
-    /// use spark::signer::Signer;
-    ///
-    /// # async fn example(tree_service: &TreeService<impl Signer>) -> Result<(), TreeServiceError> {
-    /// // First refresh to get the latest data
-    /// tree_service.refresh_leaves().await?;
-    ///
-    /// // Then list the available leaves
-    /// let available_leaves = tree_service.list_available_leaves()?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn list_available_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
-        let leaves = self.list_leaves()?;
-        Ok(leaves
-            .into_iter()
-            .filter(|leaf| leaf.status == TreeNodeStatus::Available)
-            .collect())
-    }
-
     /// Refreshes the tree state by fetching the latest leaves from the server.
     ///
     /// This method clears the current local cache of leaves and fetches all available
@@ -275,18 +241,30 @@ impl<S: Signer> TreeService<S> {
 
     pub async fn reserve_leaves(
         &self,
-        target_amount_sat: u64,
+        target_amount_sat: Option<u64>,
         exact_only: bool,
     ) -> Result<Option<LeavesReservation>, TreeServiceError> {
-        trace!("Reserving leaves for amount: {}", target_amount_sat);
+        trace!("Reserving leaves for amount: {target_amount_sat:?}");
         let reservation = {
             let mut state = self.state.lock().unwrap();
             let leaves = state.get_leaves();
-            let mut selected = self.select_leaves_by_amount(leaves.clone(), target_amount_sat)?;
-            if selected.is_none() && !exact_only {
-                selected =
-                    self.select_leaves_by_minimum_amount(leaves.clone(), target_amount_sat)?;
-            }
+            let selected = match target_amount_sat {
+                Some(amount_sats) => {
+                    let mut selected = self.select_leaves_by_amount(leaves.clone(), amount_sats)?;
+                    if selected.is_none() && !exact_only {
+                        selected =
+                            self.select_leaves_by_minimum_amount(leaves.clone(), amount_sats)?;
+                    }
+                    selected
+                }
+                None => Some(
+                    leaves
+                        .iter()
+                        .filter(|leaf| leaf.status == TreeNodeStatus::Available)
+                        .cloned()
+                        .collect(),
+                ),
+            };
 
             match selected {
                 Some(selected_leaves) => {
