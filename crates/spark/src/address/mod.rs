@@ -1,6 +1,9 @@
 pub mod error;
 
-use std::str::FromStr;
+use std::{
+    fmt::{Debug, Display},
+    str::FromStr,
+};
 
 use crate::operator::rpc::spark::{
     PaymentIntentFields as ProtoPaymentIntentFields, SparkAddress as ProtoSparkAddress,
@@ -12,16 +15,17 @@ use bitcoin::{
 use prost::Message;
 
 use error::AddressError;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::Network;
 
-const HRP_MAINNET: &str = "sp";
-const HRP_TESTNET: &str = "spt";
-const HRP_REGTEST: &str = "sprt";
-const HRP_SIGNET: &str = "sps";
+const HRP_MAINNET: Hrp = Hrp::parse_unchecked("sp");
+const HRP_TESTNET: Hrp = Hrp::parse_unchecked("spt");
+const HRP_REGTEST: Hrp = Hrp::parse_unchecked("sprt");
+const HRP_SIGNET: Hrp = Hrp::parse_unchecked("sps");
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct SparkAddress {
     pub identity_public_key: PublicKey,
     pub network: Network,
@@ -114,7 +118,7 @@ impl SparkAddress {
         }
     }
 
-    fn network_to_hrp(network: &Network) -> &'static str {
+    fn network_to_hrp(network: &Network) -> Hrp {
         match network {
             Network::Mainnet => HRP_MAINNET,
             Network::Testnet => HRP_TESTNET,
@@ -123,23 +127,23 @@ impl SparkAddress {
         }
     }
 
-    fn hrp_to_network(hrp: &str) -> Result<Network, AddressError> {
+    fn hrp_to_network(hrp: &Hrp) -> Result<Network, AddressError> {
         match hrp {
-            HRP_MAINNET => Ok(Network::Mainnet),
-            HRP_TESTNET => Ok(Network::Testnet),
-            HRP_REGTEST => Ok(Network::Regtest),
-            HRP_SIGNET => Ok(Network::Signet),
+            hrp if hrp == &HRP_MAINNET => Ok(Network::Mainnet),
+            hrp if hrp == &HRP_TESTNET => Ok(Network::Testnet),
+            hrp if hrp == &HRP_REGTEST => Ok(Network::Regtest),
+            hrp if hrp == &HRP_SIGNET => Ok(Network::Signet),
             _ => Err(AddressError::UnknownHrp(hrp.to_string())),
         }
     }
+}
 
-    /// Convert to bech32m string representation
-    pub fn to_address_string(&self) -> Result<String, AddressError> {
+impl Display for SparkAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let payment_intent_fields = self
             .payment_intent
             .as_ref()
             .map(|payment_intent| payment_intent.into());
-
         let proto_address = ProtoSparkAddress {
             identity_public_key: self.identity_public_key.serialize().to_vec(),
             payment_intent_fields,
@@ -147,14 +151,11 @@ impl SparkAddress {
 
         let payload_bytes = proto_address.encode_to_vec();
 
-        let hrp_str = Self::network_to_hrp(&self.network);
-        let hrp = Hrp::parse(hrp_str)
-            .map_err(|e| AddressError::Other(format!("Failed to parse HRP: {e}")))?;
+        let hrp = Self::network_to_hrp(&self.network);
 
-        let address = bech32::encode::<Bech32m>(hrp, &payload_bytes)
-            .map_err(|e| AddressError::Bech32EncodeError(e.to_string()))?;
-
-        Ok(address)
+        // This is safe to unwrap, because we are using a valid HRP and payload
+        let address = bech32::encode::<Bech32m>(hrp, &payload_bytes).unwrap();
+        write!(f, "{address}")
     }
 }
 
@@ -171,7 +172,7 @@ impl FromStr for SparkAddress {
         let identity_public_key = PublicKey::from_slice(&proto_address.identity_public_key)
             .map_err(|e| AddressError::InvalidPublicKey(e.to_string()))?;
 
-        let network = Self::hrp_to_network(hrp.as_str())?;
+        let network = Self::hrp_to_network(&hrp)?;
 
         let payment_intent = if let Some(fields) = proto_address.payment_intent_fields {
             Some(fields.try_into()?)
@@ -184,6 +185,32 @@ impl FromStr for SparkAddress {
             network,
             payment_intent,
         ))
+    }
+}
+
+impl Debug for SparkAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self}")
+    }
+}
+
+impl Serialize for SparkAddress {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let address_string = self.to_string();
+        serializer.serialize_str(&address_string)
+    }
+}
+
+impl<'de> Deserialize<'de> for SparkAddress {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let address_string = String::deserialize(deserializer)?;
+        SparkAddress::from_str(&address_string).map_err(serde::de::Error::custom)
     }
 }
 
@@ -203,7 +230,7 @@ mod tests {
         let public_key = create_test_public_key();
         let original_address = SparkAddress::new(public_key, Network::Mainnet, None);
 
-        let address_string = original_address.to_address_string().unwrap();
+        let address_string = original_address.to_string();
         let parsed_address = SparkAddress::from_str(&address_string).unwrap();
 
         assert_eq!(
@@ -218,7 +245,7 @@ mod tests {
         let public_key = create_test_public_key();
         let original_address = SparkAddress::new(public_key, Network::Testnet, None);
 
-        let address_string = original_address.to_address_string().unwrap();
+        let address_string = original_address.to_string();
         let parsed_address = SparkAddress::from_str(&address_string).unwrap();
 
         assert_eq!(
@@ -233,7 +260,7 @@ mod tests {
         let public_key = create_test_public_key();
         let original_address = SparkAddress::new(public_key, Network::Regtest, None);
 
-        let address_string = original_address.to_address_string().unwrap();
+        let address_string = original_address.to_string();
         let parsed_address = SparkAddress::from_str(&address_string).unwrap();
 
         assert_eq!(
@@ -248,7 +275,7 @@ mod tests {
         let public_key = create_test_public_key();
         let original_address = SparkAddress::new(public_key, Network::Signet, None);
 
-        let address_string = original_address.to_address_string().unwrap();
+        let address_string = original_address.to_string();
         let parsed_address = SparkAddress::from_str(&address_string).unwrap();
 
         assert_eq!(
@@ -316,7 +343,7 @@ mod tests {
         let original_address =
             SparkAddress::new(public_key, Network::Mainnet, Some(payment_intent.clone()));
 
-        let address_string = original_address.to_address_string().unwrap();
+        let address_string = original_address.to_string();
         let parsed_address = SparkAddress::from_str(&address_string).unwrap();
 
         assert_eq!(
@@ -355,7 +382,7 @@ mod tests {
         let original_address =
             SparkAddress::new(public_key, Network::Testnet, Some(payment_intent));
 
-        let address_string = original_address.to_address_string().unwrap();
+        let address_string = original_address.to_string();
         let parsed_address = SparkAddress::from_str(&address_string).unwrap();
 
         assert!(parsed_address.payment_intent.is_some());
@@ -372,7 +399,7 @@ mod tests {
 
         // Create address without payment intent
         let address_without_intent = SparkAddress::new(public_key, Network::Mainnet, None);
-        let string_without_intent = address_without_intent.to_address_string().unwrap();
+        let string_without_intent = address_without_intent.to_string();
 
         // Create address with payment intent
         let payment_intent = PaymentIntentFields {
@@ -383,7 +410,7 @@ mod tests {
         };
         let address_with_intent =
             SparkAddress::new(public_key, Network::Mainnet, Some(payment_intent));
-        let string_with_intent = address_with_intent.to_address_string().unwrap();
+        let string_with_intent = address_with_intent.to_string();
 
         // The strings should be different due to the payment intent data
         assert_ne!(string_without_intent, string_with_intent);
