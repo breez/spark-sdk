@@ -28,10 +28,7 @@ use spark::{
 use tokio::sync::{broadcast, watch};
 use tracing::{debug, error, info, trace};
 
-use crate::{
-    leaf::WalletLeaf,
-    model::{PayLightningInvoiceResult, WalletInfo, WalletTransfer},
-};
+use crate::model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer};
 
 use super::{SparkWalletConfig, SparkWalletError};
 
