@@ -16,7 +16,7 @@ use crate::{
     services::{PagingFilter, PagingResult, TimelockManager},
     signer::Signer,
     tree::TreeNodeId,
-    tree::{LeavesReservation, LeavesReservationId, TreeNodeStatus},
+    tree::{LeavesReservation, LeavesReservationId, TargetAmounts, TargetLeaves, TreeNodeStatus},
 };
 
 use super::{TreeNode, error::TreeServiceError, state::TreeState};
@@ -239,101 +239,42 @@ impl<S: Signer> TreeService<S> {
         Ok(())
     }
 
-    pub fn select_leaves_by_amounts(
-        &self,
-        leaves: Vec<TreeNode>,
-        target_amounts_sats: Vec<u64>,
-    ) -> Result<Vec<Vec<TreeNode>>, TreeServiceError> {
-        let mut remaining_leaves = leaves.clone();
-        if target_amounts_sats.is_empty() {
-            trace!("No target amounts specified, returning all remaining leaves");
-            return Ok(vec![remaining_leaves]);
-        }
-        let mut res = vec![];
-        for amount_sats in target_amounts_sats {
-            let leaves_sum: u64 = remaining_leaves.iter().map(|leaf| leaf.value).sum();
-            trace!("Selecting leaves for amount {amount_sats}, remaining leaves sum: {leaves_sum}");
-            let selected = self
-                .select_leaves_by_amount(remaining_leaves.clone(), amount_sats)?
-                .ok_or(TreeServiceError::UnselectableAmount)
-                .inspect_err(|e| {
-                    error!("Failed to select leaves for amount {amount_sats}: {e:?}");
-                })?;
-            trace!(
-                "Selected leaves {} for amount {amount_sats}",
-                selected.len()
-            );
-            remaining_leaves.retain(|leaf| {
-                !selected
-                    .iter()
-                    .any(|selected_leaf| selected_leaf.id == leaf.id)
-            });
-            res.push(selected);
-        }
-
-        Ok(res)
-    }
-
     pub async fn reserve_leaves(
         &self,
-        target_amounts_sats: Vec<u64>,
+        target_amounts: Option<&TargetAmounts>,
         exact_only: bool,
     ) -> Result<Option<LeavesReservation>, TreeServiceError> {
-        trace!("Reserving leaves for amounts: {target_amounts_sats:?}");
+        trace!("Reserving leaves for amounts: {target_amounts:?}");
         let reservation = {
             let mut state = self.state.lock().unwrap();
-            let leaves = state.get_leaves();
-
-            let selected = if target_amounts_sats.is_empty() {
-                trace!("No target amounts specified, returning all available leaves");
-                Some(
-                    leaves
-                        .iter()
-                        .filter(|leaf| leaf.status == TreeNodeStatus::Available)
-                        .cloned()
-                        .collect(),
-                )
-            } else {
-                let mut remaining_leaves = leaves.clone();
-                let mut selected_leaves = Vec::new();
-                for amount_sats in &target_amounts_sats {
-                    trace!("Selecting leaves for amount {amount_sats}");
-                    let selected =
-                        self.select_leaves_by_amount(remaining_leaves.clone(), *amount_sats)?;
-                    match selected {
-                        Some(selected) => {
-                            trace!(
-                                "Selected leaves {} for amount {amount_sats}",
-                                selected.len()
-                            );
-                            remaining_leaves.retain(|leaf| {
-                                !selected
-                                    .iter()
-                                    .any(|selected_leaf| selected_leaf.id == leaf.id)
-                            });
-                            selected_leaves.extend(selected);
-                        }
-                        None => {
-                            // If we cannot select leaves for this target amount, we must revert to
-                            // selecting leaves by minimum amount for the total target amount.
-                            trace!("Could not select leaves for amount {amount_sats}");
-                            selected_leaves = Vec::new();
-                            break;
-                        }
-                    }
+            // Filter available leaves from the state
+            let leaves: Vec<TreeNode> = state
+                .get_leaves()
+                .into_iter()
+                .filter(|leaf| leaf.status == TreeNodeStatus::Available)
+                .collect();
+            // Select leaves that match the target amounts
+            let target_leaves_res = self.select_leaves_by_amounts(leaves.clone(), target_amounts);
+            let selected = match target_leaves_res {
+                Ok(target_leaves) => {
+                    // Successfully selected target leaves
+                    trace!("Successfully selected target leaves");
+                    Some(
+                        [
+                            target_leaves.amount_leaves,
+                            target_leaves.fee_leaves.unwrap_or_default(),
+                        ]
+                        .concat(),
+                    )
                 }
-                if selected_leaves.is_empty() {
-                    if !exact_only {
-                        trace!("No exact match found, selecting leaves by minimum amount");
-                        self.select_leaves_by_minimum_amount(
-                            leaves.clone(),
-                            target_amounts_sats.iter().sum(),
-                        )?
-                    } else {
-                        None
-                    }
-                } else {
-                    Some(selected_leaves)
+                Err(_) if !exact_only => {
+                    trace!("No exact match found, selecting leaves by minimum amount");
+                    let target_amount_sat = target_amounts.map_or(0, |ta| ta.total_sats());
+                    self.select_leaves_by_minimum_amount(leaves.clone(), target_amount_sat)?
+                }
+                Err(e) => {
+                    error!("Failed to select target leaves: {e:?}");
+                    None
                 }
             };
 
@@ -387,6 +328,47 @@ impl<S: Signer> TreeService<S> {
         let mut state = self.state.lock().unwrap();
         state.add_leaves(&result_nodes);
         Ok(result_nodes)
+    }
+
+    /// Selects leaves from the tree that match the target amounts.
+    /// If no target amounts are specified, it returns all leaves.
+    /// If the target amounts cannot be matched exactly, it returns an error.
+    pub fn select_leaves_by_amounts(
+        &self,
+        leaves: Vec<TreeNode>,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<TargetLeaves, TreeServiceError> {
+        let mut remaining_leaves = leaves.clone();
+
+        // If no target amounts are specified, return all remaining leaves
+        let Some(target_amounts) = target_amounts else {
+            trace!("No target amounts specified, returning all remaining leaves");
+            return Ok(TargetLeaves::new(remaining_leaves, None));
+        };
+
+        // Select leaves that match the target amount_sats
+        let amount_leaves = self
+            .select_leaves_by_amount(remaining_leaves.clone(), target_amounts.amount_sats)?
+            .ok_or(TreeServiceError::UnselectableAmount)?;
+
+        let fee_leaves = match target_amounts.fee_sats {
+            Some(fee_sats) => {
+                // Remove the amount_leaves from remaining_leaves to avoid double spending
+                remaining_leaves.retain(|leaf| {
+                    !amount_leaves
+                        .iter()
+                        .any(|amount_leaf| amount_leaf.id == leaf.id)
+                });
+                // Select leaves that match the fee_sats from the remaining leaves
+                Some(
+                    self.select_leaves_by_amount(remaining_leaves.clone(), fee_sats)?
+                        .ok_or(TreeServiceError::UnselectableAmount)?,
+                )
+            }
+            None => None,
+        };
+
+        Ok(TargetLeaves::new(amount_leaves, fee_leaves))
     }
 
     /// Selects leaves from the tree that sum up to exactly the target amount.
