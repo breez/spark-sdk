@@ -1,3 +1,4 @@
+use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use clap::Parser;
 use rustyline::{Editor, history::DefaultHistory};
 use spark_wallet::SparkWallet;
@@ -38,10 +39,14 @@ pub enum Command {
     /// Transfer commands.
     #[command(subcommand)]
     Transfer(TransferCommand),
+    /// Sign a message.
+    Sign,
+    /// Verify a message.
+    Verify,
 }
 
 pub(crate) async fn handle_command<S>(
-    _rl: &mut Editor<CliHelper, DefaultHistory>,
+    rl: &mut Editor<CliHelper, DefaultHistory>,
     config: &Config,
     wallet: &SparkWallet<S>,
     command: Command,
@@ -77,6 +82,23 @@ where
         }
         Command::Transfer(transfer_command) => {
             transfer::handle_command(config, wallet, transfer_command).await?
+        }
+        Command::Sign => {
+            let message = rl.readline("Enter message to sign: ")?;
+            let signature = wallet.sign_message(&message).await?;
+            let signature = hex::encode(signature.serialize_der());
+            println!("Signature: {signature}");
+        }
+        Command::Verify => {
+            let message = rl.readline("Enter message to verify: ")?;
+            let signature = rl.readline("Enter signature to verify: ")?;
+            let signature = Signature::from_der(&hex::decode(&signature)?)?;
+            let public_key = rl.readline("Enter signer public key: ")?;
+            let public_key = PublicKey::from_slice(&hex::decode(&public_key)?)?;
+            wallet
+                .verify_message(&message, &signature, &public_key)
+                .await?;
+            println!("Signature verified successfully.");
         }
     }
 

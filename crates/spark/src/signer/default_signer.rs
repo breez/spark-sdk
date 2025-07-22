@@ -546,11 +546,12 @@ impl PrivateKeySource {
 #[cfg(test)]
 mod test {
     use bitcoin::secp256k1::rand::thread_rng;
-    use bitcoin::secp256k1::{Secp256k1, SecretKey};
+    use bitcoin::secp256k1::{self, PublicKey, Secp256k1, SecretKey};
     use std::str::FromStr;
 
     use crate::signer::{EncryptedPrivateKey, PrivateKeySource, Signer, SignerError};
     use crate::tree::TreeNodeId;
+    use crate::utils::verify_signature::verify_signature_ecdsa;
     use crate::{
         Network,
         signer::default_signer::DefaultSigner,
@@ -574,6 +575,51 @@ mod test {
     fn create_test_signer() -> DefaultSigner {
         let test_seed = [42u8; 32]; // Deterministic seed for testing
         DefaultSigner::new(&test_seed, Network::Regtest).expect("Failed to create test signer")
+    }
+
+    #[test]
+    fn test_sign_verify_signature_ecdsa_round_trip() {
+        let signer = create_test_signer();
+        let message = "test message";
+        let signature = signer
+            .sign_message_ecdsa_with_identity_key(message)
+            .expect("Failed to sign message");
+
+        verify_signature_ecdsa(
+            &signer.secp,
+            message,
+            &signature,
+            &signer.get_identity_public_key().unwrap(),
+        )
+        .expect("Failed to verify signature");
+    }
+
+    #[test]
+    fn test_verify_signature_ecdsa_invalid_signature() {
+        let signer = create_test_signer();
+        let signature = signer
+            .sign_message_ecdsa_with_identity_key("signed message")
+            .expect("Failed to sign message");
+
+        // Wrong message
+        let result = verify_signature_ecdsa(
+            &signer.secp,
+            "another message",
+            &signature,
+            &signer.get_identity_public_key().unwrap(),
+        );
+        assert!(result.is_err());
+        assert!(matches!(result, Err(secp256k1::Error::IncorrectSignature)));
+
+        // Wrong public key
+        let result = verify_signature_ecdsa(
+            &signer.secp,
+            "signed message",
+            &signature,
+            &PublicKey::from_secret_key(&Secp256k1::new(), &SecretKey::new(&mut thread_rng())),
+        );
+        assert!(result.is_err());
+        assert!(matches!(result, Err(secp256k1::Error::IncorrectSignature)));
     }
 
     #[test]

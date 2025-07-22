@@ -7,5 +7,6 @@ pub mod services;
 pub mod signer;
 pub mod ssp;
 pub mod tree;
-mod utils;
+pub mod utils;
+
 pub use core::Network;
