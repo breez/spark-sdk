@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
-use bitcoin::secp256k1::ecdsa::{RecoverableSignature, RecoveryId, Signature};
+use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
 use bitcoin::secp256k1::{self, Message, SecretKey};
 use bitcoin::{
@@ -21,7 +21,7 @@ use thiserror::Error;
 
 use crate::signer::{
     AggregateFrostRequest, EncryptedPrivateKey, FrostSigningCommitmentsWithNonces,
-    SPARK_MESSAGE_PREFIX, SignFrostRequest, secret_sharing,
+    SignFrostRequest, secret_sharing,
 };
 use crate::signer::{PrivateKeySource, SecretToSplit};
 use crate::tree::TreeNodeId;
@@ -238,21 +238,6 @@ impl Signer for DefaultSigner {
             &self.identity_key,
         );
         Ok(sig)
-    }
-
-    fn sign_message_recoverable_ecdsa_with_identity_key<T: AsRef<[u8]>>(
-        &self,
-        message: T,
-    ) -> Result<String, SignerError> {
-        let hashed_msg = Message::from_digest(
-            sha256::Hash::hash(&[SPARK_MESSAGE_PREFIX, message.as_ref()].concat()).to_byte_array(),
-        );
-
-        let sig = self
-            .secp
-            .sign_ecdsa_recoverable(&hashed_msg, &self.identity_key);
-        let encoded_sig = sig.encode_compact();
-        Ok(zbase32::encode_full_bytes(encoded_sig.as_slice()))
     }
 
     async fn generate_frost_signing_commitments(
@@ -558,49 +543,15 @@ impl PrivateKeySource {
     }
 }
 
-pub(crate) trait RecoverableSignatureEncodeExt {
-    fn encode_compact(&self) -> Vec<u8>;
-
-    fn decode_compact(data: &[u8]) -> Result<Self, secp256k1::Error>
-    where
-        Self: Sized;
-}
-
-impl RecoverableSignatureEncodeExt for RecoverableSignature {
-    fn encode_compact(&self) -> Vec<u8> {
-        let (rid, rsig) = self.serialize_compact();
-        let prefix = rid.to_i32() as u8 + 31;
-
-        [&[prefix], &rsig[..]].concat()
-    }
-
-    fn decode_compact(data: &[u8]) -> Result<Self, secp256k1::Error> {
-        // Signature must be 64 + 1 bytes long (compact signature + recovery id)
-        if data.len() != 65 {
-            return Err(secp256k1::Error::InvalidSignature);
-        }
-
-        let rsig = &data[1..];
-        let rid = data[0] as i32 - 31;
-
-        match RecoveryId::from_i32(rid) {
-            Ok(x) => RecoverableSignature::from_compact(rsig, x),
-            Err(e) => Err(e),
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
     use bitcoin::secp256k1::rand::thread_rng;
-    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+    use bitcoin::secp256k1::{self, PublicKey, Secp256k1, SecretKey};
     use std::str::FromStr;
 
     use crate::signer::{EncryptedPrivateKey, PrivateKeySource, Signer, SignerError};
     use crate::tree::TreeNodeId;
-    use crate::utils::verify_signature::{
-        VerifySignatureError, verify_recoverable_signature_ecdsa,
-    };
+    use crate::utils::verify_signature::verify_signature_ecdsa;
     use crate::{
         Network,
         signer::default_signer::DefaultSigner,
@@ -631,10 +582,10 @@ mod test {
         let signer = create_test_signer();
         let message = "test message";
         let signature = signer
-            .sign_message_recoverable_ecdsa_with_identity_key(message)
+            .sign_message_ecdsa_with_identity_key(message)
             .expect("Failed to sign message");
 
-        verify_recoverable_signature_ecdsa(
+        verify_signature_ecdsa(
             &signer.secp,
             message,
             &signature,
@@ -647,34 +598,28 @@ mod test {
     fn test_verify_signature_ecdsa_invalid_signature() {
         let signer = create_test_signer();
         let signature = signer
-            .sign_message_recoverable_ecdsa_with_identity_key("signed message")
+            .sign_message_ecdsa_with_identity_key("signed message")
             .expect("Failed to sign message");
 
         // Wrong message
-        let result = verify_recoverable_signature_ecdsa(
+        let result = verify_signature_ecdsa(
             &signer.secp,
             "another message",
             &signature,
             &signer.get_identity_public_key().unwrap(),
         );
         assert!(result.is_err());
-        assert!(matches!(
-            result,
-            Err(VerifySignatureError::InvalidSignature)
-        ));
+        assert!(matches!(result, Err(secp256k1::Error::IncorrectSignature)));
 
         // Wrong public key
-        let result = verify_recoverable_signature_ecdsa(
+        let result = verify_signature_ecdsa(
             &signer.secp,
             "signed message",
             &signature,
             &PublicKey::from_secret_key(&Secp256k1::new(), &SecretKey::new(&mut thread_rng())),
         );
         assert!(result.is_err());
-        assert!(matches!(
-            result,
-            Err(VerifySignatureError::InvalidSignature)
-        ));
+        assert!(matches!(result, Err(secp256k1::Error::IncorrectSignature)));
     }
 
     #[test]

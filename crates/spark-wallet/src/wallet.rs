@@ -4,7 +4,11 @@ use std::{
     time::Duration,
 };
 
-use bitcoin::{Address, Transaction, key::Secp256k1, secp256k1::PublicKey};
+use bitcoin::{
+    Address, Transaction,
+    key::Secp256k1,
+    secp256k1::{PublicKey, ecdsa::Signature},
+};
 
 use spark::{
     address::SparkAddress,
@@ -361,19 +365,21 @@ impl<S: Signer> SparkWallet<S> {
         Ok(transfers.into_iter().map(WalletTransfer::from).collect())
     }
 
-    pub async fn sign_message(&self, message: &str) -> Result<String, SparkWalletError> {
-        Ok(self
-            .signer
-            .sign_message_recoverable_ecdsa_with_identity_key(message)?)
+    /// Signs a message with the identity key using ECDSA and returns the signature.
+    ///
+    /// If exposing this, consider adding a prefix to prevent mistakenly signing messages.
+    pub async fn sign_message(&self, message: &str) -> Result<Signature, SparkWalletError> {
+        Ok(self.signer.sign_message_ecdsa_with_identity_key(message)?)
     }
 
+    /// Verifies a message was signed by the given public key and the signature is valid.
     pub async fn verify_message(
         &self,
         message: &str,
-        signature: &str,
+        signature: &Signature,
         public_key: &PublicKey,
     ) -> Result<(), SparkWalletError> {
-        spark::utils::verify_signature::verify_recoverable_signature_ecdsa(
+        spark::utils::verify_signature::verify_signature_ecdsa(
             &Secp256k1::new(),
             message,
             signature,

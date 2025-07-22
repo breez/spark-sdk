@@ -30,7 +30,6 @@ uuid.workspace = true
 lightning-invoice.workspace = true
 prost-types.workspace = true
 rand.workspace = true
-zbase32.workspace = true
 
 [build-dependencies]
 tonic.workspace = true

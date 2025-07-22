@@ -46,4 +46,3 @@ uuid = { version = "1.17.0", features = ["v7"] }
 lightning-invoice = "0.33.1"
 futures = { version = "0.3", default-features = false }
 rand = "0.8"
-zbase32 = "0.1.2"

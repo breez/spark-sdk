@@ -1,4 +1,4 @@
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use clap::Parser;
 use rustyline::{Editor, history::DefaultHistory};
 use spark_wallet::SparkWallet;
@@ -86,11 +86,13 @@ where
         Command::Sign => {
             let message = rl.readline("Enter message to sign: ")?;
             let signature = wallet.sign_message(&message).await?;
+            let signature = hex::encode(signature.serialize_der());
             println!("Signature: {signature}");
         }
         Command::Verify => {
             let message = rl.readline("Enter message to verify: ")?;
             let signature = rl.readline("Enter signature to verify: ")?;
+            let signature = Signature::from_der(&hex::decode(&signature)?)?;
             let public_key = rl.readline("Enter signer public key: ")?;
             let public_key = PublicKey::from_slice(&hex::decode(&public_key)?)?;
             wallet
