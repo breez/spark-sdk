@@ -219,11 +219,17 @@ impl<S: Signer> SparkWallet<S> {
 
     pub async fn fetch_coop_exit_fee_quote(
         &self,
-        withdrawal_address: Address<NetworkUnchecked>,
+        withdrawal_address: &str,
         amount_sats: Option<u64>,
     ) -> Result<CoopExitFeeQuote, SparkWalletError> {
         // Validate withdrawal address
         let withdrawal_address = withdrawal_address
+            .parse::<Address<NetworkUnchecked>>()
+            .map_err(|_| {
+                SparkWalletError::InvalidAddress(format!(
+                    "Invalid withdrawal address: {withdrawal_address}"
+                ))
+            })?
             .require_network(self.config.network.into())
             .map_err(|_| SparkWalletError::InvalidNetwork)?;
 
@@ -493,13 +499,19 @@ impl<S: Signer> SparkWallet<S> {
 
     pub async fn withdraw(
         &self,
-        withdrawal_address: Address<NetworkUnchecked>,
+        withdrawal_address: &str,
         amount_sats: Option<u64>,
         exit_speed: ExitSpeed,
         fee_quote: CoopExitFeeQuote,
     ) -> Result<WalletTransfer, SparkWalletError> {
         // Validate withdrawal address
         let withdrawal_address = withdrawal_address
+            .parse::<Address<NetworkUnchecked>>()
+            .map_err(|_| {
+                SparkWalletError::InvalidAddress(format!(
+                    "Invalid withdrawal address: {withdrawal_address}"
+                ))
+            })?
             .require_network(self.config.network.into())
             .map_err(|_| SparkWalletError::InvalidNetwork)?;
 

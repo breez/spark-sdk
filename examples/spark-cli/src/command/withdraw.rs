@@ -1,4 +1,3 @@
-use bitcoin::{Address, address::NetworkUnchecked};
 use clap::Subcommand;
 use spark_wallet::SparkWallet;
 
@@ -49,9 +48,8 @@ where
             withdrawal_address,
             amount_sats,
         } => {
-            let withdrawal_address = withdrawal_address.parse()?;
             let fee_quote = wallet
-                .fetch_coop_exit_fee_quote(withdrawal_address, amount_sats)
+                .fetch_coop_exit_fee_quote(&withdrawal_address, amount_sats)
                 .await?;
             println!("{}", serde_json::to_string_pretty(&fee_quote)?);
         }
@@ -60,14 +58,13 @@ where
             exit_speed,
             amount_sats,
         } => {
-            let withdrawal_address: Address<NetworkUnchecked> = withdrawal_address.parse()?;
             let fee_quote = wallet
-                .fetch_coop_exit_fee_quote(withdrawal_address.clone(), amount_sats)
+                .fetch_coop_exit_fee_quote(&withdrawal_address, amount_sats)
                 .await?;
 
             let result = wallet
                 .withdraw(
-                    withdrawal_address,
+                    &withdrawal_address,
                     amount_sats,
                     exit_speed.into(),
                     fee_quote,
