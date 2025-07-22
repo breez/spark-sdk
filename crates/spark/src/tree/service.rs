@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use bitcoin::secp256k1::PublicKey;
-use tracing::{trace, warn};
+use tracing::{error, trace, warn};
 
 use crate::{
     Network,
@@ -239,31 +239,102 @@ impl<S: Signer> TreeService<S> {
         Ok(())
     }
 
+    pub fn select_leaves_by_amounts(
+        &self,
+        leaves: Vec<TreeNode>,
+        target_amounts_sats: Vec<u64>,
+    ) -> Result<Vec<Vec<TreeNode>>, TreeServiceError> {
+        let mut remaining_leaves = leaves.clone();
+        if target_amounts_sats.is_empty() {
+            trace!("No target amounts specified, returning all remaining leaves");
+            return Ok(vec![remaining_leaves]);
+        }
+        let mut res = vec![];
+        for amount_sats in target_amounts_sats {
+            let leaves_sum: u64 = remaining_leaves.iter().map(|leaf| leaf.value).sum();
+            trace!("Selecting leaves for amount {amount_sats}, remaining leaves sum: {leaves_sum}");
+            let selected = self
+                .select_leaves_by_amount(remaining_leaves.clone(), amount_sats)?
+                .ok_or(TreeServiceError::UnselectableAmount)
+                .inspect_err(|e| {
+                    error!("Failed to select leaves for amount {amount_sats}: {e:?}");
+                })?;
+            trace!(
+                "Selected leaves {} for amount {amount_sats}",
+                selected.len()
+            );
+            remaining_leaves.retain(|leaf| {
+                !selected
+                    .iter()
+                    .any(|selected_leaf| selected_leaf.id == leaf.id)
+            });
+            res.push(selected);
+        }
+
+        Ok(res)
+    }
+
     pub async fn reserve_leaves(
         &self,
-        target_amount_sat: Option<u64>,
+        target_amounts_sats: Vec<u64>,
         exact_only: bool,
     ) -> Result<Option<LeavesReservation>, TreeServiceError> {
-        trace!("Reserving leaves for amount: {target_amount_sat:?}");
+        trace!("Reserving leaves for amounts: {target_amounts_sats:?}");
         let reservation = {
             let mut state = self.state.lock().unwrap();
             let leaves = state.get_leaves();
-            let selected = match target_amount_sat {
-                Some(amount_sats) => {
-                    let mut selected = self.select_leaves_by_amount(leaves.clone(), amount_sats)?;
-                    if selected.is_none() && !exact_only {
-                        selected =
-                            self.select_leaves_by_minimum_amount(leaves.clone(), amount_sats)?;
-                    }
-                    selected
-                }
-                None => Some(
+
+            let selected = if target_amounts_sats.is_empty() {
+                trace!("No target amounts specified, returning all available leaves");
+                Some(
                     leaves
                         .iter()
                         .filter(|leaf| leaf.status == TreeNodeStatus::Available)
                         .cloned()
                         .collect(),
-                ),
+                )
+            } else {
+                let mut remaining_leaves = leaves.clone();
+                let mut selected_leaves = Vec::new();
+                for amount_sats in &target_amounts_sats {
+                    trace!("Selecting leaves for amount {amount_sats}");
+                    let selected =
+                        self.select_leaves_by_amount(remaining_leaves.clone(), *amount_sats)?;
+                    match selected {
+                        Some(selected) => {
+                            trace!(
+                                "Selected leaves {} for amount {amount_sats}",
+                                selected.len()
+                            );
+                            remaining_leaves.retain(|leaf| {
+                                !selected
+                                    .iter()
+                                    .any(|selected_leaf| selected_leaf.id == leaf.id)
+                            });
+                            selected_leaves.extend(selected);
+                        }
+                        None => {
+                            // If we cannot select leaves for this target amount, we must revert to
+                            // selecting leaves by minimum amount for the total target amount.
+                            trace!("Could not select leaves for amount {amount_sats}");
+                            selected_leaves = Vec::new();
+                            break;
+                        }
+                    }
+                }
+                if selected_leaves.is_empty() {
+                    if !exact_only {
+                        trace!("No exact match found, selecting leaves by minimum amount");
+                        self.select_leaves_by_minimum_amount(
+                            leaves.clone(),
+                            target_amounts_sats.iter().sum(),
+                        )?
+                    } else {
+                        None
+                    }
+                } else {
+                    Some(selected_leaves)
+                }
             };
 
             match selected {

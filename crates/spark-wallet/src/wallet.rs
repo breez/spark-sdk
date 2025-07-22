@@ -178,7 +178,7 @@ impl<S: Signer> SparkWallet<S> {
             ));
         }
 
-        let leaves_reservation = self.select_leaves(Some(total_amount_sat)).await?;
+        let leaves_reservation = self.select_leaves(vec![total_amount_sat]).await?;
         // start the lightning swap with the operator
         let swap = with_reserved_leaves(
             self.tree_service.clone(),
@@ -228,7 +228,11 @@ impl<S: Signer> SparkWallet<S> {
             .map_err(|_| SparkWalletError::InvalidNetwork)?;
 
         // Selects leaves totaling `amount_sat` if provided, otherwise retrieves all available leaves.
-        let reservation = self.select_leaves(amount_sats).await?;
+        let target_amounts_sats = match amount_sats {
+            Some(amount) => vec![amount],
+            None => vec![],
+        };
+        let reservation = self.select_leaves(target_amounts_sats).await?;
 
         // Fetches fee quote for the coop exit then cancels the reservation.
         let fee_quote_res = self
@@ -343,7 +347,7 @@ impl<S: Signer> SparkWallet<S> {
         let receiver_pubkey = receiver_address.identity_public_key;
 
         // get leaves to transfer
-        let leaves_reservation = self.select_leaves(Some(amount_sat)).await?;
+        let leaves_reservation = self.select_leaves(vec![amount_sat]).await?;
 
         let transfer = with_reserved_leaves(
             self.tree_service.clone(),
@@ -423,58 +427,63 @@ impl<S: Signer> SparkWallet<S> {
         .map_err(|e| SparkWalletError::ValidationError(e.to_string()))
     }
 
-    /// Selects leaves from the tree that sum up to exactly the target amount.
-    /// If such a combination of leaves does not exist, it performs a swap to get a set of leaves matching the target amount.
+    /// Selects leaves from the tree that sum up to exactly the target amounts.
+    /// If such a combination of leaves does not exist, it performs a swap to get a set of leaves matching the target amounts.
     /// If no leaves can be selected, returns an error
     async fn select_leaves(
         &self,
-        target_amount_sat: Option<u64>,
+        target_amounts_sats: Vec<u64>,
     ) -> Result<LeavesReservation, SparkWalletError> {
-        trace!("Selecting leaves for amount: {target_amount_sat:?}");
-        let selection = self
+        trace!("Selecting leaves for target amounts: {target_amounts_sats:?}");
+        let reservation = self
             .tree_service
-            .reserve_leaves(target_amount_sat, false)
+            .reserve_leaves(target_amounts_sats.clone(), false)
             .await?;
-        let Some(selection) = selection else {
+        let Some(reservation) = reservation else {
             return Err(SparkWalletError::InsufficientFunds);
         };
+
         trace!(
             "Selected leaves got reservation: {:?} ({})",
-            selection.id,
-            selection.sum()
+            reservation.id,
+            reservation.sum()
         );
 
-        // Handle cases where no swapping is needed
-        if matches!(target_amount_sat, None)
-            || matches!(target_amount_sat, Some(target) if selection.sum() == target)
-        {
-            trace!("Selected leaves match requirements, no swap needed");
-            return Ok(selection);
+        // Handle cases where no swapping is needed:
+        // - The target amount is zero
+        // - The reservation already matches the total target amounts and each target amount
+        //   can be selected from the reserved leaves
+        let total_amount_sats: u64 = target_amounts_sats.iter().sum();
+        if total_amount_sats == 0 || reservation.sum() == total_amount_sats {
+            if let Ok(_) = self
+                .tree_service
+                .select_leaves_by_amounts(reservation.leaves.clone(), target_amounts_sats.clone())
+            {
+                trace!("Selected leaves match requirements, no swap needed");
+                return Ok(reservation);
+            }
         }
 
         // Swap the leaves to match the target amount.
         with_reserved_leaves(
             self.tree_service.clone(),
-            self.swap_leaves_internal(
-                &selection.leaves,
-                vec![target_amount_sat.unwrap_or_default()],
-            ),
-            &selection,
+            self.swap_leaves_internal(&reservation.leaves, target_amounts_sats.clone()),
+            &reservation,
         )
         .await?;
         trace!("Swapped leaves to match target amount");
         // Now the leaves should contain the exact amount.
-        let leaves = self
+        let reservation = self
             .tree_service
-            .reserve_leaves(target_amount_sat, true)
-            .await?;
-        let leaves = leaves.ok_or(SparkWalletError::InsufficientFunds)?;
+            .reserve_leaves(target_amounts_sats, true)
+            .await?
+            .ok_or(SparkWalletError::InsufficientFunds)?;
         trace!(
             "Selected leaves got reservation after swap: {:?} ({})",
-            leaves.id,
-            leaves.sum()
+            reservation.id,
+            reservation.sum()
         );
-        Ok(leaves)
+        Ok(reservation)
     }
 
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
@@ -495,34 +504,27 @@ impl<S: Signer> SparkWallet<S> {
             .map_err(|_| SparkWalletError::InvalidNetwork)?;
 
         // Calculate the fee based on the exit speed
-        let fee_sats = match exit_speed {
-            ExitSpeed::Fast => {
-                fee_quote.speed_fast.l1_broadcast_fee_sat + fee_quote.speed_fast.user_fee_sat
-            }
-            ExitSpeed::Medium => {
-                fee_quote.speed_medium.l1_broadcast_fee_sat + fee_quote.speed_medium.user_fee_sat
-            }
-            ExitSpeed::Slow => {
-                fee_quote.speed_slow.l1_broadcast_fee_sat + fee_quote.speed_slow.user_fee_sat
-            }
-        };
+        let fee_sats = fee_quote.fee_sats(&exit_speed);
         trace!("Calculated fee for exit speed {exit_speed:?}: {fee_sats} sats",);
 
         // Select leaves for the withdrawal
-        let withdraw_all = amount_sats.is_none();
-        let withdraw_leaves_reservation = self.select_leaves(amount_sats).await?;
+        let target_amounts_sats = match amount_sats {
+            Some(amount_sats) => vec![amount_sats, fee_sats],
+            None => vec![],
+        };
+        let leaves_reservation = self.select_leaves(target_amounts_sats.clone()).await?;
 
         let transfer = with_reserved_leaves(
             self.tree_service.clone(),
             self.withdraw_inner(
                 withdrawal_address,
                 exit_speed,
-                withdraw_leaves_reservation.leaves.clone(),
-                withdraw_all,
+                &leaves_reservation,
+                target_amounts_sats,
                 fee_sats,
                 fee_quote.id,
             ),
-            &withdraw_leaves_reservation,
+            &leaves_reservation,
         )
         .await?;
 
@@ -533,54 +535,47 @@ impl<S: Signer> SparkWallet<S> {
         &self,
         address: Address,
         exit_speed: ExitSpeed,
-        leaves: Vec<TreeNode>,
-        withdraw_all: bool,
+        leaves_reservation: &LeavesReservation,
+        target_amounts_sats: Vec<u64>,
         fee_sats: u64,
         fee_quote_id: String,
     ) -> Result<Transfer, SparkWalletError> {
-        let leaves_sum = leaves.iter().map(|l| l.value).sum::<u64>();
+        let withdraw_all = target_amounts_sats.is_empty();
+        let (withdraw_leaves, fee_leaves, fee_quote_id) = if withdraw_all {
+            (leaves_reservation.leaves.clone(), None, None)
+        } else {
+            let target_leaves = self
+                .tree_service
+                .select_leaves_by_amounts(leaves_reservation.leaves.clone(), target_amounts_sats)?;
+            (
+                target_leaves[0].clone(),
+                Some(target_leaves[1].clone()),
+                Some(fee_quote_id),
+            )
+        };
 
         // Check if the fee is greater than the amount when deducting the fee from it
-        if withdraw_all && fee_sats > leaves_sum {
+        let withdraw_leaves_sum: u64 = withdraw_leaves.iter().map(|leaf| leaf.value).sum();
+        if withdraw_all && fee_sats > withdraw_leaves_sum {
             trace!(
-                "Insufficient funds for withdrawal: amount {leaves_sum} sats, fee {fee_sats} sats"
+                "Insufficient funds for withdrawal: amount {} sats, fee {} sats",
+                withdraw_leaves_sum, fee_sats
             );
             return Err(SparkWalletError::InsufficientFunds);
         }
 
-        let (fee_quote_id, fee_leaves_reservation) = if !withdraw_all {
-            // If we are not deducting the fee from the amount, select leaves for the fee
-            (
-                Some(fee_quote_id),
-                Some(self.select_leaves(Some(fee_sats)).await?),
+        // Perform the cooperative exit with the SSP
+        let transfer = self
+            .coop_exit_service
+            .coop_exit(
+                withdraw_leaves,
+                &address,
+                withdraw_all,
+                exit_speed.into(),
+                fee_quote_id,
+                fee_leaves,
             )
-        } else {
-            (None, None)
-        };
-        let fee_leaves = fee_leaves_reservation.as_ref().map(|r| r.leaves.clone());
-
-        // Prepare a future that performs the cooperative exit with the SSP
-        let coop_exit_fut = self.coop_exit_service.coop_exit(
-            leaves,
-            &address,
-            withdraw_all,
-            exit_speed.into(),
-            fee_quote_id,
-            fee_leaves,
-        );
-        // If we have reserved leaves for the fee, we need to cancel or finalize the reservation
-        // after the cooperative exit future completes.
-        let transfer = match &fee_leaves_reservation {
-            Some(fee_reservation) => {
-                with_reserved_leaves(
-                    self.tree_service.clone(),
-                    async { Ok(coop_exit_fut.await?) },
-                    &fee_reservation,
-                )
-                .await?
-            }
-            None => coop_exit_fut.await?,
-        };
+            .await?;
 
         Ok(transfer.into())
     }

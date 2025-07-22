@@ -52,6 +52,18 @@ pub struct CoopExitFeeQuote {
     pub speed_slow: CoopExitSpeedFeeQuote,
 }
 
+impl CoopExitFeeQuote {
+    pub fn fee_sats(&self, speed: &ExitSpeed) -> u64 {
+        match speed {
+            ExitSpeed::Fast => self.speed_fast.l1_broadcast_fee_sat + self.speed_fast.user_fee_sat,
+            ExitSpeed::Medium => {
+                self.speed_medium.l1_broadcast_fee_sat + self.speed_medium.user_fee_sat
+            }
+            ExitSpeed::Slow => self.speed_slow.l1_broadcast_fee_sat + self.speed_slow.user_fee_sat,
+        }
+    }
+}
+
 impl TryFrom<crate::ssp::CoopExitFeeQuote> for CoopExitFeeQuote {
     type Error = ServiceError;
 
