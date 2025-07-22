@@ -564,6 +564,12 @@ fn find_exact_multiple_match(leaves: &[TreeNode], target_amount_sat: u64) -> Opt
         return None;
     }
 
+    // Sort leaves by value in descending order, as we want to use larger leaves first.
+    // This avoids potentially consuming smaller leaves that could be used later for
+    // smaller targets, like paying fees.
+    let mut sorted_leaves = leaves.to_vec();
+    sorted_leaves.sort_by(|a, b| b.value.cmp(&a.value));
+
     // Use dynamic programming with HashMap for space efficiency
     // dp[amount] = (leaf_idx, prev_amount) represents that we can achieve 'amount'
     // by using leaf at leaf_idx and then achieve prev_amount
@@ -571,7 +577,7 @@ fn find_exact_multiple_match(leaves: &[TreeNode], target_amount_sat: u64) -> Opt
     dp.insert(0, (usize::MAX, 0)); // Special marker for zero sum
 
     // Fill dp table
-    for (leaf_idx, leaf) in leaves.iter().enumerate() {
+    for (leaf_idx, leaf) in sorted_leaves.iter().enumerate() {
         // Consider all amounts we can currently achieve
         let current_amounts: Vec<u64> = dp.keys().cloned().collect();
 
@@ -604,8 +610,7 @@ fn find_exact_multiple_match(leaves: &[TreeNode], target_amount_sat: u64) -> Opt
         if leaf_idx == usize::MAX {
             break; // Reached the special zero marker
         }
-
-        result.push(leaves[leaf_idx].clone());
+        result.push(sorted_leaves[leaf_idx].clone());
         current_amount = prev_amount;
     }
 
