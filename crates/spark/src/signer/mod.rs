@@ -4,8 +4,8 @@ mod models;
 mod secret_sharing;
 
 use crate::tree::TreeNodeId;
-use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::ecdsa::Signature;
+use bitcoin::secp256k1::{PublicKey, SecretKey};
 use frost_secp256k1_tr::round2::SignatureShare;
 
 pub use default_signer::DefaultSigner;
@@ -29,6 +29,10 @@ pub trait Signer {
     fn generate_random_key(&self) -> Result<PrivateKeySource, SignerError>;
 
     fn get_identity_public_key(&self) -> Result<PublicKey, SignerError>;
+
+    fn get_static_deposit_private_key(&self, index: u32) -> Result<SecretKey, SignerError>;
+
+    fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError>;
 
     /// Subtract two private keys
     ///

@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter};
+
 use bitcoin::params::Params;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +15,17 @@ pub enum Network {
     Testnet,
     #[serde(rename = "signet")]
     Signet,
+}
+
+impl Display for Network {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Network::Mainnet => write!(f, "mainnet"),
+            Network::Regtest => write!(f, "regtest"),
+            Network::Testnet => write!(f, "testnet"),
+            Network::Signet => write!(f, "signet"),
+        }
+    }
 }
 
 impl Network {
