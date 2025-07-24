@@ -258,7 +258,7 @@ where
         &self,
         invoice: &str,
         amount_to_send: Option<u64>,
-        leaves: &Vec<TreeNode>,
+        leaves: &[TreeNode],
     ) -> Result<LightningSwap, ServiceError> {
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;

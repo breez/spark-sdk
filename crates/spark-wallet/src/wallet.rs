@@ -460,14 +460,14 @@ impl<S: Signer> SparkWallet<S> {
         // - The reservation already matches the total target amounts and each target amount
         //   can be selected from the reserved leaves
         let total_amount_sats = target_amounts.map(|ta| ta.total_sats()).unwrap_or(0);
-        if total_amount_sats == 0 || reservation.sum() == total_amount_sats {
-            if let Ok(_) = self
+        if (total_amount_sats == 0 || reservation.sum() == total_amount_sats)
+            && self
                 .tree_service
                 .select_leaves_by_amounts(&reservation.leaves, target_amounts)
-            {
-                trace!("Selected leaves match requirements, no swap needed");
-                return Ok(reservation);
-            }
+                .is_ok()
+        {
+            trace!("Selected leaves match requirements, no swap needed");
+            return Ok(reservation);
         }
 
         // Swap the leaves to match the target amount.
@@ -581,13 +581,13 @@ impl<S: Signer> SparkWallet<S> {
                 withdraw_leaves,
                 &address,
                 withdraw_all,
-                exit_speed.into(),
+                exit_speed,
                 fee_quote_id,
                 fee_leaves,
             )
             .await?;
 
-        Ok(transfer.into())
+        Ok(transfer)
     }
 }
 

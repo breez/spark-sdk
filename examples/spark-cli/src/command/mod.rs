@@ -105,7 +105,7 @@ where
             println!("Signature verified successfully.");
         }
         Command::Withdraw(withdraw_command) => {
-            withdraw::handle_command(&config, &wallet, withdraw_command).await?
+            withdraw::handle_command(config, wallet, withdraw_command).await?
         }
     }
 
