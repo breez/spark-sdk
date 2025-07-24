@@ -125,7 +125,7 @@ impl<S: Signer> TreeService<S> {
     /// tree_service.refresh_leaves().await?;
     ///
     /// // Then list the leaves
-    /// let leaves = tree_service.list_leaves()?;
+    /// let leaves = tree_service.list_leaves().await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -161,7 +161,7 @@ impl<S: Signer> TreeService<S> {
     /// tree_service.refresh_leaves().await?;
     ///
     /// // Now you can work with the updated leaves
-    /// let leaves = tree_service.list_leaves()?;
+    /// let leaves = tree_service.list_leaves().await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -492,7 +492,7 @@ impl<S: Signer> TreeService<S> {
     /// tree_service.refresh_leaves().await?;
     ///
     /// // Get the available balance
-    /// let balance = tree_service.get_available_balance()?;
+    /// let balance = tree_service.get_available_balance().await?;
     /// println!("Available balance: {} sats", balance);
     /// # Ok(())
     /// # }
