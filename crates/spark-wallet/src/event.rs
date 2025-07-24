@@ -1,19 +1,21 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
 use tokio::sync::mpsc::Sender;
+use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
 
 use crate::WalletEvent;
 
 pub(super) struct EventManager {
+    cancel: broadcast::Sender<()>,
     listeners: Arc<Mutex<HashMap<Uuid, Sender<WalletEvent>>>>,
 }
 
 impl EventManager {
     pub fn new() -> Self {
         Self {
+            cancel: broadcast::channel(1).0,
             listeners: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -25,9 +27,17 @@ impl EventManager {
         let clone = listener.clone();
         self.listeners.lock().await.insert(id, listener);
         let listeners = Arc::clone(&self.listeners);
+
+        // This cancel token is dropped when the eventmanager itself is dropped.
+        let mut cancel = self.cancel.subscribe();
         tokio::spawn(async move {
-            // TODO: Add cancellation logic, because this will run until the receiver is dropped.
-            clone.closed().await;
+            tokio::select! {
+                _ = clone.closed() => {}
+                _ = cancel.recv() => {
+                    // Exit if the cancel token is triggered
+                    return;
+                }
+            }
             tracing::debug!(
                 "Removing listener with ID '{}' because receiver dropped.",
                 id
