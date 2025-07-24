@@ -292,6 +292,16 @@ impl Signer for DefaultSigner {
         Ok(self.identity_key.public_key(&self.secp))
     }
 
+    fn get_static_deposit_private_key_source(
+        &self,
+        index: u32,
+    ) -> Result<PrivateKeySource, SignerError> {
+        let secret_key = self.get_static_deposit_private_key(index)?;
+        Ok(PrivateKeySource::new_encrypted(
+            self.encrypt_private_key_ecies(&secret_key, &self.get_identity_public_key()?)?,
+        ))
+    }
+
     // Seems unavoidable to expose the static deposit secret key, as its used for claiming static deposits
     fn get_static_deposit_private_key(&self, index: u32) -> Result<SecretKey, SignerError> {
         let child_number = ChildNumber::from_hardened_idx(index).map_err(|e| {

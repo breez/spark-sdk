@@ -30,6 +30,11 @@ pub trait Signer {
 
     fn get_identity_public_key(&self) -> Result<PublicKey, SignerError>;
 
+    fn get_static_deposit_private_key_source(
+        &self,
+        index: u32,
+    ) -> Result<PrivateKeySource, SignerError>;
+
     fn get_static_deposit_private_key(&self, index: u32) -> Result<SecretKey, SignerError>;
 
     fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError>;

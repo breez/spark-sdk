@@ -308,6 +308,31 @@ impl<S: Signer> SparkWallet<S> {
         Ok(transfer.into())
     }
 
+    pub async fn refund_static_deposit(
+        &self,
+        tx: Transaction,
+        output_index: Option<u32>,
+        refund_address: &str,
+        fee_sats: u64,
+    ) -> Result<Transaction, SparkWalletError> {
+        let refund_address = refund_address
+            .parse::<Address<NetworkUnchecked>>()
+            .map_err(|_| {
+                SparkWalletError::InvalidAddress(format!(
+                    "Invalid refund address: {refund_address}"
+                ))
+            })?
+            .require_network(self.config.network.into())
+            .map_err(|_| SparkWalletError::InvalidNetwork)?;
+
+        let refund_tx = self
+            .deposit_service
+            .refund_static_deposit(tx, output_index, refund_address, fee_sats)
+            .await?;
+
+        Ok(refund_tx)
+    }
+
     pub async fn generate_deposit_address(
         &self,
         is_static: bool,

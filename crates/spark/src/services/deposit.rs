@@ -1,7 +1,7 @@
 use std::{collections::HashSet, str::FromStr, sync::Arc};
 
 use bitcoin::{
-    Address, OutPoint, Transaction, TxOut, Txid,
+    Address, OutPoint, Transaction, TxOut, Txid, Witness,
     address::NetworkUnchecked,
     consensus::{deserialize, serialize},
     hashes::{Hash, sha256},
@@ -28,7 +28,7 @@ use crate::{
     tree::{TreeNode, TreeNodeId},
     utils::{
         paging::{PagingFilter, PagingResult, pager},
-        transactions::{create_node_tx, create_refund_tx},
+        transactions::{create_node_tx, create_refund_tx, create_static_deposit_refund_tx},
     },
 };
 
@@ -188,7 +188,7 @@ where
             output_index,
             UtxoSwapRequestType::Fixed,
             credit_amount_sats,
-            quote_signature,
+            &quote_signature.serialize_der(),
         );
         // Sign the payload with the identity key
         let signature = self.signer.sign_message_ecdsa_with_identity_key(&payload)?;
@@ -238,13 +238,169 @@ where
         transfer.try_into()
     }
 
+    pub async fn refund_static_deposit(
+        &self,
+        tx: Transaction,
+        output_index: Option<u32>,
+        refund_address: Address,
+        fee_sats: u64,
+    ) -> Result<Transaction, ServiceError> {
+        if fee_sats <= 300 {
+            return Err(ServiceError::Generic(
+                "fee must be more than 300 sats".to_string(),
+            ));
+        }
+
+        let txid = tx.compute_txid();
+        let output_index = match output_index {
+            Some(v) => v,
+            None => self
+                .find_static_deposit_tx_vout(&tx)
+                .await?
+                .ok_or(ServiceError::InvalidOutputIndex)?,
+        };
+        let tx_out = tx
+            .output
+            .get(output_index as usize)
+            .ok_or(ServiceError::InvalidOutputIndex)?;
+        let credit_amount_sats = tx_out.value.to_sat().saturating_sub(fee_sats);
+
+        if credit_amount_sats == 0 {
+            return Err(ServiceError::Generic(
+                "credit amount must be more than 0 sats".to_string(),
+            ));
+        }
+        trace!(
+            "Refunding static deposit txid: {txid}, output_index: {output_index}, credit_amount_sats: {credit_amount_sats}, fee_sats: {fee_sats}"
+        );
+
+        // Create the refund transaction
+        let mut refund_tx = create_static_deposit_refund_tx(
+            OutPoint {
+                txid,
+                vout: output_index,
+            },
+            credit_amount_sats,
+            &refund_address,
+        );
+        let spend_tx_sighash = sighash_from_tx(&refund_tx, 0, tx_out)?;
+        let spend_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
+
+        // Serialize the static deposit claim payload
+        let payload = self.serialize_static_deposit_claim_payload(
+            txid,
+            output_index,
+            UtxoSwapRequestType::Refund,
+            credit_amount_sats,
+            spend_tx_sighash.as_byte_array(),
+        );
+        // Sign the payload with the identity key
+        let signature = self.signer.sign_message_ecdsa_with_identity_key(&payload)?;
+
+        // Create the UTXO swap request
+        let utxo_swap_resp = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .initiate_utxo_swap(operator_rpc::spark::InitiateUtxoSwapRequest {
+                on_chain_utxo: Some(operator_rpc::spark::Utxo {
+                    vout: output_index,
+                    network: self.network.to_proto_network() as i32,
+                    txid: hex::decode(txid.to_string())
+                        .map_err(|_| ServiceError::InvalidTransaction)?,
+                    ..Default::default()
+                }),
+                request_type: operator_rpc::spark::UtxoSwapRequestType::Refund as i32,
+                ssp_signature: Vec::new(),
+                user_signature: signature.serialize_der().to_vec(),
+                transfer: Some(operator_rpc::spark::StartTransferRequest {
+                    transfer_id: uuid::Uuid::now_v7().to_string(),
+                    owner_identity_public_key: self.identity_public_key.serialize().to_vec(),
+                    receiver_identity_public_key: self.identity_public_key.serialize().to_vec(),
+                    ..Default::default()
+                }),
+                spend_tx_signing_job: Some(operator_rpc::spark::SigningJob {
+                    signing_public_key: self
+                        .signer
+                        .get_static_deposit_public_key(0)?
+                        .serialize()
+                        .to_vec(),
+                    raw_tx: serialize(&refund_tx),
+                    signing_nonce_commitment: Some(spend_nonce_commitment.commitments.try_into()?),
+                }),
+                amount: None,
+            })
+            .await?;
+
+        // Collect and map the signing results
+        let spend_tx_signing_result = utxo_swap_resp
+            .spend_tx_signing_result
+            .ok_or(ServiceError::MissingTreeSignatures)?;
+        let verifying_public_key = utxo_swap_resp
+            .deposit_address
+            .map(|da| PublicKey::from_slice(&da.verifying_public_key))
+            .transpose()
+            .map_err(|_| ServiceError::InvalidPublicKey)?
+            .ok_or(ServiceError::InvalidVerifyingKey)?;
+
+        if spend_tx_signing_result.signing_nonce_commitments.is_empty() {
+            return Err(ServiceError::MissingTreeSignatures);
+        }
+
+        let spend_tx_signing_nonce_commitments =
+            map_signing_nonce_commitments(&spend_tx_signing_result.signing_nonce_commitments)?;
+        let spend_tx_signature_shares =
+            map_signature_shares(&spend_tx_signing_result.signature_shares)?;
+        let spend_tx_statechain_public_keys =
+            map_public_keys(&spend_tx_signing_result.public_keys)?;
+
+        let static_deposit_private_key_source =
+            self.signer.get_static_deposit_private_key_source(0)?;
+        let static_deposit_public_key = self.signer.get_static_deposit_public_key(0)?;
+
+        let spend_sig = self
+            .signer
+            .sign_frost(SignFrostRequest {
+                message: spend_tx_sighash.as_byte_array(),
+                public_key: &verifying_public_key,
+                private_key: &static_deposit_private_key_source,
+                verifying_key: &verifying_public_key,
+                self_nonce_commitment: &spend_nonce_commitment,
+                statechain_commitments: spend_tx_signing_nonce_commitments.clone(),
+                adaptor_public_key: None,
+            })
+            .await?;
+
+        let spend_aggregate = self
+            .signer
+            .aggregate_frost(AggregateFrostRequest {
+                message: spend_tx_sighash.as_byte_array(),
+                statechain_signatures: spend_tx_signature_shares,
+                statechain_public_keys: spend_tx_statechain_public_keys,
+                verifying_key: &verifying_public_key,
+                statechain_commitments: spend_tx_signing_nonce_commitments,
+                self_commitment: &spend_nonce_commitment.commitments,
+                public_key: &static_deposit_public_key,
+                self_signature: &spend_sig,
+                adaptor_public_key: None,
+            })
+            .await?;
+
+        // Update the input the aggregated signature
+        let mut witness = Witness::new();
+        witness.push(&spend_aggregate.serialize()?);
+        refund_tx.input[0].witness = witness;
+
+        Ok(refund_tx)
+    }
+
     fn serialize_static_deposit_claim_payload(
         &self,
         txid: Txid,
         output_index: u32,
         request_type: UtxoSwapRequestType,
         credit_amount_sats: u64,
-        signature: Signature,
+        signing_payload: &[u8],
     ) -> Vec<u8> {
         // The user statement is constructed by concatenating the following fields in order:
         // 1. Action name: "claim_static_deposit" (UTF-8 string)
@@ -259,8 +415,8 @@ where
         payload.extend_from_slice(&[request_type.clone() as u8]);
         // 6. Credit amount: amount of satoshis to credit as 8-byte unsigned integer (little-endian)
         payload.extend_from_slice(&credit_amount_sats.to_le_bytes());
-        // 7. Signing payload: sighash of spend transaction (UTF-8 string)
-        payload.extend_from_slice(&signature.serialize_der());
+        // 7. Signing payload: SSP signature or sighash of spend transaction (UTF-8 string)
+        payload.extend_from_slice(signing_payload);
         payload
     }
 

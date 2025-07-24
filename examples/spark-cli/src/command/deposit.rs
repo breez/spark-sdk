@@ -1,5 +1,11 @@
-use bitcoin::{Transaction, consensus::encode::deserialize_hex};
+use std::str::FromStr;
+
+use bitcoin::{
+    Transaction, Txid,
+    consensus::encode::{deserialize_hex, serialize_hex},
+};
 use clap::Subcommand;
+use reqwest::header::CONTENT_TYPE;
 use spark_wallet::{PagingFilter, SparkWallet};
 
 use crate::config::Config;
@@ -46,6 +52,17 @@ pub enum DepositCommand {
         /// The offset to start listing addresses from.
         #[clap(short, long)]
         offset: Option<u64>,
+    },
+    /// Refund a static deposit.
+    Refund {
+        /// The transaction ID of the static deposit transaction.
+        txid: String,
+        /// The address to send the refund to.
+        refund_address: String,
+        /// The fee to pay for the refund transaction.
+        fee_sats: u64,
+        /// The output index of the static deposit transaction to refund.
+        output_index: Option<u32>,
     },
 }
 
@@ -118,6 +135,19 @@ where
             let addresses = wallet.list_unused_deposit_addresses(paging).await?;
             println!("{}", serde_json::to_string_pretty(&addresses)?);
         }
+        DepositCommand::Refund {
+            txid,
+            refund_address,
+            fee_sats,
+            output_index,
+        } => {
+            let tx = get_transaction(config, txid.clone()).await?;
+            let refund_tx = wallet
+                .refund_static_deposit(tx, output_index, &refund_address, fee_sats)
+                .await?;
+            let txid = broadcast_transaction(config, refund_tx).await?;
+            println!("Refund txid: {txid}");
+        }
     }
 
     Ok(())
@@ -140,4 +170,29 @@ async fn get_transaction(
     let hex = response.text().await?;
     let tx = deserialize_hex(&hex)?;
     Ok(tx)
+}
+
+async fn broadcast_transaction(
+    config: &Config,
+    tx: Transaction,
+) -> Result<Txid, Box<dyn std::error::Error>> {
+    let tx_hex = serialize_hex(&tx);
+    let url = format!("{}/tx", config.mempool_url);
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .basic_auth(
+            config.mempool_username.clone(),
+            Some(config.mempool_password.clone()),
+        )
+        .header(CONTENT_TYPE, "text/plain")
+        .body(tx_hex.clone())
+        .send()
+        .await?;
+    let text = response.text().await?;
+    let txid = Txid::from_str(&text).map_err(|_| {
+        println!("Refund tx hex: {}", tx_hex);
+        format!("Failed to parse txid from response: {text}")
+    })?;
+    Ok(txid)
 }
