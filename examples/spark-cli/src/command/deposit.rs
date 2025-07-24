@@ -191,7 +191,7 @@ async fn broadcast_transaction(
         .await?;
     let text = response.text().await?;
     let txid = Txid::from_str(&text).map_err(|_| {
-        println!("Refund tx hex: {}", tx_hex);
+        println!("Refund tx hex: {tx_hex}");
         format!("Failed to parse txid from response: {text}")
     })?;
     Ok(txid)
