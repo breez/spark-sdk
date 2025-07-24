@@ -259,51 +259,38 @@ impl<S: Signer> TreeService<S> {
                 Ok(target_leaves) => {
                     // Successfully selected target leaves
                     trace!("Successfully selected target leaves");
-                    Some(
-                        [
-                            target_leaves.amount_leaves,
-                            target_leaves.fee_leaves.unwrap_or_default(),
-                        ]
-                        .concat(),
-                    )
+                    [
+                        target_leaves.amount_leaves,
+                        target_leaves.fee_leaves.unwrap_or_default(),
+                    ]
+                    .concat()
                 }
                 Err(_) if !exact_only => {
                     trace!("No exact match found, selecting leaves by minimum amount");
                     let target_amount_sat = target_amounts.map_or(0, |ta| ta.total_sats());
-                    self.select_leaves_by_minimum_amount(leaves.clone(), target_amount_sat)?
+                    let Some(selected) =
+                        self.select_leaves_by_minimum_amount(leaves.clone(), target_amount_sat)?
+                    else {
+                        return Ok(None);
+                    };
+                    selected
                 }
                 Err(e) => {
                     error!("Failed to select target leaves: {e:?}");
-                    None
+                    return Ok(None);
                 }
             };
 
-            match selected {
-                Some(selected_leaves) => {
-                    let reservation_id = state.reserve_leaves(&selected_leaves)?;
-                    Ok::<Option<LeavesReservation>, TreeServiceError>(Some(LeavesReservation::new(
-                        selected_leaves.clone(),
-                        reservation_id,
-                    )))
-                }
-                None => Ok(None),
-            }
-        }?;
+            let reservation_id = state.reserve_leaves(&selected)?;
+            LeavesReservation::new(selected, reservation_id)
+        };
 
-        match reservation {
-            Some(reservation) => {
-                // refresh/extend time locks before returning the reservation
-                let new_leaves = self
-                    .timelock_manager
-                    .check_timelock_nodes(reservation.leaves)
-                    .await
-                    .map_err(|e| {
-                        TreeServiceError::Generic(format!("Failed to check time lock: {e:?}"))
-                    })?;
-                Ok(Some(LeavesReservation::new(new_leaves, reservation.id)))
-            }
-            None => Ok(None),
-        }
+        let new_leaves = self
+            .timelock_manager
+            .check_timelock_nodes(reservation.leaves)
+            .await
+            .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))?;
+        Ok(Some(LeavesReservation::new(new_leaves, reservation.id)))
     }
 
     pub fn cancel_reservation(&self, id: LeavesReservationId) {
