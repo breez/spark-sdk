@@ -712,6 +712,10 @@ where
             .await;
         });
 
+        if let Err(e) = self.tree_service.refresh_leaves().await {
+            error!("Error refreshing leaves on startup: {:?}", e);
+        }
+
         let ignore_transfers =
             match claim_pending_transfers(&self.transfer_service, &self.tree_service).await {
                 Ok(transfers) => {
@@ -729,6 +733,9 @@ where
                 }
             };
 
+        self.event_manager
+            .notify_listeners(WalletEvent::Synced)
+            .await;
         self.process_events(event_stream, ignore_transfers).await;
     }
 
