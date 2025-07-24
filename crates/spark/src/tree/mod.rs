@@ -178,3 +178,44 @@ impl LeavesReservation {
         self.leaves.iter().map(|leaf| leaf.value).sum()
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct TargetAmounts {
+    pub amount_sats: u64,
+    pub fee_sats: Option<u64>,
+}
+
+impl TargetAmounts {
+    pub fn new(amount_sats: u64, fee_sats: Option<u64>) -> Self {
+        Self {
+            amount_sats,
+            fee_sats,
+        }
+    }
+
+    pub fn total_sats(&self) -> u64 {
+        self.amount_sats + self.fee_sats.unwrap_or(0)
+    }
+
+    pub fn to_vec(&self) -> Vec<u64> {
+        let mut amounts = vec![self.amount_sats];
+        if let Some(fee) = self.fee_sats {
+            amounts.push(fee);
+        }
+        amounts
+    }
+}
+
+pub struct TargetLeaves {
+    pub amount_leaves: Vec<TreeNode>,
+    pub fee_leaves: Option<Vec<TreeNode>>,
+}
+
+impl TargetLeaves {
+    pub fn new(amount_leaves: Vec<TreeNode>, fee_leaves: Option<Vec<TreeNode>>) -> Self {
+        Self {
+            amount_leaves,
+            fee_leaves,
+        }
+    }
+}

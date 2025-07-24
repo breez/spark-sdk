@@ -2,13 +2,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::str::FromStr;
 
-use crate::core::Network;
-use crate::signer::PrivateKeySource;
-use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
 use bitcoin::Transaction;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::{consensus::deserialize, secp256k1::PublicKey};
-
 use frost_secp256k1_tr::{
     Identifier,
     round1::{NonceCommitment, SigningCommitments},
@@ -17,10 +13,13 @@ use frost_secp256k1_tr::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::core::Network;
+use crate::operator::rpc as operator_rpc;
+use crate::signer::PrivateKeySource;
+use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
 use crate::{ssp::BitcoinNetwork, utils::refund::SignedTx};
 
 use super::ServiceError;
-use crate::operator::rpc as operator_rpc;
 
 pub use crate::ssp::LightningSendRequestStatus;
 
@@ -538,6 +537,23 @@ impl From<operator_rpc::spark::TransferType> for TransferType {
             operator_rpc::spark::TransferType::UtxoSwap => TransferType::UtxoSwap,
             operator_rpc::spark::TransferType::Swap => TransferType::Swap,
             operator_rpc::spark::TransferType::CounterSwap => TransferType::CounterSwap,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ExitSpeed {
+    Fast,
+    Medium,
+    Slow,
+}
+
+impl From<ExitSpeed> for crate::ssp::ExitSpeed {
+    fn from(speed: ExitSpeed) -> Self {
+        match speed {
+            ExitSpeed::Fast => crate::ssp::ExitSpeed::Fast,
+            ExitSpeed::Medium => crate::ssp::ExitSpeed::Medium,
+            ExitSpeed::Slow => crate::ssp::ExitSpeed::Slow,
         }
     }
 }

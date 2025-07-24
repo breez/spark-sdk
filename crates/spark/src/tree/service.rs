@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use bitcoin::secp256k1::PublicKey;
-use tracing::{trace, warn};
+use tracing::{error, trace, warn};
 
 use crate::{
     Network,
@@ -16,7 +16,7 @@ use crate::{
     services::{PagingFilter, PagingResult, TimelockManager},
     signer::Signer,
     tree::TreeNodeId,
-    tree::{LeavesReservation, LeavesReservationId, TreeNodeStatus},
+    tree::{LeavesReservation, LeavesReservationId, TargetAmounts, TargetLeaves, TreeNodeStatus},
 };
 
 use super::{TreeNode, error::TreeServiceError, state::TreeState};
@@ -241,45 +241,56 @@ impl<S: Signer> TreeService<S> {
 
     pub async fn reserve_leaves(
         &self,
-        target_amount_sat: u64,
+        target_amounts: Option<&TargetAmounts>,
         exact_only: bool,
     ) -> Result<Option<LeavesReservation>, TreeServiceError> {
-        trace!("Reserving leaves for amount: {}", target_amount_sat);
+        trace!("Reserving leaves for amounts: {target_amounts:?}");
         let reservation = {
             let mut state = self.state.lock().unwrap();
-            let leaves = state.get_leaves();
-            let mut selected = self.select_leaves_by_amount(leaves.clone(), target_amount_sat)?;
-            if selected.is_none() && !exact_only {
-                selected =
-                    self.select_leaves_by_minimum_amount(leaves.clone(), target_amount_sat)?;
-            }
-
-            match selected {
-                Some(selected_leaves) => {
-                    let reservation_id = state.reserve_leaves(&selected_leaves)?;
-                    Ok::<Option<LeavesReservation>, TreeServiceError>(Some(LeavesReservation::new(
-                        selected_leaves.clone(),
-                        reservation_id,
-                    )))
+            // Filter available leaves from the state
+            let leaves: Vec<TreeNode> = state
+                .get_leaves()
+                .into_iter()
+                .filter(|leaf| leaf.status == TreeNodeStatus::Available)
+                .collect();
+            // Select leaves that match the target amounts
+            let target_leaves_res = self.select_leaves_by_amounts(&leaves, target_amounts);
+            let selected = match target_leaves_res {
+                Ok(target_leaves) => {
+                    // Successfully selected target leaves
+                    trace!("Successfully selected target leaves");
+                    [
+                        target_leaves.amount_leaves,
+                        target_leaves.fee_leaves.unwrap_or_default(),
+                    ]
+                    .concat()
                 }
-                None => Ok(None),
-            }
-        }?;
+                Err(_) if !exact_only => {
+                    trace!("No exact match found, selecting leaves by minimum amount");
+                    let target_amount_sat = target_amounts.map_or(0, |ta| ta.total_sats());
+                    let Some(selected) =
+                        self.select_leaves_by_minimum_amount(&leaves, target_amount_sat)?
+                    else {
+                        return Ok(None);
+                    };
+                    selected
+                }
+                Err(e) => {
+                    error!("Failed to select target leaves: {e:?}");
+                    return Ok(None);
+                }
+            };
 
-        match reservation {
-            Some(reservation) => {
-                // refresh/extend time locks before returning the reservation
-                let new_leaves = self
-                    .timelock_manager
-                    .check_timelock_nodes(reservation.leaves)
-                    .await
-                    .map_err(|e| {
-                        TreeServiceError::Generic(format!("Failed to check time lock: {e:?}"))
-                    })?;
-                Ok(Some(LeavesReservation::new(new_leaves, reservation.id)))
-            }
-            None => Ok(None),
-        }
+            let reservation_id = state.reserve_leaves(&selected)?;
+            LeavesReservation::new(selected, reservation_id)
+        };
+
+        let new_leaves = self
+            .timelock_manager
+            .check_timelock_nodes(reservation.leaves)
+            .await
+            .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))?;
+        Ok(Some(LeavesReservation::new(new_leaves, reservation.id)))
     }
 
     pub fn cancel_reservation(&self, id: LeavesReservationId) {
@@ -306,31 +317,69 @@ impl<S: Signer> TreeService<S> {
         Ok(result_nodes)
     }
 
+    /// Selects leaves from the tree that match the target amounts.
+    /// If no target amounts are specified, it returns all leaves.
+    /// If the target amounts cannot be matched exactly, it returns an error.
+    pub fn select_leaves_by_amounts(
+        &self,
+        leaves: &[TreeNode],
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<TargetLeaves, TreeServiceError> {
+        let mut remaining_leaves = leaves.to_vec();
+
+        // If no target amounts are specified, return all remaining leaves
+        let Some(target_amounts) = target_amounts else {
+            trace!("No target amounts specified, returning all remaining leaves");
+            return Ok(TargetLeaves::new(remaining_leaves, None));
+        };
+
+        // Select leaves that match the target amount_sats
+        let amount_leaves = self
+            .select_leaves_by_amount(&remaining_leaves, target_amounts.amount_sats)?
+            .ok_or(TreeServiceError::UnselectableAmount)?;
+
+        let fee_leaves = match target_amounts.fee_sats {
+            Some(fee_sats) => {
+                // Remove the amount_leaves from remaining_leaves to avoid double spending
+                remaining_leaves.retain(|leaf| {
+                    !amount_leaves
+                        .iter()
+                        .any(|amount_leaf| amount_leaf.id == leaf.id)
+                });
+                // Select leaves that match the fee_sats from the remaining leaves
+                Some(
+                    self.select_leaves_by_amount(&remaining_leaves, fee_sats)?
+                        .ok_or(TreeServiceError::UnselectableAmount)?,
+                )
+            }
+            None => None,
+        };
+
+        Ok(TargetLeaves::new(amount_leaves, fee_leaves))
+    }
+
     /// Selects leaves from the tree that sum up to exactly the target amount.
     /// If such a combination of leaves does not exist, it returns `None`.
     fn select_leaves_by_amount(
         &self,
-        mut leaves: Vec<TreeNode>,
+        leaves: &[TreeNode],
         target_amount_sat: u64,
     ) -> Result<Option<Vec<TreeNode>>, TreeServiceError> {
         if target_amount_sat == 0 {
             return Err(TreeServiceError::InvalidAmount);
         }
 
-        // Only consider leaves that are available.
-        leaves.retain(|leaf| leaf.status == TreeNodeStatus::Available);
-
         if leaves.iter().map(|leaf| leaf.value).sum::<u64>() < target_amount_sat {
             return Err(TreeServiceError::InsufficientFunds);
         }
 
         // Try to find a single leaf that matches the exact amount
-        if let Some(leaf) = find_exact_single_match(&leaves, target_amount_sat) {
+        if let Some(leaf) = find_exact_single_match(leaves, target_amount_sat) {
             return Ok(Some(vec![leaf]));
         }
 
         // Try to find a set of leaves that sum exactly to the target amount
-        if let Some(selected_leaves) = find_exact_multiple_match(&leaves, target_amount_sat) {
+        if let Some(selected_leaves) = find_exact_multiple_match(leaves, target_amount_sat) {
             return Ok(Some(selected_leaves));
         }
 
@@ -340,24 +389,18 @@ impl<S: Signer> TreeService<S> {
     /// Selects leaves from the tree that sum up to at least the target amount.
     fn select_leaves_by_minimum_amount(
         &self,
-        mut leaves: Vec<TreeNode>,
+        leaves: &[TreeNode],
         target_amount_sat: u64,
     ) -> Result<Option<Vec<TreeNode>>, TreeServiceError> {
         if target_amount_sat == 0 {
             return Err(TreeServiceError::InvalidAmount);
         }
 
-        // Only consider leaves that are available.
-        leaves.retain(|leaf| leaf.status == TreeNodeStatus::Available);
-
-        // Sort leaves by value in ascending order, to prefer spending smaller leaves first.
-        leaves.sort_by(|a, b| a.value.cmp(&b.value));
-
         let mut result = Vec::new();
         let mut sum = 0;
         for leaf in leaves {
             sum += leaf.value;
-            result.push(leaf);
+            result.push(leaf.clone());
             if sum >= target_amount_sat {
                 break;
             }
@@ -481,6 +524,12 @@ fn find_exact_multiple_match(leaves: &[TreeNode], target_amount_sat: u64) -> Opt
         return None;
     }
 
+    // Sort leaves by value in descending order, as we want to use larger leaves first.
+    // This avoids potentially consuming smaller leaves that could be used later for
+    // smaller targets, like paying fees.
+    let mut sorted_leaves = leaves.to_vec();
+    sorted_leaves.sort_by(|a, b| b.value.cmp(&a.value));
+
     // Use dynamic programming with HashMap for space efficiency
     // dp[amount] = (leaf_idx, prev_amount) represents that we can achieve 'amount'
     // by using leaf at leaf_idx and then achieve prev_amount
@@ -488,7 +537,7 @@ fn find_exact_multiple_match(leaves: &[TreeNode], target_amount_sat: u64) -> Opt
     dp.insert(0, (usize::MAX, 0)); // Special marker for zero sum
 
     // Fill dp table
-    for (leaf_idx, leaf) in leaves.iter().enumerate() {
+    for (leaf_idx, leaf) in sorted_leaves.iter().enumerate() {
         // Consider all amounts we can currently achieve
         let current_amounts: Vec<u64> = dp.keys().cloned().collect();
 
@@ -521,8 +570,7 @@ fn find_exact_multiple_match(leaves: &[TreeNode], target_amount_sat: u64) -> Opt
         if leaf_idx == usize::MAX {
             break; // Reached the special zero marker
         }
-
-        result.push(leaves[leaf_idx].clone());
+        result.push(sorted_leaves[leaf_idx].clone());
         current_amount = prev_amount;
     }
 

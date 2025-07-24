@@ -15,9 +15,9 @@ use crate::ssp::graphql::queries::complete_leaves_swap::{
     TransferFragment as CompleteLeavesSwapTransferFragment,
     UserRequestFragment as CompleteLeavesSwapUserRequestFragment,
 };
-use crate::ssp::graphql::queries::coop_exit_fee_estimates::{
-    CoopExitFeeEstimateFragment, CoopExitFeeEstimatesCoopExitFeeEstimates,
-    CurrencyAmountFragment as CoopExitFeeEstimatesCurrencyAmountFragment,
+use crate::ssp::graphql::queries::coop_exit_fee_quote::{
+    CoopExitFeeQuoteCoopExitFeeQuoteQuote,
+    CurrencyAmountFragment as CoopExitFeeQuoteCurrencyAmountFragment,
 };
 use crate::ssp::graphql::queries::leaves_swap_fee_estimate::CurrencyAmountFragment as LeavesSwapFeeEstimateCurrencyAmountFragment;
 use crate::ssp::graphql::queries::lightning_send_fee_estimate::CurrencyAmountFragment as LightningSendFeeEstimateCurrencyAmountFragment;
@@ -221,7 +221,7 @@ pub struct LightningInvoice {
 #[derive(Debug, Clone, Deserialize)]
 #[spark_macros::derive_from(CompleteCoopExitCurrencyAmountFragment)]
 #[spark_macros::derive_from(CompleteLeavesSwapCurrencyAmountFragment)]
-#[spark_macros::derive_from(CoopExitFeeEstimatesCurrencyAmountFragment)]
+#[spark_macros::derive_from(CoopExitFeeQuoteCurrencyAmountFragment)]
 #[spark_macros::derive_from(LeavesSwapFeeEstimateCurrencyAmountFragment)]
 #[spark_macros::derive_from(LightningSendFeeEstimateCurrencyAmountFragment)]
 #[spark_macros::derive_from(RequestCoopExitCurrencyAmountFragment)]
@@ -351,21 +351,22 @@ pub struct CoopExitRequest {
     pub transfer: Option<Transfer>,
 }
 
-/// CoopExitFeeEstimate structure
+/// CoopExitFeeQuote structure
 #[derive(Debug, Clone, Deserialize)]
-#[spark_macros::derive_from(CoopExitFeeEstimateFragment)]
-pub struct CoopExitFeeEstimate {
-    pub user_fee: CurrencyAmount,
-    pub l1_broadcast_fee: CurrencyAmount,
-}
-
-/// CoopExitFeeEstimatesOutput structure
-#[derive(Debug, Clone, Deserialize)]
-#[spark_macros::derive_from(CoopExitFeeEstimatesCoopExitFeeEstimates)]
-pub struct CoopExitFeeEstimates {
-    pub speed_fast: Option<CoopExitFeeEstimate>,
-    pub speed_medium: Option<CoopExitFeeEstimate>,
-    pub speed_slow: Option<CoopExitFeeEstimate>,
+#[spark_macros::derive_from(CoopExitFeeQuoteCoopExitFeeQuoteQuote)]
+pub struct CoopExitFeeQuote {
+    pub id: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub network: BitcoinNetwork,
+    pub total_amount: CurrencyAmount,
+    pub user_fee_fast: CurrencyAmount,
+    pub user_fee_medium: CurrencyAmount,
+    pub user_fee_slow: CurrencyAmount,
+    pub l1_broadcast_fee_fast: CurrencyAmount,
+    pub l1_broadcast_fee_medium: CurrencyAmount,
+    pub l1_broadcast_fee_slow: CurrencyAmount,
 }
 
 /// Static deposit quote output

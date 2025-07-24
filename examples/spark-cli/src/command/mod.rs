@@ -7,7 +7,7 @@ use crate::{
     CliHelper,
     command::{
         deposit::DepositCommand, leaves::LeavesCommand, lightning::LightningCommand,
-        transfer::TransferCommand,
+        transfer::TransferCommand, withdraw::WithdrawCommand,
     },
     config::Config,
 };
@@ -16,6 +16,7 @@ pub mod deposit;
 pub mod leaves;
 pub mod lightning;
 pub mod transfer;
+pub mod withdraw;
 
 #[derive(Clone, Debug, Parser)]
 pub enum Command {
@@ -27,6 +28,10 @@ pub enum Command {
     SparkAddress,
     /// Sync the wallet with the latest state.
     Sync,
+    /// Sign a message.
+    Sign,
+    /// Verify a message.
+    Verify,
     /// Deposit commands.
     #[command(subcommand)]
     Deposit(DepositCommand),
@@ -39,10 +44,9 @@ pub enum Command {
     /// Transfer commands.
     #[command(subcommand)]
     Transfer(TransferCommand),
-    /// Sign a message.
-    Sign,
-    /// Verify a message.
-    Verify,
+    /// Withdraw commands.
+    #[command(subcommand)]
+    Withdraw(WithdrawCommand),
 }
 
 pub(crate) async fn handle_command<S>(
@@ -72,6 +76,12 @@ where
         Command::Lightning(lightning_command) => {
             lightning::handle_command(config, wallet, lightning_command).await?
         }
+        Command::Sign => {
+            let message = rl.readline("Enter message to sign: ")?;
+            let signature = wallet.sign_message(&message).await?;
+            let signature = hex::encode(signature.serialize_der());
+            println!("Signature: {signature}");
+        }
         Command::SparkAddress => {
             let spark_address = wallet.get_spark_address().await?;
             println!("{}", spark_address.to_address_string()?)
@@ -83,12 +93,6 @@ where
         Command::Transfer(transfer_command) => {
             transfer::handle_command(config, wallet, transfer_command).await?
         }
-        Command::Sign => {
-            let message = rl.readline("Enter message to sign: ")?;
-            let signature = wallet.sign_message(&message).await?;
-            let signature = hex::encode(signature.serialize_der());
-            println!("Signature: {signature}");
-        }
         Command::Verify => {
             let message = rl.readline("Enter message to verify: ")?;
             let signature = rl.readline("Enter signature to verify: ")?;
@@ -99,6 +103,9 @@ where
                 .verify_message(&message, &signature, &public_key)
                 .await?;
             println!("Signature verified successfully.");
+        }
+        Command::Withdraw(withdraw_command) => {
+            withdraw::handle_command(&config, &wallet, withdraw_command).await?
         }
     }
 

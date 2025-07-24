@@ -19,15 +19,6 @@ fragment ClaimStaticDepositFragment on ClaimStaticDeposit {
   transfer_spark_id
 }
 
-fragment CoopExitFeeEstimateFragment on CoopExitFeeEstimate {
-  user_fee {
-    ...CurrencyAmountFragment
-  }
-  l1_broadcast_fee {
-    ...CurrencyAmountFragment
-  }
-}
-
 fragment CoopExitRequestFragment on CoopExitRequest {
   __typename
   id
@@ -229,16 +220,35 @@ mutation VerifyChallenge($input: VerifyChallengeInput!) {
 
 # Queries
 
-query CoopExitFeeEstimates($input: CoopExitFeeEstimatesInput!) {
-  coop_exit_fee_estimates(input: $input) {
-    speed_fast {
-      ...CoopExitFeeEstimateFragment
-    }
-    speed_medium {
-      ...CoopExitFeeEstimateFragment
-    }
-    speed_slow {
-      ...CoopExitFeeEstimateFragment
+query CoopExitFeeQuote($input: CoopExitFeeQuoteInput!) {
+  coop_exit_fee_quote(input: $input) {
+    quote {
+      id
+      created_at
+      updated_at
+      expires_at
+      network
+      total_amount {
+        ...CurrencyAmountFragment
+      }
+      user_fee_fast {
+        ...CurrencyAmountFragment
+      }
+      user_fee_medium {
+        ...CurrencyAmountFragment
+      }
+      user_fee_slow {
+        ...CurrencyAmountFragment
+      }
+      l1_broadcast_fee_fast {
+        ...CurrencyAmountFragment
+      }
+      l1_broadcast_fee_medium {
+        ...CurrencyAmountFragment
+      }
+      l1_broadcast_fee_slow {
+        ...CurrencyAmountFragment
+      }
     }
   }
 }

@@ -9,18 +9,17 @@ use crate::signer::Signer;
 use crate::ssp::graphql::auth_provider::AuthProvider;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
 use crate::ssp::graphql::queries::{
-    self, claim_static_deposit, complete_coop_exit, complete_leaves_swap, coop_exit_fee_estimates,
+    self, claim_static_deposit, complete_coop_exit, complete_leaves_swap, coop_exit_fee_quote,
     get_challenge, leaves_swap_fee_estimate, lightning_send_fee_estimate, request_coop_exit,
     request_leaves_swap, request_lightning_receive, request_lightning_send, static_deposit_quote,
     transfers, user_request, verify_challenge,
 };
 use crate::ssp::graphql::{
-    BitcoinNetwork, ClaimStaticDeposit, CoopExitFeeEstimates, CoopExitRequest, CurrencyAmount,
-    GraphQLClientConfig, LeavesSwapRequest, LightningReceiveRequest, LightningSendRequest,
-    StaticDepositQuote, Transfer,
+    BitcoinNetwork, ClaimStaticDeposit, CoopExitRequest, CurrencyAmount, GraphQLClientConfig,
+    LeavesSwapRequest, LightningReceiveRequest, LightningSendRequest, StaticDepositQuote, Transfer,
 };
 use crate::ssp::{
-    ClaimStaticDepositInput, RequestCoopExitInput, RequestLeavesSwapInput,
+    ClaimStaticDepositInput, CoopExitFeeQuote, RequestCoopExitInput, RequestLeavesSwapInput,
     RequestLightningReceiveInput, RequestLightningSendInput,
 };
 
@@ -239,24 +238,24 @@ where
         Ok(response.lightning_send_fee_estimate.fee_estimate.into())
     }
 
-    /// Get a coop exit fee estimate
-    pub async fn get_coop_exit_fee_estimates(
+    /// Get a coop exit fee quote
+    pub async fn get_coop_exit_fee_quote(
         &self,
         leaf_external_ids: Vec<String>,
         withdrawal_address: &str,
-    ) -> GraphQLResult<CoopExitFeeEstimates> {
-        let vars = coop_exit_fee_estimates::Variables {
-            input: coop_exit_fee_estimates::CoopExitFeeEstimatesInput {
+    ) -> GraphQLResult<CoopExitFeeQuote> {
+        let vars = coop_exit_fee_quote::Variables {
+            input: coop_exit_fee_quote::CoopExitFeeQuoteInput {
                 leaf_external_ids,
                 withdrawal_address: withdrawal_address.to_string(),
             },
         };
 
         let response = self
-            .post_query::<queries::CoopExitFeeEstimates, _>(vars, true)
+            .post_query::<queries::CoopExitFeeQuote, _>(vars, true)
             .await?;
 
-        Ok(response.coop_exit_fee_estimates.into())
+        Ok(response.coop_exit_fee_quote.quote.into())
     }
 
     /// Complete a cooperative exit

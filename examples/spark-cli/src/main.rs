@@ -1,3 +1,6 @@
+mod command;
+mod config;
+
 use std::borrow::Cow::{self, Owned};
 use std::fs::{OpenOptions, canonicalize};
 use std::path::PathBuf;
@@ -17,9 +20,6 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 use crate::command::Command;
 use crate::config::{Config, DEFAULT_CONFIG};
-
-mod command;
-mod config;
 
 const HISTORY_FILE_NAME: &str = "history.txt";
 

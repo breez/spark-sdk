@@ -56,6 +56,40 @@ pub fn create_refund_tx(
     )
 }
 
+pub fn create_coop_exit_refund_tx(
+    sequence: Sequence,
+    node_outpoint: OutPoint,
+    connector_outpoint: OutPoint,
+    amount_sat: u64,
+    receiving_pubkey: &PublicKey,
+    network: Network,
+) -> Transaction {
+    // TODO: Isolate secp256k1 initialization to avoid multiple initializations
+    let secp = Secp256k1::new();
+    let network: bitcoin::Network = network.into();
+    let addr = Address::p2tr(&secp, receiving_pubkey.x_only_public_key().0, None, network);
+
+    Transaction {
+        version: Version::TWO,
+        lock_time: LockTime::ZERO,
+        input: vec![
+            TxIn {
+                previous_output: node_outpoint,
+                sequence,
+                ..Default::default()
+            },
+            TxIn {
+                previous_output: connector_outpoint,
+                ..Default::default()
+            },
+        ],
+        output: vec![TxOut {
+            value: Amount::from_sat(amount_sat),
+            script_pubkey: addr.script_pubkey(),
+        }],
+    }
+}
+
 fn ephemeral_anchor_output() -> TxOut {
     TxOut {
         script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]), // Pay-to-anchor (P2A) ephemeral anchor output

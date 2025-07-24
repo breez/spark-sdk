@@ -10,7 +10,7 @@ pub use model::*;
 pub use spark::{
     Network,
     address::SparkAddress,
-    services::{TransferStatus, TransferType},
+    services::{ExitSpeed, TransferStatus, TransferType},
     signer::{DefaultSigner, Signer},
     tree::{SigningKeyshare, TreeNodeId},
 };

@@ -1,5 +1,5 @@
 use bitcoin::{
-    Address, Network, TapNodeHash, TapSighash, XOnlyPublicKey,
+    Address, Network, TapNodeHash, TapSighash, Transaction, TxOut, XOnlyPublicKey,
     key::{Secp256k1, TapTweak, UntweakedPublicKey},
     secp256k1::{All, Message, PublicKey, ecdsa, schnorr},
 };
@@ -66,12 +66,13 @@ impl BitcoinService {
 }
 
 pub fn sighash_from_tx(
-    tx: &bitcoin::Transaction,
+    tx: &Transaction,
     input_index: usize,
-    prev_output: &bitcoin::TxOut,
+    prev_output: &TxOut,
 ) -> Result<TapSighash, BitcoinError> {
-    let prevouts_arr = [prev_output.clone()];
-    let prev_output_fetcher = bitcoin::sighash::Prevouts::All(&prevouts_arr);
+    // Fill for each input with the previous output
+    let prevouts = vec![prev_output.clone(); tx.input.len()];
+    let prev_output_fetcher = bitcoin::sighash::Prevouts::All(&prevouts);
 
     Ok(
         bitcoin::sighash::SighashCache::new(tx).taproot_key_spend_signature_hash(
