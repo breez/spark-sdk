@@ -1,5 +1,6 @@
 mod config;
 mod error;
+mod event;
 mod model;
 mod wallet;
 

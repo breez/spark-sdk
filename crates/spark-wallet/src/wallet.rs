@@ -25,10 +25,14 @@ use spark::{
     ssp::ServiceProvider,
     tree::{LeavesReservation, TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeState},
 };
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{debug, error, info, trace};
 
-use crate::model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer};
+use crate::{
+    WalletEvent,
+    event::EventManager,
+    model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
+};
 
 use super::{SparkWalletConfig, SparkWalletError};
 
@@ -38,6 +42,7 @@ pub struct SparkWallet<S> {
     cancel: watch::Sender<()>,
     config: SparkWalletConfig,
     deposit_service: DepositService<S>,
+    event_manager: Arc<EventManager>,
     identity_public_key: PublicKey,
     signer: S,
     swap_service: Arc<Swap<S>>,
@@ -121,11 +126,13 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
             Arc::clone(&transfer_service),
         ));
 
+        let event_manager = Arc::new(EventManager::new());
         let (cancel, cancellation_token) = watch::channel(());
         let coordinator = operator_pool.get_coordinator().clone();
         let reconnect_interval = Duration::from_secs(config.reconnect_interval_seconds);
         let background_processor = Arc::new(BackgroundProcessor::new(
             coordinator,
+            Arc::clone(&event_manager),
             identity_public_key,
             reconnect_interval,
             Arc::clone(&transfer_service),
@@ -139,6 +146,7 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
             cancel,
             config,
             deposit_service,
+            event_manager,
             identity_public_key,
             signer,
             swap_service,
@@ -586,6 +594,12 @@ impl<S: Signer> SparkWallet<S> {
 
         Ok(transfer)
     }
+
+    pub async fn subscribe_events(&self) -> mpsc::Receiver<WalletEvent> {
+        let (tx, rx) = mpsc::channel(100);
+        self.event_manager.add_listener(tx).await;
+        rx
+    }
 }
 
 async fn with_reserved_leaves<F, R, S>(
@@ -636,14 +650,12 @@ async fn claim_transfer<S: Signer>(
     trace!("Inserting claimed leaves after claiming transfer");
     let result_nodes = tree_service.insert_leaves(claimed_nodes.clone()).await?;
 
-    // TODO: Emit events if emit is true
-    // TODO: Optimize leaves if optimize is true and the transfer type is not counter swap
-
     Ok(result_nodes)
 }
 
 struct BackgroundProcessor<S: Signer> {
     coordinator: Operator<S>,
+    event_manager: Arc<EventManager>,
     identity_public_key: PublicKey,
     reconnect_interval: Duration,
     transfer_service: Arc<TransferService<S>>,
@@ -656,6 +668,7 @@ where
 {
     pub fn new(
         coordinator: Operator<S>,
+        event_manager: Arc<EventManager>,
         identity_public_key: PublicKey,
         reconnect_interval: Duration,
         transfer_service: Arc<TransferService<S>>,
@@ -663,6 +676,7 @@ where
     ) -> Self {
         Self {
             coordinator,
+            event_manager,
             identity_public_key,
             reconnect_interval,
             transfer_service,
@@ -702,6 +716,11 @@ where
             match claim_pending_transfers(&self.transfer_service, &self.tree_service).await {
                 Ok(transfers) => {
                     debug!("Claimed {} pending transfers on startup", transfers.len());
+                    for transfer in &transfers {
+                        self.event_manager
+                            .notify_listeners(WalletEvent::TransferClaimed(transfer.id.clone()))
+                            .await;
+                    }
                     transfers.into_iter().map(|t| t.id).collect()
                 }
                 Err(e) => {
@@ -730,6 +749,8 @@ where
                     self.process_transfer_event(*transfer).await
                 }
                 SparkEvent::Deposit(deposit) => self.process_deposit_event(*deposit).await,
+                SparkEvent::Connected => self.process_connected_event().await,
+                SparkEvent::Disconnected => self.process_disconnected_event().await,
             };
 
             if let Err(e) = result {
@@ -741,10 +762,14 @@ where
     }
 
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
+        let id = deposit.id.clone();
         self.tree_service
             .insert_leaves(vec![deposit.clone()])
             .await?;
         self.tree_service.collect_leaves(vec![deposit]).await?;
+        self.event_manager
+            .notify_listeners(WalletEvent::DepositConfirmed(id))
+            .await;
         Ok(())
     }
 
@@ -758,6 +783,23 @@ where
         }
 
         claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
+        self.event_manager
+            .notify_listeners(WalletEvent::TransferClaimed(transfer.id))
+            .await;
+        Ok(())
+    }
+
+    async fn process_connected_event(&self) -> Result<(), SparkWalletError> {
+        self.event_manager
+            .notify_listeners(WalletEvent::StreamConnected)
+            .await;
+        Ok(())
+    }
+
+    async fn process_disconnected_event(&self) -> Result<(), SparkWalletError> {
+        self.event_manager
+            .notify_listeners(WalletEvent::StreamDisconnected)
+            .await;
         Ok(())
     }
 }

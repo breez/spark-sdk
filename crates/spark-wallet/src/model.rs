@@ -1,10 +1,9 @@
 use std::time::SystemTime;
 
-use bitcoin::{Transaction, Txid, secp256k1::PublicKey};
+use bitcoin::{Transaction, secp256k1::PublicKey};
 use serde::{Deserialize, Serialize};
 use spark::{
     Network,
-    address::SparkAddress,
     services::{
         LightningSendPayment, Transfer, TransferId, TransferLeaf, TransferStatus, TransferType,
     },
@@ -13,10 +12,9 @@ use spark::{
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum WalletEvent {
-    DepositConfirmed { txid: Txid, address: SparkAddress },
+    DepositConfirmed(TreeNodeId),
     StreamConnected,
     StreamDisconnected,
-    StreamReconnecting,
     Synced,
     TransferClaimed(TransferId),
 }
