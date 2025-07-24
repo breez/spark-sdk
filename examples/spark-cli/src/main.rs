@@ -108,6 +108,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let line_res = rl.readline(cli_prompt);
         match line_res {
             Ok(line) => {
+                if line.trim().is_empty() {
+                    continue;
+                }
+
                 rl.add_history_entry(line.as_str())?;
                 let mut vec = shellwords::split(&line)?;
                 vec.insert(0, "".to_string());
