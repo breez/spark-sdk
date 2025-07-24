@@ -108,14 +108,14 @@ where
     where
         T: Serialize + Clone + Into<Q::Variables>,
     {
-        if needs_auth && !self.auth_provider.is_authorized()? {
+        if needs_auth && !self.auth_provider.is_authorized().await? {
             self.authenticate().await?;
             tracing::debug!("Authenticated successfully with ssp");
         }
 
         let full_url = self.get_full_url();
         let mut headers = HeaderMap::new();
-        self.auth_provider.add_auth_headers(&mut headers)?;
+        self.auth_provider.add_auth_headers(&mut headers).await?;
 
         match self
             .post_query_inner::<Q, T>(&full_url, &headers, variables.clone())
@@ -132,7 +132,7 @@ where
                     if status_code == reqwest::StatusCode::UNAUTHORIZED.as_u16() && needs_auth {
                         self.authenticate().await?;
                         let mut headers = HeaderMap::new();
-                        self.auth_provider.add_auth_headers(&mut headers)?;
+                        self.auth_provider.add_auth_headers(&mut headers).await?;
 
                         return self
                             .post_query_inner::<Q, T>(&full_url, &headers, variables)
@@ -147,7 +147,7 @@ where
     /// Authenticate with the server using challenge-response
     async fn authenticate(&self) -> GraphQLResult<()> {
         tracing::debug!("Authenticating with ssp");
-        self.auth_provider.remove_auth()?;
+        self.auth_provider.remove_auth().await?;
 
         // Get the identity public key
         let identity_public_key = hex::encode(self.signer.get_identity_public_key()?.serialize());
@@ -195,10 +195,12 @@ where
             .await?;
 
         // Store the session token
-        self.auth_provider.set_auth(
-            verify_response.verify_challenge.session_token,
-            verify_response.verify_challenge.valid_until,
-        )?;
+        self.auth_provider
+            .set_auth(
+                verify_response.verify_challenge.session_token,
+                verify_response.verify_challenge.valid_until,
+            )
+            .await?;
 
         Ok(())
     }
