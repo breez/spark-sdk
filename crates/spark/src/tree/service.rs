@@ -1,7 +1,8 @@
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
+use tokio::sync::Mutex;
 use tracing::{error, trace, warn};
 
 use crate::{
@@ -128,8 +129,8 @@ impl<S: Signer> TreeService<S> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn list_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
-        Ok(self.state.lock().unwrap().get_leaves())
+    pub async fn list_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+        Ok(self.state.lock().await.get_leaves())
     }
 
     /// Refreshes the tree state by fetching the latest leaves from the server.
@@ -233,7 +234,7 @@ impl<S: Signer> TreeService<S> {
             .await
             .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))?;
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().await;
         state.set_leaves(&refreshed_leaves);
 
         Ok(())
@@ -246,7 +247,7 @@ impl<S: Signer> TreeService<S> {
     ) -> Result<Option<LeavesReservation>, TreeServiceError> {
         trace!("Reserving leaves for amounts: {target_amounts:?}");
         let reservation = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().await;
             // Filter available leaves from the state
             let leaves: Vec<TreeNode> = state
                 .get_leaves()
@@ -293,13 +294,13 @@ impl<S: Signer> TreeService<S> {
         Ok(Some(LeavesReservation::new(new_leaves, reservation.id)))
     }
 
-    pub fn cancel_reservation(&self, id: LeavesReservationId) {
-        let mut state = self.state.lock().unwrap();
+    pub async fn cancel_reservation(&self, id: LeavesReservationId) {
+        let mut state = self.state.lock().await;
         state.cancel_reservation(id);
     }
 
-    pub fn finalize_reservation(&self, id: LeavesReservationId) {
-        let mut state = self.state.lock().unwrap();
+    pub async fn finalize_reservation(&self, id: LeavesReservationId) {
+        let mut state = self.state.lock().await;
         state.finalize_reservation(id);
     }
 
@@ -312,7 +313,7 @@ impl<S: Signer> TreeService<S> {
             .check_timelock_nodes(leaves)
             .await
             .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))?;
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().await;
         state.add_leaves(&result_nodes);
         Ok(result_nodes)
     }
@@ -463,7 +464,7 @@ impl<S: Signer> TreeService<S> {
             }
         }
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().await;
         state.remove_leaves(&node_ids);
         state.add_leaves(&resulting_nodes);
         Ok(resulting_nodes)
@@ -496,9 +497,10 @@ impl<S: Signer> TreeService<S> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
+    pub async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
         Ok(self
-            .list_leaves()?
+            .list_leaves()
+            .await?
             .into_iter()
             .filter(|leaf| leaf.status == TreeNodeStatus::Available)
             .map(|leaf| leaf.value)

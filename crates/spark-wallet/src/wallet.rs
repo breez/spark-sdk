@@ -155,7 +155,7 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
 
 impl<S: Signer> SparkWallet<S> {
     pub async fn list_leaves(&self) -> Result<Vec<WalletLeaf>, SparkWalletError> {
-        let leaves = self.tree_service.list_leaves()?;
+        let leaves = self.tree_service.list_leaves().await?;
         Ok(leaves.into_iter().map(WalletLeaf::from).collect())
     }
 
@@ -243,7 +243,7 @@ impl<S: Signer> SparkWallet<S> {
             .coop_exit_service
             .fetch_coop_exit_fee_quote(reservation.leaves, withdrawal_address)
             .await;
-        self.tree_service.cancel_reservation(reservation.id);
+        self.tree_service.cancel_reservation(reservation.id).await;
 
         Ok(fee_quote_res?)
     }
@@ -391,7 +391,7 @@ impl<S: Signer> SparkWallet<S> {
     }
 
     pub async fn get_balance(&self) -> Result<u64, SparkWalletError> {
-        Ok(self.tree_service.get_available_balance()?)
+        Ok(self.tree_service.get_available_balance().await?)
     }
 
     pub async fn list_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
@@ -602,11 +602,11 @@ where
 {
     match f.await {
         Ok(r) => {
-            tree_service.finalize_reservation(leaves.id.clone());
+            tree_service.finalize_reservation(leaves.id.clone()).await;
             Ok(r)
         }
         Err(e) => {
-            tree_service.cancel_reservation(leaves.id.clone());
+            tree_service.cancel_reservation(leaves.id.clone()).await;
             Err(e)
         }
     }
