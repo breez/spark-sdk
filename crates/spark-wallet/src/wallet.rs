@@ -463,7 +463,7 @@ impl<S: Signer> SparkWallet<S> {
         if total_amount_sats == 0 || reservation.sum() == total_amount_sats {
             if let Ok(_) = self
                 .tree_service
-                .select_leaves_by_amounts(reservation.leaves.clone(), target_amounts)
+                .select_leaves_by_amounts(&reservation.leaves, target_amounts)
             {
                 trace!("Selected leaves match requirements, no swap needed");
                 return Ok(reservation);
@@ -556,7 +556,7 @@ impl<S: Signer> SparkWallet<S> {
         } else {
             let target_leaves = self
                 .tree_service
-                .select_leaves_by_amounts(leaves_reservation.leaves.clone(), target_amounts)?;
+                .select_leaves_by_amounts(&leaves_reservation.leaves, target_amounts)?;
             (
                 target_leaves.amount_leaves,
                 target_leaves.fee_leaves,

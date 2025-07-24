@@ -254,7 +254,7 @@ impl<S: Signer> TreeService<S> {
                 .filter(|leaf| leaf.status == TreeNodeStatus::Available)
                 .collect();
             // Select leaves that match the target amounts
-            let target_leaves_res = self.select_leaves_by_amounts(leaves.clone(), target_amounts);
+            let target_leaves_res = self.select_leaves_by_amounts(&leaves, target_amounts);
             let selected = match target_leaves_res {
                 Ok(target_leaves) => {
                     // Successfully selected target leaves
@@ -269,7 +269,7 @@ impl<S: Signer> TreeService<S> {
                     trace!("No exact match found, selecting leaves by minimum amount");
                     let target_amount_sat = target_amounts.map_or(0, |ta| ta.total_sats());
                     let Some(selected) =
-                        self.select_leaves_by_minimum_amount(leaves.clone(), target_amount_sat)?
+                        self.select_leaves_by_minimum_amount(&leaves, target_amount_sat)?
                     else {
                         return Ok(None);
                     };
@@ -322,10 +322,10 @@ impl<S: Signer> TreeService<S> {
     /// If the target amounts cannot be matched exactly, it returns an error.
     pub fn select_leaves_by_amounts(
         &self,
-        leaves: Vec<TreeNode>,
+        leaves: &[TreeNode],
         target_amounts: Option<&TargetAmounts>,
     ) -> Result<TargetLeaves, TreeServiceError> {
-        let mut remaining_leaves = leaves.clone();
+        let mut remaining_leaves = leaves.to_vec();
 
         // If no target amounts are specified, return all remaining leaves
         let Some(target_amounts) = target_amounts else {
@@ -335,7 +335,7 @@ impl<S: Signer> TreeService<S> {
 
         // Select leaves that match the target amount_sats
         let amount_leaves = self
-            .select_leaves_by_amount(remaining_leaves.clone(), target_amounts.amount_sats)?
+            .select_leaves_by_amount(&remaining_leaves, target_amounts.amount_sats)?
             .ok_or(TreeServiceError::UnselectableAmount)?;
 
         let fee_leaves = match target_amounts.fee_sats {
@@ -348,7 +348,7 @@ impl<S: Signer> TreeService<S> {
                 });
                 // Select leaves that match the fee_sats from the remaining leaves
                 Some(
-                    self.select_leaves_by_amount(remaining_leaves.clone(), fee_sats)?
+                    self.select_leaves_by_amount(&remaining_leaves, fee_sats)?
                         .ok_or(TreeServiceError::UnselectableAmount)?,
                 )
             }
@@ -362,27 +362,24 @@ impl<S: Signer> TreeService<S> {
     /// If such a combination of leaves does not exist, it returns `None`.
     fn select_leaves_by_amount(
         &self,
-        mut leaves: Vec<TreeNode>,
+        leaves: &[TreeNode],
         target_amount_sat: u64,
     ) -> Result<Option<Vec<TreeNode>>, TreeServiceError> {
         if target_amount_sat == 0 {
             return Err(TreeServiceError::InvalidAmount);
         }
 
-        // Only consider leaves that are available.
-        leaves.retain(|leaf| leaf.status == TreeNodeStatus::Available);
-
         if leaves.iter().map(|leaf| leaf.value).sum::<u64>() < target_amount_sat {
             return Err(TreeServiceError::InsufficientFunds);
         }
 
         // Try to find a single leaf that matches the exact amount
-        if let Some(leaf) = find_exact_single_match(&leaves, target_amount_sat) {
+        if let Some(leaf) = find_exact_single_match(leaves, target_amount_sat) {
             return Ok(Some(vec![leaf]));
         }
 
         // Try to find a set of leaves that sum exactly to the target amount
-        if let Some(selected_leaves) = find_exact_multiple_match(&leaves, target_amount_sat) {
+        if let Some(selected_leaves) = find_exact_multiple_match(leaves, target_amount_sat) {
             return Ok(Some(selected_leaves));
         }
 
@@ -392,24 +389,18 @@ impl<S: Signer> TreeService<S> {
     /// Selects leaves from the tree that sum up to at least the target amount.
     fn select_leaves_by_minimum_amount(
         &self,
-        mut leaves: Vec<TreeNode>,
+        leaves: &[TreeNode],
         target_amount_sat: u64,
     ) -> Result<Option<Vec<TreeNode>>, TreeServiceError> {
         if target_amount_sat == 0 {
             return Err(TreeServiceError::InvalidAmount);
         }
 
-        // Only consider leaves that are available.
-        leaves.retain(|leaf| leaf.status == TreeNodeStatus::Available);
-
-        // Sort leaves by value in ascending order, to prefer spending smaller leaves first.
-        leaves.sort_by(|a, b| a.value.cmp(&b.value));
-
         let mut result = Vec::new();
         let mut sum = 0;
         for leaf in leaves {
             sum += leaf.value;
-            result.push(leaf);
+            result.push(leaf.clone());
             if sum >= target_amount_sat {
                 break;
             }
