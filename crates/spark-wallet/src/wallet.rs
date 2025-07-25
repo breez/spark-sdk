@@ -18,12 +18,13 @@ use spark::{
     operator::{Operator, OperatorPool, rpc::ConnectionManager},
     services::{
         CoopExitFeeQuote, CoopExitService, DepositService, ExitSpeed, LightningReceivePayment,
-        LightningSendPayment, LightningService, PagingFilter, Swap, TimelockManager, Transfer,
-        TransferId, TransferService,
+        LightningSendPayment, LightningService, Swap, TimelockManager, Transfer, TransferId,
+        TransferService,
     },
     signer::Signer,
     ssp::ServiceProvider,
     tree::{LeavesReservation, TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeState},
+    utils::paging::PagingFilter,
 };
 use tokio::sync::{broadcast, watch};
 use tracing::{debug, error, info, trace};
@@ -313,13 +314,15 @@ impl<S: Signer> SparkWallet<S> {
         Ok(address.address)
     }
 
-    pub async fn list_unused_deposit_addresses(&self) -> Result<Vec<Address>, SparkWalletError> {
+    pub async fn list_unused_deposit_addresses(
+        &self,
+        paging: Option<PagingFilter>,
+    ) -> Result<Vec<Address>, SparkWalletError> {
         let deposit_addresses = self
             .deposit_service
-            .query_unused_deposit_addresses(&PagingFilter::default())
+            .query_unused_deposit_addresses(paging)
             .await?;
         Ok(deposit_addresses
-            .items
             .into_iter()
             .map(|addr| addr.address)
             .collect())
@@ -394,18 +397,21 @@ impl<S: Signer> SparkWallet<S> {
         Ok(self.tree_service.get_available_balance().await?)
     }
 
-    pub async fn list_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
-        let transfers = self
-            .transfer_service
-            .query_all_transfers(&PagingFilter::default())
-            .await?;
+    pub async fn list_transfers(
+        &self,
+        paging: Option<PagingFilter>,
+    ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+        let transfers = self.transfer_service.query_transfers(paging).await?;
         Ok(transfers.into_iter().map(WalletTransfer::from).collect())
     }
 
-    pub async fn list_pending_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+    pub async fn list_pending_transfers(
+        &self,
+        paging: Option<PagingFilter>,
+    ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
         let transfers = self
             .transfer_service
-            .query_pending_transfers(&PagingFilter::default())
+            .query_pending_transfers(paging)
             .await?;
         Ok(transfers.into_iter().map(WalletTransfer::from).collect())
     }
@@ -618,7 +624,7 @@ async fn claim_pending_transfers<S: Signer>(
 ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
     trace!("Claiming all pending transfers");
     let transfers = transfer_service
-        .query_pending_receiver_transfers(&PagingFilter::default())
+        .query_pending_receiver_transfers(None)
         .await?;
     trace!("There are {} pending transfers", transfers.len());
     for transfer in &transfers {

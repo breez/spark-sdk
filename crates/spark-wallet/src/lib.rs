@@ -13,5 +13,6 @@ pub use spark::{
     services::{ExitSpeed, TransferStatus, TransferType},
     signer::{DefaultSigner, Signer},
     tree::{SigningKeyshare, TreeNodeId},
+    utils::paging::PagingFilter,
 };
 pub use wallet::SparkWallet;

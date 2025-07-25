@@ -1,5 +1,5 @@
 use clap::Subcommand;
-use spark_wallet::{SparkAddress, SparkWallet};
+use spark_wallet::{PagingFilter, SparkAddress, SparkWallet};
 
 use crate::config::Config;
 
@@ -9,10 +9,24 @@ pub enum TransferCommand {
     ClaimPending,
 
     /// Lists all transfers
-    List,
+    List {
+        /// The maximum number of transfers to return.
+        #[clap(short, long)]
+        limit: Option<u64>,
+        /// The offset to start listing transfers from.
+        #[clap(short, long)]
+        offset: Option<u64>,
+    },
 
     /// Lists all pending transfers
-    ListPending,
+    ListPending {
+        /// The maximum number of transfers to return.
+        #[clap(short, long)]
+        limit: Option<u64>,
+        /// The offset to start listing transfers from.
+        #[clap(short, long)]
+        offset: Option<u64>,
+    },
 
     /// Transfer funds to another wallet.
     Transfer {
@@ -39,12 +53,24 @@ where
                 serde_json::to_string_pretty(&transfers)?
             );
         }
-        TransferCommand::List => {
-            let transfers = wallet.list_transfers().await?;
+        TransferCommand::List { limit, offset } => {
+            let paging = if limit.is_some() || offset.is_some() {
+                Some(PagingFilter::new(offset, limit))
+            } else {
+                None
+            };
+
+            let transfers = wallet.list_transfers(paging).await?;
             println!("Transfers: {}", serde_json::to_string_pretty(&transfers)?);
         }
-        TransferCommand::ListPending => {
-            let transfers = wallet.list_pending_transfers().await?;
+        TransferCommand::ListPending { limit, offset } => {
+            let paging = if limit.is_some() || offset.is_some() {
+                Some(PagingFilter::new(offset, limit))
+            } else {
+                None
+            };
+
+            let transfers = wallet.list_pending_transfers(paging).await?;
             println!(
                 "Pending transfers: {}",
                 serde_json::to_string_pretty(&transfers)?

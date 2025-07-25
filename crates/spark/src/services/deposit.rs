@@ -15,10 +15,12 @@ use crate::{
     bitcoin::{BitcoinService, sighash_from_tx},
     core::initial_sequence,
     operator::{OperatorPool, rpc as operator_rpc},
-    services::{PagingFilter, PagingResult},
     signer::{AggregateFrostRequest, PrivateKeySource, SignFrostRequest, Signer},
     tree::{TreeNode, TreeNodeId},
-    utils::transactions::{create_node_tx, create_refund_tx},
+    utils::{
+        paging::{PagingFilter, PagingResult, pager},
+        transactions::{create_node_tx, create_refund_tx},
+    },
 };
 
 use super::{
@@ -358,31 +360,18 @@ where
         address: &Address,
     ) -> Result<Option<DepositAddress>, ServiceError> {
         // TODO: unused deposit addresses could be cached in the wallet, so they don't have to be queried from the server every time.
-        let mut paging = PagingFilter::default();
-        loop {
-            let unused = self.query_unused_deposit_addresses(&paging).await?;
-            trace!(
-                "query_unused_deposit_addresses: found {} addresses: {:?}",
-                unused.items.len(),
-                unused
-            );
-
-            if let Some(deposit_address) = unused.items.into_iter().find(|d| &d.address == address)
-            {
-                return Ok(Some(deposit_address));
-            }
-
-            match unused.next {
-                Some(next) => paging = next,
-                None => return Ok(None),
-            }
-        }
+        let addresses = self.query_unused_deposit_addresses(None).await?;
+        Ok(addresses.into_iter().find(|d| &d.address == address))
     }
 
-    pub async fn query_unused_deposit_addresses(
+    async fn query_unused_deposit_addresses_inner(
         &self,
-        paging: &PagingFilter,
+        paging: PagingFilter,
     ) -> Result<PagingResult<DepositAddress>, ServiceError> {
+        trace!(
+            "Querying unused deposit addresses with limit: {:?}, offset: {:?}",
+            paging.limit, paging.offset
+        );
         let resp = self
             .operator_pool
             .get_coordinator()
@@ -431,6 +420,27 @@ where
             items: addresses,
             next: paging.next_from_offset(resp.offset),
         })
+    }
+
+    pub async fn query_unused_deposit_addresses(
+        &self,
+        paging: Option<PagingFilter>,
+    ) -> Result<Vec<DepositAddress>, ServiceError> {
+        let addresses = match paging {
+            Some(paging) => {
+                self.query_unused_deposit_addresses_inner(paging)
+                    .await?
+                    .items
+            }
+            None => {
+                pager(
+                    |f| self.query_unused_deposit_addresses_inner(f),
+                    PagingFilter::default(),
+                )
+                .await?
+            }
+        };
+        Ok(addresses)
     }
 
     fn proof_of_possession_message_hash(

@@ -14,10 +14,13 @@ use crate::{
             spark::{QueryNodesRequest, query_nodes_request::Source},
         },
     },
-    services::{PagingFilter, PagingResult, TimelockManager},
+    services::TimelockManager,
     signer::Signer,
-    tree::TreeNodeId,
-    tree::{LeavesReservation, LeavesReservationId, TargetAmounts, TargetLeaves, TreeNodeStatus},
+    tree::{
+        LeavesReservation, LeavesReservationId, TargetAmounts, TargetLeaves, TreeNodeId,
+        TreeNodeStatus,
+    },
+    utils::paging::{PagingFilter, PagingResult, pager},
 };
 
 use super::{TreeNode, error::TreeServiceError, state::TreeState};
@@ -50,35 +53,15 @@ impl<S: Signer> TreeService<S> {
         }
     }
 
-    // TODO: move this to a middle layer where we can handle paging for all queries where it makes sense
-    async fn fetch_all_leaves_using_client(
+    async fn query_nodes_inner(
         &self,
         client: &SparkRpcClient<S>,
-    ) -> Result<Vec<TreeNode>, TreeServiceError> {
-        let mut paging = PagingFilter::default();
-        let mut all_leaves = Vec::new();
-        loop {
-            let leaves = self.fetch_leaves_using_client(client, &paging).await?;
-            if leaves.items.is_empty() {
-                break;
-            }
-
-            all_leaves.extend(leaves.items);
-
-            match leaves.next {
-                None => break,
-                Some(next) => paging = next,
-            }
-        }
-        Ok(all_leaves)
-    }
-
-    // TODO: move this to a middle layer where we can handle paging for all queries where it makes sense
-    async fn fetch_leaves_using_client(
-        &self,
-        client: &SparkRpcClient<S>,
-        paging: &PagingFilter,
+        paging: PagingFilter,
     ) -> Result<PagingResult<TreeNode>, TreeServiceError> {
+        trace!(
+            "Querying nodes with limit: {:?}, offset: {:?}",
+            paging.limit, paging.offset
+        );
         let nodes = client
             .query_nodes(QueryNodesRequest {
                 include_parents: false,
@@ -101,6 +84,18 @@ impl<S: Signer> TreeService<S> {
                 })?,
             next: paging.next_from_offset(nodes.offset),
         })
+    }
+
+    async fn query_nodes(
+        &self,
+        client: &SparkRpcClient<S>,
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let nodes = pager(
+            |f| self.query_nodes_inner(client, f),
+            PagingFilter::default(),
+        )
+        .await?;
+        Ok(nodes)
     }
 
     /// Lists all leaves from the local cache.
@@ -167,7 +162,7 @@ impl<S: Signer> TreeService<S> {
     /// ```
     pub async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
         let coordinator_leaves = self
-            .fetch_all_leaves_using_client(&self.operator_pool.get_coordinator().client)
+            .query_nodes(&self.operator_pool.get_coordinator().client)
             .await?;
 
         let mut leaves_to_ignore: HashSet<TreeNodeId> = HashSet::new();
@@ -175,7 +170,7 @@ impl<S: Signer> TreeService<S> {
         // TODO: on js sdk, leaves missing from operators are not ignored when checking balance
         // TODO: we can optimize this by fetching leaves from all operators in parallel
         for operator in self.operator_pool.get_non_coordinator_operators() {
-            let operator_leaves = self.fetch_all_leaves_using_client(&operator.client).await?;
+            let operator_leaves = self.query_nodes(&operator.client).await?;
 
             for leaf in &coordinator_leaves {
                 match operator_leaves.iter().find(|l| l.id == leaf.id) {
