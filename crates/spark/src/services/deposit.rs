@@ -245,6 +245,7 @@ where
         refund_address: Address,
         fee_sats: u64,
     ) -> Result<Transaction, ServiceError> {
+        // TODO: Take a fee rate as a parameter instead of a fixed fee
         if fee_sats <= 300 {
             return Err(ServiceError::Generic(
                 "fee must be more than 300 sats".to_string(),

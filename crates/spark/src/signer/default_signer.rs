@@ -598,7 +598,9 @@ mod test {
     use crate::{
         Network,
         signer::default_signer::DefaultSigner,
-        signer::default_signer::{identity_derivation_path, signing_derivation_path},
+        signer::default_signer::{
+            identity_derivation_path, signing_derivation_path, static_deposit_derivation_path,
+        },
     };
 
     /// Ensure constants are defined correctly and don't panic.
@@ -613,6 +615,11 @@ mod test {
         signing_derivation_path(Network::Testnet);
         signing_derivation_path(Network::Regtest);
         signing_derivation_path(Network::Signet);
+
+        static_deposit_derivation_path(Network::Mainnet);
+        static_deposit_derivation_path(Network::Testnet);
+        static_deposit_derivation_path(Network::Regtest);
+        static_deposit_derivation_path(Network::Signet);
     }
 
     fn create_test_signer() -> DefaultSigner {
