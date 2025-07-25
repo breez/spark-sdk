@@ -12,6 +12,7 @@ use bitcoin::{
 use prost::Message;
 
 use error::AddressError;
+use uuid::Uuid;
 
 use crate::Network;
 
@@ -29,16 +30,39 @@ pub struct SparkAddress {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct PaymentIntentFields {
-    pub id: String,
-    pub asset_identifier: Option<String>,
+    pub id: Uuid,
+    pub asset_identifier: Option<AssetIdentifier>,
     pub asset_amount: u64,
     pub memo: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AssetIdentifier(Vec<u8>);
+impl std::fmt::Display for AssetIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(&self.0))
+    }
+}
+
+impl FromStr for AssetIdentifier {
+    type Err = AddressError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let bytes = hex::decode(s).map_err(|_| {
+            AddressError::InvalidPaymentIntent("Invalid asset identifier".to_string())
+        })?;
+        Ok(AssetIdentifier(bytes))
+    }
+}
+
 impl PaymentIntentFields {
-    pub fn new(asset_amount: u64, asset_identifier: Option<String>, memo: Option<String>) -> Self {
+    pub fn new(
+        asset_amount: u64,
+        asset_identifier: Option<AssetIdentifier>,
+        memo: Option<String>,
+    ) -> Self {
         PaymentIntentFields {
-            id: uuid::Uuid::now_v7().to_string(),
+            id: uuid::Uuid::now_v7(),
             asset_identifier,
             asset_amount,
             memo,
@@ -53,9 +77,8 @@ impl TryFrom<ProtoPaymentIntentFields> for PaymentIntentFields {
         Ok(PaymentIntentFields {
             id: uuid::Uuid::from_bytes(proto.id.try_into().map_err(|_| {
                 AddressError::InvalidPaymentIntent("Invalid UUID length".to_string())
-            })?)
-            .to_string(),
-            asset_identifier: proto.asset_identifier.map(hex::encode),
+            })?),
+            asset_identifier: proto.asset_identifier.map(AssetIdentifier),
             asset_amount: u128::from_be_bytes(proto.asset_amount.try_into().map_err(|_| {
                 AddressError::InvalidPaymentIntent("Invalid asset amount length".to_string())
             })?) as u64,
@@ -64,28 +87,17 @@ impl TryFrom<ProtoPaymentIntentFields> for PaymentIntentFields {
     }
 }
 
-impl TryFrom<&PaymentIntentFields> for ProtoPaymentIntentFields {
-    type Error = AddressError;
+impl From<&PaymentIntentFields> for ProtoPaymentIntentFields {
+    fn from(val: &PaymentIntentFields) -> Self {
+        let id = val.id.as_bytes().to_vec();
+        let asset_identifier = val.asset_identifier.as_ref().map(|id| id.0.clone());
 
-    fn try_from(val: &PaymentIntentFields) -> Result<Self, Self::Error> {
-        let id = uuid::Uuid::parse_str(&val.id)
-            .map_err(|_| AddressError::InvalidPaymentIntent("Invalid UUID format".to_string()))?
-            .as_bytes()
-            .to_vec();
-        let asset_identifier = if let Some(id) = &val.asset_identifier {
-            Some(hex::decode(id).map_err(|_| {
-                AddressError::InvalidPaymentIntent("Invalid asset identifier".to_string())
-            })?)
-        } else {
-            None
-        };
-
-        Ok(ProtoPaymentIntentFields {
+        ProtoPaymentIntentFields {
             id,
             asset_identifier,
             asset_amount: u128::to_be_bytes(val.asset_amount as u128).to_vec(),
             memo: val.memo.clone(),
-        })
+        }
     }
 }
 
@@ -123,11 +135,10 @@ impl SparkAddress {
 
     /// Convert to bech32m string representation
     pub fn to_address_string(&self) -> Result<String, AddressError> {
-        let payment_intent_fields = if let Some(payment_intent) = &self.payment_intent {
-            Some(payment_intent.try_into()?)
-        } else {
-            None
-        };
+        let payment_intent_fields = self
+            .payment_intent
+            .as_ref()
+            .map(|payment_intent| payment_intent.into());
 
         let proto_address = ProtoSparkAddress {
             identity_public_key: self.identity_public_key.serialize().to_vec(),
@@ -294,8 +305,10 @@ mod tests {
     fn test_payment_intent_address_roundtrip() {
         let public_key = create_test_public_key();
         let payment_intent = PaymentIntentFields {
-            id: uuid::Uuid::now_v7().to_string(),
-            asset_identifier: Some("1234567890abcdef1234567890abcdef".to_string()),
+            id: uuid::Uuid::now_v7(),
+            asset_identifier: Some(AssetIdentifier(
+                "1234567890abcdef1234567890abcdef".as_bytes().to_vec(),
+            )),
             asset_amount: 1000000,
             memo: Some("Test payment".to_string()),
         };
@@ -333,7 +346,7 @@ mod tests {
     fn test_payment_intent_minimal_data() {
         let public_key = create_test_public_key();
         let payment_intent = PaymentIntentFields {
-            id: uuid::Uuid::now_v7().to_string(),
+            id: uuid::Uuid::now_v7(),
             asset_identifier: None,
             asset_amount: 500,
             memo: None,
@@ -348,7 +361,6 @@ mod tests {
         assert!(parsed_address.payment_intent.is_some());
         let parsed_payment_intent = parsed_address.payment_intent.unwrap();
 
-        assert_eq!(parsed_payment_intent.id.len(), 36); // UUID string length
         assert_eq!(parsed_payment_intent.asset_identifier, None);
         assert_eq!(parsed_payment_intent.asset_amount, 500);
         assert_eq!(parsed_payment_intent.memo, None);
@@ -364,8 +376,8 @@ mod tests {
 
         // Create address with payment intent
         let payment_intent = PaymentIntentFields {
-            id: uuid::Uuid::now_v7().to_string(),
-            asset_identifier: Some("abcdef1234567890".to_string()),
+            id: uuid::Uuid::now_v7(),
+            asset_identifier: Some(AssetIdentifier("abcdef1234567890".as_bytes().to_vec())),
             asset_amount: 1000,
             memo: Some("Test memo".to_string()),
         };
