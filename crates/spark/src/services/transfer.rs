@@ -7,11 +7,12 @@ use crate::operator::rpc::spark::TransferFilter;
 use crate::operator::rpc::spark::transfer_filter::Participant;
 use crate::operator::rpc::{self as operator_rpc};
 use crate::services::models::{LeafKeyTweak, Transfer, map_signing_nonce_commitments};
-use crate::services::{PagingFilter, ProofMap, TransferId, TransferStatus};
+use crate::services::{ProofMap, TransferId, TransferStatus};
 use crate::signer::{
     FrostSigningCommitmentsWithNonces, PrivateKeySource, SecretToSplit, VerifiableSecretShare,
 };
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
+use crate::utils::paging::{PagingFilter, PagingResult, pager};
 use crate::utils::refund::{prepare_refund_so_signing_jobs, sign_aggregate_refunds, sign_refunds};
 
 use bitcoin::Transaction;
@@ -828,18 +829,15 @@ impl<S: Signer> TransferService<S> {
         Ok(leaf_key_map)
     }
 
-    /// Queries all transfers for the current identity
-    ///
-    /// By default, returns the first 100 transfers
-    pub async fn query_all_transfers(
+    async fn query_transfers_inner(
         &self,
-        paging: &PagingFilter,
-    ) -> Result<Vec<Transfer>, ServiceError> {
+        paging: PagingFilter,
+    ) -> Result<PagingResult<Transfer>, ServiceError> {
         trace!(
-            "Querying all transfers with limit: {:?}, offset: {:?}",
+            "Querying transfers with limit: {:?}, offset: {:?}",
             paging.limit, paging.offset
         );
-        let response = self
+        let resp = self
             .operator_pool
             .get_coordinator()
             .client
@@ -860,20 +858,37 @@ impl<S: Signer> TransferService<S> {
             })
             .await?;
 
-        response
-            .transfers
-            .into_iter()
-            .map(|t| t.try_into())
-            .collect::<Result<Vec<Transfer>, _>>()
+        Ok(PagingResult {
+            items: resp
+                .transfers
+                .into_iter()
+                .map(|t| t.try_into())
+                .collect::<Result<Vec<Transfer>, _>>()?,
+            next: paging.next_from_offset(resp.offset),
+        })
     }
 
-    /// Queries pending transfers from the operator
-    pub async fn query_pending_transfers(
+    /// Queries transfers for the current identity
+    pub async fn query_transfers(
         &self,
-        paging: &PagingFilter,
+        paging: Option<PagingFilter>,
     ) -> Result<Vec<Transfer>, ServiceError> {
-        trace!("Querying all pending transfers");
-        let response = self
+        let transfers = match paging {
+            Some(paging) => self.query_transfers_inner(paging).await?.items,
+            None => pager(|f| self.query_transfers_inner(f), PagingFilter::default()).await?,
+        };
+        Ok(transfers)
+    }
+
+    async fn query_pending_transfers_inner(
+        &self,
+        paging: PagingFilter,
+    ) -> Result<PagingResult<Transfer>, ServiceError> {
+        trace!(
+            "Querying pending transfers with limit: {:?}, offset: {:?}",
+            paging.limit, paging.offset
+        );
+        let resp = self
             .operator_pool
             .get_coordinator()
             .client
@@ -888,20 +903,43 @@ impl<S: Signer> TransferService<S> {
             })
             .await?;
 
-        response
-            .transfers
-            .into_iter()
-            .map(|t| t.try_into())
-            .collect::<Result<Vec<Transfer>, _>>()
+        Ok(PagingResult {
+            items: resp
+                .transfers
+                .into_iter()
+                .map(|t| t.try_into())
+                .collect::<Result<Vec<Transfer>, _>>()?,
+            next: paging.next_from_offset(resp.offset),
+        })
     }
 
     /// Queries pending transfers from the operator
-    pub async fn query_pending_receiver_transfers(
+    pub async fn query_pending_transfers(
         &self,
-        paging: &PagingFilter,
+        paging: Option<PagingFilter>,
     ) -> Result<Vec<Transfer>, ServiceError> {
-        trace!("Querying all pending receiver transfers");
-        let response = self
+        let transfers = match paging {
+            Some(paging) => self.query_pending_transfers_inner(paging).await?.items,
+            None => {
+                pager(
+                    |f| self.query_pending_transfers_inner(f),
+                    PagingFilter::default(),
+                )
+                .await?
+            }
+        };
+        Ok(transfers)
+    }
+
+    async fn query_pending_receiver_transfers_inner(
+        &self,
+        paging: PagingFilter,
+    ) -> Result<PagingResult<Transfer>, ServiceError> {
+        trace!(
+            "Querying pending receiver transfers with limit: {:?}, offset: {:?}",
+            paging.limit, paging.offset
+        );
+        let resp = self
             .operator_pool
             .get_coordinator()
             .client
@@ -916,11 +954,36 @@ impl<S: Signer> TransferService<S> {
             })
             .await?;
 
-        response
-            .transfers
-            .into_iter()
-            .map(|t| t.try_into())
-            .collect::<Result<Vec<Transfer>, _>>()
+        Ok(PagingResult {
+            items: resp
+                .transfers
+                .into_iter()
+                .map(|t| t.try_into())
+                .collect::<Result<Vec<Transfer>, _>>()?,
+            next: paging.next_from_offset(resp.offset),
+        })
+    }
+
+    /// Queries pending transfers from the operator
+    pub async fn query_pending_receiver_transfers(
+        &self,
+        paging: Option<PagingFilter>,
+    ) -> Result<Vec<Transfer>, ServiceError> {
+        let transfers = match paging {
+            Some(paging) => {
+                self.query_pending_receiver_transfers_inner(paging)
+                    .await?
+                    .items
+            }
+            None => {
+                pager(
+                    |f| self.query_pending_receiver_transfers_inner(f),
+                    PagingFilter::default(),
+                )
+                .await?
+            }
+        };
+        Ok(transfers)
     }
 
     pub async fn query_transfer(

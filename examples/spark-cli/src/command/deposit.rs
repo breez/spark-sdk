@@ -1,6 +1,6 @@
 use bitcoin::{Transaction, consensus::encode::deserialize_hex};
 use clap::Subcommand;
-use spark_wallet::SparkWallet;
+use spark_wallet::{PagingFilter, SparkWallet};
 
 use crate::config::Config;
 
@@ -14,7 +14,14 @@ pub enum DepositCommand {
     /// Generate a new onchain deposit address.
     NewAddress,
     /// List unused deposit addresses.
-    ListUnusedAddresses,
+    ListUnusedAddresses {
+        /// The maximum number of addresses to return.
+        #[clap(short, long)]
+        limit: Option<u64>,
+        /// The offset to start listing addresses from.
+        #[clap(short, long)]
+        offset: Option<u64>,
+    },
 }
 
 pub async fn handle_command<S>(
@@ -46,8 +53,13 @@ where
 
             println!("Could not claim deposit for txid: {txid} - no matching output found.",);
         }
-        DepositCommand::ListUnusedAddresses => {
-            let addresses = wallet.list_unused_deposit_addresses().await?;
+        DepositCommand::ListUnusedAddresses { limit, offset } => {
+            let paging = if limit.is_some() || offset.is_some() {
+                Some(PagingFilter::new(offset, limit))
+            } else {
+                None
+            };
+            let addresses = wallet.list_unused_deposit_addresses(paging).await?;
             println!("{}", serde_json::to_string_pretty(&addresses)?);
         }
     }
