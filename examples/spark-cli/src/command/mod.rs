@@ -84,7 +84,7 @@ where
         }
         Command::SparkAddress => {
             let spark_address = wallet.get_spark_address().await?;
-            println!("{}", spark_address.to_address_string()?)
+            println!("{spark_address}")
         }
         Command::Sync => {
             wallet.sync().await?;

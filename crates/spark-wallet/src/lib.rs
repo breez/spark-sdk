@@ -1,6 +1,6 @@
 mod config;
 mod error;
-mod leaf;
+mod event;
 mod model;
 mod wallet;
 

@@ -11,6 +11,15 @@ use spark::{
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum WalletEvent {
+    DepositConfirmed(TreeNodeId),
+    StreamConnected,
+    StreamDisconnected,
+    Synced,
+    TransferClaimed(TransferId),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WalletInfo {
     pub identity_public_key: PublicKey,
     pub network: Network,

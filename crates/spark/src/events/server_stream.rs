@@ -116,7 +116,7 @@ pub async fn subscribe_server_events<S>(
                 }
                 Event::Connected(_) => {
                     debug!("Received connected event");
-                    continue; // No need to publish a connected event
+                    SparkEvent::Connected
                 }
             };
 
@@ -127,6 +127,13 @@ pub async fn subscribe_server_events<S>(
                 );
                 return;
             }
+        }
+
+        if publisher.send(SparkEvent::Disconnected).is_err() {
+            error!(
+                "Failed to send disconnected event, all receivers dropped. Quitting event subscription."
+            );
+            return;
         }
     }
 }

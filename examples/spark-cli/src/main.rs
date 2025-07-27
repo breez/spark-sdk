@@ -4,6 +4,7 @@ mod config;
 use std::borrow::Cow::{self, Owned};
 use std::fs::{OpenOptions, canonicalize};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use bitcoin::hashes::Hash;
 use clap::Parser;
@@ -88,9 +89,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let network = config.spark_config.network;
     let signer = DefaultSigner::new(&seed, network)?;
-    let wallet = spark_wallet::SparkWallet::connect(config.spark_config.clone(), signer).await?;
-    wallet.sync().await?;
-
+    let wallet =
+        Arc::new(spark_wallet::SparkWallet::connect(config.spark_config.clone(), signer).await?);
+    let clone = Arc::clone(&wallet);
+    tokio::spawn(async move {
+        let mut receiver = clone.subscribe_events();
+        loop {
+            tokio::select! {
+                Ok(event) = receiver.recv() => {
+                    match event {
+                        spark_wallet::WalletEvent::DepositConfirmed(tree_node_id) => println!("Deposit confirmed: {tree_node_id}"),
+                        spark_wallet::WalletEvent::StreamConnected => println!("Connected to Spark server."),
+                        spark_wallet::WalletEvent::StreamDisconnected => println!("Disconnected from Spark server."),
+                        spark_wallet::WalletEvent::Synced => println!("Synced"),
+                        spark_wallet::WalletEvent::TransferClaimed(transfer_id) => println!("Transfer claimed: {transfer_id}"),
+                    }
+                }
+                else => eprintln!("Event stream closed."),
+            }
+        }
+    });
     let rl = &mut Editor::new()?;
     rl.set_helper(Some(CliHelper {
         hinter: HistoryHinter {},
