@@ -25,7 +25,7 @@ use spark::{
     ssp::ServiceProvider,
     tree::{LeavesReservation, TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeState},
 };
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, watch};
 use tracing::{debug, error, info, trace};
 
 use crate::{
@@ -595,10 +595,8 @@ impl<S: Signer> SparkWallet<S> {
         Ok(transfer)
     }
 
-    pub async fn subscribe_events(&self) -> mpsc::Receiver<WalletEvent> {
-        let (tx, rx) = mpsc::channel(100);
-        self.event_manager.add_listener(tx).await;
-        rx
+    pub fn subscribe_events(&self) -> broadcast::Receiver<WalletEvent> {
+        self.event_manager.listen()
     }
 }
 
@@ -722,8 +720,7 @@ where
                     debug!("Claimed {} pending transfers on startup", transfers.len());
                     for transfer in &transfers {
                         self.event_manager
-                            .notify_listeners(WalletEvent::TransferClaimed(transfer.id.clone()))
-                            .await;
+                            .notify_listeners(WalletEvent::TransferClaimed(transfer.id.clone()));
                     }
                     transfers.into_iter().map(|t| t.id).collect()
                 }
@@ -733,9 +730,7 @@ where
                 }
             };
 
-        self.event_manager
-            .notify_listeners(WalletEvent::Synced)
-            .await;
+        self.event_manager.notify_listeners(WalletEvent::Synced);
         self.process_events(event_stream, ignore_transfers).await;
     }
 
@@ -775,8 +770,7 @@ where
             .await?;
         self.tree_service.collect_leaves(vec![deposit]).await?;
         self.event_manager
-            .notify_listeners(WalletEvent::DepositConfirmed(id))
-            .await;
+            .notify_listeners(WalletEvent::DepositConfirmed(id));
         Ok(())
     }
 
@@ -791,22 +785,19 @@ where
 
         claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
         self.event_manager
-            .notify_listeners(WalletEvent::TransferClaimed(transfer.id))
-            .await;
+            .notify_listeners(WalletEvent::TransferClaimed(transfer.id));
         Ok(())
     }
 
     async fn process_connected_event(&self) -> Result<(), SparkWalletError> {
         self.event_manager
-            .notify_listeners(WalletEvent::StreamConnected)
-            .await;
+            .notify_listeners(WalletEvent::StreamConnected);
         Ok(())
     }
 
     async fn process_disconnected_event(&self) -> Result<(), SparkWalletError> {
         self.event_manager
-            .notify_listeners(WalletEvent::StreamDisconnected)
-            .await;
+            .notify_listeners(WalletEvent::StreamDisconnected);
         Ok(())
     }
 }

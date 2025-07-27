@@ -93,10 +93,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(spark_wallet::SparkWallet::connect(config.spark_config.clone(), signer).await?);
     let clone = Arc::clone(&wallet);
     tokio::spawn(async move {
-        let mut receiver = clone.subscribe_events().await;
+        let mut receiver = clone.subscribe_events();
         loop {
             tokio::select! {
-                Some(event) = receiver.recv() => {
+                Ok(event) = receiver.recv() => {
                     match event {
                         spark_wallet::WalletEvent::DepositConfirmed(tree_node_id) => println!("Deposit confirmed: {tree_node_id}"),
                         spark_wallet::WalletEvent::StreamConnected => println!("Connected to Spark server."),
