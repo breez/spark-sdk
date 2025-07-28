@@ -350,14 +350,20 @@ impl<S: Signer> TreeService<S> {
     pub async fn insert_leaves(
         &self,
         leaves: Vec<TreeNode>,
+        optimize: bool,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
         let result_nodes = self
             .timelock_manager
             .check_timelock_nodes(leaves)
             .await
             .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))?;
-        let mut state = self.state.lock().await;
-        state.add_leaves(&result_nodes);
+        {
+            let mut state = self.state.lock().await;
+            state.add_leaves(&result_nodes);
+        }
+        if optimize {
+            Box::pin(self.optimize_leaves()).await?;
+        }
         Ok(result_nodes)
     }
 
@@ -638,7 +644,7 @@ impl<S: Signer> TreeService<S> {
             .swap_leaves(leaves, target_amounts)
             .await?;
 
-        let result_nodes = self.insert_leaves(claimed_nodes.clone()).await?;
+        let result_nodes = self.insert_leaves(claimed_nodes.clone(), false).await?;
 
         Ok(result_nodes)
     }

@@ -635,7 +635,9 @@ async fn claim_transfer<S: Signer>(
     let claimed_nodes = transfer_service.claim_transfer(transfer, None).await?;
 
     trace!("Inserting claimed leaves after claiming transfer");
-    let result_nodes = tree_service.insert_leaves(claimed_nodes.clone()).await?;
+    let result_nodes = tree_service
+        .insert_leaves(claimed_nodes.clone(), true)
+        .await?;
 
     Ok(result_nodes)
 }
@@ -752,7 +754,7 @@ impl<S: Signer> BackgroundProcessor<S> {
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
         let id = deposit.id.clone();
         self.tree_service
-            .insert_leaves(vec![deposit.clone()])
+            .insert_leaves(vec![deposit.clone()], false)
             .await?;
         self.tree_service.collect_leaves(vec![deposit]).await?;
         self.event_manager
