@@ -50,6 +50,14 @@ fn signing_derivation_path(network: Network) -> DerivationPath {
     ])
 }
 
+fn static_deposit_derivation_path(network: Network) -> DerivationPath {
+    DerivationPath::from(vec![
+        purpose(),
+        coin_type(network),
+        ChildNumber::from_hardened_idx(3).expect("Hardened one is invalid"),
+    ])
+}
+
 fn coin_type(network: Network) -> ChildNumber {
     let coin_type: u32 = match network {
         Network::Regtest => 0,
@@ -116,6 +124,7 @@ pub struct DefaultSigner {
     identity_key: SecretKey,
     secp: Secp256k1<All>,
     signing_master_key: Xpriv,
+    static_deposit_master_key: Xpriv,
 }
 
 #[derive(Debug, Error)]
@@ -149,10 +158,13 @@ impl DefaultSigner {
             .private_key;
         let signing_master_key =
             master_key.derive_priv(&secp, &signing_derivation_path(network))?;
+        let static_deposit_master_key =
+            master_key.derive_priv(&secp, &static_deposit_derivation_path(network))?;
         Ok(DefaultSigner {
             identity_key,
             secp,
             signing_master_key,
+            static_deposit_master_key,
         })
     }
 }
@@ -278,6 +290,37 @@ impl Signer for DefaultSigner {
 
     fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
         Ok(self.identity_key.public_key(&self.secp))
+    }
+
+    fn get_static_deposit_private_key_source(
+        &self,
+        index: u32,
+    ) -> Result<PrivateKeySource, SignerError> {
+        let secret_key = self.get_static_deposit_private_key(index)?;
+        Ok(PrivateKeySource::new_encrypted(
+            self.encrypt_private_key_ecies(&secret_key, &self.get_identity_public_key()?)?,
+        ))
+    }
+
+    // Seems unavoidable to expose the static deposit secret key, as its used for claiming static deposits
+    fn get_static_deposit_private_key(&self, index: u32) -> Result<SecretKey, SignerError> {
+        let child_number = ChildNumber::from_hardened_idx(index).map_err(|e| {
+            SignerError::Generic(format!("failed to create child from {index}: {e}"))
+        })?;
+        let derivation_path = DerivationPath::from(vec![child_number]);
+        let private_key = self
+            .static_deposit_master_key
+            .derive_priv(&self.secp, &derivation_path)
+            .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {e}")))?
+            .private_key;
+        Ok(private_key)
+    }
+
+    fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError> {
+        let public_key = self
+            .get_static_deposit_private_key(index)?
+            .public_key(&self.secp);
+        Ok(public_key)
     }
 
     fn subtract_private_keys(
@@ -555,7 +598,9 @@ mod test {
     use crate::{
         Network,
         signer::default_signer::DefaultSigner,
-        signer::default_signer::{identity_derivation_path, signing_derivation_path},
+        signer::default_signer::{
+            identity_derivation_path, signing_derivation_path, static_deposit_derivation_path,
+        },
     };
 
     /// Ensure constants are defined correctly and don't panic.
@@ -570,6 +615,11 @@ mod test {
         signing_derivation_path(Network::Testnet);
         signing_derivation_path(Network::Regtest);
         signing_derivation_path(Network::Signet);
+
+        static_deposit_derivation_path(Network::Mainnet);
+        static_deposit_derivation_path(Network::Testnet);
+        static_deposit_derivation_path(Network::Regtest);
+        static_deposit_derivation_path(Network::Signet);
     }
 
     fn create_test_signer() -> DefaultSigner {

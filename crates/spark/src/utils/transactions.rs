@@ -90,6 +90,25 @@ pub fn create_coop_exit_refund_tx(
     }
 }
 
+pub fn create_static_deposit_refund_tx(
+    deposit_outpoint: OutPoint,
+    amount_sat: u64,
+    refund_address: &Address,
+) -> Transaction {
+    Transaction {
+        version: Version::TWO,
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: deposit_outpoint,
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(amount_sat),
+            script_pubkey: refund_address.script_pubkey(),
+        }],
+    }
+}
+
 fn ephemeral_anchor_output() -> TxOut {
     TxOut {
         script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]), // Pay-to-anchor (P2A) ephemeral anchor output

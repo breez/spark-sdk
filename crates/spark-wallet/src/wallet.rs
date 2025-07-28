@@ -18,8 +18,8 @@ use spark::{
     operator::{Operator, OperatorPool, rpc::ConnectionManager},
     services::{
         CoopExitFeeQuote, CoopExitService, DepositService, ExitSpeed, LightningReceivePayment,
-        LightningSendPayment, LightningService, Swap, TimelockManager, Transfer, TransferId,
-        TransferService,
+        LightningSendPayment, LightningService, StaticDepositQuote, Swap, TimelockManager,
+        Transfer, TransferId, TransferService,
     },
     signer::Signer,
     ssp::ServiceProvider,
@@ -85,6 +85,7 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
             identity_public_key,
             config.network,
             operator_pool.clone(),
+            service_provider.clone(),
             signer.clone(),
         );
 
@@ -303,12 +304,50 @@ impl<S: Signer> SparkWallet<S> {
         Ok(collected_leaves.into_iter().map(WalletLeaf::from).collect())
     }
 
+    pub async fn claim_static_deposit(
+        &self,
+        quote: StaticDepositQuote,
+    ) -> Result<WalletTransfer, SparkWalletError> {
+        let transfer = self.deposit_service.claim_static_deposit(quote).await?;
+
+        Ok(transfer.into())
+    }
+
+    pub async fn refund_static_deposit(
+        &self,
+        tx: Transaction,
+        output_index: Option<u32>,
+        refund_address: &str,
+        fee_sats: u64,
+    ) -> Result<Transaction, SparkWalletError> {
+        let refund_address = refund_address
+            .parse::<Address<NetworkUnchecked>>()
+            .map_err(|_| {
+                SparkWalletError::InvalidAddress(format!(
+                    "Invalid refund address: {refund_address}"
+                ))
+            })?
+            .require_network(self.config.network.into())
+            .map_err(|_| SparkWalletError::InvalidNetwork)?;
+
+        let refund_tx = self
+            .deposit_service
+            .refund_static_deposit(tx, output_index, refund_address, fee_sats)
+            .await?;
+
+        Ok(refund_tx)
+    }
+
     pub async fn generate_deposit_address(
         &self,
         is_static: bool,
     ) -> Result<Address, SparkWalletError> {
         let leaf_id = TreeNodeId::generate();
-        let signing_public_key = self.signer.get_public_key_for_node(&leaf_id)?;
+        let signing_public_key = if is_static {
+            self.signer.get_static_deposit_public_key(0)?
+        } else {
+            self.signer.get_public_key_for_node(&leaf_id)?
+        };
         let address = self
             .deposit_service
             .generate_deposit_address(signing_public_key, &leaf_id, is_static)
@@ -317,6 +356,20 @@ impl<S: Signer> SparkWallet<S> {
         // TODO: Watch this address for deposits.
 
         Ok(address.address)
+    }
+
+    pub async fn list_static_deposit_addresses(
+        &self,
+        paging: Option<PagingFilter>,
+    ) -> Result<Vec<Address>, SparkWalletError> {
+        let static_addresses = self
+            .deposit_service
+            .query_static_deposit_addresses(paging)
+            .await?;
+        Ok(static_addresses
+            .into_iter()
+            .map(|addr| addr.address)
+            .collect())
     }
 
     pub async fn list_unused_deposit_addresses(
@@ -331,6 +384,18 @@ impl<S: Signer> SparkWallet<S> {
             .into_iter()
             .map(|addr| addr.address)
             .collect())
+    }
+
+    /// Fetches a quote for the creditable amount when claiming a static deposit.
+    pub async fn fetch_static_deposit_claim_quote(
+        &self,
+        tx: Transaction,
+        output_index: Option<u32>,
+    ) -> Result<StaticDepositQuote, SparkWalletError> {
+        Ok(self
+            .deposit_service
+            .fetch_static_deposit_claim_quote(tx, output_index)
+            .await?)
     }
 
     async fn swap_leaves_internal(
