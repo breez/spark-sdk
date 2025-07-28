@@ -50,22 +50,40 @@ impl<S: Signer> Swap<S> {
     }
 
     /// Swaps the specified leaves for new leaves with the target amounts. Returns a transfer object that should be claimed to obtain the new leaves.
+    /// If no target amounts are provided, the leaves will be swapped for an optimized set of leaves.
     pub async fn swap_leaves(
         &self,
         leaves: &[TreeNode],
-        target_amounts: Vec<u64>,
+        maybe_target_amounts: Option<Vec<u64>>,
     ) -> Result<Transfer, ServiceError> {
-        if target_amounts.is_empty() {
-            return Err(ServiceError::InvalidAmount);
+        if leaves.is_empty() {
+            return Err(ServiceError::Generic("no leaves to swap".to_string()));
         }
 
-        let target_sum: u64 = target_amounts.iter().sum();
+        if let Some(target_amounts) = &maybe_target_amounts {
+            if target_amounts.is_empty() {
+                return Err(ServiceError::InvalidAmount);
+            }
+            if target_amounts.contains(&0) {
+                return Err(ServiceError::InvalidAmount);
+            }
+        }
+
         let leaf_sum: u64 = leaves.iter().map(|leaf| leaf.value).sum();
+
+        // If no target amounts are provided, the target sum is the sum of the leaf values.
+        let target_sum: u64 = maybe_target_amounts
+            .as_ref()
+            .map(|target_amounts| target_amounts.iter().sum())
+            .unwrap_or(leaf_sum);
+
         if leaf_sum < target_sum {
             return Err(ServiceError::InsufficientFunds);
         }
 
         // The target amounts are more than or equal to the leaf values. Continue with split.
+
+        // TODO: split swap into batches (js sdk uses chunks of 100 leaves)
 
         // Build leaf key tweaks with new signing keys that will be swapped to the ssp.
         let leaf_key_tweaks = leaves
@@ -172,7 +190,7 @@ impl<S: Signer> Swap<S> {
                 fee_sats: 0, // TODO: Request fee estimate from SSP
                 user_leaves,
                 idempotency_key: uuid::Uuid::now_v7().to_string(), // TODO: Generate a proper idempotency key
-                target_amount_sats_list: Some(target_amounts),
+                target_amount_sats_list: maybe_target_amounts,
             })
             .await?;
 

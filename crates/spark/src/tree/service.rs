@@ -239,14 +239,22 @@ impl<S: Signer> TreeService<S> {
             .await
             .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))?;
 
-        let mut state = self.state.lock().await;
-        state.set_leaves(&refreshed_leaves);
+        {
+            let mut state = self.state.lock().await;
+            state.set_leaves(&refreshed_leaves);
+        }
+
+        self.optimize_leaves().await?;
 
         Ok(())
     }
 
-    pub async fn optimize_leaves(&self) -> Result<(), TreeServiceError> {
+    async fn optimize_leaves(&self) -> Result<(), TreeServiceError> {
         if let Ok(_guard) = self.leaf_optimization_lock.try_lock() {
+            if !self.leaves_need_optimization().await {
+                debug!("Leaves do not need optimization, skipping");
+                return Ok(());
+            }
             if let Some(reservation) = self.reserve_leaves(None, false).await? {
                 debug!("Optimizing {} leaves", reservation.leaves.len());
                 let optimized_leaves = self
@@ -261,6 +269,23 @@ impl<S: Signer> TreeService<S> {
             debug!("Leaf optimization already in progress, skipping");
         }
         Ok(())
+    }
+
+    async fn leaves_need_optimization(&self) -> bool {
+        let state = self.state.lock().await;
+        let leaves = state.get_leaves();
+
+        if leaves.len() <= 1 {
+            return false;
+        }
+
+        let total_amount_sats = leaves.iter().map(|leaf| leaf.value).sum::<u64>();
+
+        // Calculate the optimal number of leaves by counting set bits in binary representation
+        // This is equivalent to the JavaScript algorithm that uses powers of 2
+        let optimal_leaves_length = total_amount_sats.count_ones() as usize;
+
+        leaves.len() > optimal_leaves_length * 5
     }
 
     pub async fn reserve_leaves(
@@ -608,7 +633,11 @@ impl<S: Signer> TreeService<S> {
         leaves: &[TreeNode],
         target_amounts: Option<&TargetAmounts>,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
-        let target_amounts = target_amounts.map(|ta| ta.to_vec()).unwrap_or_default();
+        if leaves.is_empty() {
+            return Err(TreeServiceError::Generic("no leaves to swap".to_string()));
+        }
+
+        let target_amounts = target_amounts.map(|ta| ta.to_vec());
         let transfer = self
             .swap_service
             .swap_leaves(leaves, target_amounts)
