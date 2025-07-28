@@ -4,7 +4,7 @@ mod state;
 
 pub use error::TreeServiceError;
 use serde::{Deserialize, Serialize};
-pub use service::TreeService;
+pub use service::{TreeService, TreeServiceParams};
 pub use state::TreeState;
 use tracing::{error, trace};
 

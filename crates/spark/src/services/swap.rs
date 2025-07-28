@@ -27,19 +27,16 @@ const SWAP_EXPIRY_DURATION: Duration = Duration::from_secs(2 * 60);
 pub struct Swap<S> {
     network: Network,
     operator_pool: Arc<OperatorPool<S>>,
-    signer: S,
+    signer: Arc<S>,
     ssp_client: Arc<ServiceProvider<S>>,
     transfer_service: Arc<TransferService<S>>,
 }
 
-impl<S> Swap<S>
-where
-    S: Signer,
-{
+impl<S: Signer> Swap<S> {
     pub fn new(
         network: Network,
         operator_pool: Arc<OperatorPool<S>>,
-        signer: S,
+        signer: Arc<S>,
         ssp_client: Arc<ServiceProvider<S>>,
         transfer_service: Arc<TransferService<S>>,
     ) -> Self {

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bitcoin::secp256k1::PublicKey;
 
 use crate::{
@@ -17,12 +19,9 @@ pub struct ServiceProvider<S> {
     gql_client: GraphQLClient<S>,
 }
 
-impl<S> ServiceProvider<S>
-where
-    S: Signer,
-{
+impl<S: Signer> ServiceProvider<S> {
     /// Create a new GraphQLClient with the given configuration and signer
-    pub fn new(config: ServiceProviderConfig, signer: S) -> Self {
+    pub fn new(config: ServiceProviderConfig, signer: Arc<S>) -> Self {
         Self {
             identity_public_key: config.identity_public_key,
             gql_client: GraphQLClient::new(config.into(), signer),

@@ -15,7 +15,7 @@ use spark::{
     address::SparkAddress,
     bitcoin::BitcoinService,
     events::{SparkEvent, subscribe_server_events},
-    operator::{Operator, OperatorPool, rpc::ConnectionManager},
+    operator::{OperatorPool, rpc::ConnectionManager},
     services::{
         CoopExitFeeQuote, CoopExitService, DepositService, ExitSpeed, LightningReceivePayment,
         LightningSendPayment, LightningService, StaticDepositQuote, Swap, TimelockManager,
@@ -23,7 +23,10 @@ use spark::{
     },
     signer::Signer,
     ssp::ServiceProvider,
-    tree::{LeavesReservation, TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeState},
+    tree::{
+        LeavesReservation, TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeServiceParams,
+        TreeState,
+    },
     utils::paging::PagingFilter,
 };
 use tokio::sync::{broadcast, watch};
@@ -45,19 +48,20 @@ pub struct SparkWallet<S> {
     deposit_service: DepositService<S>,
     event_manager: Arc<EventManager>,
     identity_public_key: PublicKey,
-    signer: S,
-    swap_service: Arc<Swap<S>>,
+    signer: Arc<S>,
     tree_service: Arc<TreeService<S>>,
     coop_exit_service: Arc<CoopExitService<S>>,
     transfer_service: Arc<TransferService<S>>,
     lightning_service: Arc<LightningService<S>>,
 }
 
-impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
+impl<S: Signer> SparkWallet<S> {
     pub async fn connect(config: SparkWalletConfig, signer: S) -> Result<Self, SparkWalletError> {
         config.validate()?;
         let identity_public_key = signer.get_identity_public_key()?;
         let connection_manager = ConnectionManager::new();
+
+        let signer = Arc::new(signer);
 
         let bitcoin_service = BitcoinService::new(config.network);
         let service_provider = Arc::new(ServiceProvider::new(
@@ -69,7 +73,7 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
             OperatorPool::connect(
                 &config.operator_pool,
                 &connection_manager,
-                Arc::new(signer.clone()),
+                Arc::clone(&signer),
             )
             .await?,
         );
@@ -77,7 +81,7 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
             operator_pool.clone(),
             service_provider.clone(),
             config.network,
-            signer.clone(),
+            Arc::clone(&signer),
             config.split_secret_threshold,
         ));
         let deposit_service = DepositService::new(
@@ -86,7 +90,7 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
             config.network,
             operator_pool.clone(),
             service_provider.clone(),
-            signer.clone(),
+            Arc::clone(&signer),
         );
 
         let transfer_service = Arc::new(TransferService::new(
@@ -104,36 +108,39 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
         ));
 
         let tree_state = TreeState::new();
-        let tree_service = Arc::new(TreeService::new(
-            identity_public_key,
-            config.network,
-            operator_pool.clone(),
-            tree_state,
-            Arc::clone(&timelock_manager),
-            signer.clone(),
-        ));
 
         let coop_exit_service = Arc::new(CoopExitService::new(
             operator_pool.clone(),
             service_provider.clone(),
             Arc::clone(&transfer_service),
             config.network,
-            signer.clone(),
+            Arc::clone(&signer),
         ));
-        let swap_service = Arc::new(Swap::new(
+
+        let swap_service = Swap::new(
             config.network,
             operator_pool.clone(),
-            signer.clone(),
+            Arc::clone(&signer),
             Arc::clone(&service_provider),
             Arc::clone(&transfer_service),
-        ));
+        );
+
+        let tree_service = Arc::new(TreeService::new(TreeServiceParams {
+            identity_pubkey: identity_public_key,
+            network: config.network,
+            operator_pool: operator_pool.clone(),
+            state: tree_state,
+            timelock_manager: Arc::clone(&timelock_manager),
+            signer: Arc::clone(&signer),
+            swap_service,
+            transfer_service: Arc::clone(&transfer_service),
+        }));
 
         let event_manager = Arc::new(EventManager::new());
         let (cancel, cancellation_token) = watch::channel(());
-        let coordinator = operator_pool.get_coordinator().clone();
         let reconnect_interval = Duration::from_secs(config.reconnect_interval_seconds);
         let background_processor = Arc::new(BackgroundProcessor::new(
-            coordinator,
+            Arc::clone(&operator_pool),
             Arc::clone(&event_manager),
             identity_public_key,
             reconnect_interval,
@@ -151,7 +158,6 @@ impl<S: Signer + Clone + Send + Sync + 'static> SparkWallet<S> {
             event_manager,
             identity_public_key,
             signer,
-            swap_service,
             tree_service,
             coop_exit_service,
             transfer_service,
@@ -186,19 +192,22 @@ impl<S: Signer> SparkWallet<S> {
         }
 
         let target_amounts = TargetAmounts::new(total_amount_sat, None);
-        let leaves_reservation = self.select_leaves(Some(&target_amounts)).await?;
+        let leaves_reservation = self
+            .tree_service
+            .select_leaves(Some(&target_amounts))
+            .await?;
         // start the lightning swap with the operator
-        let swap = with_reserved_leaves(
-            self.tree_service.clone(),
-            async {
-                Ok(self
-                    .lightning_service
-                    .start_lightning_swap(invoice, amount_to_send, &leaves_reservation.leaves)
-                    .await?)
-            },
-            &leaves_reservation,
-        )
-        .await?;
+        let swap = self
+            .tree_service
+            .with_reserved_leaves(
+                self.lightning_service.start_lightning_swap(
+                    invoice,
+                    amount_to_send,
+                    &leaves_reservation.leaves,
+                ),
+                &leaves_reservation,
+            )
+            .await?;
 
         // send the leaves to the operator
         let _ = self
@@ -243,7 +252,10 @@ impl<S: Signer> SparkWallet<S> {
 
         // Selects leaves totaling `amount_sat` if provided, otherwise retrieves all available leaves.
         let target_amounts = amount_sats.map(|amount| TargetAmounts::new(amount, None));
-        let reservation = self.select_leaves(target_amounts.as_ref()).await?;
+        let reservation = self
+            .tree_service
+            .select_leaves(target_amounts.as_ref())
+            .await?;
 
         // Fetches fee quote for the coop exit then cancels the reservation.
         let fee_quote_res = self
@@ -398,20 +410,6 @@ impl<S: Signer> SparkWallet<S> {
             .await?)
     }
 
-    async fn swap_leaves_internal(
-        &self,
-        leaves: &[TreeNode],
-        target_amounts: Option<&TargetAmounts>,
-    ) -> Result<Vec<TreeNode>, SparkWalletError> {
-        let target_amounts = target_amounts.map(|ta| ta.to_vec()).unwrap_or_default();
-        let transfer = self
-            .swap_service
-            .swap_leaves(leaves, target_amounts)
-            .await?;
-        let leaves = claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
-        Ok(leaves)
-    }
-
     /// Sends a transfer to another Spark user.
     pub async fn transfer(
         &self,
@@ -426,19 +424,19 @@ impl<S: Signer> SparkWallet<S> {
 
         // get leaves to transfer
         let target_amounts = TargetAmounts::new(amount_sat, None);
-        let leaves_reservation = self.select_leaves(Some(&target_amounts)).await?;
+        let leaves_reservation = self
+            .tree_service
+            .select_leaves(Some(&target_amounts))
+            .await?;
 
-        let transfer = with_reserved_leaves(
-            self.tree_service.clone(),
-            async {
-                Ok(self
-                    .transfer_service
-                    .transfer_leaves_to(leaves_reservation.leaves.clone(), &receiver_pubkey)
-                    .await?)
-            },
-            &leaves_reservation,
-        )
-        .await?;
+        let transfer = self
+            .tree_service
+            .with_reserved_leaves(
+                self.transfer_service
+                    .transfer_leaves_to(leaves_reservation.leaves.clone(), &receiver_pubkey),
+                &leaves_reservation,
+            )
+            .await?;
 
         Ok(transfer.into())
     }
@@ -509,65 +507,6 @@ impl<S: Signer> SparkWallet<S> {
         .map_err(|e| SparkWalletError::ValidationError(e.to_string()))
     }
 
-    /// Selects leaves from the tree that sum up to exactly the target amounts.
-    /// If such a combination of leaves does not exist, it performs a swap to get a set of leaves matching the target amounts.
-    /// If no leaves can be selected, returns an error
-    async fn select_leaves(
-        &self,
-        target_amounts: Option<&TargetAmounts>,
-    ) -> Result<LeavesReservation, SparkWalletError> {
-        trace!("Selecting leaves for target amounts: {target_amounts:?}");
-        let reservation = self
-            .tree_service
-            .reserve_leaves(target_amounts, false)
-            .await?;
-        let Some(reservation) = reservation else {
-            return Err(SparkWalletError::InsufficientFunds);
-        };
-
-        trace!(
-            "Selected leaves got reservation: {:?} ({})",
-            reservation.id,
-            reservation.sum()
-        );
-
-        // Handle cases where no swapping is needed:
-        // - The target amount is zero
-        // - The reservation already matches the total target amounts and each target amount
-        //   can be selected from the reserved leaves
-        let total_amount_sats = target_amounts.map(|ta| ta.total_sats()).unwrap_or(0);
-        if (total_amount_sats == 0 || reservation.sum() == total_amount_sats)
-            && self
-                .tree_service
-                .select_leaves_by_amounts(&reservation.leaves, target_amounts)
-                .is_ok()
-        {
-            trace!("Selected leaves match requirements, no swap needed");
-            return Ok(reservation);
-        }
-
-        // Swap the leaves to match the target amount.
-        with_reserved_leaves(
-            self.tree_service.clone(),
-            self.swap_leaves_internal(&reservation.leaves, target_amounts),
-            &reservation,
-        )
-        .await?;
-        trace!("Swapped leaves to match target amount");
-        // Now the leaves should contain the exact amount.
-        let reservation = self
-            .tree_service
-            .reserve_leaves(target_amounts, true)
-            .await?
-            .ok_or(SparkWalletError::InsufficientFunds)?;
-        trace!(
-            "Selected leaves got reservation after swap: {:?} ({})",
-            reservation.id,
-            reservation.sum()
-        );
-        Ok(reservation)
-    }
-
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
         self.tree_service.refresh_leaves().await?;
         Ok(())
@@ -598,21 +537,25 @@ impl<S: Signer> SparkWallet<S> {
         // Select leaves for the withdrawal
         let target_amounts =
             amount_sats.map(|amount_sats| TargetAmounts::new(amount_sats, Some(fee_sats)));
-        let leaves_reservation = self.select_leaves(target_amounts.as_ref()).await?;
+        let leaves_reservation = self
+            .tree_service
+            .select_leaves(target_amounts.as_ref())
+            .await?;
 
-        let transfer = with_reserved_leaves(
-            self.tree_service.clone(),
-            self.withdraw_inner(
-                withdrawal_address,
-                exit_speed,
+        let transfer = self
+            .tree_service
+            .with_reserved_leaves(
+                self.withdraw_inner(
+                    withdrawal_address,
+                    exit_speed,
+                    &leaves_reservation,
+                    target_amounts.as_ref(),
+                    fee_sats,
+                    fee_quote.id,
+                ),
                 &leaves_reservation,
-                target_amounts.as_ref(),
-                fee_sats,
-                fee_quote.id,
-            ),
-            &leaves_reservation,
-        )
-        .await?;
+            )
+            .await?;
 
         Ok(transfer.into())
     }
@@ -671,27 +614,6 @@ impl<S: Signer> SparkWallet<S> {
     }
 }
 
-async fn with_reserved_leaves<F, R, S>(
-    tree_service: Arc<TreeService<S>>,
-    f: F,
-    leaves: &LeavesReservation,
-) -> Result<R, SparkWalletError>
-where
-    F: Future<Output = Result<R, SparkWalletError>>,
-    S: Signer,
-{
-    match f.await {
-        Ok(r) => {
-            tree_service.finalize_reservation(leaves.id.clone()).await;
-            Ok(r)
-        }
-        Err(e) => {
-            tree_service.cancel_reservation(leaves.id.clone()).await;
-            Err(e)
-        }
-    }
-}
-
 async fn claim_pending_transfers<S: Signer>(
     transfer_service: &Arc<TransferService<S>>,
     tree_service: &Arc<TreeService<S>>,
@@ -702,28 +624,17 @@ async fn claim_pending_transfers<S: Signer>(
         .await?;
     trace!("There are {} pending transfers", transfers.len());
     for transfer in &transfers {
-        claim_transfer(transfer, transfer_service, tree_service).await?;
+        tree_service
+            .claim_and_insert_transfer(transfer)
+            .await
+            .map_err(|e| SparkWalletError::Generic(format!("Failed to claim transfer: {e:?}")))?;
     }
 
     Ok(transfers.into_iter().map(WalletTransfer::from).collect())
 }
 
-async fn claim_transfer<S: Signer>(
-    transfer: &Transfer,
-    transfer_service: &Arc<TransferService<S>>,
-    tree_service: &Arc<TreeService<S>>,
-) -> Result<Vec<TreeNode>, SparkWalletError> {
-    trace!("Claiming transfer with id: {}", transfer.id);
-    let claimed_nodes = transfer_service.claim_transfer(transfer, None).await?;
-
-    trace!("Inserting claimed leaves after claiming transfer");
-    let result_nodes = tree_service.insert_leaves(claimed_nodes.clone()).await?;
-
-    Ok(result_nodes)
-}
-
 struct BackgroundProcessor<S: Signer> {
-    coordinator: Operator<S>,
+    operator_pool: Arc<OperatorPool<S>>,
     event_manager: Arc<EventManager>,
     identity_public_key: PublicKey,
     reconnect_interval: Duration,
@@ -731,12 +642,9 @@ struct BackgroundProcessor<S: Signer> {
     tree_service: Arc<TreeService<S>>,
 }
 
-impl<S> BackgroundProcessor<S>
-where
-    S: Signer + Clone + Send + Sync + 'static,
-{
+impl<S: Signer> BackgroundProcessor<S> {
     pub fn new(
-        coordinator: Operator<S>,
+        operator_pool: Arc<OperatorPool<S>>,
         event_manager: Arc<EventManager>,
         identity_public_key: PublicKey,
         reconnect_interval: Duration,
@@ -744,7 +652,7 @@ where
         tree_service: Arc<TreeService<S>>,
     ) -> Self {
         Self {
-            coordinator,
+            operator_pool,
             event_manager,
             identity_public_key,
             reconnect_interval,
@@ -767,13 +675,13 @@ where
         mut cancellation_token: watch::Receiver<()>,
     ) {
         let (event_tx, event_stream) = broadcast::channel(100);
-        let coordinator = self.coordinator.clone();
+        let operator_pool = Arc::clone(&self.operator_pool);
         let reconnect_interval = self.reconnect_interval;
         let identity_public_key = self.identity_public_key;
         tokio::spawn(async move {
             subscribe_server_events(
                 identity_public_key,
-                &coordinator,
+                operator_pool,
                 &event_tx,
                 reconnect_interval,
                 &mut cancellation_token,
@@ -854,7 +762,10 @@ where
             return Ok(());
         }
 
-        claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
+        self.tree_service
+            .claim_and_insert_transfer(&transfer)
+            .await
+            .map_err(|e| SparkWalletError::Generic(format!("Failed to claim transfer: {e:?}")))?;
         self.event_manager
             .notify_listeners(WalletEvent::TransferClaimed(transfer.id));
         Ok(())

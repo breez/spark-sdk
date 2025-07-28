@@ -62,7 +62,7 @@ impl Default for ClaimTransferConfig {
 }
 
 pub struct TransferService<S> {
-    signer: S,
+    signer: Arc<S>,
     network: Network,
     split_secret_threshold: u32,
     operator_pool: Arc<OperatorPool<S>>,
@@ -70,7 +70,7 @@ pub struct TransferService<S> {
 
 impl<S: Signer> TransferService<S> {
     pub fn new(
-        signer: S,
+        signer: Arc<S>,
         network: Network,
         split_secret_threshold: u32,
         operator_pool: Arc<OperatorPool<S>>,

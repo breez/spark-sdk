@@ -115,20 +115,17 @@ pub struct DepositService<S> {
     network: Network,
     operator_pool: Arc<OperatorPool<S>>,
     ssp_client: Arc<ServiceProvider<S>>,
-    signer: S,
+    signer: Arc<S>,
 }
 
-impl<S> DepositService<S>
-where
-    S: Signer,
-{
+impl<S: Signer> DepositService<S> {
     pub fn new(
         bitcoin_service: BitcoinService,
         identity_public_key: PublicKey,
         network: impl Into<Network>,
         operator_pool: Arc<OperatorPool<S>>,
         ssp_client: Arc<ServiceProvider<S>>,
-        signer: S,
+        signer: Arc<S>,
     ) -> Self {
         DepositService {
             bitcoin_service,

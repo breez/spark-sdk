@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
@@ -30,7 +31,7 @@ pub struct SignedTx {
 }
 
 pub async fn prepare_leaf_refund_signing_data<S: Signer>(
-    signer: &S,
+    signer: &Arc<S>,
     leaf_key_tweaks: &[LeafKeyTweak],
     receiving_public_key: PublicKey,
 ) -> Result<HashMap<TreeNodeId, LeafRefundSigningData>, SignerError> {
@@ -57,7 +58,7 @@ pub async fn prepare_leaf_refund_signing_data<S: Signer>(
 }
 
 pub async fn sign_refunds<S: Signer>(
-    signer: &S,
+    signer: &Arc<S>,
     leaves: &[LeafKeyTweak],
     spark_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
     receiver_pubkey: &PublicKey,
@@ -127,7 +128,7 @@ pub async fn sign_refunds<S: Signer>(
 
 /// Signs refund transactions using FROST threshold signatures
 pub async fn sign_aggregate_refunds<S: Signer>(
-    signer: &S,
+    signer: &Arc<S>,
     leaf_data_map: &HashMap<TreeNodeId, LeafRefundSigningData>,
     operator_signing_results: &[crate::operator::rpc::spark::LeafRefundTxSigningResult],
     adaptor_pubkey: Option<&PublicKey>,

@@ -90,15 +90,12 @@ pub struct OperatorPool<S> {
     operators: Vec<Operator<S>>,
 }
 
-impl<S> OperatorPool<S> {
+impl<S: Signer> OperatorPool<S> {
     pub async fn connect(
         config: &OperatorPoolConfig,
         connection_manager: &ConnectionManager,
         signer: Arc<S>,
-    ) -> Result<Self, OperatorRpcError>
-    where
-        S: Signer + Clone,
-    {
+    ) -> Result<Self, OperatorRpcError> {
         let mut operators = Vec::new();
         for operator in &config.operators {
             let channel = connection_manager.get_channel(operator).await?;

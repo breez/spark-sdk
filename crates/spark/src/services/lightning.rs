@@ -146,19 +146,16 @@ pub struct LightningService<S> {
     operator_pool: Arc<OperatorPool<S>>,
     ssp_client: Arc<ServiceProvider<S>>,
     network: Network,
-    signer: S,
+    signer: Arc<S>,
     split_secret_threshold: u32,
 }
 
-impl<S> LightningService<S>
-where
-    S: Signer,
-{
+impl<S: Signer> LightningService<S> {
     pub fn new(
         operator_pool: Arc<OperatorPool<S>>,
         ssp_client: Arc<ServiceProvider<S>>,
         network: Network,
-        signer: S,
+        signer: Arc<S>,
         split_secret_threshold: u32,
     ) -> Self {
         LightningService {

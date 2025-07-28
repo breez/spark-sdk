@@ -92,7 +92,7 @@ pub struct CoopExitService<S> {
     ssp_client: Arc<ServiceProvider<S>>,
     transfer_service: Arc<TransferService<S>>,
     network: Network,
-    signer: S,
+    signer: Arc<S>,
 }
 
 impl<S> CoopExitService<S>
@@ -104,7 +104,7 @@ where
         ssp_client: Arc<ServiceProvider<S>>,
         transfer_service: Arc<TransferService<S>>,
         network: Network,
-        signer: S,
+        signer: Arc<S>,
     ) -> Self {
         CoopExitService {
             operator_pool,

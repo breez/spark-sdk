@@ -22,6 +22,9 @@ pub enum TreeServiceError {
     #[error("non reservable leaves")]
     NonReservableLeaves,
 
+    #[error("Service error: {0}")]
+    ServiceError(#[from] crate::services::ServiceError),
+
     #[error("generic error: {0}")]
     Generic(String),
 }
