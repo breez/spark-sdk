@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use tonic::transport::ClientTlsConfig;
 
+use super::retry_channel::RetryChannel;
 use crate::operator::rpc::OperatorRpcError;
-
-pub type Transport = tonic::transport::Channel;
+pub type Transport = RetryChannel<tonic::transport::Channel>;
 
 #[derive(Clone)]
 pub struct GrpcClient {
@@ -14,7 +14,7 @@ pub struct GrpcClient {
 impl GrpcClient {
     pub fn new(url: String) -> Result<Self, OperatorRpcError> {
         Ok(Self {
-            inner: Self::create_endpoint(&url)?.connect_lazy(),
+            inner: RetryChannel::new(Self::create_endpoint(&url)?.connect_lazy()),
         })
     }
 
