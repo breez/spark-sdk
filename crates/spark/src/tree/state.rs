@@ -68,17 +68,22 @@ impl TreeState {
         trace!("Removed {} leaves from the local state", leaf_ids.len());
     }
 
-    // move leaves from the main pool to the reserved pool
+    // Reserves leaves by moving them from the main pool to the reserved pool.
+    // If accept_new_leaves is true, allows reserving leaves that are not in the main pool.
+    // If false, only allows reserving leaves that are already in the main pool.
     pub fn reserve_leaves(
         &mut self,
         leaves: &[TreeNode],
+        accept_new_leaves: bool,
     ) -> Result<LeavesReservationId, TreeServiceError> {
         if leaves.is_empty() {
             return Err(TreeServiceError::NonReservableLeaves);
         }
-        for leaf in leaves {
-            if !self.leaves.contains_key(&leaf.id) {
-                return Err(TreeServiceError::NonReservableLeaves);
+        if !accept_new_leaves {
+            for leaf in leaves {
+                if !self.leaves.contains_key(&leaf.id) {
+                    return Err(TreeServiceError::NonReservableLeaves);
+                }
             }
         }
         let id = Uuid::now_v7().to_string();
@@ -228,7 +233,7 @@ mod test {
 
         // Reserve some leaves
         let reserved_leaves = vec![leaves[0].clone(), leaves[1].clone()];
-        let reservation_id = state.reserve_leaves(&reserved_leaves).unwrap();
+        let reservation_id = state.reserve_leaves(&reserved_leaves, false).unwrap();
 
         // Update leaves with new data (including updated versions of reserved leaves)
         let mut updated_leaf1 = create_test_tree_node("node1", 150); // Updated value
@@ -266,7 +271,7 @@ mod test {
         state.add_leaves(&leaves);
 
         // Reserve leaves
-        let reservation_id = state.reserve_leaves(&leaves).unwrap();
+        let reservation_id = state.reserve_leaves(&leaves, false).unwrap();
 
         // Set new leaves that don't include the reserved ones
         let new_leaves = vec![create_test_tree_node("node3", 300)];
@@ -287,7 +292,7 @@ mod test {
         state.add_leaves(&leaves);
 
         let to_reserve = vec![leaves[0].clone()];
-        let reservation_id = state.reserve_leaves(&to_reserve).unwrap();
+        let reservation_id = state.reserve_leaves(&to_reserve, false).unwrap();
 
         // Check that reservation was created
         assert!(state.leaves_reservations.contains_key(&reservation_id));
@@ -311,7 +316,7 @@ mod test {
         state.add_leaves(&leaves);
 
         let to_reserve = vec![leaves[0].clone()];
-        let reservation_id = state.reserve_leaves(&to_reserve).unwrap();
+        let reservation_id = state.reserve_leaves(&to_reserve, false).unwrap();
 
         // Cancel the reservation
         state.cancel_reservation(reservation_id.clone());
@@ -348,7 +353,7 @@ mod test {
         state.add_leaves(&leaves);
 
         let to_reserve = vec![leaves[0].clone()];
-        let reservation_id = state.reserve_leaves(&to_reserve).unwrap();
+        let reservation_id = state.reserve_leaves(&to_reserve, false).unwrap();
 
         // Finalize the reservation
         state.finalize_reservation(reservation_id.clone());
@@ -385,8 +390,8 @@ mod test {
         state.add_leaves(&leaves);
 
         // Create multiple reservations
-        let reservation1 = state.reserve_leaves(&[leaves[0].clone()]).unwrap();
-        let reservation2 = state.reserve_leaves(&[leaves[1].clone()]).unwrap();
+        let reservation1 = state.reserve_leaves(&[leaves[0].clone()], false).unwrap();
+        let reservation2 = state.reserve_leaves(&[leaves[1].clone()], false).unwrap();
 
         // Check both reservations exist
         assert!(state.leaves_reservations.contains_key(&reservation1));
@@ -415,9 +420,9 @@ mod test {
         let leaf = create_test_tree_node("node1", 100);
         state.add_leaves(&[leaf.clone()]);
 
-        let id1 = state.reserve_leaves(&[leaf.clone()]).unwrap();
+        let id1 = state.reserve_leaves(&[leaf.clone()], false).unwrap();
         state.cancel_reservation(id1.clone());
-        let id2 = state.reserve_leaves(&[leaf.clone()]).unwrap();
+        let id2 = state.reserve_leaves(&[leaf.clone()], false).unwrap();
 
         assert_ne!(id1, id2);
     }
@@ -428,16 +433,74 @@ mod test {
         let leaf = create_test_tree_node("node1", 100);
         state.add_leaves(&[leaf.clone()]);
 
-        let _ = state.reserve_leaves(&[leaf.clone()]).unwrap();
-        let result = state.reserve_leaves(&[leaf.clone()]).unwrap_err();
+        let _ = state.reserve_leaves(&[leaf.clone()], false).unwrap();
+        let result = state.reserve_leaves(&[leaf.clone()], false).unwrap_err();
         assert!(matches!(result, TreeServiceError::NonReservableLeaves));
     }
 
     #[test]
     fn test_reserve_leaves_empty() {
         let mut state = TreeState::new();
-        let err = state.reserve_leaves(&[]).unwrap_err();
+        let err = state.reserve_leaves(&[], false).unwrap_err();
 
         assert!(matches!(err, TreeServiceError::NonReservableLeaves));
+    }
+
+    #[test]
+    fn test_remove_leaves() {
+        let mut state = TreeState::new();
+        let leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+            create_test_tree_node("node3", 300),
+        ];
+        state.add_leaves(&leaves);
+
+        state.remove_leaves(&[
+            TreeNodeId::from_str("node1").unwrap(),
+            TreeNodeId::from_str("node3").unwrap(),
+        ]);
+
+        let remaining_leaves = state.get_leaves();
+        assert_eq!(remaining_leaves.len(), 1);
+        assert_eq!(remaining_leaves[0].id.to_string(), "node2");
+    }
+
+    #[test]
+    fn test_reserve_leaves_accept_new_leaves() {
+        let mut state = TreeState::new();
+        let leaf = create_test_tree_node("new_node", 500);
+
+        // Reserve a leaf that doesn't exist in the main pool
+        let reservation_id = state.reserve_leaves(&[leaf.clone()], true).unwrap();
+
+        // Check that reservation was created
+        assert!(state.leaves_reservations.contains_key(&reservation_id));
+        let reserved = state.leaves_reservations.get(&reservation_id).unwrap();
+        assert_eq!(reserved.len(), 1);
+        assert_eq!(reserved[0].id.to_string(), "new_node");
+
+        // Check that the main pool is still empty
+        assert!(state.get_leaves().is_empty());
+    }
+
+    #[test]
+    fn test_reserve_leaves_mix_existing_and_new() {
+        let mut state = TreeState::new();
+        let existing_leaf = create_test_tree_node("existing", 100);
+        state.add_leaves(&[existing_leaf.clone()]);
+
+        let new_leaf = create_test_tree_node("new", 200);
+
+        // Try to reserve both an existing and a new leaf
+        let leaves_to_reserve = vec![existing_leaf.clone(), new_leaf.clone()];
+        let reservation_id = state.reserve_leaves(&leaves_to_reserve, true).unwrap();
+
+        // Check the reservation contains both leaves
+        let reserved = state.leaves_reservations.get(&reservation_id).unwrap();
+        assert_eq!(reserved.len(), 2);
+
+        // Check the existing leaf is no longer in the main pool
+        assert!(state.get_leaves().is_empty());
     }
 }

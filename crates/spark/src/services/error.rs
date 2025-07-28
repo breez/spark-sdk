@@ -1,7 +1,7 @@
 use thiserror::Error;
 use tonic::Status;
 
-use crate::operator::rpc::OperatorRpcError;
+use crate::{operator::rpc::OperatorRpcError, tree::TreeNode};
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
@@ -74,6 +74,10 @@ pub enum ServiceError {
     // Cooperative exit related errors
     #[error("Fee exceeds withdrawal amount")]
     InvalidFees,
+
+    // Timelock manager related errors
+    #[error("Partial check timelock error")]
+    PartialCheckTimelockError(Vec<TreeNode>),
 
     // Common errors
     #[error("bitcoin error: {0}")]

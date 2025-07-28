@@ -14,7 +14,7 @@ use crate::{
             spark::{QueryNodesRequest, query_nodes_request::Source},
         },
     },
-    services::{Swap, TimelockManager},
+    services::{ServiceError, Swap, TimelockManager},
     signer::Signer,
     tree::{
         LeavesReservation, LeavesReservationId, TargetAmounts, TargetLeaves, TreeNodeId,
@@ -228,11 +228,19 @@ impl<S: Signer> TreeService<S> {
             .filter(|leaf| !leaves_to_ignore.contains(&leaf.id))
             .collect::<Vec<_>>();
 
-        let refreshed_leaves = self
-            .timelock_manager
-            .check_timelock_nodes(new_leaves)
-            .await
-            .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))?;
+        let refreshed_leaves = match self.timelock_manager.check_timelock_nodes(new_leaves).await {
+            Ok(nodes) => Ok(nodes),
+            Err(e) => {
+                // If this is a partial check timelock error, the extend node timelock failed
+                // but we can still update the leaves that were refreshed
+                if let ServiceError::PartialCheckTimelockError(ref nodes) = e {
+                    self.state.lock().await.set_leaves(nodes);
+                }
+                Err(TreeServiceError::Generic(format!(
+                    "Failed to check time lock: {e:?}"
+                )))
+            }
+        }?;
 
         {
             let mut state = self.state.lock().await;
@@ -325,15 +333,31 @@ impl<S: Signer> TreeService<S> {
                 }
             };
 
-            let reservation_id = state.reserve_leaves(&selected)?;
+            let reservation_id = state.reserve_leaves(&selected, false)?;
             LeavesReservation::new(selected, reservation_id)
         };
 
-        let new_leaves = self
+        let new_leaves = match self
             .timelock_manager
             .check_timelock_nodes(reservation.leaves)
             .await
-            .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))?;
+        {
+            Ok(nodes) => Ok(nodes),
+            Err(e) => {
+                let mut state = self.state.lock().await;
+                // Cancel the reservation if the timelock check fails
+                state.cancel_reservation(reservation.id.clone());
+                // If this is a partial check timelock error, the extend node timelock failed
+                // but we can still update the leaves that were refreshed
+                if let ServiceError::PartialCheckTimelockError(ref nodes) = e {
+                    state.add_leaves(nodes);
+                }
+                Err(TreeServiceError::Generic(format!(
+                    "Failed to check time lock: {e:?}"
+                )))
+            }
+        }?;
+
         Ok(Some(LeavesReservation::new(new_leaves, reservation.id)))
     }
 
@@ -352,11 +376,20 @@ impl<S: Signer> TreeService<S> {
         leaves: Vec<TreeNode>,
         optimize: bool,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
-        let result_nodes = self
-            .timelock_manager
-            .check_timelock_nodes(leaves)
-            .await
-            .map_err(|e| TreeServiceError::Generic(format!("Failed to check time lock: {e:?}")))?;
+        let result_nodes = match self.timelock_manager.check_timelock_nodes(leaves).await {
+            Ok(nodes) => Ok(nodes),
+            Err(e) => {
+                // If this is a partial check timelock error, the extend node timelock failed
+                // but we can still update the leaves that were refreshed
+                if let ServiceError::PartialCheckTimelockError(ref nodes) = e {
+                    self.state.lock().await.add_leaves(nodes);
+                }
+                Err(TreeServiceError::Generic(format!(
+                    "Failed to check time lock: {e:?}"
+                )))
+            }
+        }?;
+
         {
             let mut state = self.state.lock().await;
             state.add_leaves(&result_nodes);
@@ -516,18 +549,10 @@ impl<S: Signer> TreeService<S> {
         Ok(Some(result))
     }
 
-    // TODO: right now, this looks tighly coupled to claiming a deposit.
-    //  We should either move this to the deposit service or make it more general.
-    //  If made more general, should also be moved to timelock manager.
-    pub async fn collect_leaves(
+    async fn collect_leaves_inner(
         &self,
         nodes: Vec<TreeNode>,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
-        if nodes.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let node_ids: Vec<_> = nodes.iter().map(|n| n.id.clone()).collect();
         let mut resulting_nodes = Vec::new();
         for node in nodes.into_iter() {
             if node.status != TreeNodeStatus::Available {
@@ -566,10 +591,38 @@ impl<S: Signer> TreeService<S> {
             }
         }
 
-        let mut state = self.state.lock().await;
-        state.remove_leaves(&node_ids);
-        state.add_leaves(&resulting_nodes);
         Ok(resulting_nodes)
+    }
+
+    // TODO: right now, this looks tighly coupled to claiming a deposit.
+    //  We should either move this to the deposit service or make it more general.
+    //  If made more general, should also be moved to timelock manager.
+    pub async fn collect_leaves(
+        &self,
+        nodes: Vec<TreeNode>,
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        if nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut state = self.state.lock().await;
+        // Immediately reserve the new leaves, even though they are not in the main pool
+        let reservation_id = state.reserve_leaves(&nodes, true)?;
+
+        match self.collect_leaves_inner(nodes).await {
+            Ok(collected_nodes) => {
+                // Finalize the reservation, disgarding the new leaves for the collected leaves
+                state.finalize_reservation(reservation_id);
+                state.add_leaves(&collected_nodes);
+                Ok(collected_nodes)
+            }
+            Err(e) => {
+                error!("Failed to collect leaves: {e:?}");
+                // Cancel the reservation, moving the new leaves to the main pool
+                state.cancel_reservation(reservation_id);
+                Err(e)
+            }
+        }
     }
 
     /// Returns the total balance of all available leaves in the tree.

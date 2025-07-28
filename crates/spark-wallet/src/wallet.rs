@@ -306,7 +306,6 @@ impl<S: Signer> SparkWallet<S> {
 
         let deposit_nodes = self.deposit_service.claim_deposit(tx, vout).await?;
         debug!("Claimed deposit root node: {:?}", deposit_nodes);
-        // TODO: update local tree here, otherwise a failure in collect_leaves will result in out of date state.
         let collected_leaves = self.tree_service.collect_leaves(deposit_nodes).await?;
         debug!("Collected deposit leaves: {:?}", collected_leaves);
         Ok(collected_leaves.into_iter().map(WalletLeaf::from).collect())
@@ -753,9 +752,6 @@ impl<S: Signer> BackgroundProcessor<S> {
 
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
         let id = deposit.id.clone();
-        self.tree_service
-            .insert_leaves(vec![deposit.clone()], false)
-            .await?;
         self.tree_service.collect_leaves(vec![deposit]).await?;
         self.event_manager
             .notify_listeners(WalletEvent::DepositConfirmed(id));
