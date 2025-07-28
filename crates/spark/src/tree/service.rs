@@ -14,7 +14,7 @@ use crate::{
             spark::{QueryNodesRequest, query_nodes_request::Source},
         },
     },
-    services::{Swap, TimelockManager, TransferService},
+    services::{Swap, TimelockManager},
     signer::Signer,
     tree::{
         LeavesReservation, LeavesReservationId, TargetAmounts, TargetLeaves, TreeNodeId,
@@ -25,17 +25,6 @@ use crate::{
 
 use super::{TreeNode, error::TreeServiceError, state::TreeState};
 
-pub struct TreeServiceParams<S> {
-    pub identity_pubkey: PublicKey,
-    pub network: Network,
-    pub operator_pool: Arc<OperatorPool<S>>,
-    pub state: TreeState,
-    pub timelock_manager: Arc<TimelockManager<S>>,
-    pub signer: Arc<S>,
-    pub swap_service: Swap<S>,
-    pub transfer_service: Arc<TransferService<S>>,
-}
-
 pub struct TreeService<S> {
     identity_pubkey: PublicKey,
     network: Network,
@@ -44,21 +33,27 @@ pub struct TreeService<S> {
     timelock_manager: Arc<TimelockManager<S>>,
     signer: Arc<S>,
     swap_service: Swap<S>,
-    transfer_service: Arc<TransferService<S>>,
     leaf_optimization_lock: Mutex<()>,
 }
 
 impl<S: Signer> TreeService<S> {
-    pub fn new(params: TreeServiceParams<S>) -> Self {
+    pub fn new(
+        identity_pubkey: PublicKey,
+        network: Network,
+        operator_pool: Arc<OperatorPool<S>>,
+        state: TreeState,
+        timelock_manager: Arc<TimelockManager<S>>,
+        signer: Arc<S>,
+        swap_service: Swap<S>,
+    ) -> Self {
         TreeService {
-            identity_pubkey: params.identity_pubkey,
-            network: params.network,
-            operator_pool: params.operator_pool,
-            state: Mutex::new(params.state),
-            timelock_manager: params.timelock_manager,
-            signer: params.signer,
-            swap_service: params.swap_service,
-            transfer_service: params.transfer_service,
+            identity_pubkey,
+            network,
+            operator_pool,
+            state: Mutex::new(state),
+            timelock_manager,
+            signer,
+            swap_service,
             leaf_optimization_lock: Mutex::new(()),
         }
     }
@@ -638,31 +633,11 @@ impl<S: Signer> TreeService<S> {
         }
 
         let target_amounts = target_amounts.map(|ta| ta.to_vec());
-        let transfer = self
+        let claimed_nodes = self
             .swap_service
             .swap_leaves(leaves, target_amounts)
             .await?;
-        let leaves = self.claim_and_insert_transfer(&transfer).await?;
-        Ok(leaves)
-    }
 
-    /// Claims a transfer and inserts the resulting leaves into the tree
-    pub async fn claim_and_insert_transfer(
-        &self,
-        transfer: &crate::services::Transfer,
-    ) -> Result<Vec<TreeNode>, TreeServiceError> {
-        use crate::services::ServiceError;
-
-        trace!("Claiming transfer with id: {}", transfer.id);
-        let claimed_nodes = self
-            .transfer_service
-            .claim_transfer(transfer, None)
-            .await
-            .map_err(|e: ServiceError| {
-                TreeServiceError::Generic(format!("Failed to claim transfer: {e:?}"))
-            })?;
-
-        trace!("Inserting claimed leaves after claiming transfer");
         let result_nodes = self.insert_leaves(claimed_nodes.clone()).await?;
 
         Ok(result_nodes)

@@ -23,10 +23,7 @@ use spark::{
     },
     signer::Signer,
     ssp::ServiceProvider,
-    tree::{
-        LeavesReservation, TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeServiceParams,
-        TreeState,
-    },
+    tree::{LeavesReservation, TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeState},
     utils::paging::PagingFilter,
 };
 use tokio::sync::{broadcast, watch};
@@ -125,16 +122,15 @@ impl<S: Signer> SparkWallet<S> {
             Arc::clone(&transfer_service),
         );
 
-        let tree_service = Arc::new(TreeService::new(TreeServiceParams {
-            identity_pubkey: identity_public_key,
-            network: config.network,
-            operator_pool: operator_pool.clone(),
-            state: tree_state,
-            timelock_manager: Arc::clone(&timelock_manager),
-            signer: Arc::clone(&signer),
+        let tree_service = Arc::new(TreeService::new(
+            identity_public_key,
+            config.network,
+            operator_pool.clone(),
+            tree_state,
+            Arc::clone(&timelock_manager),
+            Arc::clone(&signer),
             swap_service,
-            transfer_service: Arc::clone(&transfer_service),
-        }));
+        ));
 
         let event_manager = Arc::new(EventManager::new());
         let (cancel, cancellation_token) = watch::channel(());
@@ -624,13 +620,24 @@ async fn claim_pending_transfers<S: Signer>(
         .await?;
     trace!("There are {} pending transfers", transfers.len());
     for transfer in &transfers {
-        tree_service
-            .claim_and_insert_transfer(transfer)
-            .await
-            .map_err(|e| SparkWalletError::Generic(format!("Failed to claim transfer: {e:?}")))?;
+        claim_transfer(transfer, transfer_service, tree_service).await?;
     }
 
     Ok(transfers.into_iter().map(WalletTransfer::from).collect())
+}
+
+async fn claim_transfer<S: Signer>(
+    transfer: &Transfer,
+    transfer_service: &Arc<TransferService<S>>,
+    tree_service: &Arc<TreeService<S>>,
+) -> Result<Vec<TreeNode>, SparkWalletError> {
+    trace!("Claiming transfer with id: {}", transfer.id);
+    let claimed_nodes = transfer_service.claim_transfer(transfer, None).await?;
+
+    trace!("Inserting claimed leaves after claiming transfer");
+    let result_nodes = tree_service.insert_leaves(claimed_nodes.clone()).await?;
+
+    Ok(result_nodes)
 }
 
 struct BackgroundProcessor<S: Signer> {
@@ -762,10 +769,7 @@ impl<S: Signer> BackgroundProcessor<S> {
             return Ok(());
         }
 
-        self.tree_service
-            .claim_and_insert_transfer(&transfer)
-            .await
-            .map_err(|e| SparkWalletError::Generic(format!("Failed to claim transfer: {e:?}")))?;
+        claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
         self.event_manager
             .notify_listeners(WalletEvent::TransferClaimed(transfer.id));
         Ok(())

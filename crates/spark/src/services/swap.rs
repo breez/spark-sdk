@@ -5,6 +5,7 @@ use std::{
 
 use bitcoin::consensus::serialize;
 use prost_types::Timestamp;
+use tracing::trace;
 
 use crate::{
     Network,
@@ -49,13 +50,13 @@ impl<S: Signer> Swap<S> {
         }
     }
 
-    /// Swaps the specified leaves for new leaves with the target amounts. Returns a transfer object that should be claimed to obtain the new leaves.
+    /// Swaps the specified leaves for new leaves with the target amounts. Returns claimed leaves that should be inserted into the tree.
     /// If no target amounts are provided, the leaves will be swapped for an optimized set of leaves.
     pub async fn swap_leaves(
         &self,
         leaves: &[TreeNode],
         maybe_target_amounts: Option<Vec<u64>>,
-    ) -> Result<Transfer, ServiceError> {
+    ) -> Result<Vec<TreeNode>, ServiceError> {
         if leaves.is_empty() {
             return Err(ServiceError::Generic("no leaves to swap".to_string()));
         }
@@ -235,7 +236,18 @@ impl<S: Signer> Swap<S> {
             .into_iter()
             .nth(0)
             .ok_or(ServiceError::Generic("transfer not found".to_string()))?;
-        transfer.try_into()
+        let transfer = Transfer::try_from(transfer)?;
+
+        trace!("Claiming transfer with id: {}", transfer.id);
+        let claimed_nodes = self
+            .transfer_service
+            .claim_transfer(&transfer, None)
+            .await
+            .map_err(|e: ServiceError| {
+                ServiceError::Generic(format!("Failed to claim transfer: {e:?}"))
+            })?;
+
+        Ok(claimed_nodes)
     }
 }
 
