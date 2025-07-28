@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use bitcoin::secp256k1::PublicKey;
 use tokio::time::sleep;
@@ -7,7 +7,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     events::{EventPublisher, models::SparkEvent},
     operator::{
-        Operator,
+        OperatorPool,
         rpc::spark::{SubscribeToEventsRequest, subscribe_to_events_response::Event},
     },
     services::Transfer,
@@ -17,7 +17,7 @@ use crate::{
 
 pub async fn subscribe_server_events<S>(
     identity_public_key: PublicKey,
-    operator: &Operator<S>,
+    operator_pool: Arc<OperatorPool<S>>,
     publisher: &EventPublisher,
     reconnect_interval: Duration,
     cancellation_token: &mut tokio::sync::watch::Receiver<()>,
@@ -37,7 +37,8 @@ pub async fn subscribe_server_events<S>(
             }
         }
 
-        let mut stream = match operator
+        let mut stream = match operator_pool
+            .get_coordinator()
             .client
             .subscribe_to_events(SubscribeToEventsRequest {
                 identity_public_key: identity_public_key.serialize().to_vec(),

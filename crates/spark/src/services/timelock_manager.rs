@@ -28,7 +28,7 @@ use crate::{
 };
 
 pub struct TimelockManager<S> {
-    signer: S,
+    signer: Arc<S>,
     network: Network,
     operator_pool: Arc<OperatorPool<S>>,
     transfer_service: Arc<TransferService<S>>,
@@ -36,7 +36,7 @@ pub struct TimelockManager<S> {
 
 impl<S: Signer> TimelockManager<S> {
     pub fn new(
-        signer: S,
+        signer: Arc<S>,
         network: Network,
         operator_pool: Arc<OperatorPool<S>>,
         transfer_service: Arc<TransferService<S>>,

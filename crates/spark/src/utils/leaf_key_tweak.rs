@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{
     services::LeafKeyTweak,
     signer::{PrivateKeySource, Signer, SignerError},
@@ -5,7 +7,7 @@ use crate::{
 };
 
 pub fn prepare_leaf_key_tweaks_to_send<S: Signer>(
-    signer: &S,
+    signer: &Arc<S>,
     leaves: Vec<TreeNode>,
 ) -> Result<Vec<LeafKeyTweak>, SignerError> {
     // Build leaf key tweaks with new signing keys that we will sent to the receiver

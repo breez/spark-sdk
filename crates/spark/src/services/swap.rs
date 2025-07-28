@@ -5,6 +5,7 @@ use std::{
 
 use bitcoin::consensus::serialize;
 use prost_types::Timestamp;
+use tracing::trace;
 
 use crate::{
     Network,
@@ -27,19 +28,16 @@ const SWAP_EXPIRY_DURATION: Duration = Duration::from_secs(2 * 60);
 pub struct Swap<S> {
     network: Network,
     operator_pool: Arc<OperatorPool<S>>,
-    signer: S,
+    signer: Arc<S>,
     ssp_client: Arc<ServiceProvider<S>>,
     transfer_service: Arc<TransferService<S>>,
 }
 
-impl<S> Swap<S>
-where
-    S: Signer,
-{
+impl<S: Signer> Swap<S> {
     pub fn new(
         network: Network,
         operator_pool: Arc<OperatorPool<S>>,
-        signer: S,
+        signer: Arc<S>,
         ssp_client: Arc<ServiceProvider<S>>,
         transfer_service: Arc<TransferService<S>>,
     ) -> Self {
@@ -52,23 +50,41 @@ where
         }
     }
 
-    /// Swaps the specified leaves for new leaves with the target amounts. Returns a transfer object that should be claimed to obtain the new leaves.
+    /// Swaps the specified leaves for new leaves with the target amounts. Returns claimed leaves that should be inserted into the tree.
+    /// If no target amounts are provided, the leaves will be swapped for an optimized set of leaves.
     pub async fn swap_leaves(
         &self,
         leaves: &[TreeNode],
-        target_amounts: Vec<u64>,
-    ) -> Result<Transfer, ServiceError> {
-        if target_amounts.is_empty() {
-            return Err(ServiceError::InvalidAmount);
+        maybe_target_amounts: Option<Vec<u64>>,
+    ) -> Result<Vec<TreeNode>, ServiceError> {
+        if leaves.is_empty() {
+            return Err(ServiceError::Generic("no leaves to swap".to_string()));
         }
 
-        let target_sum: u64 = target_amounts.iter().sum();
+        if let Some(target_amounts) = &maybe_target_amounts {
+            if target_amounts.is_empty() {
+                return Err(ServiceError::InvalidAmount);
+            }
+            if target_amounts.contains(&0) {
+                return Err(ServiceError::InvalidAmount);
+            }
+        }
+
         let leaf_sum: u64 = leaves.iter().map(|leaf| leaf.value).sum();
+
+        // If no target amounts are provided, the target sum is the sum of the leaf values.
+        let target_sum: u64 = maybe_target_amounts
+            .as_ref()
+            .map(|target_amounts| target_amounts.iter().sum())
+            .unwrap_or(leaf_sum);
+
         if leaf_sum < target_sum {
             return Err(ServiceError::InsufficientFunds);
         }
 
         // The target amounts are more than or equal to the leaf values. Continue with split.
+
+        // TODO: split swap into batches (js sdk uses chunks of 100 leaves)
 
         // Build leaf key tweaks with new signing keys that will be swapped to the ssp.
         let leaf_key_tweaks = leaves
@@ -175,7 +191,7 @@ where
                 fee_sats: 0, // TODO: Request fee estimate from SSP
                 user_leaves,
                 idempotency_key: uuid::Uuid::now_v7().to_string(), // TODO: Generate a proper idempotency key
-                target_amount_sats_list: Some(target_amounts),
+                target_amount_sats_list: maybe_target_amounts,
             })
             .await?;
 
@@ -220,7 +236,18 @@ where
             .into_iter()
             .nth(0)
             .ok_or(ServiceError::Generic("transfer not found".to_string()))?;
-        transfer.try_into()
+        let transfer = Transfer::try_from(transfer)?;
+
+        trace!("Claiming transfer with id: {}", transfer.id);
+        let claimed_nodes = self
+            .transfer_service
+            .claim_transfer(&transfer, None)
+            .await
+            .map_err(|e: ServiceError| {
+                ServiceError::Generic(format!("Failed to claim transfer: {e:?}"))
+            })?;
+
+        Ok(claimed_nodes)
     }
 }
 
