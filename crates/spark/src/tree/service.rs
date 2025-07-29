@@ -133,6 +133,25 @@ impl<S: Signer> TreeService<S> {
         Ok(self.state.lock().await.get_leaves())
     }
 
+    async fn check_timelock_nodes<F>(
+        &self,
+        nodes: Vec<TreeNode>,
+        error_fn: impl Fn(ServiceError) -> F,
+    ) -> Result<Vec<TreeNode>, TreeServiceError>
+    where
+        F: Future<Output = ()>,
+    {
+        match self.timelock_manager.check_timelock_nodes(nodes).await {
+            Ok(nodes) => Ok(nodes),
+            Err(e) => {
+                error_fn(e).await;
+                Err(TreeServiceError::Generic(
+                    "Failed to check time lock".to_string(),
+                ))
+            }
+        }
+    }
+
     /// Refreshes the tree state by fetching the latest leaves from the server.
     ///
     /// This method clears the current local cache of leaves and fetches all available
@@ -228,19 +247,15 @@ impl<S: Signer> TreeService<S> {
             .filter(|leaf| !leaves_to_ignore.contains(&leaf.id))
             .collect::<Vec<_>>();
 
-        let refreshed_leaves = match self.timelock_manager.check_timelock_nodes(new_leaves).await {
-            Ok(nodes) => Ok(nodes),
-            Err(e) => {
+        let refreshed_leaves = self
+            .check_timelock_nodes(new_leaves, async |e| {
                 // If this is a partial check timelock error, the extend node timelock failed
                 // but we can still update the leaves that were refreshed
                 if let ServiceError::PartialCheckTimelockError(ref nodes) = e {
                     self.state.lock().await.set_leaves(nodes);
                 }
-                Err(TreeServiceError::Generic(format!(
-                    "Failed to check time lock: {e:?}"
-                )))
-            }
-        }?;
+            })
+            .await?;
 
         {
             let mut state = self.state.lock().await;
@@ -337,13 +352,8 @@ impl<S: Signer> TreeService<S> {
             LeavesReservation::new(selected, reservation_id)
         };
 
-        let new_leaves = match self
-            .timelock_manager
-            .check_timelock_nodes(reservation.leaves)
-            .await
-        {
-            Ok(nodes) => Ok(nodes),
-            Err(e) => {
+        let new_leaves = self
+            .check_timelock_nodes(reservation.leaves, async |e| {
                 let mut state = self.state.lock().await;
                 // Cancel the reservation if the timelock check fails
                 state.cancel_reservation(reservation.id.clone());
@@ -352,11 +362,8 @@ impl<S: Signer> TreeService<S> {
                 if let ServiceError::PartialCheckTimelockError(ref nodes) = e {
                     state.add_leaves(nodes);
                 }
-                Err(TreeServiceError::Generic(format!(
-                    "Failed to check time lock: {e:?}"
-                )))
-            }
-        }?;
+            })
+            .await?;
 
         Ok(Some(LeavesReservation::new(new_leaves, reservation.id)))
     }
@@ -376,19 +383,15 @@ impl<S: Signer> TreeService<S> {
         leaves: Vec<TreeNode>,
         optimize: bool,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
-        let result_nodes = match self.timelock_manager.check_timelock_nodes(leaves).await {
-            Ok(nodes) => Ok(nodes),
-            Err(e) => {
+        let result_nodes = self
+            .check_timelock_nodes(leaves, async |e| {
                 // If this is a partial check timelock error, the extend node timelock failed
                 // but we can still update the leaves that were refreshed
                 if let ServiceError::PartialCheckTimelockError(ref nodes) = e {
                     self.state.lock().await.add_leaves(nodes);
                 }
-                Err(TreeServiceError::Generic(format!(
-                    "Failed to check time lock: {e:?}"
-                )))
-            }
-        }?;
+            })
+            .await?;
 
         {
             let mut state = self.state.lock().await;
