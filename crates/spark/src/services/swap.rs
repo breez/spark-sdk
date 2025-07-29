@@ -247,6 +247,8 @@ impl<S: Signer> Swap<S> {
                 ServiceError::Generic(format!("Failed to claim transfer: {e:?}"))
             })?;
 
+        // TODO: in case of error the js sdk cancels initiated transfers
+
         Ok(claimed_nodes)
     }
 }

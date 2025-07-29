@@ -4,8 +4,10 @@ use bitcoin::{Transaction, secp256k1::PublicKey};
 use serde::{Deserialize, Serialize};
 use spark::{
     Network,
+    address::SparkAddress,
     services::{
-        LightningSendPayment, Transfer, TransferId, TransferLeaf, TransferStatus, TransferType,
+        LightningSendPayment, TokenMetadata, Transfer, TransferId, TransferLeaf, TransferStatus,
+        TransferType,
     },
     ssp::{SspTransfer, SspUserRequest},
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
@@ -144,4 +146,16 @@ impl From<TreeNode> for WalletLeaf {
 pub enum TransferDirection {
     Incoming,
     Outgoing,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TokenBalance {
+    pub balance: u128,
+    pub token_metadata: TokenMetadata,
+}
+
+pub struct TransferTokenOutput {
+    pub token_id: String,
+    pub amount: u128,
+    pub receiver_address: SparkAddress,
 }

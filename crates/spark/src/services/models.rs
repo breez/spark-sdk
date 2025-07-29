@@ -508,3 +508,126 @@ impl From<ExitSpeed> for crate::ssp::ExitSpeed {
         }
     }
 }
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TokenMetadata {
+    identifier: String,
+    issuer_public_key: PublicKey,
+    name: String,
+    ticker: String,
+    decimals: u8,
+    max_supply: u128,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TokenOutput {
+    pub id: String,
+    pub owner_public_key: PublicKey,
+    pub revocation_commitment: Vec<u8>,
+    pub withdraw_bond_sats: u64,
+    pub withdraw_relative_block_locktime: u64,
+    pub token_public_key: PublicKey,
+    pub token_identifier: Vec<u8>,
+    pub token_amount: u128,
+}
+
+impl TryFrom<operator_rpc::spark::TokenOutput> for TokenOutput {
+    type Error = ServiceError;
+
+    fn try_from(output: operator_rpc::spark::TokenOutput) -> Result<Self, Self::Error> {
+        let id = output
+            .id
+            .ok_or_else(|| ServiceError::Generic("Missing token output id".to_string()))?;
+        let owner_public_key = PublicKey::from_slice(&output.owner_public_key)
+            .map_err(|_| ServiceError::Generic("Invalid owner public key".to_string()))?;
+        let revocation_commitment = output
+            .revocation_commitment
+            .ok_or_else(|| ServiceError::Generic("Missing revocation commitment".to_string()))?;
+        let withdraw_bond_sats = output
+            .withdraw_bond_sats
+            .ok_or_else(|| ServiceError::Generic("Missing withdraw bond sats".to_string()))?;
+        let withdraw_relative_block_locktime =
+            output.withdraw_relative_block_locktime.ok_or_else(|| {
+                ServiceError::Generic("Missing withdraw relative block locktime".to_string())
+            })?;
+        let token_public_key = PublicKey::from_slice(
+            &output
+                .token_public_key
+                .ok_or_else(|| ServiceError::Generic("Missing token public key".to_string()))?,
+        )
+        .map_err(|_| ServiceError::Generic("Invalid token public key".to_string()))?;
+        let token_identifier = output
+            .token_identifier
+            .ok_or_else(|| ServiceError::Generic("Missing token identifier".to_string()))?;
+        let token_amount = u128::from_be_bytes(
+            output
+                .token_amount
+                .try_into()
+                .map_err(|_| ServiceError::Generic("Invalid token amount".to_string()))?,
+        );
+        Ok(TokenOutput {
+            id,
+            owner_public_key,
+            revocation_commitment,
+            withdraw_bond_sats,
+            withdraw_relative_block_locktime,
+            token_public_key,
+            token_identifier,
+            token_amount,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TokenTransaction {
+    pub inputs: Vec<TokenInput>,
+    pub outputs: Vec<TokenOutput>,
+    pub status: TokenTransactionStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum TokenInput {
+    Mint(TokenMintInput),
+    Transfer(TokenTransferInput),
+    Create(TokenCreateInput),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TokenMintInput {
+    pub issuer_public_key: PublicKey,
+    pub token_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TokenTransferInput {
+    pub outputs_to_spend: Vec<TokenOutputToSpend>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TokenOutputToSpend {
+    prev_token_tx_hash: String,
+    prev_token_tx_vout: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TokenCreateInput {
+    issuer_public_key: PublicKey,
+    token_name: String,
+    token_ticker: String,
+    token_decimals: u8,
+    token_max_supply: u128,
+    is_freezable: bool,
+    creation_entity_public_key: Option<PublicKey>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum TokenTransactionStatus {
+    Started,
+    Signed,
+    Revealed,
+    Finalized,
+    StartedCancelled,
+    SignedCancelled,
+    Unknown,
+    Unrecognized,
+}

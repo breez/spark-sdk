@@ -5,6 +5,7 @@ mod lightning;
 mod models;
 mod swap;
 mod timelock_manager;
+mod tokens;
 mod transfer;
 
 pub use coop_exit::*;
@@ -16,5 +17,5 @@ pub use lightning::{
 pub use models::*;
 pub use swap::*;
 pub use timelock_manager::*;
-
+pub use tokens::*;
 pub use transfer::*;
