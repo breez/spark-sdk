@@ -47,11 +47,28 @@ pub struct LightningSendPayment {
     pub updated_at: i64,
     pub network: Network,
     pub encoded_invoice: String,
-    pub fee_msat: u64,
+    pub fee_sat: u64,
     pub idempotency_key: String,
-    pub status: LightningSendRequestStatus,
+    pub status: LightningSendStatus,
     pub transfer_id: Option<TransferId>,
     pub payment_preimage: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum LightningSendStatus {
+    Pending,
+    Completed,
+    Failed,
+}
+
+impl From<LightningSendRequestStatus> for LightningSendStatus {
+    fn from(value: LightningSendRequestStatus) -> Self {
+        match value {
+            LightningSendRequestStatus::LightningPaymentFailed => LightningSendStatus::Failed,
+            LightningSendRequestStatus::LightningPaymentSucceeded => LightningSendStatus::Completed,
+            _ => LightningSendStatus::Pending,
+        }
+    }
 }
 
 impl TryFrom<crate::ssp::LightningSendRequest> for LightningSendPayment {
@@ -73,12 +90,12 @@ impl TryFrom<crate::ssp::LightningSendRequest> for LightningSendPayment {
             updated_at: value.updated_at.timestamp(),
             network: value.network.into(),
             encoded_invoice: value.encoded_invoice,
-            fee_msat: value
+            fee_sat: value
                 .fee
                 .as_sats()
                 .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))?,
             idempotency_key: value.idempotency_key,
-            status: value.status,
+            status: value.status.into(),
             transfer_id,
             payment_preimage: value.lightning_send_payment_preimage,
         })

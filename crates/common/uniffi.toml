@@ -1,0 +1,24 @@
+# https://mozilla.github.io/uniffi-rs/swift/configuration.html
+[bindings.swift]
+cdylib_name = "breez_sdk_common"
+
+# https://mozilla.github.io/uniffi-rs/kotlin/configuration.html
+[bindings.kotlin]
+package_name = "breez_sdk"
+cdylib_name = "breez_sdk_common"
+
+# https://mozilla.github.io/uniffi-rs/python/configuration.html
+[bindings.python]
+cdylib_name = "breez_sdk_common"
+
+# https://github.com/NordSecurity/uniffi-bindgen-cs/blob/main/docs/CONFIGURATION.md
+[bindings.csharp]
+package_name = "breez_sdk"
+cdylib_name = "breez_sdk_common"
+namespace = "Breez.Sdk"
+access_modifier = "public"
+
+# https://github.com/NordSecurity/uniffi-bindgen-go/blob/main/docs/CONFIGURATION.md
+[bindings.go]
+package_name = "breez_sdk"
+cdylib_name = "breez_sdk_common"

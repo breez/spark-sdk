@@ -1,6 +1,6 @@
 [package]
 name = "spark"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 
 [dependencies]
@@ -24,7 +24,7 @@ serde_with.workspace = true
 spark-macros.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
-tonic.workspace = true
+tonic.workspace=true
 tracing.workspace = true
 uuid.workspace = true
 lightning-invoice.workspace = true
