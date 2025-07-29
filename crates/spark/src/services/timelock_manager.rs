@@ -1,7 +1,7 @@
 use std::{collections::HashMap, str::FromStr as _, sync::Arc};
 
 use bitcoin::{OutPoint, hashes::Hash, secp256k1::PublicKey};
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::{
     Network,
@@ -55,9 +55,13 @@ impl<S: Signer> TimelockManager<S> {
     ) -> Result<Vec<TreeNode>, ServiceError> {
         trace!("Checking timelock nodes: {:?}", nodes);
         let nodes = self.check_refresh_timelock_nodes(nodes).await?;
-        // TODO: update local tree here, otherwise a failure to refresh will not be reflected in the tree.
-        let nodes = self.check_extend_timelock_nodes(nodes).await?;
-        Ok(nodes)
+        match self.check_extend_timelock_nodes(nodes.clone()).await {
+            Ok(nodes) => Ok(nodes),
+            Err(e) => {
+                warn!("Error checking extend timelock nodes: {:?}", e);
+                Err(ServiceError::PartialCheckTimelockError(nodes))
+            }
+        }
     }
 
     /// Checks and refreshes timelock nodes if needed
