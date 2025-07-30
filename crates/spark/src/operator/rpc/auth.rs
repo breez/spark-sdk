@@ -7,6 +7,7 @@ use super::spark_authn::{
     GetChallengeRequest, VerifyChallengeRequest,
     spark_authn_service_client::SparkAuthnServiceClient,
 };
+use crate::operator::rpc::spark_token::spark_token_service_client::SparkTokenServiceClient;
 use crate::signer::Signer;
 use prost::Message;
 use tokio::sync::Mutex;
@@ -48,6 +49,16 @@ where
     ) -> Result<SparkServiceClient<InterceptedService<Channel, OperationSession>>> {
         let session = self.get_authenticated_session().await?;
         Ok(SparkServiceClient::with_interceptor(
+            self.channel.clone(),
+            session,
+        ))
+    }
+
+    pub async fn spark_token_service_client(
+        &self,
+    ) -> Result<SparkTokenServiceClient<InterceptedService<Channel, OperationSession>>> {
+        let session = self.get_authenticated_session().await?;
+        Ok(SparkTokenServiceClient::with_interceptor(
             self.channel.clone(),
             session,
         ))

@@ -483,6 +483,7 @@ impl<S: Signer> DepositService<S> {
                     raw_tx: serialize(&refund_tx),
                     signing_nonce_commitment: Some(refund_nonce_commitment.commitments.try_into()?),
                 }),
+                ..Default::default()
             })
             .await?;
 
@@ -601,6 +602,7 @@ impl<S: Signer> DepositService<S> {
                         .serialize()
                         .map_err(|_| ServiceError::InvalidSignatureShare)?
                         .to_vec(),
+                    ..Default::default()
                 }],
             })
             .await?;
@@ -698,6 +700,7 @@ impl<S: Signer> DepositService<S> {
                     network: self.network.to_proto_network() as i32,
                     offset: paging.offset as i64,
                     limit: paging.limit as i64,
+                    deposit_address: None,
                 },
             )
             .await?;

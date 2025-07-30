@@ -444,11 +444,12 @@ impl<S: Signer> LightningService<S> {
             .iter()
             .map(|l| l.node.id.clone().to_string())
             .collect();
+        let count = node_ids.len() as u32;
         let spark_commitments = self
             .operator_pool
             .get_coordinator()
             .client
-            .get_signing_commitments(GetSigningCommitmentsRequest { node_ids })
+            .get_signing_commitments(GetSigningCommitmentsRequest { node_ids, count })
             .await?;
 
         // get user signed refunds
@@ -498,6 +499,7 @@ impl<S: Signer> LightningService<S> {
                     .into_iter()
                     .map(|l| l.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
+                ..Default::default()
             }),
             receiver_identity_public_key: req.receiver_pubkey.serialize().to_vec(),
             fee_sats: req.fee_sats,

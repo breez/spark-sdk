@@ -4,6 +4,7 @@ use std::sync::Arc;
 use super::auth::OperatorAuth;
 use super::error::Result;
 use super::spark::*;
+use super::spark_token;
 use crate::operator::rpc::spark::query_nodes_request::Source;
 use crate::signer::Signer;
 use tonic::transport::Channel;
@@ -449,10 +450,13 @@ where
         Ok(())
     }
 
-    pub async fn freeze_tokens(&self, req: FreezeTokensRequest) -> Result<FreezeTokensResponse> {
+    pub async fn freeze_tokens(
+        &self,
+        req: spark_token::FreezeTokensRequest,
+    ) -> Result<spark_token::FreezeTokensResponse> {
         Ok(self
             .auth
-            .spark_service_client()
+            .spark_token_service_client()
             .await?
             .freeze_tokens(req)
             .await?
@@ -461,24 +465,37 @@ where
 
     pub async fn query_token_outputs(
         &self,
-        req: QueryTokenOutputsRequest,
-    ) -> Result<QueryTokenOutputsResponse> {
+        req: spark_token::QueryTokenOutputsRequest,
+    ) -> Result<spark_token::QueryTokenOutputsResponse> {
         Ok(self
             .auth
-            .spark_service_client()
+            .spark_token_service_client()
             .await?
             .query_token_outputs(req)
             .await?
             .into_inner())
     }
 
-    pub async fn query_token_transactions(
+    pub async fn query_token_metadata(
         &self,
-        req: QueryTokenTransactionsRequest,
-    ) -> Result<QueryTokenTransactionsResponse> {
+        req: spark_token::QueryTokenMetadataRequest,
+    ) -> Result<spark_token::QueryTokenMetadataResponse> {
         Ok(self
             .auth
-            .spark_service_client()
+            .spark_token_service_client()
+            .await?
+            .query_token_metadata(req)
+            .await?
+            .into_inner())
+    }
+
+    pub async fn query_token_transactions(
+        &self,
+        req: spark_token::QueryTokenTransactionsRequest,
+    ) -> Result<spark_token::QueryTokenTransactionsResponse> {
+        Ok(self
+            .auth
+            .spark_token_service_client()
             .await?
             .query_token_transactions(req)
             .await?

@@ -134,7 +134,11 @@ impl<S: Signer> SparkWallet<S> {
             swap_service,
         ));
 
-        let token_service = Arc::new(TokenService::new(Arc::clone(&signer)));
+        let token_service = Arc::new(TokenService::new(
+            Arc::clone(&signer),
+            operator_pool.clone(),
+            config.network,
+        ));
 
         let event_manager = Arc::new(EventManager::new());
         let (cancel, cancellation_token) = watch::channel(());
@@ -641,8 +645,10 @@ impl<S: Signer> SparkWallet<S> {
     /// Returns the balances of all tokens in the wallet.
     ///
     /// Balances are returned in a map keyed by the token identifier.
-    pub fn get_token_balances(&self) -> Result<HashMap<String, TokenBalance>, SparkWalletError> {
-        let tokens_outputs = self.token_service.get_tokens_outputs();
+    pub async fn get_token_balances(
+        &self,
+    ) -> Result<HashMap<String, TokenBalance>, SparkWalletError> {
+        let tokens_outputs = self.token_service.get_tokens_outputs().await;
 
         let balances = tokens_outputs
             .iter()

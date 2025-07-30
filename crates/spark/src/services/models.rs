@@ -511,12 +511,53 @@ impl From<ExitSpeed> for crate::ssp::ExitSpeed {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TokenMetadata {
-    identifier: String,
+    identifier: Vec<u8>,
     issuer_public_key: PublicKey,
     name: String,
     ticker: String,
-    decimals: u8,
+    decimals: u32,
     max_supply: u128,
+    is_freezable: bool,
+    creation_entity_public_key: Option<PublicKey>,
+}
+
+impl TryFrom<operator_rpc::spark_token::TokenMetadata> for TokenMetadata {
+    type Error = ServiceError;
+
+    fn try_from(metadata: operator_rpc::spark_token::TokenMetadata) -> Result<Self, Self::Error> {
+        let identifier = metadata.token_identifier;
+        let issuer_public_key = PublicKey::from_slice(&metadata.issuer_public_key)
+            .map_err(|_| ServiceError::Generic("Invalid issuer public key".to_string()))?;
+        let name = metadata.token_name;
+        let ticker = metadata.token_ticker;
+        let decimals = metadata.decimals;
+        let max_supply = u128::from_be_bytes(
+            metadata
+                .max_supply
+                .try_into()
+                .map_err(|_| ServiceError::Generic("Invalid max supply".to_string()))?,
+        );
+        let is_freezable = metadata.is_freezable;
+        let creation_entity_public_key = metadata
+            .creation_entity_public_key
+            .map(|pk| {
+                PublicKey::from_slice(&pk).map_err(|_| {
+                    ServiceError::Generic("Invalid creation entity public key".to_string())
+                })
+            })
+            .transpose()?;
+
+        Ok(TokenMetadata {
+            identifier,
+            issuer_public_key,
+            name,
+            ticker,
+            decimals,
+            max_supply,
+            is_freezable,
+            creation_entity_public_key,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -531,10 +572,10 @@ pub struct TokenOutput {
     pub token_amount: u128,
 }
 
-impl TryFrom<operator_rpc::spark::TokenOutput> for TokenOutput {
+impl TryFrom<operator_rpc::spark_token::TokenOutput> for TokenOutput {
     type Error = ServiceError;
 
-    fn try_from(output: operator_rpc::spark::TokenOutput) -> Result<Self, Self::Error> {
+    fn try_from(output: operator_rpc::spark_token::TokenOutput) -> Result<Self, Self::Error> {
         let id = output
             .id
             .ok_or_else(|| ServiceError::Generic("Missing token output id".to_string()))?;

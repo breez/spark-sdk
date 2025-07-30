@@ -65,14 +65,23 @@ where
     match command {
         Command::Balance => {
             let balance = wallet.get_balance().await?;
-            let token_balances = wallet.get_token_balances()?;
             println!("Balance: {balance} sats");
+            let token_balances = wallet.get_token_balances().await?;
             if !token_balances.is_empty() {
                 println!("Token balances:");
                 for (token_id, token_balance) in token_balances {
+                    // Remove raw identifier field (too verbose)
+                    let mut value = serde_json::to_value(&token_balance)?;
+                    if let Some(metadata) = value
+                        .get_mut("token_metadata")
+                        .and_then(|v| v.as_object_mut())
+                    {
+                        metadata.remove("identifier");
+                    }
+
                     println!(
-                        "   Token: {token_id}\n{}",
-                        serde_json::to_string_pretty(&token_balance)?
+                        "Token ID: {token_id}\n{}",
+                        serde_json::to_string_pretty(&value)?
                     );
                 }
             } else {

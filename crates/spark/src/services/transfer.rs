@@ -279,6 +279,7 @@ impl<S: Signer> TransferService<S> {
                 refund_signature: refund_signature
                     .map(|s| s.serialize_compact().to_vec())
                     .unwrap_or_default(),
+                ..Default::default()
             };
 
             leaf_tweaks_map.insert(operator.identifier, send_leaf_key_tweak);
@@ -303,6 +304,7 @@ impl<S: Signer> TransferService<S> {
                     .iter()
                     .map(|l| l.node.id.to_string())
                     .collect(),
+                count: leaf_key_tweaks.len() as u32,
             })
             .await?
             .signing_commitments
@@ -331,6 +333,7 @@ impl<S: Signer> TransferService<S> {
                 .map(|(k, v)| (hex::encode(k.serialize()), v))
                 .collect(),
             user_signature: Vec::new(),
+            ..Default::default()
         };
 
         let signed_transfer_package =
