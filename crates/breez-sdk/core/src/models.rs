@@ -5,6 +5,7 @@ use spark_wallet::{
     LightningSendPayment, LightningSendStatus, Network as SparkNetwork, TransferDirection,
     TransferStatus, WalletTransfer,
 };
+use std::time::UNIX_EPOCH;
 
 /// The type of payment
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -88,7 +89,6 @@ impl From<WalletTransfer> for Payment {
         let payment_type = match transfer.direction {
             TransferDirection::Incoming => PaymentType::Receive,
             TransferDirection::Outgoing => PaymentType::Send,
-            TransferDirection::Unknown => PaymentType::Send,
         };
         let status = match transfer.status {
             TransferStatus::Completed => PaymentStatus::Completed,
@@ -102,7 +102,10 @@ impl From<WalletTransfer> for Payment {
             status,
             amount: transfer.total_value_sat,
             fees: 0,
-            timestamp: 0,
+            timestamp: match transfer.created_at.map(|t| t.duration_since(UNIX_EPOCH)) {
+                Some(Ok(duration)) => duration.as_secs(),
+                _ => 0,
+            },
         }
     }
 }
