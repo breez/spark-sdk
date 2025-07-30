@@ -70,18 +70,9 @@ where
             if !token_balances.is_empty() {
                 println!("Token balances:");
                 for (token_id, token_balance) in token_balances {
-                    // Remove raw identifier field (too verbose)
-                    let mut value = serde_json::to_value(&token_balance)?;
-                    if let Some(metadata) = value
-                        .get_mut("token_metadata")
-                        .and_then(|v| v.as_object_mut())
-                    {
-                        metadata.remove("identifier");
-                    }
-
                     println!(
                         "Token ID: {token_id}\n{}",
-                        serde_json::to_string_pretty(&value)?
+                        serde_json::to_string_pretty(&token_balance)?
                     );
                 }
             } else {

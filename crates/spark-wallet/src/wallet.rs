@@ -18,8 +18,9 @@ use spark::{
     operator::{OperatorPool, rpc::ConnectionManager},
     services::{
         CoopExitFeeQuote, CoopExitService, DepositService, ExitSpeed, LightningReceivePayment,
-        LightningSendPayment, LightningService, StaticDepositQuote, Swap, TimelockManager,
-        TokenService, TokenTransaction, Transfer, TransferId, TransferService,
+        LightningSendPayment, LightningService, QueryTokenTransactionsFilter, StaticDepositQuote,
+        Swap, TimelockManager, TokenService, TokenTransaction, Transfer, TransferId,
+        TransferService,
     },
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer},
@@ -30,7 +31,7 @@ use tokio::sync::{broadcast, watch};
 use tracing::{debug, error, info, trace};
 
 use crate::{
-    TokenBalance, TransferTokenOutput, WalletEvent,
+    ListTokenTransactionsRequest, TokenBalance, TransferTokenOutput, WalletEvent,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
@@ -687,16 +688,23 @@ impl<S: Signer> SparkWallet<S> {
         todo!()
     }
 
-    pub async fn query_token_transactions(
+    pub async fn list_token_transactions(
         &self,
-        owner_public_keys: Option<Vec<PublicKey>>,
-        issuer_public_keys: Option<Vec<PublicKey>>,
-        token_transaction_hashes: Option<Vec<String>>,
-        token_ids: Option<Vec<String>>,
-        output_ids: Option<Vec<String>>,
-        paging: Option<PagingFilter>,
+        request: ListTokenTransactionsRequest,
     ) -> Result<Vec<TokenTransaction>, SparkWalletError> {
-        todo!()
+        self.token_service
+            .query_token_transactions(
+                QueryTokenTransactionsFilter {
+                    owner_public_keys: request.owner_public_keys,
+                    issuer_public_keys: request.issuer_public_keys,
+                    token_transaction_hashes: request.token_transaction_hashes,
+                    token_ids: request.token_ids,
+                    output_ids: request.output_ids,
+                },
+                request.paging,
+            )
+            .await
+            .map_err(Into::into)
     }
 
     pub fn get_token_l1_address(&self) -> Result<String, SparkWalletError> {

@@ -1,7 +1,9 @@
 use std::str::FromStr;
 
 use clap::Subcommand;
-use spark_wallet::{PagingFilter, SparkAddress, SparkWallet, TransferTokenOutput};
+use spark_wallet::{
+    ListTokenTransactionsRequest, PagingFilter, SparkAddress, SparkWallet, TransferTokenOutput,
+};
 
 use crate::config::Config;
 
@@ -125,7 +127,10 @@ where
                 None
             };
             let transactions = wallet
-                .query_token_transactions(None, None, None, None, None, paging)
+                .list_token_transactions(ListTokenTransactionsRequest {
+                    paging,
+                    ..Default::default()
+                })
                 .await?;
 
             println!(

@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
+use crate::services::bech32m_encode_token_id;
 use crate::signer::PrivateKeySource;
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
 use crate::{ssp::BitcoinNetwork, utils::refund::SignedTx};
@@ -511,21 +512,23 @@ impl From<ExitSpeed> for crate::ssp::ExitSpeed {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TokenMetadata {
-    identifier: Vec<u8>,
-    issuer_public_key: PublicKey,
-    name: String,
-    ticker: String,
-    decimals: u32,
-    max_supply: u128,
-    is_freezable: bool,
-    creation_entity_public_key: Option<PublicKey>,
+    pub identifier: String,
+    pub issuer_public_key: PublicKey,
+    pub name: String,
+    pub ticker: String,
+    pub decimals: u32,
+    pub max_supply: u128,
+    pub is_freezable: bool,
+    pub creation_entity_public_key: Option<PublicKey>,
 }
 
-impl TryFrom<operator_rpc::spark_token::TokenMetadata> for TokenMetadata {
+impl TryFrom<(operator_rpc::spark_token::TokenMetadata, Network)> for TokenMetadata {
     type Error = ServiceError;
 
-    fn try_from(metadata: operator_rpc::spark_token::TokenMetadata) -> Result<Self, Self::Error> {
-        let identifier = metadata.token_identifier;
+    fn try_from(
+        (metadata, network): (operator_rpc::spark_token::TokenMetadata, Network),
+    ) -> Result<Self, Self::Error> {
+        let identifier = bech32m_encode_token_id(&metadata.token_identifier, network)?;
         let issuer_public_key = PublicKey::from_slice(&metadata.issuer_public_key)
             .map_err(|_| ServiceError::Generic("Invalid issuer public key".to_string()))?;
         let name = metadata.token_name;
@@ -564,26 +567,29 @@ impl TryFrom<operator_rpc::spark_token::TokenMetadata> for TokenMetadata {
 pub struct TokenOutput {
     pub id: String,
     pub owner_public_key: PublicKey,
-    pub revocation_commitment: Vec<u8>,
+    pub revocation_commitment: String,
     pub withdraw_bond_sats: u64,
     pub withdraw_relative_block_locktime: u64,
-    pub token_public_key: PublicKey,
-    pub token_identifier: Vec<u8>,
+    pub token_public_key: Option<PublicKey>,
+    pub token_identifier: String,
     pub token_amount: u128,
 }
 
-impl TryFrom<operator_rpc::spark_token::TokenOutput> for TokenOutput {
+impl TryFrom<(operator_rpc::spark_token::TokenOutput, Network)> for TokenOutput {
     type Error = ServiceError;
 
-    fn try_from(output: operator_rpc::spark_token::TokenOutput) -> Result<Self, Self::Error> {
+    fn try_from(
+        (output, network): (operator_rpc::spark_token::TokenOutput, Network),
+    ) -> Result<Self, Self::Error> {
         let id = output
             .id
             .ok_or_else(|| ServiceError::Generic("Missing token output id".to_string()))?;
         let owner_public_key = PublicKey::from_slice(&output.owner_public_key)
             .map_err(|_| ServiceError::Generic("Invalid owner public key".to_string()))?;
-        let revocation_commitment = output
-            .revocation_commitment
-            .ok_or_else(|| ServiceError::Generic("Missing revocation commitment".to_string()))?;
+        let revocation_commitment =
+            hex::encode(output.revocation_commitment.ok_or_else(|| {
+                ServiceError::Generic("Missing revocation commitment".to_string())
+            })?);
         let withdraw_bond_sats = output
             .withdraw_bond_sats
             .ok_or_else(|| ServiceError::Generic("Missing withdraw bond sats".to_string()))?;
@@ -591,15 +597,19 @@ impl TryFrom<operator_rpc::spark_token::TokenOutput> for TokenOutput {
             output.withdraw_relative_block_locktime.ok_or_else(|| {
                 ServiceError::Generic("Missing withdraw relative block locktime".to_string())
             })?;
-        let token_public_key = PublicKey::from_slice(
+        let token_public_key = output
+            .token_public_key
+            .map(|pk| {
+                PublicKey::from_slice(&pk)
+                    .map_err(|_| ServiceError::Generic("Invalid token public key".to_string()))
+            })
+            .transpose()?;
+        let token_identifier = bech32m_encode_token_id(
             &output
-                .token_public_key
-                .ok_or_else(|| ServiceError::Generic("Missing token public key".to_string()))?,
-        )
-        .map_err(|_| ServiceError::Generic("Invalid token public key".to_string()))?;
-        let token_identifier = output
-            .token_identifier
-            .ok_or_else(|| ServiceError::Generic("Missing token identifier".to_string()))?;
+                .token_identifier
+                .ok_or_else(|| ServiceError::Generic("Missing token identifier".to_string()))?,
+            network,
+        )?;
         let token_amount = u128::from_be_bytes(
             output
                 .token_amount
@@ -621,27 +631,116 @@ impl TryFrom<operator_rpc::spark_token::TokenOutput> for TokenOutput {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TokenTransaction {
-    pub inputs: Vec<TokenInput>,
+    pub inputs: TokenInputs,
     pub outputs: Vec<TokenOutput>,
     pub status: TokenTransactionStatus,
 }
 
+impl
+    TryFrom<(
+        operator_rpc::spark_token::TokenTransactionWithStatus,
+        Network,
+    )> for TokenTransaction
+{
+    type Error = ServiceError;
+
+    fn try_from(
+        (transaction, network): (
+            operator_rpc::spark_token::TokenTransactionWithStatus,
+            Network,
+        ),
+    ) -> Result<Self, Self::Error> {
+        let token_transaction = transaction.token_transaction.ok_or(ServiceError::Generic(
+            "Missing token transaction".to_string(),
+        ))?;
+
+        let inputs = token_transaction
+            .token_inputs
+            .ok_or(ServiceError::Generic("Missing token inputs".to_string()))?
+            .try_into()?;
+
+        let outputs = token_transaction
+            .token_outputs
+            .into_iter()
+            .map(|output| (output, network).try_into())
+            .collect::<Result<Vec<TokenOutput>, _>>()?;
+
+        let status =
+            operator_rpc::spark_token::TokenTransactionStatus::try_from(transaction.status)
+                .map_err(|_| ServiceError::Generic("Invalid token transaction status".to_string()))?
+                .into();
+
+        Ok(TokenTransaction {
+            inputs,
+            outputs,
+            status,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub enum TokenInput {
+pub enum TokenInputs {
     Mint(TokenMintInput),
     Transfer(TokenTransferInput),
     Create(TokenCreateInput),
 }
 
+impl TryFrom<operator_rpc::spark_token::token_transaction::TokenInputs> for TokenInputs {
+    type Error = ServiceError;
+
+    fn try_from(
+        inputs: operator_rpc::spark_token::token_transaction::TokenInputs,
+    ) -> Result<Self, Self::Error> {
+        match inputs {
+            operator_rpc::spark_token::token_transaction::TokenInputs::MintInput(input) => {
+                Ok(TokenInputs::Mint(input.try_into()?))
+            }
+            operator_rpc::spark_token::token_transaction::TokenInputs::TransferInput(input) => {
+                Ok(TokenInputs::Transfer(input.try_into()?))
+            }
+            operator_rpc::spark_token::token_transaction::TokenInputs::CreateInput(input) => {
+                Ok(TokenInputs::Create(input.try_into()?))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TokenMintInput {
     pub issuer_public_key: PublicKey,
-    pub token_id: String,
+    pub token_id: Option<Vec<u8>>,
+}
+
+impl TryFrom<operator_rpc::spark_token::TokenMintInput> for TokenMintInput {
+    type Error = ServiceError;
+
+    fn try_from(input: operator_rpc::spark_token::TokenMintInput) -> Result<Self, Self::Error> {
+        let issuer_public_key = PublicKey::from_slice(&input.issuer_public_key)
+            .map_err(|_| ServiceError::Generic("Invalid issuer public key".to_string()))?;
+        let token_id = input.token_identifier;
+        Ok(TokenMintInput {
+            issuer_public_key,
+            token_id,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TokenTransferInput {
     pub outputs_to_spend: Vec<TokenOutputToSpend>,
+}
+
+impl TryFrom<operator_rpc::spark_token::TokenTransferInput> for TokenTransferInput {
+    type Error = ServiceError;
+
+    fn try_from(input: operator_rpc::spark_token::TokenTransferInput) -> Result<Self, Self::Error> {
+        let outputs_to_spend = input
+            .outputs_to_spend
+            .into_iter()
+            .map(|output| output.try_into())
+            .collect::<Result<Vec<TokenOutputToSpend>, _>>()?;
+        Ok(TokenTransferInput { outputs_to_spend })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -650,15 +749,68 @@ pub struct TokenOutputToSpend {
     prev_token_tx_vout: u32,
 }
 
+impl TryFrom<operator_rpc::spark_token::TokenOutputToSpend> for TokenOutputToSpend {
+    type Error = ServiceError;
+
+    fn try_from(
+        output: operator_rpc::spark_token::TokenOutputToSpend,
+    ) -> Result<Self, Self::Error> {
+        let prev_token_tx_hash = hex::encode(output.prev_token_transaction_hash);
+        let prev_token_tx_vout = output.prev_token_transaction_vout;
+
+        Ok(TokenOutputToSpend {
+            prev_token_tx_hash,
+            prev_token_tx_vout,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TokenCreateInput {
     issuer_public_key: PublicKey,
-    token_name: String,
-    token_ticker: String,
-    token_decimals: u8,
-    token_max_supply: u128,
+    name: String,
+    ticker: String,
+    decimals: u32,
+    max_supply: u128,
     is_freezable: bool,
     creation_entity_public_key: Option<PublicKey>,
+}
+
+impl TryFrom<operator_rpc::spark_token::TokenCreateInput> for TokenCreateInput {
+    type Error = ServiceError;
+
+    fn try_from(input: operator_rpc::spark_token::TokenCreateInput) -> Result<Self, Self::Error> {
+        let issuer_public_key = PublicKey::from_slice(&input.issuer_public_key)
+            .map_err(|_| ServiceError::Generic("Invalid issuer public key".to_string()))?;
+        let name = input.token_name;
+        let ticker = input.token_ticker;
+        let decimals = input.decimals;
+        let max_supply = u128::from_be_bytes(
+            input
+                .max_supply
+                .try_into()
+                .map_err(|_| ServiceError::Generic("Invalid max supply".to_string()))?,
+        );
+        let is_freezable = input.is_freezable;
+        let creation_entity_public_key = input
+            .creation_entity_public_key
+            .map(|pk| {
+                PublicKey::from_slice(&pk).map_err(|_| {
+                    ServiceError::Generic("Invalid creation entity public key".to_string())
+                })
+            })
+            .transpose()?;
+
+        Ok(TokenCreateInput {
+            issuer_public_key,
+            name,
+            ticker,
+            decimals,
+            max_supply,
+            is_freezable,
+            creation_entity_public_key,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -670,5 +822,41 @@ pub enum TokenTransactionStatus {
     StartedCancelled,
     SignedCancelled,
     Unknown,
-    Unrecognized,
+}
+
+impl From<operator_rpc::spark_token::TokenTransactionStatus> for TokenTransactionStatus {
+    fn from(status: operator_rpc::spark_token::TokenTransactionStatus) -> Self {
+        match status {
+            operator_rpc::spark_token::TokenTransactionStatus::TokenTransactionStarted => {
+                TokenTransactionStatus::Started
+            }
+            operator_rpc::spark_token::TokenTransactionStatus::TokenTransactionSigned => {
+                TokenTransactionStatus::Signed
+            }
+            operator_rpc::spark_token::TokenTransactionStatus::TokenTransactionRevealed => {
+                TokenTransactionStatus::Revealed
+            }
+            operator_rpc::spark_token::TokenTransactionStatus::TokenTransactionFinalized => {
+                TokenTransactionStatus::Finalized
+            }
+            operator_rpc::spark_token::TokenTransactionStatus::TokenTransactionStartedCancelled => {
+                TokenTransactionStatus::StartedCancelled
+            }
+            operator_rpc::spark_token::TokenTransactionStatus::TokenTransactionSignedCancelled => {
+                TokenTransactionStatus::SignedCancelled
+            }
+            operator_rpc::spark_token::TokenTransactionStatus::TokenTransactionUnknown => {
+                TokenTransactionStatus::Unknown
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct QueryTokenTransactionsFilter {
+    pub owner_public_keys: Vec<PublicKey>,
+    pub issuer_public_keys: Vec<PublicKey>,
+    pub token_transaction_hashes: Vec<String>,
+    pub token_ids: Vec<String>,
+    pub output_ids: Vec<String>,
 }

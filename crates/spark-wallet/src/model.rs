@@ -11,6 +11,7 @@ use spark::{
     },
     ssp::{SspTransfer, SspUserRequest},
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
+    utils::paging::PagingFilter,
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -158,4 +159,14 @@ pub struct TransferTokenOutput {
     pub token_id: String,
     pub amount: u128,
     pub receiver_address: SparkAddress,
+}
+
+#[derive(Default)]
+pub struct ListTokenTransactionsRequest {
+    pub paging: Option<PagingFilter>,
+    pub owner_public_keys: Vec<PublicKey>,
+    pub issuer_public_keys: Vec<PublicKey>,
+    pub token_transaction_hashes: Vec<String>,
+    pub token_ids: Vec<String>,
+    pub output_ids: Vec<String>,
 }

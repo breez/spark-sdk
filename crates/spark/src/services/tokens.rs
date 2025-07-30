@@ -8,10 +8,15 @@ use crate::{
     Network,
     operator::{
         OperatorPool,
-        rpc::spark_token::{QueryTokenMetadataRequest, QueryTokenOutputsRequest},
+        rpc::spark_token::{
+            QueryTokenMetadataRequest, QueryTokenOutputsRequest, QueryTokenTransactionsRequest,
+        },
     },
-    services::{ServiceError, TokenMetadata, TokenOutput},
+    services::{
+        QueryTokenTransactionsFilter, ServiceError, TokenMetadata, TokenOutput, TokenTransaction,
+    },
     signer::Signer,
+    utils::paging::{PagingFilter, PagingResult, pager},
 };
 
 const HRP_STR_MAINNET: &str = "btkn";
@@ -72,7 +77,7 @@ impl<S: Signer> TokenService<S> {
             };
 
             let token_id = output.token_identifier().to_vec();
-            let token_outputs: TokenOutput = output.try_into()?;
+            let token_outputs: TokenOutput = (output, self.network).try_into()?;
 
             outputs_map
                 .entry(token_id)
@@ -106,12 +111,10 @@ impl<S: Signer> TokenService<S> {
                     .iter()
                     .find(|m| m.token_identifier == token_id)
                     .ok_or_else(|| ServiceError::Generic("Metadata not found".to_string()))?;
+                let metadata: TokenMetadata = (metadata.clone(), self.network).try_into()?;
                 Ok((
-                    self.bech32m_encode_token_id(&token_id)?,
-                    TokenOutputs {
-                        metadata: metadata.clone().try_into()?,
-                        outputs,
-                    },
+                    metadata.identifier.clone(),
+                    TokenOutputs { metadata, outputs },
                 ))
             })
             .collect::<Result<HashMap<String, TokenOutputs>, ServiceError>>()?;
@@ -127,34 +130,119 @@ impl<S: Signer> TokenService<S> {
         self.tokens_outputs.lock().await.clone()
     }
 
-    fn bech32m_encode_token_id(&self, raw_token_id: &[u8]) -> Result<String, ServiceError> {
-        let hrp_str = match self.network {
-            Network::Mainnet => HRP_STR_MAINNET,
-            Network::Testnet => HRP_STR_TESTNET,
-            Network::Regtest => HRP_STR_REGTEST,
-            Network::Signet => HRP_STR_SIGNET,
-        };
-        let hrp = Hrp::parse_unchecked(hrp_str);
-        let bech32 = bech32::encode::<Bech32m>(hrp, raw_token_id)
-            .map_err(|e| ServiceError::Generic(format!("Failed to encode token id: {e}")))?;
-        Ok(bech32)
+    pub async fn query_token_transactions_inner(
+        &self,
+        filter: QueryTokenTransactionsFilter,
+        paging: PagingFilter,
+    ) -> Result<PagingResult<TokenTransaction>, ServiceError> {
+        let mut owner_public_keys = filter
+            .owner_public_keys
+            .iter()
+            .map(|k| k.serialize().to_vec())
+            .collect::<Vec<_>>();
+        if owner_public_keys.is_empty() {
+            owner_public_keys.push(self.signer.get_identity_public_key()?.serialize().to_vec());
+        }
+        let response = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .query_token_transactions(QueryTokenTransactionsRequest {
+                output_ids: filter.output_ids,
+                owner_public_keys,
+                issuer_public_keys: filter
+                    .issuer_public_keys
+                    .iter()
+                    .map(|k| k.serialize().to_vec())
+                    .collect(),
+                token_identifiers: filter
+                    .token_ids
+                    .iter()
+                    .map(|id| {
+                        bech32m_decode_token_id(id, self.network)
+                            .map_err(|_| ServiceError::Generic("Invalid token id".to_string()))
+                    })
+                    .collect::<Result<Vec<Vec<u8>>, _>>()?,
+                token_transaction_hashes: filter
+                    .token_transaction_hashes
+                    .iter()
+                    .map(|id| {
+                        hex::decode(id).map_err(|_| {
+                            ServiceError::Generic("Invalid token transaction hash".to_string())
+                        })
+                    })
+                    .collect::<Result<Vec<Vec<u8>>, _>>()?,
+                limit: paging.limit as i64,
+                offset: paging.offset as i64,
+            })
+            .await?;
+
+        Ok(PagingResult {
+            items: response
+                .token_transactions_with_status
+                .into_iter()
+                .map(|t| (t, self.network).try_into())
+                .collect::<Result<Vec<TokenTransaction>, _>>()?,
+            next: paging.next_from_offset(response.offset),
+        })
     }
 
-    fn bech32m_decode_token_id(&self, token_id: &str) -> Result<Vec<u8>, ServiceError> {
-        let (hrp, data) = bech32::decode(token_id)
-            .map_err(|e| ServiceError::Generic(format!("Failed to decode token id: {e}")))?;
-        let bech32_network = match hrp.as_str() {
-            "btkn" => Network::Mainnet,
-            "btknt" => Network::Testnet,
-            "btknrt" => Network::Regtest,
-            "btkns" => Network::Signet,
-            _ => return Err(ServiceError::Generic(format!("Invalid network: {hrp}"))),
+    pub async fn query_token_transactions(
+        &self,
+        filter: QueryTokenTransactionsFilter,
+        paging: Option<PagingFilter>,
+    ) -> Result<Vec<TokenTransaction>, ServiceError> {
+        let transactions = match paging {
+            Some(paging) => {
+                self.query_token_transactions_inner(filter, paging)
+                    .await?
+                    .items
+            }
+            None => {
+                pager(
+                    |p| self.query_token_transactions_inner(filter.clone(), p),
+                    PagingFilter::default(),
+                )
+                .await?
+            }
         };
-        if bech32_network != self.network {
-            return Err(ServiceError::Generic(format!(
-                "Invalid network: {bech32_network}"
-            )));
-        }
-        Ok(data)
+        Ok(transactions)
     }
+}
+
+pub(crate) fn bech32m_encode_token_id(
+    raw_token_id: &[u8],
+    network: Network,
+) -> Result<String, ServiceError> {
+    let hrp_str = match network {
+        Network::Mainnet => HRP_STR_MAINNET,
+        Network::Testnet => HRP_STR_TESTNET,
+        Network::Regtest => HRP_STR_REGTEST,
+        Network::Signet => HRP_STR_SIGNET,
+    };
+    let hrp = Hrp::parse_unchecked(hrp_str);
+    let bech32 = bech32::encode::<Bech32m>(hrp, raw_token_id)
+        .map_err(|e| ServiceError::Generic(format!("Failed to encode token id: {e}")))?;
+    Ok(bech32)
+}
+
+pub(crate) fn bech32m_decode_token_id(
+    token_id: &str,
+    network: Network,
+) -> Result<Vec<u8>, ServiceError> {
+    let (hrp, data) = bech32::decode(token_id)
+        .map_err(|e| ServiceError::Generic(format!("Failed to decode token id: {e}")))?;
+    let bech32_network = match hrp.as_str() {
+        "btkn" => Network::Mainnet,
+        "btknt" => Network::Testnet,
+        "btknrt" => Network::Regtest,
+        "btkns" => Network::Signet,
+        _ => return Err(ServiceError::Generic(format!("Invalid network: {hrp}"))),
+    };
+    if bech32_network != network {
+        return Err(ServiceError::Generic(format!(
+            "Invalid network: {bech32_network}"
+        )));
+    }
+    Ok(data)
 }
