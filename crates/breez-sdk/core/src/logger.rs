@@ -2,6 +2,7 @@ use std::fs::OpenOptions;
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::{
     EnvFilter, Layer,
+    fmt::{FormatFields, format::Writer},
     layer::{Context, SubscriberExt},
     util::SubscriberInitExt,
 };
@@ -20,17 +21,20 @@ where
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         if event.metadata().level() <= &Level::INFO {
             if let Some(s) = self.log_listener.as_ref() {
-                if let Some(line) = event.metadata().fields().field("message") {
+                let mut buf = String::new();
+                let writer = Writer::new(&mut buf);
+
+                if let Ok(_) = tracing_subscriber::fmt::format::DefaultFields::new()
+                    .format_fields(writer, event)
+                {
                     s.log(LogEntry {
-                        line: line.to_string(),
+                        line: buf,
                         level: event.metadata().level().to_string(),
                     });
                 }
             }
         }
     }
-
-    // Implement other on_* methods as needed for span lifecycle
 }
 
 pub(super) fn init_logging(
