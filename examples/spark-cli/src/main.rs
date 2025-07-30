@@ -89,10 +89,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let network = config.spark_config.network;
     let signer = DefaultSigner::new(&seed, network)?;
-    println!(
-        "Connecting to Spark wallet, config = {:?}",
-        config.spark_config
-    );
     let wallet =
         Arc::new(spark_wallet::SparkWallet::connect(config.spark_config.clone(), signer).await?);
     let clone = Arc::clone(&wallet);
