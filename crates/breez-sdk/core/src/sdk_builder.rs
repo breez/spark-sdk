@@ -2,7 +2,12 @@ use spark_wallet::DefaultSigner;
 use std::{path::PathBuf, str::FromStr, sync::Arc};
 use tokio::sync::watch;
 
-use crate::{BreezSdk, SqliteStorage, error::SdkError, models::Config, persist::Storage};
+use crate::{
+    error::SdkError,
+    models::Config,
+    persist::{SqliteStorage, Storage},
+    sdk::BreezSdk,
+};
 
 /// Builder for creating `BreezSdk` instances with customizable components.
 pub struct SdkBuilder {

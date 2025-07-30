@@ -35,7 +35,11 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// A vector of payments or a `StorageError`
-    fn list_payments(&self, offset: u32, limit: u32) -> Result<Vec<Payment>, StorageError>;
+    fn list_payments(
+        &self,
+        offset: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<Vec<Payment>, StorageError>;
 
     /// Inserts a payment into storage
     ///

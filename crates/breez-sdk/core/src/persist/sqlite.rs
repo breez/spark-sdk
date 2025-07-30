@@ -83,14 +83,22 @@ unsafe impl Send for SqliteStorage {}
 unsafe impl Sync for SqliteStorage {}
 
 impl Storage for SqliteStorage {
-    fn list_payments(&self, offset: u32, limit: u32) -> Result<Vec<Payment>, StorageError> {
+    fn list_payments(
+        &self,
+        offset: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<Vec<Payment>, StorageError> {
         let connection = self.connection.lock().unwrap();
 
-        let mut stmt = connection.prepare(
-            "SELECT id, payment_type, status, amount, fees, timestamp FROM payments ORDER BY timestamp DESC LIMIT ? OFFSET ?"
-        )?;
+        let query = format!(
+            "SELECT id, payment_type, status, amount, fees, timestamp FROM payments ORDER BY timestamp DESC LIMIT {} OFFSET {}",
+            limit.unwrap_or(u32::MAX),
+            offset.unwrap_or(0)
+        );
 
-        let payment_iter = stmt.query_map(params![limit, offset], |row| {
+        let mut stmt = connection.prepare(&query)?;
+
+        let payment_iter = stmt.query_map(params![], |row| {
             Ok(Payment {
                 id: row.get(0)?,
                 payment_type: PaymentType::from(row.get::<_, String>(1)?.as_str()),
@@ -201,7 +209,7 @@ mod tests {
         storage.insert_payment(&payment).unwrap();
 
         // List payments
-        let payments = storage.list_payments(0, 10).unwrap();
+        let payments = storage.list_payments(Some(0), Some(10)).unwrap();
         assert_eq!(payments.len(), 1);
         assert_eq!(payments[0].id, payment.id);
         assert_eq!(payments[0].payment_type, payment.payment_type);

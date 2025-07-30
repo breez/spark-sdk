@@ -1,10 +1,11 @@
 use core::fmt;
 use std::{collections::HashMap, sync::RwLock};
 
+use serde::Serialize;
 use uuid::Uuid;
 
 /// Events emitted by the SDK
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum SdkEvent {
     /// Emitted when the wallet has been synchronized with the network
     Synced {},

@@ -4,7 +4,7 @@ use bitcoin::secp256k1::PublicKey;
 use serde::{Deserialize, Serialize};
 use spark::{
     Network,
-    operator::{OperatorConfig, OperatorError, OperatorPoolConfig},
+    operator::{OperatorConfig, OperatorPoolConfig},
     ssp::ServiceProviderConfig,
 };
 
@@ -80,30 +80,60 @@ impl SparkWalletConfig {
     }
 
     pub fn default_operator_pool_config(network: Network) -> OperatorPoolConfig {
-        let operators = vec![
-            Self::create_opeartor_config(
-                0,
-                "0000000000000000000000000000000000000000000000000000000000000001",
-                "https://0.spark.loadtest.dev.sparkinfra.net/",
-                "03d8d2d331e07f572636dfd371a30dfa139a8bdc99ea98f1f48e27dcc664589ecc",
-            )
-            .unwrap(),
-            Self::create_opeartor_config(
-                1,
-                "0000000000000000000000000000000000000000000000000000000000000002",
-                "https://1.spark.loadtest.dev.sparkinfra.net/",
-                "023b1f3e062137ffc541a8edeaab7a4648aafa506d0208956123507d66d3886ac6",
-            )
-            .unwrap(),
-            Self::create_opeartor_config(
-                2,
-                "0000000000000000000000000000000000000000000000000000000000000003",
-                "https://2.spark.loadtest.dev.sparkinfra.net/",
-                "02a2c62aa3230d9a51759b3d67399f57223455656369d28120fb39ef062b4469c8",
-            )
-            .unwrap(),
-        ];
-        OperatorPoolConfig::new(0, operators).unwrap()
+        match network {
+            Network::Mainnet => {
+                let operators = vec![
+                    Self::create_opeartor_config(
+                        0,
+                        "0000000000000000000000000000000000000000000000000000000000000001",
+                        "https://0.spark.lightspark.com",
+                        "03dfbdff4b6332c220f8fa2ba8ed496c698ceada563fa01b67d9983bfc5c95e763",
+                    )
+                    .unwrap(),
+                    Self::create_opeartor_config(
+                        1,
+                        "0000000000000000000000000000000000000000000000000000000000000002",
+                        "https://1.spark.lightspark.com",
+                        "03e625e9768651c9be268e287245cc33f96a68ce9141b0b4769205db027ee8ed77",
+                    )
+                    .unwrap(),
+                    Self::create_opeartor_config(
+                        2,
+                        "0000000000000000000000000000000000000000000000000000000000000003",
+                        "https://2.spark.flashnet.xyz",
+                        "022eda13465a59205413086130a65dc0ed1b8f8e51937043161f8be0c369b1a410",
+                    )
+                    .unwrap(),
+                ];
+                OperatorPoolConfig::new(0, operators).unwrap()
+            }
+            _ => {
+                let operators = vec![
+                    Self::create_opeartor_config(
+                        0,
+                        "0000000000000000000000000000000000000000000000000000000000000001",
+                        "https://0.spark.loadtest.dev.sparkinfra.net/",
+                        "03d8d2d331e07f572636dfd371a30dfa139a8bdc99ea98f1f48e27dcc664589ecc",
+                    )
+                    .unwrap(),
+                    Self::create_opeartor_config(
+                        1,
+                        "0000000000000000000000000000000000000000000000000000000000000002",
+                        "https://1.spark.loadtest.dev.sparkinfra.net/",
+                        "023b1f3e062137ffc541a8edeaab7a4648aafa506d0208956123507d66d3886ac6",
+                    )
+                    .unwrap(),
+                    Self::create_opeartor_config(
+                        2,
+                        "0000000000000000000000000000000000000000000000000000000000000003",
+                        "https://2.spark.loadtest.dev.sparkinfra.net/",
+                        "02a2c62aa3230d9a51759b3d67399f57223455656369d28120fb39ef062b4469c8",
+                    )
+                    .unwrap(),
+                ];
+                OperatorPoolConfig::new(0, operators).unwrap()
+            }
+        }
     }
 
     pub fn create_service_provier_config(

@@ -1,5 +1,5 @@
 [package]
-name = "breez-sdk"
+name = "breez-sdk-core"
 edition = "2024"
 version.workspace = true
 
@@ -19,9 +19,9 @@ spark-wallet.workspace = true
 breez-sdk-common.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing.workspace = true
 qrcode-rs = { version = "0.1", default-features = false }
 thiserror.workspace = true
-log = "0.4"
 chrono.workspace = true
 uuid.workspace = true
 rusqlite = { git = "https://github.com/Spxg/rusqlite", rev = "e36644127f31fa6e7ea0999b59432deb4a07f220", features = [

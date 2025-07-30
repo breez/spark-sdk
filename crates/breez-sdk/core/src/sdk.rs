@@ -1,37 +1,27 @@
-pub mod error;
-pub mod events;
-pub mod models;
-pub mod persist;
-pub mod sdk_builder;
+pub use breez_sdk_common::input::parse;
 
-use breez_sdk_common::input::parse;
-use log::{error, info, trace};
-use models::Config;
 use spark_wallet::{
     DefaultSigner, PagingFilter, PayLightningInvoiceResult, SparkAddress, SparkWallet, WalletEvent,
 };
 use std::{sync::Arc, time::Instant};
-
-// Export the persist module for external use
-pub use persist::{SqliteStorage, Storage};
-// Export events module for external use
-pub use events::{EventEmitter, EventListener, SdkEvent};
+use tracing::{error, info, trace};
 
 use tokio::sync::watch;
 
-// Export the builder module
-pub use sdk_builder::SdkBuilder;
-
 use crate::{
+    GetPaymentRequest, GetPaymentResponse, Logger,
     error::SdkError,
+    events::{EventEmitter, EventListener, SdkEvent},
+    logger,
     models::{
-        GetInfoRequest, GetInfoResponse, ListPaymentsRequest, ListPaymentsResponse, Payment,
-        PrepareReceivePaymentRequest, PrepareReceivePaymentResponse, PrepareSendPaymentRequest,
-        PrepareSendPaymentResponse, ReceivePaymentMethod, ReceivePaymentRequest,
-        ReceivePaymentResponse, SendPaymentMethod, SendPaymentRequest, SendPaymentResponse,
-        SyncWalletRequest, SyncWalletResponse,
+        Config, GetInfoRequest, GetInfoResponse, ListPaymentsRequest, ListPaymentsResponse,
+        Payment, PrepareReceivePaymentRequest, PrepareReceivePaymentResponse,
+        PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentMethod,
+        ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentMethod, SendPaymentRequest,
+        SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
-    persist::{CachedAccountInfo, CachedSyncInfo},
+    persist::{CachedAccountInfo, CachedSyncInfo, Storage},
+    sdk_builder::SdkBuilder,
 };
 
 /// `BreezSDK` is a wrapper around `SparkSDK` that provides a more structured API
@@ -50,6 +40,14 @@ pub async fn connect(config: Config) -> Result<BreezSdk, SdkError> {
     let sdk = SdkBuilder::new(config).build().await?;
     sdk.start()?;
     Ok(sdk)
+}
+
+pub async fn init_logging(
+    log_dir: &str,
+    app_logger: Option<Box<dyn Logger>>,
+    log_filter: Option<String>,
+) -> Result<(), SdkError> {
+    logger::init_logging(log_dir, app_logger, log_filter)
 }
 
 impl BreezSdk {
@@ -98,7 +96,7 @@ impl BreezSdk {
     /// # Returns
     ///
     /// A unique identifier for the listener, which can be used to remove it later
-    pub fn add_event_listener(&self, listener: Box<dyn EventListener>) -> String {
+    pub async fn add_event_listener(&self, listener: Box<dyn EventListener>) -> String {
         self.event_emitter.add_listener(listener)
     }
 
@@ -111,7 +109,7 @@ impl BreezSdk {
     /// # Returns
     ///
     /// `true` if the listener was found and removed, `false` otherwise
-    pub fn remove_event_listener(&self, id: &str) -> bool {
+    pub async fn remove_event_listener(&self, id: &str) -> bool {
         self.event_emitter.remove_listener(id)
     }
 
@@ -171,6 +169,9 @@ impl BreezSdk {
             }
             WalletEvent::TransferClaimed(_) => {
                 info!("Transfer claimed");
+                if let Err(e) = self.sync_payments_to_storage().await {
+                    error!("Failed to sync payments to storage: {e:?}");
+                }
             }
         }
     }
@@ -182,7 +183,7 @@ impl BreezSdk {
     /// # Returns
     ///
     /// Result containing either success or an `SdkError` if the background task couldn't be stopped
-    pub fn stop(&self) -> Result<(), SdkError> {
+    pub async fn disconnect(&self) -> Result<(), SdkError> {
         self.shutdown_sender
             .send(())
             .map_err(|_| SdkError::GenericError("Failed to send shutdown signal".to_string()))?;
@@ -203,6 +204,10 @@ impl BreezSdk {
         request: PrepareReceivePaymentRequest,
     ) -> Result<PrepareReceivePaymentResponse, SdkError> {
         match &request.payment_method {
+            ReceivePaymentMethod::SparkAddress => Ok(PrepareReceivePaymentResponse {
+                payment_method: request.payment_method,
+                fee_sats: 0,
+            }),
             ReceivePaymentMethod::BitcoinAddress => {
                 Ok(PrepareReceivePaymentResponse {
                     payment_method: request.payment_method,
@@ -221,6 +226,9 @@ impl BreezSdk {
         request: ReceivePaymentRequest,
     ) -> Result<ReceivePaymentResponse, SdkError> {
         match &request.prepare_response.payment_method {
+            ReceivePaymentMethod::SparkAddress => Ok(ReceivePaymentResponse {
+                payment_identifier: self.spark_wallet.get_spark_address().await?.to_string(),
+            }),
             ReceivePaymentMethod::BitcoinAddress => Ok(ReceivePaymentResponse {
                 // TODO: allow passing amount
                 payment_identifier: self
@@ -355,6 +363,14 @@ impl BreezSdk {
 
     /// Synchronizes payments from transfers to persistent storage
     async fn sync_payments_to_storage(&self) -> Result<(), SdkError> {
+        //sync balance
+        let balance = self.spark_wallet.get_balance().await?;
+        CachedAccountInfo {
+            balance_sats: balance,
+        }
+        .save(self.storage.as_ref())?;
+
+        // sync payments
         const BATCH_SIZE: u64 = 50;
 
         // Get the last offset we processed from storage
@@ -364,6 +380,7 @@ impl BreezSdk {
         // We'll keep querying in batches until we have all transfers
         let mut next_offset = current_offset;
         let mut has_more = true;
+        info!("Syncing payments to storage, offset = {next_offset}");
         while has_more {
             // Get batch of transfers starting from current offset
             let transfers_response = self
@@ -371,6 +388,10 @@ impl BreezSdk {
                 .list_transfers(Some(PagingFilter::new(Some(next_offset), Some(BATCH_SIZE))))
                 .await?;
 
+            info!(
+                "Syncing payments to storage, offset = {next_offset}, transfers = {}",
+                transfers_response.len()
+            );
             // Process transfers in this batch
             for transfer in &transfers_response {
                 // Create a payment record
@@ -379,6 +400,7 @@ impl BreezSdk {
                 if let Err(err) = self.storage.insert_payment(&payment) {
                     error!("Failed to insert payment: {err:?}");
                 }
+                info!("Inserted payment: {payment:?}");
             }
 
             // Check if we have more transfers to fetch
@@ -412,11 +434,19 @@ impl BreezSdk {
     /// * `Ok(ListPaymentsResponse)` - Contains the list of payments if successful
     /// * `Err(SdkError)` - If there was an error accessing the storage
     ///
-    pub fn list_payments(
+    pub async fn list_payments(
         &self,
-        request: &ListPaymentsRequest,
+        request: ListPaymentsRequest,
     ) -> Result<ListPaymentsResponse, SdkError> {
         let payments = self.storage.list_payments(request.offset, request.limit)?;
         Ok(ListPaymentsResponse { payments })
+    }
+
+    pub async fn get_payment(
+        &self,
+        request: GetPaymentRequest,
+    ) -> Result<GetPaymentResponse, SdkError> {
+        let payment = self.storage.get_payment_by_id(&request.payment_id)?;
+        Ok(GetPaymentResponse { payment })
     }
 }

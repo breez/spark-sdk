@@ -1,6 +1,15 @@
 [workspace]
 resolver = "2"
-members = ["crates/spark", "crates/spark-wallet", "examples/spark-cli", "crates/breez-sdk", "crates/common", "crates/macros"]
+members = [
+  "crates/spark", 
+  "crates/spark-wallet", 
+  "examples/spark-cli", 
+  "crates/breez-sdk/core", 
+  "crates/breez-sdk/common", 
+  "crates/breez-sdk/macros",
+  "crates/breez-sdk/core",
+  "crates/breez-sdk/cli"
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -45,8 +54,9 @@ shellwords = "1.1.0"
 spark = { path = "crates/spark" }
 spark-macros = { path = "crates/spark-macros" }
 spark-wallet = { path = "crates/spark-wallet" }
-breez-sdk-common = { path = "crates/common" }
-breez-sdk-macros = { path = "crates/macros" }
+breez-sdk-common = { path = "crates/breez-sdk/common" }
+breez-sdk-macros = { path = "crates/breez-sdk/macros" }
+breez-sdk-core = { path = "crates/breez-sdk/core" }
 thiserror = "2.0.12"
 tokio = { version = "1.45.1", default-features = false }
 tonic = { version = "0.12.3", features = [

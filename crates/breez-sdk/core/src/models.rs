@@ -1,12 +1,13 @@
 use breez_sdk_common::input::{BitcoinAddress, DetailedBolt11Invoice};
 use core::fmt;
+use serde::Serialize;
 use spark_wallet::{
     LightningSendPayment, LightningSendStatus, Network as SparkNetwork, TransferDirection,
     TransferStatus, WalletTransfer,
 };
 
 /// The type of payment
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum PaymentType {
     /// Payment sent from this wallet
     Send,
@@ -33,7 +34,7 @@ impl From<&str> for PaymentType {
 }
 
 /// The status of a payment
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum PaymentStatus {
     /// Payment is completed successfully
     Completed,
@@ -64,7 +65,7 @@ impl From<&str> for PaymentStatus {
 }
 
 /// Represents a payment (sent or received)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Payment {
     /// Unique identifier for the payment
     pub id: String,
@@ -167,7 +168,7 @@ pub struct Config {
 pub struct GetInfoRequest {}
 
 /// Response containing the balance of the wallet
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct GetInfoResponse {
     /// The balance in satoshis
     pub balance_sats: u64,
@@ -178,10 +179,12 @@ pub struct GetInfoResponse {
 pub struct SyncWalletRequest {}
 
 /// Response from synchronizing the wallet
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SyncWalletResponse {}
 
+#[derive(Debug, Clone, Serialize)]
 pub enum ReceivePaymentMethod {
+    SparkAddress,
     BitcoinAddress,
     Bolt11Invoice {
         description: String,
@@ -189,6 +192,7 @@ pub enum ReceivePaymentMethod {
     },
 }
 
+#[derive(Debug, Clone, Serialize)]
 pub enum SendPaymentMethod {
     BitcoinAddress {
         address: BitcoinAddress,
@@ -206,6 +210,7 @@ pub struct PrepareReceivePaymentRequest {
     pub payment_method: ReceivePaymentMethod,
 }
 
+#[derive(Debug, Clone, Serialize)]
 pub struct PrepareReceivePaymentResponse {
     pub payment_method: ReceivePaymentMethod,
     pub fee_sats: u64,
@@ -215,6 +220,7 @@ pub struct ReceivePaymentRequest {
     pub prepare_response: PrepareReceivePaymentResponse,
 }
 
+#[derive(Debug, Clone, Serialize)]
 pub struct ReceivePaymentResponse {
     pub payment_identifier: String,
 }
@@ -224,6 +230,7 @@ pub struct PrepareSendPaymentRequest {
     pub amount_sats: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize)]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     pub amount_sats: u64,
@@ -234,6 +241,7 @@ pub struct SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
 }
 
+#[derive(Debug, Clone, Serialize)]
 pub struct SendPaymentResponse {
     pub payment: Payment,
 }
@@ -242,14 +250,33 @@ pub struct SendPaymentResponse {
 #[derive(Debug, Clone)]
 pub struct ListPaymentsRequest {
     /// Number of records to skip
-    pub offset: u32,
+    pub offset: Option<u32>,
     /// Maximum number of records to return
-    pub limit: u32,
+    pub limit: Option<u32>,
 }
 
 /// Response from listing payments
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ListPaymentsResponse {
     /// The list of payments
     pub payments: Vec<Payment>,
+}
+
+pub struct GetPaymentRequest {
+    pub payment_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GetPaymentResponse {
+    pub payment: Payment,
+}
+
+pub trait Logger: Send + Sync {
+    fn log(&self, l: LogEntry);
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LogEntry {
+    pub line: String,
+    pub level: String,
 }
