@@ -1,5 +1,7 @@
 mod sqlite;
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 pub use sqlite::SqliteStorage;
 use thiserror::Error;
@@ -63,40 +65,50 @@ pub trait Storage: Send + Sync {
     fn get_payment_by_id(&self, id: &str) -> Result<Payment, StorageError>;
 }
 
-#[derive(Serialize, Deserialize)]
+pub(crate) struct ObjectCacheRepository {
+    storage: Arc<dyn Storage>,
+}
+
+impl ObjectCacheRepository {
+    pub(crate) fn new(storage: Arc<dyn Storage>) -> Self {
+        ObjectCacheRepository { storage }
+    }
+
+    pub(crate) fn save_account_info(&self, value: CachedAccountInfo) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item("account_info", serde_json::to_string(&value)?)?;
+        Ok(())
+    }
+
+    pub(crate) fn fetch_account_info(&self) -> Result<Option<CachedAccountInfo>, StorageError> {
+        let value = self.storage.get_cached_item("account_info")?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) fn save_sync_info(&self, value: CachedSyncInfo) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item("sync_offset", serde_json::to_string(&value)?)?;
+        Ok(())
+    }
+
+    pub(crate) fn fetch_sync_info(&self) -> Result<Option<CachedSyncInfo>, StorageError> {
+        let value = self.storage.get_cached_item("sync_offset")?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedAccountInfo {
     pub(crate) balance_sats: u64,
 }
 
-impl CachedAccountInfo {
-    pub(crate) fn save(&self, storage: &dyn Storage) -> Result<(), StorageError> {
-        storage.set_cached_item("account_info", serde_json::to_string(self)?)?;
-        Ok(())
-    }
-    pub(crate) fn fetch(storage: &dyn Storage) -> Result<Self, StorageError> {
-        let account_info = storage.get_cached_item("account_info")?;
-        match account_info {
-            Some(account_info) => Ok(serde_json::from_str(&account_info)?),
-            None => Ok(CachedAccountInfo { balance_sats: 0 }),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedSyncInfo {
     pub(crate) offset: u64,
-}
-
-impl CachedSyncInfo {
-    pub(crate) fn save(&self, storage: &dyn Storage) -> Result<(), StorageError> {
-        storage.set_cached_item("sync_offset", serde_json::to_string(self)?)?;
-        Ok(())
-    }
-    pub(crate) fn fetch(storage: &dyn Storage) -> Result<Self, StorageError> {
-        let offset = storage.get_cached_item("sync_offset")?;
-        match offset {
-            Some(offset) => Ok(serde_json::from_str(&offset)?),
-            None => Ok(CachedSyncInfo { offset: 0 }),
-        }
-    }
 }

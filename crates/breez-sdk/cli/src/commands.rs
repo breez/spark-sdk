@@ -109,7 +109,7 @@ pub(crate) async fn execute_command(
         } => {
             let prepared_payment = sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
-                    payment_identifier: payment_request,
+                    payment_request,
                     amount_sats: amount,
                 })
                 .await;

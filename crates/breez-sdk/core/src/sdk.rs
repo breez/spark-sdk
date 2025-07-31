@@ -20,7 +20,7 @@ use crate::{
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentMethod, SendPaymentRequest,
         SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
-    persist::{CachedAccountInfo, CachedSyncInfo, Storage},
+    persist::{CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, Storage},
     sdk_builder::SdkBuilder,
 };
 
@@ -193,7 +193,8 @@ impl BreezSdk {
 
     /// Returns the balance of the wallet in satoshis
     pub async fn get_info(&self, _request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
-        let account_info = CachedAccountInfo::fetch(self.storage.as_ref())?;
+        let object_repository = ObjectCacheRepository::new(self.storage.clone());
+        let account_info = object_repository.fetch_account_info()?.unwrap_or_default();
         Ok(GetInfoResponse {
             balance_sats: account_info.balance_sats,
         })
@@ -227,11 +228,11 @@ impl BreezSdk {
     ) -> Result<ReceivePaymentResponse, SdkError> {
         match &request.prepare_response.payment_method {
             ReceivePaymentMethod::SparkAddress => Ok(ReceivePaymentResponse {
-                payment_identifier: self.spark_wallet.get_spark_address().await?.to_string(),
+                payment_request: self.spark_wallet.get_spark_address().await?.to_string(),
             }),
             ReceivePaymentMethod::BitcoinAddress => Ok(ReceivePaymentResponse {
                 // TODO: allow passing amount
-                payment_identifier: self
+                payment_request: self
                     .spark_wallet
                     .generate_deposit_address(true)
                     .await?
@@ -241,7 +242,7 @@ impl BreezSdk {
                 description,
                 amount_sats,
             } => Ok(ReceivePaymentResponse {
-                payment_identifier: self
+                payment_request: self
                     .spark_wallet
                     .create_lightning_invoice(
                         amount_sats.unwrap_or_default(),
@@ -258,7 +259,7 @@ impl BreezSdk {
         request: PrepareSendPaymentRequest,
     ) -> Result<PrepareSendPaymentResponse, SdkError> {
         // First check for spark address
-        if let Ok(spark_address) = request.payment_identifier.parse::<SparkAddress>() {
+        if let Ok(spark_address) = request.payment_request.parse::<SparkAddress>() {
             return Ok(PrepareSendPaymentResponse {
                 payment_method: SendPaymentMethod::SparkAddress {
                     address: spark_address.to_string(),
@@ -270,20 +271,19 @@ impl BreezSdk {
             });
         }
         // Then check for other types of inputs
-        let parsed_input = parse(&request.payment_identifier).await?;
+        let parsed_input = parse(&request.payment_request).await?;
         match &parsed_input {
             breez_sdk_common::input::InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
                 let fee_estimation = self
                     .spark_wallet
                     .fetch_lightning_send_fee_estimate(
-                        &request.payment_identifier,
+                        &request.payment_request,
                         request.amount_sats,
                     )
                     .await?;
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::Bolt11Invoice {
-                        raw_invoice: request.payment_identifier.clone(),
-                        invoice: detailed_bolt11_invoice.clone(),
+                        detailed_invoice: detailed_bolt11_invoice.clone(),
                     },
                     fee_sats: fee_estimation,
                     amount_sats: request
@@ -293,7 +293,6 @@ impl BreezSdk {
                 })
             }
             breez_sdk_common::input::InputType::BitcoinAddress(bitcoin_address) => todo!(),
-            breez_sdk_common::input::InputType::Bip21(bip21) => todo!(),
             _ => Err(SdkError::GenericError("Unsupported input type".to_string())),
         }
     }
@@ -315,14 +314,11 @@ impl BreezSdk {
                     payment: transfer.into(),
                 })
             }
-            SendPaymentMethod::Bolt11Invoice {
-                raw_invoice,
-                invoice,
-            } => {
+            SendPaymentMethod::Bolt11Invoice { detailed_invoice } => {
                 let payment_response = self
                     .spark_wallet
                     .pay_lightning_invoice(
-                        &raw_invoice,
+                        &detailed_invoice.invoice.bolt11,
                         Some(request.prepare_response.amount_sats),
                         Some(request.prepare_response.fee_sats),
                         true,
@@ -365,16 +361,16 @@ impl BreezSdk {
     async fn sync_payments_to_storage(&self) -> Result<(), SdkError> {
         //sync balance
         let balance = self.spark_wallet.get_balance().await?;
-        CachedAccountInfo {
+        let object_repository = ObjectCacheRepository::new(self.storage.clone());
+        object_repository.save_account_info(CachedAccountInfo {
             balance_sats: balance,
-        }
-        .save(self.storage.as_ref())?;
+        })?;
 
         // sync payments
         const BATCH_SIZE: u64 = 50;
 
         // Get the last offset we processed from storage
-        let cached_sync_info = CachedSyncInfo::fetch(self.storage.as_ref())?;
+        let cached_sync_info = object_repository.fetch_sync_info()?.unwrap_or_default();
         let current_offset = cached_sync_info.offset;
 
         // We'll keep querying in batches until we have all transfers
@@ -406,10 +402,9 @@ impl BreezSdk {
             // Check if we have more transfers to fetch
             next_offset = next_offset.saturating_add(u64::try_from(transfers_response.len())?);
             // Update our last processed offset in the storage
-            let save_res = CachedSyncInfo {
+            let save_res = object_repository.save_sync_info(CachedSyncInfo {
                 offset: next_offset,
-            }
-            .save(self.storage.as_ref());
+            });
 
             if let Err(err) = save_res {
                 error!("Failed to update last sync offset: {err:?}");

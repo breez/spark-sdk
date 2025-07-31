@@ -201,8 +201,7 @@ pub enum SendPaymentMethod {
         address: BitcoinAddress,
     },
     Bolt11Invoice {
-        raw_invoice: String,
-        invoice: DetailedBolt11Invoice,
+        detailed_invoice: DetailedBolt11Invoice,
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
@@ -225,11 +224,11 @@ pub struct ReceivePaymentRequest {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReceivePaymentResponse {
-    pub payment_identifier: String,
+    pub payment_request: String,
 }
 
 pub struct PrepareSendPaymentRequest {
-    pub payment_identifier: String,
+    pub payment_request: String,
     pub amount_sats: Option<u64>,
 }
 
