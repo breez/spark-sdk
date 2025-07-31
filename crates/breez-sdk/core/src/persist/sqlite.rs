@@ -1,17 +1,15 @@
 use rusqlite::{Connection, OpenFlags, params};
-use std::{
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use rusqlite_migration::{M, Migrations};
+use std::path::{Path, PathBuf};
 
 use crate::models::{PaymentStatus, PaymentType};
 
 use super::{Payment, Storage, StorageError};
 
+const DEFAULT_DB_FILENAME: &str = "storage.sql";
 /// SQLite-based storage implementation
 pub struct SqliteStorage {
-    // Change from Arc<Connection> to Arc<Mutex<Connection>> to make it thread-safe
-    connection: Arc<Mutex<Connection>>,
+    db_dir: PathBuf,
 }
 
 impl SqliteStorage {
@@ -25,62 +23,59 @@ impl SqliteStorage {
     ///
     /// A new `SqliteStorage` instance or an error
     pub fn new(path: &Path) -> Result<Self, StorageError> {
-        let open_flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
-        let conn = Connection::open_with_flags(path, open_flags)?;
-
         let storage = Self {
-            connection: Arc::new(Mutex::new(conn)),
+            db_dir: path.to_path_buf(),
         };
 
-        storage.initialize()?;
-
+        storage.migrate()?;
         Ok(storage)
     }
 
-    /// Initializes the database by creating necessary tables
-    fn initialize(&self) -> Result<(), StorageError> {
-        let connection = self.connection.lock().unwrap();
+    pub(crate) fn get_connection(&self) -> Result<Connection, StorageError> {
+        Ok(Connection::open(self.get_db_path())?)
+    }
 
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS payments (
-                id TEXT PRIMARY KEY,
-                payment_type TEXT NOT NULL,
-                status TEXT NOT NULL,
-                amount INTEGER NOT NULL,
-                fees INTEGER NOT NULL,
-                timestamp INTEGER NOT NULL
-            )",
-            [],
-        )?;
+    fn get_db_path(&self) -> PathBuf {
+        self.db_dir.join(DEFAULT_DB_FILENAME)
+    }
 
-        // Create settings table for storing metadata like last_sync_offset
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )",
-            [],
-        )?;
-
+    fn migrate(&self) -> Result<(), StorageError> {
+        let migrations =
+            Migrations::new(Self::current_migrations().into_iter().map(M::up).collect());
+        let mut conn = self.get_connection()?;
+        migrations.to_latest(&mut conn)?;
         Ok(())
     }
 
-    /// Opens an in-memory `SQLite` database for testing purposes
-    #[cfg(test)]
-    pub fn in_memory() -> Result<Self, StorageError> {
-        let conn = Connection::open_in_memory()?;
-        let storage = Self {
-            connection: Arc::new(Mutex::new(conn)),
-        };
-        storage.initialize()?;
-        Ok(storage)
+    pub(crate) fn current_migrations() -> Vec<&'static str> {
+        vec![
+            "CREATE TABLE IF NOT EXISTS payments (
+              id TEXT PRIMARY KEY,
+              payment_type TEXT NOT NULL,
+              status TEXT NOT NULL,
+              amount INTEGER NOT NULL,
+              fees INTEGER NOT NULL,
+              timestamp INTEGER NOT NULL
+            );",
+            "CREATE TABLE IF NOT EXISTS settings (
+              key TEXT PRIMARY KEY,
+              value TEXT NOT NULL
+            );",
+        ]
     }
 }
 
-// Implement Send and Sync for SqliteStorage
-// This is safe because we're using Mutex for thread safety
-unsafe impl Send for SqliteStorage {}
-unsafe impl Sync for SqliteStorage {}
+impl From<rusqlite::Error> for StorageError {
+    fn from(value: rusqlite::Error) -> Self {
+        StorageError::Implementation(value.to_string())
+    }
+}
+
+impl From<rusqlite_migration::Error> for StorageError {
+    fn from(value: rusqlite_migration::Error) -> Self {
+        StorageError::Implementation(value.to_string())
+    }
+}
 
 impl Storage for SqliteStorage {
     fn list_payments(
@@ -88,7 +83,7 @@ impl Storage for SqliteStorage {
         offset: Option<u32>,
         limit: Option<u32>,
     ) -> Result<Vec<Payment>, StorageError> {
-        let connection = self.connection.lock().unwrap();
+        let connection = self.get_connection()?;
 
         let query = format!(
             "SELECT id, payment_type, status, amount, fees, timestamp FROM payments ORDER BY timestamp DESC LIMIT {} OFFSET {}",
@@ -118,7 +113,7 @@ impl Storage for SqliteStorage {
     }
 
     fn insert_payment(&self, payment: &Payment) -> Result<(), StorageError> {
-        let connection = self.connection.lock().unwrap();
+        let connection = self.get_connection()?;
 
         connection.execute(
             "INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp) 
@@ -137,7 +132,7 @@ impl Storage for SqliteStorage {
     }
 
     fn set_cached_item(&self, key: &str, value: String) -> Result<(), StorageError> {
-        let connection = self.connection.lock().unwrap();
+        let connection = self.get_connection()?;
 
         connection.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
@@ -148,7 +143,7 @@ impl Storage for SqliteStorage {
     }
 
     fn get_cached_item(&self, key: &str) -> Result<Option<String>, StorageError> {
-        let connection = self.connection.lock().unwrap();
+        let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare("SELECT value FROM settings WHERE key = ?")?;
 
@@ -165,7 +160,7 @@ impl Storage for SqliteStorage {
     }
 
     fn get_payment_by_id(&self, id: &str) -> Result<Payment, StorageError> {
-        let connection = self.connection.lock().unwrap();
+        let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare(
             "SELECT id, payment_type, status, amount, fees, timestamp FROM payments WHERE id = ?",
@@ -192,8 +187,8 @@ mod tests {
 
     #[test]
     fn test_sqlite_storage() {
-        // Create in-memory database
-        let storage = SqliteStorage::in_memory().unwrap();
+        let temp_dir = tempdir::TempDir::new("sqlite_storage").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
         // Create test payment
         let payment = Payment {

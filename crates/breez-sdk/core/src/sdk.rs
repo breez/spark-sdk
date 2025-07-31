@@ -236,7 +236,7 @@ impl BreezSdk {
                     .spark_wallet
                     .generate_deposit_address(true)
                     .await?
-                    .to_qr_uri(),
+                    .to_string(),
             }),
             ReceivePaymentMethod::Bolt11Invoice {
                 description,

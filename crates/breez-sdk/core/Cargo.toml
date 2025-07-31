@@ -24,7 +24,9 @@ qrcode-rs = { version = "0.1", default-features = false }
 thiserror.workspace = true
 chrono.workspace = true
 uuid.workspace = true
-rusqlite = { git = "https://github.com/Spxg/rusqlite", rev = "e36644127f31fa6e7ea0999b59432deb4a07f220", features = [
+rusqlite = { git = "https://github.com/Spxg/rusqlite", rev = "8e53118a3e1807dc9a9f59c5969fdff7e0416400", features = [
     "backup",
     "bundled",
 ] }
+tempdir = "0.3.7"
+rusqlite_migration = { git = "https://github.com/breez/rusqlite_migration", branch = "spxg-rusqlite" }

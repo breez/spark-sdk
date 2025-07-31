@@ -12,8 +12,8 @@ use crate::models::Payment;
 #[derive(Debug, Error)]
 pub enum StorageError {
     /// `SQLite` error
-    #[error("SQLite error: {0}")]
-    Sqlite(#[from] rusqlite::Error),
+    #[error("Underline implementation error: {0}")]
+    Implementation(String),
 
     /// Database initialization error
     #[error("Failed to initialize database: {0}")]
