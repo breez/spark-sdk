@@ -8,7 +8,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize)]
 pub enum SdkEvent {
     /// Emitted when the wallet has been synchronized with the network
-    Synced {},
+    Synced,
 }
 
 impl fmt::Display for SdkEvent {

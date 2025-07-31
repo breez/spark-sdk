@@ -113,9 +113,9 @@ impl From<WalletTransfer> for Payment {
 impl Payment {
     pub fn from_lightning(payment: LightningSendPayment, amount_sat: u64) -> Self {
         let status = match payment.status {
-            LightningSendStatus::Pending => PaymentStatus::Pending,
-            LightningSendStatus::Completed => PaymentStatus::Completed,
-            LightningSendStatus::Failed => PaymentStatus::Failed,
+            LightningSendStatus::LightningPaymentSucceeded => PaymentStatus::Completed,
+            LightningSendStatus::LightningPaymentFailed => PaymentStatus::Failed,
+            _ => PaymentStatus::Pending,
         };
         Payment {
             id: payment.id,
@@ -131,7 +131,7 @@ impl Payment {
 #[derive(Debug, Clone)]
 pub enum PaymentDetails {
     Lightning,
-    InternalTransfer,
+    Spark,
     Bitcoin,
 }
 

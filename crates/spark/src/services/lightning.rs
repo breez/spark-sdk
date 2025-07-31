@@ -56,17 +56,33 @@ pub struct LightningSendPayment {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub enum LightningSendStatus {
-    Pending,
-    Completed,
-    Failed,
+    Created,
+    RequestValidated,
+    LightningPaymentInitiated,
+    LightningPaymentFailed,
+    LightningPaymentSucceeded,
+    PreimageProvided,
+    TransferCompleted,
+    Unknown,
 }
 
 impl From<LightningSendRequestStatus> for LightningSendStatus {
     fn from(value: LightningSendRequestStatus) -> Self {
         match value {
-            LightningSendRequestStatus::LightningPaymentFailed => LightningSendStatus::Failed,
-            LightningSendRequestStatus::LightningPaymentSucceeded => LightningSendStatus::Completed,
-            _ => LightningSendStatus::Pending,
+            LightningSendRequestStatus::LightningPaymentFailed => {
+                LightningSendStatus::LightningPaymentFailed
+            }
+            LightningSendRequestStatus::LightningPaymentSucceeded => {
+                LightningSendStatus::LightningPaymentSucceeded
+            }
+            LightningSendRequestStatus::Created => LightningSendStatus::Created,
+            LightningSendRequestStatus::RequestValidated => LightningSendStatus::RequestValidated,
+            LightningSendRequestStatus::LightningPaymentInitiated => {
+                LightningSendStatus::LightningPaymentInitiated
+            }
+            LightningSendRequestStatus::PreimageProvided => LightningSendStatus::PreimageProvided,
+            LightningSendRequestStatus::TransferCompleted => LightningSendStatus::TransferCompleted,
+            LightningSendRequestStatus::Unknown => LightningSendStatus::Unknown,
         }
     }
 }

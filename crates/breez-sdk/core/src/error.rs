@@ -17,8 +17,8 @@ pub enum SdkError {
     InvalidInput(String),
 
     /// Network error
-    #[error("Network error: {network_err}")]
-    NetworkError { network_err: String },
+    #[error("Network error: {0}")]
+    NetworkError(String),
 
     /// Storage error
     #[error("Storage error: {0}")]
