@@ -9,7 +9,7 @@ use tracing::{error, info, trace};
 use tokio::sync::watch;
 
 use crate::{
-    GetPaymentRequest, GetPaymentResponse, Logger,
+    GetPaymentRequest, GetPaymentResponse, Logger, PaymentStatus,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -383,6 +383,7 @@ impl BreezSdk {
         let mut next_offset = current_offset;
         let mut has_more = true;
         info!("Syncing payments to storage, offset = {next_offset}");
+        let mut pending_payments = 0;
         while has_more {
             // Get batch of transfers starting from current offset
             let transfers_response = self
@@ -406,14 +407,18 @@ impl BreezSdk {
                 if let Err(err) = self.storage.insert_payment(&payment) {
                     error!("Failed to insert payment: {err:?}");
                 }
+                if payment.status == PaymentStatus::Pending {
+                    pending_payments += 1;
+                }
                 info!("Inserted payment: {payment:?}");
             }
 
             // Check if we have more transfers to fetch
             next_offset = next_offset.saturating_add(u64::try_from(transfers_response.len())?);
-            // Update our last processed offset in the storage
+            // Update our last processed offset in the storage. We should remove pending payments
+            // from the offset as they might be removed from the list later.
             let save_res = object_repository.save_sync_info(CachedSyncInfo {
-                offset: next_offset,
+                offset: next_offset - pending_payments,
             });
 
             if let Err(err) = save_res {
