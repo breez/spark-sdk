@@ -194,6 +194,31 @@ pub async fn sign_refunds<S: Signer>(
     })
 }
 
+/// Signs a refund transaction using FROST threshold signatures.
+///
+/// This function performs the client-side portion of the FROST signing protocol for a refund transaction:
+/// 1. Calculates the transaction sighash
+/// 2. Generates new nonce commitments for signing
+/// 3. Signs the transaction using the FROST protocol
+/// 4. Returns a structured `SignedTx` object with all data needed for later aggregation
+///
+/// The function does not perform signature aggregation - it only creates the user's signature share.
+/// Aggregation happens later when combined with operator signatures.
+///
+/// # Arguments
+///
+/// * `signer` - Reference to the signer implementation
+/// * `leaf` - The leaf key data containing node info and signing key
+/// * `tx` - The original transaction being spent by the refund transaction
+/// * `refund_tx` - The refund transaction to sign
+/// * `signing_public_key` - The public key corresponding to the user's signing key
+/// * `spark_commitments` - The FROST signing commitments from the Spark operators
+/// * `network` - The Bitcoin network being used
+///
+/// # Returns
+///
+/// * `Ok(SignedTx)` - A structure containing the signed transaction and signing metadata
+/// * `Err(SignerError)` - If the signing process fails
 async fn sign_refund<S: Signer>(
     signer: &Arc<S>,
     leaf: &LeafKeyTweak,
@@ -479,6 +504,25 @@ where
     Ok(signing_jobs)
 }
 
+/// Converts operator-provided node signatures into a structured `RefundSignatures` object.
+///
+/// This function processes an array of `NodeSignatures` (typically from operators) and maps them
+/// into HashMaps keyed by `TreeNodeId` for easier access. It handles three types of signatures:
+///
+/// 1. CPFP refund transaction signatures (always present)
+/// 2. Direct refund transaction signatures (optional)
+/// 3. Direct-from-CPFP refund transaction signatures (optional)
+///
+/// The function validates each signature by attempting to parse it from its compact representation.
+///
+/// # Arguments
+///
+/// * `node_signatures` - A vector of `NodeSignatures` from operators containing serialized signatures
+///
+/// # Returns
+///
+/// * `Ok(RefundSignatures)` - A structured object containing HashMaps of signatures organized by type and node ID
+/// * `Err(ServiceError)` - If any node ID or signature fails validation
 pub fn map_refund_signatures(
     node_signatures: Vec<crate::operator::rpc::spark::NodeSignatures>,
 ) -> Result<RefundSignatures, ServiceError> {

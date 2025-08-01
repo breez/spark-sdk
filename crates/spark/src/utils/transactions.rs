@@ -31,6 +31,20 @@ pub struct ConnectorRefundTxsParams<'a> {
     pub network: Network,
 }
 
+/// Creates a Bitcoin transaction for the Spark protocol with customizable parameters.
+///
+/// This function builds a transaction with a single input and one or two outputs:
+/// - The main output pays to the provided script with the specified value
+/// - An optional anchor output (when `include_anchor` is true)
+///
+/// # Arguments
+///
+/// * `previous_output` - The outpoint to use as the input for this transaction
+/// * `sequence` - The sequence number to use for the input (used for timelocks)
+/// * `value` - The amount to send in the transaction
+/// * `script_pubkey` - The output script to pay to
+/// * `apply_fee` - Whether to subtract a fee from the value (using `DEFAULT_FEE_SATS`)
+/// * `include_anchor` - Whether to include an ephemeral anchor output (for CPFP)
 fn create_spark_tx(
     previous_output: OutPoint,
     sequence: Sequence,
@@ -66,6 +80,33 @@ fn create_spark_tx(
     tx
 }
 
+/// Creates a pair of transactions for a Spark node, a CPFP transaction and an optional direct transaction.
+///
+/// This function generates two types of transactions:
+/// 1. A CPFP (Child Pays For Parent) transaction that always includes an anchor output for fee bumping
+/// 2. An optional direct transaction that can be used for direct spending (if `direct_outpoint` is provided)
+///
+/// The CPFP transaction is to be broadcast by the user in case of a unilateral exit. The direct transaction
+/// is to be used by the watchtower to be broadcast on the user's behalf if in case of an attack while the
+/// user is offline and unable to broadcast the CPFP transaction themselves. The sequence number for the
+/// direct transaction is always `DIRECT_TIME_LOCK_OFFSET` blocks higher than the CPFP transaction so that
+/// the CPFP transaction can be broadcast first.
+///
+/// # Arguments
+///
+/// * `cpfp_sequence` - The sequence number to use for the CPFP transaction's input
+/// * `direct_sequence` - The sequence number to use for the direct transaction's input (if created)
+/// * `cpfp_outpoint` - The outpoint to spend in the CPFP transaction
+/// * `direct_outpoint` - Optional outpoint to spend in the direct transaction
+/// * `value` - The amount to send in both transactions
+/// * `script_pubkey` - The output script to pay to in both transactions
+/// * `apply_fee` - Whether to subtract a fee from the direct transaction (fees are not applied to CPFP tx)
+///
+/// # Returns
+///
+/// A `NodeTransactions` struct containing:
+/// - `cpfp_tx`: Always present, includes an anchor output
+/// - `direct_tx`: Only present if `direct_outpoint` is provided, has no anchor output
 pub fn create_node_txs(
     cpfp_sequence: Sequence,
     direct_sequence: Sequence,
@@ -97,6 +138,39 @@ pub fn create_node_txs(
     NodeTransactions { cpfp_tx, direct_tx }
 }
 
+/// Creates a set of refund transactions that can be used to claim funds in case of protocol failures.
+///
+/// This function generates three possible transactions:
+/// 1. A CPFP (Child Pays For Parent) transaction that always includes an anchor output
+/// 2. An optional direct transaction that spends from the direct outpoint (if provided)
+/// 3. An optional direct transaction that spends from the CPFP outpoint, but with a different
+///    sequence number (used as an alternative spending path)
+///
+/// The CPFP refund transaction is to be broadcast by the user in case of a unilateral exit. The direct
+/// refund transactions are to be used by the watchtower to be broadcast on the user's behalf if in case
+/// of an attack while the user is offline and unable to broadcast the CPFP refund transaction themselves.
+/// The sequence number for the direct transaction is always `DIRECT_TIME_LOCK_OFFSET` blocks higher than
+/// the CPFP refund transaction so that the CPFP refund transaction can be broadcast first.
+///
+/// All transactions pay to a P2TR (Pay-to-Taproot) address derived from the provided public key.
+///
+/// # Arguments
+///
+/// * `cpfp_sequence` - The sequence number to use for the CPFP transaction's input
+/// * `direct_sequence` - The sequence number to use for direct transactions' inputs
+/// * `cpfp_outpoint` - The outpoint to spend in the CPFP transaction
+/// * `direct_outpoint` - Optional outpoint to spend in the direct transaction
+/// * `amount_sat` - The amount in satoshis to send in the transactions
+/// * `receiving_pubkey` - The public key to send the funds to (used to create P2TR address)
+/// * `network` - The Bitcoin network to use (affects address format)
+///
+/// # Returns
+///
+/// A `RefundTransactions` struct containing:
+/// - `cpfp_tx`: Always present, includes an anchor output
+/// - `direct_tx`: Only present if `direct_outpoint` is provided
+/// - `direct_from_cpfp_tx`: Alternative transaction that spends from the CPFP outpoint
+///   with the direct sequence number (only present if `direct_outpoint` is provided)
 pub fn create_refund_txs(
     cpfp_sequence: Sequence,
     direct_sequence: Sequence,
@@ -150,6 +224,40 @@ pub fn create_refund_txs(
     }
 }
 
+/// Creates a set of refund transactions for a connector in the Spark protocol.
+///
+/// This function is similar to `create_refund_txs`, but specifically designed for connectors.
+/// It generates transactions that spend from both the connector outpoint and one of the node
+/// outpoints in a single transaction. This is important for refund scenarios where both
+/// inputs need to be spent together.
+///
+/// The function generates three possible transactions:
+/// 1. A CPFP transaction that spends from both the CPFP outpoint and connector outpoint
+/// 2. An optional direct transaction that spends from both the direct outpoint and connector outpoint (if provided)
+/// 3. An optional alternative direct transaction that spends from both the CPFP outpoint and connector outpoint,
+///    but using the direct sequence number (if direct_outpoint is provided)
+///
+/// All transactions pay to a P2TR (Pay-to-Taproot) address derived from the provided public key.
+///
+/// # Arguments
+///
+/// * `params` - A `ConnectorRefundTxsParams` struct containing:
+///   - `cpfp_sequence`: The sequence number for the CPFP transaction
+///   - `direct_sequence`: The sequence number for direct transactions
+///   - `cpfp_outpoint`: The CPFP outpoint to spend
+///   - `direct_outpoint`: Optional direct outpoint to spend
+///   - `connector_outpoint`: The connector's outpoint that must be spent along with node outpoints
+///   - `amount_sats`: The amount in satoshis to send
+///   - `receiving_pubkey`: The public key to send funds to (used to create P2TR address)
+///   - `network`: The Bitcoin network to use (affects address format)
+///
+/// # Returns
+///
+/// A `RefundTransactions` struct containing:
+/// - `cpfp_tx`: Always present, spends both CPFP and connector outpoints
+/// - `direct_tx`: Only present if `direct_outpoint` is provided, spends direct and connector outpoints
+/// - `direct_from_cpfp_tx`: Alternative transaction that spends CPFP and connector outpoints with
+///   the direct sequence number (only present if `direct_outpoint` is provided)
 pub fn create_connector_refund_txs(params: ConnectorRefundTxsParams<'_>) -> RefundTransactions {
     // TODO: Isolate secp256k1 initialization to avoid multiple initializations
     let secp = Secp256k1::new();

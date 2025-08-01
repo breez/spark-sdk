@@ -24,6 +24,36 @@ pub struct SignAggregateFrostParams<'a, S: Signer> {
     pub signing_result: SigningResult,
 }
 
+/// Performs a complete FROST signing and aggregation flow for a Bitcoin transaction.
+///
+/// This function handles the full FROST (Flexible Round-Optimized Schnorr Threshold) signature process:
+/// 1. Creates a sighash for the transaction
+/// 2. Signs the sighash using FROST with the user's key
+/// 3. Aggregates the user's signature with signatures from statechain participants
+///
+/// The function supports optional adaptor signatures when an adaptor public key is provided.
+/// Adaptor signatures allow the signature to be "encrypted" under an adaptor key,
+/// requiring additional knowledge to extract the complete signature.
+///
+/// # Arguments
+///
+/// * `params` - A `SignAggregateFrostParams` struct containing:
+///   - `signer`: Reference to the signer implementation
+///   - `tx`: The Bitcoin transaction to sign
+///   - `prev_out`: The previous transaction output being spent
+///   - `signing_public_key`: The public key to use for signing (user's key)
+///   - `aggregating_public_key`: The public key to use for aggregation
+///   - `signing_private_key`: The private key source for signing
+///   - `self_nonce_commitment`: User's FROST nonce commitments with nonces
+///   - `adaptor_public_key`: Optional public key for adaptor signatures
+///   - `verifying_key`: The combined public key used to verify the signature
+///   - `signing_result`: Contains signature shares and commitments from statechain
+///
+/// # Returns
+///
+/// A `Result` containing:
+/// - `Ok(frost_secp256k1_tr::Signature)`: The aggregated FROST signature on success
+/// - `Err(SignerError)`: If any part of the signing or aggregation process fails
 pub async fn sign_aggregate_frost<S: Signer>(
     params: SignAggregateFrostParams<'_, S>,
 ) -> Result<frost_secp256k1_tr::Signature, SignerError> {

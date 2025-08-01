@@ -131,10 +131,52 @@ impl<S: Signer> TimelockManager<S> {
         Ok(ready_nodes)
     }
 
-    /// Refreshes the timelock on a single node by decrementing the timelock on the node tx
-    /// and rebuilding the refund tx with the initial timelock.
+    /// Refreshes a timelock node by creating new transactions with decreased timelocks.
     ///
-    /// Should be done when the refund tx timelock is about to expire.
+    /// This function decreases the timelock values in the node transaction to enable earlier
+    /// spending. It's part of the Spark protocol's safety mechanism to ensure funds can be
+    /// recovered if channel operations fail or are delayed.
+    ///
+    /// Transaction Relationship Structure:
+    /// ```ignore
+    ///                           +----------------+
+    ///                           | Parent Node TX |
+    ///                           +-------+--------+
+    ///                                   |
+    ///                     +-------------+--------------+
+    ///                     |                            |
+    ///           +---------v----------+       +---------v----------+
+    ///           | CPFP Node TX       |       | Direct Node TX     |
+    ///           | (decreased seq)    |       | (decreased seq)    |
+    ///           | (anchor, no fee)   |       | (no anchor, fee)   |
+    ///           +---------+----------+       +---------+----------+
+    ///                     |                            |
+    ///      +--------------+-------------+              +----------+
+    ///      |                            |                         |
+    /// +----v-------------+      +-------v----------+       +------v-----------+
+    /// | CPFP Refund TX   |      | Direct From CPFP |       | Direct Refund TX |
+    /// | (anchor, no fee) |      | Refund TX        |       | (no anchor, fee) |
+    /// |                  |      | (no anchor, fee) |       |                  |
+    /// +------------------+      +------------------+       +------------------+
+    /// ```
+    ///
+    /// The function:
+    /// 1. Calculates new, decreased sequence numbers using the `next_sequence` function
+    /// 2. Creates new node transactions (CPFP and Direct) with the decreased timelocks
+    /// 3. Creates new refund transactions for the newly created node transactions
+    /// 4. Sets up signing commitments for all transactions
+    /// 5. Signs all transactions using FROST threshold signatures
+    /// 6. Finalizes the signatures with operators
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The node to refresh
+    /// * `parent_node` - The parent of the node to be refreshed
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(TreeNode)` - The refreshed tree node with updated transactions
+    /// * `Err(ServiceError)` - If any part of the refresh process fails
     async fn refresh_timelock_node(
         &self,
         node: TreeNode,
@@ -374,9 +416,56 @@ impl<S: Signer> TimelockManager<S> {
         Ok(ready_nodes)
     }
 
-    /// Extends the timelock of a node by creating a new child node (this having the initial timelock on both node and refund txs).
+    /// Extends the timelock of a node by creating a new child node (this having the initial
+    /// timelock on both node and refund txs).
     ///
-    /// Should be done when the node tx timelock is about to expire.
+    /// Unlike `refresh_timelock_node` which decreases timelocks on existing transactions,
+    /// this function creates a completely new child node. Should be done when the node tx
+    /// timelock is about to expire.
+    ///
+    /// Transaction Relationship Structure:
+    /// ```ignore
+    ///                          +------------------+
+    ///                          | Original Node TX |
+    ///                          +--------+---------+
+    ///                                   |
+    ///                     +-------------+--------------+
+    ///                     |                            |
+    ///           +---------v----------+       +---------v----------+
+    ///           | New CPFP Node TX   |       | New Direct Node TX |
+    ///           | (anchor, no fee)   |       | (no anchor, fee)   |
+    ///           +---------+----------+       +---------+----------+
+    ///                     |                            |
+    ///      +--------------+-------------+              +----------+
+    ///      |                            |                         |
+    /// +----v-------------+      +-------v----------+       +------v-----------+
+    /// | CPFP Refund TX   |      | Direct From CPFP |       | Direct Refund TX |
+    /// | (anchor, no fee) |      | Refund TX        |       | (no anchor, fee) |
+    /// |                  |      | (no anchor, fee) |       |                  |
+    /// +------------------+      +------------------+       +------------------+
+    /// ```
+    ///
+    /// The key differences from refresh_timelock_node:
+    /// 1. Creates a completely new node rather than updating an existing node
+    /// 2. Uses initial timelocks for all transactions (resetting the countdown)
+    /// 3. Creates a child of the existing node instead of replacing it
+    /// 4. Requires a transfer to self to update the signing key for the new node
+    ///
+    /// The function:
+    /// 1. Creates new node transactions spending from the original node
+    /// 2. Creates new refund transactions with initial (maximum) timelocks
+    /// 3. Sets up signing commitments for all transactions
+    /// 4. Signs all transactions using FROST threshold signatures
+    /// 5. Finalizes the signatures with operators
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The node whose timelock needs to be extended
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<TreeNode>)` - The newly created tree nodes with fresh timelocks
+    /// * `Err(ServiceError)` - If any part of the extension process fails
     pub(crate) async fn extend_time_lock(
         &self,
         node: &TreeNode,

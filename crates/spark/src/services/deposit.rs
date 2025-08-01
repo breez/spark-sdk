@@ -397,6 +397,55 @@ impl<S: Signer> DepositService<S> {
         payload
     }
 
+    /// Creates a tree root node for a deposit transaction.
+    ///
+    /// This function initializes the transaction structure for a new deposit in the Spark protocol.
+    /// It creates multiple transactions to ensure security and flexibility in fund management:
+    ///
+    /// Transaction Structure:
+    /// ```ignore
+    ///                           +---------------+
+    ///                           | Deposit TX    |
+    ///                           | (On-chain)    |
+    ///                           +-------+-------+
+    ///                                   |
+    ///                     +-------------+--------------+
+    ///                     |                            |
+    ///           +---------v----------+       +---------v----------+
+    ///           | CPFP Root TX       |       | Direct Root TX     |
+    ///           | (anchor, no fee)   |       | (no anchor, fee)   |
+    ///           +---------+----------+       +---------+----------+
+    ///                     |                            |
+    ///      +--------------+-------------+              +----------+
+    ///      |                            |                         |
+    /// +----v-------------+      +-------v----------+       +------v-----------+
+    /// | CPFP Refund TX   |      | Direct From CPFP |       | Direct Refund TX |
+    /// | (anchor, no fee) |      | Refund TX        |       | (no anchor, fee) |
+    /// |                  |      | (no anchor, fee) |       |                  |
+    /// +------------------+      +------------------+       +------------------+
+    /// ```
+    ///
+    /// The function:
+    /// 1. Creates a pair of root transactions (CPFP and Direct) that spend from the deposit
+    /// 2. Creates three refund transactions to ensure funds can be recovered:
+    ///    - CPFP Refund TX: Spends from CPFP Root TX, includes anchor output for fee bumping
+    ///    - Direct Refund TX: Spends from Direct Root TX, no anchor output
+    ///    - Direct-from-CPFP Refund TX: Alternative path that spends from CPFP Root TX using direct sequence
+    /// 3. Sets up signing commitments for all transactions
+    /// 4. Signs all transactions using FROST threshold signatures
+    /// 5. Finalizes and registers the node with operators
+    ///
+    /// # Arguments
+    ///
+    /// * `deposit_leaf_id` - The ID for the leaf node being created
+    /// * `verifying_public_key` - The public key used to verify signatures
+    /// * `deposit_tx` - The on-chain deposit transaction
+    /// * `vout` - The output index in the deposit transaction
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<TreeNode>)` - The created tree nodes
+    /// * `Err(ServiceError)` - If any part of the creation process fails
     async fn create_tree_root(
         &self,
         deposit_leaf_id: &TreeNodeId,

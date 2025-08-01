@@ -17,9 +17,27 @@ pub fn initial_direct_sequence() -> Sequence {
     to_sequence(INITIAL_TIME_LOCK + DIRECT_TIME_LOCK_OFFSET)
 }
 
-/// Calculate the next sequence based on the current sequence.
-/// Returns `None` if the current sequence is too low to calculate the next sequence.
-/// Otherwise, returns a tuple containing the next sequence and the direct sequence.
+/// Calculates the next pair of sequence numbers for transaction timelocks.
+///
+/// This function is used in the Spark protocol to generate decreasing timelocks
+/// for refund transactions. Each call decreases the timelock by `TIME_LOCK_INTERVAL` blocks.
+/// It returns both a CPFP sequence and a direct sequence, where the direct sequence
+/// is offset by `DIRECT_TIME_LOCK_OFFSET` blocks from the CPFP sequence.
+///
+/// # Arguments
+///
+/// * `current_sequence` - The current sequence number to decrement
+///
+/// # Returns
+///
+/// * `Some((cpfp_sequence, direct_sequence))` - A tuple containing the next CPFP and direct sequence numbers
+/// * `None` - If the timelock can't be decreased further (would go below zero)
+///
+/// # Notes
+///
+/// - CPFP sequences are used for transactions that include an anchor output for fee bumping
+/// - Direct sequences are used for transactions that spend directly without anchor outputs
+/// - The direct sequence is always `DIRECT_TIME_LOCK_OFFSET` blocks higher than the CPFP sequence
 pub fn next_sequence(current_sequence: Sequence) -> Option<(Sequence, Sequence)> {
     let current_sequence_num = current_sequence.to_consensus_u32();
     trace!("Current sequence {}", current_sequence_num);
