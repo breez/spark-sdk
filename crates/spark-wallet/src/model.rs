@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bitcoin::{Transaction, secp256k1::PublicKey};
 use serde::{Deserialize, Serialize};
@@ -40,20 +40,31 @@ pub struct WalletTransfer {
     pub direction: TransferDirection,
 }
 
-impl From<Transfer> for WalletTransfer {
-    fn from(value: Transfer) -> Self {
+impl WalletTransfer {
+    pub fn from_transfer(value: Transfer, our_public_key: PublicKey) -> Self {
+        let direction = if value.sender_identity_public_key == our_public_key {
+            TransferDirection::Outgoing
+        } else {
+            TransferDirection::Incoming
+        };
         WalletTransfer {
             id: value.id,
             sender_id: value.sender_identity_public_key,
             receiver_id: value.receiver_identity_public_key,
             status: value.status,
             total_value_sat: value.total_value,
-            expiry_time: None,
+            expiry_time: value
+                .expiry_time
+                .map(|t| UNIX_EPOCH + Duration::from_secs(t)),
             leaves: value.leaves.into_iter().map(Into::into).collect(),
-            created_at: None,
-            updated_at: None,
+            created_at: value
+                .created_time
+                .map(|t| UNIX_EPOCH + Duration::from_secs(t)),
+            updated_at: value
+                .updated_time
+                .map(|t| UNIX_EPOCH + Duration::from_secs(t)),
             transfer_type: value.transfer_type,
-            direction: TransferDirection::default(), // TODO: Set to actual direction
+            direction,
         }
     }
 }
@@ -67,18 +78,23 @@ pub enum PayLightningInvoiceResult {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WalletTransferLeaf {
     pub leaf: WalletLeaf,
-    // pub secret_cipher: String,
-    // pub signature: String,
-    // pub intermediate_refund_tx: String,
+    pub secret_cipher: String,
+    pub signature: String,
+    pub intermediate_refund_tx: String,
 }
 
 impl From<TransferLeaf> for WalletTransferLeaf {
     fn from(value: TransferLeaf) -> Self {
         WalletTransferLeaf {
             leaf: value.leaf.into(),
-            // secret_cipher: value.secret_cipher,
-            // signature: value.signature,
-            // intermediate_refund_tx: value.intermediate_refund_tx,
+            secret_cipher: hex::encode(value.secret_cipher),
+            signature: value
+                .signature
+                .map(|s| hex::encode(s.serialize_compact()))
+                .unwrap_or_default(),
+            intermediate_refund_tx: hex::encode(bitcoin::consensus::serialize(
+                &value.intermediate_refund_tx,
+            )),
         }
     }
 }
@@ -116,10 +132,8 @@ impl From<TreeNode> for WalletLeaf {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum TransferDirection {
-    #[default]
-    Unknown,
     Incoming,
     Outgoing,
 }

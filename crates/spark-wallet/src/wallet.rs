@@ -433,12 +433,20 @@ impl<S: Signer> SparkWallet<S> {
             )
             .await?;
 
-        Ok(transfer.into())
+        Ok(WalletTransfer::from_transfer(
+            transfer,
+            self.identity_public_key,
+        ))
     }
 
     /// Claims all pending transfers.
     pub async fn claim_pending_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
-        claim_pending_transfers(&self.transfer_service, &self.tree_service).await
+        claim_pending_transfers(
+            self.identity_public_key,
+            &self.transfer_service,
+            &self.tree_service,
+        )
+        .await
     }
 
     pub fn get_info(&self) -> WalletInfo {
@@ -464,19 +472,27 @@ impl<S: Signer> SparkWallet<S> {
         &self,
         paging: Option<PagingFilter>,
     ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+        let our_pubkey = self.identity_public_key;
         let transfers = self.transfer_service.query_transfers(paging).await?;
-        Ok(transfers.into_iter().map(WalletTransfer::from).collect())
+        Ok(transfers
+            .into_iter()
+            .map(|t| WalletTransfer::from_transfer(t, our_pubkey))
+            .collect())
     }
 
     pub async fn list_pending_transfers(
         &self,
         paging: Option<PagingFilter>,
     ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+        let our_pubkey = self.identity_public_key;
         let transfers = self
             .transfer_service
             .query_pending_transfers(paging)
             .await?;
-        Ok(transfers.into_iter().map(WalletTransfer::from).collect())
+        Ok(transfers
+            .into_iter()
+            .map(|t| WalletTransfer::from_transfer(t, our_pubkey))
+            .collect())
     }
 
     /// Signs a message with the identity key using ECDSA and returns the signature.
@@ -552,7 +568,10 @@ impl<S: Signer> SparkWallet<S> {
             )
             .await?;
 
-        Ok(transfer.into())
+        Ok(WalletTransfer::from_transfer(
+            transfer,
+            self.identity_public_key,
+        ))
     }
 
     async fn withdraw_inner(
@@ -610,6 +629,7 @@ impl<S: Signer> SparkWallet<S> {
 }
 
 async fn claim_pending_transfers<S: Signer>(
+    our_pubkey: PublicKey,
     transfer_service: &Arc<TransferService<S>>,
     tree_service: &Arc<TreeService<S>>,
 ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
@@ -622,7 +642,10 @@ async fn claim_pending_transfers<S: Signer>(
         claim_transfer(transfer, transfer_service, tree_service).await?;
     }
 
-    Ok(transfers.into_iter().map(WalletTransfer::from).collect())
+    Ok(transfers
+        .into_iter()
+        .map(|t| WalletTransfer::from_transfer(t, our_pubkey))
+        .collect())
 }
 
 async fn claim_transfer<S: Signer>(
@@ -701,21 +724,26 @@ impl<S: Signer> BackgroundProcessor<S> {
             error!("Error refreshing leaves on startup: {:?}", e);
         }
 
-        let ignore_transfers =
-            match claim_pending_transfers(&self.transfer_service, &self.tree_service).await {
-                Ok(transfers) => {
-                    debug!("Claimed {} pending transfers on startup", transfers.len());
-                    for transfer in &transfers {
-                        self.event_manager
-                            .notify_listeners(WalletEvent::TransferClaimed(transfer.id.clone()));
-                    }
-                    transfers.into_iter().map(|t| t.id).collect()
+        let ignore_transfers = match claim_pending_transfers(
+            self.identity_public_key,
+            &self.transfer_service,
+            &self.tree_service,
+        )
+        .await
+        {
+            Ok(transfers) => {
+                debug!("Claimed {} pending transfers on startup", transfers.len());
+                for transfer in &transfers {
+                    self.event_manager
+                        .notify_listeners(WalletEvent::TransferClaimed(transfer.id.clone()));
                 }
-                Err(e) => {
-                    debug!("Error claiming pending transfers on startup: {:?}", e);
-                    HashSet::new()
-                }
-            };
+                transfers.into_iter().map(|t| t.id).collect()
+            }
+            Err(e) => {
+                debug!("Error claiming pending transfers on startup: {:?}", e);
+                HashSet::new()
+            }
+        };
 
         self.event_manager.notify_listeners(WalletEvent::Synced);
         self.process_events(event_stream, ignore_transfers).await;

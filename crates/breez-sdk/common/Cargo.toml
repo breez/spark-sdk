@@ -1,0 +1,51 @@
+[package]
+name = "breez-sdk-common"
+edition = "2024"
+version.workspace = true
+
+[build-dependencies]
+uniffi = { workspace = true, features = [ "build" ], optional = true }
+tonic-build = { workspace = true }
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+bech32.workspace = true
+bitcoin.workspace = true
+breez-sdk-macros.workspace = true
+# flutter_rust_bridge = { workspace = true, optional = true}
+hex.workspace = true
+lightning.workspace = true
+percent-encoding-rfc3986.workspace = true
+prost.workspace = true
+reqwest.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+strum = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+hickory-resolver = { workspace = true, features = ["dnssec-ring"] }
+maybe-sync = { workspace = true, features = ["sync"] }
+prost.workspace = true
+tonic.workspace=true
+uniffi = { workspace = true, optional = true }
+
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+dns-parser.workspace = true
+maybe-sync.workspace = true
+tonic-web-wasm-client.workspace = true
+uniffi = { version = "0.29.2", features = ["wasm-unstable-single-threaded"], optional = true }
+
+[features]
+# flutter = ["dep:flutter_rust_bridge"]
+uniffi = ["dep:uniffi"]
+
+[lib]
+crate-type = ["staticlib", "cdylib", "lib"]
+name = "breez_sdk_common"
+
+[lints]
+workspace = true
