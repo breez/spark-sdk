@@ -48,9 +48,8 @@ macro_rules! with_connection_retry {
                 "with_connection_fallback: initial call failed with: {:?}",
                 status
             );
-            let source = match status.source() {
-                Some(source) => source,
-                None => return Err(status),
+            let Some(source) = status.source() else {
+                return Err(status);
             };
 
             let error: &tonic::transport::Error = match source.downcast_ref() {
@@ -62,9 +61,8 @@ macro_rules! with_connection_retry {
                 return Err(status);
             }
 
-            let source = match error.source() {
-                Some(source) => source,
-                None => return Err(status),
+            let Some(source) = error.source() else {
+                return Err(status);
             };
 
             debug!(

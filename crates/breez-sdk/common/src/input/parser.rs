@@ -426,82 +426,7 @@ fn parse_bip_21(input: &str, source: &PaymentRequestSource) -> Result<Option<Bip
                 (original_key, false)
             };
 
-            match key {
-                "amount" if bip_21.amount_sat.is_some() => {
-                    return Err(Bip21Error::multiple_params(key));
-                }
-                "amount" => {
-                    bip_21.amount_sat = Some(
-                        bitcoin::Amount::from_str_in(value, Denomination::Bitcoin)
-                            .map_err(|_| Bip21Error::InvalidAmount)?
-                            .to_sat(),
-                    );
-                }
-                "assetid" if bip_21.asset_id.is_some() => {
-                    return Err(Bip21Error::multiple_params(key));
-                }
-                "assetid" => bip_21.asset_id = Some(value.to_string()),
-                "bc" => {}
-                "label" if bip_21.label.is_some() => {
-                    return Err(Bip21Error::multiple_params(key));
-                }
-                "label" => {
-                    let percent_decoded = percent_decode_str(value)
-                        .map_err(Bip21Error::invalid_parameter_func("label"))?;
-                    bip_21.label = Some(
-                        percent_decoded
-                            .decode_utf8()
-                            .map_err(Bip21Error::invalid_parameter_func("label"))?
-                            .to_string(),
-                    );
-                }
-                "lightning" => {
-                    let lightning = parse_lightning_payment_method(value, source);
-                    match lightning {
-                        Some(lightning) => bip_21.payment_methods.push(lightning),
-                        None => return Err(Bip21Error::invalid_parameter("lightning")),
-                    }
-                }
-                "lno" => {
-                    let bolt12_offer = parse_bolt12_offer(value, source);
-                    match bolt12_offer {
-                        Some(offer) => bip_21.payment_methods.push(InputType::Bolt12Offer(offer)),
-                        None => return Err(Bip21Error::invalid_parameter("lno")),
-                    }
-                }
-                "message" if bip_21.message.is_some() => {
-                    return Err(Bip21Error::multiple_params(key));
-                }
-                "message" => {
-                    let percent_decoded = percent_decode_str(value)
-                        .map_err(Bip21Error::invalid_parameter_func("label"))?;
-                    bip_21.message = Some(
-                        percent_decoded
-                            .decode_utf8()
-                            .map_err(Bip21Error::invalid_parameter_func("label"))?
-                            .to_string(),
-                    );
-                }
-                "sp" => {
-                    let silent_payment_address = parse_silent_payment_address(input, source);
-                    match silent_payment_address {
-                        Some(silent_payment) => bip_21
-                            .payment_methods
-                            .push(InputType::SilentPaymentAddress(silent_payment)),
-                        None => return Err(Bip21Error::invalid_parameter("sp")),
-                    }
-                }
-                extra_key => {
-                    if is_required {
-                        return Err(Bip21Error::UnknownRequiredParameter(extra_key.to_string()));
-                    }
-
-                    bip_21.extras.push(Bip21Extra {
-                        key: original_key.to_string(),
-                        value: value.to_string(),
-                    });
-                }
-            }
+            parse_bip21_key(source, &mut bip_21, original_key, value, key, is_required)?;
         }
     }
 
@@ -510,6 +435,93 @@ fn parse_bip_21(input: &str, source: &PaymentRequestSource) -> Result<Option<Bip
     }
 
     Ok(Some(bip_21))
+}
+
+fn parse_bip21_key(
+    source: &PaymentRequestSource,
+    bip_21: &mut Bip21,
+    original_key: &str,
+    value: &str,
+    key: &str,
+    is_required: bool,
+) -> Result<(), Bip21Error> {
+    match key {
+        "amount" if bip_21.amount_sat.is_some() => {
+            return Err(Bip21Error::multiple_params(key));
+        }
+        "amount" => {
+            bip_21.amount_sat = Some(
+                bitcoin::Amount::from_str_in(value, Denomination::Bitcoin)
+                    .map_err(|_| Bip21Error::InvalidAmount)?
+                    .to_sat(),
+            );
+        }
+        "assetid" if bip_21.asset_id.is_some() => {
+            return Err(Bip21Error::multiple_params(key));
+        }
+        "assetid" => bip_21.asset_id = Some(value.to_string()),
+        "bc" => {}
+        "label" if bip_21.label.is_some() => {
+            return Err(Bip21Error::multiple_params(key));
+        }
+        "label" => {
+            let percent_decoded =
+                percent_decode_str(value).map_err(Bip21Error::invalid_parameter_func("label"))?;
+            bip_21.label = Some(
+                percent_decoded
+                    .decode_utf8()
+                    .map_err(Bip21Error::invalid_parameter_func("label"))?
+                    .to_string(),
+            );
+        }
+        "lightning" => {
+            let lightning = parse_lightning_payment_method(value, source);
+            match lightning {
+                Some(lightning) => bip_21.payment_methods.push(lightning),
+                None => return Err(Bip21Error::invalid_parameter("lightning")),
+            }
+        }
+        "lno" => {
+            let bolt12_offer = parse_bolt12_offer(value, source);
+            match bolt12_offer {
+                Some(offer) => bip_21.payment_methods.push(InputType::Bolt12Offer(offer)),
+                None => return Err(Bip21Error::invalid_parameter("lno")),
+            }
+        }
+        "message" if bip_21.message.is_some() => {
+            return Err(Bip21Error::multiple_params(key));
+        }
+        "message" => {
+            let percent_decoded =
+                percent_decode_str(value).map_err(Bip21Error::invalid_parameter_func("label"))?;
+            bip_21.message = Some(
+                percent_decoded
+                    .decode_utf8()
+                    .map_err(Bip21Error::invalid_parameter_func("label"))?
+                    .to_string(),
+            );
+        }
+        "sp" => {
+            let silent_payment_address = parse_silent_payment_address(value, source);
+            match silent_payment_address {
+                Some(silent_payment) => bip_21
+                    .payment_methods
+                    .push(InputType::SilentPaymentAddress(silent_payment)),
+                None => return Err(Bip21Error::invalid_parameter("sp")),
+            }
+        }
+        extra_key => {
+            if is_required {
+                return Err(Bip21Error::UnknownRequiredParameter(extra_key.to_string()));
+            }
+
+            bip_21.extras.push(Bip21Extra {
+                key: original_key.to_string(),
+                value: value.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn parse_bitcoin(input: &str, source: &PaymentRequestSource) -> Option<InputType> {
@@ -730,6 +742,7 @@ pub enum LnurlRequestData {
 }
 
 #[cfg(test)]
+#[allow(clippy::similar_names)]
 mod tests {
 
     use serde_json::json;

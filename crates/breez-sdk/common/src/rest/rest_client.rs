@@ -86,6 +86,7 @@ where
     })
 }
 
+#[allow(dead_code)]
 pub async fn get_and_check_success<C: RestClient + ?Sized>(
     rest_client: &C,
     url: &str,

@@ -292,7 +292,7 @@ impl BreezSdk {
                         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
                 })
             }
-            breez_sdk_common::input::InputType::BitcoinAddress(bitcoin_address) => todo!(),
+            breez_sdk_common::input::InputType::BitcoinAddress(_bitcoin_address) => todo!(),
             _ => Err(SdkError::GenericError("Unsupported input type".to_string())),
         }
     }
@@ -332,7 +332,7 @@ impl BreezSdk {
                 };
                 Ok(SendPaymentResponse { payment })
             }
-            SendPaymentMethod::BitcoinAddress { address } => todo!(),
+            SendPaymentMethod::BitcoinAddress { address: _ } => todo!(),
         }
     }
 

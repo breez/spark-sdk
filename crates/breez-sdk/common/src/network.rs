@@ -15,7 +15,6 @@ pub enum BitcoinNetwork {
 impl From<bitcoin::Network> for BitcoinNetwork {
     fn from(network: bitcoin::Network) -> Self {
         match network {
-            bitcoin::Network::Bitcoin => BitcoinNetwork::Bitcoin,
             bitcoin::Network::Testnet => BitcoinNetwork::Testnet3,
             bitcoin::Network::Testnet4 => BitcoinNetwork::Testnet4,
             bitcoin::Network::Signet => BitcoinNetwork::Signet,

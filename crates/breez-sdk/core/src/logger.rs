@@ -18,14 +18,15 @@ impl<S> Layer<S> for GlobalSdkLogger
 where
     S: Subscriber,
 {
-    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         if event.metadata().level() <= &Level::INFO {
             if let Some(s) = self.log_listener.as_ref() {
                 let mut buf = String::new();
                 let writer = Writer::new(&mut buf);
 
                 if tracing_subscriber::fmt::format::DefaultFields::new()
-                    .format_fields(writer, event).is_ok()
+                    .format_fields(writer, event)
+                    .is_ok()
                 {
                     s.log(LogEntry {
                         line: buf,

@@ -30,7 +30,7 @@ pub struct BreezServer {
 }
 
 impl BreezServer {
-    pub fn new(server_url: String, api_key: Option<String>) -> anyhow::Result<Self> {
+    pub fn new(server_url: &str, api_key: Option<String>) -> anyhow::Result<Self> {
         Ok(Self {
             grpc_client: Mutex::new(GrpcClient::new(server_url)?),
             api_key,

@@ -120,9 +120,7 @@ pub(crate) async fn execute_command(
                     prepared_payment.err().unwrap()
                 ));
             };
-            println!(
-                "Prepared payment: {prepare_response:#?}\n Do you want to continue? (y/n)"
-            );
+            println!("Prepared payment: {prepare_response:#?}\n Do you want to continue? (y/n)");
             let line = rl.readline_with_initial("", ("y", ""))?.to_lowercase();
             if line != "y" {
                 return Ok(true);

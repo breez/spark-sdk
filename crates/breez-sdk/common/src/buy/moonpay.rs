@@ -79,6 +79,7 @@ impl BuyBitcoinProviderApi for MoonpayProvider {
         redirect_url: Option<String>,
     ) -> Result<String> {
         let config = moonpay_config();
+        #[allow(clippy::cast_precision_loss)]
         let url = create_moonpay_url(
             address,
             locked_amount_sat.map(|amount| format!("{:.8}", amount as f64 / 100_000_000.0)),

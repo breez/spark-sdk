@@ -9,9 +9,9 @@ pub struct GrpcClient {
 }
 
 impl GrpcClient {
-    pub fn new(url: String) -> Result<Self> {
+    pub fn new(url: &str) -> Result<Self> {
         Ok(Self {
-            inner: Self::create_endpoint(&url)?.connect_lazy(),
+            inner: Self::create_endpoint(url)?.connect_lazy(),
         })
     }
 
