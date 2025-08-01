@@ -82,6 +82,7 @@ use enum_to_enum::FromEnum;
 use serde::{Deserialize, Serialize};
 
 pub use crate::ssp::graphql::queries::claim_static_deposit::ClaimStaticDepositInput;
+pub use crate::ssp::graphql::queries::complete_leaves_swap::CompleteLeavesSwapInput;
 pub use crate::ssp::graphql::queries::request_coop_exit::RequestCoopExitInput;
 pub use crate::ssp::graphql::queries::request_leaves_swap::RequestLeavesSwapInput;
 pub use crate::ssp::graphql::queries::request_leaves_swap::UserLeafInput;
@@ -149,6 +150,7 @@ pub enum SparkLeavesSwapRequestStatus {
     LeavesLocked,
     RefundTxAdaptorSigned,
     InboundTransferClaimed,
+    InboundTransferVerified,
     Succeeded,
     Expired,
     Failed,
@@ -184,7 +186,12 @@ pub enum LightningSendRequestStatus {
     LightningPaymentFailed,
     LightningPaymentSucceeded,
     PreimageProvided,
+    PreimageProvidingFailed,
     TransferCompleted,
+    TransferFailed,
+    PendingUserSwapReturn,
+    UserSwapReturned,
+    UserSwapReturnFailed,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -356,10 +363,8 @@ pub enum ClaimStaticDepositStatus {
     Created,
     TransferCreated,
     TransferCreationFailed,
-    RefundSigningCommitmentsQueryingFailed,
-    RefundSigningFailed,
-    UtxoSwappingFailed,
     TransferCompleted,
+    UtxoSwappingFailed,
     SpendTxCreated,
     SpendTxBroadcast,
     #[serde(other, skip_serializing)]
@@ -375,12 +380,6 @@ impl From<TransfersClaimStaticDepositStatus> for ClaimStaticDepositStatus {
             }
             TransfersClaimStaticDepositStatus::TRANSFER_CREATION_FAILED => {
                 ClaimStaticDepositStatus::TransferCreationFailed
-            }
-            TransfersClaimStaticDepositStatus::REFUND_SIGNING_COMMITMENTS_QUERYING_FAILED => {
-                ClaimStaticDepositStatus::RefundSigningCommitmentsQueryingFailed
-            }
-            TransfersClaimStaticDepositStatus::REFUND_SIGNING_FAILED => {
-                ClaimStaticDepositStatus::RefundSigningFailed
             }
             TransfersClaimStaticDepositStatus::UTXO_SWAPPING_FAILED => {
                 ClaimStaticDepositStatus::UtxoSwappingFailed

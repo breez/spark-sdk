@@ -52,6 +52,20 @@ type ClaimStaticDeposit implements UserRequest & Entity {
   transfer_spark_id: UUID
 }
 
+input ClaimStaticDepositFixedAmountInput {
+  static_deposit_quote_id: ID!
+
+  """
+  The user's private key share for the static deposit address. This key share is used in combination with Spark operator key shares to create the final signature for the spend transaction.
+  """
+  static_deposit_address_private_key_share: String!
+
+  """
+  The user's signature authorizing the static deposit claim. This is a hex-encoded ECDSA signature that proves the user's authorization to claim the deposit. The signature should be created by signing a message containing the claim details (transaction ID, output index, network, and credit amount) with the user's identity private key. This signature is used to authenticate the claim request and prevent unauthorized access to the deposit funds.
+  """
+  signature: String!
+}
+
 input ClaimStaticDepositInput {
   """The transaction id of the deposit."""
   transaction_id: String!
@@ -94,10 +108,8 @@ enum ClaimStaticDepositStatus {
   CREATED
   TRANSFER_CREATED
   TRANSFER_CREATION_FAILED
-  REFUND_SIGNING_COMMITMENTS_QUERYING_FAILED
-  REFUND_SIGNING_FAILED
-  UTXO_SWAPPING_FAILED
   TRANSFER_COMPLETED
+  UTXO_SWAPPING_FAILED
   SPEND_TX_CREATED
   SPEND_TX_BROADCAST
 }
@@ -115,6 +127,8 @@ input CompleteLeavesSwapInput {
   adaptor_secret_key: String!
   user_outbound_transfer_external_id: UUID!
   leaves_swap_request_id: ID!
+  direct_adaptor_secret_key: String = null
+  direct_from_cpfp_adaptor_secret_key: String = null
 }
 
 type CompleteLeavesSwapOutput {
@@ -423,7 +437,7 @@ type LeavesSwapRequest implements UserRequest & Entity {
   """The network the lightning send request is on."""
   network: BitcoinNetwork!
 
-  """The status of the request."""
+  """The status of the request for Spark users."""
   status: SparkLeavesSwapRequestStatus!
 
   """The total amount of leaves user sent for swap."""
@@ -548,7 +562,12 @@ enum LightningSendRequestStatus {
   LIGHTNING_PAYMENT_FAILED
   LIGHTNING_PAYMENT_SUCCEEDED
   PREIMAGE_PROVIDED
+  PREIMAGE_PROVIDING_FAILED
   TRANSFER_COMPLETED
+  TRANSFER_FAILED
+  PENDING_USER_SWAP_RETURN
+  USER_SWAP_RETURNED
+  USER_SWAP_RETURN_FAILED
 }
 
 """The `Long` scalar type represents a 64 bit integer."""
@@ -557,6 +576,9 @@ scalar Long
 type Mutation {
   """For spark users to claim static deposits."""
   claim_static_deposit(input: ClaimStaticDepositInput!): ClaimStaticDepositOutput!
+
+  """For spark users to claim static deposits using fixed amount method."""
+  claim_static_deposit_fixed_amount(input: ClaimStaticDepositFixedAmountInput!): ClaimStaticDepositOutput!
 
   """This API will broadcast the coop exit transaction."""
   complete_coop_exit(input: CompleteCoopExitInput!): CompleteCoopExitOutput!
@@ -652,6 +674,11 @@ type Query {
   """
   static_deposit_quote(input: StaticDepositQuoteInput!): StaticDepositQuoteOutput!
 
+  """
+  Get a FIXED_AMOUNT quote from this SSP to claim a deposit to a static deposit address.
+  """
+  quote_static_deposit(input: StaticDepositQuoteInput!): QuoteStaticDepositOutput!
+
   """Query the user request of a given id."""
   user_request(request_id: ID!): UserRequest
 
@@ -660,6 +687,10 @@ type Query {
 
   """Query transfers of a given list of transfer spark ids."""
   transfers(transfer_spark_ids: [UUID!]!): [Transfer!]!
+}
+
+type QuoteStaticDepositOutput {
+  quote: StaticDepositQuote!
 }
 
 input RequestCoopExitInput {
@@ -684,6 +715,8 @@ input RequestLeavesSwapInput {
   user_leaves: [UserLeafInput!]!
   idempotency_key: String!
   target_amount_sats_list: [Long!] = null
+  direct_adaptor_pubkey: PublicKey = null
+  direct_from_cpfp_adaptor_pubkey: PublicKey = null
 }
 
 type RequestLeavesSwapOutput {
@@ -779,6 +812,7 @@ enum SparkLeavesSwapRequestStatus {
   LEAVES_LOCKED
   REFUND_TX_ADAPTOR_SIGNED
   INBOUND_TRANSFER_CLAIMED
+  INBOUND_TRANSFER_VERIFIED
   SUCCEEDED
   EXPIRED
   FAILED
@@ -854,6 +888,34 @@ input StartSeedReleaseInput {
   phone_number: String!
 }
 
+type StaticDepositQuote implements Entity {
+  """
+  The unique identifier of this entity across all Lightspark systems. Should be treated as an opaque string.
+  """
+  id: ID!
+
+  """The date and time when the entity was first created."""
+  created_at: DateTime!
+
+  """The date and time when the entity was last updated."""
+  updated_at: DateTime!
+
+  """The network of the deposit."""
+  network: BitcoinNetwork!
+
+  """The transaction id of the deposit."""
+  transaction_id: String!
+
+  """The output index of the deposit."""
+  output_index: Int!
+
+  """The amount of credit to be added to the user's balance."""
+  credit_amount: CurrencyAmount!
+
+  """The quote signature from SSP."""
+  quote_signature: String!
+}
+
 input StaticDepositQuoteInput {
   """The transaction id of the deposit."""
   transaction_id: String!
@@ -886,6 +948,10 @@ type SwapLeaf {
   leaf_id: UUID!
   raw_unsigned_refund_transaction: String!
   adaptor_signed_signature: String!
+  direct_raw_unsigned_refund_transaction: String
+  direct_from_cpfp_raw_unsigned_refund_transaction: String
+  direct_adaptor_signed_signature: String
+  direct_from_cpfp_adaptor_signed_signature: String
 }
 
 type Transfer {
@@ -910,6 +976,10 @@ input UserLeafInput {
   leaf_id: UUID!
   raw_unsigned_refund_transaction: String!
   adaptor_added_signature: String!
+  direct_raw_unsigned_refund_transaction: String = null
+  direct_from_cpfp_raw_unsigned_refund_transaction: String = null
+  direct_adaptor_added_signature: String = null
+  direct_from_cpfp_adaptor_added_signature: String = null
 }
 
 interface UserRequest implements Entity {

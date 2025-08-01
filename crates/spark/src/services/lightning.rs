@@ -13,16 +13,15 @@ use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
     ServiceProvider,
 };
+use crate::utils::refund::SignedRefundTransactions;
 use crate::utils::{leaf_key_tweak::prepare_leaf_key_tweaks_to_send, refund::sign_refunds};
 use crate::{signer::Signer, tree::TreeNode};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
-use frost_secp256k1_tr::Identifier;
 use hex::ToHex;
 use lightning_invoice::Bolt11Invoice;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -62,26 +61,42 @@ pub enum LightningSendStatus {
     LightningPaymentFailed,
     LightningPaymentSucceeded,
     PreimageProvided,
+    PreimageProvidingFailed,
     TransferCompleted,
+    TransferFailed,
+    PendingUserSwapReturn,
+    UserSwapReturned,
+    UserSwapReturnFailed,
     Unknown,
 }
 
 impl From<LightningSendRequestStatus> for LightningSendStatus {
     fn from(value: LightningSendRequestStatus) -> Self {
         match value {
+            LightningSendRequestStatus::Created => LightningSendStatus::Created,
+            LightningSendRequestStatus::RequestValidated => LightningSendStatus::RequestValidated,
+            LightningSendRequestStatus::LightningPaymentInitiated => {
+                LightningSendStatus::LightningPaymentInitiated
+            }
             LightningSendRequestStatus::LightningPaymentFailed => {
                 LightningSendStatus::LightningPaymentFailed
             }
             LightningSendRequestStatus::LightningPaymentSucceeded => {
                 LightningSendStatus::LightningPaymentSucceeded
             }
-            LightningSendRequestStatus::Created => LightningSendStatus::Created,
-            LightningSendRequestStatus::RequestValidated => LightningSendStatus::RequestValidated,
-            LightningSendRequestStatus::LightningPaymentInitiated => {
-                LightningSendStatus::LightningPaymentInitiated
-            }
             LightningSendRequestStatus::PreimageProvided => LightningSendStatus::PreimageProvided,
+            LightningSendRequestStatus::PreimageProvidingFailed => {
+                LightningSendStatus::PreimageProvidingFailed
+            }
             LightningSendRequestStatus::TransferCompleted => LightningSendStatus::TransferCompleted,
+            LightningSendRequestStatus::TransferFailed => LightningSendStatus::TransferFailed,
+            LightningSendRequestStatus::PendingUserSwapReturn => {
+                LightningSendStatus::PendingUserSwapReturn
+            }
+            LightningSendRequestStatus::UserSwapReturned => LightningSendStatus::UserSwapReturned,
+            LightningSendRequestStatus::UserSwapReturnFailed => {
+                LightningSendStatus::UserSwapReturnFailed
+            }
             LightningSendRequestStatus::Unknown => LightningSendStatus::Unknown,
         }
     }
@@ -443,26 +458,41 @@ impl<S: Signer> LightningService<S> {
             .iter()
             .map(|l| l.node.id.clone().to_string())
             .collect();
-        let spark_commitments = self
+        let signing_commitments = self
             .operator_pool
             .get_coordinator()
             .client
             .get_signing_commitments(GetSigningCommitmentsRequest { node_ids, count: 3 })
-            .await?;
-
-        // get user signed refunds
-        let signing_commitments: Vec<
-            BTreeMap<Identifier, frost_secp256k1_tr::round1::SigningCommitments>,
-        > = spark_commitments
+            .await?
             .signing_commitments
             .iter()
             .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let user_signed_refunds = sign_refunds(
+        let chunked_signing_commitments = signing_commitments
+            .chunks(req.leaves.len())
+            .collect::<Vec<_>>();
+
+        if chunked_signing_commitments.len() != 3 {
+            return Err(ServiceError::SSPswapError(
+                "Not enough signing commitments returned".to_string(),
+            ));
+        }
+
+        let cpfp_signing_commitments = chunked_signing_commitments[0].to_vec();
+        let direct_signing_commitments = chunked_signing_commitments[1].to_vec();
+        let direct_from_cpfp_signing_commitments = chunked_signing_commitments[2].to_vec();
+
+        let SignedRefundTransactions {
+            cpfp_signed_tx,
+            direct_signed_tx,
+            direct_from_cpfp_signed_tx,
+        } = sign_refunds(
             &self.signer,
             req.leaves,
-            signing_commitments,
+            cpfp_signing_commitments,
+            direct_signing_commitments,
+            direct_from_cpfp_signing_commitments,
             req.receiver_pubkey,
             self.network,
         )
@@ -493,11 +523,18 @@ impl<S: Signer> LightningService<S> {
                     .to_vec(),
                 receiver_identity_public_key: req.receiver_pubkey.serialize().to_vec(),
                 expiry_time: Default::default(),
-                leaves_to_send: user_signed_refunds
+                leaves_to_send: cpfp_signed_tx
                     .into_iter()
                     .map(|l| l.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
-                ..Default::default()
+                direct_leaves_to_send: direct_signed_tx
+                    .into_iter()
+                    .map(|l| l.try_into())
+                    .collect::<Result<Vec<_>, _>>()?,
+                direct_from_cpfp_leaves_to_send: direct_from_cpfp_signed_tx
+                    .into_iter()
+                    .map(|l| l.try_into())
+                    .collect::<Result<Vec<_>, _>>()?,
             }),
             receiver_identity_public_key: req.receiver_pubkey.serialize().to_vec(),
             fee_sats: req.fee_sats,
@@ -507,7 +544,7 @@ impl<S: Signer> LightningService<S> {
             .operator_pool
             .get_coordinator()
             .client
-            .initiate_preimage_swap(request_data)
+            .initiate_preimage_swap_v2(request_data)
             .await?;
         Ok(response)
     }

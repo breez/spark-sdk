@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::str::FromStr;
 
-use bitcoin::Transaction;
 use bitcoin::secp256k1::ecdsa::Signature;
+use bitcoin::{Transaction, TxOut};
 use bitcoin::{consensus::deserialize, secp256k1::PublicKey};
 use frost_secp256k1_tr::{
     Identifier,
@@ -17,7 +17,7 @@ use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
 use crate::services::bech32m_encode_token_id;
-use crate::signer::PrivateKeySource;
+use crate::signer::{FrostSigningCommitmentsWithNonces, PrivateKeySource};
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
 use crate::{ssp::BitcoinNetwork, utils::refund::SignedTx};
 
@@ -113,6 +113,85 @@ impl TryFrom<SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
                 signing_commitments: to_proto_signing_commitments(&signed_tx.signing_commitments)?,
             }),
             user_signature: signed_tx.user_signature.serialize().to_vec(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) enum SigningJobTxType {
+    CpfpNode,
+    DirectNode,
+    CpfpRefund,
+    DirectRefund,
+    DirectFromCpfpRefund,
+}
+
+#[derive(Clone)]
+pub(crate) struct SigningJob {
+    pub tx_type: SigningJobTxType,
+    pub tx: Transaction,
+    pub parent_tx_out: TxOut,
+    pub signing_public_key: PublicKey,
+    pub signing_commitments: FrostSigningCommitmentsWithNonces,
+}
+
+impl AsRef<SigningJob> for SigningJob {
+    fn as_ref(&self) -> &SigningJob {
+        self
+    }
+}
+
+impl TryFrom<&SigningJob> for operator_rpc::spark::SigningJob {
+    type Error = ServiceError;
+
+    fn try_from(signing_job: &SigningJob) -> Result<Self, Self::Error> {
+        Ok(operator_rpc::spark::SigningJob {
+            raw_tx: bitcoin::consensus::serialize(&signing_job.tx),
+            signing_public_key: signing_job.signing_public_key.serialize().to_vec(),
+            signing_nonce_commitment: Some(signing_job.signing_commitments.commitments.try_into()?),
+        })
+    }
+}
+
+pub(crate) struct SigningResult {
+    pub signing_commitments: BTreeMap<Identifier, SigningCommitments>,
+    pub signature_shares: BTreeMap<Identifier, SignatureShare>,
+    pub public_keys: BTreeMap<Identifier, PublicKey>,
+}
+
+impl TryFrom<&operator_rpc::spark::SigningResult> for SigningResult {
+    type Error = ServiceError;
+
+    fn try_from(signing_result: &operator_rpc::spark::SigningResult) -> Result<Self, Self::Error> {
+        Ok(SigningResult {
+            signing_commitments: map_signing_nonce_commitments(
+                &signing_result.signing_nonce_commitments,
+            )?,
+            signature_shares: map_signature_shares(&signing_result.signature_shares)?,
+            public_keys: map_public_keys(&signing_result.public_keys)?,
+        })
+    }
+}
+
+pub(crate) struct ExtendLeafSigningResult {
+    pub verifying_key: PublicKey,
+    pub signing_result: Option<SigningResult>,
+}
+
+impl TryFrom<&operator_rpc::spark::ExtendLeafSigningResult> for ExtendLeafSigningResult {
+    type Error = ServiceError;
+
+    fn try_from(
+        extend_leaf_signing_result: &operator_rpc::spark::ExtendLeafSigningResult,
+    ) -> Result<Self, Self::Error> {
+        Ok(ExtendLeafSigningResult {
+            verifying_key: PublicKey::from_slice(&extend_leaf_signing_result.verifying_key)
+                .map_err(|_| ServiceError::ValidationError("Invalid verifying key".to_string()))?,
+            signing_result: extend_leaf_signing_result
+                .signing_result
+                .as_ref()
+                .map(|sr| sr.try_into())
+                .transpose()?,
         })
     }
 }
@@ -248,6 +327,8 @@ pub struct TransferLeaf {
     pub secret_cipher: Vec<u8>,
     pub signature: Option<Signature>,
     pub intermediate_refund_tx: Transaction,
+    pub intermediate_direct_refund_tx: Option<Transaction>,
+    pub intermediate_direct_from_cpfp_refund_tx: Option<Transaction>,
 }
 
 impl TryFrom<operator_rpc::spark::TransferLeaf> for TransferLeaf {
@@ -262,6 +343,29 @@ impl TryFrom<operator_rpc::spark::TransferLeaf> for TransferLeaf {
         let intermediate_refund_tx = deserialize(&leaf.intermediate_refund_tx).map_err(|_| {
             ServiceError::Generic("Invalid intermediate refund transaction".to_string())
         })?;
+        let intermediate_direct_refund_tx = if leaf.intermediate_direct_refund_tx.is_empty() {
+            None
+        } else {
+            Some(
+                deserialize(&leaf.intermediate_direct_refund_tx).map_err(|_| {
+                    ServiceError::Generic(
+                        "Invalid intermediate direct refund transaction".to_string(),
+                    )
+                })?,
+            )
+        };
+        let intermediate_direct_from_cpfp_refund_tx =
+            if leaf.intermediate_direct_from_cpfp_refund_tx.is_empty() {
+                None
+            } else {
+                Some(
+                    deserialize(&leaf.intermediate_direct_from_cpfp_refund_tx).map_err(|_| {
+                        ServiceError::Generic(
+                            "Invalid intermediate direct from CPFP refund transaction".to_string(),
+                        )
+                    })?,
+                )
+            };
 
         let signature = match leaf.signature.len() {
             0 => None,
@@ -280,6 +384,8 @@ impl TryFrom<operator_rpc::spark::TransferLeaf> for TransferLeaf {
             secret_cipher: leaf.secret_cipher,
             signature,
             intermediate_refund_tx,
+            intermediate_direct_refund_tx,
+            intermediate_direct_from_cpfp_refund_tx,
         })
     }
 }
@@ -312,6 +418,31 @@ impl TryFrom<operator_rpc::spark::TreeNode> for TreeNode {
             )
         };
 
+        let direct_tx = if node.direct_tx.is_empty() {
+            None
+        } else {
+            Some(
+                deserialize(&node.direct_tx)
+                    .map_err(|_| ServiceError::Generic("Invalid direct transaction".to_string()))?,
+            )
+        };
+
+        let direct_refund_tx = if node.direct_refund_tx.is_empty() {
+            None
+        } else {
+            Some(deserialize(&node.direct_refund_tx).map_err(|_| {
+                ServiceError::Generic("Invalid direct refund transaction".to_string())
+            })?)
+        };
+
+        let direct_from_cpfp_refund_tx = if node.direct_from_cpfp_refund_tx.is_empty() {
+            None
+        } else {
+            Some(deserialize(&node.direct_from_cpfp_refund_tx).map_err(|_| {
+                ServiceError::Generic("Invalid direct from CPFP refund transaction".to_string())
+            })?)
+        };
+
         let verifying_public_key = PublicKey::from_slice(&node.verifying_public_key)
             .map_err(|_| ServiceError::Generic("Invalid verifying public key".to_string()))?;
 
@@ -335,6 +466,9 @@ impl TryFrom<operator_rpc::spark::TreeNode> for TreeNode {
             parent_node_id,
             node_tx,
             refund_tx,
+            direct_tx,
+            direct_refund_tx,
+            direct_from_cpfp_refund_tx,
             vout: node.vout,
             verifying_public_key,
             owner_identity_public_key,

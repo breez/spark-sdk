@@ -3,7 +3,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use bitcoin::consensus::serialize;
+use bitcoin::{consensus::serialize, secp256k1::ecdsa::Signature};
 use prost_types::Timestamp;
 use tracing::trace;
 
@@ -15,10 +15,10 @@ use crate::{
     },
     services::{LeafKeyTweak, ServiceError, Transfer, TransferId, TransferService},
     signer::{PrivateKeySource, Signer, from_bytes_to_scalar},
-    ssp::{RequestLeavesSwapInput, ServiceProvider, UserLeafInput},
+    ssp::{CompleteLeavesSwapInput, RequestLeavesSwapInput, ServiceProvider, UserLeafInput},
     tree::TreeNode,
     utils::refund::{
-        node_signatures_to_map, prepare_leaf_refund_signing_data, prepare_refund_so_signing_jobs,
+        map_refund_signatures, prepare_leaf_refund_signing_data, prepare_refund_so_signing_jobs,
         sign_aggregate_refunds,
     },
 };
@@ -113,7 +113,7 @@ impl<S: Signer> Swap<S> {
             .operator_pool
             .get_coordinator()
             .client
-            .start_leaf_swap(StartTransferRequest {
+            .start_leaf_swap_v2(StartTransferRequest {
                 transfer_id: transfer_id.to_string(),
                 owner_identity_public_key: self
                     .signer
@@ -133,59 +133,128 @@ impl<S: Signer> Swap<S> {
         ))?;
         let transfer: Transfer = transfer.try_into()?;
 
-        let signed_refunds = sign_aggregate_refunds(
+        let node_signatures = sign_aggregate_refunds(
             &self.signer,
             &leaf_data_map,
             &response.signing_results,
             None,
+            None,
+            None,
         )
         .await?;
+        trace!("Signatures aggregated for transfer: {}", transfer.id);
+        let refund_signatures = map_refund_signatures(node_signatures)?;
+
         let first_leaf = transfer
             .leaves
             .first()
             .ok_or(ServiceError::Generic("no leaves in transfer".to_string()))?;
-        let first_leaf_id = first_leaf.leaf.id.to_string();
-        let refund_signature = signed_refunds
-            .iter()
-            .find(|r| r.node_id == first_leaf_id)
-            .ok_or(ServiceError::Generic(
-                "refund signature not found".to_string(),
-            ))?;
-        let (adaptor_signature, adaptor_private_key) =
-            generate_adaptor_from_signature(&refund_signature.refund_tx_signature)?;
+        let first_leaf_id = &first_leaf.leaf.id;
 
-        let mut user_leaves = Vec::new();
-        user_leaves.push(UserLeafInput {
-            leaf_id: first_leaf_id,
-            raw_unsigned_refund_transaction: hex::encode(serialize(
-                &first_leaf.intermediate_refund_tx,
-            )),
-            adaptor_added_signature: hex::encode(adaptor_signature.to_bytes()),
-        });
-
-        for leaf in transfer.leaves.iter().skip(1) {
-            let refund_signature = signed_refunds
-                .iter()
-                .find(|r| r.node_id == leaf.leaf.id.to_string())
+        let cpfp_refund_signature =
+            refund_signatures
+                .cpfp_signatures
+                .get(first_leaf_id)
                 .ok_or(ServiceError::Generic(
                     "refund signature not found".to_string(),
                 ))?;
-            let signature = generate_signature_from_existing_adaptor(
-                &refund_signature.refund_tx_signature,
-                &adaptor_private_key,
+        let direct_refund_signature = refund_signatures.direct_signatures.get(first_leaf_id);
+        let direct_from_cpfp_refund_signature = refund_signatures
+            .direct_from_cpfp_signatures
+            .get(first_leaf_id);
+
+        let (cpfp_adaptor_signature, cpfp_adaptor_private_key) =
+            generate_adaptor_from_signature(cpfp_refund_signature)?;
+        let maybe_direct_adaptor = direct_refund_signature
+            .map(generate_adaptor_from_signature)
+            .transpose()?;
+        let maybe_direct_from_cpfp_adaptor = direct_from_cpfp_refund_signature
+            .map(generate_adaptor_from_signature)
+            .transpose()?;
+
+        let mut user_leaves = Vec::new();
+        user_leaves.push(UserLeafInput {
+            leaf_id: first_leaf_id.to_string(),
+            raw_unsigned_refund_transaction: hex::encode(serialize(
+                &first_leaf.intermediate_refund_tx,
+            )),
+            direct_raw_unsigned_refund_transaction: first_leaf
+                .intermediate_direct_refund_tx
+                .as_ref()
+                .map(|tx| hex::encode(serialize(tx))),
+            direct_from_cpfp_raw_unsigned_refund_transaction: first_leaf
+                .intermediate_direct_from_cpfp_refund_tx
+                .as_ref()
+                .map(|tx| hex::encode(serialize(tx))),
+            adaptor_added_signature: hex::encode(cpfp_adaptor_signature.to_bytes()),
+            direct_adaptor_added_signature: maybe_direct_adaptor
+                .as_ref()
+                .map(|(sig, _)| hex::encode(sig.to_bytes())),
+            direct_from_cpfp_adaptor_added_signature: maybe_direct_from_cpfp_adaptor
+                .as_ref()
+                .map(|(sig, _)| hex::encode(sig.to_bytes())),
+        });
+
+        for leaf in transfer.leaves.iter().skip(1) {
+            let cpfp_refund_signature =
+                refund_signatures.cpfp_signatures.get(&leaf.leaf.id).ok_or(
+                    ServiceError::Generic("refund signature not found".to_string()),
+                )?;
+            let direct_refund_signature = refund_signatures.direct_signatures.get(&leaf.leaf.id);
+            let direct_from_cpfp_refund_signature = refund_signatures
+                .direct_from_cpfp_signatures
+                .get(&leaf.leaf.id);
+
+            let cpfp_adaptor_signature = generate_signature_from_existing_adaptor(
+                cpfp_refund_signature,
+                &cpfp_adaptor_private_key,
             )?;
+            let direct_adaptor_signature = match (direct_refund_signature, &maybe_direct_adaptor) {
+                (Some(signature), Some((_, private_key))) => Some(
+                    generate_signature_from_existing_adaptor(signature, private_key)?,
+                ),
+                _ => None,
+            };
+            let direct_from_cpfp_adaptor_signature = match (
+                direct_from_cpfp_refund_signature,
+                &maybe_direct_from_cpfp_adaptor,
+            ) {
+                (Some(signature), Some((_, private_key))) => Some(
+                    generate_signature_from_existing_adaptor(signature, private_key)?,
+                ),
+                _ => None,
+            };
+
             user_leaves.push(UserLeafInput {
                 leaf_id: leaf.leaf.id.to_string(),
                 raw_unsigned_refund_transaction: hex::encode(serialize(
                     &leaf.intermediate_refund_tx,
                 )),
-                adaptor_added_signature: hex::encode(signature.to_bytes()),
+                direct_raw_unsigned_refund_transaction: leaf
+                    .intermediate_direct_refund_tx
+                    .as_ref()
+                    .map(|tx| hex::encode(serialize(tx))),
+                direct_from_cpfp_raw_unsigned_refund_transaction: leaf
+                    .intermediate_direct_from_cpfp_refund_tx
+                    .as_ref()
+                    .map(|tx| hex::encode(serialize(tx))),
+                adaptor_added_signature: hex::encode(cpfp_adaptor_signature.to_bytes()),
+                direct_adaptor_added_signature: direct_adaptor_signature
+                    .map(|sig| hex::encode(sig.to_bytes())),
+                direct_from_cpfp_adaptor_added_signature: direct_from_cpfp_adaptor_signature
+                    .map(|sig| hex::encode(sig.to_bytes())),
             });
         }
         let swap_response = self
             .ssp_client
             .request_leaves_swap(RequestLeavesSwapInput {
-                adaptor_pubkey: hex::encode(adaptor_private_key.public_key().to_sec1_bytes()),
+                adaptor_pubkey: hex::encode(cpfp_adaptor_private_key.public_key().to_sec1_bytes()),
+                direct_adaptor_pubkey: maybe_direct_adaptor
+                    .as_ref()
+                    .map(|(_, private_key)| hex::encode(private_key.public_key().to_sec1_bytes())),
+                direct_from_cpfp_adaptor_pubkey: maybe_direct_from_cpfp_adaptor
+                    .as_ref()
+                    .map(|(_, private_key)| hex::encode(private_key.public_key().to_sec1_bytes())),
                 total_amount_sats: leaf_sum,
                 target_amount_sats: target_sum,
                 fee_sats: 0, // TODO: Request fee estimate from SSP
@@ -197,18 +266,23 @@ impl<S: Signer> Swap<S> {
 
         // TODO: Validate the amounts in swap_response match the leaf sum, and the target amounts are met.
         // TODO: javascript SDK applies adaptor to signature here for every leaf, but it seems to not do anything?
-        let refund_signature_map = node_signatures_to_map(signed_refunds)?;
         let transfer = self
             .transfer_service
-            .deliver_transfer_package(&transfer, &leaf_key_tweaks, refund_signature_map)
+            .deliver_transfer_package(&transfer, &leaf_key_tweaks, refund_signatures)
             .await?;
         let complete_response = self
             .ssp_client
-            .complete_leaves_swap(
-                &hex::encode(adaptor_private_key.to_bytes()),
-                &transfer.id.to_string(),
-                &swap_response.id,
-            )
+            .complete_leaves_swap(CompleteLeavesSwapInput {
+                adaptor_secret_key: hex::encode(cpfp_adaptor_private_key.to_bytes()),
+                direct_adaptor_secret_key: maybe_direct_adaptor
+                    .as_ref()
+                    .map(|(_, private_key)| hex::encode(private_key.to_bytes())),
+                direct_from_cpfp_adaptor_secret_key: maybe_direct_from_cpfp_adaptor
+                    .as_ref()
+                    .map(|(_, private_key)| hex::encode(private_key.to_bytes())),
+                user_outbound_transfer_external_id: transfer.id.to_string(),
+                leaves_swap_request_id: swap_response.id,
+            })
             .await?;
         let transfer_id =
             complete_response
@@ -254,19 +328,15 @@ impl<S: Signer> Swap<S> {
 }
 
 fn generate_adaptor_from_signature(
-    signature: &[u8],
+    signature: &Signature,
 ) -> Result<(k256::schnorr::Signature, k256::SecretKey), ServiceError> {
-    if signature.len() != 64 {
-        return Err(ServiceError::Generic(
-            "Invalid signature length".to_string(),
-        ));
-    }
+    let signature_bytes = signature.serialize_compact();
     // last 32 bytes of the signature are the s value
-    let s = from_bytes_to_scalar(&signature[32..])?;
+    let s = from_bytes_to_scalar(&signature_bytes[32..])?;
     let adaptor_private_key = k256::SecretKey::random(&mut rand::thread_rng());
     let new_s = s.sub(adaptor_private_key.to_nonzero_scalar().as_ref());
 
-    let mut new_signature_bytes = signature[..32].to_vec();
+    let mut new_signature_bytes = signature_bytes[..32].to_vec();
     new_signature_bytes.extend_from_slice(&new_s.to_bytes());
     let ns: &[u8] = &new_signature_bytes;
     Ok((
@@ -277,18 +347,14 @@ fn generate_adaptor_from_signature(
 }
 
 fn generate_signature_from_existing_adaptor(
-    signature: &[u8],
+    signature: &Signature,
     adaptor_private_key: &k256::SecretKey,
 ) -> Result<k256::schnorr::Signature, ServiceError> {
-    if signature.len() != 64 {
-        return Err(ServiceError::Generic(
-            "Invalid signature length".to_string(),
-        ));
-    }
-    let s = from_bytes_to_scalar(&signature[32..])?;
+    let signature_bytes = signature.serialize_compact();
+    let s = from_bytes_to_scalar(&signature_bytes[32..])?;
     let new_s = s.sub(adaptor_private_key.to_nonzero_scalar().as_ref());
 
-    let mut new_signature_bytes = signature[..32].to_vec();
+    let mut new_signature_bytes = signature_bytes[..32].to_vec();
     new_signature_bytes.extend_from_slice(&new_s.to_bytes());
     let ns: &[u8] = &new_signature_bytes;
     k256::schnorr::Signature::try_from(ns)

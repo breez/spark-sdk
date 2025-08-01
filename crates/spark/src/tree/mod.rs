@@ -78,6 +78,12 @@ pub struct TreeNode {
     pub node_tx: Transaction,
     // TODO: improve model to only allow empty refunds txs on expected cases
     pub refund_tx: Option<Transaction>,
+    /// The direct transaction of the node, this transaction is for the watchtower to broadcast.
+    pub direct_tx: Option<Transaction>,
+    /// The refund transaction of the node, this transaction is to pay to the user.
+    pub direct_refund_tx: Option<Transaction>,
+    /// The refund transaction of the node, this transaction is to pay to the user.
+    pub direct_from_cpfp_refund_tx: Option<Transaction>,
     /// This vout is the vout to spend the previous transaction, which is in the
     /// parent node.
     pub vout: u32,
@@ -86,12 +92,11 @@ pub struct TreeNode {
     /// The signing keyshare information of the node on the SE side.
     pub signing_keyshare: SigningKeyshare,
     pub status: TreeNodeStatus,
-    // pub network: Network,
 }
 
 impl TreeNode {
     fn is_timelock_expiring(sequence: Sequence) -> Result<bool, TreeServiceError> {
-        let next_sequence = next_sequence(sequence).ok_or(TreeServiceError::Generic(
+        let (next_sequence, _) = next_sequence(sequence).ok_or(TreeServiceError::Generic(
             "Failed to get next sequence".to_string(),
         ))?;
         let next_sequence_num = next_sequence.to_consensus_u32();

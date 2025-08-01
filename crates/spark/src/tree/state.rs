@@ -135,6 +135,9 @@ mod test {
                 output: vec![],
             },
             refund_tx: None,
+            direct_tx: None,
+            direct_refund_tx: None,
+            direct_from_cpfp_refund_tx: None,
             vout: 0,
             verifying_public_key: PublicKey::from_str(
                 "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443",

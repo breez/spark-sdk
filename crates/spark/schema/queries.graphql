@@ -131,6 +131,10 @@ fragment SwapLeafFragment on SwapLeaf {
   leaf_id
   raw_unsigned_refund_transaction
   adaptor_signed_signature
+  direct_raw_unsigned_refund_transaction
+  direct_adaptor_signed_signature
+  direct_from_cpfp_raw_unsigned_refund_transaction
+  direct_from_cpfp_adaptor_signed_signature
 }
 
 fragment TransferFragment on Transfer {

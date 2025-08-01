@@ -35,7 +35,7 @@ where
         }
     }
 
-    pub async fn finalize_node_signatures(
+    pub async fn finalize_node_signatures_v2(
         &self,
         req: FinalizeNodeSignaturesRequest,
     ) -> Result<FinalizeNodeSignaturesResponse> {
@@ -43,7 +43,7 @@ where
             .auth
             .spark_service_client()
             .await?
-            .finalize_node_signatures(req)
+            .finalize_node_signatures_v2(req)
             .await?
             .into_inner())
     }
@@ -87,13 +87,16 @@ where
             .into_inner())
     }
 
-    pub async fn start_transfer(&self, req: StartTransferRequest) -> Result<StartTransferResponse> {
+    pub async fn start_transfer_v2(
+        &self,
+        req: StartTransferRequest,
+    ) -> Result<StartTransferResponse> {
         trace!("Calling start_transfer with request: {:?}", req);
         Ok(self
             .auth
             .spark_service_client()
             .await?
-            .start_transfer(req)
+            .start_transfer_v2(req)
             .await?
             .into_inner())
     }
@@ -161,7 +164,7 @@ where
         Ok(())
     }
 
-    pub async fn claim_transfer_sign_refunds(
+    pub async fn claim_transfer_sign_refunds_v2(
         &self,
         req: ClaimTransferSignRefundsRequest,
     ) -> Result<ClaimTransferSignRefundsResponse> {
@@ -169,7 +172,7 @@ where
             .auth
             .spark_service_client()
             .await?
-            .claim_transfer_sign_refunds(req)
+            .claim_transfer_sign_refunds_v2(req)
             .await?
             .into_inner())
     }
@@ -197,7 +200,7 @@ where
             .into_inner())
     }
 
-    pub async fn cooperative_exit(
+    pub async fn cooperative_exit_v2(
         &self,
         req: CooperativeExitRequest,
     ) -> Result<CooperativeExitResponse> {
@@ -205,12 +208,12 @@ where
             .auth
             .spark_service_client()
             .await?
-            .cooperative_exit(req)
+            .cooperative_exit_v2(req)
             .await?
             .into_inner())
     }
 
-    pub async fn initiate_preimage_swap(
+    pub async fn initiate_preimage_swap_v2(
         &self,
         req: InitiatePreimageSwapRequest,
     ) -> Result<InitiatePreimageSwapResponse> {
@@ -218,7 +221,7 @@ where
             .auth
             .spark_service_client()
             .await?
-            .initiate_preimage_swap(req)
+            .initiate_preimage_swap_v2(req)
             .await?
             .into_inner())
     }
@@ -236,7 +239,7 @@ where
             .into_inner())
     }
 
-    pub async fn start_leaf_swap(
+    pub async fn start_leaf_swap_v2(
         &self,
         req: StartTransferRequest,
     ) -> Result<StartTransferResponse> {
@@ -244,12 +247,12 @@ where
             .auth
             .spark_service_client()
             .await?
-            .start_leaf_swap(req)
+            .start_leaf_swap_v2(req)
             .await?
             .into_inner())
     }
 
-    pub async fn counter_leaf_swap(
+    pub async fn counter_leaf_swap_v2(
         &self,
         req: CounterLeafSwapRequest,
     ) -> Result<CounterLeafSwapResponse> {
@@ -257,12 +260,12 @@ where
             .auth
             .spark_service_client()
             .await?
-            .counter_leaf_swap(req)
+            .counter_leaf_swap_v2(req)
             .await?
             .into_inner())
     }
 
-    pub async fn refresh_timelock(
+    pub async fn refresh_timelock_v2(
         &self,
         req: RefreshTimelockRequest,
     ) -> Result<RefreshTimelockResponse> {
@@ -270,17 +273,17 @@ where
             .auth
             .spark_service_client()
             .await?
-            .refresh_timelock(req)
+            .refresh_timelock_v2(req)
             .await?
             .into_inner())
     }
 
-    pub async fn extend_leaf(&self, req: ExtendLeafRequest) -> Result<ExtendLeafResponse> {
+    pub async fn extend_leaf_v2(&self, req: ExtendLeafRequest) -> Result<ExtendLeafResponse> {
         Ok(self
             .auth
             .spark_service_client()
             .await?
-            .extend_leaf(req)
+            .extend_leaf_v2(req)
             .await?
             .into_inner())
     }

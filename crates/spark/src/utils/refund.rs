@@ -8,17 +8,37 @@ use bitcoin::{OutPoint, Sequence, Transaction};
 use frost_core::round2::SignatureShare;
 use frost_secp256k1_tr::round1::SigningCommitments;
 use frost_secp256k1_tr::{Identifier, Secp256K1Sha256TR};
+use tracing::trace;
 
-use crate::operator::rpc::spark::NodeSignatures;
-use crate::services::{
-    LeafRefundSigningData, ServiceError, map_public_keys, map_signature_shares,
-    map_signing_nonce_commitments,
-};
-use crate::signer::{AggregateFrostRequest, SignerError};
-use crate::signer::{SignFrostRequest, Signer};
+use crate::services::{LeafRefundSigningData, ServiceError};
+use crate::signer::{SignFrostRequest, Signer, SignerError};
 use crate::tree::{TreeNode, TreeNodeId};
-use crate::utils::transactions::create_refund_tx;
+use crate::utils::frost::{SignAggregateFrostParams, sign_aggregate_frost};
+use crate::utils::transactions::{RefundTransactions, create_refund_txs};
 use crate::{Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak};
+
+#[derive(Clone, Debug, Default)]
+pub struct RefundSignatures {
+    pub cpfp_signatures: HashMap<TreeNodeId, Signature>,
+    pub direct_signatures: HashMap<TreeNodeId, Signature>,
+    pub direct_from_cpfp_signatures: HashMap<TreeNodeId, Signature>,
+}
+
+pub struct RefundTxConstructor<'a> {
+    pub node: &'a TreeNode,
+    pub vout: u32,
+    pub refund_tx: Transaction,
+    pub cpfp_sequence: Sequence,
+    pub direct_sequence: Sequence,
+    pub direct_outpoint: Option<OutPoint>,
+    pub receiving_pubkey: &'a PublicKey,
+}
+
+pub struct SignedRefundTransactions {
+    pub cpfp_signed_tx: Vec<SignedTx>,
+    pub direct_signed_tx: Vec<SignedTx>,
+    pub direct_from_cpfp_signed_tx: Vec<SignedTx>,
+}
 
 pub struct SignedTx {
     pub node_id: TreeNodeId,
@@ -38,6 +58,9 @@ pub async fn prepare_leaf_refund_signing_data<S: Signer>(
     let mut leaf_data_map = HashMap::new();
     for leaf_key in leaf_key_tweaks.iter() {
         let signing_nonce_commitment = signer.generate_frost_signing_commitments().await?;
+        let direct_signing_nonce_commitment = signer.generate_frost_signing_commitments().await?;
+        let direct_from_cpfp_signing_nonce_commitment =
+            signer.generate_frost_signing_commitments().await?;
 
         leaf_data_map.insert(
             leaf_key.node.id.clone(),
@@ -47,8 +70,13 @@ pub async fn prepare_leaf_refund_signing_data<S: Signer>(
                 signing_private_key: leaf_key.signing_key.clone(),
                 receiving_public_key,
                 tx: leaf_key.node.node_tx.clone(),
+                direct_tx: leaf_key.node.direct_tx.clone(),
                 refund_tx: leaf_key.node.refund_tx.clone(),
+                direct_refund_tx: leaf_key.node.direct_refund_tx.clone(),
+                direct_from_cpfp_refund_tx: leaf_key.node.direct_from_cpfp_refund_tx.clone(),
                 signing_nonce_commitment,
+                direct_signing_nonce_commitment,
+                direct_from_cpfp_signing_nonce_commitment,
                 vout: leaf_key.node.vout,
             },
         );
@@ -60,14 +88,19 @@ pub async fn prepare_leaf_refund_signing_data<S: Signer>(
 pub async fn sign_refunds<S: Signer>(
     signer: &Arc<S>,
     leaves: &[LeafKeyTweak],
-    spark_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
+    cpfp_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
+    direct_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
+    direct_from_cpfp_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
     receiver_pubkey: &PublicKey,
     network: Network,
-) -> Result<Vec<SignedTx>, SignerError> {
-    let mut signed_refunds = Vec::with_capacity(leaves.len());
+) -> Result<SignedRefundTransactions, SignerError> {
+    let mut cpfp_signed_refunds = Vec::with_capacity(leaves.len());
+    let mut direct_signed_refunds = Vec::with_capacity(leaves.len());
+    let mut direct_from_cpfp_signed_refunds = Vec::with_capacity(leaves.len());
 
     for (i, leaf) in leaves.iter().enumerate() {
         let node_tx = leaf.node.node_tx.clone();
+        let direct_tx = leaf.node.direct_tx.clone();
 
         let old_sequence = leaf
             .node
@@ -76,54 +109,124 @@ pub async fn sign_refunds<S: Signer>(
             .ok_or(SignerError::Generic("No refund transaction".to_string()))?
             .input[0]
             .sequence;
-        let sequence = next_sequence(old_sequence).ok_or(SignerError::Generic(
-            "Failed to get next sequence".to_string(),
-        ))?;
+        let (cpfp_sequence, direct_sequence) = next_sequence(old_sequence).ok_or(
+            SignerError::Generic("Failed to get next sequence".to_string()),
+        )?;
+        let direct_outpoint = direct_tx.as_ref().map(|tx| OutPoint {
+            txid: tx.compute_txid(),
+            vout: 0,
+        });
 
-        let new_refund_tx = create_refund_tx(
-            sequence,
+        let RefundTransactions {
+            cpfp_tx: cpfp_refund_tx,
+            direct_tx: direct_refund_tx,
+            direct_from_cpfp_tx: direct_from_cpfp_refund_tx,
+        } = create_refund_txs(
+            cpfp_sequence,
+            direct_sequence,
             OutPoint {
                 txid: node_tx.compute_txid(),
                 vout: 0,
             },
+            direct_outpoint,
             leaf.node.value,
             receiver_pubkey,
             network,
         );
 
-        let sighash = sighash_from_tx(&new_refund_tx, 0, &node_tx.output[0])
-            .map_err(|e| SignerError::Generic(e.to_string()))?;
-
-        let self_commitment = signer.generate_frost_signing_commitments().await?;
-        let spark_commitment = spark_commitments[i].clone();
-
         let signing_public_key =
             signer.get_public_key_from_private_key_source(&leaf.signing_key)?;
 
-        let user_signature_share = signer
-            .sign_frost(SignFrostRequest {
-                message: sighash.to_raw_hash().to_byte_array().as_ref(),
-                public_key: &signing_public_key,
-                private_key: &leaf.signing_key,
-                verifying_key: &leaf.node.verifying_public_key,
-                self_nonce_commitment: &self_commitment,
-                statechain_commitments: spark_commitment.clone(),
-                adaptor_public_key: None,
-            })
-            .await?;
-
-        signed_refunds.push(SignedTx {
-            node_id: leaf.node.id.clone(),
+        let cpfp_signed_tx = sign_refund(
+            signer,
+            leaf,
+            &node_tx,
+            cpfp_refund_tx,
             signing_public_key,
-            tx: new_refund_tx,
-            user_signature: user_signature_share,
-            user_signature_commitment: self_commitment.commitments,
-            signing_commitments: spark_commitment,
+            cpfp_signing_commitments[i].clone(),
             network,
-        });
+        )
+        .await?;
+        cpfp_signed_refunds.push(cpfp_signed_tx);
+
+        if let Some(direct_tx) = direct_tx {
+            let Some(direct_refund_tx) = direct_refund_tx else {
+                return Err(SignerError::Generic(
+                    "Direct refund transaction is missing".to_string(),
+                ));
+            };
+            let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx else {
+                return Err(SignerError::Generic(
+                    "Direct from CPFP refund transaction is missing".to_string(),
+                ));
+            };
+
+            let direct_refund_tx = sign_refund(
+                signer,
+                leaf,
+                &direct_tx,
+                direct_refund_tx,
+                signing_public_key,
+                direct_signing_commitments[i].clone(),
+                network,
+            )
+            .await?;
+            direct_signed_refunds.push(direct_refund_tx);
+
+            let direct_from_cpfp_signed_tx = sign_refund(
+                signer,
+                leaf,
+                &node_tx,
+                direct_from_cpfp_refund_tx,
+                signing_public_key,
+                direct_from_cpfp_signing_commitments[i].clone(),
+                network,
+            )
+            .await?;
+            direct_from_cpfp_signed_refunds.push(direct_from_cpfp_signed_tx);
+        }
     }
 
-    Ok(signed_refunds)
+    Ok(SignedRefundTransactions {
+        cpfp_signed_tx: cpfp_signed_refunds,
+        direct_signed_tx: direct_signed_refunds,
+        direct_from_cpfp_signed_tx: direct_from_cpfp_signed_refunds,
+    })
+}
+
+async fn sign_refund<S: Signer>(
+    signer: &Arc<S>,
+    leaf: &LeafKeyTweak,
+    tx: &Transaction,
+    refund_tx: Transaction,
+    signing_public_key: PublicKey,
+    spark_commitments: BTreeMap<Identifier, SigningCommitments>,
+    network: Network,
+) -> Result<SignedTx, SignerError> {
+    let sighash = sighash_from_tx(&refund_tx, 0, &tx.output[0])
+        .map_err(|e| SignerError::Generic(e.to_string()))?;
+    let self_commitment = signer.generate_frost_signing_commitments().await?;
+    let user_signature = signer
+        .sign_frost(SignFrostRequest {
+            message: sighash.to_raw_hash().to_byte_array().as_ref(),
+            public_key: &signing_public_key,
+            private_key: &leaf.signing_key,
+            verifying_key: &leaf.node.verifying_public_key,
+            self_nonce_commitment: &self_commitment,
+            statechain_commitments: spark_commitments.clone(),
+            adaptor_public_key: None,
+        })
+        .await?;
+
+    Ok(SignedTx {
+        node_id: leaf.node.id.clone(),
+        signing_public_key,
+        tx: refund_tx,
+        user_signature,
+        user_signature_commitment: self_commitment.commitments,
+        signing_commitments: spark_commitments,
+        network,
+    })
 }
 
 /// Signs refund transactions using FROST threshold signatures
@@ -131,8 +234,10 @@ pub async fn sign_aggregate_refunds<S: Signer>(
     signer: &Arc<S>,
     leaf_data_map: &HashMap<TreeNodeId, LeafRefundSigningData>,
     operator_signing_results: &[crate::operator::rpc::spark::LeafRefundTxSigningResult],
-    adaptor_pubkey: Option<&PublicKey>,
-) -> Result<Vec<NodeSignatures>, ServiceError> {
+    cpfp_adaptor_pubkey: Option<&PublicKey>,
+    direct_adaptor_pubkey: Option<&PublicKey>,
+    direct_from_cpfp_adaptor_pubkey: Option<&PublicKey>,
+) -> Result<Vec<crate::operator::rpc::spark::NodeSignatures>, ServiceError> {
     let mut node_signatures = Vec::new();
 
     for operator_signing_result in operator_signing_results {
@@ -146,62 +251,102 @@ pub async fn sign_aggregate_refunds<S: Signer>(
             ))
         })?;
 
-        let refund_tx_signing_result = operator_signing_result
-            .refund_tx_signing_result
-            .as_ref()
-            .ok_or_else(|| {
-                ServiceError::ValidationError("Missing refund tx signing result".to_string())
-            })?;
-
+        let tx = &leaf_data.tx;
         let refund_tx = leaf_data
             .refund_tx
             .as_ref()
             .ok_or_else(|| ServiceError::Generic("Missing refund transaction".to_string()))?;
 
-        let refund_tx_sighash = sighash_from_tx(refund_tx, 0, &leaf_data.tx.output[0])?;
-
-        // Map operator signing commitments and signature shares
-        let signing_nonce_commitments =
-            map_signing_nonce_commitments(&refund_tx_signing_result.signing_nonce_commitments)?;
-        let signature_shares = map_signature_shares(&refund_tx_signing_result.signature_shares)?;
-        let public_keys = map_public_keys(&refund_tx_signing_result.public_keys)?;
-
         let verifying_key = PublicKey::from_slice(&operator_signing_result.verifying_key)
             .map_err(|_| ServiceError::ValidationError("Invalid verifying key".to_string()))?;
 
-        // Sign with FROST
-        let user_signature = signer
-            .sign_frost(SignFrostRequest {
-                message: refund_tx_sighash.as_byte_array(),
-                public_key: &leaf_data.signing_public_key,
-                private_key: &leaf_data.signing_private_key,
-                verifying_key: &verifying_key,
-                self_nonce_commitment: &leaf_data.signing_nonce_commitment,
-                statechain_commitments: signing_nonce_commitments.clone(),
-                adaptor_public_key: adaptor_pubkey,
-            })
-            .await?;
+        let refund_tx_signing_result = operator_signing_result
+            .refund_tx_signing_result
+            .as_ref()
+            .map(|sr| sr.try_into())
+            .transpose()?
+            .ok_or(ServiceError::ValidationError(
+                "Missing refund tx signing result".to_string(),
+            ))?;
 
-        // Aggregate FROST signatures
-        let refund_aggregate = signer
-            .aggregate_frost(AggregateFrostRequest {
-                message: refund_tx_sighash.as_byte_array(),
-                statechain_signatures: signature_shares,
-                statechain_public_keys: public_keys,
-                verifying_key: &verifying_key,
-                statechain_commitments: signing_nonce_commitments,
-                self_commitment: &leaf_data.signing_nonce_commitment.commitments,
-                public_key: &leaf_data.signing_public_key,
-                self_signature: &user_signature,
-                adaptor_public_key: adaptor_pubkey,
-            })
-            .await?;
+        let refund_tx_signature = sign_aggregate_frost(SignAggregateFrostParams {
+            signer,
+            tx: refund_tx,
+            prev_out: &tx.output[0],
+            signing_public_key: &leaf_data.signing_public_key,
+            aggregating_public_key: &leaf_data.signing_public_key,
+            signing_private_key: &leaf_data.signing_private_key,
+            self_nonce_commitment: &leaf_data.signing_nonce_commitment,
+            adaptor_public_key: cpfp_adaptor_pubkey,
+            verifying_key: &verifying_key,
+            signing_result: refund_tx_signing_result,
+        })
+        .await?;
 
-        node_signatures.push(NodeSignatures {
+        let mut direct_refund_tx_signature = Vec::new();
+        let mut direct_from_cpfp_refund_tx_signature = Vec::new();
+
+        if let Some(direct_tx) = &leaf_data.direct_tx {
+            if let Some(direct_refund_tx) = &leaf_data.direct_refund_tx {
+                trace!("Signing direct refund tx for leaf");
+                let direct_refund_tx_signing_result = operator_signing_result
+                    .direct_refund_tx_signing_result
+                    .as_ref()
+                    .map(|sr| sr.try_into())
+                    .transpose()?
+                    .ok_or(ServiceError::ValidationError(
+                        "Missing direct refund tx signing result".to_string(),
+                    ))?;
+                let signature = sign_aggregate_frost(SignAggregateFrostParams {
+                    signer,
+                    tx: direct_refund_tx,
+                    prev_out: &direct_tx.output[0],
+                    signing_public_key: &leaf_data.signing_public_key,
+                    aggregating_public_key: &leaf_data.signing_public_key,
+                    signing_private_key: &leaf_data.signing_private_key,
+                    self_nonce_commitment: &leaf_data.direct_signing_nonce_commitment,
+                    adaptor_public_key: direct_adaptor_pubkey,
+                    verifying_key: &verifying_key,
+                    signing_result: direct_refund_tx_signing_result,
+                })
+                .await?;
+                direct_refund_tx_signature = signature.serialize()?.to_vec();
+            }
+
+            if let Some(direct_from_cpfp_refund_tx) = &leaf_data.direct_from_cpfp_refund_tx {
+                trace!("Signing direct from CPFP refund tx for leaf");
+                let direct_from_cpfp_refund_tx_signing_result = operator_signing_result
+                    .direct_from_cpfp_refund_tx_signing_result
+                    .as_ref()
+                    .map(|sr| sr.try_into())
+                    .transpose()?
+                    .ok_or(ServiceError::ValidationError(
+                        "Missing direct from CPFP refund tx signing result".to_string(),
+                    ))?;
+                let signature = sign_aggregate_frost(SignAggregateFrostParams {
+                    signer,
+                    tx: direct_from_cpfp_refund_tx,
+                    prev_out: &tx.output[0],
+                    signing_public_key: &leaf_data.signing_public_key,
+                    aggregating_public_key: &leaf_data.signing_public_key,
+                    signing_private_key: &leaf_data.signing_private_key,
+                    self_nonce_commitment: &leaf_data.direct_from_cpfp_signing_nonce_commitment,
+                    adaptor_public_key: direct_from_cpfp_adaptor_pubkey,
+                    verifying_key: &verifying_key,
+                    signing_result: direct_from_cpfp_refund_tx_signing_result,
+                })
+                .await?;
+                direct_from_cpfp_refund_tx_signature = signature.serialize()?.to_vec();
+            }
+        }
+
+        node_signatures.push(crate::operator::rpc::spark::NodeSignatures {
             node_id: operator_signing_result.leaf_id.clone(),
-            refund_tx_signature: refund_aggregate.serialize()?.to_vec(),
             node_tx_signature: Vec::new(),
-            ..Default::default()
+            refund_tx_signature: refund_tx_signature.serialize()?.to_vec(),
+            direct_node_tx_signature: Vec::new(),
+            direct_refund_tx_signature,
+            direct_from_cpfp_refund_tx_signature,
         });
     }
 
@@ -217,15 +362,17 @@ pub fn prepare_refund_so_signing_jobs(
     prepare_refund_so_signing_jobs_with_tx_constructor(
         leaves,
         leaf_data_map,
-        |node, _, _, sequence, receiving_pubkey| {
-            create_refund_tx(
-                sequence,
+        |refund_tx_constructor| {
+            create_refund_txs(
+                refund_tx_constructor.cpfp_sequence,
+                refund_tx_constructor.direct_sequence,
                 OutPoint {
-                    txid: node.node_tx.compute_txid(),
+                    txid: refund_tx_constructor.node.node_tx.compute_txid(),
                     vout: 0,
                 },
-                node.value,
-                receiving_pubkey,
+                refund_tx_constructor.direct_outpoint,
+                refund_tx_constructor.node.value,
+                refund_tx_constructor.receiving_pubkey,
                 network,
             )
         },
@@ -239,7 +386,7 @@ pub fn prepare_refund_so_signing_jobs_with_tx_constructor<F>(
     refund_tx_constructor: F,
 ) -> Result<Vec<crate::operator::rpc::spark::LeafRefundTxSigningJob>, ServiceError>
 where
-    F: Fn(&TreeNode, usize, Transaction, Sequence, &PublicKey) -> Transaction,
+    F: Fn(RefundTxConstructor) -> RefundTransactions,
 {
     let mut signing_jobs = Vec::new();
 
@@ -254,23 +401,63 @@ where
             .refund_tx
             .clone()
             .ok_or(ServiceError::Generic("No refund tx".to_string()))?;
-        let sequence = next_sequence(refund_tx.input[0].sequence).ok_or(ServiceError::Generic(
-            "Failed to get next sequence".to_string(),
-        ))?;
+        let (cpfp_sequence, direct_sequence) = next_sequence(refund_tx.input[0].sequence).ok_or(
+            ServiceError::Generic("Failed to get next sequence".to_string()),
+        )?;
+        let direct_outpoint = leaf.node.direct_tx.as_ref().map(|tx| OutPoint {
+            txid: tx.compute_txid(),
+            vout: 0,
+        });
 
-        let refund_tx = refund_tx_constructor(
-            &leaf.node,
-            i,
+        let RefundTransactions {
+            cpfp_tx: cpfp_refund_tx,
+            direct_tx: direct_refund_tx,
+            direct_from_cpfp_tx: direct_from_cpfp_refund_tx,
+        } = refund_tx_constructor(RefundTxConstructor {
+            node: &leaf.node,
+            vout: i as u32,
             refund_tx,
-            sequence,
-            &refund_signing_data.receiving_public_key,
-        );
+            cpfp_sequence,
+            direct_sequence,
+            direct_outpoint,
+            receiving_pubkey: &refund_signing_data.receiving_public_key,
+        });
+
+        let direct_refund_tx_signing_job = if let Some(direct_refund_tx) = &direct_refund_tx {
+            Some(crate::operator::rpc::spark::SigningJob {
+                signing_public_key: refund_signing_data.signing_public_key.serialize().to_vec(),
+                raw_tx: bitcoin::consensus::serialize(direct_refund_tx),
+                signing_nonce_commitment: Some(
+                    refund_signing_data
+                        .direct_signing_nonce_commitment
+                        .commitments
+                        .try_into()?,
+                ),
+            })
+        } else {
+            None
+        };
+        let direct_from_cpfp_refund_tx_signing_job =
+            if let Some(direct_from_cpfp_refund_tx) = &direct_from_cpfp_refund_tx {
+                Some(crate::operator::rpc::spark::SigningJob {
+                    signing_public_key: refund_signing_data.signing_public_key.serialize().to_vec(),
+                    raw_tx: bitcoin::consensus::serialize(direct_from_cpfp_refund_tx),
+                    signing_nonce_commitment: Some(
+                        refund_signing_data
+                            .direct_from_cpfp_signing_nonce_commitment
+                            .commitments
+                            .try_into()?,
+                    ),
+                })
+            } else {
+                None
+            };
 
         let signing_job = crate::operator::rpc::spark::LeafRefundTxSigningJob {
             leaf_id: leaf.node.id.to_string(),
             refund_tx_signing_job: Some(crate::operator::rpc::spark::SigningJob {
                 signing_public_key: refund_signing_data.signing_public_key.serialize().to_vec(),
-                raw_tx: bitcoin::consensus::serialize(&refund_tx),
+                raw_tx: bitcoin::consensus::serialize(&cpfp_refund_tx),
                 signing_nonce_commitment: Some(
                     refund_signing_data
                         .signing_nonce_commitment
@@ -278,10 +465,13 @@ where
                         .try_into()?,
                 ),
             }),
-            ..Default::default()
+            direct_refund_tx_signing_job,
+            direct_from_cpfp_refund_tx_signing_job,
         };
 
-        refund_signing_data.refund_tx = Some(refund_tx);
+        refund_signing_data.refund_tx = Some(cpfp_refund_tx);
+        refund_signing_data.direct_refund_tx = direct_refund_tx;
+        refund_signing_data.direct_from_cpfp_refund_tx = direct_from_cpfp_refund_tx;
 
         signing_jobs.push(signing_job);
     }
@@ -289,22 +479,51 @@ where
     Ok(signing_jobs)
 }
 
-pub fn node_signatures_to_map(
-    node_signatures: Vec<NodeSignatures>,
-) -> Result<HashMap<TreeNodeId, Signature>, ServiceError> {
-    node_signatures
-        .into_iter()
-        .map(|ns| {
-            let node_id: TreeNodeId = match ns.node_id.parse() {
-                Ok(id) => id,
-                Err(_) => return Err(ServiceError::Generic("invalid node_id".to_string())),
-            };
-            Ok((
-                node_id,
-                Signature::from_compact(&ns.refund_tx_signature).map_err(|_| {
-                    ServiceError::Generic("invalid refund tx signature".to_string())
+pub fn map_refund_signatures(
+    node_signatures: Vec<crate::operator::rpc::spark::NodeSignatures>,
+) -> Result<RefundSignatures, ServiceError> {
+    let mut cpfp_signatures = HashMap::new();
+    let mut direct_signatures = HashMap::new();
+    let mut direct_from_cpfp_signatures = HashMap::new();
+
+    for ns in node_signatures {
+        let node_id: TreeNodeId = match ns.node_id.parse() {
+            Ok(id) => id,
+            Err(_) => return Err(ServiceError::Generic("invalid node_id".to_string())),
+        };
+
+        cpfp_signatures.insert(
+            node_id.clone(),
+            Signature::from_compact(&ns.refund_tx_signature)
+                .map_err(|_| ServiceError::Generic("invalid refund tx signature".to_string()))?,
+        );
+
+        if !ns.direct_refund_tx_signature.is_empty() {
+            direct_signatures.insert(
+                node_id.clone(),
+                Signature::from_compact(&ns.direct_refund_tx_signature).map_err(|_| {
+                    ServiceError::Generic("invalid direct refund tx signature".to_string())
                 })?,
-            ))
-        })
-        .collect::<Result<HashMap<_, _>, ServiceError>>()
+            );
+        }
+
+        if !ns.direct_from_cpfp_refund_tx_signature.is_empty() {
+            direct_from_cpfp_signatures.insert(
+                node_id,
+                Signature::from_compact(&ns.direct_from_cpfp_refund_tx_signature).map_err(
+                    |_| {
+                        ServiceError::Generic(
+                            "invalid direct from CPFP refund tx signature".to_string(),
+                        )
+                    },
+                )?,
+            );
+        }
+    }
+
+    Ok(RefundSignatures {
+        cpfp_signatures,
+        direct_signatures,
+        direct_from_cpfp_signatures,
+    })
 }

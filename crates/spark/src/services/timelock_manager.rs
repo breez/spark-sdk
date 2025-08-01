@@ -1,12 +1,11 @@
 use std::{collections::HashMap, str::FromStr as _, sync::Arc};
 
-use bitcoin::{OutPoint, hashes::Hash, secp256k1::PublicKey};
+use bitcoin::{OutPoint, secp256k1::PublicKey};
 use tracing::{trace, warn};
 
 use crate::{
     Network,
-    bitcoin::sighash_from_tx,
-    core::{initial_sequence, next_sequence},
+    core::{initial_cpfp_sequence, initial_direct_sequence, next_sequence},
     operator::{
         OperatorPool,
         rpc::{
@@ -14,17 +13,20 @@ use crate::{
             common::SignatureIntent,
             spark::{
                 ExtendLeafRequest, FinalizeNodeSignaturesRequest, NodeSignatures,
-                RefreshTimelockRequest, SigningJob, TreeNodeIds, query_nodes_request::Source,
+                RefreshTimelockRequest, TreeNodeIds, query_nodes_request::Source,
             },
         },
     },
     services::{
-        LeafKeyTweak, ServiceError, TransferService, map_public_keys, map_signature_shares,
-        map_signing_nonce_commitments,
+        ExtendLeafSigningResult, LeafKeyTweak, ServiceError, SigningJob, SigningJobTxType,
+        TransferService,
     },
-    signer::{AggregateFrostRequest, PrivateKeySource, SignFrostRequest, Signer},
+    signer::{PrivateKeySource, Signer},
     tree::{TreeNode, TreeNodeId},
-    utils::transactions::{create_node_tx, create_refund_tx},
+    utils::{
+        frost::{SignAggregateFrostParams, sign_aggregate_frost},
+        transactions::{NodeTransactions, RefundTransactions, create_node_txs, create_refund_txs},
+    },
 };
 
 pub struct TimelockManager<S> {
@@ -144,181 +146,186 @@ impl<S: Signer> TimelockManager<S> {
             .signer
             .get_public_key_from_private_key_source(&signing_key)?;
 
-        let node_tx_input = node.node_tx.input[0].clone();
+        let parent_node_tx = &parent_node.node_tx;
+        let parent_node_out = &parent_node_tx.output[0];
 
-        let new_node_tx = create_node_tx(
-            next_sequence(node_tx_input.sequence).ok_or(ServiceError::Generic(
-                "Failed to get next sequence".to_string(),
-            ))?,
-            node_tx_input.previous_output,
-            node.node_tx.output[0].value,
-            node.node_tx.output[0].script_pubkey.clone(),
+        let node_tx = &node.node_tx;
+        let node_outpoint = node_tx.input[0].previous_output;
+        let node_out = &node_tx.output[0];
+
+        let direct_tx = node.direct_tx;
+        let direct_outpoint = direct_tx.as_ref().map(|tx| tx.input[0].previous_output);
+
+        let old_sequence = node_tx.input[0].sequence;
+        let (cpfp_sequence, direct_sequence) = next_sequence(old_sequence).ok_or(
+            ServiceError::Generic("Failed to get next sequence".to_string()),
+        )?;
+
+        let NodeTransactions {
+            cpfp_tx: cpfp_node_tx,
+            direct_tx: direct_node_tx,
+        } = create_node_txs(
+            cpfp_sequence,
+            direct_sequence,
+            node_outpoint,
+            direct_outpoint,
+            parent_node_out.value,
+            parent_node_out.script_pubkey.clone(),
+            true,
         );
 
-        let refund_tx = node
-            .refund_tx
-            .clone()
-            .ok_or(ServiceError::Generic("No refund tx".to_string()))?;
-
-        let new_refund_tx = create_refund_tx(
-            initial_sequence(),
+        let RefundTransactions {
+            cpfp_tx: cpfp_refund_tx,
+            direct_tx: direct_refund_tx,
+            direct_from_cpfp_tx: direct_from_cpfp_refund_tx,
+        } = create_refund_txs(
+            initial_cpfp_sequence(),
+            initial_direct_sequence(),
             OutPoint {
-                txid: new_node_tx.compute_txid(),
+                txid: cpfp_node_tx.compute_txid(),
                 vout: 0,
             },
-            refund_tx.output[0].value.to_sat(),
+            direct_node_tx.as_ref().map(|tx| OutPoint {
+                txid: tx.compute_txid(),
+                vout: 0,
+            }),
+            node_out.value.to_sat(),
             &signing_public_key,
             self.network,
         );
 
-        let new_node_signing_commitments = self.signer.generate_frost_signing_commitments().await?;
-        let new_refund_signing_commitments =
-            self.signer.generate_frost_signing_commitments().await?;
+        let mut signing_jobs = Vec::new();
 
-        let signing_job = SigningJob {
-            signing_public_key: signing_public_key.serialize().to_vec(),
-            raw_tx: bitcoin::consensus::serialize(&new_node_tx),
-            signing_nonce_commitment: Some(new_node_signing_commitments.commitments.try_into()?),
-        };
+        signing_jobs.push(SigningJob {
+            tx_type: SigningJobTxType::CpfpNode,
+            tx: cpfp_node_tx.clone(),
+            parent_tx_out: parent_node_out.clone(),
+            signing_public_key,
+            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+        });
+        signing_jobs.push(SigningJob {
+            tx_type: SigningJobTxType::CpfpRefund,
+            tx: cpfp_refund_tx,
+            parent_tx_out: cpfp_node_tx.output[0].clone(),
+            signing_public_key,
+            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+        });
 
-        let refund_signing_job = SigningJob {
-            signing_public_key: signing_public_key.serialize().to_vec(),
-            raw_tx: bitcoin::consensus::serialize(&new_refund_tx),
-            signing_nonce_commitment: Some(new_refund_signing_commitments.commitments.try_into()?),
-        };
+        if let Some(direct_node_tx) = &direct_node_tx {
+            signing_jobs.push(SigningJob {
+                tx_type: SigningJobTxType::DirectNode,
+                tx: direct_node_tx.clone(),
+                parent_tx_out: parent_node_out.clone(),
+                signing_public_key,
+                signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            });
+        }
+        if let (Some(direct_refund_tx), Some(direct_node_tx)) = (direct_refund_tx, &direct_node_tx)
+        {
+            signing_jobs.push(SigningJob {
+                tx_type: SigningJobTxType::DirectRefund,
+                tx: direct_refund_tx.clone(),
+                parent_tx_out: direct_node_tx.output[0].clone(),
+                signing_public_key,
+                signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            });
+        }
+        if let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx {
+            signing_jobs.push(SigningJob {
+                tx_type: SigningJobTxType::DirectFromCpfpRefund,
+                tx: direct_from_cpfp_refund_tx,
+                parent_tx_out: cpfp_node_tx.output[0].clone(),
+                signing_public_key,
+                signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            });
+        }
 
+        let signing_jobs_count = signing_jobs.len();
         let response = self
             .operator_pool
             .get_coordinator()
             .client
-            .refresh_timelock(RefreshTimelockRequest {
+            .refresh_timelock_v2(RefreshTimelockRequest {
                 leaf_id: node.id.to_string(),
                 owner_identity_public_key: self
                     .signer
                     .get_identity_public_key()?
                     .serialize()
                     .to_vec(),
-                signing_jobs: vec![signing_job, refund_signing_job],
+                signing_jobs: signing_jobs
+                    .iter()
+                    .map(|job| job.try_into())
+                    .collect::<Result<Vec<_>, _>>()?,
             })
             .await?;
 
-        if response.signing_results.len() != 2 {
-            return Err(ServiceError::Generic(
-                "Expected 2 signing results".to_string(),
-            ));
+        if response.signing_results.len() != signing_jobs_count {
+            return Err(ServiceError::Generic(format!(
+                "Expected {signing_jobs_count} signing results"
+            )));
         }
 
-        let node_tx_signing_result = &response.signing_results[0];
-        let refund_tx_signing_result = &response.signing_results[1];
+        let mut node_signatures = NodeSignatures {
+            node_id: node.id.to_string(),
+            ..Default::default()
+        };
 
-        let node_sighash = sighash_from_tx(&new_node_tx, 0, &parent_node.node_tx.output[0])?;
-        let refund_sighash = sighash_from_tx(&new_refund_tx, 0, &new_node_tx.output[0])?;
+        for (i, signing_result) in response.signing_results.iter().enumerate() {
+            let signing_job = &signing_jobs[i];
+            trace!("Processing signing job: {:?}", signing_job.tx_type);
 
-        let new_node_tx_verifying_key =
-            PublicKey::from_slice(&node_tx_signing_result.verifying_key)
+            let verifying_key = PublicKey::from_slice(&signing_result.verifying_key)
                 .map_err(|_| ServiceError::ValidationError("Invalid verifying key".to_string()))?;
-        let new_refund_tx_verifying_key =
-            PublicKey::from_slice(&refund_tx_signing_result.verifying_key)
-                .map_err(|_| ServiceError::ValidationError("Invalid verifying key".to_string()))?;
 
-        let new_node_tx_signing_result =
-            node_tx_signing_result
+            let signing_result = signing_result
                 .signing_result
                 .as_ref()
-                .ok_or(ServiceError::Generic(
-                    "Node tx signing result is none".to_string(),
-                ))?;
-        let new_refund_tx_signing_result =
-            refund_tx_signing_result
-                .signing_result
-                .as_ref()
-                .ok_or(ServiceError::Generic(
-                    "Refund tx signing result is none".to_string(),
-                ))?;
+                .map(|sr| sr.try_into())
+                .transpose()?
+                .ok_or(ServiceError::Generic("Signing result is none".to_string()))?;
 
-        let new_node_statechain_commitments =
-            map_signing_nonce_commitments(&new_node_tx_signing_result.signing_nonce_commitments)?;
-        let new_refund_statechain_commitments =
-            map_signing_nonce_commitments(&new_refund_tx_signing_result.signing_nonce_commitments)?;
-
-        let new_node_statechain_signatures =
-            map_signature_shares(&new_node_tx_signing_result.signature_shares)?;
-        let new_refund_statechain_signatures =
-            map_signature_shares(&new_refund_tx_signing_result.signature_shares)?;
-
-        let new_node_statechain_public_keys =
-            map_public_keys(&new_node_tx_signing_result.public_keys)?;
-        let new_refund_statechain_public_keys =
-            map_public_keys(&new_refund_tx_signing_result.public_keys)?;
-
-        let user_node_signature = self
-            .signer
-            .sign_frost(SignFrostRequest {
-                message: node_sighash.as_raw_hash().as_byte_array(),
-                public_key: &signing_public_key,
-                private_key: &signing_key,
-                verifying_key: &new_node_tx_verifying_key,
-                self_nonce_commitment: &new_node_signing_commitments,
-                statechain_commitments: new_node_statechain_commitments.clone(),
+            let signature = sign_aggregate_frost(SignAggregateFrostParams {
+                signer: &self.signer,
+                tx: &signing_job.tx,
+                prev_out: &signing_job.parent_tx_out,
+                signing_public_key: &signing_public_key,
+                aggregating_public_key: &signing_public_key,
+                signing_private_key: &signing_key,
+                self_nonce_commitment: &signing_job.signing_commitments,
                 adaptor_public_key: None,
+                verifying_key: &verifying_key,
+                signing_result,
             })
-            .await?;
+            .await?
+            .serialize()?
+            .to_vec();
 
-        let node_signature = self
-            .signer
-            .aggregate_frost(AggregateFrostRequest {
-                message: node_sighash.as_raw_hash().as_byte_array(),
-                statechain_signatures: new_node_statechain_signatures,
-                statechain_public_keys: new_node_statechain_public_keys,
-                verifying_key: &new_node_tx_verifying_key,
-                statechain_commitments: new_node_statechain_commitments,
-                self_commitment: &new_node_signing_commitments.commitments,
-                public_key: &signing_public_key,
-                self_signature: &user_node_signature,
-                adaptor_public_key: None,
-            })
-            .await?;
-
-        let user_refund_signature = self
-            .signer
-            .sign_frost(SignFrostRequest {
-                message: refund_sighash.as_raw_hash().as_byte_array(),
-                public_key: &signing_public_key,
-                private_key: &signing_key,
-                verifying_key: &new_refund_tx_verifying_key,
-                self_nonce_commitment: &new_refund_signing_commitments,
-                statechain_commitments: new_refund_statechain_commitments.clone(),
-                adaptor_public_key: None,
-            })
-            .await?;
-
-        let refund_signature = self
-            .signer
-            .aggregate_frost(AggregateFrostRequest {
-                message: refund_sighash.as_raw_hash().as_byte_array(),
-                statechain_signatures: new_refund_statechain_signatures,
-                statechain_public_keys: new_refund_statechain_public_keys,
-                verifying_key: &new_refund_tx_verifying_key,
-                statechain_commitments: new_refund_statechain_commitments,
-                self_commitment: &new_refund_signing_commitments.commitments,
-                public_key: &signing_public_key,
-                self_signature: &user_refund_signature,
-                adaptor_public_key: None,
-            })
-            .await?;
+            match signing_job.tx_type {
+                SigningJobTxType::CpfpNode => {
+                    node_signatures.node_tx_signature = signature;
+                }
+                SigningJobTxType::CpfpRefund => {
+                    node_signatures.refund_tx_signature = signature;
+                }
+                SigningJobTxType::DirectNode => {
+                    node_signatures.direct_node_tx_signature = signature;
+                }
+                SigningJobTxType::DirectRefund => {
+                    node_signatures.direct_refund_tx_signature = signature;
+                }
+                SigningJobTxType::DirectFromCpfpRefund => {
+                    node_signatures.direct_from_cpfp_refund_tx_signature = signature;
+                }
+            }
+        }
 
         let response = self
             .operator_pool
             .get_coordinator()
             .client
-            .finalize_node_signatures(FinalizeNodeSignaturesRequest {
+            .finalize_node_signatures_v2(FinalizeNodeSignaturesRequest {
                 intent: SignatureIntent::Refresh.into(),
-                node_signatures: vec![NodeSignatures {
-                    node_id: node.id.to_string(),
-                    node_tx_signature: node_signature.serialize()?.to_vec(),
-                    refund_tx_signature: refund_signature.serialize()?.to_vec(),
-                    ..Default::default()
-                }],
+                node_signatures: vec![node_signatures],
             })
             .await?;
 
@@ -380,189 +387,308 @@ impl<S: Signer> TimelockManager<S> {
             .signer
             .get_public_key_from_private_key_source(&signing_key)?;
 
+        let node_tx = &node.node_tx;
+        let node_out = &node_tx.output[0];
+
+        let direct_outpoint = node
+            .direct_tx
+            .as_ref()
+            .map(|tx| tx.input[0].previous_output);
+
         let refund_tx = node
             .refund_tx
             .clone()
             .ok_or(ServiceError::Generic("No refund tx".to_string()))?;
+        let refund_out = &refund_tx.output[0];
 
-        let new_node_sequence = next_sequence(refund_tx.input[0].sequence).ok_or(
+        let (cpfp_sequence, direct_sequence) = next_sequence(refund_tx.input[0].sequence).ok_or(
             ServiceError::Generic("Failed to get next sequence".to_string()),
         )?;
 
-        let new_node_tx = create_node_tx(
-            new_node_sequence,
+        let NodeTransactions {
+            cpfp_tx: cpfp_node_tx,
+            direct_tx: direct_node_tx,
+        } = create_node_txs(
+            cpfp_sequence,
+            direct_sequence,
             OutPoint {
                 txid: node.node_tx.compute_txid(),
                 vout: 0,
             },
-            node.node_tx.output[0].value,
-            node.node_tx.output[0].script_pubkey.clone(),
+            direct_outpoint,
+            node_out.value,
+            node_out.script_pubkey.clone(),
+            true,
         );
 
-        let new_refund_tx = create_refund_tx(
-            initial_sequence(),
+        let RefundTransactions {
+            cpfp_tx: cpfp_refund_tx,
+            direct_tx: direct_refund_tx,
+            direct_from_cpfp_tx: direct_from_cpfp_refund_tx,
+        } = create_refund_txs(
+            initial_cpfp_sequence(),
+            initial_direct_sequence(),
             OutPoint {
-                txid: new_node_tx.compute_txid(),
+                txid: cpfp_node_tx.compute_txid(),
                 vout: 0,
             },
-            new_node_tx.output[0].value.to_sat(),
+            direct_node_tx.as_ref().map(|tx| OutPoint {
+                txid: tx.compute_txid(),
+                vout: 0,
+            }),
+            refund_out.value.to_sat(),
             &signing_public_key,
             self.network,
         );
 
-        let node_sighash = sighash_from_tx(&new_node_tx, 0, &node.node_tx.output[0])?;
-        let refund_sighash = sighash_from_tx(&new_refund_tx, 0, &new_node_tx.output[0])?;
-
-        let new_node_signing_commitments = self.signer.generate_frost_signing_commitments().await?;
-        let new_refund_signing_commitments =
-            self.signer.generate_frost_signing_commitments().await?;
-
-        let new_node_signing_job = SigningJob {
-            signing_public_key: signing_public_key.serialize().to_vec(),
-            raw_tx: bitcoin::consensus::serialize(&new_node_tx),
-            signing_nonce_commitment: Some(new_node_signing_commitments.commitments.try_into()?),
+        let node_tx_signing_job = SigningJob {
+            tx_type: SigningJobTxType::CpfpNode,
+            tx: cpfp_node_tx.clone(),
+            parent_tx_out: node_out.clone(),
+            signing_public_key,
+            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+        };
+        let refund_tx_signing_job = SigningJob {
+            tx_type: SigningJobTxType::CpfpRefund,
+            tx: cpfp_refund_tx,
+            parent_tx_out: cpfp_node_tx.output[0].clone(),
+            signing_public_key,
+            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
         };
 
-        let new_refund_signing_job = SigningJob {
-            signing_public_key: signing_public_key.serialize().to_vec(),
-            raw_tx: bitcoin::consensus::serialize(&new_refund_tx),
-            signing_nonce_commitment: Some(new_refund_signing_commitments.commitments.try_into()?),
+        let direct_node_tx_signing_job = if let Some(direct_node_tx) = &direct_node_tx {
+            Some(SigningJob {
+                tx_type: SigningJobTxType::DirectNode,
+                tx: direct_node_tx.clone(),
+                parent_tx_out: node_out.clone(),
+                signing_public_key,
+                signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            })
+        } else {
+            None
         };
+
+        let direct_refund_tx_signing_job = if let (Some(direct_refund_tx), Some(direct_node_tx)) =
+            (direct_refund_tx, &direct_node_tx)
+        {
+            Some(SigningJob {
+                tx_type: SigningJobTxType::DirectRefund,
+                tx: direct_refund_tx.clone(),
+                parent_tx_out: direct_node_tx.output[0].clone(),
+                signing_public_key,
+                signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            })
+        } else {
+            None
+        };
+
+        let direct_from_cpfp_refund_tx_signing_job =
+            if let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx {
+                Some(SigningJob {
+                    tx_type: SigningJobTxType::DirectFromCpfpRefund,
+                    tx: direct_from_cpfp_refund_tx,
+                    parent_tx_out: cpfp_node_tx.output[0].clone(),
+                    signing_public_key,
+                    signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+                })
+            } else {
+                None
+            };
 
         let response = self
             .operator_pool
             .get_coordinator()
             .client
-            .extend_leaf(ExtendLeafRequest {
+            .extend_leaf_v2(ExtendLeafRequest {
                 leaf_id: node.id.to_string(),
                 owner_identity_public_key: self
                     .signer
                     .get_identity_public_key()?
                     .serialize()
                     .to_vec(),
-                node_tx_signing_job: Some(new_node_signing_job),
-                refund_tx_signing_job: Some(new_refund_signing_job),
-                ..Default::default()
+                node_tx_signing_job: Some(node_tx_signing_job.as_ref().try_into()?),
+                refund_tx_signing_job: Some(refund_tx_signing_job.as_ref().try_into()?),
+                direct_node_tx_signing_job: direct_node_tx_signing_job
+                    .as_ref()
+                    .map(|job| job.try_into())
+                    .transpose()?,
+                direct_refund_tx_signing_job: direct_refund_tx_signing_job
+                    .as_ref()
+                    .map(|job| job.try_into())
+                    .transpose()?,
+                direct_from_cpfp_refund_tx_signing_job: direct_from_cpfp_refund_tx_signing_job
+                    .as_ref()
+                    .map(|job| job.try_into())
+                    .transpose()?,
             })
             .await?;
 
-        let node_tx_signing_result =
-            response
-                .node_tx_signing_result
+        let node_tx_extended_signing_result: ExtendLeafSigningResult = response
+            .node_tx_signing_result
+            .as_ref()
+            .map(|sr| sr.try_into())
+            .transpose()?
+            .ok_or(ServiceError::Generic(
+                "Node tx extended leaf signing result is none".to_string(),
+            ))?;
+
+        let refund_tx_extended_signing_result: ExtendLeafSigningResult = response
+            .refund_tx_signing_result
+            .as_ref()
+            .map(|sr| sr.try_into())
+            .transpose()?
+            .ok_or(ServiceError::Generic(
+                "Refund tx extended leaf signing result is none".to_string(),
+            ))?;
+
+        let node_tx_signature = sign_aggregate_frost(SignAggregateFrostParams {
+            signer: &self.signer,
+            tx: &node_tx_signing_job.tx,
+            prev_out: &node_tx_signing_job.parent_tx_out,
+            signing_public_key: &signing_public_key,
+            aggregating_public_key: &signing_public_key,
+            signing_private_key: &signing_key,
+            self_nonce_commitment: &node_tx_signing_job.signing_commitments,
+            adaptor_public_key: None,
+            verifying_key: &node_tx_extended_signing_result.verifying_key,
+            signing_result: node_tx_extended_signing_result.signing_result.ok_or(
+                ServiceError::Generic("Node tx signing result is none".to_string()),
+            )?,
+        })
+        .await?;
+
+        let refund_tx_signature = sign_aggregate_frost(SignAggregateFrostParams {
+            signer: &self.signer,
+            tx: &refund_tx_signing_job.tx,
+            prev_out: &refund_tx_signing_job.parent_tx_out,
+            signing_public_key: &signing_public_key,
+            aggregating_public_key: &signing_public_key,
+            signing_private_key: &signing_key,
+            self_nonce_commitment: &refund_tx_signing_job.signing_commitments,
+            adaptor_public_key: None,
+            verifying_key: &refund_tx_extended_signing_result.verifying_key,
+            signing_result: refund_tx_extended_signing_result.signing_result.ok_or(
+                ServiceError::Generic("Refund tx signing result is none".to_string()),
+            )?,
+        })
+        .await?;
+
+        let mut node_signatures = NodeSignatures {
+            node_id: response.leaf_id,
+            node_tx_signature: node_tx_signature.serialize()?.to_vec(),
+            refund_tx_signature: refund_tx_signature.serialize()?.to_vec(),
+            ..Default::default()
+        };
+
+        if let Some(direct_node_tx_signing_job) = direct_node_tx_signing_job {
+            let direct_node_tx_extended_signing_result: ExtendLeafSigningResult = response
+                .direct_node_tx_signing_result
+                .as_ref()
+                .map(|sr| sr.try_into())
+                .transpose()?
                 .ok_or(ServiceError::Generic(
-                    "Node tx signing result is none".to_string(),
+                    "Direct node tx extended leaf signing result is none".to_string(),
                 ))?;
-        let refund_tx_signing_result =
-            response
-                .refund_tx_signing_result
+
+            let direct_node_tx_signature = sign_aggregate_frost(SignAggregateFrostParams {
+                signer: &self.signer,
+                tx: &direct_node_tx_signing_job.tx,
+                prev_out: &direct_node_tx_signing_job.parent_tx_out,
+                signing_public_key: &signing_public_key,
+                aggregating_public_key: &signing_public_key,
+                signing_private_key: &signing_key,
+                self_nonce_commitment: &direct_node_tx_signing_job.signing_commitments,
+                adaptor_public_key: None,
+                verifying_key: &direct_node_tx_extended_signing_result.verifying_key,
+                signing_result: direct_node_tx_extended_signing_result
+                    .signing_result
+                    .ok_or(ServiceError::Generic(
+                        "Direct node tx signing result is none".to_string(),
+                    ))?,
+            })
+            .await?;
+
+            node_signatures.direct_node_tx_signature =
+                direct_node_tx_signature.serialize()?.to_vec();
+        }
+
+        if let Some(direct_refund_tx_signing_job) = direct_refund_tx_signing_job {
+            let direct_refund_tx_extended_signing_result: ExtendLeafSigningResult = response
+                .direct_refund_tx_signing_result
+                .as_ref()
+                .map(|sr| sr.try_into())
+                .transpose()?
                 .ok_or(ServiceError::Generic(
-                    "Refund tx signing result is none".to_string(),
+                    "Direct refund tx extended leaf signing result is none".to_string(),
                 ))?;
 
-        let new_node_tx_verifying_key =
-            PublicKey::from_slice(&node_tx_signing_result.verifying_key)
-                .map_err(|_| ServiceError::ValidationError("Invalid verifying key".to_string()))?;
-        let new_refund_tx_verifying_key =
-            PublicKey::from_slice(&refund_tx_signing_result.verifying_key)
-                .map_err(|_| ServiceError::ValidationError("Invalid verifying key".to_string()))?;
-
-        let new_node_tx_signing_result =
-            node_tx_signing_result
-                .signing_result
-                .ok_or(ServiceError::Generic(
-                    "Node tx signing result is none".to_string(),
-                ))?;
-        let new_refund_tx_signing_result =
-            refund_tx_signing_result
-                .signing_result
-                .ok_or(ServiceError::Generic(
-                    "Refund tx signing result is none".to_string(),
-                ))?;
-
-        let new_node_statechain_commitments =
-            map_signing_nonce_commitments(&new_node_tx_signing_result.signing_nonce_commitments)?;
-        let new_refund_statechain_commitments =
-            map_signing_nonce_commitments(&new_refund_tx_signing_result.signing_nonce_commitments)?;
-
-        let new_node_statechain_signatures =
-            map_signature_shares(&new_node_tx_signing_result.signature_shares)?;
-        let new_refund_statechain_signatures =
-            map_signature_shares(&new_refund_tx_signing_result.signature_shares)?;
-
-        let new_node_statechain_public_keys =
-            map_public_keys(&new_node_tx_signing_result.public_keys)?;
-        let new_refund_statechain_public_keys =
-            map_public_keys(&new_refund_tx_signing_result.public_keys)?;
-
-        // sign node and refund txs
-        let node_user_signature = self
-            .signer
-            .sign_frost(SignFrostRequest {
-                message: node_sighash.as_raw_hash().as_byte_array(),
-                public_key: &signing_public_key,
-                private_key: &signing_key,
-                verifying_key: &new_node_tx_verifying_key,
-                self_nonce_commitment: &new_node_signing_commitments,
-                statechain_commitments: new_node_statechain_commitments.clone(),
+            let direct_refund_tx_signature = sign_aggregate_frost(SignAggregateFrostParams {
+                signer: &self.signer,
+                tx: &direct_refund_tx_signing_job.tx,
+                prev_out: &direct_refund_tx_signing_job.parent_tx_out,
+                signing_public_key: &signing_public_key,
+                aggregating_public_key: &signing_public_key,
+                signing_private_key: &signing_key,
+                self_nonce_commitment: &direct_refund_tx_signing_job.signing_commitments,
                 adaptor_public_key: None,
+                verifying_key: &direct_refund_tx_extended_signing_result.verifying_key,
+                signing_result: direct_refund_tx_extended_signing_result
+                    .signing_result
+                    .ok_or(ServiceError::Generic(
+                        "Direct refund tx signing result is none".to_string(),
+                    ))?,
             })
             .await?;
 
-        let refund_user_signature = self
-            .signer
-            .sign_frost(SignFrostRequest {
-                message: refund_sighash.as_raw_hash().as_byte_array(),
-                public_key: &signing_public_key,
-                private_key: &signing_key,
-                verifying_key: &new_refund_tx_verifying_key,
-                self_nonce_commitment: &new_refund_signing_commitments,
-                statechain_commitments: new_refund_statechain_commitments.clone(),
-                adaptor_public_key: None,
-            })
-            .await?;
+            node_signatures.direct_refund_tx_signature =
+                direct_refund_tx_signature.serialize()?.to_vec();
+        }
 
-        let node_signature = self
-            .signer
-            .aggregate_frost(AggregateFrostRequest {
-                message: node_sighash.as_raw_hash().as_byte_array(),
-                statechain_signatures: new_node_statechain_signatures,
-                statechain_public_keys: new_node_statechain_public_keys,
-                verifying_key: &new_node_tx_verifying_key,
-                statechain_commitments: new_node_statechain_commitments,
-                self_commitment: &new_node_signing_commitments.commitments,
-                public_key: &signing_public_key,
-                self_signature: &node_user_signature,
-                adaptor_public_key: None,
-            })
-            .await?;
+        if let Some(direct_from_cpfp_refund_tx_signing_job) = direct_from_cpfp_refund_tx_signing_job
+        {
+            let direct_from_cpfp_refund_tx_extended_signing_result: ExtendLeafSigningResult =
+                response
+                    .direct_from_cpfp_refund_tx_signing_result
+                    .as_ref()
+                    .map(|sr| sr.try_into())
+                    .transpose()?
+                    .ok_or(ServiceError::Generic(
+                        "Direct from cpfp refund tx extended leaf signing result is none"
+                            .to_string(),
+                    ))?;
 
-        let refund_signature = self
-            .signer
-            .aggregate_frost(AggregateFrostRequest {
-                message: refund_sighash.as_raw_hash().as_byte_array(),
-                statechain_signatures: new_refund_statechain_signatures,
-                statechain_public_keys: new_refund_statechain_public_keys,
-                verifying_key: &new_refund_tx_verifying_key,
-                statechain_commitments: new_refund_statechain_commitments,
-                self_commitment: &new_refund_signing_commitments.commitments,
-                public_key: &signing_public_key,
-                self_signature: &refund_user_signature,
-                adaptor_public_key: None,
-            })
-            .await?;
+            let direct_from_cpfp_refund_tx_signature =
+                sign_aggregate_frost(SignAggregateFrostParams {
+                    signer: &self.signer,
+                    tx: &direct_from_cpfp_refund_tx_signing_job.tx,
+                    prev_out: &direct_from_cpfp_refund_tx_signing_job.parent_tx_out,
+                    signing_public_key: &signing_public_key,
+                    aggregating_public_key: &signing_public_key,
+                    signing_private_key: &signing_key,
+                    self_nonce_commitment: &direct_from_cpfp_refund_tx_signing_job
+                        .signing_commitments,
+                    adaptor_public_key: None,
+                    verifying_key: &direct_from_cpfp_refund_tx_extended_signing_result
+                        .verifying_key,
+                    signing_result: direct_from_cpfp_refund_tx_extended_signing_result
+                        .signing_result
+                        .ok_or(ServiceError::Generic(
+                            "Direct from cpfp refund tx signing result is none".to_string(),
+                        ))?,
+                })
+                .await?;
+
+            node_signatures.direct_from_cpfp_refund_tx_signature =
+                direct_from_cpfp_refund_tx_signature.serialize()?.to_vec();
+        }
 
         let nodes = self
             .operator_pool
             .get_coordinator()
             .client
-            .finalize_node_signatures(FinalizeNodeSignaturesRequest {
+            .finalize_node_signatures_v2(FinalizeNodeSignaturesRequest {
                 intent: SignatureIntent::Extend.into(),
-                node_signatures: vec![NodeSignatures {
-                    node_id: response.leaf_id,
-                    node_tx_signature: node_signature.serialize()?.to_vec(),
-                    refund_tx_signature: refund_signature.serialize()?.to_vec(),
-                    ..Default::default()
-                }],
+                node_signatures: vec![node_signatures],
             })
             .await?
             .nodes;

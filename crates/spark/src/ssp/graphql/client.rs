@@ -19,8 +19,8 @@ use crate::ssp::graphql::{
     LeavesSwapRequest, LightningReceiveRequest, LightningSendRequest, StaticDepositQuote,
 };
 use crate::ssp::{
-    ClaimStaticDepositInput, CoopExitFeeQuote, RequestCoopExitInput, RequestLeavesSwapInput,
-    RequestLightningReceiveInput, RequestLightningSendInput, SspTransfer,
+    ClaimStaticDepositInput, CompleteLeavesSwapInput, CoopExitFeeQuote, RequestCoopExitInput,
+    RequestLeavesSwapInput, RequestLightningReceiveInput, RequestLightningSendInput, SspTransfer,
 };
 
 /// GraphQL client for interacting with the Spark server
@@ -336,17 +336,9 @@ impl<S: Signer> GraphQLClient<S> {
     /// Complete a leaves swap
     pub async fn complete_leaves_swap(
         &self,
-        adaptor_secret_key: &str,
-        user_outbound_transfer_external_id: &str,
-        leaves_swap_request_id: &str,
+        input: CompleteLeavesSwapInput,
     ) -> GraphQLResult<LeavesSwapRequest> {
-        let vars = complete_leaves_swap::Variables {
-            input: complete_leaves_swap::CompleteLeavesSwapInput {
-                adaptor_secret_key: adaptor_secret_key.to_string(),
-                user_outbound_transfer_external_id: user_outbound_transfer_external_id.to_string(),
-                leaves_swap_request_id: leaves_swap_request_id.to_string(),
-            },
-        };
+        let vars = complete_leaves_swap::Variables { input };
 
         let response = self
             .post_query::<queries::CompleteLeavesSwap, _>(vars, true)
