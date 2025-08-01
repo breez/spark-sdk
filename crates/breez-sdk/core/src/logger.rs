@@ -24,8 +24,8 @@ where
                 let mut buf = String::new();
                 let writer = Writer::new(&mut buf);
 
-                if let Ok(_) = tracing_subscriber::fmt::format::DefaultFields::new()
-                    .format_fields(writer, event)
+                if tracing_subscriber::fmt::format::DefaultFields::new()
+                    .format_fields(writer, event).is_ok()
                 {
                     s.log(LogEntry {
                         line: buf,

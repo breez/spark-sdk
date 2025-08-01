@@ -1,4 +1,4 @@
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, params};
 use rusqlite_migration::{M, Migrations};
 use std::path::{Path, PathBuf};
 

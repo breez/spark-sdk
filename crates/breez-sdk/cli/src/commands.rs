@@ -121,8 +121,7 @@ pub(crate) async fn execute_command(
                 ));
             };
             println!(
-                "Prepared payment: {:#?}\n Do you want to continue? (y/n)",
-                prepare_response
+                "Prepared payment: {prepare_response:#?}\n Do you want to continue? (y/n)"
             );
             let line = rl.readline_with_initial("", ("y", ""))?.to_lowercase();
             if line != "y" {
@@ -178,7 +177,7 @@ pub(crate) async fn execute_command(
 
 fn print_value<T: serde::Serialize>(value: &T) -> Result<(), serde_json::Error> {
     let serialized = serialize(value)?;
-    println!("{}", serialized);
+    println!("{serialized}");
     Ok(())
 }
 

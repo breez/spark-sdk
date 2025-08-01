@@ -14,7 +14,7 @@ pub enum SdkEvent {
 impl fmt::Display for SdkEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SdkEvent::Synced {} => write!(f, "Synced"),
+            SdkEvent::Synced => write!(f, "Synced"),
         }
     }
 }

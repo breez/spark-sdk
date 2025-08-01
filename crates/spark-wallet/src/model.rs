@@ -64,7 +64,7 @@ impl WalletTransfer {
                 .updated_time
                 .map(|t| UNIX_EPOCH + Duration::from_secs(t)),
             transfer_type: value.transfer_type,
-            direction: direction,
+            direction,
         }
     }
 }

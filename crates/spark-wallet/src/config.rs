@@ -147,7 +147,7 @@ impl SparkWalletConfig {
             address: address
                 .parse()
                 .map_err(|_| SparkWalletError::ValidationError("Invalid address".to_string()))?,
-            identity_public_key: PublicKey::from_str(&identity_public_key).map_err(|_| {
+            identity_public_key: PublicKey::from_str(identity_public_key).map_err(|_| {
                 SparkWalletError::ValidationError("Invalid identity public key".to_string())
             })?,
         })

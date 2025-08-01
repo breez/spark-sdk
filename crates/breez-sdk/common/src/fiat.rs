@@ -54,7 +54,7 @@ impl FiatAPI for BreezServer {
             serde_json::from_str(data).map_err(|e| {
                 ServiceConnectivityError::new(
                     ServiceConnectivityErrorKind::Json,
-                    format!("failed to load embedded fiat currencies: {:?}", e),
+                    format!("failed to load embedded fiat currencies: {e:?}"),
                 )
             })?;
         let mut fiat_currency_list: Vec<FiatCurrency> = Vec::new();
@@ -71,7 +71,7 @@ impl FiatAPI for BreezServer {
         let mut client = self.get_information_client().await;
 
         let request = RatesRequest {};
-        let response = with_connection_retry!(client.rates(request.clone()))
+        let response = with_connection_retry!(client.rates(request))
             .await
             .map_err(|e| {
                 ServiceConnectivityError::new(

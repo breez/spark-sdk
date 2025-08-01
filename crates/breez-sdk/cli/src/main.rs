@@ -136,11 +136,11 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
                             }
                         }
                         Err(e) => {
-                            println!("Error: {}", e);
+                            println!("Error: {e}");
                         }
                     },
                     Err(e) => {
-                        println!("{}", e);
+                        println!("{e}");
                     }
                 }
             }
@@ -153,7 +153,7 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
                 break;
             }
             Err(err) => {
-                println!("Error: {:?}", err);
+                println!("Error: {err:?}");
                 break;
             }
         }

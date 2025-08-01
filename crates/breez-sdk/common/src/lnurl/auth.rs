@@ -53,7 +53,7 @@ pub trait LnurlAuthSigner {
 /// <https://github.com/lnurl/luds/blob/luds/04.md>
 ///
 /// Linking key is derived as per LUD-05
-/// https://github.com/lnurl/luds/blob/luds/05.md
+/// <https://github.com/lnurl/luds/blob/luds/05.md>
 ///
 /// See the [`parse`] docs for more detail on the full workflow.
 pub async fn perform_lnurl_auth<C: RestClient + ?Sized, S: LnurlAuthSigner>(
