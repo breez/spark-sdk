@@ -288,7 +288,7 @@ impl BreezSdk {
                     fee_sats: fee_estimation,
                     amount_sats: request
                         .amount_sats
-                        .or(detailed_bolt11_invoice.amount_msat)
+                        .or(detailed_bolt11_invoice.amount_msat.map(|msat| msat / 1000))
                         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
                 })
             }
@@ -315,11 +315,17 @@ impl BreezSdk {
                 })
             }
             SendPaymentMethod::Bolt11Invoice { detailed_invoice } => {
+                let amount_to_send = match detailed_invoice.amount_msat {
+                    // we are not sending amount in case the invoice contains it.
+                    Some(_) => None,
+                    // We are sending amount for zero amount invoice
+                    None => Some(request.prepare_response.amount_sats),
+                };
                 let payment_response = self
                     .spark_wallet
                     .pay_lightning_invoice(
                         &detailed_invoice.invoice.bolt11,
-                        Some(request.prepare_response.amount_sats),
+                        amount_to_send,
                         Some(request.prepare_response.fee_sats),
                         true,
                     )
