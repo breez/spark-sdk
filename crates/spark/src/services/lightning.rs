@@ -535,9 +535,10 @@ fn get_invoice_amount_sats(
 
     // it seems that spark currently don't support over payment
     if invoice_amount_sats > 0 && to_pay_sat > invoice_amount_sats {
-        return Err(ServiceError::ValidationError(
-            "Overpayments are not allowed".to_string(),
-        ));
+        return Err(ServiceError::ValidationError(format!(
+            "Overpayments are not allowed {} < {}",
+            invoice_amount_sats, to_pay_sat
+        )));
     }
     Ok(to_pay_sat)
 }

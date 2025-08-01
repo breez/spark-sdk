@@ -44,7 +44,7 @@ impl SdkBuilder {
             storage
         } else {
             // Create default SQLite storage in the data directory
-            let db_path = PathBuf::from_str(&self.config.data_dir)?.join("spark_wallet.db");
+            let db_path = PathBuf::from_str(&self.config.data_dir)?;
             let storage = SqliteStorage::new(&db_path)?;
             Arc::new(storage)
         };

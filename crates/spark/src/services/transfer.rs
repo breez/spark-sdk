@@ -12,7 +12,7 @@ use crate::signer::{
     FrostSigningCommitmentsWithNonces, PrivateKeySource, SecretToSplit, VerifiableSecretShare,
 };
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
-use crate::utils::paging::{PagingFilter, PagingResult, pager};
+use crate::utils::paging::{Order, PagingFilter, PagingResult, pager};
 use crate::utils::refund::{prepare_refund_so_signing_jobs, sign_aggregate_refunds, sign_refunds};
 
 use bitcoin::Transaction;
@@ -842,6 +842,10 @@ impl<S: Signer> TransferService<S> {
             .get_coordinator()
             .client
             .query_all_transfers(TransferFilter {
+                order: match paging.order {
+                    Order::Ascending => operator_rpc::spark::Order::Ascending.into(),
+                    Order::Descending => operator_rpc::spark::Order::Descending.into(),
+                },
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
                 )),
