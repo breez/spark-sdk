@@ -1,8 +1,4 @@
-UNAME := $(shell uname)
-
-ifeq ($(UNAME), Darwin)
-	CLANG_PREFIX += AR=$(shell brew --prefix llvm)/bin/llvm-ar CC=$(shell brew --prefix llvm)/bin/clang
-endif
+include ../../../Makefile.common
 
 default: check
 
@@ -12,8 +8,10 @@ build:
 build-release:
 	cargo build --release
 
-build-wasm: install-wasm32-unknown-unknown
-	$(CLANG_PREFIX) cargo build --target=wasm32-unknown-unknown
+build-target-%: install-target-%
+	$(CLANG_PREFIX) cargo build --target=$*
+
+build-wasm: build-target-wasm32-unknown-unknown
 
 check: fmt-check clippy-check wasm-clippy-check
 
@@ -37,11 +35,8 @@ fmt-fix:
 fmt-check:
 	cargo fmt -- --check
 
-install-wasm32-unknown-unknown:
-	$(CLANG_PREFIX) rustup target add wasm32-unknown-unknown
-
 test:
 	cargo test
 
-wasm-clippy-check: install-wasm32-unknown-unknown
+wasm-clippy-check: install-target-wasm32-unknown-unknown
 	$(CLANG_PREFIX) cargo clippy --all-targets --target=wasm32-unknown-unknown -- -D warnings
