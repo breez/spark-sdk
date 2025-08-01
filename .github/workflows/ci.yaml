@@ -33,6 +33,9 @@ jobs:
         crate:
           - spark
           - spark-wallet
+          - breez-sdk/common
+          - breez-sdk/core
+          - breez-sdk/macros
         target:
           - x86_64-unknown-linux-gnu
 
