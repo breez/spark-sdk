@@ -55,7 +55,7 @@ where
         }
         TransferCommand::List { limit, offset } => {
             let paging = if limit.is_some() || offset.is_some() {
-                Some(PagingFilter::new(offset, limit))
+                Some(PagingFilter::new(offset, limit, None))
             } else {
                 None
             };
@@ -65,7 +65,7 @@ where
         }
         TransferCommand::ListPending { limit, offset } => {
             let paging = if limit.is_some() || offset.is_some() {
-                Some(PagingFilter::new(offset, limit))
+                Some(PagingFilter::new(offset, limit, None))
             } else {
                 None
             };

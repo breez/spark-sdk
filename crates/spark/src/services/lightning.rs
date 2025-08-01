@@ -375,9 +375,10 @@ impl<S: Signer> LightningService<S> {
             .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))?;
         if let Some(max_fee_sat) = max_fee_sat {
             if fee_sat > max_fee_sat {
-                return Err(ServiceError::ValidationError(
-                    "Fee exceeds maximum allowed fee".to_string(),
-                ));
+                return Err(ServiceError::ValidationError(format!(
+                    "Fee exceeds maximum allowed fee {} > {}",
+                    fee_sat, max_fee_sat
+                )));
             }
         }
 

@@ -119,7 +119,7 @@ where
         }
         DepositCommand::ListStaticAddresses { limit, offset } => {
             let paging = if limit.is_some() || offset.is_some() {
-                Some(PagingFilter::new(offset, limit))
+                Some(PagingFilter::new(offset, limit, None))
             } else {
                 None
             };
@@ -128,7 +128,7 @@ where
         }
         DepositCommand::ListUnusedAddresses { limit, offset } => {
             let paging = if limit.is_some() || offset.is_some() {
-                Some(PagingFilter::new(offset, limit))
+                Some(PagingFilter::new(offset, limit, None))
             } else {
                 None
             };
