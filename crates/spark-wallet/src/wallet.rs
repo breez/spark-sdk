@@ -317,7 +317,10 @@ impl<S: Signer> SparkWallet<S> {
     ) -> Result<WalletTransfer, SparkWalletError> {
         let transfer = self.deposit_service.claim_static_deposit(quote).await?;
 
-        Ok(transfer.into())
+        Ok(WalletTransfer::from_transfer(
+            transfer,
+            self.identity_public_key,
+        ))
     }
 
     pub async fn refund_static_deposit(
