@@ -1,0 +1,43 @@
+dkg:
+  min_available_keys: 100
+bitcoind:
+  regtest:
+    network: regtest
+    host: 127.0.0.1:8332
+    rpcuser: rpcuser
+    rpcpassword: rpcpassword
+    zmqpubrawblock: tcp://127.0.0.1:28332
+token:
+  disconnect_lrc20_node: true
+database:
+  pool_min_conns: 4
+  pool_max_conns: 32
+  pool_max_conn_lifetime: 5m
+  pool_max_conn_idle_time: 30s
+  pool_health_check_period: 15s
+
+lrc20:
+  regtest:
+    disablerpcs: true
+    disablel1: true
+    network: regtest
+    host: 127.0.0.1:18530
+    withdrawbondsats: 10000 # 0.01 BTC
+    withdrawrelativeblocklocktime: 1000
+    grpcpagesize: 200
+    grpcpoolsize: 10
+service_authz:
+  mode: 1 # AuthzModeDisabled
+  ip_allowlist: []
+xff_client_ip_position: 0
+return_detailed_errors: true
+return_detailed_panic_errors: true
+tracing:
+  enabled: false
+  otel_collector_endpoint: ""
+  otel_collector_cert_path: ""
+  global_sampling_rate: 0
+  span_sampling_config:
+    per_span_sampling_rates: {}
+    allow_list: []
+    block_list: []

@@ -13,7 +13,7 @@ use spark::{
     utils::paging::PagingFilter,
 };
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub enum WalletEvent {
     DepositConfirmed(TreeNodeId),
     StreamConnected,

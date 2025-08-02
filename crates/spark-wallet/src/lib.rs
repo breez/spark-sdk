@@ -4,11 +4,13 @@ mod event;
 mod model;
 mod wallet;
 
+pub use bitcoin::secp256k1::PublicKey;
 pub use config::*;
 pub use error::*;
 pub use model::*;
+pub use spark::operator::{OperatorConfig, OperatorError, OperatorPoolConfig};
 pub use spark::{
-    Network,
+    Identifier, Network,
     address::SparkAddress,
     services::{
         ExitSpeed, LightningSendPayment, LightningSendStatus, TransferStatus, TransferTokenOutput,

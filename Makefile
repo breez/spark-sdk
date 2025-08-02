@@ -29,6 +29,9 @@ fmt-fix: $(SUBDIRS) $(EXAMPLE_SUBDIRS)
 
 fmt-check: $(SUBDIRS) $(EXAMPLE_SUBDIRS)
 
+itest:
+	$(MAKE) -C crates/spark-itest $(MAKECMDGOALS)
+
 test: $(SUBDIRS) $(EXAMPLE_SUBDIRS)
 
 wasm-clippy-check: $(SUBDIRS)

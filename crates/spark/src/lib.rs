@@ -10,3 +10,4 @@ pub mod tree;
 pub mod utils;
 
 pub use core::Network;
+pub use frost_secp256k1_tr::Identifier;

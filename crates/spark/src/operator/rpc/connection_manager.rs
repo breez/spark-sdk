@@ -19,9 +19,13 @@ impl Default for ConnectionManager {
 
 impl ConnectionManager {
     pub fn new() -> ConnectionManager {
-        rustls::crypto::ring::default_provider()
+        // if rustls::static_default::
+        if rustls::crypto::ring::default_provider()
             .install_default()
-            .expect("Failed to install rustls crypto provider");
+            .is_err()
+        {
+            tracing::error!("Failed to install rustls crypto provider, ignoring error");
+        }
         let connections_map = HashMap::new();
         Self {
             connections_map: Mutex::new(connections_map),
