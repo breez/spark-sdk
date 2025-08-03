@@ -44,6 +44,9 @@ pub enum SparkWalletError {
     #[error("Service error: {0}")]
     ServiceError(#[from] spark::services::ServiceError),
 
+    #[error("SSP error: {0}")]
+    SspError(#[from] spark::ssp::ServiceProviderError),
+
     #[error("Generic error: {0}")]
     Generic(String),
 }

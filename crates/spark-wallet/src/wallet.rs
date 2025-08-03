@@ -22,7 +22,7 @@ use spark::{
         Transfer, TransferId, TransferService,
     },
     signer::Signer,
-    ssp::ServiceProvider,
+    ssp::{ServiceProvider, SspTransfer},
     tree::{LeavesReservation, TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeState},
     utils::paging::PagingFilter,
 };
@@ -50,6 +50,7 @@ pub struct SparkWallet<S> {
     coop_exit_service: Arc<CoopExitService<S>>,
     transfer_service: Arc<TransferService<S>>,
     lightning_service: Arc<LightningService<S>>,
+    ssp_client: Arc<ServiceProvider<S>>,
 }
 
 impl<S: Signer> SparkWallet<S> {
@@ -142,6 +143,7 @@ impl<S: Signer> SparkWallet<S> {
             reconnect_interval,
             Arc::clone(&transfer_service),
             Arc::clone(&tree_service),
+            Arc::clone(&service_provider),
         ));
         background_processor
             .run_background_tasks(cancellation_token.clone())
@@ -158,6 +160,7 @@ impl<S: Signer> SparkWallet<S> {
             coop_exit_service,
             transfer_service,
             lightning_service,
+            ssp_client: service_provider.clone(),
         })
     }
 }
@@ -319,6 +322,7 @@ impl<S: Signer> SparkWallet<S> {
 
         Ok(WalletTransfer::from_transfer(
             transfer,
+            None,
             self.identity_public_key,
         ))
     }
@@ -438,6 +442,7 @@ impl<S: Signer> SparkWallet<S> {
 
         Ok(WalletTransfer::from_transfer(
             transfer,
+            None,
             self.identity_public_key,
         ))
     }
@@ -448,6 +453,7 @@ impl<S: Signer> SparkWallet<S> {
             self.identity_public_key,
             &self.transfer_service,
             &self.tree_service,
+            &self.ssp_client,
         )
         .await
     }
@@ -477,10 +483,7 @@ impl<S: Signer> SparkWallet<S> {
     ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
         let our_pubkey = self.identity_public_key;
         let transfers = self.transfer_service.query_transfers(paging).await?;
-        Ok(transfers
-            .into_iter()
-            .map(|t| WalletTransfer::from_transfer(t, our_pubkey))
-            .collect())
+        Ok(create_transfers(transfers, &self.ssp_client, our_pubkey).await?)
     }
 
     pub async fn list_pending_transfers(
@@ -492,10 +495,7 @@ impl<S: Signer> SparkWallet<S> {
             .transfer_service
             .query_pending_transfers(paging)
             .await?;
-        Ok(transfers
-            .into_iter()
-            .map(|t| WalletTransfer::from_transfer(t, our_pubkey))
-            .collect())
+        Ok(create_transfers(transfers, &self.ssp_client, our_pubkey).await?)
     }
 
     /// Signs a message with the identity key using ECDSA and returns the signature.
@@ -571,10 +571,15 @@ impl<S: Signer> SparkWallet<S> {
             )
             .await?;
 
-        Ok(WalletTransfer::from_transfer(
-            transfer,
-            self.identity_public_key,
-        ))
+        Ok(
+            create_transfers(vec![transfer], &self.ssp_client, self.identity_public_key)
+                .await?
+                .first()
+                .cloned()
+                .ok_or(SparkWalletError::Generic(
+                    "Failed to create transfer".to_string(),
+                ))?,
+        )
     }
 
     async fn withdraw_inner(
@@ -635,6 +640,7 @@ async fn claim_pending_transfers<S: Signer>(
     our_pubkey: PublicKey,
     transfer_service: &Arc<TransferService<S>>,
     tree_service: &Arc<TreeService<S>>,
+    ssp_client: &Arc<ServiceProvider<S>>,
 ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
     trace!("Claiming all pending transfers");
     let transfers = transfer_service
@@ -644,10 +650,29 @@ async fn claim_pending_transfers<S: Signer>(
     for transfer in &transfers {
         claim_transfer(transfer, transfer_service, tree_service).await?;
     }
+    Ok(create_transfers(transfers, ssp_client, our_pubkey).await?)
+}
 
+async fn create_transfers<S: Signer>(
+    transfers: Vec<Transfer>,
+    ssp_client: &Arc<ServiceProvider<S>>,
+    our_public_key: PublicKey,
+) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+    let transfer_ids: Vec<String> = transfers.iter().map(|t| t.id.to_string()).collect();
+    let ssp_tranfers = ssp_client.get_transfers(transfer_ids).await?;
+    let ssp_transfers_map: HashMap<String, SspTransfer> = ssp_tranfers
+        .into_iter()
+        .filter_map(|t| t.spark_id.clone().map(|spark_id| (spark_id, t.clone())))
+        .collect();
     Ok(transfers
         .into_iter()
-        .map(|t| WalletTransfer::from_transfer(t, our_pubkey))
+        .map(|t| {
+            WalletTransfer::from_transfer(
+                t.clone(),
+                ssp_transfers_map.get(&t.id.to_string()).cloned(),
+                our_public_key,
+            )
+        })
         .collect())
 }
 
@@ -674,6 +699,7 @@ struct BackgroundProcessor<S: Signer> {
     reconnect_interval: Duration,
     transfer_service: Arc<TransferService<S>>,
     tree_service: Arc<TreeService<S>>,
+    ssp_client: Arc<ServiceProvider<S>>,
 }
 
 impl<S: Signer> BackgroundProcessor<S> {
@@ -684,6 +710,7 @@ impl<S: Signer> BackgroundProcessor<S> {
         reconnect_interval: Duration,
         transfer_service: Arc<TransferService<S>>,
         tree_service: Arc<TreeService<S>>,
+        ssp_client: Arc<ServiceProvider<S>>,
     ) -> Self {
         Self {
             operator_pool,
@@ -692,6 +719,7 @@ impl<S: Signer> BackgroundProcessor<S> {
             reconnect_interval,
             transfer_service,
             tree_service,
+            ssp_client,
         }
     }
 
@@ -731,6 +759,7 @@ impl<S: Signer> BackgroundProcessor<S> {
             self.identity_public_key,
             &self.transfer_service,
             &self.tree_service,
+            &self.ssp_client,
         )
         .await
         {

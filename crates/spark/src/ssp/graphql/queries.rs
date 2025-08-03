@@ -20,7 +20,7 @@ type Long = u64;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug",
+    response_derives = "Debug,Clone",
     extern_enums("BitcoinNetwork", "ClaimStaticDepositRequestType")
 )]
 pub struct ClaimStaticDeposit;
@@ -30,7 +30,7 @@ pub struct ClaimStaticDeposit;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug",
+    response_derives = "Debug,Clone,Serialize",
     extern_enums(
         "CurrencyUnit",
         "ExitSpeed",
@@ -45,7 +45,7 @@ pub struct CompleteCoopExit;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug",
+    response_derives = "Debug,Clone,Serialize",
     extern_enums("CurrencyUnit", "BitcoinNetwork", "SparkLeavesSwapRequestStatus")
 )]
 pub struct CompleteLeavesSwap;
@@ -55,7 +55,7 @@ pub struct CompleteLeavesSwap;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug",
+    response_derives = "Debug,Clone,Serialize",
     extern_enums("BitcoinNetwork", "CurrencyUnit")
 )]
 pub struct CoopExitFeeQuote;
@@ -65,7 +65,7 @@ pub struct CoopExitFeeQuote;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug"
+    response_derives = "Debug,Clone,Serialize"
 )]
 pub struct GetChallenge;
 
@@ -74,7 +74,7 @@ pub struct GetChallenge;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug",
+    response_derives = "Debug,Clone,Serialize",
     extern_enums("CurrencyUnit")
 )]
 pub struct LeavesSwapFeeEstimate;
@@ -84,7 +84,7 @@ pub struct LeavesSwapFeeEstimate;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug",
+    response_derives = "Debug,Clone,Serialize",
     extern_enums("CurrencyUnit")
 )]
 pub struct LightningSendFeeEstimate;
@@ -94,7 +94,7 @@ pub struct LightningSendFeeEstimate;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug",
+    response_derives = "Debug,Clone,Serialize",
     extern_enums(
         "CurrencyUnit",
         "ExitSpeed",
@@ -109,7 +109,7 @@ pub struct RequestCoopExit;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug",
+    response_derives = "Debug,Clone,Serialize",
     extern_enums("CurrencyUnit", "BitcoinNetwork", "SparkLeavesSwapRequestStatus")
 )]
 pub struct RequestLeavesSwap;
@@ -119,7 +119,7 @@ pub struct RequestLeavesSwap;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug",
+    response_derives = "Debug,Clone,Serialize",
     extern_enums(
         "CurrencyUnit",
         "ExitSpeed",
@@ -134,7 +134,7 @@ pub struct RequestLightningReceive;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug",
+    response_derives = "Debug,Clone,Serialize",
     extern_enums("CurrencyUnit", "BitcoinNetwork", "LightningSendRequestStatus")
 )]
 pub struct RequestLightningSend;
@@ -144,7 +144,7 @@ pub struct RequestLightningSend;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug",
+    response_derives = "Debug,Clone,Serialize",
     extern_enums("BitcoinNetwork")
 )]
 pub struct StaticDepositQuote;
@@ -154,7 +154,7 @@ pub struct StaticDepositQuote;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug",
+    response_derives = "Debug,Clone,Serialize",
     extern_enums("CurrencyUnit")
 )]
 pub struct Transfers;
@@ -164,7 +164,7 @@ pub struct Transfers;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug",
+    response_derives = "Debug,Clone,Serialize",
     extern_enums(
         "CurrencyUnit",
         "ExitSpeed",
@@ -182,6 +182,6 @@ pub struct UserRequest;
     query_path = "schema/queries.graphql",
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
-    response_derives = "Debug"
+    response_derives = "Debug,Clone,Serialize"
 )]
 pub struct VerifyChallenge;
