@@ -13,6 +13,7 @@ use frost_secp256k1_tr::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
 use crate::services::bech32m_encode_token_id;
@@ -629,6 +630,41 @@ impl TryFrom<(operator_rpc::spark_token::TokenOutput, Network)> for TokenOutput 
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct TokenOutputWithPrevOut {
+    pub output: TokenOutput,
+    pub prev_tx_hash: String,
+    pub prev_tx_vout: u32,
+}
+
+impl
+    TryFrom<(
+        operator_rpc::spark_token::OutputWithPreviousTransactionData,
+        Network,
+    )> for TokenOutputWithPrevOut
+{
+    type Error = ServiceError;
+
+    fn try_from(
+        (output_with_prev_tx_data, network): (
+            operator_rpc::spark_token::OutputWithPreviousTransactionData,
+            Network,
+        ),
+    ) -> Result<Self, Self::Error> {
+        let output = output_with_prev_tx_data
+            .output
+            .ok_or_else(|| ServiceError::Generic("Missing token output".to_string()))?;
+        let output = TokenOutput::try_from((output, network))?;
+        let prev_tx_hash = hex::encode(output_with_prev_tx_data.previous_transaction_hash);
+        let prev_tx_vout = output_with_prev_tx_data.previous_transaction_vout;
+        Ok(TokenOutputWithPrevOut {
+            output,
+            prev_tx_hash,
+            prev_tx_vout,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TokenTransaction {
     pub inputs: TokenInputs,
@@ -859,4 +895,98 @@ pub struct QueryTokenTransactionsFilter {
     pub token_transaction_hashes: Vec<String>,
     pub token_ids: Vec<String>,
     pub output_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TransferTokenOutput {
+    pub token_id: String,
+    pub amount: u128,
+    pub receiver_address: SparkAddress,
+}
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::secp256k1::PublicKey;
+
+    use crate::operator::rpc as operator_rpc;
+    use crate::services::bech32m_decode_token_id;
+    use crate::{Network, services::TokenOutputWithPrevOut};
+
+    #[test]
+    fn test_token_output_with_prev_out_roundtrip() {
+        let token_id = "123";
+        let owner_public_key = PublicKey::from_slice(&[
+            3, 141, 37, 201, 160, 148, 226, 93, 184, 201, 131, 47, 222, 91, 55, 171, 38, 95, 13,
+            248, 175, 190, 44, 132, 189, 75, 131, 204, 215, 82, 93, 167, 177,
+        ])
+        .unwrap();
+        let revocation_commitment = vec![1, 2, 3, 4, 5, 6];
+        let withdraw_bond_sats = 5;
+        let withdraw_relative_block_locktime = 10;
+        let token_public_key = PublicKey::from_slice(&[
+            2, 127, 55, 243, 159, 164, 203, 75, 127, 192, 114, 94, 161, 176, 56, 167, 40, 38, 14,
+            107, 203, 243, 227, 234, 184, 42, 180, 200, 218, 192, 76, 120, 108,
+        ])
+        .unwrap();
+        let token_identifier = "btknrt1sn0g08xew2y6fzcvlca3kpdmy5ftkd7skg2m8dxh5kmwfnm7lpaq487jlc";
+        let token_amount = 100000000u128;
+        let previous_transaction_hash = vec![1, 2, 3];
+        let previous_transaction_vout = 5;
+
+        let output_with_previous_transaction_data =
+            operator_rpc::spark_token::OutputWithPreviousTransactionData {
+                output: Some(operator_rpc::spark_token::TokenOutput {
+                    id: Some(token_id.to_string()),
+                    owner_public_key: owner_public_key.serialize().to_vec(),
+                    revocation_commitment: Some(revocation_commitment.clone()),
+                    withdraw_bond_sats: Some(withdraw_bond_sats),
+                    withdraw_relative_block_locktime: Some(withdraw_relative_block_locktime),
+                    token_public_key: Some(token_public_key.serialize().to_vec()),
+                    token_identifier: Some(
+                        bech32m_decode_token_id(token_identifier, Some(Network::Regtest)).unwrap(),
+                    ),
+                    token_amount: token_amount.to_be_bytes().to_vec(),
+                }),
+                previous_transaction_hash: previous_transaction_hash.clone(),
+                previous_transaction_vout,
+            };
+
+        let output_with_prev_out = TokenOutputWithPrevOut::try_from((
+            output_with_previous_transaction_data.clone(),
+            Network::Regtest,
+        ))
+        .unwrap();
+
+        assert_eq!(output_with_prev_out.output.id, token_id);
+        assert_eq!(
+            output_with_prev_out.output.owner_public_key,
+            owner_public_key
+        );
+        assert_eq!(
+            output_with_prev_out.output.revocation_commitment,
+            hex::encode(revocation_commitment)
+        );
+        assert_eq!(
+            output_with_prev_out.output.withdraw_bond_sats,
+            withdraw_bond_sats
+        );
+        assert_eq!(
+            output_with_prev_out.output.withdraw_relative_block_locktime,
+            withdraw_relative_block_locktime
+        );
+        assert_eq!(
+            output_with_prev_out.output.token_public_key,
+            Some(token_public_key)
+        );
+        assert_eq!(
+            output_with_prev_out.output.token_identifier,
+            token_identifier
+        );
+        assert_eq!(output_with_prev_out.output.token_amount, token_amount);
+        assert_eq!(
+            output_with_prev_out.prev_tx_hash,
+            hex::encode(previous_transaction_hash)
+        );
+        assert_eq!(output_with_prev_out.prev_tx_vout, previous_transaction_vout);
+    }
 }

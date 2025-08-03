@@ -6,6 +6,10 @@ use super::error::Result;
 use super::spark::*;
 use super::spark_token;
 use crate::operator::rpc::spark::query_nodes_request::Source;
+use crate::operator::rpc::spark_token::CommitTransactionRequest;
+use crate::operator::rpc::spark_token::CommitTransactionResponse;
+use crate::operator::rpc::spark_token::StartTransactionRequest;
+use crate::operator::rpc::spark_token::StartTransactionResponse;
 use crate::signer::Signer;
 use tonic::transport::Channel;
 use tracing::trace;
@@ -502,6 +506,32 @@ where
             .into_inner())
     }
 
+    pub async fn start_transaction(
+        &self,
+        req: StartTransactionRequest,
+    ) -> Result<StartTransactionResponse> {
+        Ok(self
+            .auth
+            .spark_token_service_client()
+            .await?
+            .start_transaction(req)
+            .await?
+            .into_inner())
+    }
+
+    pub async fn commit_transaction(
+        &self,
+        req: CommitTransactionRequest,
+    ) -> Result<CommitTransactionResponse> {
+        Ok(self
+            .auth
+            .spark_token_service_client()
+            .await?
+            .commit_transaction(req)
+            .await?
+            .into_inner())
+    }
+
     pub async fn return_lightning_payment(&self, req: ReturnLightningPaymentRequest) -> Result<()> {
         self.auth
             .spark_service_client()
@@ -529,6 +559,8 @@ where
         &self,
         req: InitiateUtxoSwapRequest,
     ) -> Result<InitiateUtxoSwapResponse> {
+        // TODO: update to drop use of deprecated initiate_utxo_swap call
+        #[allow(deprecated)]
         Ok(self
             .auth
             .spark_service_client()

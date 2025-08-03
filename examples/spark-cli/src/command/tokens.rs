@@ -22,8 +22,7 @@ impl FromStr for TransferTokenOutputArg {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() != 3 {
             return Err(format!(
-                "Invalid format '{}'. Expected format: 'token_id:amount:receiver_address'",
-                s
+                "Invalid format '{s}'. Expected format: 'token_id:amount:receiver_address'"
             ));
         }
 
@@ -103,7 +102,7 @@ where
                 amount,
                 receiver_address: SparkAddress::from_str(&receiver_address)?,
             };
-            let transfer_id = wallet.transfer_tokens(&output).await?;
+            let transfer_id = wallet.transfer_tokens(output).await?;
             println!("Transaction ID: {transfer_id}");
             Ok(())
         }
@@ -116,7 +115,7 @@ where
                 .into_iter()
                 .map(|o| o.try_into())
                 .collect::<Result<Vec<_>, _>>()?;
-            let transfer_id = wallet.batch_transfer_tokens(&outputs).await?;
+            let transfer_id = wallet.batch_transfer_tokens(outputs).await?;
             println!("Transaction ID: {transfer_id}");
             Ok(())
         }

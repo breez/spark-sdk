@@ -20,7 +20,7 @@ use spark::{
         CoopExitFeeQuote, CoopExitService, DepositService, ExitSpeed, LightningReceivePayment,
         LightningSendPayment, LightningService, QueryTokenTransactionsFilter, StaticDepositQuote,
         Swap, TimelockManager, TokenService, TokenTransaction, Transfer, TransferId,
-        TransferService,
+        TransferService, TransferTokenOutput,
     },
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer},
@@ -31,7 +31,7 @@ use tokio::sync::{broadcast, watch};
 use tracing::{debug, error, info, trace};
 
 use crate::{
-    ListTokenTransactionsRequest, TokenBalance, TransferTokenOutput, WalletEvent,
+    ListTokenTransactionsRequest, TokenBalance, WalletEvent,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
@@ -657,7 +657,7 @@ impl<S: Signer> SparkWallet<S> {
                 let balance = token_outputs
                     .outputs
                     .iter()
-                    .map(|output| output.token_amount)
+                    .map(|output| output.output.token_amount)
                     .sum();
                 (
                     token_id.clone(),
@@ -675,17 +675,21 @@ impl<S: Signer> SparkWallet<S> {
     /// Transfers tokens to another Spark user.
     pub async fn transfer_tokens(
         &self,
-        output: &TransferTokenOutput,
+        output: TransferTokenOutput,
     ) -> Result<String, SparkWalletError> {
-        todo!()
+        let tx_hash = self.token_service.transfer_tokens(vec![output]).await?;
+        Ok(tx_hash)
     }
 
     /// Transfers tokens with multiple outputs.
+    ///
+    /// All outputs must share the same token id.
     pub async fn batch_transfer_tokens(
         &self,
-        outputs: &[TransferTokenOutput],
+        outputs: Vec<TransferTokenOutput>,
     ) -> Result<String, SparkWalletError> {
-        todo!()
+        let tx_hash = self.token_service.transfer_tokens(outputs).await?;
+        Ok(tx_hash)
     }
 
     pub async fn list_token_transactions(

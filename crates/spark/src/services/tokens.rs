@@ -1,23 +1,35 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ops::Not, sync::Arc, time::SystemTime};
 
-use bitcoin::bech32::{self, Bech32m, Hrp};
+use bitcoin::{
+    bech32::{self, Bech32m, Hrp},
+    hashes::{Hash, HashEngine, sha256},
+};
+use prost_types::Timestamp;
 use tokio::sync::Mutex;
 use tracing::warn;
 
 use crate::{
     Network,
+    address::SparkAddress,
     operator::{
         OperatorPool,
-        rpc::spark_token::{
-            QueryTokenMetadataRequest, QueryTokenOutputsRequest, QueryTokenTransactionsRequest,
+        rpc::{
+            self,
+            spark_token::{
+                CommitTransactionRequest, QueryTokenMetadataRequest, QueryTokenOutputsRequest,
+                QueryTokenTransactionsRequest, SignatureWithIndex, StartTransactionRequest,
+            },
         },
     },
     services::{
-        QueryTokenTransactionsFilter, ServiceError, TokenMetadata, TokenOutput, TokenTransaction,
+        QueryTokenTransactionsFilter, ServiceError, TokenMetadata, TokenOutputWithPrevOut,
+        TokenTransaction, TransferTokenOutput,
     },
     signer::Signer,
     utils::paging::{PagingFilter, PagingResult, pager},
 };
+
+const MAX_TOKEN_TX_INPUTS: usize = 500;
 
 const HRP_STR_MAINNET: &str = "btkn";
 const HRP_STR_TESTNET: &str = "btknt";
@@ -27,7 +39,7 @@ const HRP_STR_SIGNET: &str = "btkns";
 #[derive(Clone)]
 pub struct TokenOutputs {
     pub metadata: TokenMetadata,
-    pub outputs: Vec<TokenOutput>,
+    pub outputs: Vec<TokenOutputWithPrevOut>,
 }
 
 pub struct TokenService<S> {
@@ -68,21 +80,19 @@ impl<S: Signer> TokenService<S> {
         }
 
         // Raw token id to token outputs map
-        let mut outputs_map: HashMap<Vec<u8>, Vec<TokenOutput>> = HashMap::new();
+        let mut outputs_map: HashMap<Vec<u8>, Vec<TokenOutputWithPrevOut>> = HashMap::new();
 
-        for output in outputs {
-            let Some(output) = output.output else {
+        for output_with_previous_transaction_data in outputs {
+            let Some(output) = &output_with_previous_transaction_data.output else {
                 warn!("An empty output was returned from query_token_outputs, skipping");
                 continue;
             };
 
             let token_id = output.token_identifier().to_vec();
-            let token_outputs: TokenOutput = (output, self.network).try_into()?;
+            let token_outputs: TokenOutputWithPrevOut =
+                (output_with_previous_transaction_data, self.network).try_into()?;
 
-            outputs_map
-                .entry(token_id)
-                .or_insert(vec![])
-                .push(token_outputs);
+            outputs_map.entry(token_id).or_default().push(token_outputs);
         }
 
         // Fetch metadata for owned tokens
@@ -159,7 +169,7 @@ impl<S: Signer> TokenService<S> {
                     .token_ids
                     .iter()
                     .map(|id| {
-                        bech32m_decode_token_id(id, self.network)
+                        bech32m_decode_token_id(id, Some(self.network))
                             .map_err(|_| ServiceError::Generic("Invalid token id".to_string()))
                     })
                     .collect::<Result<Vec<Vec<u8>>, _>>()?,
@@ -208,6 +218,475 @@ impl<S: Signer> TokenService<S> {
         };
         Ok(transactions)
     }
+
+    pub async fn transfer_tokens(
+        &self,
+        receiver_outputs: Vec<TransferTokenOutput>,
+    ) -> Result<String, ServiceError> {
+        // Validate parameters
+        if receiver_outputs.is_empty() {
+            return Err(ServiceError::Generic(
+                "No receiver outputs provided".to_string(),
+            ));
+        }
+        let token_id = receiver_outputs[0].token_id.clone();
+        if receiver_outputs.iter().any(|o| o.token_id != token_id) {
+            return Err(ServiceError::Generic(
+                "All receiver outputs must have the same token id".to_string(),
+            ));
+        }
+
+        let total_amount: u128 = receiver_outputs.iter().map(|o| o.amount).sum();
+
+        // Get outputs matching token id
+        let outputs = self.tokens_outputs.lock().await;
+        let Some(this_token_outputs) = outputs.get(&token_id) else {
+            return Err(ServiceError::Generic(format!(
+                "No tokens available for token id: {token_id}"
+            )));
+        };
+
+        let inputs = Self::select_token_outputs(&this_token_outputs.outputs, total_amount)?;
+
+        if inputs.len() > MAX_TOKEN_TX_INPUTS {
+            // We may consider doing an intermediate self transfer here to aggregate the inputs
+            return Err(ServiceError::Generic(format!(
+                "Needed too many outputs ({}) to transfer tokens",
+                inputs.len()
+            )));
+        }
+
+        let tx = self.build_partial_tx(inputs, receiver_outputs).await?;
+
+        let txid = self.finalize_broadcast_transaction(tx).await?;
+
+        Ok(txid)
+    }
+
+    /// Selects tokens to match a given amount.
+    ///
+    /// Prioritizes smaller outputs.
+    fn select_token_outputs(
+        outputs: &[TokenOutputWithPrevOut],
+        amount: u128,
+    ) -> Result<Vec<TokenOutputWithPrevOut>, ServiceError> {
+        if outputs.iter().map(|o| o.output.token_amount).sum::<u128>() < amount {
+            return Err(ServiceError::Generic(
+                "Not enough outputs to transfer tokens".to_string(),
+            ));
+        }
+
+        // If there's an exact match, return it
+        if let Some(output) = outputs.iter().find(|o| o.output.token_amount == amount) {
+            return Ok(vec![output.clone()]);
+        }
+
+        // TODO: support other selection strategies (JS supports either smallest or largest first)
+        // Sort outputs by amount, smallest first
+        let mut sorted_outputs = outputs.to_vec();
+        sorted_outputs.sort_by_key(|o| o.output.token_amount);
+
+        // Select outputs to match the amount
+        let mut selected_outputs = Vec::new();
+        let mut remaining_amount = amount;
+        for output in sorted_outputs {
+            if remaining_amount == 0 {
+                break;
+            }
+            selected_outputs.push(output.clone());
+            remaining_amount = remaining_amount.saturating_sub(output.output.token_amount);
+        }
+
+        // We should never get here, but just in case
+        if remaining_amount > 0 {
+            return Err(ServiceError::Generic(format!(
+                "Not enough outputs to transfer tokens, remaining amount: {remaining_amount}"
+            )));
+        }
+
+        Ok(selected_outputs)
+    }
+
+    async fn build_partial_tx(
+        &self,
+        mut inputs: Vec<TokenOutputWithPrevOut>,
+        mut receiver_outputs: Vec<TransferTokenOutput>,
+    ) -> Result<rpc::spark_token::TokenTransaction, ServiceError> {
+        // Ensure inputs are ordered by vout ascending so that the input indices
+        // used for owner signatures match the order expected by the SO, which sorts
+        // inputs by "prevTokenTransactionVout" before validating signatures.
+        inputs.sort_by_key(|o| o.prev_tx_vout);
+
+        // If the inputs amount is greater than the outputs amount, we add a change output
+        let inputs_amount = inputs.iter().map(|o| o.output.token_amount).sum::<u128>();
+        let outputs_amount = receiver_outputs.iter().map(|o| o.amount).sum::<u128>();
+        if inputs_amount > outputs_amount {
+            receiver_outputs.push(TransferTokenOutput {
+                token_id: receiver_outputs[0].token_id.clone(),
+                amount: inputs_amount - outputs_amount,
+                receiver_address: SparkAddress::new(
+                    self.signer.get_identity_public_key()?,
+                    self.network,
+                    None,
+                ),
+            });
+        }
+
+        // Prepare inputs
+        let outputs_to_spend = inputs
+            .iter()
+            .map(|o| {
+                Ok(rpc::spark_token::TokenOutputToSpend {
+                    prev_token_transaction_hash: hex::decode(&o.prev_tx_hash)
+                        .map_err(|_| ServiceError::Generic("Invalid prev tx hash".to_string()))?,
+                    prev_token_transaction_vout: o.prev_tx_vout,
+                })
+            })
+            .collect::<Result<Vec<_>, ServiceError>>()?;
+        let inputs = rpc::spark_token::token_transaction::TokenInputs::TransferInput(
+            rpc::spark_token::TokenTransferInput { outputs_to_spend },
+        );
+
+        // Prepare outputs
+        let token_outputs = receiver_outputs
+            .iter()
+            .map(|o| {
+                Ok(rpc::spark_token::TokenOutput {
+                    owner_public_key: o.receiver_address.identity_public_key.serialize().to_vec(),
+                    token_identifier: Some(
+                        bech32m_decode_token_id(&o.token_id, Some(self.network))
+                            .map_err(|_| ServiceError::Generic("Invalid token id".to_string()))?,
+                    ),
+                    token_amount: o.amount.to_be_bytes().to_vec(),
+                    ..Default::default()
+                })
+            })
+            .collect::<Result<Vec<_>, ServiceError>>()?;
+
+        // Build transaction
+        let transaction = rpc::spark_token::TokenTransaction {
+            version: 1,
+            token_outputs,
+            spark_operator_identity_public_keys: self.get_operator_identity_public_keys()?,
+            expiry_time: None,
+            network: self.network.to_proto_network().into(),
+            client_created_timestamp: Some({
+                let now_ms = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .map_err(|_| {
+                        ServiceError::Generic(
+                            "client_created_timestamp is before UNIX_EPOCH".to_string(),
+                        )
+                    })?;
+                Timestamp {
+                    seconds: now_ms.as_secs() as i64,
+                    nanos: now_ms.subsec_nanos() as i32,
+                }
+            }),
+            token_inputs: Some(inputs),
+        };
+
+        Ok(transaction)
+    }
+
+    fn get_operator_identity_public_keys(&self) -> Result<Vec<Vec<u8>>, ServiceError> {
+        let operators = self.operator_pool.get_all_operators();
+        let keys = operators
+            .map(|o| o.identity_public_key.serialize().to_vec())
+            .collect();
+        Ok(keys)
+    }
+
+    async fn finalize_broadcast_transaction(
+        &self,
+        partial_tx: rpc::spark_token::TokenTransaction,
+    ) -> Result<String, ServiceError> {
+        let partial_tx_hash = partial_tx.compute_hash(true)?;
+
+        // Sign inputs
+        let mut owner_signatures: Vec<SignatureWithIndex> = Vec::new();
+        let Some(rpc::spark_token::token_transaction::TokenInputs::TransferInput(input)) =
+            partial_tx.token_inputs.as_ref()
+        else {
+            return Err(ServiceError::Generic(
+                "Token inputs are required".to_string(),
+            ));
+        };
+        let signature = self
+            .signer
+            .sign_hash_schnorr_with_identity_key(&partial_tx_hash)?
+            .serialize()
+            .to_vec();
+        for i in 0..input.outputs_to_spend.len() {
+            owner_signatures.push(SignatureWithIndex {
+                signature: signature.clone(),
+                input_index: i as u32,
+            });
+        }
+
+        let start_response = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .start_transaction(StartTransactionRequest {
+                identity_public_key: self.signer.get_identity_public_key()?.serialize().to_vec(),
+                partial_token_transaction: Some(partial_tx.clone()),
+                partial_token_transaction_owner_signatures: owner_signatures,
+                validity_duration_seconds: 180, // TODO: make this configurable
+            })
+            .await?;
+
+        let Some(final_tx) = start_response.final_token_transaction else {
+            return Err(ServiceError::Generic(
+                "No final transaction returned from start_transaction".to_string(),
+            ));
+        };
+        let Some(keyshare_info) = start_response.keyshare_info else {
+            return Err(ServiceError::Generic(
+                "No keyshare info returned from start_transaction".to_string(),
+            ));
+        };
+
+        self.validate_token_transaction(&partial_tx, &final_tx, &keyshare_info)?;
+
+        let final_tx_hash = final_tx.compute_hash(false)?;
+
+        let per_operator_signatures =
+            self.create_per_operator_signatures(&final_tx, &final_tx_hash)?;
+
+        self.operator_pool
+            .get_coordinator()
+            .client
+            .commit_transaction(CommitTransactionRequest {
+                final_token_transaction: Some(final_tx),
+                final_token_transaction_hash: final_tx_hash.clone(),
+                input_ttxo_signatures_per_operator: per_operator_signatures,
+                owner_identity_public_key: self
+                    .signer
+                    .get_identity_public_key()?
+                    .serialize()
+                    .to_vec(),
+            })
+            .await?;
+
+        Ok(hex::encode(final_tx_hash))
+    }
+
+    fn validate_token_transaction(
+        &self,
+        partial_tx: &rpc::spark_token::TokenTransaction,
+        final_tx: &rpc::spark_token::TokenTransaction,
+        keyshare_info: &rpc::spark::SigningKeyshare,
+    ) -> Result<(), ServiceError> {
+        if final_tx.network != partial_tx.network {
+            return Err(ServiceError::Generic(
+                "Network mismatch between partial and final transaction".to_string(),
+            ));
+        }
+
+        let partial_tx_inputs = partial_tx
+            .token_inputs
+            .as_ref()
+            .ok_or(ServiceError::Generic(
+                "Token inputs missing from partial tx".to_string(),
+            ))?;
+        let final_tx_inputs = final_tx.token_inputs.as_ref().ok_or(ServiceError::Generic(
+            "Token inputs missing from final tx".to_string(),
+        ))?;
+
+        match (partial_tx_inputs, final_tx_inputs) {
+            (
+                rpc::spark_token::token_transaction::TokenInputs::TransferInput(partial_tx_input),
+                rpc::spark_token::token_transaction::TokenInputs::TransferInput(final_tx_input),
+            ) => {
+                if partial_tx_input.outputs_to_spend.len() != final_tx_input.outputs_to_spend.len()
+                {
+                    return Err(ServiceError::Generic(
+                        "Outputs to spend mismatch between partial and final tx".to_string(),
+                    ));
+                }
+
+                for (partial_output, final_output) in partial_tx_input
+                    .outputs_to_spend
+                    .iter()
+                    .zip(final_tx_input.outputs_to_spend.iter())
+                {
+                    if partial_output.prev_token_transaction_hash
+                        != final_output.prev_token_transaction_hash
+                    {
+                        return Err(ServiceError::Generic(
+                            "Prev token transaction hash mismatch between partial and final tx"
+                                .to_string(),
+                        ));
+                    }
+
+                    if partial_output.prev_token_transaction_vout
+                        != final_output.prev_token_transaction_vout
+                    {
+                        return Err(ServiceError::Generic(
+                            "Prev token transaction vout mismatch between partial and final tx"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+            _ => {
+                return Err(ServiceError::Generic(
+                    "Unexpected token inputs type".to_string(),
+                ));
+            }
+        }
+
+        if partial_tx.spark_operator_identity_public_keys.len()
+            != final_tx.spark_operator_identity_public_keys.len()
+        {
+            return Err(ServiceError::Generic(
+                "Spark operator identity public keys mismatch between partial and final tx"
+                    .to_string(),
+            ));
+        }
+
+        if partial_tx.token_outputs.len() != final_tx.token_outputs.len() {
+            return Err(ServiceError::Generic(
+                "Token outputs mismatch between partial and final tx".to_string(),
+            ));
+        }
+
+        for (partial_output, final_output) in partial_tx
+            .token_outputs
+            .iter()
+            .zip(final_tx.token_outputs.iter())
+        {
+            if partial_output.owner_public_key != final_output.owner_public_key {
+                return Err(ServiceError::Generic(
+                    "Owner public key mismatch between partial and final tx".to_string(),
+                ));
+            }
+
+            if partial_output.token_amount != final_output.token_amount {
+                return Err(ServiceError::Generic(
+                    "Token amount mismatch between partial and final tx".to_string(),
+                ));
+            }
+
+            if let Some(final_withdraw_bond_sats) = final_output.withdraw_bond_sats {
+                // TODO: make this configurable
+                if final_withdraw_bond_sats != 10_000 {
+                    return Err(ServiceError::Generic(
+                        "Unexpected withdraw bond sats in final tx".to_string(),
+                    ));
+                }
+            }
+
+            if let Some(final_withdraw_relative_block_locktime) =
+                final_output.withdraw_relative_block_locktime
+            {
+                // TODO: make this configurable
+                if final_withdraw_relative_block_locktime != 1_000 {
+                    return Err(ServiceError::Generic(
+                        "Unexpected withdraw relative block locktime in final tx".to_string(),
+                    ));
+                }
+            }
+        }
+
+        if keyshare_info.threshold != 2 {
+            return Err(ServiceError::Generic(
+                "Unexpected threshold in keyshare info".to_string(),
+            ));
+        }
+
+        if keyshare_info.owner_identifiers.len() != self.operator_pool.get_all_operators().count() {
+            return Err(ServiceError::Generic(
+                "Keyshare info owner identifiers amount differs from operators amount".to_string(),
+            ));
+        }
+
+        for identifier in &keyshare_info.owner_identifiers {
+            if self
+                .operator_pool
+                .get_all_operators()
+                .any(|o| hex::encode(o.identifier.serialize()) == *identifier)
+                .not()
+            {
+                return Err(ServiceError::Generic(
+                    "Keyshare info owner identifier not found in operators".to_string(),
+                ));
+            }
+        }
+
+        if final_tx
+            .client_created_timestamp
+            .ok_or(ServiceError::Generic(
+                "Client created timestamp is required".to_string(),
+            ))?
+            != partial_tx
+                .client_created_timestamp
+                .ok_or(ServiceError::Generic(
+                    "Client created timestamp is required".to_string(),
+                ))?
+        {
+            return Err(ServiceError::Generic(
+                "Client created timestamp mismatch between partial and final tx".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn create_per_operator_signatures(
+        &self,
+        tx: &rpc::spark_token::TokenTransaction,
+        tx_hash: &[u8],
+    ) -> Result<Vec<rpc::spark_token::InputTtxoSignaturesPerOperator>, ServiceError> {
+        let mut per_operator_signatures = Vec::new();
+
+        for operator in self.operator_pool.get_all_operators() {
+            let operator_identity_public_key_bytes =
+                operator.identity_public_key.serialize().to_vec();
+
+            let mut signatures = Vec::new();
+
+            let rpc::spark_token::token_transaction::TokenInputs::TransferInput(input) =
+                tx.token_inputs.as_ref().ok_or(ServiceError::Generic(
+                    "Token inputs are required".to_string(),
+                ))?
+            else {
+                return Err(ServiceError::Generic(
+                    "Token transfer inputs are required".to_string(),
+                ));
+            };
+            let inputs_len = input.outputs_to_spend.len();
+
+            let tx_hash_hash = sha256::Hash::hash(tx_hash).to_byte_array().to_vec();
+            let operator_pubkey_hash = sha256::Hash::hash(&operator_identity_public_key_bytes)
+                .to_byte_array()
+                .to_vec();
+            let final_hash = sha256::Hash::hash(&[tx_hash_hash, operator_pubkey_hash].concat())
+                .to_byte_array()
+                .to_vec();
+
+            let signature = self
+                .signer
+                .sign_hash_schnorr_with_identity_key(&final_hash)?
+                .serialize()
+                .to_vec();
+
+            for i in 0..inputs_len {
+                signatures.push(rpc::spark_token::SignatureWithIndex {
+                    signature: signature.clone(),
+                    input_index: i as u32,
+                });
+            }
+
+            per_operator_signatures.push(rpc::spark_token::InputTtxoSignaturesPerOperator {
+                ttxo_signatures: signatures,
+                operator_identity_public_key: operator_identity_public_key_bytes,
+            });
+        }
+
+        Ok(per_operator_signatures)
+    }
 }
 
 pub(crate) fn bech32m_encode_token_id(
@@ -226,9 +705,12 @@ pub(crate) fn bech32m_encode_token_id(
     Ok(bech32)
 }
 
+/// Decodes a token id from a string.
+///
+/// If a network is provided, it will be checked against the network in the token id.
 pub(crate) fn bech32m_decode_token_id(
     token_id: &str,
-    network: Network,
+    network: Option<Network>,
 ) -> Result<Vec<u8>, ServiceError> {
     let (hrp, data) = bech32::decode(token_id)
         .map_err(|e| ServiceError::Generic(format!("Failed to decode token id: {e}")))?;
@@ -239,10 +721,389 @@ pub(crate) fn bech32m_decode_token_id(
         "btkns" => Network::Signet,
         _ => return Err(ServiceError::Generic(format!("Invalid network: {hrp}"))),
     };
-    if bech32_network != network {
-        return Err(ServiceError::Generic(format!(
-            "Invalid network: {bech32_network}"
-        )));
+    if let Some(network) = network {
+        if bech32_network != network {
+            return Err(ServiceError::Generic(format!(
+                "Invalid network: {bech32_network}"
+            )));
+        }
     }
     Ok(data)
+}
+
+const TOKEN_TRANSACTION_TRANSFER_TYPE: u32 = 3;
+
+trait HashableTokenTransaction {
+    fn compute_hash(&self, partial: bool) -> Result<Vec<u8>, ServiceError>;
+}
+
+impl HashableTokenTransaction for rpc::spark_token::TokenTransaction {
+    fn compute_hash(&self, partial: bool) -> Result<Vec<u8>, ServiceError> {
+        let mut all_hashes = Vec::new();
+
+        let version_hash = sha256::Hash::hash(&self.version.to_be_bytes())
+            .to_byte_array()
+            .to_vec();
+        all_hashes.push(version_hash);
+
+        // We only support transfer transactions
+        let tx_type_hash = sha256::Hash::hash(&TOKEN_TRANSACTION_TRANSFER_TYPE.to_be_bytes())
+            .to_byte_array()
+            .to_vec();
+        all_hashes.push(tx_type_hash);
+
+        let rpc::spark_token::token_transaction::TokenInputs::TransferInput(input) =
+            self.token_inputs.as_ref().ok_or(ServiceError::Generic(
+                "Token inputs are required".to_string(),
+            ))?
+        else {
+            return Err(ServiceError::Generic(
+                "Token transfer inputs are required".to_string(),
+            ));
+        };
+        let inputs = &input.outputs_to_spend;
+        let inputs_len = inputs.len() as u32;
+        let inputs_len_hash = sha256::Hash::hash(&inputs_len.to_be_bytes())
+            .to_byte_array()
+            .to_vec();
+        all_hashes.push(inputs_len_hash);
+
+        for input in inputs {
+            let mut engine = sha256::Hash::engine();
+            engine.input(&input.prev_token_transaction_hash);
+            engine.input(&input.prev_token_transaction_vout.to_be_bytes());
+            all_hashes.push(sha256::Hash::from_engine(engine).to_byte_array().to_vec());
+        }
+
+        let outputs_len = self.token_outputs.len() as u32;
+        let outputs_len_hash = sha256::Hash::hash(&outputs_len.to_be_bytes())
+            .to_byte_array()
+            .to_vec();
+        all_hashes.push(outputs_len_hash);
+
+        for output in &self.token_outputs {
+            let mut engine = sha256::Hash::engine();
+            if !partial {
+                if let Some(id) = &output.id {
+                    engine.input(id.as_bytes());
+                }
+            }
+            engine.input(&output.owner_public_key);
+
+            if !partial {
+                let revocation_commitment =
+                    output
+                        .revocation_commitment
+                        .as_ref()
+                        .ok_or(ServiceError::Generic(
+                            "Revocation commitment is required".to_string(),
+                        ))?;
+                engine.input(revocation_commitment);
+
+                let withdraw_bond_sats = output.withdraw_bond_sats.ok_or(ServiceError::Generic(
+                    "Withdraw bond sats is required".to_string(),
+                ))?;
+                engine.input(&withdraw_bond_sats.to_be_bytes());
+
+                let withdraw_relative_block_locktime = output
+                    .withdraw_relative_block_locktime
+                    .ok_or(ServiceError::Generic(
+                        "Withdraw relative block locktime is required".to_string(),
+                    ))?;
+                engine.input(&withdraw_relative_block_locktime.to_be_bytes());
+            }
+
+            let zeroed_pubkey = vec![0; 33];
+            let token_pubkey = output.token_public_key.as_ref().unwrap_or(&zeroed_pubkey);
+            engine.input(token_pubkey);
+
+            let token_identifier =
+                output
+                    .token_identifier
+                    .as_ref()
+                    .ok_or(ServiceError::Generic(
+                        "Token identifier is required".to_string(),
+                    ))?;
+            engine.input(token_identifier);
+
+            engine.input(&output.token_amount);
+
+            all_hashes.push(sha256::Hash::from_engine(engine).to_byte_array().to_vec());
+        }
+
+        // Sort operator public keys before hashing
+        let mut operator_public_keys = self.spark_operator_identity_public_keys.clone();
+        operator_public_keys.sort_by(|a, b| {
+            // Compare bytes one by one
+            for (a_byte, b_byte) in a.iter().zip(b.iter()) {
+                if a_byte != b_byte {
+                    return a_byte.cmp(b_byte);
+                }
+            }
+            // If all bytes match up to the shorter length, compare lengths
+            a.len().cmp(&b.len())
+        });
+
+        let operator_pubkeys_len = operator_public_keys.len() as u32;
+        let operator_pubkeys_len_hash = sha256::Hash::hash(&operator_pubkeys_len.to_be_bytes())
+            .to_byte_array()
+            .to_vec();
+        all_hashes.push(operator_pubkeys_len_hash);
+
+        for pubkey in operator_public_keys {
+            all_hashes.push(sha256::Hash::hash(&pubkey).to_byte_array().to_vec());
+        }
+
+        let network_hash = sha256::Hash::hash(&self.network.to_be_bytes())
+            .to_byte_array()
+            .to_vec();
+        all_hashes.push(network_hash);
+
+        let unix_timestamp = self.client_created_timestamp.ok_or(ServiceError::Generic(
+            "Client created timestamp is required".to_string(),
+        ))?;
+        let unix_timestamp_ms =
+            unix_timestamp.seconds as u64 * 1000 + unix_timestamp.nanos as u64 / 1_000_000;
+        let client_created_timestamp_hash = sha256::Hash::hash(&unix_timestamp_ms.to_be_bytes())
+            .to_byte_array()
+            .to_vec();
+        all_hashes.push(client_created_timestamp_hash);
+
+        if !partial {
+            let expiry_time = self.expiry_time.map(|t| t.seconds as u64).unwrap_or(0);
+            let expiry_time_hash = sha256::Hash::hash(&expiry_time.to_be_bytes())
+                .to_byte_array()
+                .to_vec();
+            all_hashes.push(expiry_time_hash);
+        }
+
+        let final_hash = sha256::Hash::hash(&all_hashes.concat())
+            .to_byte_array()
+            .to_vec();
+
+        Ok(final_hash)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use prost_types::Timestamp;
+
+    use crate::{
+        operator::rpc::{
+            self,
+            spark_token::{
+                TokenOutput, TokenOutputToSpend, TokenTransferInput, token_transaction::TokenInputs,
+            },
+        },
+        services::tokens::HashableTokenTransaction,
+    };
+
+    #[test]
+    fn test_compute_token_transaction_hash_non_partial() {
+        let tx =
+            rpc::spark_token::TokenTransaction {
+                version: 1,
+                token_outputs: vec![TokenOutput {
+                id: Some("660e8400-e29b-41d4-a716-446655440001".to_string()),
+                owner_public_key: hex::decode(
+                    "02c0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247c9",
+                )
+                .unwrap(),
+                revocation_commitment: Some(
+                    hex::decode(
+                        "03d0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247ca",
+                    )
+                    .unwrap(),
+                ),
+                withdraw_bond_sats: Some(500),
+                withdraw_relative_block_locktime: Some(50),
+                token_public_key: Some(
+                    hex::decode(
+                        "02e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
+                    )
+                    .unwrap(),
+                ),
+                token_identifier: Some(
+                    hex::decode("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+                        .unwrap(),
+                ),
+                token_amount: 50_u128.to_be_bytes().to_vec(),
+            }, TokenOutput {
+                id: Some("660e8400-e29b-41d4-a716-446655440002".to_string()),
+                owner_public_key: hex::decode(
+                    "02f0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cc",
+                )
+                .unwrap(),
+                revocation_commitment: Some(
+                    hex::decode(
+                        "03e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
+                    )
+                    .unwrap(),
+                ),
+                withdraw_bond_sats: Some(300),
+                withdraw_relative_block_locktime: Some(30),
+                token_public_key: Some(
+                    hex::decode(
+                        "02f0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cc",
+                    )
+                    .unwrap(),
+                ),
+                token_identifier: Some(
+                    hex::decode("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+                        .unwrap(),
+                ),
+                token_amount: 100_u128.to_be_bytes().to_vec(),
+            }],
+                spark_operator_identity_public_keys: vec![
+                    hex::decode(
+                        "02e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
+                    )
+                    .unwrap(),
+                    hex::decode(
+                        "02f0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cc",
+                    )
+                    .unwrap(),
+                ],
+                expiry_time: Some(Timestamp {
+                    seconds: 2103123456,
+                    nanos: 321000000,
+                }),
+                network: rpc::spark::Network::Mainnet as i32,
+                client_created_timestamp: Some(Timestamp {
+                    seconds: 1703123456,
+                    nanos: 123000000,
+                }),
+                token_inputs: Some(TokenInputs::TransferInput(TokenTransferInput {
+                    outputs_to_spend: vec![
+                        TokenOutputToSpend {
+                            prev_token_transaction_hash: hex::decode(
+                                "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                            )
+                            .unwrap(),
+                            prev_token_transaction_vout: 0,
+                        },
+                        TokenOutputToSpend {
+                            prev_token_transaction_hash: hex::decode(
+                                "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                            )
+                            .unwrap(),
+                            prev_token_transaction_vout: 1,
+                        },
+                    ],
+                })),
+            };
+
+        let hash = tx.compute_hash(false).unwrap();
+        // Value taken from JS implementation
+        assert_eq!(
+            hash,
+            hex::decode("0b7b506a33722689744cdad140c8c02702a9ad779869637a5631281f6fbbe0eb")
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_compute_token_transaction_hash_partial() {
+        let tx =
+            rpc::spark_token::TokenTransaction {
+                version: 1,
+                token_outputs: vec![TokenOutput {
+                id: Some("660e8400-e29b-41d4-a716-446655440001".to_string()),
+                owner_public_key: hex::decode(
+                    "02c0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247c9",
+                )
+                .unwrap(),
+                revocation_commitment: Some(
+                    hex::decode(
+                        "03d0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247ca",
+                    )
+                    .unwrap(),
+                ),
+                withdraw_bond_sats: Some(500),
+                withdraw_relative_block_locktime: Some(50),
+                token_public_key: Some(
+                    hex::decode(
+                        "02e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
+                    )
+                    .unwrap(),
+                ),
+                token_identifier: Some(
+                    hex::decode("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+                        .unwrap(),
+                ),
+                token_amount: 50_u128.to_be_bytes().to_vec(),
+            }, TokenOutput {
+                id: Some("660e8400-e29b-41d4-a716-446655440002".to_string()),
+                owner_public_key: hex::decode(
+                    "02f0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cc",
+                )
+                .unwrap(),
+                revocation_commitment: Some(
+                    hex::decode(
+                        "03e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
+                    )
+                    .unwrap(),
+                ),
+                withdraw_bond_sats: Some(300),
+                withdraw_relative_block_locktime: Some(30),
+                token_public_key: Some(
+                    hex::decode(
+                        "02f0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cc",
+                    )
+                    .unwrap(),
+                ),
+                token_identifier: Some(
+                    hex::decode("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+                        .unwrap(),
+                ),
+                token_amount: 100_u128.to_be_bytes().to_vec(),
+            }],
+                spark_operator_identity_public_keys: vec![
+                    hex::decode(
+                        "02e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
+                    )
+                    .unwrap(),
+                    hex::decode(
+                        "02f0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cc",
+                    )
+                    .unwrap(),
+                ],
+                expiry_time: Some(Timestamp {
+                    seconds: 2103123456,
+                    nanos: 321000000,
+                }),
+                network: rpc::spark::Network::Mainnet as i32,
+                client_created_timestamp: Some(Timestamp {
+                    seconds: 1703123456,
+                    nanos: 123000000,
+                }),
+                token_inputs: Some(TokenInputs::TransferInput(TokenTransferInput {
+                    outputs_to_spend: vec![
+                        TokenOutputToSpend {
+                            prev_token_transaction_hash: hex::decode(
+                                "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                            )
+                            .unwrap(),
+                            prev_token_transaction_vout: 0,
+                        },
+                        TokenOutputToSpend {
+                            prev_token_transaction_hash: hex::decode(
+                                "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                            )
+                            .unwrap(),
+                            prev_token_transaction_vout: 1,
+                        },
+                    ],
+                })),
+            };
+
+        let hash = tx.compute_hash(true).unwrap();
+        // Value taken from JS implementation
+        assert_eq!(
+            hash,
+            hex::decode("2fb877692e90822551c7cfd522139a4119f2395c6c96677e41f5a1c68c872af0")
+                .unwrap()
+        );
+    }
 }
