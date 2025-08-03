@@ -76,6 +76,7 @@ impl WalletTransfer {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize)]
 pub enum PayLightningInvoiceResult {
     LightningPayment(LightningSendPayment),

@@ -483,7 +483,7 @@ impl<S: Signer> SparkWallet<S> {
     ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
         let our_pubkey = self.identity_public_key;
         let transfers = self.transfer_service.query_transfers(paging).await?;
-        Ok(create_transfers(transfers, &self.ssp_client, our_pubkey).await?)
+        create_transfers(transfers, &self.ssp_client, our_pubkey).await
     }
 
     pub async fn list_pending_transfers(
@@ -495,7 +495,7 @@ impl<S: Signer> SparkWallet<S> {
             .transfer_service
             .query_pending_transfers(paging)
             .await?;
-        Ok(create_transfers(transfers, &self.ssp_client, our_pubkey).await?)
+        create_transfers(transfers, &self.ssp_client, our_pubkey).await
     }
 
     /// Signs a message with the identity key using ECDSA and returns the signature.
@@ -571,15 +571,13 @@ impl<S: Signer> SparkWallet<S> {
             )
             .await?;
 
-        Ok(
-            create_transfers(vec![transfer], &self.ssp_client, self.identity_public_key)
-                .await?
-                .first()
-                .cloned()
-                .ok_or(SparkWalletError::Generic(
-                    "Failed to create transfer".to_string(),
-                ))?,
-        )
+        create_transfers(vec![transfer], &self.ssp_client, self.identity_public_key)
+            .await?
+            .first()
+            .cloned()
+            .ok_or(SparkWalletError::Generic(
+                "Failed to create transfer".to_string(),
+            ))
     }
 
     async fn withdraw_inner(
@@ -650,7 +648,7 @@ async fn claim_pending_transfers<S: Signer>(
     for transfer in &transfers {
         claim_transfer(transfer, transfer_service, tree_service).await?;
     }
-    Ok(create_transfers(transfers, ssp_client, our_pubkey).await?)
+    create_transfers(transfers, ssp_client, our_pubkey).await
 }
 
 async fn create_transfers<S: Signer>(
