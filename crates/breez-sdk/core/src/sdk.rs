@@ -1,7 +1,8 @@
 pub use breez_sdk_common::input::parse;
 
 use spark_wallet::{
-    DefaultSigner, PagingFilter, PayLightningInvoiceResult, SparkAddress, SparkWallet, WalletEvent,
+    DefaultSigner, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress, SparkWallet,
+    WalletEvent,
 };
 use std::{sync::Arc, time::Instant};
 use tracing::{error, info, trace};
@@ -391,7 +392,7 @@ impl BreezSdk {
                 .list_transfers(Some(PagingFilter::new(
                     Some(next_offset),
                     Some(BATCH_SIZE),
-                    None,
+                    Some(Order::Ascending),
                 )))
                 .await?;
 

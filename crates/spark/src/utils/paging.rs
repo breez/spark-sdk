@@ -48,7 +48,7 @@ impl Default for PagingFilter {
         Self {
             offset: DEFAULT_PAGING_OFFSET,
             limit: DEFAULT_PAGING_LIMIT,
-            order: Order::Ascending,
+            order: Order::Descending,
         }
     }
 }

@@ -15,6 +15,7 @@ pub use spark::{
     },
     signer::{DefaultSigner, Signer},
     tree::{SigningKeyshare, TreeNodeId},
+    utils::paging::Order,
     utils::paging::PagingFilter,
 };
 pub use wallet::SparkWallet;
