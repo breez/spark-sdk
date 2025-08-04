@@ -120,10 +120,7 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
             },
             SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark,
             SspUserRequest::LightningReceiveRequest(request) => {
-                let detailed_invoice = input::parse_bolt11(
-                    &request.invoice.encoded_invoice,
-                    &PaymentRequestSource::default(),
-                );
+                let detailed_invoice = input::parse_invoice(&request.invoice.encoded_invoice);
                 PaymentDetails::Lightning {
                     description: request.invoice.memo,
                     preimage: request.lightning_receive_payment_preimage,
@@ -133,8 +130,7 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
                 }
             }
             SspUserRequest::LightningSendRequest(request) => {
-                let detailed_invoice =
-                    input::parse_bolt11(&request.encoded_invoice, &PaymentRequestSource::default());
+                let detailed_invoice = input::parse_invoice(&request.encoded_invoice);
                 PaymentDetails::Lightning {
                     description: detailed_invoice.clone().and_then(|d| d.description),
                     preimage: request.lightning_send_payment_preimage,
@@ -201,8 +197,7 @@ impl Payment {
             _ => PaymentStatus::Pending,
         };
 
-        let detailed_invoice =
-            input::parse_bolt11(&payment.encoded_invoice, &PaymentRequestSource::default());
+        let detailed_invoice = input::parse_invoice(&payment.encoded_invoice);
         let details = PaymentDetails::Lightning {
             description: detailed_invoice.clone().and_then(|d| d.description),
             preimage: payment.payment_preimage,

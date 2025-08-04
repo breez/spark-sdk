@@ -36,6 +36,10 @@ pub async fn parse(input: &str) -> Result<InputType, ParseError> {
         .await
 }
 
+pub fn parse_invoice(input: &str) -> Option<DetailedBolt11Invoice> {
+    parse_bolt11(input, &PaymentRequestSource::default())
+}
+
 pub struct InputParser<C, D> {
     rest_client: C,
     dns_resolver: D,
@@ -567,7 +571,7 @@ fn parse_bitcoin_address(input: &str, source: &PaymentRequestSource) -> Option<B
     })
 }
 
-pub fn parse_bolt11(input: &str, source: &PaymentRequestSource) -> Option<DetailedBolt11Invoice> {
+fn parse_bolt11(input: &str, source: &PaymentRequestSource) -> Option<DetailedBolt11Invoice> {
     let bolt11: lightning::bolt11_invoice::Bolt11Invoice = match input.parse() {
         Ok(invoice) => invoice,
         Err(_) => return None,
