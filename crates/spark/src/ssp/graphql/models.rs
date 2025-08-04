@@ -338,20 +338,53 @@ pub struct ClaimStaticDepositInfo {
     pub transfer_spark_id: Option<String>,
 }
 
-#[derive(FromEnum, Debug, Clone, Deserialize, Serialize)]
-#[from_enum(TransfersClaimStaticDepositStatus)]
-#[allow(non_camel_case_types)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClaimStaticDepositStatus {
-    CREATED,
-    TRANSFER_CREATED,
-    TRANSFER_CREATION_FAILED,
-    REFUND_SIGNING_COMMITMENTS_QUERYING_FAILED,
-    REFUND_SIGNING_FAILED,
-    UTXO_SWAPPING_FAILED,
-    TRANSFER_COMPLETED,
-    SPEND_TX_CREATED,
-    SPEND_TX_BROADCAST,
-    Other(String),
+    Created,
+    TransferCreated,
+    TransferCreationFailed,
+    RefundSigningCommitmentsQueryingFailed,
+    RefundSigningFailed,
+    UtxoSwappingFailed,
+    TransferCompleted,
+    SpendTxCreated,
+    SpendTxBroadcast,
+    #[serde(other, skip_serializing)]
+    Unknown,
+}
+
+impl From<TransfersClaimStaticDepositStatus> for ClaimStaticDepositStatus {
+    fn from(value: TransfersClaimStaticDepositStatus) -> Self {
+        match value {
+            TransfersClaimStaticDepositStatus::CREATED => ClaimStaticDepositStatus::Created,
+            TransfersClaimStaticDepositStatus::TRANSFER_CREATED => {
+                ClaimStaticDepositStatus::TransferCreated
+            }
+            TransfersClaimStaticDepositStatus::TRANSFER_CREATION_FAILED => {
+                ClaimStaticDepositStatus::TransferCreationFailed
+            }
+            TransfersClaimStaticDepositStatus::REFUND_SIGNING_COMMITMENTS_QUERYING_FAILED => {
+                ClaimStaticDepositStatus::RefundSigningCommitmentsQueryingFailed
+            }
+            TransfersClaimStaticDepositStatus::REFUND_SIGNING_FAILED => {
+                ClaimStaticDepositStatus::RefundSigningFailed
+            }
+            TransfersClaimStaticDepositStatus::UTXO_SWAPPING_FAILED => {
+                ClaimStaticDepositStatus::UtxoSwappingFailed
+            }
+            TransfersClaimStaticDepositStatus::TRANSFER_COMPLETED => {
+                ClaimStaticDepositStatus::TransferCompleted
+            }
+            TransfersClaimStaticDepositStatus::SPEND_TX_CREATED => {
+                ClaimStaticDepositStatus::SpendTxCreated
+            }
+            TransfersClaimStaticDepositStatus::SPEND_TX_BROADCAST => {
+                ClaimStaticDepositStatus::SpendTxBroadcast
+            }
+            TransfersClaimStaticDepositStatus::Other(_) => ClaimStaticDepositStatus::Unknown,
+        }
+    }
 }
 
 /// LightningReceiveRequest structure
