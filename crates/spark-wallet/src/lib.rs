@@ -14,7 +14,7 @@ pub use spark::{
         ExitSpeed, LightningSendPayment, LightningSendStatus, TransferStatus, TransferType,
     },
     signer::{DefaultSigner, Signer},
-    ssp::SspUserRequest,
+    ssp::*,
     tree::{SigningKeyshare, TreeNodeId},
     utils::paging::Order,
     utils::paging::PagingFilter,

@@ -4,4 +4,4 @@ mod parser;
 
 pub use error::ParseError;
 pub use models::*;
-pub use parser::parse;
+pub use parser::{parse, parse_bolt11};

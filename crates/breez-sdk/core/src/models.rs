@@ -1,9 +1,9 @@
-use breez_sdk_common::input::{BitcoinAddress, DetailedBolt11Invoice};
+use breez_sdk_common::input::{self, BitcoinAddress, DetailedBolt11Invoice, PaymentRequestSource};
 use core::fmt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use spark_wallet::{
-    LightningSendPayment, LightningSendStatus, Network as SparkNetwork, TransferDirection,
-    TransferStatus, WalletTransfer,
+    CurrencyAmount, LightningSendPayment, LightningSendStatus, Network as SparkNetwork,
+    SspUserRequest, TransferDirection, TransferStatus, WalletTransfer,
 };
 use std::time::UNIX_EPOCH;
 
@@ -80,12 +80,80 @@ pub struct Payment {
     pub fees: u64,
     /// Timestamp of when the payment was created
     pub timestamp: u64,
-    //TODO: add the payment details
-    //pub details: PaymentDetails,
+    /// Details of the payment
+    pub details: Option<PaymentDetails>,
 }
 
-impl From<WalletTransfer> for Payment {
-    fn from(transfer: WalletTransfer) -> Self {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PaymentDetails {
+    Spark,
+    Lightning {
+        /// Represents the invoice description
+        description: Option<String>,
+        /// The preimage of the paid invoice (proof of payment).
+        preimage: Option<String>,
+        /// Represents the Bolt11/Bolt12 invoice associated with a payment
+        /// In the case of a Send payment, this is the invoice paid to the user
+        /// In the case of a Receive payment, this is the invoice paid by the user
+        invoice: Option<String>,
+
+        /// The payment hash of the invoice
+        payment_hash: Option<String>,
+
+        /// The invoice destination/payee pubkey
+        destination_pubkey: Option<String>,
+    },
+    Withdraw {
+        tx_id: String,
+    },
+    Deposit {
+        tx_id: String,
+    },
+}
+
+impl TryFrom<SspUserRequest> for PaymentDetails {
+    type Error = String;
+    fn try_from(user_request: SspUserRequest) -> Result<Self, Self::Error> {
+        let details = match user_request {
+            SspUserRequest::CoopExitRequest(request) => PaymentDetails::Withdraw {
+                tx_id: request.coop_exit_txid,
+            },
+            SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark,
+            SspUserRequest::LightningReceiveRequest(request) => {
+                let detailed_invoice = input::parse_bolt11(
+                    &request.invoice.encoded_invoice,
+                    &PaymentRequestSource::default(),
+                );
+                PaymentDetails::Lightning {
+                    description: request.invoice.memo,
+                    preimage: request.lightning_receive_payment_preimage,
+                    invoice: Some(request.invoice.encoded_invoice),
+                    payment_hash: Some(request.invoice.payment_hash),
+                    destination_pubkey: detailed_invoice.map(|d| d.payee_pubkey),
+                }
+            }
+            SspUserRequest::LightningSendRequest(request) => {
+                let detailed_invoice =
+                    input::parse_bolt11(&request.encoded_invoice, &PaymentRequestSource::default());
+                PaymentDetails::Lightning {
+                    description: detailed_invoice.clone().and_then(|d| d.description),
+                    preimage: request.lightning_send_payment_preimage,
+                    invoice: Some(request.encoded_invoice),
+                    payment_hash: detailed_invoice.clone().map(|d| d.payment_hash),
+                    destination_pubkey: detailed_invoice.map(|d| d.payee_pubkey),
+                }
+            }
+            SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
+                tx_id: request.transaction_id,
+            },
+        };
+        Ok(details)
+    }
+}
+
+impl TryFrom<WalletTransfer> for Payment {
+    type Error = String;
+    fn try_from(transfer: WalletTransfer) -> Result<Self, Self::Error> {
         let payment_type = match transfer.direction {
             TransferDirection::Incoming => PaymentType::Receive,
             TransferDirection::Outgoing => PaymentType::Send,
@@ -96,17 +164,33 @@ impl From<WalletTransfer> for Payment {
             TransferStatus::Returned => PaymentStatus::Failed,
             _ => PaymentStatus::Pending,
         };
-        Payment {
+        let fees: CurrencyAmount = match transfer.clone().user_request {
+            Some(user_request) => match user_request {
+                SspUserRequest::LightningSendRequest(r) => r.fee.into(),
+                SspUserRequest::CoopExitRequest(r) => r.fee.into(),
+                // TODO:  we probably need to fetch the transaction amount an deduce the transfer amount to calculate the fee here?
+                SspUserRequest::ClaimStaticDeposit(r) => r.max_fee.into(),
+                _ => CurrencyAmount::default(),
+            },
+            None => CurrencyAmount::default(),
+        };
+
+        let details: Option<PaymentDetails> = transfer
+            .user_request
+            .and_then(|user_request| user_request.try_into().ok());
+
+        Ok(Payment {
             id: transfer.id.to_string(),
             payment_type,
             status,
             amount: transfer.total_value_sat,
-            fees: 0,
+            fees: fees.as_sats().unwrap_or(0),
             timestamp: match transfer.created_at.map(|t| t.duration_since(UNIX_EPOCH)) {
                 Some(Ok(duration)) => duration.as_secs(),
                 _ => 0,
             },
-        }
+            details,
+        })
     }
 }
 
@@ -117,6 +201,17 @@ impl Payment {
             LightningSendStatus::LightningPaymentFailed => PaymentStatus::Failed,
             _ => PaymentStatus::Pending,
         };
+
+        let detailed_invoice =
+            input::parse_bolt11(&payment.encoded_invoice, &PaymentRequestSource::default());
+        let details = PaymentDetails::Lightning {
+            description: detailed_invoice.clone().and_then(|d| d.description),
+            preimage: payment.payment_preimage,
+            invoice: Some(payment.encoded_invoice),
+            payment_hash: detailed_invoice.clone().map(|d| d.payment_hash),
+            destination_pubkey: detailed_invoice.map(|d| d.payee_pubkey),
+        };
+
         Payment {
             id: payment.id,
             payment_type: PaymentType::Send,
@@ -124,15 +219,9 @@ impl Payment {
             amount: amount_sat,
             fees: payment.fee_sat,
             timestamp: payment.created_at as u64,
+            details: Some(details),
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum PaymentDetails {
-    Lightning,
-    Spark,
-    Bitcoin,
 }
 
 #[derive(Debug, Clone)]
