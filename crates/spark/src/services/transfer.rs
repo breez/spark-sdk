@@ -12,7 +12,7 @@ use crate::signer::{
     FrostSigningCommitmentsWithNonces, PrivateKeySource, SecretToSplit, VerifiableSecretShare,
 };
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
-use crate::utils::paging::{Order, PagingFilter, PagingResult, pager};
+use crate::utils::paging::{PagingFilter, PagingResult, pager};
 use crate::utils::refund::{prepare_refund_so_signing_jobs, sign_aggregate_refunds, sign_refunds};
 
 use bitcoin::Transaction;
