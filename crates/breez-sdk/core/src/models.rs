@@ -8,7 +8,7 @@ use spark_wallet::{
 use std::time::UNIX_EPOCH;
 
 /// The type of payment
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PaymentType {
     /// Payment sent from this wallet
     Send,
@@ -35,7 +35,7 @@ impl From<&str> for PaymentType {
 }
 
 /// The status of a payment
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PaymentStatus {
     /// Payment is completed successfully
     Completed,
@@ -66,7 +66,7 @@ impl From<&str> for PaymentStatus {
 }
 
 /// Represents a payment (sent or received)
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Payment {
     /// Unique identifier for the payment
     pub id: String,
@@ -166,18 +166,17 @@ impl TryFrom<WalletTransfer> for Payment {
         };
         let fees: CurrencyAmount = match transfer.clone().user_request {
             Some(user_request) => match user_request {
-                SspUserRequest::LightningSendRequest(r) => r.fee.into(),
-                SspUserRequest::CoopExitRequest(r) => r.fee.into(),
-                // TODO:  we probably need to fetch the transaction amount an deduce the transfer amount to calculate the fee here?
-                SspUserRequest::ClaimStaticDeposit(r) => r.max_fee.into(),
+                SspUserRequest::LightningSendRequest(r) => r.fee,
+                SspUserRequest::CoopExitRequest(r) => r.fee,
                 _ => CurrencyAmount::default(),
             },
             None => CurrencyAmount::default(),
         };
 
-        let details: Option<PaymentDetails> = transfer
-            .user_request
-            .and_then(|user_request| user_request.try_into().ok());
+        let details: Option<PaymentDetails> = match transfer.user_request {
+            Some(user_request) => user_request.try_into().ok(),
+            None => Some(PaymentDetails::Spark),
+        };
 
         Ok(Payment {
             id: transfer.id.to_string(),
