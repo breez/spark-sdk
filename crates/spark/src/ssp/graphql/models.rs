@@ -1,4 +1,3 @@
-use crate::ssp;
 use crate::ssp::graphql::queries::claim_static_deposit::ClaimStaticDepositClaimStaticDeposit;
 use crate::ssp::graphql::queries::complete_coop_exit::{
     CoopExitRequestFragment as CompleteCoopExitCoopExitRequestFragment,
@@ -178,7 +177,6 @@ pub enum LightningReceiveRequestStatus {
 /// Lightning send request status enum
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-
 pub enum LightningSendRequestStatus {
     Created,
     RequestValidated,
@@ -342,6 +340,7 @@ pub struct ClaimStaticDepositInfo {
 
 #[derive(FromEnum, Debug, Clone, Deserialize, Serialize)]
 #[from_enum(TransfersClaimStaticDepositStatus)]
+#[allow(non_camel_case_types)]
 pub enum ClaimStaticDepositStatus {
     CREATED,
     TRANSFER_CREATED,
