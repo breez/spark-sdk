@@ -1193,6 +1193,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "enum_to_enum"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a98f748df7c1570c9c6bfbd3b422adeee429fd778538c66b79cccbb051b0d02"
+dependencies = [
+ "enum_to_enum_derive",
+]
+
+[[package]]
+name = "enum_to_enum_derive"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51953530e29a0e9abfb23af10748b0328cabf3d0d0e1ffd34b61144c0e0440b1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3699,6 +3719,7 @@ dependencies = [
  "bitcoin",
  "chrono",
  "ecies",
+ "enum_to_enum",
  "frost-core-unofficial",
  "frost-secp256k1-tr-unofficial",
  "futures",

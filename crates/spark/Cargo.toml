@@ -30,6 +30,7 @@ uuid.workspace = true
 lightning-invoice.workspace = true
 prost-types.workspace = true
 rand.workspace = true
+enum_to_enum="0.1.0"
 
 [build-dependencies]
 tonic.workspace = true
