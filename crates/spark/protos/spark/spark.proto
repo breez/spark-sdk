@@ -734,6 +734,11 @@ enum TransferType {
     COUNTER_SWAP = 40;
 }
 
+enum Order {
+  DESCENDING = 0;
+  ASCENDING = 1;
+}
+
 message Transfer {
     string id = 1;
     bytes sender_identity_public_key = 2;
@@ -768,6 +773,7 @@ message TransferFilter {
     repeated TransferType types = 70;
     Network network = 4; // defaults to mainnet when no network is provided.
     repeated TransferStatus statuses = 80;
+    Order order = 5;
 }
 
 message QueryTransfersResponse {

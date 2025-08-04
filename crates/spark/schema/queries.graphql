@@ -140,13 +140,39 @@ fragment TransferFragment on Transfer {
   }
   spark_id
   user_request {
+    __typename   
+   id
+  }
+}
+
+fragment FullTransferFragment on Transfer {
+  __typename
+  total_amount {
+    ...CurrencyAmountFragment
+  }
+  spark_id
+  user_request {
    ...UserRequestFragment
   }
 }
 
 fragment UserRequestFragment on UserRequest {
-  __typename
-  id
+  __typename  
+  ... on ClaimStaticDeposit {
+    ...ClaimStaticDepositFragment
+  }
+  ... on CoopExitRequest {
+    ...CoopExitRequestFragment
+  }
+  ... on LeavesSwapRequest {
+    ...LeavesSwapRequestFragment
+  }
+  ... on LightningReceiveRequest {
+    ...LightningReceiveRequestFragment
+  }
+  ... on LightningSendRequest {
+    ...LightningSendRequestFragment
+  }
 }
 
 # Mutations
@@ -281,7 +307,7 @@ query StaticDepositQuote($input: StaticDepositQuoteInput!) {
 
 query Transfers($transfer_spark_ids: [UUID!]!) {
   transfers(transfer_spark_ids: $transfer_spark_ids) {
-    ...TransferFragment
+    ...FullTransferFragment
   }
 }
 

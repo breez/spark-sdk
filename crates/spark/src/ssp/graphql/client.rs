@@ -16,11 +16,11 @@ use crate::ssp::graphql::queries::{
 };
 use crate::ssp::graphql::{
     BitcoinNetwork, ClaimStaticDeposit, CoopExitRequest, CurrencyAmount, GraphQLClientConfig,
-    LeavesSwapRequest, LightningReceiveRequest, LightningSendRequest, StaticDepositQuote, Transfer,
+    LeavesSwapRequest, LightningReceiveRequest, LightningSendRequest, StaticDepositQuote,
 };
 use crate::ssp::{
     ClaimStaticDepositInput, CoopExitFeeQuote, RequestCoopExitInput, RequestLeavesSwapInput,
-    RequestLightningReceiveInput, RequestLightningSendInput,
+    RequestLightningReceiveInput, RequestLightningSendInput, SspTransfer,
 };
 
 /// GraphQL client for interacting with the Spark server
@@ -487,14 +487,14 @@ impl<S: Signer> GraphQLClient<S> {
     /// Get transfers by IDs
     pub async fn get_transfers(
         &self,
-        transfer_spark_ids: Vec<&str>,
-    ) -> GraphQLResult<Vec<Transfer>> {
-        let vars = transfers::Variables {
-            transfer_spark_ids: transfer_spark_ids.into_iter().map(String::from).collect(),
-        };
-
+        transfer_spark_ids: Vec<String>,
+    ) -> GraphQLResult<Vec<SspTransfer>> {
+        let vars = transfers::Variables { transfer_spark_ids };
         let response = self.post_query::<queries::Transfers, _>(vars, true).await?;
-
-        Ok(response.transfers.into_iter().map(Transfer::from).collect())
+        Ok(response
+            .transfers
+            .into_iter()
+            .map(SspTransfer::from)
+            .collect())
     }
 }

@@ -837,11 +837,13 @@ impl<S: Signer> TransferService<S> {
             "Querying transfers with limit: {:?}, offset: {:?}",
             paging.limit, paging.offset
         );
+        let order: crate::operator::rpc::spark::Order = paging.order.clone().into();
         let resp = self
             .operator_pool
             .get_coordinator()
             .client
             .query_all_transfers(TransferFilter {
+                order: order.into(),
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
                 )),

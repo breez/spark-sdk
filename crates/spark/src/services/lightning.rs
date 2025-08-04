@@ -375,9 +375,9 @@ impl<S: Signer> LightningService<S> {
             .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))?;
         if let Some(max_fee_sat) = max_fee_sat {
             if fee_sat > max_fee_sat {
-                return Err(ServiceError::ValidationError(
-                    "Fee exceeds maximum allowed fee".to_string(),
-                ));
+                return Err(ServiceError::ValidationError(format!(
+                    "Fee exceeds maximum allowed fee {fee_sat} > {max_fee_sat}",
+                )));
             }
         }
 
@@ -535,9 +535,9 @@ fn get_invoice_amount_sats(
 
     // it seems that spark currently don't support over payment
     if invoice_amount_sats > 0 && to_pay_sat > invoice_amount_sats {
-        return Err(ServiceError::ValidationError(
-            "Overpayments are not allowed".to_string(),
-        ));
+        return Err(ServiceError::ValidationError(format!(
+            "Overpayments are not allowed {invoice_amount_sats} < {to_pay_sat}",
+        )));
     }
     Ok(to_pay_sat)
 }

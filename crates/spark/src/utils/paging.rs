@@ -8,13 +8,30 @@ const DEFAULT_PAGING_OFFSET: u64 = 0;
 pub struct PagingFilter {
     pub offset: u64,
     pub limit: u64,
+    pub order: Order,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Order {
+    Ascending,
+    Descending,
+}
+
+impl From<Order> for crate::operator::rpc::spark::Order {
+    fn from(value: Order) -> Self {
+        match value {
+            Order::Ascending => crate::operator::rpc::spark::Order::Ascending,
+            Order::Descending => crate::operator::rpc::spark::Order::Descending,
+        }
+    }
 }
 
 impl PagingFilter {
-    pub fn new(offset: Option<u64>, limit: Option<u64>) -> Self {
+    pub fn new(offset: Option<u64>, limit: Option<u64>, order: Option<Order>) -> Self {
         Self {
             offset: offset.unwrap_or(DEFAULT_PAGING_OFFSET),
             limit: limit.unwrap_or(DEFAULT_PAGING_LIMIT),
+            order: order.unwrap_or(Order::Descending),
         }
     }
 
@@ -22,6 +39,7 @@ impl PagingFilter {
         Self {
             offset: self.offset + self.limit,
             limit: self.limit,
+            order: self.order.clone(),
         }
     }
 
@@ -39,6 +57,7 @@ impl Default for PagingFilter {
         Self {
             offset: DEFAULT_PAGING_OFFSET,
             limit: DEFAULT_PAGING_LIMIT,
+            order: Order::Descending,
         }
     }
 }
@@ -190,7 +209,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pager_with_custom_filter() {
-        let custom_filter = PagingFilter::new(Some(10), Some(5));
+        let custom_filter = PagingFilter::new(Some(10), Some(5), None);
         let expected_offsets = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 
         let result = pager(
@@ -248,6 +267,7 @@ mod tests {
                             next: Some(PagingFilter {
                                 offset: filter_clone.offset,
                                 limit: filter_clone.limit,
+                                order: filter_clone.order.clone(),
                             }),
                         })
                     } else {

@@ -7,6 +7,7 @@ use spark::{
     services::{
         LightningSendPayment, Transfer, TransferId, TransferLeaf, TransferStatus, TransferType,
     },
+    ssp::{SspTransfer, SspUserRequest},
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
 };
 
@@ -38,10 +39,15 @@ pub struct WalletTransfer {
     pub updated_at: Option<SystemTime>,
     pub transfer_type: TransferType,
     pub direction: TransferDirection,
+    pub user_request: Option<SspUserRequest>,
 }
 
 impl WalletTransfer {
-    pub fn from_transfer(value: Transfer, our_public_key: PublicKey) -> Self {
+    pub fn from_transfer(
+        value: Transfer,
+        ssp_transfer: Option<SspTransfer>,
+        our_public_key: PublicKey,
+    ) -> Self {
         let direction = if value.sender_identity_public_key == our_public_key {
             TransferDirection::Outgoing
         } else {
@@ -65,10 +71,12 @@ impl WalletTransfer {
                 .map(|t| UNIX_EPOCH + Duration::from_secs(t)),
             transfer_type: value.transfer_type,
             direction,
+            user_request: ssp_transfer.and_then(|t| t.user_request),
         }
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize)]
 pub enum PayLightningInvoiceResult {
     LightningPayment(LightningSendPayment),

@@ -8,7 +8,7 @@ use crate::{
         BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CoopExitFeeQuote,
         CurrencyAmount, LeavesSwapRequest, RequestCoopExitInput, RequestLeavesSwapInput,
         RequestLightningReceiveInput, RequestLightningSendInput, ServiceProviderConfig,
-        StaticDepositQuote, Transfer,
+        SspTransfer, StaticDepositQuote,
         error::ServiceProviderResult,
         graphql::{CoopExitRequest, GraphQLClient, LightningReceiveRequest, LightningSendRequest},
     },
@@ -187,8 +187,8 @@ impl<S: Signer> ServiceProvider<S> {
     /// Get transfers by IDs
     pub async fn get_transfers(
         &self,
-        transfer_spark_ids: Vec<&str>,
-    ) -> ServiceProviderResult<Vec<Transfer>> {
+        transfer_spark_ids: Vec<String>,
+    ) -> ServiceProviderResult<Vec<SspTransfer>> {
         Ok(self.gql_client.get_transfers(transfer_spark_ids).await?)
     }
 }
