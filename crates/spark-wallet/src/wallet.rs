@@ -673,18 +673,9 @@ impl<S: Signer> SparkWallet<S> {
     }
 
     /// Transfers tokens to another Spark user.
-    pub async fn transfer_tokens(
-        &self,
-        output: TransferTokenOutput,
-    ) -> Result<String, SparkWalletError> {
-        let tx_hash = self.token_service.transfer_tokens(vec![output]).await?;
-        Ok(tx_hash)
-    }
-
-    /// Transfers tokens with multiple outputs.
     ///
-    /// All outputs must share the same token id.
-    pub async fn batch_transfer_tokens(
+    /// Multiple outputs may be provided but they must share the same token id.
+    pub async fn transfer_tokens(
         &self,
         outputs: Vec<TransferTokenOutput>,
     ) -> Result<String, SparkWalletError> {

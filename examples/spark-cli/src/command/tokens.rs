@@ -56,17 +56,13 @@ impl TryFrom<TransferTokenOutputArg> for TransferTokenOutput {
 pub enum TokensCommand {
     /// Prints the L1 address of the token wallet.
     L1Address,
-    /// Transfer tokens to another Spark user.
-    Transfer {
-        token_id: String,
-        amount: u128,
-        receiver_address: String,
-    },
-    /// Transfer tokens with multiple outputs.
+    /// Prints the balance of the token wallet.
+    Balance,
+    /// Transfer tokens.
     ///
     /// Example usage:
-    /// tokens batch-transfer token_id1:100:address1 token_id2:200:address2
-    BatchTransfer {
+    /// tokens transfer token_id1:100:address1 token_id2:200:address2
+    Transfer {
         outputs: Vec<TransferTokenOutputArg>,
     },
     /// List transfers
@@ -92,21 +88,22 @@ where
             println!("L1 address: {l1_address}");
             Ok(())
         }
-        TokensCommand::Transfer {
-            token_id,
-            amount,
-            receiver_address,
-        } => {
-            let output = TransferTokenOutput {
-                token_id,
-                amount,
-                receiver_address: SparkAddress::from_str(&receiver_address)?,
-            };
-            let transfer_id = wallet.transfer_tokens(output).await?;
-            println!("Transaction ID: {transfer_id}");
+        TokensCommand::Balance => {
+            let token_balances = wallet.get_token_balances().await?;
+            if !token_balances.is_empty() {
+                println!("Token balances:");
+                for (token_id, token_balance) in token_balances {
+                    println!(
+                        "Token ID: {token_id}\n{}",
+                        serde_json::to_string_pretty(&token_balance)?
+                    );
+                }
+            } else {
+                println!("No token balances found.");
+            }
             Ok(())
         }
-        TokensCommand::BatchTransfer { outputs } => {
+        TokensCommand::Transfer { outputs } => {
             if outputs.is_empty() {
                 return Err("At least one output must be specified".into());
             }
@@ -115,7 +112,7 @@ where
                 .into_iter()
                 .map(|o| o.try_into())
                 .collect::<Result<Vec<_>, _>>()?;
-            let transfer_id = wallet.batch_transfer_tokens(outputs).await?;
+            let transfer_id = wallet.transfer_tokens(outputs).await?;
             println!("Transaction ID: {transfer_id}");
             Ok(())
         }

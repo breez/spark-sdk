@@ -66,18 +66,6 @@ where
         Command::Balance => {
             let balance = wallet.get_balance().await?;
             println!("Balance: {balance} sats");
-            let token_balances = wallet.get_token_balances().await?;
-            if !token_balances.is_empty() {
-                println!("Token balances:");
-                for (token_id, token_balance) in token_balances {
-                    println!(
-                        "Token ID: {token_id}\n{}",
-                        serde_json::to_string_pretty(&token_balance)?
-                    );
-                }
-            } else {
-                println!("No token balances found.");
-            }
         }
         Command::Deposit(deposit_command) => {
             deposit::handle_command(config, wallet, deposit_command).await?
