@@ -1,3 +1,4 @@
+use crate::ssp;
 use crate::ssp::graphql::queries::claim_static_deposit::ClaimStaticDepositClaimStaticDeposit;
 use crate::ssp::graphql::queries::complete_coop_exit::{
     CoopExitRequestFragment as CompleteCoopExitCoopExitRequestFragment,
@@ -52,10 +53,17 @@ use crate::ssp::graphql::queries::request_lightning_send::{
 };
 use crate::ssp::graphql::queries::static_deposit_quote::StaticDepositQuoteStaticDepositQuote;
 use crate::ssp::graphql::queries::transfers::{
-    CurrencyAmountFragment as TransferCurrencyAmountFragment,
-    FullTransferFragment,
-    // UserRequestFragmentOn as TransferUserRequestFragmentOn,
-    //TransferFragmentUserRequestOn as TransferUserRequestFragmentOn,
+    ClaimStaticDepositFragment as TransfersClaimStaticDepositFragment,
+    ClaimStaticDepositStatus as TransfersClaimStaticDepositStatus,
+    CoopExitRequestFragment as TransfersCoopExitRequestFragment,
+    CurrencyAmountFragment as TransferCurrencyAmountFragment, FullTransferFragment,
+    InvoiceFragment as TransfersInvoiceFragment,
+    LeavesSwapRequestFragment as TransfersLeavesSwapRequestFragment,
+    LightningReceiveRequestFragment as TransfersLightningReceiveRequestFragment,
+    LightningSendRequestFragment as TransfersLightningSendRequestFragment,
+    SwapLeafFragment as TransfersSwapLeafFragment, TransferFragment as TransfersTransferFragment,
+    TransferFragmentUserRequest as TransfersTransferFragmentUserRequest,
+    TransferFragmentUserRequestOn as TransfersTransferFragmentUserRequestOn,
     UserRequestFragment as TransferUserRequestFragment,
 };
 use crate::ssp::graphql::queries::user_request::{
@@ -170,6 +178,7 @@ pub enum LightningReceiveRequestStatus {
 /// Lightning send request status enum
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+
 pub enum LightningSendRequestStatus {
     Created,
     RequestValidated,
@@ -213,9 +222,10 @@ pub struct VerifyChallengeOutput {
 }
 
 /// Lightning invoice structure
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[spark_macros::derive_from(RequestLightningReceiveInvoiceFragment)]
 #[spark_macros::derive_from(UserRequestInvoiceFragment)]
+#[spark_macros::derive_from(TransfersInvoiceFragment)]
 pub struct LightningInvoice {
     pub encoded_invoice: String,
     pub bitcoin_network: BitcoinNetwork,
@@ -248,7 +258,7 @@ pub struct CurrencyAmount {
 }
 
 /// Transfer structure
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[spark_macros::derive_from(CompleteCoopExitTransferFragment)]
 #[spark_macros::derive_from(CompleteLeavesSwapTransferFragment)]
 #[spark_macros::derive_from(RequestCoopExitTransferFragment)]
@@ -256,6 +266,7 @@ pub struct CurrencyAmount {
 #[spark_macros::derive_from(RequestLightningReceiveTransferFragment)]
 #[spark_macros::derive_from(RequestLightningSendTransferFragment)]
 #[spark_macros::derive_from(UserRequestTransferFragment)]
+#[spark_macros::derive_from(TransfersTransferFragment)]
 pub struct Transfer {
     pub total_amount: CurrencyAmount,
     pub spark_id: Option<String>,
@@ -263,7 +274,7 @@ pub struct Transfer {
 }
 
 /// UserRequest structure
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[spark_macros::derive_from(CompleteCoopExitUserRequestFragment)]
 #[spark_macros::derive_from(CompleteLeavesSwapUserRequestFragment)]
 #[spark_macros::derive_from(RequestCoopExitUserRequestFragment)]
@@ -271,12 +282,13 @@ pub struct Transfer {
 #[spark_macros::derive_from(RequestLightningReceiveUserRequestFragment)]
 #[spark_macros::derive_from(RequestLightningSendUserRequestFragment)]
 #[spark_macros::derive_from(UserRequestTransferFragmentUserRequest)]
+#[spark_macros::derive_from(TransfersTransferFragmentUserRequest)]
 pub struct UserRequest {
     pub id: String,
     pub on: TransferFragmentUserRequestOn,
 }
 
-#[derive(FromEnum, Debug, Clone, Deserialize)]
+#[derive(FromEnum, Debug, Clone, Deserialize, Serialize)]
 #[from_enum(CompleteLeavesSwapUserRequestFragmentOn)]
 #[from_enum(RequestCoopExitUserRequestFragmentOn)]
 #[from_enum(RequestLeavesSwapUserRequestFragmentOn)]
@@ -284,6 +296,7 @@ pub struct UserRequest {
 #[from_enum(RequestLightningSendUserRequestFragmentOn)]
 #[from_enum(UserRequestTransferFragmentUserRequestOn)]
 #[from_enum(CompleteCoopExitUserRequestFragmentOn)]
+#[from_enum(TransfersTransferFragmentUserRequestOn)]
 pub enum TransferFragmentUserRequestOn {
     ClaimStaticDeposit,
     CoopExitRequest,
@@ -298,14 +311,55 @@ pub enum TransferFragmentUserRequestOn {
 pub struct SspTransfer {
     pub total_amount: CurrencyAmount,
     pub spark_id: Option<String>,
-    pub user_request: Option<TransferUserRequestFragment>,
+    pub user_request: Option<SspUserRequest>,
 }
 
-pub type SspUserRequest = TransferUserRequestFragment;
+#[derive(FromEnum, Debug, Clone, Deserialize, Serialize)]
+#[from_enum(TransferUserRequestFragment)]
+pub enum SspUserRequest {
+    ClaimStaticDeposit(ClaimStaticDepositInfo),
+    CoopExitRequest(CoopExitRequest),
+    LeavesSwapRequest(LeavesSwapRequest),
+    LightningReceiveRequest(LightningReceiveRequest),
+    LightningSendRequest(LightningSendRequest),
+}
+
+#[spark_macros::derive_from(TransfersClaimStaticDepositFragment)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ClaimStaticDepositInfo {
+    pub id: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub network: BitcoinNetwork,
+    pub deposit_status: ClaimStaticDepositStatus,
+    pub credit_amount: CurrencyAmount,
+    pub max_fee: CurrencyAmount,
+    pub transaction_id: String,
+    pub output_index: i64,
+    pub bitcoin_network: BitcoinNetwork,
+    pub transfer_spark_id: Option<String>,
+}
+
+#[derive(FromEnum, Debug, Clone, Deserialize, Serialize)]
+#[from_enum(TransfersClaimStaticDepositStatus)]
+pub enum ClaimStaticDepositStatus {
+    CREATED,
+    TRANSFER_CREATED,
+    TRANSFER_CREATION_FAILED,
+    REFUND_SIGNING_COMMITMENTS_QUERYING_FAILED,
+    REFUND_SIGNING_FAILED,
+    UTXO_SWAPPING_FAILED,
+    TRANSFER_COMPLETED,
+    SPEND_TX_CREATED,
+    SPEND_TX_BROADCAST,
+    Other(String),
+}
+
 /// LightningReceiveRequest structure
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[spark_macros::derive_from(RequestLightningReceiveLightningReceiveRequestFragment)]
 #[spark_macros::derive_from(UserRequestLightningReceiveRequestFragment)]
+#[spark_macros::derive_from(TransfersLightningReceiveRequestFragment)]
 pub struct LightningReceiveRequest {
     pub id: String,
     pub created_at: DateTime<Utc>,
@@ -318,9 +372,10 @@ pub struct LightningReceiveRequest {
 }
 
 /// LightningSendRequest structure
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[spark_macros::derive_from(RequestLightningSendLightningSendRequestFragment)]
 #[spark_macros::derive_from(UserRequestLightningSendRequestFragment)]
+#[spark_macros::derive_from(TransfersLightningSendRequestFragment)]
 pub struct LightningSendRequest {
     pub id: String,
     pub created_at: DateTime<Utc>,
@@ -335,10 +390,11 @@ pub struct LightningSendRequest {
 }
 
 /// SwapLeaf structure
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[spark_macros::derive_from(CompleteLeavesSwapSwapLeafFragment)]
 #[spark_macros::derive_from(RequestLeavesSwapSwapLeafFragment)]
 #[spark_macros::derive_from(UserRequestSwapLeafFragment)]
+#[spark_macros::derive_from(TransfersSwapLeafFragment)]
 pub struct SwapLeaf {
     pub leaf_id: String,
     pub raw_unsigned_refund_transaction: String,
@@ -346,10 +402,11 @@ pub struct SwapLeaf {
 }
 
 /// LeavesSwapRequest structure
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[spark_macros::derive_from(CompleteLeavesSwapLeavesSwapRequestFragment)]
 #[spark_macros::derive_from(RequestLeavesSwapLeavesSwapRequestFragment)]
 #[spark_macros::derive_from(UserRequestLeavesSwapRequestFragment)]
+#[spark_macros::derive_from(TransfersLeavesSwapRequestFragment)]
 pub struct LeavesSwapRequest {
     pub id: String,
     pub created_at: DateTime<Utc>,
@@ -366,10 +423,11 @@ pub struct LeavesSwapRequest {
 }
 
 /// CoopExitRequest structure
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[spark_macros::derive_from(CompleteCoopExitCoopExitRequestFragment)]
 #[spark_macros::derive_from(RequestCoopExitCoopExitRequestFragment)]
 #[spark_macros::derive_from(UserRequestCoopExitRequestFragment)]
+#[spark_macros::derive_from(TransfersCoopExitRequestFragment)]
 pub struct CoopExitRequest {
     pub id: String,
     pub created_at: DateTime<Utc>,

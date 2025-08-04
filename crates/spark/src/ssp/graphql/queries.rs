@@ -35,7 +35,7 @@ pub struct ClaimStaticDeposit;
         "CurrencyUnit",
         "ExitSpeed",
         "BitcoinNetwork",
-        "SparkCoopExitRequestStatus"
+        "SparkCoopExitRequestStatus",
     )
 )]
 pub struct CompleteCoopExit;
@@ -46,7 +46,7 @@ pub struct CompleteCoopExit;
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
     response_derives = "Debug,Clone,Serialize",
-    extern_enums("CurrencyUnit", "BitcoinNetwork", "SparkLeavesSwapRequestStatus")
+    extern_enums("CurrencyUnit", "BitcoinNetwork", "SparkLeavesSwapRequestStatus",)
 )]
 pub struct CompleteLeavesSwap;
 
@@ -99,7 +99,7 @@ pub struct LightningSendFeeEstimate;
         "CurrencyUnit",
         "ExitSpeed",
         "BitcoinNetwork",
-        "SparkCoopExitRequestStatus"
+        "SparkCoopExitRequestStatus",
     )
 )]
 pub struct RequestCoopExit;
@@ -110,7 +110,7 @@ pub struct RequestCoopExit;
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
     response_derives = "Debug,Clone,Serialize",
-    extern_enums("CurrencyUnit", "BitcoinNetwork", "SparkLeavesSwapRequestStatus")
+    extern_enums("CurrencyUnit", "BitcoinNetwork", "SparkLeavesSwapRequestStatus",)
 )]
 pub struct RequestLeavesSwap;
 
@@ -124,7 +124,7 @@ pub struct RequestLeavesSwap;
         "CurrencyUnit",
         "ExitSpeed",
         "BitcoinNetwork",
-        "LightningReceiveRequestStatus"
+        "LightningReceiveRequestStatus",
     )
 )]
 pub struct RequestLightningReceive;
@@ -135,7 +135,7 @@ pub struct RequestLightningReceive;
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
     response_derives = "Debug,Clone,Serialize",
-    extern_enums("CurrencyUnit", "BitcoinNetwork", "LightningSendRequestStatus")
+    extern_enums("CurrencyUnit", "BitcoinNetwork", "LightningSendRequestStatus",)
 )]
 pub struct RequestLightningSend;
 
@@ -155,7 +155,14 @@ pub struct StaticDepositQuote;
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
     response_derives = "Debug,Clone,Serialize",
-    extern_enums("CurrencyUnit")
+    extern_enums(
+        "CurrencyUnit",
+        "BitcoinNetwork",
+        "LightningSendRequestStatus",
+        "LightningReceiveRequestStatus",
+        "SparkCoopExitRequestStatus",
+        "SparkLeavesSwapRequestStatus"
+    )
 )]
 pub struct Transfers;
 
@@ -172,7 +179,7 @@ pub struct Transfers;
         "LightningReceiveRequestStatus",
         "LightningSendRequestStatus",
         "SparkCoopExitRequestStatus",
-        "SparkLeavesSwapRequestStatus"
+        "SparkLeavesSwapRequestStatus",
     )
 )]
 pub struct UserRequest;
