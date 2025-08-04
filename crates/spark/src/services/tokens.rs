@@ -239,8 +239,8 @@ impl<S: Signer> TokenService<S> {
         let total_amount: u128 = receiver_outputs.iter().map(|o| o.amount).sum();
 
         // Get outputs matching token id
-        let outputs = self.tokens_outputs.lock().await;
-        let Some(this_token_outputs) = outputs.get(&token_id) else {
+        let mut outputs = self.tokens_outputs.lock().await;
+        let Some(this_token_outputs) = outputs.get_mut(&token_id) else {
             return Err(ServiceError::Generic(format!(
                 "No tokens available for token id: {token_id}"
             )));
@@ -256,9 +256,30 @@ impl<S: Signer> TokenService<S> {
             )));
         }
 
-        let tx = self.build_partial_tx(inputs, receiver_outputs).await?;
+        let partial_tx = self
+            .build_partial_tx(inputs.clone(), receiver_outputs)
+            .await?;
 
-        let txid = self.finalize_broadcast_transaction(tx).await?;
+        let (txid, final_tx) = self
+            .finalize_broadcast_transaction(partial_tx.clone())
+            .await?;
+
+        // Removed used outputs from local cache and add any change outputs
+        this_token_outputs.outputs.retain(|o| !inputs.contains(o));
+        let identity_public_key_bytes = self.signer.get_identity_public_key()?.serialize();
+        final_tx
+            .token_outputs
+            .into_iter()
+            .enumerate()
+            .filter(|(_, o)| o.owner_public_key == identity_public_key_bytes)
+            .try_for_each(|(vout, o)| -> Result<(), ServiceError> {
+                this_token_outputs.outputs.push(TokenOutputWithPrevOut {
+                    output: (o, self.network).try_into()?,
+                    prev_tx_hash: txid.clone(),
+                    prev_tx_vout: vout as u32,
+                });
+                Ok(())
+            })?;
 
         Ok(txid)
     }
@@ -400,7 +421,7 @@ impl<S: Signer> TokenService<S> {
     async fn finalize_broadcast_transaction(
         &self,
         partial_tx: rpc::spark_token::TokenTransaction,
-    ) -> Result<String, ServiceError> {
+    ) -> Result<(String, rpc::spark_token::TokenTransaction), ServiceError> {
         let partial_tx_hash = partial_tx.compute_hash(true)?;
 
         // Sign inputs
@@ -458,7 +479,7 @@ impl<S: Signer> TokenService<S> {
             .get_coordinator()
             .client
             .commit_transaction(CommitTransactionRequest {
-                final_token_transaction: Some(final_tx),
+                final_token_transaction: Some(final_tx.clone()),
                 final_token_transaction_hash: final_tx_hash.clone(),
                 input_ttxo_signatures_per_operator: per_operator_signatures,
                 owner_identity_public_key: self
@@ -469,7 +490,7 @@ impl<S: Signer> TokenService<S> {
             })
             .await?;
 
-        Ok(hex::encode(final_tx_hash))
+        Ok((hex::encode(final_tx_hash), final_tx))
     }
 
     fn validate_token_transaction(

@@ -564,7 +564,7 @@ impl TryFrom<(operator_rpc::spark_token::TokenMetadata, Network)> for TokenMetad
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct TokenOutput {
     pub id: String,
     pub owner_public_key: PublicKey,
@@ -630,7 +630,7 @@ impl TryFrom<(operator_rpc::spark_token::TokenOutput, Network)> for TokenOutput 
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TokenOutputWithPrevOut {
     pub output: TokenOutput,
     pub prev_tx_hash: String,
