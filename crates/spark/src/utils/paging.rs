@@ -17,12 +17,21 @@ pub enum Order {
     Descending,
 }
 
+impl From<Order> for crate::operator::rpc::spark::Order {
+    fn from(value: Order) -> Self {
+        match value {
+            Order::Ascending => crate::operator::rpc::spark::Order::Ascending,
+            Order::Descending => crate::operator::rpc::spark::Order::Descending,
+        }
+    }
+}
+
 impl PagingFilter {
     pub fn new(offset: Option<u64>, limit: Option<u64>, order: Option<Order>) -> Self {
         Self {
             offset: offset.unwrap_or(DEFAULT_PAGING_OFFSET),
             limit: limit.unwrap_or(DEFAULT_PAGING_LIMIT),
-            order: order.unwrap_or(Order::Ascending),
+            order: order.unwrap_or(Order::Descending),
         }
     }
 
