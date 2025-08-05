@@ -230,7 +230,7 @@ mod tests {
             amount: 100_000,
             fees: 1000,
             timestamp: Utc::now().timestamp().try_into().unwrap(),
-            details: Some(PaymentDetails::Spark),
+            details: PaymentDetails::Spark,
         };
 
         // Insert payment
@@ -244,7 +244,7 @@ mod tests {
         assert_eq!(payments[0].status, payment.status);
         assert_eq!(payments[0].amount, payment.amount);
         assert_eq!(payments[0].fees, payment.fees);
-        assert!(matches!(payments[0].details, Some(PaymentDetails::Spark)));
+        assert!(matches!(payments[0].details, PaymentDetails::Spark));
 
         // Get payment by ID
         let retrieved_payment = storage.get_payment_by_id(&payment.id).unwrap();

@@ -81,7 +81,7 @@ pub struct Payment {
     /// Timestamp of when the payment was created
     pub timestamp: u64,
     /// Details of the payment
-    pub details: Option<PaymentDetails>,
+    pub details: PaymentDetails,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,9 +169,9 @@ impl TryFrom<WalletTransfer> for Payment {
             None => CurrencyAmount::default(),
         };
 
-        let details: Option<PaymentDetails> = match transfer.user_request {
-            Some(user_request) => user_request.try_into().ok(),
-            None => Some(PaymentDetails::Spark),
+        let details: PaymentDetails = match transfer.user_request {
+            Some(user_request) => user_request.try_into()?,
+            None => PaymentDetails::Spark,
         };
 
         Ok(Payment {
@@ -213,7 +213,7 @@ impl Payment {
             amount: amount_sat,
             fees: payment.fee_sat,
             timestamp: payment.created_at as u64,
-            details: Some(details),
+            details,
         }
     }
 }
