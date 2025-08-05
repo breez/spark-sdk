@@ -1,4 +1,4 @@
-use breez_sdk_common::input::{self, BitcoinAddress, DetailedBolt11Invoice, PaymentRequestSource};
+use breez_sdk_common::input::{self, BitcoinAddress, DetailedBolt11Invoice};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{

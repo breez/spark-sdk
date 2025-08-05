@@ -53,7 +53,7 @@ pub async fn init_logging(
 }
 
 pub async fn parse_input(input: &str) -> Result<InputType, SdkError> {
-    Ok(parse(input).await?.into())
+    Ok(parse(input).await?)
 }
 
 impl BreezSdk {
