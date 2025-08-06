@@ -1,4 +1,4 @@
-pub use breez_sdk_common::input::parse;
+pub use breez_sdk_common::input::parse as parse_input;
 
 use breez_sdk_common::input::InputType;
 use spark_wallet::{
@@ -52,8 +52,8 @@ pub async fn init_logging(
     logger::init_logging(log_dir, app_logger, log_filter)
 }
 
-pub async fn parse_input(input: &str) -> Result<InputType, SdkError> {
-    Ok(parse(input).await?)
+pub async fn parse(input: &str) -> Result<InputType, SdkError> {
+    Ok(parse_input(input).await?)
 }
 
 impl BreezSdk {
