@@ -7,6 +7,8 @@ use spark_wallet::{
 };
 use std::time::UNIX_EPOCH;
 
+use crate::SdkError;
+
 /// The type of payment
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PaymentType {
@@ -95,13 +97,13 @@ pub enum PaymentDetails {
         /// Represents the Bolt11/Bolt12 invoice associated with a payment
         /// In the case of a Send payment, this is the invoice paid to the user
         /// In the case of a Receive payment, this is the invoice paid by the user
-        invoice: Option<String>,
+        invoice: String,
 
         /// The payment hash of the invoice
-        payment_hash: Option<String>,
+        payment_hash: String,
 
         /// The invoice destination/payee pubkey
-        destination_pubkey: Option<String>,
+        destination_pubkey: String,
     },
     Withdraw {
         tx_id: String,
@@ -112,7 +114,7 @@ pub enum PaymentDetails {
 }
 
 impl TryFrom<SspUserRequest> for PaymentDetails {
-    type Error = String;
+    type Error = SdkError;
     fn try_from(user_request: SspUserRequest) -> Result<Self, Self::Error> {
         let details = match user_request {
             SspUserRequest::CoopExitRequest(request) => PaymentDetails::Withdraw {
@@ -120,23 +122,30 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
             },
             SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark,
             SspUserRequest::LightningReceiveRequest(request) => {
-                let detailed_invoice = input::parse_invoice(&request.invoice.encoded_invoice);
+                let detailed_invoice = input::parse_invoice(&request.invoice.encoded_invoice)
+                    .ok_or(SdkError::GenericError(
+                        "Invalid invoice in SspUserRequest::LightningReceiveRequest".to_string(),
+                    ))?;
                 PaymentDetails::Lightning {
                     description: request.invoice.memo,
                     preimage: request.lightning_receive_payment_preimage,
-                    invoice: Some(request.invoice.encoded_invoice),
-                    payment_hash: Some(request.invoice.payment_hash),
-                    destination_pubkey: detailed_invoice.map(|d| d.payee_pubkey),
+                    invoice: request.invoice.encoded_invoice,
+                    payment_hash: request.invoice.payment_hash,
+                    destination_pubkey: detailed_invoice.payee_pubkey,
                 }
             }
             SspUserRequest::LightningSendRequest(request) => {
-                let detailed_invoice = input::parse_invoice(&request.encoded_invoice);
+                let detailed_invoice = input::parse_invoice(&request.encoded_invoice).ok_or(
+                    SdkError::GenericError(
+                        "Invalid invoice in SspUserRequest::LightningSendRequest".to_string(),
+                    ),
+                )?;
                 PaymentDetails::Lightning {
-                    description: detailed_invoice.clone().and_then(|d| d.description),
+                    description: detailed_invoice.description,
                     preimage: request.lightning_send_payment_preimage,
-                    invoice: Some(request.encoded_invoice),
-                    payment_hash: detailed_invoice.clone().map(|d| d.payment_hash),
-                    destination_pubkey: detailed_invoice.map(|d| d.payee_pubkey),
+                    invoice: request.encoded_invoice,
+                    payment_hash: detailed_invoice.payment_hash,
+                    destination_pubkey: detailed_invoice.payee_pubkey,
                 }
             }
             SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
@@ -148,7 +157,7 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
 }
 
 impl TryFrom<WalletTransfer> for Payment {
-    type Error = String;
+    type Error = SdkError;
     fn try_from(transfer: WalletTransfer) -> Result<Self, Self::Error> {
         let payment_type = match transfer.direction {
             TransferDirection::Incoming => PaymentType::Receive,
@@ -190,23 +199,28 @@ impl TryFrom<WalletTransfer> for Payment {
 }
 
 impl Payment {
-    pub fn from_lightning(payment: LightningSendPayment, amount_sat: u64) -> Self {
+    pub fn from_lightning(
+        payment: LightningSendPayment,
+        amount_sat: u64,
+    ) -> Result<Self, SdkError> {
         let status = match payment.status {
             LightningSendStatus::LightningPaymentSucceeded => PaymentStatus::Completed,
             LightningSendStatus::LightningPaymentFailed => PaymentStatus::Failed,
             _ => PaymentStatus::Pending,
         };
 
-        let detailed_invoice = input::parse_invoice(&payment.encoded_invoice);
+        let detailed_invoice = input::parse_invoice(&payment.encoded_invoice).ok_or(
+            SdkError::GenericError("Invalid invoice in LightnintSendPayment".to_string()),
+        )?;
         let details = PaymentDetails::Lightning {
-            description: detailed_invoice.clone().and_then(|d| d.description),
+            description: detailed_invoice.description,
             preimage: payment.payment_preimage,
-            invoice: Some(payment.encoded_invoice),
-            payment_hash: detailed_invoice.clone().map(|d| d.payment_hash),
-            destination_pubkey: detailed_invoice.map(|d| d.payee_pubkey),
+            invoice: payment.encoded_invoice,
+            payment_hash: detailed_invoice.payment_hash,
+            destination_pubkey: detailed_invoice.payee_pubkey,
         };
 
-        Payment {
+        Ok(Payment {
             id: payment.id,
             payment_type: PaymentType::Send,
             status,
@@ -214,7 +228,7 @@ impl Payment {
             fees: payment.fee_sat,
             timestamp: payment.created_at as u64,
             details,
-        }
+        })
     }
 }
 

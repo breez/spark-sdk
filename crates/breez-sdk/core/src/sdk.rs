@@ -338,7 +338,7 @@ impl BreezSdk {
                     .await?;
                 let payment = match payment_response {
                     PayLightningInvoiceResult::LightningPayment(payment) => {
-                        Payment::from_lightning(payment, request.prepare_response.amount_sats)
+                        Payment::from_lightning(payment, request.prepare_response.amount_sats)?
                     }
                     PayLightningInvoiceResult::Transfer(payment) => payment.try_into()?,
                 };
