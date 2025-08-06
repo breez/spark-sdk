@@ -656,7 +656,7 @@ async fn create_transfers<S: Signer>(
     ssp_client: &Arc<ServiceProvider<S>>,
     our_public_key: PublicKey,
 ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
-    let transfer_ids: Vec<String> = transfers.iter().map(|t| t.id.to_string()).collect();
+    let transfer_ids = transfers.iter().map(|t| t.id.to_string()).collect();
     let ssp_tranfers = ssp_client.get_transfers(transfer_ids).await?;
     let ssp_transfers_map: HashMap<String, SspTransfer> = ssp_tranfers
         .into_iter()

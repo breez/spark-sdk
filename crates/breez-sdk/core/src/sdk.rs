@@ -1,5 +1,6 @@
-pub use breez_sdk_common::input::parse;
+pub use breez_sdk_common::input::parse as parse_input;
 
+use breez_sdk_common::input::InputType;
 use spark_wallet::{
     DefaultSigner, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress, SparkWallet,
     WalletEvent,
@@ -49,6 +50,10 @@ pub async fn init_logging(
     log_filter: Option<String>,
 ) -> Result<(), SdkError> {
     logger::init_logging(log_dir, app_logger, log_filter)
+}
+
+pub async fn parse(input: &str) -> Result<InputType, SdkError> {
+    Ok(parse_input(input).await?)
 }
 
 impl BreezSdk {
@@ -312,7 +317,7 @@ impl BreezSdk {
                     .transfer(request.prepare_response.amount_sats, &spark_address)
                     .await?;
                 Ok(SendPaymentResponse {
-                    payment: transfer.into(),
+                    payment: transfer.try_into()?,
                 })
             }
             SendPaymentMethod::Bolt11Invoice { detailed_invoice } => {
@@ -333,9 +338,9 @@ impl BreezSdk {
                     .await?;
                 let payment = match payment_response {
                     PayLightningInvoiceResult::LightningPayment(payment) => {
-                        Payment::from_lightning(payment, request.prepare_response.amount_sats)
+                        Payment::from_lightning(payment, request.prepare_response.amount_sats)?
                     }
-                    PayLightningInvoiceResult::Transfer(payment) => payment.into(),
+                    PayLightningInvoiceResult::Transfer(payment) => payment.try_into()?,
                 };
                 Ok(SendPaymentResponse { payment })
             }
@@ -403,7 +408,7 @@ impl BreezSdk {
             // Process transfers in this batch
             for transfer in &transfers_response {
                 // Create a payment record
-                let payment = transfer.clone().into();
+                let payment = transfer.clone().try_into()?;
                 // Insert payment into storage
                 if let Err(err) = self.storage.insert_payment(&payment) {
                     error!("Failed to insert payment: {err:?}");

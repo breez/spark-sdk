@@ -255,6 +255,18 @@ pub struct CurrencyAmount {
     pub preferred_currency_value_approx: f64,
 }
 
+impl Default for CurrencyAmount {
+    fn default() -> Self {
+        Self {
+            original_value: 0,
+            original_unit: CurrencyUnit::Satoshi,
+            preferred_currency_unit: CurrencyUnit::Satoshi,
+            preferred_currency_value_rounded: 0,
+            preferred_currency_value_approx: 0.0,
+        }
+    }
+}
+
 /// Transfer structure
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[spark_macros::derive_from(CompleteCoopExitTransferFragment)]

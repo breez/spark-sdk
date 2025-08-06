@@ -36,6 +36,10 @@ pub async fn parse(input: &str) -> Result<InputType, ParseError> {
         .await
 }
 
+pub fn parse_invoice(input: &str) -> Option<DetailedBolt11Invoice> {
+    parse_bolt11(input, &PaymentRequestSource::default())
+}
+
 pub struct InputParser<C, D> {
     rest_client: C,
     dns_resolver: D,

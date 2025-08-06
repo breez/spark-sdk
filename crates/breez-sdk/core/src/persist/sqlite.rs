@@ -1,8 +1,14 @@
-use rusqlite::{Connection, params};
+use rusqlite::{
+    Connection, ToSql, params,
+    types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
+};
 use rusqlite_migration::{M, Migrations};
 use std::path::{Path, PathBuf};
 
-use crate::models::{PaymentStatus, PaymentType};
+use crate::{
+    PaymentDetails,
+    models::{PaymentStatus, PaymentType},
+};
 
 use super::{Payment, Storage, StorageError};
 
@@ -61,6 +67,7 @@ impl SqliteStorage {
               key TEXT PRIMARY KEY,
               value TEXT NOT NULL
             );",
+            "ALTER TABLE payments ADD COLUMN details TEXT;",
         ]
     }
 }
@@ -86,7 +93,7 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         let query = format!(
-            "SELECT id, payment_type, status, amount, fees, timestamp FROM payments ORDER BY timestamp DESC LIMIT {} OFFSET {}",
+            "SELECT id, payment_type, status, amount, fees, timestamp, details FROM payments ORDER BY timestamp DESC LIMIT {} OFFSET {}",
             limit.unwrap_or(u32::MAX),
             offset.unwrap_or(0)
         );
@@ -101,6 +108,7 @@ impl Storage for SqliteStorage {
                 amount: row.get(3)?,
                 fees: row.get(4)?,
                 timestamp: row.get(5)?,
+                details: row.get(6)?,
             })
         })?;
 
@@ -116,8 +124,8 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         connection.execute(
-            "INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp) 
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, details) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
             params![
                 payment.id,
                 payment.payment_type.to_string(),
@@ -125,6 +133,7 @@ impl Storage for SqliteStorage {
                 payment.amount,
                 payment.fees,
                 payment.timestamp,
+                payment.details,
             ],
         )?;
 
@@ -163,7 +172,7 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare(
-            "SELECT id, payment_type, status, amount, fees, timestamp FROM payments WHERE id = ?",
+            "SELECT id, payment_type, status, amount, fees, timestamp, details FROM payments WHERE id = ?",
         )?;
 
         let result = stmt.query_row(params![id], |row| {
@@ -174,9 +183,32 @@ impl Storage for SqliteStorage {
                 amount: row.get(3)?,
                 fees: row.get(4)?,
                 timestamp: row.get(5)?,
+                details: row.get(6)?,
             })
         });
         result.map_err(StorageError::from)
+    }
+}
+
+impl ToSql for PaymentDetails {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        let json = serde_json::to_string(self)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        Ok(rusqlite::types::ToSqlOutput::from(json))
+    }
+}
+
+impl FromSql for PaymentDetails {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value {
+            ValueRef::Text(i) => {
+                let s = std::str::from_utf8(i).map_err(FromSqlError::other)?;
+                let payment_details: PaymentDetails =
+                    serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
+                Ok(payment_details)
+            }
+            _ => Err(FromSqlError::InvalidType),
+        }
     }
 }
 
@@ -198,6 +230,7 @@ mod tests {
             amount: 100_000,
             fees: 1000,
             timestamp: Utc::now().timestamp().try_into().unwrap(),
+            details: PaymentDetails::Spark,
         };
 
         // Insert payment
@@ -211,6 +244,7 @@ mod tests {
         assert_eq!(payments[0].status, payment.status);
         assert_eq!(payments[0].amount, payment.amount);
         assert_eq!(payments[0].fees, payment.fees);
+        assert!(matches!(payments[0].details, PaymentDetails::Spark));
 
         // Get payment by ID
         let retrieved_payment = storage.get_payment_by_id(&payment.id).unwrap();

@@ -1,14 +1,16 @@
-use breez_sdk_common::input::{BitcoinAddress, DetailedBolt11Invoice};
+use breez_sdk_common::input::{self, BitcoinAddress, DetailedBolt11Invoice};
 use core::fmt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use spark_wallet::{
-    LightningSendPayment, LightningSendStatus, Network as SparkNetwork, TransferDirection,
-    TransferStatus, WalletTransfer,
+    CurrencyAmount, LightningSendPayment, LightningSendStatus, Network as SparkNetwork,
+    SspUserRequest, TransferDirection, TransferStatus, WalletTransfer,
 };
 use std::time::UNIX_EPOCH;
 
+use crate::SdkError;
+
 /// The type of payment
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PaymentType {
     /// Payment sent from this wallet
     Send,
@@ -35,7 +37,7 @@ impl From<&str> for PaymentType {
 }
 
 /// The status of a payment
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PaymentStatus {
     /// Payment is completed successfully
     Completed,
@@ -66,7 +68,7 @@ impl From<&str> for PaymentStatus {
 }
 
 /// Represents a payment (sent or received)
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Payment {
     /// Unique identifier for the payment
     pub id: String,
@@ -80,12 +82,83 @@ pub struct Payment {
     pub fees: u64,
     /// Timestamp of when the payment was created
     pub timestamp: u64,
-    //TODO: add the payment details
-    //pub details: PaymentDetails,
+    /// Details of the payment
+    pub details: PaymentDetails,
 }
 
-impl From<WalletTransfer> for Payment {
-    fn from(transfer: WalletTransfer) -> Self {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PaymentDetails {
+    Spark,
+    Lightning {
+        /// Represents the invoice description
+        description: Option<String>,
+        /// The preimage of the paid invoice (proof of payment).
+        preimage: Option<String>,
+        /// Represents the Bolt11/Bolt12 invoice associated with a payment
+        /// In the case of a Send payment, this is the invoice paid by the user
+        /// In the case of a Receive payment, this is the invoice paid to the user
+        invoice: String,
+
+        /// The payment hash of the invoice
+        payment_hash: String,
+
+        /// The invoice destination/payee pubkey
+        destination_pubkey: String,
+    },
+    Withdraw {
+        tx_id: String,
+    },
+    Deposit {
+        tx_id: String,
+    },
+}
+
+impl TryFrom<SspUserRequest> for PaymentDetails {
+    type Error = SdkError;
+    fn try_from(user_request: SspUserRequest) -> Result<Self, Self::Error> {
+        let details = match user_request {
+            SspUserRequest::CoopExitRequest(request) => PaymentDetails::Withdraw {
+                tx_id: request.coop_exit_txid,
+            },
+            SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark,
+            SspUserRequest::LightningReceiveRequest(request) => {
+                let detailed_invoice = input::parse_invoice(&request.invoice.encoded_invoice)
+                    .ok_or(SdkError::GenericError(
+                        "Invalid invoice in SspUserRequest::LightningReceiveRequest".to_string(),
+                    ))?;
+                PaymentDetails::Lightning {
+                    description: request.invoice.memo,
+                    preimage: request.lightning_receive_payment_preimage,
+                    invoice: request.invoice.encoded_invoice,
+                    payment_hash: request.invoice.payment_hash,
+                    destination_pubkey: detailed_invoice.payee_pubkey,
+                }
+            }
+            SspUserRequest::LightningSendRequest(request) => {
+                let detailed_invoice = input::parse_invoice(&request.encoded_invoice).ok_or(
+                    SdkError::GenericError(
+                        "Invalid invoice in SspUserRequest::LightningSendRequest".to_string(),
+                    ),
+                )?;
+                PaymentDetails::Lightning {
+                    description: detailed_invoice.description,
+                    preimage: request.lightning_send_payment_preimage,
+                    invoice: request.encoded_invoice,
+                    payment_hash: detailed_invoice.payment_hash,
+                    destination_pubkey: detailed_invoice.payee_pubkey,
+                }
+            }
+            SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
+                tx_id: request.transaction_id,
+            },
+        };
+        Ok(details)
+    }
+}
+
+impl TryFrom<WalletTransfer> for Payment {
+    type Error = SdkError;
+    fn try_from(transfer: WalletTransfer) -> Result<Self, Self::Error> {
         let payment_type = match transfer.direction {
             TransferDirection::Incoming => PaymentType::Receive,
             TransferDirection::Outgoing => PaymentType::Send,
@@ -96,43 +169,67 @@ impl From<WalletTransfer> for Payment {
             TransferStatus::Returned => PaymentStatus::Failed,
             _ => PaymentStatus::Pending,
         };
-        Payment {
+        let fees: CurrencyAmount = match transfer.clone().user_request {
+            Some(user_request) => match user_request {
+                SspUserRequest::LightningSendRequest(r) => r.fee,
+                SspUserRequest::CoopExitRequest(r) => r.fee,
+                _ => CurrencyAmount::default(),
+            },
+            None => CurrencyAmount::default(),
+        };
+
+        let details: PaymentDetails = match transfer.user_request {
+            Some(user_request) => user_request.try_into()?,
+            None => PaymentDetails::Spark,
+        };
+
+        Ok(Payment {
             id: transfer.id.to_string(),
             payment_type,
             status,
             amount: transfer.total_value_sat,
-            fees: 0,
+            fees: fees.as_sats().unwrap_or(0),
             timestamp: match transfer.created_at.map(|t| t.duration_since(UNIX_EPOCH)) {
                 Some(Ok(duration)) => duration.as_secs(),
                 _ => 0,
             },
-        }
+            details,
+        })
     }
 }
 
 impl Payment {
-    pub fn from_lightning(payment: LightningSendPayment, amount_sat: u64) -> Self {
+    pub fn from_lightning(
+        payment: LightningSendPayment,
+        amount_sat: u64,
+    ) -> Result<Self, SdkError> {
         let status = match payment.status {
             LightningSendStatus::LightningPaymentSucceeded => PaymentStatus::Completed,
             LightningSendStatus::LightningPaymentFailed => PaymentStatus::Failed,
             _ => PaymentStatus::Pending,
         };
-        Payment {
+
+        let detailed_invoice = input::parse_invoice(&payment.encoded_invoice).ok_or(
+            SdkError::GenericError("Invalid invoice in LightnintSendPayment".to_string()),
+        )?;
+        let details = PaymentDetails::Lightning {
+            description: detailed_invoice.description,
+            preimage: payment.payment_preimage,
+            invoice: payment.encoded_invoice,
+            payment_hash: detailed_invoice.payment_hash,
+            destination_pubkey: detailed_invoice.payee_pubkey,
+        };
+
+        Ok(Payment {
             id: payment.id,
             payment_type: PaymentType::Send,
             status,
             amount: amount_sat,
             fees: payment.fee_sat,
             timestamp: payment.created_at as u64,
-        }
+            details,
+        })
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum PaymentDetails {
-    Lightning,
-    Spark,
-    Bitcoin,
 }
 
 #[derive(Debug, Clone)]
