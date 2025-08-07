@@ -5,6 +5,7 @@ use bitcoin::{
     hashes::{Hash, HashEngine, sha256},
 };
 use prost_types::Timestamp;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::warn;
 
@@ -42,20 +43,37 @@ pub struct TokenOutputs {
     pub outputs: Vec<TokenOutputWithPrevOut>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TokensConfig {
+    pub expected_withdraw_bond_sats: u64,
+    pub expected_withdraw_relative_block_locktime: u64,
+    pub transaction_validity_duration_seconds: u64,
+}
+
 pub struct TokenService<S> {
     tokens_outputs: Mutex<HashMap<String, TokenOutputs>>,
     signer: Arc<S>,
     operator_pool: Arc<OperatorPool<S>>,
     network: Network,
+    split_secret_threshold: u32,
+    tokens_config: TokensConfig,
 }
 
 impl<S: Signer> TokenService<S> {
-    pub fn new(signer: Arc<S>, operator_pool: Arc<OperatorPool<S>>, network: Network) -> Self {
+    pub fn new(
+        signer: Arc<S>,
+        operator_pool: Arc<OperatorPool<S>>,
+        network: Network,
+        split_secret_threshold: u32,
+        tokens_config: TokensConfig,
+    ) -> Self {
         Self {
             tokens_outputs: Mutex::new(HashMap::new()),
             signer,
             operator_pool,
             network,
+            split_secret_threshold,
+            tokens_config,
         }
     }
 
@@ -89,10 +107,10 @@ impl<S: Signer> TokenService<S> {
             };
 
             let token_id = output.token_identifier().to_vec();
-            let token_outputs: TokenOutputWithPrevOut =
+            let token_output: TokenOutputWithPrevOut =
                 (output_with_previous_transaction_data, self.network).try_into()?;
 
-            outputs_map.entry(token_id).or_default().push(token_outputs);
+            outputs_map.entry(token_id).or_default().push(token_output);
         }
 
         // Fetch metadata for owned tokens
@@ -453,7 +471,7 @@ impl<S: Signer> TokenService<S> {
                 identity_public_key: self.signer.get_identity_public_key()?.serialize().to_vec(),
                 partial_token_transaction: Some(partial_tx.clone()),
                 partial_token_transaction_owner_signatures: owner_signatures,
-                validity_duration_seconds: 180, // TODO: make this configurable
+                validity_duration_seconds: self.tokens_config.transaction_validity_duration_seconds,
             })
             .await?;
 
@@ -591,8 +609,7 @@ impl<S: Signer> TokenService<S> {
             }
 
             if let Some(final_withdraw_bond_sats) = final_output.withdraw_bond_sats {
-                // TODO: make this configurable
-                if final_withdraw_bond_sats != 10_000 {
+                if final_withdraw_bond_sats != self.tokens_config.expected_withdraw_bond_sats {
                     return Err(ServiceError::Generic(
                         "Unexpected withdraw bond sats in final tx".to_string(),
                     ));
@@ -602,8 +619,9 @@ impl<S: Signer> TokenService<S> {
             if let Some(final_withdraw_relative_block_locktime) =
                 final_output.withdraw_relative_block_locktime
             {
-                // TODO: make this configurable
-                if final_withdraw_relative_block_locktime != 1_000 {
+                if final_withdraw_relative_block_locktime
+                    != self.tokens_config.expected_withdraw_relative_block_locktime
+                {
                     return Err(ServiceError::Generic(
                         "Unexpected withdraw relative block locktime in final tx".to_string(),
                     ));
@@ -611,7 +629,7 @@ impl<S: Signer> TokenService<S> {
             }
         }
 
-        if keyshare_info.threshold != 2 {
+        if keyshare_info.threshold != self.split_secret_threshold {
             return Err(ServiceError::Generic(
                 "Unexpected threshold in keyshare info".to_string(),
             ));

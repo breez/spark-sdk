@@ -444,12 +444,11 @@ impl<S: Signer> LightningService<S> {
             .iter()
             .map(|l| l.node.id.clone().to_string())
             .collect();
-        let count = node_ids.len() as u32;
         let spark_commitments = self
             .operator_pool
             .get_coordinator()
             .client
-            .get_signing_commitments(GetSigningCommitmentsRequest { node_ids, count })
+            .get_signing_commitments(GetSigningCommitmentsRequest { node_ids, count: 3 })
             .await?;
 
         // get user signed refunds

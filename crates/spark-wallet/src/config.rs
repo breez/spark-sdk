@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use spark::{
     Network,
     operator::{OperatorConfig, OperatorPoolConfig},
+    services::TokensConfig,
     ssp::ServiceProviderConfig,
 };
 
@@ -17,6 +18,7 @@ pub struct SparkWalletConfig {
     pub reconnect_interval_seconds: u64,
     pub service_provider_config: ServiceProviderConfig,
     pub split_secret_threshold: u32,
+    pub tokens_config: TokensConfig,
 }
 
 impl SparkWalletConfig {
@@ -43,6 +45,7 @@ impl SparkWalletConfig {
                 )
                 .unwrap(),
                 split_secret_threshold: 2,
+                tokens_config: Self::default_tokens_config(),
             },
             _ => Self {
                 network,
@@ -55,6 +58,7 @@ impl SparkWalletConfig {
                 )
                 .unwrap(),
                 split_secret_threshold: 2,
+                tokens_config: Self::default_tokens_config(),
             },
         }
     }
@@ -151,5 +155,13 @@ impl SparkWalletConfig {
                 SparkWalletError::ValidationError("Invalid identity public key".to_string())
             })?,
         })
+    }
+
+    pub fn default_tokens_config() -> TokensConfig {
+        TokensConfig {
+            expected_withdraw_bond_sats: 10_000,
+            expected_withdraw_relative_block_locktime: 1_000,
+            transaction_validity_duration_seconds: 180,
+        }
     }
 }

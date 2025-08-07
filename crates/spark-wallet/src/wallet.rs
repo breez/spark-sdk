@@ -139,6 +139,8 @@ impl<S: Signer> SparkWallet<S> {
             Arc::clone(&signer),
             operator_pool.clone(),
             config.network,
+            config.split_secret_threshold,
+            config.tokens_config.clone(),
         ));
 
         let event_manager = Arc::new(EventManager::new());
