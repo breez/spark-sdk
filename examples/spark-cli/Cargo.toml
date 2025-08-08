@@ -10,6 +10,7 @@ clap = { workspace = true, features = ["derive"] }
 dotenvy.workspace = true
 figment = { workspace = true, features = ["env", "yaml"] }
 hex.workspace = true
+qrcode-rs.workspace = true
 reqwest.workspace = true
 rustyline = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
@@ -18,4 +19,3 @@ shellwords.workspace = true
 spark-wallet.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-qrcode-rs = { version = "0.1", default-features = false }

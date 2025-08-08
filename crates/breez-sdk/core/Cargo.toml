@@ -6,27 +6,24 @@ version.workspace = true
 [dependencies]
 bip39.workspace = true
 bitcoin.workspace = true
+breez-sdk-common.workspace = true
+chrono.workspace = true
 clap = { workspace = true, features = ["derive"] }
 dotenvy.workspace = true
 figment = { workspace = true, features = ["env", "yaml"] }
 hex.workspace = true
+qrcode-rs.workspace = true
 reqwest.workspace = true
+rusqlite.workspace = true
+rusqlite_migration.workspace = true
 rustyline = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 shellwords.workspace = true
 spark-wallet.workspace = true
-breez-sdk-common.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
-tracing.workspace = true
-qrcode-rs = { version = "0.1", default-features = false }
+tempdir.workspace = true
 thiserror.workspace = true
-chrono.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid.workspace = true
-rusqlite = { git = "https://github.com/Spxg/rusqlite", rev = "8e53118a3e1807dc9a9f59c5969fdff7e0416400", features = [
-    "backup",
-    "bundled",
-] }
-tempdir = "0.3.7"
-rusqlite_migration = { git = "https://github.com/breez/rusqlite_migration", branch = "spxg-rusqlite" }

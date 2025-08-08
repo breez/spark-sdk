@@ -4,8 +4,8 @@ edition = "2024"
 version.workspace = true
 
 [build-dependencies]
-uniffi = { workspace = true, features = [ "build" ], optional = true }
 tonic-build = { workspace = true }
+uniffi = { workspace = true, features = [ "build" ], optional = true }
 
 [dependencies]
 anyhow.workspace = true

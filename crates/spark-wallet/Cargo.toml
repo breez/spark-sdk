@@ -5,12 +5,12 @@ edition = "2024"
 
 [dependencies]
 bitcoin = { workspace = true, features = ["serde"] }
+frost-secp256k1-tr.workspace = true
 futures.workspace = true
+hex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 spark.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
 uuid.workspace = true
-frost-secp256k1-tr.workspace = true
-hex.workspace = true
