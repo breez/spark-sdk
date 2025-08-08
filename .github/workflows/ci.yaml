@@ -61,6 +61,20 @@ jobs:
       - name: Run Format Check
         run: make fmt-check
 
+  itest:
+    name: Integration test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Tests
+        run: make itest
+
   test:
     name: Test
     runs-on: ubuntu-latest
