@@ -5,13 +5,13 @@ use spark_wallet::{
     DefaultSigner, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress, SparkWallet,
     WalletEvent,
 };
-use std::{sync::Arc, time::Instant};
+use std::{path::PathBuf, str::FromStr, sync::Arc, time::Instant};
 use tracing::{error, info, trace};
 
 use tokio::sync::watch;
 
 use crate::{
-    GetPaymentRequest, GetPaymentResponse, Logger, PaymentStatus,
+    GetPaymentRequest, GetPaymentResponse, Logger, Network, PaymentStatus, SqliteStorage,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -23,7 +23,6 @@ use crate::{
         SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
     persist::{CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, Storage},
-    sdk_builder::SdkBuilder,
 };
 
 /// `BreezSDK` is a wrapper around `SparkSDK` that provides a more structured API
@@ -37,19 +36,22 @@ pub struct BreezSdk {
     shutdown_receiver: watch::Receiver<()>,
 }
 
-// Modify the connect function to use the builder pattern
-pub async fn connect(config: Config) -> Result<BreezSdk, SdkError> {
-    let sdk = SdkBuilder::new(config).build().await?;
-    sdk.start()?;
-    Ok(sdk)
-}
-
 pub async fn init_logging(
     log_dir: &str,
     app_logger: Option<Box<dyn Logger>>,
     log_filter: Option<String>,
 ) -> Result<(), SdkError> {
     logger::init_logging(log_dir, app_logger, log_filter)
+}
+
+pub fn default_storage(data_dir: String) -> Result<Box<dyn Storage>, SdkError> {
+    let db_path = PathBuf::from_str(&data_dir)?;
+    let storage = SqliteStorage::new(&db_path)?;
+    Ok(Box::new(storage))
+}
+
+pub fn default_config(network: Network) -> Config {
+    Config { network }
 }
 
 pub async fn parse(input: &str) -> Result<InputType, SdkError> {

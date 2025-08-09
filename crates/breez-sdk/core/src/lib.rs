@@ -11,5 +11,5 @@ pub use error::SdkError;
 pub use events::{EventEmitter, EventListener, SdkEvent};
 pub use models::*;
 pub use persist::{SqliteStorage, Storage};
-pub use sdk::{BreezSdk, connect, init_logging, parse_input};
+pub use sdk::{BreezSdk, default_config, default_storage, init_logging, parse_input};
 pub use sdk_builder::SdkBuilder;

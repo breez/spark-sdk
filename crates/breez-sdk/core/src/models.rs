@@ -259,8 +259,6 @@ impl From<Network> for SparkNetwork {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub network: Network,
-    pub mnemonic: String,
-    pub data_dir: String,
 }
 
 /// Request to get the balance of the wallet
