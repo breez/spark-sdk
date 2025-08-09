@@ -5,10 +5,12 @@ use serde::{Deserialize, Serialize};
 use spark::{
     Network,
     services::{
-        LightningSendPayment, Transfer, TransferId, TransferLeaf, TransferStatus, TransferType,
+        LightningSendPayment, TokenMetadata, Transfer, TransferId, TransferLeaf, TransferStatus,
+        TransferType,
     },
     ssp::{SspTransfer, SspUserRequest},
     tree::{SigningKeyshare, TreeNode, TreeNodeId},
+    utils::paging::PagingFilter,
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -144,4 +146,20 @@ impl From<TreeNode> for WalletLeaf {
 pub enum TransferDirection {
     Incoming,
     Outgoing,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TokenBalance {
+    pub balance: u128,
+    pub token_metadata: TokenMetadata,
+}
+
+#[derive(Default)]
+pub struct ListTokenTransactionsRequest {
+    pub paging: Option<PagingFilter>,
+    pub owner_public_keys: Vec<PublicKey>,
+    pub issuer_public_keys: Vec<PublicKey>,
+    pub token_transaction_hashes: Vec<String>,
+    pub token_ids: Vec<String>,
+    pub output_ids: Vec<String>,
 }

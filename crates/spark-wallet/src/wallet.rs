@@ -18,8 +18,9 @@ use spark::{
     operator::{OperatorPool, rpc::ConnectionManager},
     services::{
         CoopExitFeeQuote, CoopExitService, DepositService, ExitSpeed, LightningReceivePayment,
-        LightningSendPayment, LightningService, StaticDepositQuote, Swap, TimelockManager,
-        Transfer, TransferId, TransferService,
+        LightningSendPayment, LightningService, QueryTokenTransactionsFilter, StaticDepositQuote,
+        Swap, TimelockManager, TokenService, TokenTransaction, Transfer, TransferId,
+        TransferService, TransferTokenOutput,
     },
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer},
@@ -30,7 +31,7 @@ use tokio::sync::{broadcast, watch};
 use tracing::{debug, error, info, trace};
 
 use crate::{
-    WalletEvent,
+    ListTokenTransactionsRequest, TokenBalance, WalletEvent,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
@@ -51,6 +52,7 @@ pub struct SparkWallet<S> {
     transfer_service: Arc<TransferService<S>>,
     lightning_service: Arc<LightningService<S>>,
     ssp_client: Arc<ServiceProvider<S>>,
+    token_service: Arc<TokenService<S>>,
 }
 
 impl<S: Signer> SparkWallet<S> {
@@ -133,6 +135,14 @@ impl<S: Signer> SparkWallet<S> {
             swap_service,
         ));
 
+        let token_service = Arc::new(TokenService::new(
+            Arc::clone(&signer),
+            operator_pool.clone(),
+            config.network,
+            config.split_secret_threshold,
+            config.tokens_config.clone(),
+        ));
+
         let event_manager = Arc::new(EventManager::new());
         let (cancel, cancellation_token) = watch::channel(());
         let reconnect_interval = Duration::from_secs(config.reconnect_interval_seconds);
@@ -161,6 +171,7 @@ impl<S: Signer> SparkWallet<S> {
             transfer_service,
             lightning_service,
             ssp_client: service_provider.clone(),
+            token_service,
         })
     }
 }
@@ -523,6 +534,7 @@ impl<S: Signer> SparkWallet<S> {
 
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
         self.tree_service.refresh_leaves().await?;
+        self.token_service.refresh_tokens().await?;
         Ok(())
     }
 
@@ -631,6 +643,76 @@ impl<S: Signer> SparkWallet<S> {
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<WalletEvent> {
         self.event_manager.listen()
+    }
+
+    /// Returns the balances of all tokens in the wallet.
+    ///
+    /// Balances are returned in a map keyed by the token identifier.
+    pub async fn get_token_balances(
+        &self,
+    ) -> Result<HashMap<String, TokenBalance>, SparkWalletError> {
+        let tokens_outputs = self.token_service.get_tokens_outputs().await;
+
+        let balances = tokens_outputs
+            .iter()
+            .map(|(token_id, token_outputs)| {
+                let balance = token_outputs
+                    .outputs
+                    .iter()
+                    .map(|output| output.output.token_amount)
+                    .sum();
+                (
+                    token_id.clone(),
+                    TokenBalance {
+                        balance,
+                        token_metadata: token_outputs.metadata.clone(),
+                    },
+                )
+            })
+            .collect();
+
+        Ok(balances)
+    }
+
+    /// Transfers tokens to another Spark user.
+    ///
+    /// Multiple outputs may be provided but they must share the same token id.
+    pub async fn transfer_tokens(
+        &self,
+        outputs: Vec<TransferTokenOutput>,
+    ) -> Result<String, SparkWalletError> {
+        let tx_hash = self.token_service.transfer_tokens(outputs).await?;
+        Ok(tx_hash)
+    }
+
+    pub async fn list_token_transactions(
+        &self,
+        request: ListTokenTransactionsRequest,
+    ) -> Result<Vec<TokenTransaction>, SparkWalletError> {
+        self.token_service
+            .query_token_transactions(
+                QueryTokenTransactionsFilter {
+                    owner_public_keys: request.owner_public_keys,
+                    issuer_public_keys: request.issuer_public_keys,
+                    token_transaction_hashes: request.token_transaction_hashes,
+                    token_ids: request.token_ids,
+                    output_ids: request.output_ids,
+                },
+                request.paging,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    pub fn get_token_l1_address(&self) -> Result<String, SparkWalletError> {
+        let compressed_pubkey =
+            bitcoin::key::CompressedPublicKey::from_slice(&self.identity_public_key.serialize())
+                .map_err(|e| SparkWalletError::ValidationError(e.to_string()))?;
+        Ok(Address::p2wpkh(
+            &compressed_pubkey,
+            bitcoin::Network::from(self.config.network),
+        )
+        .to_string())
     }
 }
 

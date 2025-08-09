@@ -317,6 +317,7 @@ impl<S: Signer> TimelockManager<S> {
                     node_id: node.id.to_string(),
                     node_tx_signature: node_signature.serialize()?.to_vec(),
                     refund_tx_signature: refund_signature.serialize()?.to_vec(),
+                    ..Default::default()
                 }],
             })
             .await?;
@@ -441,6 +442,7 @@ impl<S: Signer> TimelockManager<S> {
                     .to_vec(),
                 node_tx_signing_job: Some(new_node_signing_job),
                 refund_tx_signing_job: Some(new_refund_signing_job),
+                ..Default::default()
             })
             .await?;
 
@@ -559,6 +561,7 @@ impl<S: Signer> TimelockManager<S> {
                     node_id: response.leaf_id,
                     node_tx_signature: node_signature.serialize()?.to_vec(),
                     refund_tx_signature: refund_signature.serialize()?.to_vec(),
+                    ..Default::default()
                 }],
             })
             .await?

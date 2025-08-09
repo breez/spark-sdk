@@ -7,7 +7,7 @@ use crate::{
     CliHelper,
     command::{
         deposit::DepositCommand, leaves::LeavesCommand, lightning::LightningCommand,
-        transfer::TransferCommand, withdraw::WithdrawCommand,
+        tokens::TokensCommand, transfer::TransferCommand, withdraw::WithdrawCommand,
     },
     config::Config,
 };
@@ -15,10 +15,11 @@ use crate::{
 pub mod deposit;
 pub mod leaves;
 pub mod lightning;
+pub mod tokens;
 pub mod transfer;
 pub mod withdraw;
 
-#[derive(Clone, Debug, Parser)]
+#[derive(Debug, Parser)]
 pub enum Command {
     /// Display the wallet's available balance.
     Balance,
@@ -47,6 +48,9 @@ pub enum Command {
     /// Withdraw commands.
     #[command(subcommand)]
     Withdraw(WithdrawCommand),
+    /// Token commands.
+    #[command(subcommand)]
+    Tokens(TokensCommand),
 }
 
 pub(crate) async fn handle_command<S>(
@@ -61,7 +65,7 @@ where
     match command {
         Command::Balance => {
             let balance = wallet.get_balance().await?;
-            println!("Balance: {balance} sats")
+            println!("Balance: {balance} sats");
         }
         Command::Deposit(deposit_command) => {
             deposit::handle_command(config, wallet, deposit_command).await?
@@ -75,6 +79,9 @@ where
         }
         Command::Lightning(lightning_command) => {
             lightning::handle_command(config, wallet, lightning_command).await?
+        }
+        Command::Tokens(tokens_command) => {
+            tokens::handle_command(config, wallet, tokens_command).await?
         }
         Command::Sign => {
             let message = rl.readline("Enter message to sign: ")?;

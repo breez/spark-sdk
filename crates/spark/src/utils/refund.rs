@@ -201,6 +201,7 @@ pub async fn sign_aggregate_refunds<S: Signer>(
             node_id: operator_signing_result.leaf_id.clone(),
             refund_tx_signature: refund_aggregate.serialize()?.to_vec(),
             node_tx_signature: Vec::new(),
+            ..Default::default()
         });
     }
 
@@ -277,6 +278,7 @@ where
                         .try_into()?,
                 ),
             }),
+            ..Default::default()
         };
 
         refund_signing_data.refund_tx = Some(refund_tx);

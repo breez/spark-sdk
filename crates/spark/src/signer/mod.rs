@@ -5,7 +5,7 @@ mod secret_sharing;
 
 use crate::tree::TreeNodeId;
 use bitcoin::secp256k1::ecdsa::Signature;
-use bitcoin::secp256k1::{PublicKey, SecretKey};
+use bitcoin::secp256k1::{PublicKey, SecretKey, schnorr};
 use frost_secp256k1_tr::round2::SignatureShare;
 
 pub use default_signer::DefaultSigner;
@@ -19,6 +19,11 @@ pub trait Signer: Send + Sync + 'static {
         &self,
         message: T,
     ) -> Result<Signature, SignerError>;
+
+    fn sign_hash_schnorr_with_identity_key<T: AsRef<[u8]>>(
+        &self,
+        message: T,
+    ) -> Result<schnorr::Signature, SignerError>;
 
     async fn generate_frost_signing_commitments(
         &self,

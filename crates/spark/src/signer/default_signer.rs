@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
-use bitcoin::secp256k1::{self, Message, SecretKey};
+use bitcoin::secp256k1::{self, Message, SecretKey, schnorr};
 use bitcoin::{
     hashes::{Hash, sha256},
     key::Secp256k1,
@@ -248,6 +248,25 @@ impl Signer for DefaultSigner {
         let sig = self.secp.sign_ecdsa(
             &Message::from_digest(digest.to_byte_array()),
             &self.identity_key,
+        );
+        Ok(sig)
+    }
+
+    fn sign_hash_schnorr_with_identity_key<T: AsRef<[u8]>>(
+        &self,
+        hash: T,
+    ) -> Result<schnorr::Signature, SignerError> {
+        let hash_bytes = hash.as_ref();
+        if hash_bytes.len() != 32 {
+            return Err(SignerError::Generic(
+                "Hash must be exactly 32 bytes".to_string(),
+            ));
+        }
+        let mut hash_array = [0u8; 32];
+        hash_array.copy_from_slice(hash_bytes);
+        let sig = self.secp.sign_schnorr_no_aux_rand(
+            &Message::from_digest(hash_array),
+            &self.identity_key.keypair(&self.secp),
         );
         Ok(sig)
     }
