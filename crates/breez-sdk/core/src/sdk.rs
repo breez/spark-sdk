@@ -1,17 +1,23 @@
-pub use breez_sdk_common::input::parse as parse_input;
-
+use bitcoin::consensus::encode::deserialize_hex;
 use breez_sdk_common::input::InputType;
+pub use breez_sdk_common::input::parse as parse_input;
 use spark_wallet::{
     DefaultSigner, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress, SparkWallet,
     WalletEvent,
 };
-use std::{path::PathBuf, str::FromStr, sync::Arc, time::Instant};
+use std::{
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tracing::{error, info, trace};
 
 use tokio::sync::watch;
 
 use crate::{
-    GetPaymentRequest, GetPaymentResponse, Logger, Network, PaymentStatus, SqliteStorage,
+    BitcoinChainService, GetPaymentRequest, GetPaymentResponse, Logger, Network, PaymentStatus,
+    SqliteStorage,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -29,8 +35,10 @@ use crate::{
 /// with request/response objects and comprehensive error handling.
 #[derive(Clone)]
 pub struct BreezSdk {
+    config: Config,
     spark_wallet: Arc<SparkWallet<DefaultSigner>>,
     storage: Arc<dyn Storage>,
+    chain_service: Arc<dyn BitcoinChainService + Send + Sync>,
     event_emitter: Arc<EventEmitter>,
     shutdown_sender: watch::Sender<()>,
     shutdown_receiver: watch::Receiver<()>,
@@ -51,7 +59,10 @@ pub fn default_storage(data_dir: String) -> Result<Box<dyn Storage>, SdkError> {
 }
 
 pub fn default_config(network: Network) -> Config {
-    Config { network }
+    Config {
+        network,
+        deposits_monitoring_interval: 10 * 60, // every 10 minutes
+    }
 }
 
 pub async fn parse(input: &str) -> Result<InputType, SdkError> {
@@ -77,16 +88,19 @@ impl BreezSdk {
         config: Config,
         signer: DefaultSigner,
         storage: Arc<dyn Storage + Send + Sync>,
+        chain_service: Arc<dyn BitcoinChainService + Send + Sync>,
         shutdown_sender: watch::Sender<()>,
         shutdown_receiver: watch::Receiver<()>,
     ) -> Result<Self, SdkError> {
         let spark_wallet_config =
-            spark_wallet::SparkWalletConfig::default_config(config.network.into());
+            spark_wallet::SparkWalletConfig::default_config(config.clone().network.into());
         let spark_wallet = SparkWallet::connect(spark_wallet_config, signer).await?;
 
         let sdk = Self {
+            config,
             spark_wallet: Arc::new(spark_wallet),
             storage,
+            chain_service,
             event_emitter: Arc::new(EventEmitter::new()),
             shutdown_sender,
             shutdown_receiver,
@@ -128,7 +142,33 @@ impl BreezSdk {
     ///
     pub fn start(&self) -> Result<(), SdkError> {
         self.periodic_sync();
+        self.monitor_deposits();
         Ok(())
+    }
+
+    fn monitor_deposits(&self) {
+        let sdk = self.clone();
+        let mut shutdown_receiver = sdk.shutdown_receiver.clone();
+
+        info!("Monitoring deposits started");
+        // First interval is immediate, after first iteration we change it according to the configuration
+        let mut deposits_monitoring_interval = 1;
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown_receiver.changed() => {
+                        info!("Deposit tracking loop shutdown signal received");
+                        return;
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(deposits_monitoring_interval.into())) => {
+                      if let Err(e) = sdk.check_and_claim_static_deposits().await {
+                        error!("Monitor deposits failed to list static deposit addresses: {e:?}");
+                      }
+                      deposits_monitoring_interval = sdk.config.deposits_monitoring_interval;
+                    }
+                }
+            }
+        });
     }
 
     fn periodic_sync(&self) {
@@ -466,5 +506,37 @@ impl BreezSdk {
     ) -> Result<GetPaymentResponse, SdkError> {
         let payment = self.storage.get_payment_by_id(&request.payment_id)?;
         Ok(GetPaymentResponse { payment })
+    }
+
+    async fn check_and_claim_static_deposits(&self) -> Result<(), SdkError> {
+        let addresses = self
+            .spark_wallet
+            .list_static_deposit_addresses(None)
+            .await?;
+        for address in addresses {
+            info!("Checking static deposit address: {}", address.to_string());
+            let utxos = self
+                .chain_service
+                .get_address_utxos(address.to_string().as_str())
+                .await;
+            if let Ok(utxos) = utxos {
+                info!("Found {} utxos for address {}", utxos.len(), address);
+                for utxo in utxos {
+                    let tx_hex = self.chain_service.get_transaction_hex(&utxo.txid).await?;
+                    let tx = deserialize_hex(&tx_hex)?;
+                    let quote = self
+                        .spark_wallet
+                        .fetch_static_deposit_claim_quote(tx, Some(utxo.vout))
+                        .await?;
+                    let transfer = self.spark_wallet.claim_static_deposit(quote).await?;
+                    info!(
+                        "Claimed static deopsit transfer: {}",
+                        serde_json::to_string_pretty(&transfer)?
+                    );
+                }
+            }
+        }
+
+        Ok(())
     }
 }

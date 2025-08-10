@@ -1,3 +1,4 @@
+mod chain;
 mod error;
 mod events;
 mod logger;
@@ -7,6 +8,7 @@ mod sdk;
 mod sdk_builder;
 
 pub use breez_sdk_common::input::{InputType, ParseError, parse};
+pub use chain::{BitcoinChainService, ChainServiceError, rest_client::RestClientChainService};
 pub use error::SdkError;
 pub use events::{EventEmitter, EventListener, SdkEvent};
 pub use models::*;
