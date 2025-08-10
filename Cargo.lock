@@ -609,12 +609,15 @@ dependencies = [
 name = "breez-sdk-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bip39",
  "bitcoin",
  "breez-sdk-common",
+ "breez-sdk-macros",
  "chrono",
  "clap",
  "dotenvy",
+ "esplora-client",
  "figment",
  "hex",
  "qrcode-rs",
@@ -2640,6 +2643,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
 dependencies = [
  "adler2",
+]
+
+[[package]]
+name = "minreq"
+version = "2.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84885312a86831bff4a3cb04a1e54a3f698407e3274c83249313f194d3e0b678"
+dependencies = [
+ "base64",
+ "log",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

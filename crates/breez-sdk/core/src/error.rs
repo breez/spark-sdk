@@ -1,5 +1,5 @@
 use crate::persist::{self};
-use bitcoin::address::ParseError;
+use bitcoin::{address::ParseError, consensus::encode::FromHexError};
 use spark_wallet::SparkWalletError;
 use std::{convert::Infallible, num::TryFromIntError};
 use thiserror::Error;
@@ -26,6 +26,9 @@ pub enum SdkError {
 
     #[error("Parse error: {0}")]
     ParseError(#[from] breez_sdk_common::input::ParseError),
+
+    #[error("Chain service error: {0}")]
+    ChainServiceError(#[from] crate::chain::ChainServiceError),
 
     #[error("General error: {0}")]
     GenericError(String),
@@ -63,6 +66,12 @@ impl From<TryFromIntError> for SdkError {
 
 impl From<serde_json::Error> for SdkError {
     fn from(e: serde_json::Error) -> Self {
+        SdkError::GenericError(e.to_string())
+    }
+}
+
+impl From<FromHexError> for SdkError {
+    fn from(e: FromHexError) -> Self {
         SdkError::GenericError(e.to_string())
     }
 }

@@ -27,3 +27,15 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid.workspace = true
+breez-sdk-macros.workspace = true
+async-trait.workspace = true
+rusqlite = { git = "https://github.com/Spxg/rusqlite", rev = "8e53118a3e1807dc9a9f59c5969fdff7e0416400", features = [
+    "backup",
+    "bundled",
+] }
+tempdir = "0.3.7"
+rusqlite_migration = { git = "https://github.com/breez/rusqlite_migration", branch = "spxg-rusqlite" }
+esplora-client = "0.12.1"
+
+[dev-dependencies]
+mockito = "1.2.0"
