@@ -223,11 +223,10 @@ impl BitcoindFixture {
                 .rpc_call("gettransaction", &[json!(txid.to_string())])
                 .await?;
 
-            if let Some(confirmations) = result.get("confirmations").and_then(|c| c.as_u64()) {
-                if confirmations >= min_confirmations {
+            if let Some(confirmations) = result.get("confirmations").and_then(|c| c.as_u64())
+                && confirmations >= min_confirmations {
                     return Ok(());
                 }
-            }
 
             sleep(Duration::from_millis(500)).await;
         }

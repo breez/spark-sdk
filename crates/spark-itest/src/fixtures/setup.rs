@@ -16,10 +16,16 @@ pub struct TestFixtures {
 #[derive(Clone, Debug)]
 pub struct FixtureId(String);
 
+impl Default for FixtureId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FixtureId {
     pub fn new() -> Self {
         let id: u32 = rand::thread_rng().gen_range(0..0xFFFFFFFF);
-        Self(hex::encode(&id.to_le_bytes()))
+        Self(hex::encode(id.to_le_bytes()))
     }
 
     pub fn to_network(&self) -> String {
