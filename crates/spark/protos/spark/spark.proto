@@ -6,7 +6,7 @@ option go_package = "github.com/lightsparkdev/spark/proto/spark";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 import "validate/validate.proto";
-import "common.proto";
+import "spark/common.proto";
 
 service SparkService {
     rpc generate_deposit_address(GenerateDepositAddressRequest) returns (GenerateDepositAddressResponse) {}
