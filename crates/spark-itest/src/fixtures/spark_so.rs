@@ -260,7 +260,12 @@ impl SparkSoFixture {
         for (index, server_rx) in server_receivers {
             match timeout(LOG_WAIT_TIMEOUT, server_rx).await {
                 Ok(Ok(())) => info!("Operator {} server ready", index),
-                _ => info!("Timeout waiting for operator {} server to be ready", index),
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Timeout waiting for operator {} server to be ready",
+                        index
+                    ));
+                }
             }
         }
 
