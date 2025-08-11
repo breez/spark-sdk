@@ -88,7 +88,7 @@ impl SparkSoFixture {
                 // Each operator gets their own postgres container for simplicity.
                 let postgres = Postgres::default()
                     .with_network(fixture_id.to_network())
-                    .with_container_name(format!("postgres-{}-{}", i, fixture_id))
+                    .with_container_name(format!("postgres-{i}-{fixture_id}"))
                     .start()
                     .await?;
                 let postgres_ip = postgres.get_bridge_ip_address().await?;
@@ -109,7 +109,7 @@ impl SparkSoFixture {
                         internal_postgres_connectionstring.as_str(),
                     ])
                     .with_network(fixture_id.to_network())
-                    .with_container_name(format!("migrations-{}-{}", i, fixture_id))
+                    .with_container_name(format!("migrations-{i}-{fixture_id}"))
                     .with_log_consumer(TracingConsumer::new(format!("migrations {i}")))
                     .start()
                     .await?;
@@ -134,7 +134,7 @@ impl SparkSoFixture {
                     .with_exposed_port(ContainerPort::Tcp(OPERATOR_PORT))
                     .with_log_consumer(log_consumer)
                     .with_network(fixture_id.to_network())
-                    .with_container_name(format!("spark-so-{}-{}", i, fixture_id))
+                    .with_container_name(format!("spark-so-{i}-{fixture_id}"))
                     .with_mount(Mount::bind_mount(
                         operators_json_path.display().to_string(),
                         "/config/operators.json",

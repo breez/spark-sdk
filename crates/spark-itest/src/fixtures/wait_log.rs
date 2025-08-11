@@ -51,18 +51,20 @@ impl WaitForLogConsumer {
         // Check for startup complete message
         if message.contains(self.startup_pattern)
             && let Ok(mut tx_lock) = self.startup_complete_tx.lock()
-                && let Some(tx) = tx_lock.take() {
-                    let _ = tx.send(());
-                    tracing::info!("[{}] Detected startup complete", self.prefix);
-                }
+            && let Some(tx) = tx_lock.take()
+        {
+            let _ = tx.send(());
+            tracing::info!("[{}] Detected startup complete", self.prefix);
+        }
 
         // Check for server ready message
         if message.contains(self.server_pattern)
             && let Ok(mut tx_lock) = self.server_ready_tx.lock()
-                && let Some(tx) = tx_lock.take() {
-                    let _ = tx.send(());
-                    tracing::info!("[{}] Detected server ready", self.prefix);
-                }
+            && let Some(tx) = tx_lock.take()
+        {
+            let _ = tx.send(());
+            tracing::info!("[{}] Detected server ready", self.prefix);
+        }
     }
 }
 

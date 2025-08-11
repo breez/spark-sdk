@@ -54,7 +54,7 @@ impl BitcoindFixture {
                 "init message: Done loading",
             )))
             .with_network(fixture_id.to_network())
-            .with_container_name(format!("bitcoind-{}", fixture_id))
+            .with_container_name(format!("bitcoind-{fixture_id}"))
             .with_log_consumer(TracingConsumer::new("bitcoind"))
             .with_cmd([
                 "-regtest",
@@ -224,9 +224,10 @@ impl BitcoindFixture {
                 .await?;
 
             if let Some(confirmations) = result.get("confirmations").and_then(|c| c.as_u64())
-                && confirmations >= min_confirmations {
-                    return Ok(());
-                }
+                && confirmations >= min_confirmations
+            {
+                return Ok(());
+            }
 
             sleep(Duration::from_millis(500)).await;
         }
