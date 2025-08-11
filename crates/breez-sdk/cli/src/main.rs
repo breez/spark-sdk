@@ -5,8 +5,8 @@ use crate::commands::CliHelper;
 use crate::persist::CliPersistence;
 use anyhow::{Result, anyhow};
 use bitcoin::hashes::{Hash, sha256};
-use breez_sdk_core::{Config, Network};
 use breez_sdk_core::{EventListener, SdkEvent};
+use breez_sdk_core::{Network, SdkBuilder, default_config, default_storage};
 use clap::Parser;
 use commands::{Command, execute_command};
 use rustyline::Editor;
@@ -99,12 +99,11 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
         .join(path_suffix);
     fs::create_dir_all(&wallet_data_dir)?;
 
-    let config = Config {
-        network: network.clone(),
-        mnemonic: mnemonic.to_string(),
-        data_dir: wallet_data_dir.to_string_lossy().to_string(),
-    };
-    let sdk = breez_sdk_core::connect(config).await?;
+    let config = default_config(network.clone());
+    let storage = default_storage(wallet_data_dir.to_string_lossy().to_string())?;
+    let sdk = SdkBuilder::new(config, mnemonic.to_string(), storage)
+        .build()
+        .await?;
 
     let listener = Box::new(CliEventListener {});
     sdk.add_event_listener(listener).await;
