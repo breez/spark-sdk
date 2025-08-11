@@ -189,11 +189,11 @@ impl<S: Signer> TimelockManager<S> {
             .get_public_key_from_private_key_source(&signing_key)?;
 
         let parent_node_tx = &parent_node.node_tx;
-        let parent_node_out = &parent_node_tx.output[0];
+        let parent_node_tx_out = &parent_node_tx.output[0];
 
         let node_tx = &node.node_tx;
         let node_outpoint = node_tx.input[0].previous_output;
-        let node_out = &node_tx.output[0];
+        let node_tx_out = &node_tx.output[0];
 
         let direct_tx = node.direct_tx;
         let direct_outpoint = direct_tx.as_ref().map(|tx| tx.input[0].previous_output);
@@ -211,8 +211,8 @@ impl<S: Signer> TimelockManager<S> {
             direct_sequence,
             node_outpoint,
             direct_outpoint,
-            parent_node_out.value,
-            parent_node_out.script_pubkey.clone(),
+            parent_node_tx_out.value,
+            parent_node_tx_out.script_pubkey.clone(),
             true,
         );
 
@@ -231,7 +231,7 @@ impl<S: Signer> TimelockManager<S> {
                 txid: tx.compute_txid(),
                 vout: 0,
             }),
-            node_out.value.to_sat(),
+            node_tx_out.value.to_sat(),
             &signing_public_key,
             self.network,
         );
@@ -241,7 +241,7 @@ impl<S: Signer> TimelockManager<S> {
         signing_jobs.push(SigningJob {
             tx_type: SigningJobTxType::CpfpNode,
             tx: cpfp_node_tx.clone(),
-            parent_tx_out: parent_node_out.clone(),
+            parent_tx_out: parent_node_tx_out.clone(),
             signing_public_key,
             signing_commitments: self.signer.generate_frost_signing_commitments().await?,
         });
@@ -257,7 +257,7 @@ impl<S: Signer> TimelockManager<S> {
             signing_jobs.push(SigningJob {
                 tx_type: SigningJobTxType::DirectNode,
                 tx: direct_node_tx.clone(),
-                parent_tx_out: parent_node_out.clone(),
+                parent_tx_out: parent_node_tx_out.clone(),
                 signing_public_key,
                 signing_commitments: self.signer.generate_frost_signing_commitments().await?,
             });
@@ -477,18 +477,17 @@ impl<S: Signer> TimelockManager<S> {
             .get_public_key_from_private_key_source(&signing_key)?;
 
         let node_tx = &node.node_tx;
-        let node_out = &node_tx.output[0];
-
-        let direct_outpoint = node
-            .direct_tx
-            .as_ref()
-            .map(|tx| tx.input[0].previous_output);
+        let node_tx_out = &node_tx.output[0];
+        let node_outpoint = OutPoint {
+            txid: node_tx.compute_txid(),
+            vout: 0,
+        };
 
         let refund_tx = node
             .refund_tx
             .clone()
             .ok_or(ServiceError::Generic("No refund tx".to_string()))?;
-        let refund_out = &refund_tx.output[0];
+        let refund_tx_out = &refund_tx.output[0];
 
         let (cpfp_sequence, direct_sequence) = next_sequence(refund_tx.input[0].sequence).ok_or(
             ServiceError::Generic("Failed to get next sequence".to_string()),
@@ -500,13 +499,10 @@ impl<S: Signer> TimelockManager<S> {
         } = create_node_txs(
             cpfp_sequence,
             direct_sequence,
-            OutPoint {
-                txid: node.node_tx.compute_txid(),
-                vout: 0,
-            },
-            direct_outpoint,
-            node_out.value,
-            node_out.script_pubkey.clone(),
+            node_outpoint,
+            Some(node_outpoint),
+            node_tx_out.value,
+            node_tx_out.script_pubkey.clone(),
             true,
         );
 
@@ -525,7 +521,7 @@ impl<S: Signer> TimelockManager<S> {
                 txid: tx.compute_txid(),
                 vout: 0,
             }),
-            refund_out.value.to_sat(),
+            refund_tx_out.value.to_sat(),
             &signing_public_key,
             self.network,
         );
@@ -533,7 +529,7 @@ impl<S: Signer> TimelockManager<S> {
         let node_tx_signing_job = SigningJob {
             tx_type: SigningJobTxType::CpfpNode,
             tx: cpfp_node_tx.clone(),
-            parent_tx_out: node_out.clone(),
+            parent_tx_out: node_tx_out.clone(),
             signing_public_key,
             signing_commitments: self.signer.generate_frost_signing_commitments().await?,
         };
@@ -549,7 +545,7 @@ impl<S: Signer> TimelockManager<S> {
             Some(SigningJob {
                 tx_type: SigningJobTxType::DirectNode,
                 tx: direct_node_tx.clone(),
-                parent_tx_out: node_out.clone(),
+                parent_tx_out: node_tx_out.clone(),
                 signing_public_key,
                 signing_commitments: self.signer.generate_frost_signing_commitments().await?,
             })

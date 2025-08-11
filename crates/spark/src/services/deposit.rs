@@ -459,10 +459,14 @@ impl<S: Signer> DepositService<S> {
             .get_public_key_from_private_key_source(&signing_private_key)?;
 
         let deposit_txid = deposit_tx.compute_txid();
-        let deposit_output = deposit_tx
+        let deposit_tx_out = deposit_tx
             .output
             .get(vout as usize)
             .ok_or(ServiceError::InvalidOutputIndex)?;
+        let deposit_outpoint = OutPoint {
+            txid: deposit_txid,
+            vout,
+        };
 
         let NodeTransactions {
             cpfp_tx: cpfp_root_tx,
@@ -470,16 +474,10 @@ impl<S: Signer> DepositService<S> {
         } = create_node_txs(
             Default::default(),
             Default::default(),
-            OutPoint {
-                txid: deposit_txid,
-                vout,
-            },
-            Some(OutPoint {
-                txid: deposit_txid,
-                vout,
-            }),
-            deposit_output.value,
-            deposit_output.script_pubkey.clone(),
+            deposit_outpoint,
+            Some(deposit_outpoint),
+            deposit_tx_out.value,
+            deposit_tx_out.script_pubkey.clone(),
             true,
         );
         let Some(direct_root_tx) = direct_root_tx else {
@@ -503,7 +501,7 @@ impl<S: Signer> DepositService<S> {
                 txid: direct_root_tx.compute_txid(),
                 vout: 0,
             }),
-            deposit_output.value.to_sat(),
+            deposit_tx_out.value.to_sat(),
             &signing_public_key,
             self.network,
         );
@@ -626,7 +624,7 @@ impl<S: Signer> DepositService<S> {
         let cpfp_root_signature = sign_aggregate_frost(SignAggregateFrostParams {
             signer: &self.signer,
             tx: &cpfp_root_tx,
-            prev_out: deposit_output,
+            prev_out: deposit_tx_out,
             signing_public_key: &signing_public_key,
             aggregating_public_key: &signing_public_key,
             signing_private_key: &signing_private_key,
@@ -640,7 +638,7 @@ impl<S: Signer> DepositService<S> {
         let direct_root_signature = sign_aggregate_frost(SignAggregateFrostParams {
             signer: &self.signer,
             tx: &direct_root_tx,
-            prev_out: deposit_output,
+            prev_out: deposit_tx_out,
             signing_public_key: &signing_public_key,
             aggregating_public_key: &signing_public_key,
             signing_private_key: &signing_private_key,
