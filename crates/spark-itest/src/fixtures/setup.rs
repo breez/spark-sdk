@@ -79,6 +79,7 @@ impl TestFixtures {
                 schema_endpoint: None,
                 identity_public_key: PublicKey::from_slice(&[2; 33])?,
             },
+            tokens_config: SparkWalletConfig::default_tokens_config(),
         })
     }
 }
