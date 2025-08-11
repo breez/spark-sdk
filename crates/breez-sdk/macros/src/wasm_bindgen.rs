@@ -156,11 +156,10 @@ fn get_path(path_args: &PathArguments) -> Option<&TypePath> {
             if let GenericArgument::Type(ty) = arg {
                 if let Type::Path(path) = ty {
                     return Some(path);
-                } else if let Type::Reference(reference) = ty {
-                    if let Type::Path(ref path) = *reference.elem {
+                } else if let Type::Reference(reference) = ty
+                    && let Type::Path(ref path) = *reference.elem {
                         return Some(path);
                     }
-                }
             }
         }
     }

@@ -19,8 +19,8 @@ where
     S: Subscriber,
 {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        if event.metadata().level() <= &Level::INFO {
-            if let Some(s) = self.log_listener.as_ref() {
+        if event.metadata().level() <= &Level::INFO
+            && let Some(s) = self.log_listener.as_ref() {
                 let mut buf = String::new();
                 let writer = Writer::new(&mut buf);
 
@@ -34,7 +34,6 @@ where
                     });
                 }
             }
-        }
     }
 }
 

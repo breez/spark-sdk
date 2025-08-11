@@ -418,11 +418,11 @@ mod test {
     fn test_reservation_ids_are_unique() {
         let mut state = TreeState::new();
         let leaf = create_test_tree_node("node1", 100);
-        state.add_leaves(&[leaf.clone()]);
+        state.add_leaves(std::slice::from_ref(&leaf));
 
-        let id1 = state.reserve_leaves(&[leaf.clone()], false).unwrap();
+        let id1 = state.reserve_leaves(std::slice::from_ref(&leaf), false).unwrap();
         state.cancel_reservation(id1.clone());
-        let id2 = state.reserve_leaves(&[leaf.clone()], false).unwrap();
+        let id2 = state.reserve_leaves(std::slice::from_ref(&leaf), false).unwrap();
 
         assert_ne!(id1, id2);
     }
@@ -431,10 +431,10 @@ mod test {
     fn test_non_reservable_leaves() {
         let mut state = TreeState::new();
         let leaf = create_test_tree_node("node1", 100);
-        state.add_leaves(&[leaf.clone()]);
+        state.add_leaves(std::slice::from_ref(&leaf));
 
-        let _ = state.reserve_leaves(&[leaf.clone()], false).unwrap();
-        let result = state.reserve_leaves(&[leaf.clone()], false).unwrap_err();
+        let _ = state.reserve_leaves(std::slice::from_ref(&leaf), false).unwrap();
+        let result = state.reserve_leaves(std::slice::from_ref(&leaf), false).unwrap_err();
         assert!(matches!(result, TreeServiceError::NonReservableLeaves));
     }
 
@@ -472,7 +472,7 @@ mod test {
         let leaf = create_test_tree_node("new_node", 500);
 
         // Reserve a leaf that doesn't exist in the main pool
-        let reservation_id = state.reserve_leaves(&[leaf.clone()], true).unwrap();
+        let reservation_id = state.reserve_leaves(std::slice::from_ref(&leaf), true).unwrap();
 
         // Check that reservation was created
         assert!(state.leaves_reservations.contains_key(&reservation_id));
@@ -488,7 +488,7 @@ mod test {
     fn test_reserve_leaves_mix_existing_and_new() {
         let mut state = TreeState::new();
         let existing_leaf = create_test_tree_node("existing", 100);
-        state.add_leaves(&[existing_leaf.clone()]);
+        state.add_leaves(std::slice::from_ref(&existing_leaf));
 
         let new_leaf = create_test_tree_node("new", 200);
 

@@ -608,25 +608,22 @@ impl<S: Signer> TokenService<S> {
                 ));
             }
 
-            if let Some(final_withdraw_bond_sats) = final_output.withdraw_bond_sats {
-                if final_withdraw_bond_sats != self.tokens_config.expected_withdraw_bond_sats {
+            if let Some(final_withdraw_bond_sats) = final_output.withdraw_bond_sats
+                && final_withdraw_bond_sats != self.tokens_config.expected_withdraw_bond_sats {
                     return Err(ServiceError::Generic(
                         "Unexpected withdraw bond sats in final tx".to_string(),
                     ));
                 }
-            }
 
             if let Some(final_withdraw_relative_block_locktime) =
                 final_output.withdraw_relative_block_locktime
-            {
-                if final_withdraw_relative_block_locktime
+                && final_withdraw_relative_block_locktime
                     != self.tokens_config.expected_withdraw_relative_block_locktime
                 {
                     return Err(ServiceError::Generic(
                         "Unexpected withdraw relative block locktime in final tx".to_string(),
                     ));
                 }
-            }
         }
 
         if keyshare_info.threshold != self.split_secret_threshold {
@@ -760,13 +757,12 @@ pub(crate) fn bech32m_decode_token_id(
         "btkns" => Network::Signet,
         _ => return Err(ServiceError::Generic(format!("Invalid network: {hrp}"))),
     };
-    if let Some(network) = network {
-        if bech32_network != network {
+    if let Some(network) = network
+        && bech32_network != network {
             return Err(ServiceError::Generic(format!(
                 "Invalid network: {bech32_network}"
             )));
         }
-    }
     Ok(data)
 }
 
@@ -822,11 +818,10 @@ impl HashableTokenTransaction for rpc::spark_token::TokenTransaction {
 
         for output in &self.token_outputs {
             let mut engine = sha256::Hash::engine();
-            if !partial {
-                if let Some(id) = &output.id {
+            if !partial
+                && let Some(id) = &output.id {
                     engine.input(id.as_bytes());
                 }
-            }
             engine.input(&output.owner_public_key);
 
             if !partial {

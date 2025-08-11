@@ -359,11 +359,10 @@ impl<S: Signer> LightningService<S> {
 
         // get the invoice amount in sats, then validate the amount
         let to_pay_sat = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
-        if prefer_spark {
-            if let Some(receiver_address) = self.extract_spark_address(&decoded_invoice) {
+        if prefer_spark
+            && let Some(receiver_address) = self.extract_spark_address(&decoded_invoice) {
                 return Ok((to_pay_sat, Some(receiver_address)));
             }
-        }
 
         let fee_estimate = self
             .ssp_client
@@ -373,13 +372,12 @@ impl<S: Signer> LightningService<S> {
         let fee_sat = fee_estimate
             .as_sats()
             .map_err(|_| ServiceError::Generic("Failed to parse fee".to_string()))?;
-        if let Some(max_fee_sat) = max_fee_sat {
-            if fee_sat > max_fee_sat {
+        if let Some(max_fee_sat) = max_fee_sat
+            && fee_sat > max_fee_sat {
                 return Err(ServiceError::ValidationError(format!(
                     "Fee exceeds maximum allowed fee {fee_sat} > {max_fee_sat}",
                 )));
             }
-        }
 
         Ok((fee_sat + to_pay_sat, None))
     }
