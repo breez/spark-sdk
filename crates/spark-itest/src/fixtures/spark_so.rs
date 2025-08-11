@@ -4,7 +4,6 @@ use bitcoin::secp256k1::SecretKey;
 use serde_json::json;
 use spark_wallet::Identifier;
 use std::fs;
-use std::net::IpAddr;
 use std::path::Path;
 use std::time::Duration;
 use testcontainers::GenericImage;
@@ -41,7 +40,7 @@ pub struct OperatorFixture {
     pub public_key: bitcoin::secp256k1::PublicKey,
     pub host_port: u16,
     pub internal_port: u16,
-    pub internal_ip: IpAddr,
+    pub host_name: String,
     pub postgres_connectionstring: String,
 }
 
@@ -86,15 +85,16 @@ impl SparkSoFixture {
             // Create async task for each operator
             let operator_future = tokio::spawn(async move {
                 // Each operator gets their own postgres container for simplicity.
+                let postgres_container_name = format!("postgres-{i}-{fixture_id}");
                 let postgres = Postgres::default()
                     .with_network(fixture_id.to_network())
-                    .with_container_name(format!("postgres-{i}-{fixture_id}"))
+                    .with_container_name(&postgres_container_name)
                     .start()
                     .await?;
-                let postgres_ip = postgres.get_bridge_ip_address().await?;
+
                 let postgres_port = postgres.get_host_port_ipv4(POSTGRES_PORT).await?;
                 let internal_postgres_connectionstring = format!(
-                    "postgres://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{postgres_ip}:{POSTGRES_PORT}/{POSTGRES_DB}?sslmode=disable"
+                    "postgres://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{postgres_container_name}:{POSTGRES_PORT}/{POSTGRES_DB}?sslmode=disable"
                 );
                 let postgres_connectionstring = format!(
                     "postgres://{}:{}@{}:{}/{}?sslmode=disable",
@@ -130,11 +130,12 @@ impl SparkSoFixture {
                 );
 
                 // Create container for this operator
+                let operator_host_name = format!("spark-so-{i}-{fixture_id}");
                 let container = GenericImage::new("spark-so", "latest")
                     .with_exposed_port(ContainerPort::Tcp(OPERATOR_PORT))
                     .with_log_consumer(log_consumer)
                     .with_network(fixture_id.to_network())
-                    .with_container_name(format!("spark-so-{i}-{fixture_id}"))
+                    .with_container_name(&operator_host_name)
                     .with_mount(Mount::bind_mount(
                         operators_json_path.display().to_string(),
                         "/config/operators.json",
@@ -144,7 +145,7 @@ impl SparkSoFixture {
                     .with_env_var("SPARK_OPERATOR_KEY", hex::encode(secret_key.secret_bytes()))
                     .with_env_var("SPARK_THRESHOLD", MIN_SIGNERS.to_string())
                     // Postgres configuration
-                    .with_env_var("POSTGRES_HOST", postgres_ip.to_string())
+                    .with_env_var("POSTGRES_HOST", &postgres_container_name)
                     .with_env_var("POSTGRES_PORT", POSTGRES_PORT.to_string())
                     .with_env_var("POSTGRES_USER", POSTGRES_USER)
                     .with_env_var("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
@@ -161,7 +162,6 @@ impl SparkSoFixture {
 
                 let identifier = Identifier::deserialize(&hex::decode(format!("{:0>64}", i + 1))?)?;
                 let public_key = secret_key.public_key(&secp);
-                let internal_ip = container.get_bridge_ip_address().await?;
 
                 let operator = OperatorFixture {
                     postgres,
@@ -171,7 +171,7 @@ impl SparkSoFixture {
                     index: i,
                     public_key,
                     internal_port: OPERATOR_PORT,
-                    internal_ip,
+                    host_name: operator_host_name,
                     postgres_connectionstring,
                 };
 
@@ -219,7 +219,7 @@ impl SparkSoFixture {
         for operator in operators {
             let operator_entry = json!({
                 "id": operator.index,
-                "address": format!("{}:{}", operator.internal_ip, operator.internal_port),
+                "address": format!("{}:{}", operator.host_name, operator.internal_port),
                 "external_address": format!("localhost:{}", operator.host_port),
                 "identity_public_key": operator.public_key.to_string(),
             });

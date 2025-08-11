@@ -47,6 +47,7 @@ struct RpcResponse<T> {
 impl BitcoindFixture {
     pub async fn new(fixture_id: &FixtureId) -> anyhow::Result<Self> {
         // Define bitcoind container with command line arguments
+        let container_name = format!("bitcoind-{fixture_id}");
         let container = GenericImage::new(BITCOIND_DOCKER_IMAGE, BITCOIND_VERSION)
             .with_exposed_port(ContainerPort::Tcp(REGTEST_RPC_PORT))
             .with_exposed_port(ContainerPort::Tcp(ZMQPUBRAWBLOCK_RPC_PORT))
@@ -54,7 +55,7 @@ impl BitcoindFixture {
                 "init message: Done loading",
             )))
             .with_network(fixture_id.to_network())
-            .with_container_name(format!("bitcoind-{fixture_id}"))
+            .with_container_name(&container_name)
             .with_log_consumer(TracingConsumer::new("bitcoind"))
             .with_cmd([
                 "-regtest",
@@ -86,9 +87,9 @@ impl BitcoindFixture {
         let rpc_url = format!("http://127.0.0.1:{host_rpc_port}/");
         let zmqpubrawblock_url = format!("tcp://127.0.0.1:{host_zmq_port}");
 
-        let internal_ip = container.get_bridge_ip_address().await?;
-        let internal_rpc_url = format!("tcp://{internal_ip}:{REGTEST_RPC_PORT}");
-        let internal_zmqpubrawblock_url = format!("tcp://{internal_ip}:{ZMQPUBRAWBLOCK_RPC_PORT}");
+        let internal_rpc_url = format!("tcp://{container_name}:{REGTEST_RPC_PORT}");
+        let internal_zmqpubrawblock_url =
+            format!("tcp://{container_name}:{ZMQPUBRAWBLOCK_RPC_PORT}");
         info!(
             "Got bitcoind exposed rpc and zmq ports: {} and. {}",
             host_rpc_port, host_zmq_port
