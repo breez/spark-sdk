@@ -367,6 +367,7 @@ impl<S: Signer> TokenService<S> {
                     self.signer.get_identity_public_key()?,
                     self.network,
                     None,
+                    None,
                 ),
             });
         }

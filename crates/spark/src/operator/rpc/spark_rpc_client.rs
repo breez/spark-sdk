@@ -288,29 +288,6 @@ where
             .into_inner())
     }
 
-    pub async fn prepare_tree_address(
-        &self,
-        req: PrepareTreeAddressRequest,
-    ) -> Result<PrepareTreeAddressResponse> {
-        Ok(self
-            .auth
-            .spark_service_client()
-            .await?
-            .prepare_tree_address(req)
-            .await?
-            .into_inner())
-    }
-
-    pub async fn create_tree(&self, req: CreateTreeRequest) -> Result<CreateTreeResponse> {
-        Ok(self
-            .auth
-            .spark_service_client()
-            .await?
-            .create_tree(req)
-            .await?
-            .into_inner())
-    }
-
     pub async fn get_signing_operator_list(&self) -> Result<GetSigningOperatorListResponse> {
         Ok(self
             .auth

@@ -128,7 +128,7 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
                 rl.add_history_entry(line.as_str())?;
 
                 match parse_command(trimmed) {
-                    Ok(command) => match execute_command(rl, command, &sdk).await {
+                    Ok(command) => match Box::pin(execute_command(rl, command, &sdk)).await {
                         Ok(continue_loop) => {
                             if !continue_loop {
                                 break;

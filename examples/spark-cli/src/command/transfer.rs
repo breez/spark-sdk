@@ -4,6 +4,7 @@ use spark_wallet::{PagingFilter, SparkAddress, SparkWallet};
 use crate::config::Config;
 
 #[derive(Clone, Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum TransferCommand {
     /// Claims all pending transfers
     ClaimPending,

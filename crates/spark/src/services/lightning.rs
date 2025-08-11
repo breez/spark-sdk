@@ -402,7 +402,12 @@ impl<S: Signer> LightningService<S> {
         for route_hint in decoded_invoice.route_hints() {
             for node in route_hint.0 {
                 if node.short_channel_id == RECEIVER_IDENTITY_PUBLIC_KEY_SHORT_CHANNEL_ID {
-                    return Some(SparkAddress::new(node.src_node_id, self.network, None));
+                    return Some(SparkAddress::new(
+                        node.src_node_id,
+                        self.network,
+                        None,
+                        None,
+                    ));
                 }
             }
         }

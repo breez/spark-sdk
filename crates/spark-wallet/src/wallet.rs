@@ -481,6 +481,7 @@ impl<S: Signer> SparkWallet<S> {
             self.identity_public_key,
             self.config.network,
             None,
+            None,
         ))
     }
 

@@ -249,9 +249,13 @@ where
 
         // Create the Spark payment intent
         trace!("Creating Spark payment intent for cooperative exit");
-        let spark_payment_intent =
-            SparkAddress::new(self.signer.get_identity_public_key()?, self.network, None)
-                .to_string();
+        let spark_payment_intent = SparkAddress::new(
+            self.signer.get_identity_public_key()?,
+            self.network,
+            None,
+            None,
+        )
+        .to_string();
 
         let transfer_id = TransferId::generate();
         let expiry_time = if self.network == Network::Mainnet {
