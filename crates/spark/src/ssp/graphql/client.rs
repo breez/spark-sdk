@@ -86,9 +86,10 @@ impl<S: Signer> GraphQLClient<S> {
         let json: Response<Q::ResponseData> =
             serde_json::from_str(&text).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
         if let Some(errors) = json.errors
-            && !errors.is_empty() {
-                return Err(GraphQLError::from_graphql_errors(&errors));
-            }
+            && !errors.is_empty()
+        {
+            return Err(GraphQLError::from_graphql_errors(&errors));
+        }
 
         json.data.ok_or(GraphQLError::serialization(
             "Unable to deserialize response",
@@ -124,15 +125,17 @@ impl<S: Signer> GraphQLClient<S> {
                     code: Some(status_code),
                     ..
                 } = e.clone()
-                    && status_code == reqwest::StatusCode::UNAUTHORIZED.as_u16() && needs_auth {
-                        self.authenticate().await?;
-                        let mut headers = HeaderMap::new();
-                        self.auth_provider.add_auth_headers(&mut headers).await?;
+                    && status_code == reqwest::StatusCode::UNAUTHORIZED.as_u16()
+                    && needs_auth
+                {
+                    self.authenticate().await?;
+                    let mut headers = HeaderMap::new();
+                    self.auth_provider.add_auth_headers(&mut headers).await?;
 
-                        return self
-                            .post_query_inner::<Q, T>(&full_url, &headers, variables)
-                            .await;
-                    }
+                    return self
+                        .post_query_inner::<Q, T>(&full_url, &headers, variables)
+                        .await;
+                }
                 Err(e)
             }
         }

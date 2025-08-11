@@ -113,9 +113,10 @@ pub fn validate_request(url: &reqwest::Url) -> Result<LnurlAuthRequestData, Lnur
     }
 
     if let Some(action) = &maybe_action
-        && !["register", "login", "link", "auth"].contains(&action.as_str()) {
-            return Err(LnurlError::UnsupportedAction);
-        }
+        && !["register", "login", "link", "auth"].contains(&action.as_str())
+    {
+        return Err(LnurlError::UnsupportedAction);
+    }
 
     Ok(LnurlAuthRequestData {
         k1,

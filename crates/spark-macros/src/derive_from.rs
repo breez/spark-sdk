@@ -50,18 +50,20 @@ pub fn derive_from(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Check if a type is an Option<T>
 fn is_option_type(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty
-        && type_path.path.segments.len() == 1 {
-            return type_path.path.segments[0].ident == "Option";
-        }
+        && type_path.path.segments.len() == 1
+    {
+        return type_path.path.segments[0].ident == "Option";
+    }
     false
 }
 
 /// Check if a type is a Vec<T>
 fn is_vec_type(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty
-        && type_path.path.segments.len() == 1 {
-            return type_path.path.segments[0].ident == "Vec";
-        }
+        && type_path.path.segments.len() == 1
+    {
+        return type_path.path.segments[0].ident == "Vec";
+    }
     false
 }
 

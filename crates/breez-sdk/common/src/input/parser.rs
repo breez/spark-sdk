@@ -286,10 +286,11 @@ where
         _source: &PaymentRequestSource,
     ) -> Result<InputType, LnurlError> {
         if let Some(query) = url.query()
-            && query.contains("tag=login") {
-                let data = auth::validate_request(url)?;
-                return Ok(InputType::LnurlAuth(data));
-            }
+            && query.contains("tag=login")
+        {
+            let data = auth::validate_request(url)?;
+            return Ok(InputType::LnurlAuth(data));
+        }
 
         let (response, _) = self
             .rest_client
@@ -529,16 +530,17 @@ fn parse_bip21_key(
 
 fn parse_bitcoin(input: &str, source: &PaymentRequestSource) -> Option<InputType> {
     if let Ok((hrp, _)) = bech32::decode(input)
-        && hrp.to_lowercase().as_str() == "sp" {
-            match parse_silent_payment_address(input, source) {
-                Some(silent_payment) => {
-                    return Some(InputType::SilentPaymentAddress(silent_payment));
-                }
-                None => {
-                    return None;
-                }
+        && hrp.to_lowercase().as_str() == "sp"
+    {
+        match parse_silent_payment_address(input, source) {
+            Some(silent_payment) => {
+                return Some(InputType::SilentPaymentAddress(silent_payment));
+            }
+            None => {
+                return None;
             }
         }
+    }
 
     if let Some(address) = parse_bitcoin_address(input, source) {
         return Some(InputType::BitcoinAddress(address));
