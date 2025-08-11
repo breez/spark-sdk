@@ -133,6 +133,9 @@ impl SparkSoFixture {
                 let operator_host_name = format!("spark-so-{i}-{fixture_id}");
                 let container = GenericImage::new("spark-so", "latest")
                     .with_exposed_port(ContainerPort::Tcp(OPERATOR_PORT))
+                    .with_wait_for(WaitFor::Log(LogWaitStrategy::stdout(
+                        "Waiting for updated operators.json file",
+                    )))
                     .with_log_consumer(log_consumer)
                     .with_network(fixture_id.to_network())
                     .with_container_name(&operator_host_name)
