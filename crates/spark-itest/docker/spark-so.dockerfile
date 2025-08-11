@@ -3,7 +3,7 @@ ARG USER=so
 ARG VERSION=428a71c0f13175a3b1ffff0f5f31eba042d7d537
 ARG REPOSITORY=https://github.com/buildonspark/spark.git
 
-FROM debian:bookworm-slim AS downloader
+FROM debian:bookworm-20250721-slim AS downloader
 
 ARG VERSION
 ARG REPOSITORY
@@ -21,7 +21,7 @@ RUN git init && \
     git checkout FETCH_HEAD
 
 
-FROM golang:bookworm AS operator-builder
+FROM golang:1.24.6-bookworm AS operator-builder
 
 # Install required dependencies for building
 RUN apt-get update -qq && \
@@ -39,7 +39,7 @@ WORKDIR /app/spark
 RUN go build ./bin/operator
 
 
-FROM rust:bookworm AS signer-builder
+FROM rust:1.89.0-bookworm AS signer-builder
 
 RUN apt-get update -qq && \
     apt-get install -qq -y --no-install-recommends \
@@ -52,7 +52,7 @@ WORKDIR /app/spark-frost-signer
 RUN cargo install --path .
 
 
-FROM debian:bookworm-slim AS final
+FROM debian:bookworm-20250721-slim AS final
 
 ARG USER
 

@@ -1,7 +1,7 @@
 ARG VERSION=428a71c0f13175a3b1ffff0f5f31eba042d7d537
 ARG REPOSITORY=https://github.com/buildonspark/spark.git
 
-FROM debian:bookworm-slim AS downloader
+FROM debian:bookworm-20250721-slim AS downloader
 
 ARG VERSION
 ARG REPOSITORY
@@ -19,6 +19,6 @@ RUN git init && \
     git checkout FETCH_HEAD
 
 
-FROM arigaio/atlas AS final
+FROM arigaio/atlas:0.36.0 AS final
 
 COPY --from=downloader /source/spark/so/ent/migrate/migrations/ /migrations/
