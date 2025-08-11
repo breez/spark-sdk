@@ -85,6 +85,7 @@ while true; do
     break
   fi
   
+  echo "Waiting for operators.json to be updated..."
   sleep 1
 done
 
