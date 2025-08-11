@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use bitcoin::hashes::Hash;
-use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::{Address, OutPoint, Transaction, Txid};
 use prost_types::Timestamp;
 use serde::Serialize;
@@ -22,10 +21,10 @@ use crate::ssp::ServiceProvider;
 use crate::tree::TreeNodeId;
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::refund::{
-    node_signatures_to_map, prepare_leaf_refund_signing_data,
+    RefundSignatures, map_refund_signatures, prepare_leaf_refund_signing_data,
     prepare_refund_so_signing_jobs_with_tx_constructor, sign_aggregate_refunds,
 };
-use crate::utils::transactions::create_coop_exit_refund_tx;
+use crate::utils::transactions::{ConnectorRefundTxsParams, create_connector_refund_txs};
 use crate::{signer::Signer, tree::TreeNode};
 
 const COOP_EXIT_EXPIRY_DURATION_MAINNET: Duration = Duration::from_secs(24 * 60 * 60 * 2); // 48 hours
@@ -40,7 +39,7 @@ pub struct CoopExitSpeedFeeQuote {
 #[derive(Debug)]
 struct CoopExitRefundSignatures {
     pub transfer: Transfer,
-    pub refund_signature_map: HashMap<TreeNodeId, Signature>,
+    pub refund_signatures: RefundSignatures,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -215,13 +214,13 @@ where
             .deliver_transfer_package(
                 &coop_exit_refund_signatures.transfer,
                 &leaf_key_tweaks,
-                coop_exit_refund_signatures.refund_signature_map.clone(),
+                coop_exit_refund_signatures.refund_signatures.clone(),
             )
             .await?;
 
         Ok(CoopExitRefundSignatures {
             transfer: transfer_tweaked,
-            refund_signature_map: coop_exit_refund_signatures.refund_signature_map,
+            refund_signatures: coop_exit_refund_signatures.refund_signatures,
         })
     }
 
@@ -268,7 +267,7 @@ where
             .operator_pool
             .get_coordinator()
             .client
-            .cooperative_exit(operator_rpc::spark::CooperativeExitRequest {
+            .cooperative_exit_v2(operator_rpc::spark::CooperativeExitRequest {
                 transfer: Some(operator_rpc::spark::StartTransferRequest {
                     transfer_id: transfer_id.to_string(),
                     #[allow(deprecated)]
@@ -303,15 +302,17 @@ where
             &leaf_data_map,
             &response.signing_results,
             None,
+            None,
+            None,
         )
         .await?;
 
         trace!("Converting signed refunds to map");
-        let refund_signature_map = node_signatures_to_map(signed_refunds)?;
+        let refund_signatures = map_refund_signatures(signed_refunds)?;
 
         Ok(CoopExitRefundSignatures {
             transfer,
-            refund_signature_map,
+            refund_signatures,
         })
     }
 
@@ -324,18 +325,24 @@ where
         prepare_refund_so_signing_jobs_with_tx_constructor(
             leaf_key_tweaks,
             leaf_data_map,
-            |node, index, refund_tx, sequence, receiving_pubkey| {
-                create_coop_exit_refund_tx(
-                    sequence,
-                    refund_tx.input[0].previous_output,
-                    OutPoint {
+            |refund_tx_constructor| {
+                create_connector_refund_txs(ConnectorRefundTxsParams {
+                    cpfp_sequence: refund_tx_constructor.cpfp_sequence,
+                    direct_sequence: refund_tx_constructor.direct_sequence,
+                    cpfp_outpoint: refund_tx_constructor.refund_tx.input[0].previous_output,
+                    direct_outpoint: refund_tx_constructor
+                        .node
+                        .direct_refund_tx
+                        .as_ref()
+                        .map(|tx| tx.input[0].previous_output),
+                    connector_outpoint: OutPoint {
                         txid: connector_txid,
-                        vout: index as u32,
+                        vout: refund_tx_constructor.vout,
                     },
-                    node.value,
-                    receiving_pubkey,
-                    self.network,
-                )
+                    amount_sats: refund_tx_constructor.node.value,
+                    receiving_pubkey: refund_tx_constructor.receiving_pubkey,
+                    network: self.network,
+                })
             },
         )
     }

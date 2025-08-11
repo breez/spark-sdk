@@ -181,7 +181,7 @@ async fn main() -> Result<(), anyhow::Error> {
         _ => return Err(anyhow!("Invalid network. Use 'regtest' or 'mainnet'")),
     };
 
-    run_interactive_mode(data_dir, network).await?;
+    Box::pin(run_interactive_mode(data_dir, network)).await?;
 
     Ok(())
 }

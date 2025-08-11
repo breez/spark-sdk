@@ -222,7 +222,7 @@ impl<S: Signer> SparkWallet<S> {
         // send the leaves to the operator
         let _ = self
             .transfer_service
-            .deliver_transfer_package(&swap.transfer, &swap.leaves, HashMap::new())
+            .deliver_transfer_package(&swap.transfer, &swap.leaves, Default::default())
             .await?;
 
         // finalize the lightning swap with the ssp - send the actual lightning payment

@@ -5,10 +5,10 @@ use bitcoin::secp256k1::PublicKey;
 use crate::{
     signer::Signer,
     ssp::{
-        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CoopExitFeeQuote,
-        CurrencyAmount, LeavesSwapRequest, RequestCoopExitInput, RequestLeavesSwapInput,
-        RequestLightningReceiveInput, RequestLightningSendInput, ServiceProviderConfig,
-        SspTransfer, StaticDepositQuote,
+        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CompleteLeavesSwapInput,
+        CoopExitFeeQuote, CurrencyAmount, LeavesSwapRequest, RequestCoopExitInput,
+        RequestLeavesSwapInput, RequestLightningReceiveInput, RequestLightningSendInput,
+        ServiceProviderConfig, SspTransfer, StaticDepositQuote,
         error::ServiceProviderResult,
         graphql::{CoopExitRequest, GraphQLClient, LightningReceiveRequest, LightningSendRequest},
     },
@@ -111,18 +111,9 @@ impl<S: Signer> ServiceProvider<S> {
     /// Complete a leaves swap
     pub async fn complete_leaves_swap(
         &self,
-        adaptor_secret_key: &str,
-        user_outbound_transfer_external_id: &str,
-        leaves_swap_request_id: &str,
+        input: CompleteLeavesSwapInput,
     ) -> ServiceProviderResult<LeavesSwapRequest> {
-        Ok(self
-            .gql_client
-            .complete_leaves_swap(
-                adaptor_secret_key,
-                user_outbound_transfer_external_id,
-                leaves_swap_request_id,
-            )
-            .await?)
+        Ok(self.gql_client.complete_leaves_swap(input).await?)
     }
 
     /// Get claim deposit quote

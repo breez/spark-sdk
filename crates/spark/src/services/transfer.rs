@@ -13,7 +13,10 @@ use crate::signer::{
 };
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::paging::{PagingFilter, PagingResult, pager};
-use crate::utils::refund::{prepare_refund_so_signing_jobs, sign_aggregate_refunds, sign_refunds};
+use crate::utils::refund::{
+    RefundSignatures, SignedRefundTransactions, prepare_refund_so_signing_jobs,
+    sign_aggregate_refunds, sign_refunds,
+};
 
 use bitcoin::Transaction;
 use bitcoin::hashes::{Hash, sha256};
@@ -39,8 +42,13 @@ pub struct LeafRefundSigningData {
     pub signing_public_key: PublicKey,
     pub receiving_public_key: PublicKey,
     pub tx: Transaction,
+    pub direct_tx: Option<Transaction>,
     pub refund_tx: Option<Transaction>,
+    pub direct_refund_tx: Option<Transaction>,
+    pub direct_from_cpfp_refund_tx: Option<Transaction>,
     pub signing_nonce_commitment: FrostSigningCommitmentsWithNonces,
+    pub direct_signing_nonce_commitment: FrostSigningCommitmentsWithNonces,
+    pub direct_from_cpfp_signing_nonce_commitment: FrostSigningCommitmentsWithNonces,
     pub vout: u32,
 }
 
@@ -113,7 +121,7 @@ impl<S: Signer> TransferService<S> {
                 &transfer_id,
                 receiver_id,
                 leaf_key_tweaks,
-                HashMap::new(),
+                Default::default(),
             )
             .await?;
 
@@ -142,7 +150,7 @@ impl<S: Signer> TransferService<S> {
             .operator_pool
             .get_coordinator()
             .client
-            .start_transfer(start_transfer_request)
+            .start_transfer_v2(start_transfer_request)
             .await?
             .transfer
             .ok_or(ServiceError::Generic(
@@ -157,18 +165,32 @@ impl<S: Signer> TransferService<S> {
         transfer_id: &TransferId,
         receiver_public_key: &PublicKey,
         leaves: &[LeafKeyTweak],
-        refund_signatures: HashMap<TreeNodeId, Signature>,
+        refund_signatures: RefundSignatures,
     ) -> Result<HashMap<Identifier, Vec<operator_rpc::spark::SendLeafKeyTweak>>, ServiceError> {
         let mut leaves_tweaks_map = HashMap::new();
 
         for leaf in leaves {
-            let refund_signature = refund_signatures.get(&leaf.node.id).cloned();
+            let cpfp_refund_signature = refund_signatures
+                .cpfp_signatures
+                .get(&leaf.node.id)
+                .cloned();
+            let direct_refund_signature = refund_signatures
+                .direct_signatures
+                .get(&leaf.node.id)
+                .cloned();
+            let direct_from_cpfp_refund_signature = refund_signatures
+                .direct_from_cpfp_signatures
+                .get(&leaf.node.id)
+                .cloned();
+
             let leaf_tweaks_map = self
                 .prepare_single_send_transfer_key_tweak(
                     transfer_id,
                     leaf,
                     receiver_public_key,
-                    refund_signature,
+                    cpfp_refund_signature,
+                    direct_refund_signature,
+                    direct_from_cpfp_refund_signature,
                 )
                 .await?;
 
@@ -190,7 +212,9 @@ impl<S: Signer> TransferService<S> {
         transfer_id: &TransferId,
         leaf: &LeafKeyTweak,
         receiver_public_key: &PublicKey,
-        refund_signature: Option<Signature>,
+        cpfp_refund_signature: Option<Signature>,
+        direct_refund_signature: Option<Signature>,
+        direct_from_cpfp_refund_signature: Option<Signature>,
     ) -> Result<HashMap<Identifier, operator_rpc::spark::SendLeafKeyTweak>, ServiceError> {
         // Calculate the key tweak by subtracting keys
         let privkey_tweak = self
@@ -276,10 +300,15 @@ impl<S: Signer> TransferService<S> {
                 pubkey_shares_tweak: pubkey_shares_tweak.clone(),
                 secret_cipher: secret_cipher.clone(),
                 signature: signature.serialize_compact().to_vec(),
-                refund_signature: refund_signature
+                refund_signature: cpfp_refund_signature
                     .map(|s| s.serialize_compact().to_vec())
                     .unwrap_or_default(),
-                ..Default::default()
+                direct_refund_signature: direct_refund_signature
+                    .map(|s| s.serialize_compact().to_vec())
+                    .unwrap_or_default(),
+                direct_from_cpfp_refund_signature: direct_from_cpfp_refund_signature
+                    .map(|s| s.serialize_compact().to_vec())
+                    .unwrap_or_default(),
             };
 
             leaf_tweaks_map.insert(operator.identifier, send_leaf_key_tweak);
@@ -304,7 +333,7 @@ impl<S: Signer> TransferService<S> {
                     .iter()
                     .map(|l| l.node.id.to_string())
                     .collect(),
-                count: leaf_key_tweaks.len() as u32,
+                count: 3,
             })
             .await?
             .signing_commitments
@@ -312,10 +341,30 @@ impl<S: Signer> TransferService<S> {
             .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let leaf_signing_jobs = sign_refunds(
+        let chunked_signing_commitments = signing_commitments
+            .chunks(leaf_key_tweaks.len())
+            .collect::<Vec<_>>();
+
+        if chunked_signing_commitments.len() != 3 {
+            return Err(ServiceError::SSPswapError(
+                "Not enough signing commitments returned".to_string(),
+            ));
+        }
+
+        let cpfp_signing_commitments = chunked_signing_commitments[0].to_vec();
+        let direct_signing_commitments = chunked_signing_commitments[1].to_vec();
+        let direct_from_cpfp_signing_commitments = chunked_signing_commitments[2].to_vec();
+
+        let SignedRefundTransactions {
+            cpfp_signed_tx,
+            direct_signed_tx,
+            direct_from_cpfp_signed_tx,
+        } = sign_refunds(
             &self.signer,
             leaf_key_tweaks,
-            signing_commitments,
+            cpfp_signing_commitments,
+            direct_signing_commitments,
+            direct_from_cpfp_signing_commitments,
             receiver_public_key,
             self.network,
         )
@@ -324,7 +373,15 @@ impl<S: Signer> TransferService<S> {
         let encrypted_key_tweaks = self.encrypt_key_tweaks(&key_tweak_input_map)?;
 
         let unsigned_transfer_package = operator_rpc::spark::TransferPackage {
-            leaves_to_send: leaf_signing_jobs
+            leaves_to_send: cpfp_signed_tx
+                .into_iter()
+                .map(|l| l.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+            direct_leaves_to_send: direct_signed_tx
+                .into_iter()
+                .map(|l| l.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+            direct_from_cpfp_leaves_to_send: direct_from_cpfp_signed_tx
                 .into_iter()
                 .map(|l| l.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
@@ -333,7 +390,6 @@ impl<S: Signer> TransferService<S> {
                 .map(|(k, v)| (hex::encode(k.serialize()), v))
                 .collect(),
             user_signature: Vec::new(),
-            ..Default::default()
         };
 
         let signed_transfer_package =
@@ -714,6 +770,10 @@ impl<S: Signer> TransferService<S> {
         let mut leaf_data_map = HashMap::new();
         for leaf_key in leaf_keys {
             let signing_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
+            let direct_signing_nonce_commitment =
+                self.signer.generate_frost_signing_commitments().await?;
+            let direct_from_cpfp_signing_nonce_commitment =
+                self.signer.generate_frost_signing_commitments().await?;
 
             leaf_data_map.insert(
                 leaf_key.node.id.clone(),
@@ -726,8 +786,13 @@ impl<S: Signer> TransferService<S> {
                         .signer
                         .get_public_key_from_private_key_source(&leaf_key.new_signing_key)?,
                     tx: leaf_key.node.node_tx.clone(),
+                    direct_tx: leaf_key.node.direct_tx.clone(),
                     refund_tx: None,
+                    direct_refund_tx: None,
+                    direct_from_cpfp_refund_tx: None,
                     signing_nonce_commitment,
+                    direct_signing_nonce_commitment,
+                    direct_from_cpfp_signing_nonce_commitment,
                     vout: leaf_key.node.vout,
                 },
             );
@@ -742,7 +807,7 @@ impl<S: Signer> TransferService<S> {
             .operator_pool
             .get_coordinator()
             .client
-            .claim_transfer_sign_refunds(operator_rpc::spark::ClaimTransferSignRefundsRequest {
+            .claim_transfer_sign_refunds_v2(operator_rpc::spark::ClaimTransferSignRefundsRequest {
                 transfer_id: transfer.id.to_string(),
                 owner_identity_public_key: self
                     .signer
@@ -759,6 +824,8 @@ impl<S: Signer> TransferService<S> {
             &leaf_data_map.into_iter().collect(),
             &response.signing_results,
             None,
+            None,
+            None,
         )
         .await?;
 
@@ -774,7 +841,7 @@ impl<S: Signer> TransferService<S> {
             .operator_pool
             .get_coordinator()
             .client
-            .finalize_node_signatures(operator_rpc::spark::FinalizeNodeSignaturesRequest {
+            .finalize_node_signatures_v2(operator_rpc::spark::FinalizeNodeSignaturesRequest {
                 intent: operator_rpc::common::SignatureIntent::Transfer as i32,
                 node_signatures: node_signatures.to_vec(),
             })
@@ -1023,14 +1090,14 @@ impl<S: Signer> TransferService<S> {
         &self,
         transfer: &Transfer,
         leaves: &[LeafKeyTweak],
-        refund_signature_map: HashMap<TreeNodeId, Signature>,
+        refund_signatures: RefundSignatures,
     ) -> Result<Transfer, ServiceError> {
         let key_tweak_input_map = self
             .prepare_send_transfer_key_tweaks(
                 &transfer.id,
                 &transfer.receiver_identity_public_key,
                 leaves,
-                refund_signature_map,
+                refund_signatures,
             )
             .await?;
 
