@@ -1,6 +1,6 @@
 # $USER name to be used in the `final` image
 ARG USER=so
-ARG VERSION=428a71c0f13175a3b1ffff0f5f31eba042d7d537
+ARG VERSION=2d37cec3f3366fce9554d10fd4f1a43665861ba7
 ARG REPOSITORY=https://github.com/buildonspark/spark.git
 
 FROM debian:bookworm-20250721-slim AS downloader

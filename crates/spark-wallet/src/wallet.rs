@@ -901,7 +901,8 @@ impl<S: Signer> BackgroundProcessor<S> {
 
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
         let id = deposit.id.clone();
-        self.tree_service.collect_leaves(vec![deposit]).await?;
+        let leaves = self.tree_service.collect_leaves(vec![deposit]).await?;
+        debug!("Collected deposit leaves: {:?}", leaves);
         self.event_manager
             .notify_listeners(WalletEvent::DepositConfirmed(id));
         Ok(())
