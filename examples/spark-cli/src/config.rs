@@ -49,4 +49,8 @@ spark_config:
     base_url: "https://api.loadtest.dev.sparkinfra.net"
     schema_endpoint: "graphql/spark/rc"
     identity_public_key: "03e23a4912c275d1ba8742cfdfc7e9befdc2243a74be2412b7b77d227643353a1f"
+  tokens_config:
+    expected_withdraw_bond_sats: 10000
+    expected_withdraw_relative_block_locktime: 1000
+    transaction_validity_duration_seconds: 180
 "#;
