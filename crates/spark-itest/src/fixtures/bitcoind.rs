@@ -15,7 +15,7 @@ use testcontainers::{
 use tokio::time::sleep;
 use tracing::info;
 
-use crate::fixtures::log::TracingConsumer;
+use crate::fixtures::{log::TracingConsumer, setup::FixtureId};
 
 const BITCOIND_VERSION: &str = "v28.0";
 const BITCOIND_DOCKER_IMAGE: &str = "lncm/bitcoind";
@@ -45,7 +45,7 @@ struct RpcResponse<T> {
 }
 
 impl BitcoindFixture {
-    pub async fn new() -> anyhow::Result<Self> {
+    pub async fn new(fixture_id: &FixtureId) -> anyhow::Result<Self> {
         // Define bitcoind container with command line arguments
         let container = GenericImage::new(BITCOIND_DOCKER_IMAGE, BITCOIND_VERSION)
             .with_exposed_port(ContainerPort::Tcp(REGTEST_RPC_PORT))
@@ -53,6 +53,8 @@ impl BitcoindFixture {
             .with_wait_for(WaitFor::Log(LogWaitStrategy::stdout(
                 "init message: Done loading",
             )))
+            .with_network(fixture_id.to_network())
+            .with_container_name(format!("bitcoind-{}", fixture_id))
             .with_log_consumer(TracingConsumer::new("bitcoind"))
             .with_cmd([
                 "-regtest",

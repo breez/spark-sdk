@@ -20,6 +20,7 @@ use tracing::{info, warn};
 
 use crate::fixtures::bitcoind::BitcoindFixture;
 use crate::fixtures::log::TracingConsumer;
+use crate::fixtures::setup::FixtureId;
 use crate::fixtures::wait_log::WaitForLogConsumer;
 
 const POSTGRES_USER: &str = "postgres";
@@ -63,7 +64,7 @@ pub struct SparkSoFixture {
 }
 
 impl SparkSoFixture {
-    pub async fn new(bitcoind_fixture: &BitcoindFixture) -> Result<Self> {
+    pub async fn new(fixture_id: &FixtureId, bitcoind_fixture: &BitcoindFixture) -> Result<Self> {
         let config_dir = testdir::testdir!();
         let operators_json_path = config_dir.join("operators.json");
         fs::create_dir_all(config_dir)?;
@@ -80,11 +81,16 @@ impl SparkSoFixture {
             let internal_rpc_url = bitcoind_fixture.internal_rpc_url.clone();
             let internal_zmqpubrawblock_url = bitcoind_fixture.internal_zmqpubrawblock_url.clone();
             let secp = secp.clone();
+            let fixture_id = fixture_id.clone();
 
             // Create async task for each operator
             let operator_future = tokio::spawn(async move {
                 // Each operator gets their own postgres container for simplicity.
-                let postgres = Postgres::default().start().await?;
+                let postgres = Postgres::default()
+                    .with_network(fixture_id.to_network())
+                    .with_container_name(format!("postgres-{}-{}", i, fixture_id))
+                    .start()
+                    .await?;
                 let postgres_ip = postgres.get_bridge_ip_address().await?;
                 let postgres_port = postgres.get_host_port_ipv4(POSTGRES_PORT).await?;
                 let internal_postgres_connectionstring = format!(
@@ -102,6 +108,8 @@ impl SparkSoFixture {
                         "--url",
                         internal_postgres_connectionstring.as_str(),
                     ])
+                    .with_network(fixture_id.to_network())
+                    .with_container_name(format!("migrations-{}-{}", i, fixture_id))
                     .with_log_consumer(TracingConsumer::new(format!("migrations {i}")))
                     .start()
                     .await?;
@@ -125,6 +133,8 @@ impl SparkSoFixture {
                 let container = GenericImage::new("spark-so", "latest")
                     .with_exposed_port(ContainerPort::Tcp(OPERATOR_PORT))
                     .with_log_consumer(log_consumer)
+                    .with_network(fixture_id.to_network())
+                    .with_container_name(format!("spark-so-{}-{}", i, fixture_id))
                     .with_mount(Mount::bind_mount(
                         operators_json_path.display().to_string(),
                         "/config/operators.json",

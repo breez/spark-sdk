@@ -9,6 +9,7 @@ async-trait = { workspace = true }
 bitcoin = { workspace = true, features = ["serde"] }
 futures = { workspace = true }
 hex = { workspace = true }
+rand.workspace = true
 reqwest = { workspace = true }
 rstest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

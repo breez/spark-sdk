@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rand::Rng;
 use spark_wallet::{
     DefaultSigner, Network, OperatorConfig, OperatorPoolConfig, PublicKey, ServiceProviderConfig,
     SparkWalletConfig,
@@ -12,14 +13,36 @@ pub struct TestFixtures {
     pub spark_so: SparkSoFixture,
 }
 
+#[derive(Clone, Debug)]
+pub struct FixtureId(String);
+
+impl FixtureId {
+    pub fn new() -> Self {
+        let id: u32 = rand::thread_rng().gen_range(0..0xFFFFFFFF);
+        Self(hex::encode(&id.to_le_bytes()))
+    }
+
+    pub fn to_network(&self) -> String {
+        format!("network-{}", self.0)
+    }
+}
+
+impl std::fmt::Display for FixtureId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 impl TestFixtures {
     pub async fn new() -> Result<Self> {
+        let fixture_id = FixtureId::new();
+
         // Initialize bitcoind
-        let mut bitcoind = BitcoindFixture::new().await?;
+        let mut bitcoind = BitcoindFixture::new(&fixture_id).await?;
         bitcoind.initialize().await?;
 
         // Create the SparkSoFixture with the docker_ref and bitcoind connection
-        let mut spark_so = SparkSoFixture::new(&bitcoind).await?;
+        let mut spark_so = SparkSoFixture::new(&fixture_id, &bitcoind).await?;
         spark_so.initialize().await?;
 
         info!("All test fixtures initialized");

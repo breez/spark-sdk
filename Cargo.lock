@@ -4146,6 +4146,7 @@ dependencies = [
  "bitcoin",
  "futures",
  "hex",
+ "rand 0.8.5",
  "reqwest",
  "rstest",
  "serde",
