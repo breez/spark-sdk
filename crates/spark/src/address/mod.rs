@@ -3,15 +3,20 @@ pub mod error;
 use std::{
     fmt::{Debug, Display},
     str::FromStr,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crate::operator::rpc::spark::{
-    PaymentIntentFields as ProtoPaymentIntentFields, SparkAddress as ProtoSparkAddress,
+    SatsPayment as ProtoSatsPayment, SparkAddress as ProtoSparkAddress,
+    SparkInvoiceFields as ProtoSparkInvoiceFields, TokensPayment as ProtoTokensPayment,
+    spark_invoice_fields::PaymentType as ProtoPaymentType,
 };
 use bitcoin::{
     bech32::{self, Bech32m, Hrp},
     secp256k1::PublicKey,
+    secp256k1::ecdsa::Signature,
 };
+
 use prost::Message;
 
 use error::AddressError;
@@ -29,15 +34,82 @@ const HRP_SIGNET: Hrp = Hrp::parse_unchecked("sps");
 pub struct SparkAddress {
     pub identity_public_key: PublicKey,
     pub network: Network,
-    payment_intent: Option<PaymentIntentFields>,
+    pub spark_invoice_fields: Option<SparkInvoiceFields>,
+    pub signature: Option<Signature>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
-pub struct PaymentIntentFields {
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct SparkInvoiceFields {
     pub id: Uuid,
-    pub asset_identifier: Option<AssetIdentifier>,
-    pub asset_amount: u64,
+    pub version: u32,
     pub memo: Option<String>,
+    pub sender_public_key: Option<PublicKey>,
+    pub expiry_time: Option<SystemTime>,
+    pub payment_type: Option<SparkAddressPaymentType>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum SparkAddressPaymentType {
+    TokensPayment(TokensPayment),
+    SatsPayment(SatsPayment),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SatsPayment {
+    pub amount: Option<u64>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct TokensPayment {
+    pub token_identifier: Option<AssetIdentifier>,
+    pub amount: Option<u64>,
+}
+
+impl From<SparkAddressPaymentType> for ProtoPaymentType {
+    fn from(value: SparkAddressPaymentType) -> Self {
+        match value {
+            SparkAddressPaymentType::TokensPayment(tp) => {
+                ProtoPaymentType::TokensPayment(ProtoTokensPayment {
+                    amount: tp
+                        .amount
+                        .map(|amount| u128::to_be_bytes(amount as u128).to_vec()),
+                    token_identifier: tp.token_identifier.map(|id| id.0.to_vec()),
+                })
+            }
+            SparkAddressPaymentType::SatsPayment(sp) => {
+                ProtoPaymentType::SatsPayment(ProtoSatsPayment { amount: sp.amount })
+            }
+        }
+    }
+}
+
+impl TryFrom<ProtoPaymentType> for SparkAddressPaymentType {
+    type Error = AddressError;
+    fn try_from(value: ProtoPaymentType) -> Result<Self, Self::Error> {
+        match value {
+            ProtoPaymentType::TokensPayment(tp) => {
+                let amount = match tp.amount {
+                    Some(amount) => {
+                        let amount_bytes: [u8; 16] = amount.try_into().map_err(|_| {
+                            AddressError::InvalidPaymentIntent("Invalid amount".to_string())
+                        })?;
+                        Some(u128::from_be_bytes(amount_bytes) as u64)
+                    }
+                    None => None,
+                };
+
+                Ok(SparkAddressPaymentType::TokensPayment(TokensPayment {
+                    token_identifier: tp.token_identifier.map(AssetIdentifier),
+                    amount,
+                }))
+            }
+            ProtoPaymentType::SatsPayment(sp) => {
+                Ok(SparkAddressPaymentType::SatsPayment(SatsPayment {
+                    amount: sp.amount,
+                }))
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -59,47 +131,60 @@ impl FromStr for AssetIdentifier {
     }
 }
 
-impl PaymentIntentFields {
-    pub fn new(
-        asset_amount: u64,
-        asset_identifier: Option<AssetIdentifier>,
-        memo: Option<String>,
-    ) -> Self {
-        PaymentIntentFields {
-            id: uuid::Uuid::now_v7(),
-            asset_identifier,
-            asset_amount,
-            memo,
-        }
-    }
-}
-
-impl TryFrom<ProtoPaymentIntentFields> for PaymentIntentFields {
+impl TryFrom<ProtoSparkInvoiceFields> for SparkInvoiceFields {
     type Error = AddressError;
 
-    fn try_from(proto: ProtoPaymentIntentFields) -> Result<Self, Self::Error> {
-        Ok(PaymentIntentFields {
+    fn try_from(proto: ProtoSparkInvoiceFields) -> Result<Self, Self::Error> {
+        let sender_public_key = match proto.sender_public_key {
+            Some(pk) => Some(
+                PublicKey::from_slice(&pk)
+                    .map_err(|e| AddressError::InvalidPublicKey(e.to_string()))?,
+            ),
+            None => None,
+        };
+
+        let payment_type = match proto.payment_type {
+            Some(pt) => Some(pt.try_into().map_err(|_| {
+                AddressError::InvalidPaymentIntent("Invalid payment type".to_string())
+            })?),
+            None => None,
+        };
+
+        Ok(SparkInvoiceFields {
             id: uuid::Uuid::from_bytes(proto.id.try_into().map_err(|_| {
                 AddressError::InvalidPaymentIntent("Invalid UUID length".to_string())
             })?),
-            asset_identifier: proto.asset_identifier.map(AssetIdentifier),
-            asset_amount: u128::from_be_bytes(proto.asset_amount.try_into().map_err(|_| {
-                AddressError::InvalidPaymentIntent("Invalid asset amount length".to_string())
-            })?) as u64,
+            version: proto.version,
+            sender_public_key,
+            expiry_time: proto.expiry_time.map(|t| {
+                UNIX_EPOCH
+                    + Duration::from_secs(t.seconds as u64)
+                    + Duration::from_nanos(t.nanos as u64)
+            }),
+            payment_type,
             memo: proto.memo,
         })
     }
 }
 
-impl From<&PaymentIntentFields> for ProtoPaymentIntentFields {
-    fn from(val: &PaymentIntentFields) -> Self {
+impl From<SparkInvoiceFields> for ProtoSparkInvoiceFields {
+    fn from(val: SparkInvoiceFields) -> Self {
         let id = val.id.as_bytes().to_vec();
-        let asset_identifier = val.asset_identifier.as_ref().map(|id| id.0.clone());
 
-        ProtoPaymentIntentFields {
+        let payment_type = val.payment_type.map(|pt| pt.into());
+
+        ProtoSparkInvoiceFields {
             id,
-            asset_identifier,
-            asset_amount: u128::to_be_bytes(val.asset_amount as u128).to_vec(),
+            version: val.version,
+            sender_public_key: val.sender_public_key.map(|pk| pk.serialize().to_vec()),
+            expiry_time: val.expiry_time.map(|t| ::prost_types::Timestamp {
+                seconds: t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
+                nanos: t
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() as i32,
+            }),
+            payment_type,
             memo: val.memo.clone(),
         }
     }
@@ -109,12 +194,14 @@ impl SparkAddress {
     pub fn new(
         identity_public_key: PublicKey,
         network: Network,
-        payment_intent: Option<PaymentIntentFields>,
+        spark_invoice_fields: Option<SparkInvoiceFields>,
+        signature: Option<Signature>,
     ) -> Self {
         SparkAddress {
             identity_public_key,
             network,
-            payment_intent,
+            spark_invoice_fields,
+            signature,
         }
     }
 
@@ -140,13 +227,13 @@ impl SparkAddress {
 
 impl Display for SparkAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let payment_intent_fields = self
-            .payment_intent
-            .as_ref()
-            .map(|payment_intent| payment_intent.into());
+        let spark_invoice_fields: Option<ProtoSparkInvoiceFields> =
+            self.spark_invoice_fields.clone().map(|f| f.into());
+
         let proto_address = ProtoSparkAddress {
             identity_public_key: self.identity_public_key.serialize().to_vec(),
-            payment_intent_fields,
+            spark_invoice_fields,
+            signature: None,
         };
 
         let payload_bytes = proto_address.encode_to_vec();
@@ -174,16 +261,24 @@ impl FromStr for SparkAddress {
 
         let network = Self::hrp_to_network(&hrp)?;
 
-        let payment_intent = if let Some(fields) = proto_address.payment_intent_fields {
-            Some(fields.try_into()?)
-        } else {
-            None
-        };
+        let invoice_fields: Option<SparkInvoiceFields> = proto_address
+            .spark_invoice_fields
+            .map(|f| f.try_into())
+            .transpose()?;
+
+        let signature = proto_address
+            .signature
+            .map(|s| {
+                Signature::from_compact(&s)
+                    .map_err(|e| AddressError::InvalidSignature(e.to_string()))
+            })
+            .transpose()?;
 
         Ok(SparkAddress::new(
             identity_public_key,
             network,
-            payment_intent,
+            invoice_fields,
+            signature,
         ))
     }
 }
@@ -216,6 +311,7 @@ impl<'de> Deserialize<'de> for SparkAddress {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use bitcoin::secp256k1::Secp256k1;
 
@@ -228,7 +324,7 @@ mod tests {
     #[test]
     fn test_address_roundtrip() {
         let public_key = create_test_public_key();
-        let original_address = SparkAddress::new(public_key, Network::Mainnet, None);
+        let original_address = SparkAddress::new(public_key, Network::Mainnet, None, None);
 
         let address_string = original_address.to_string();
         let parsed_address = SparkAddress::from_str(&address_string).unwrap();
@@ -243,7 +339,7 @@ mod tests {
     #[test]
     fn test_address_roundtrip_testnet() {
         let public_key = create_test_public_key();
-        let original_address = SparkAddress::new(public_key, Network::Testnet, None);
+        let original_address = SparkAddress::new(public_key, Network::Testnet, None, None);
 
         let address_string = original_address.to_string();
         let parsed_address = SparkAddress::from_str(&address_string).unwrap();
@@ -258,7 +354,7 @@ mod tests {
     #[test]
     fn test_address_roundtrip_regtest() {
         let public_key = create_test_public_key();
-        let original_address = SparkAddress::new(public_key, Network::Regtest, None);
+        let original_address = SparkAddress::new(public_key, Network::Regtest, None, None);
 
         let address_string = original_address.to_string();
         let parsed_address = SparkAddress::from_str(&address_string).unwrap();
@@ -273,7 +369,7 @@ mod tests {
     #[test]
     fn test_address_roundtrip_signet() {
         let public_key = create_test_public_key();
-        let original_address = SparkAddress::new(public_key, Network::Signet, None);
+        let original_address = SparkAddress::new(public_key, Network::Signet, None, None);
 
         let address_string = original_address.to_string();
         let parsed_address = SparkAddress::from_str(&address_string).unwrap();
@@ -310,7 +406,8 @@ mod tests {
         let public_key = create_test_public_key();
         let proto_address = ProtoSparkAddress {
             identity_public_key: public_key.serialize().to_vec(),
-            payment_intent_fields: None,
+            spark_invoice_fields: None,
+            signature: None,
         };
         let payload_bytes = proto_address.encode_to_vec();
 
@@ -329,19 +426,29 @@ mod tests {
     }
 
     #[test]
-    fn test_payment_intent_address_roundtrip() {
+    fn test_invoice_fields_address_roundtrip() {
         let public_key = create_test_public_key();
-        let payment_intent = PaymentIntentFields {
+        let sender_public_key = create_test_public_key();
+        let invoice_fields = SparkInvoiceFields {
             id: uuid::Uuid::now_v7(),
-            asset_identifier: Some(AssetIdentifier(
-                "1234567890abcdef1234567890abcdef".as_bytes().to_vec(),
-            )),
-            asset_amount: 1000000,
+            version: 1,
+            sender_public_key: Some(sender_public_key),
+            expiry_time: Some(SystemTime::now()),
+            payment_type: Some(SparkAddressPaymentType::TokensPayment(TokensPayment {
+                token_identifier: Some(AssetIdentifier(
+                    "1234567890abcdef1234567890abcdef".as_bytes().to_vec(),
+                )),
+                amount: Some(100),
+            })),
             memo: Some("Test payment".to_string()),
         };
 
-        let original_address =
-            SparkAddress::new(public_key, Network::Mainnet, Some(payment_intent.clone()));
+        let original_address = SparkAddress::new(
+            public_key,
+            Network::Mainnet,
+            Some(invoice_fields.clone()),
+            None,
+        );
 
         let address_string = original_address.to_string();
         let parsed_address = SparkAddress::from_str(&address_string).unwrap();
@@ -353,63 +460,89 @@ mod tests {
         assert_eq!(parsed_address.network, original_address.network);
 
         // Check payment intent fields
-        assert!(parsed_address.payment_intent.is_some());
-        let parsed_payment_intent = parsed_address.payment_intent.unwrap();
-        let original_payment_intent = original_address.payment_intent.unwrap();
+        assert!(parsed_address.spark_invoice_fields.is_some());
+        let parsed_invoice_fields = parsed_address.spark_invoice_fields.unwrap();
+        let original_invoice_fields = original_address.spark_invoice_fields.unwrap();
 
-        assert_eq!(parsed_payment_intent.id, original_payment_intent.id);
+        assert_eq!(parsed_invoice_fields.id, original_invoice_fields.id);
         assert_eq!(
-            parsed_payment_intent.asset_identifier,
-            original_payment_intent.asset_identifier
+            parsed_invoice_fields.expiry_time,
+            original_invoice_fields.expiry_time
         );
+        assert_eq!(parsed_invoice_fields.id, original_invoice_fields.id);
+        assert_eq!(parsed_invoice_fields.memo, original_invoice_fields.memo);
+
+        let Some(SparkAddressPaymentType::TokensPayment(tokens_payment1)) =
+            parsed_invoice_fields.payment_type
+        else {
+            panic!("Expected TokensPayment");
+        };
+        let Some(SparkAddressPaymentType::TokensPayment(tokens_payment2)) =
+            original_invoice_fields.payment_type
+        else {
+            panic!("Expected TokensPayment");
+        };
         assert_eq!(
-            parsed_payment_intent.asset_amount,
-            original_payment_intent.asset_amount
+            tokens_payment1.token_identifier,
+            tokens_payment2.token_identifier
         );
-        assert_eq!(parsed_payment_intent.memo, original_payment_intent.memo);
+        assert_eq!(tokens_payment1.amount, tokens_payment2.amount);
     }
 
     #[test]
-    fn test_payment_intent_minimal_data() {
+    fn test_invoice_fields_minimal_data() {
         let public_key = create_test_public_key();
-        let payment_intent = PaymentIntentFields {
+        let invoice_fields = SparkInvoiceFields {
             id: uuid::Uuid::now_v7(),
-            asset_identifier: None,
-            asset_amount: 500,
+            version: 1,
+            sender_public_key: None,
+            expiry_time: None,
+            payment_type: Some(SparkAddressPaymentType::SatsPayment(SatsPayment {
+                amount: Some(500),
+            })),
             memo: None,
         };
 
         let original_address =
-            SparkAddress::new(public_key, Network::Testnet, Some(payment_intent));
+            SparkAddress::new(public_key, Network::Testnet, Some(invoice_fields), None);
 
         let address_string = original_address.to_string();
         let parsed_address = SparkAddress::from_str(&address_string).unwrap();
 
-        assert!(parsed_address.payment_intent.is_some());
-        let parsed_payment_intent = parsed_address.payment_intent.unwrap();
+        assert!(parsed_address.spark_invoice_fields.is_some());
+        let parsed_invoice_fields = parsed_address.spark_invoice_fields.unwrap();
 
-        assert_eq!(parsed_payment_intent.asset_identifier, None);
-        assert_eq!(parsed_payment_intent.asset_amount, 500);
-        assert_eq!(parsed_payment_intent.memo, None);
+        let Some(SparkAddressPaymentType::SatsPayment(sp)) = parsed_invoice_fields.payment_type
+        else {
+            panic!("Invalid payment type");
+        };
+
+        assert_eq!(sp.amount.unwrap(), 500);
+        assert_eq!(parsed_invoice_fields.memo, None);
     }
 
     #[test]
-    fn test_compare_addresses_with_and_without_payment_intent() {
+    fn test_compare_addresses_with_and_without_invoice_fields() {
         let public_key = create_test_public_key();
+        let sender_public_key = create_test_public_key();
 
-        // Create address without payment intent
-        let address_without_intent = SparkAddress::new(public_key, Network::Mainnet, None);
+        // Create address without invoice fields
+        let address_without_intent = SparkAddress::new(public_key, Network::Mainnet, None, None);
         let string_without_intent = address_without_intent.to_string();
 
-        // Create address with payment intent
-        let payment_intent = PaymentIntentFields {
+        let invoice_fields = SparkInvoiceFields {
             id: uuid::Uuid::now_v7(),
-            asset_identifier: Some(AssetIdentifier("abcdef1234567890".as_bytes().to_vec())),
-            asset_amount: 1000,
+            version: 1,
+            sender_public_key: Some(sender_public_key),
+            expiry_time: Some(SystemTime::now()),
+            payment_type: Some(SparkAddressPaymentType::TokensPayment(TokensPayment {
+                token_identifier: Some(AssetIdentifier("abcdef1234567890".as_bytes().to_vec())),
+                amount: Some(100),
+            })),
             memo: Some("Test memo".to_string()),
         };
         let address_with_intent =
-            SparkAddress::new(public_key, Network::Mainnet, Some(payment_intent));
+            SparkAddress::new(public_key, Network::Mainnet, Some(invoice_fields), None);
         let string_with_intent = address_with_intent.to_string();
 
         // The strings should be different due to the payment intent data
@@ -424,25 +557,33 @@ mod tests {
             parsed_with_intent.identity_public_key
         );
         assert_eq!(parsed_without_intent.network, parsed_with_intent.network);
-        assert!(parsed_without_intent.payment_intent.is_none());
-        assert!(parsed_with_intent.payment_intent.is_some());
+        assert!(parsed_without_intent.spark_invoice_fields.is_none());
+        assert!(parsed_with_intent.spark_invoice_fields.is_some());
     }
 
     #[test]
-    fn test_invalid_payment_intent_data() {
+    fn test_invalid_invoice_fields_data() {
         let public_key = create_test_public_key();
 
         // Try to create invalid asset identifier
-        let proto_fields = ProtoPaymentIntentFields {
+        let proto_fields = ProtoSparkInvoiceFields {
             id: vec![1, 2, 3], // Too short to be a valid UUID
-            asset_identifier: None,
-            asset_amount: u128::to_be_bytes(1000u128).to_vec(),
+            version: 1,
+            sender_public_key: None,
+            expiry_time: None,
+            payment_type: Some(ProtoPaymentType::TokensPayment(ProtoTokensPayment {
+                token_identifier: None,
+                amount: Some(u128::to_be_bytes(1000u128).to_vec()),
+            })),
+            // asset_identifier: None,
+            // asset_amount: u128::to_be_bytes(1000u128).to_vec(),
             memo: Some("Test".to_string()),
         };
 
         let proto_address = ProtoSparkAddress {
             identity_public_key: public_key.serialize().to_vec(),
-            payment_intent_fields: Some(proto_fields.clone()),
+            spark_invoice_fields: Some(proto_fields.clone()),
+            signature: None,
         };
 
         let payload_bytes = proto_address.encode_to_vec();

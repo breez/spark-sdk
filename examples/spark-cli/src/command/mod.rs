@@ -20,6 +20,7 @@ pub mod transfer;
 pub mod withdraw;
 
 #[derive(Debug, Parser)]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Display the wallet's available balance.
     Balance,
