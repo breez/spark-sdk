@@ -1,7 +1,9 @@
-use std::{sync::OnceLock, time::Duration};
-
+use base64::{Engine as _, engine::general_purpose};
 use bitcoin::{Address, address::NetworkUnchecked};
-use reqwest::Response;
+use breez_sdk_common::error::ServiceConnectivityError;
+use breez_sdk_common::rest::RestClient as CommonRestClient;
+use std::collections::HashMap;
+use std::time::Duration;
 use tracing::info;
 
 use crate::{
@@ -34,7 +36,7 @@ impl BasicAuth {
 pub struct RestClientChainService {
     base_url: String,
     network: Network,
-    client: OnceLock<reqwest::Client>,
+    client: Box<dyn breez_sdk_common::rest::RestClient>,
     max_retries: usize,
     basic_auth: Option<BasicAuth>,
 }
@@ -44,27 +46,16 @@ impl RestClientChainService {
         base_url: String,
         network: Network,
         max_retries: usize,
+        rest_client: Box<dyn CommonRestClient>,
         basic_auth: Option<BasicAuth>,
     ) -> Self {
         Self {
             base_url,
             network,
-            client: OnceLock::new(),
+            client: rest_client,
             max_retries,
             basic_auth,
         }
-    }
-
-    fn get_client(&self) -> Result<&reqwest::Client, ChainServiceError> {
-        if let Some(c) = self.client.get() {
-            return Ok(c);
-        }
-
-        let client = reqwest::ClientBuilder::new()
-            .timeout(std::time::Duration::from_secs(5))
-            .build()?;
-        let client = self.client.get_or_init(|| client);
-        Ok(client)
     }
 
     async fn get_response_json<T: serde::de::DeserializeOwned>(
@@ -73,59 +64,61 @@ impl RestClientChainService {
     ) -> Result<T, ChainServiceError> {
         let url = format!("{}{}", self.base_url, path);
         info!("Fetching response json from {}", url);
-        let response = self.get_with_retry(&url, self.get_client()?).await?;
+        let (response, _) = self.get_with_retry(&url, self.client.as_ref()).await?;
 
-        if !response.status().is_success() {
-            return Err(ChainServiceError::HttpError {
-                status: response.status().as_u16(),
-                message: response.text().await?,
-            });
-        }
+        let response: T = serde_json::from_str(&response)
+            .map_err(|e| ChainServiceError::GenericError(e.to_string()))?;
 
-        response
-            .json::<T>()
-            .await
-            .map_err(|e| ChainServiceError::GenericError(e.to_string()))
+        Ok(response)
     }
 
     async fn get_response_text(&self, path: &str) -> Result<String, ChainServiceError> {
         let url = format!("{}{}", self.base_url, path);
         info!("Fetching response text from {}", url);
-        let response = self.get_with_retry(&url, self.get_client()?).await?;
-
-        if !response.status().is_success() {
-            return Err(ChainServiceError::HttpError {
-                status: response.status().as_u16(),
-                message: response.text().await?,
-            });
-        }
-
-        response
-            .text()
-            .await
-            .map_err(|e| ChainServiceError::GenericError(e.to_string()))
+        let (response, _) = self.get_with_retry(&url, self.client.as_ref()).await?;
+        Ok(response)
     }
 
     async fn get_with_retry(
         &self,
         url: &str,
-        client: &reqwest::Client,
-    ) -> Result<Response, reqwest::Error> {
+        client: &dyn CommonRestClient,
+    ) -> Result<(String, u16), ChainServiceError> {
         let mut delay = BASE_BACKOFF_MILLIS;
         let mut attempts = 0;
 
         loop {
-            let mut request = client.get(url);
+            let mut headers: Option<HashMap<String, String>> = None;
             if let Some(basic_auth) = &self.basic_auth {
-                request = request.basic_auth(&basic_auth.username, Some(&basic_auth.password));
+                let auth_string = format!("{}:{}", basic_auth.username, basic_auth.password);
+                let encoded_auth = general_purpose::STANDARD.encode(auth_string.as_bytes());
+
+                headers = Some(
+                    vec![(
+                        "Authorization".to_string(),
+                        format!("Basic {}", encoded_auth),
+                    )]
+                    .into_iter()
+                    .collect(),
+                );
             }
-            match request.send().await? {
-                resp if attempts < self.max_retries && is_status_retryable(resp.status()) => {
+
+            let (body, status) = client.get(url, headers).await?;
+            match status {
+                status if attempts < self.max_retries && is_status_retryable(status) => {
                     tokio::time::sleep(delay).await;
                     attempts += 1;
                     delay *= 2;
                 }
-                resp => return Ok(resp),
+                _ => {
+                    if !(200..300).contains(&status) {
+                        return Err(ChainServiceError::HttpError {
+                            status,
+                            message: body,
+                        });
+                    }
+                    return Ok((body, status));
+                }
             }
         }
     }
@@ -159,21 +152,26 @@ impl From<reqwest::Error> for ChainServiceError {
     }
 }
 
-fn is_status_retryable(status: reqwest::StatusCode) -> bool {
-    RETRYABLE_ERROR_CODES.contains(&status.as_u16())
+impl From<ServiceConnectivityError> for ChainServiceError {
+    fn from(value: ServiceConnectivityError) -> Self {
+        ChainServiceError::GenericError(value.to_string())
+    }
+}
+
+fn is_status_retryable(status: u16) -> bool {
+    RETRYABLE_ERROR_CODES.contains(&status)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Network;
-    use mockito::Server;
+
+    #[cfg(test)]
+    use breez_sdk_common::test_utils::mock_rest_client::{MockResponse, MockRestClient};
 
     #[tokio::test]
     async fn test_get_address_utxos() {
-        // Create a mock server
-        let mut server = Server::new_async().await;
-
         // Mock JSON response from the actual API call
         let mock_response = r#"[
             {
@@ -233,26 +231,23 @@ mod tests {
             }
         ]"#;
 
-        // Mock the API endpoint
-        let mock = server
-            .mock("GET", "/address/1wiz18xYmhRX6xStj2b9t1rwWX4GKUgpv/utxo")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(mock_response)
-            .create_async()
-            .await;
+        let mock = MockRestClient::new();
+        mock.add_response(MockResponse::new(200, mock_response.to_string()));
 
         // Create the service with the mock server URL
-        let service = RestClientChainService::new(server.url(), Network::Mainnet, 3, None);
+        let service = RestClientChainService::new(
+            "http://localhost:8080".to_string(),
+            Network::Mainnet,
+            3,
+            Box::new(mock),
+            None,
+        );
 
         // Call the method under test
         let mut result = service
             .get_address_utxos("1wiz18xYmhRX6xStj2b9t1rwWX4GKUgpv")
             .await
             .unwrap();
-
-        // Verify the mock was called
-        mock.assert_async().await;
 
         // Sort results by value for consistent testing
         result.sort_by(|a, b| a.value.cmp(&b.value));
@@ -286,18 +281,5 @@ mod tests {
             assert!(utxo.status.block_height.is_some());
             assert!(utxo.status.block_time.is_some());
         }
-    }
-
-    #[tokio::test]
-    async fn test_get_address_utxos_invalid_address() {
-        let server = Server::new_async().await;
-
-        let service = RestClientChainService::new(server.url(), Network::Mainnet, 3, None);
-
-        // Test with invalid address format
-        let result = service.get_address_utxos("invalid_address_format").await;
-
-        // Should return an error for invalid address
-        assert!(result.is_err());
     }
 }

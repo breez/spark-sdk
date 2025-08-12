@@ -294,7 +294,7 @@ where
 
         let (response, _) = self
             .rest_client
-            .get(url.as_ref())
+            .get(url.as_ref(), None)
             .await
             .map_err(LnurlError::ServiceConnectivity)?;
         let lnurl_data: LnurlRequestData =

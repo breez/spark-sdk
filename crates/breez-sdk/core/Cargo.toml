@@ -30,6 +30,8 @@ uuid.workspace = true
 breez-sdk-macros.workspace = true
 async-trait.workspace = true
 esplora-client = "0.12.1"
+base64.workspace = true
 
 [dev-dependencies]
-mockito = "1.2.0"
+breez-sdk-common = { workspace = true, features = ["test-utils"] }
+

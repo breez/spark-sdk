@@ -11,7 +11,7 @@ pub mod rest;
 pub mod tonic_wrap;
 pub mod utils;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 
 #[cfg(feature = "uniffi")]

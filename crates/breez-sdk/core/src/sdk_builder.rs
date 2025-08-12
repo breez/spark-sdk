@@ -1,3 +1,4 @@
+use breez_sdk_common::rest::ReqwestRestClient as CommonRequestRestClient;
 use spark_wallet::DefaultSigner;
 use tokio::sync::watch;
 
@@ -47,28 +48,37 @@ impl SdkBuilder {
             .map_err(|e| SdkError::GenericError(e.to_string()))?;
         let signer = DefaultSigner::new(&mnemonic.to_seed(""), self.config.network.clone().into())
             .map_err(|e| SdkError::GenericError(e.to_string()))?;
-        let chain_service = self
-            .chain_service
-            .unwrap_or_else(|| match self.config.network {
-                Network::Mainnet => Box::new(RestClientChainService::new(
-                    "https://blockstream.info/api".to_string(),
-                    self.config.network.clone(),
-                    5,
-                    None,
-                )),
-                Network::Regtest => Box::new(RestClientChainService::new(
-                    "https://regtest-mempool.loadtest.dev.sparkinfra.net/api".to_string(),
-                    self.config.network.clone(),
-                    5,
-                    match (
-                        std::env::var("CHAIN_SERVICE_USERNAME"),
-                        std::env::var("CHAIN_SERVICE_PASSWORD"),
-                    ) {
-                        (Ok(username), Ok(password)) => Some(BasicAuth::new(username, password)),
-                        _ => None,
-                    },
-                )),
-            });
+        let chain_service = match self.chain_service {
+            Some(service) => service,
+            None => {
+                let inner_client = CommonRequestRestClient::new()
+                    .map_err(|e| SdkError::GenericError(e.to_string()))?;
+                match self.config.network {
+                    Network::Mainnet => Box::new(RestClientChainService::new(
+                        "https://blockstream.info/api".to_string(),
+                        self.config.network.clone(),
+                        5,
+                        Box::new(inner_client),
+                        None,
+                    )),
+                    Network::Regtest => Box::new(RestClientChainService::new(
+                        "https://regtest-mempool.loadtest.dev.sparkinfra.net/api".to_string(),
+                        self.config.network.clone(),
+                        5,
+                        Box::new(inner_client),
+                        match (
+                            std::env::var("CHAIN_SERVICE_USERNAME"),
+                            std::env::var("CHAIN_SERVICE_PASSWORD"),
+                        ) {
+                            (Ok(username), Ok(password)) => {
+                                Some(BasicAuth::new(username, password))
+                            }
+                            _ => None,
+                        },
+                    )),
+                }
+            }
+        };
         let (shutdown_sender, shutdown_receiver) = watch::channel::<()>(());
         // Create the SDK instance
         let sdk = BreezSdk::new(
