@@ -420,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn test_payment_intent_address_roundtrip() {
+    fn test_invoice_fields_address_roundtrip() {
         let public_key = create_test_public_key();
         let sender_public_key = create_test_public_key();
         let invoice_fields = SparkInvoiceFields {
@@ -455,24 +455,24 @@ mod tests {
 
         // Check payment intent fields
         assert!(parsed_address.spark_invoice_fields.is_some());
-        let parsed_payment_intent = parsed_address.spark_invoice_fields.unwrap();
-        let original_payment_intent = original_address.spark_invoice_fields.unwrap();
+        let parsed_invoice_fields = parsed_address.spark_invoice_fields.unwrap();
+        let original_invoice_fields = original_address.spark_invoice_fields.unwrap();
 
-        assert_eq!(parsed_payment_intent.id, original_payment_intent.id);
+        assert_eq!(parsed_invoice_fields.id, original_invoice_fields.id);
         assert_eq!(
-            parsed_payment_intent.expiry_time,
-            original_payment_intent.expiry_time
+            parsed_invoice_fields.expiry_time,
+            original_invoice_fields.expiry_time
         );
-        assert_eq!(parsed_payment_intent.id, original_payment_intent.id);
-        assert_eq!(parsed_payment_intent.memo, original_payment_intent.memo);
+        assert_eq!(parsed_invoice_fields.id, original_invoice_fields.id);
+        assert_eq!(parsed_invoice_fields.memo, original_invoice_fields.memo);
 
         let Some(SparkAddressPaymentType::TokensPayment(tokens_payment1)) =
-            parsed_payment_intent.payment_type
+            parsed_invoice_fields.payment_type
         else {
             panic!("Expected TokensPayment");
         };
         let Some(SparkAddressPaymentType::TokensPayment(tokens_payment2)) =
-            original_payment_intent.payment_type
+            original_invoice_fields.payment_type
         else {
             panic!("Expected TokensPayment");
         };
@@ -484,9 +484,9 @@ mod tests {
     }
 
     #[test]
-    fn test_payment_intent_minimal_data() {
+    fn test_invoice_fields_minimal_data() {
         let public_key = create_test_public_key();
-        let payment_intent = SparkInvoiceFields {
+        let invoice_fields = SparkInvoiceFields {
             id: uuid::Uuid::now_v7(),
             version: 1,
             sender_public_key: None,
@@ -498,29 +498,29 @@ mod tests {
         };
 
         let original_address =
-            SparkAddress::new(public_key, Network::Testnet, Some(payment_intent), None);
+            SparkAddress::new(public_key, Network::Testnet, Some(invoice_fields), None);
 
         let address_string = original_address.to_string();
         let parsed_address = SparkAddress::from_str(&address_string).unwrap();
 
         assert!(parsed_address.spark_invoice_fields.is_some());
-        let parsed_payment_intent = parsed_address.spark_invoice_fields.unwrap();
+        let parsed_invoice_fields = parsed_address.spark_invoice_fields.unwrap();
 
-        let Some(SparkAddressPaymentType::SatsPayment(sp)) = parsed_payment_intent.payment_type
+        let Some(SparkAddressPaymentType::SatsPayment(sp)) = parsed_invoice_fields.payment_type
         else {
             panic!("Invalid payment type");
         };
 
         assert_eq!(sp.amount.unwrap(), 500);
-        assert_eq!(parsed_payment_intent.memo, None);
+        assert_eq!(parsed_invoice_fields.memo, None);
     }
 
     #[test]
-    fn test_compare_addresses_with_and_without_payment_intent() {
+    fn test_compare_addresses_with_and_without_invoice_fields() {
         let public_key = create_test_public_key();
         let sender_public_key = create_test_public_key();
 
-        // Create address without payment intent
+        // Create address without invoice fields
         let address_without_intent = SparkAddress::new(public_key, Network::Mainnet, None, None);
         let string_without_intent = address_without_intent.to_string();
 
@@ -556,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_payment_intent_data() {
+    fn test_invalid_invoice_fields_data() {
         let public_key = create_test_public_key();
 
         // Try to create invalid asset identifier
