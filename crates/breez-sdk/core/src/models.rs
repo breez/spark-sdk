@@ -262,6 +262,12 @@ pub struct Config {
     pub deposits_monitoring_interval: u32,
 }
 
+#[derive(Debug, Clone)]
+pub struct Credentials {
+    pub username: String,
+    pub password: String,
+}
+
 /// Request to get the balance of the wallet
 #[derive(Debug, Clone)]
 pub struct GetInfoRequest {}

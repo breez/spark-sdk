@@ -3,7 +3,7 @@ use spark_wallet::DefaultSigner;
 use tokio::sync::watch;
 
 use crate::{
-    Network,
+    Credentials, Network,
     chain::{
         BitcoinChainService,
         rest_client::{BasicAuth, RestClientChainService},
@@ -38,6 +38,21 @@ impl SdkBuilder {
         chain_service: Box<dyn BitcoinChainService + Send + Sync>,
     ) -> Self {
         self.chain_service = Some(chain_service);
+        self
+    }
+
+    pub fn with_rest_chain_service(
+        mut self,
+        url: String,
+        credentials: Option<Credentials>,
+    ) -> Self {
+        self.chain_service = Some(Box::new(RestClientChainService::new(
+            url,
+            self.config.network.clone(),
+            5,
+            Box::new(CommonRequestRestClient::new().unwrap()),
+            credentials.map(|c| BasicAuth::new(c.username, c.password)),
+        )));
         self
     }
 
