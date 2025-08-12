@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use std::str::FromStr;
 
 use bitcoin::secp256k1::ecdsa::Signature;
-use bitcoin::{Transaction, TxOut};
+use bitcoin::{Transaction, TxOut, Txid};
 use bitcoin::{consensus::deserialize, secp256k1::PublicKey};
 use frost_secp256k1_tr::{
     Identifier,
@@ -1029,6 +1029,33 @@ pub struct QueryTokenTransactionsFilter {
     pub token_transaction_hashes: Vec<String>,
     pub token_ids: Vec<String>,
     pub output_ids: Vec<String>,
+}
+
+pub struct Utxo {
+    pub tx: Option<Transaction>,
+    pub vout: u32,
+    pub network: Network,
+    pub txid: Txid,
+}
+
+impl TryFrom<operator_rpc::spark::Utxo> for Utxo {
+    type Error = ServiceError;
+
+    fn try_from(utxo: operator_rpc::spark::Utxo) -> Result<Self, Self::Error> {
+        let network = Network::from_proto_network(utxo.network)
+            .map_err(|_| ServiceError::InvalidNetwork(utxo.network))?;
+        let mut tx: Option<Transaction> = None;
+        if let Ok(t) = deserialize(&utxo.raw_tx) {
+            tx = Some(t);
+        }
+        Ok(Utxo {
+            tx,
+            vout: utxo.vout,
+            network,
+            txid: Txid::from_str(&hex::encode(utxo.txid))
+                .map_err(|_| ServiceError::InvalidTransaction)?,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]

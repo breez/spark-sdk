@@ -3,7 +3,10 @@ use tokio::sync::watch;
 
 use crate::{
     Network,
-    chain::{BitcoinChainService, rest_client::RestClientChainService},
+    chain::{
+        BitcoinChainService,
+        rest_client::{BasicAuth, RestClientChainService},
+    },
     error::SdkError,
     models::Config,
     persist::Storage,
@@ -51,11 +54,19 @@ impl SdkBuilder {
                     "https://blockstream.info/api".to_string(),
                     self.config.network.clone(),
                     5,
+                    None,
                 )),
                 Network::Regtest => Box::new(RestClientChainService::new(
-                    "https://mempool.space/api".to_string(),
+                    "https://regtest-mempool.loadtest.dev.sparkinfra.net/api".to_string(),
                     self.config.network.clone(),
                     5,
+                    match (
+                        std::env::var("CHAIN_SERVICE_USERNAME"),
+                        std::env::var("CHAIN_SERVICE_PASSWORD"),
+                    ) {
+                        (Ok(username), Ok(password)) => Some(BasicAuth::new(username, password)),
+                        _ => None,
+                    },
                 )),
             });
         let (shutdown_sender, shutdown_receiver) = watch::channel::<()>(());

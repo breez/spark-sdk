@@ -36,6 +36,8 @@ pub enum ServiceError {
     InvalidSignatureShare,
     #[error("invalid transaction")]
     InvalidTransaction,
+    #[error("invalid network: {0}")]
+    InvalidNetwork(i32),
     #[error("invalid verifying key")]
     InvalidVerifyingKey,
     #[error("not a deposit output")]

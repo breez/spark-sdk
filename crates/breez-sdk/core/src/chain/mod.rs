@@ -20,56 +20,11 @@ pub trait BitcoinChainService {
     async fn get_transaction_hex(&self, txid: &str) -> Result<String, ChainServiceError>;
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct PrevOut {
-    pub value: u64,
-    pub scriptpubkey: ScriptBuf,
-}
-
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct Vin {
-    pub txid: String,
-    pub vout: u32,
-    // None if coinbase
-    pub prevout: Option<PrevOut>,
-    pub scriptsig: ScriptBuf,
-    pub sequence: u32,
-    pub is_coinbase: bool,
-}
-
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct Vout {
-    pub value: u64,
-    pub scriptpubkey: ScriptBuf,
-}
-
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct TxStatus {
     pub confirmed: bool,
     pub block_height: Option<u32>,
     pub block_time: Option<u64>,
-}
-
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct Tx {
-    pub txid: String,
-    pub version: i32,
-    pub locktime: u32,
-    pub vin: Vec<Vin>,
-    pub vout: Vec<Vout>,
-    /// Transaction size in raw bytes (NOT virtual bytes).
-    pub size: usize,
-    /// Transaction weight units.
-    pub weight: u64,
-    pub status: TxStatus,
-    pub fee: u64,
-}
-
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
-struct TxOutput {
-    txid: String,
-    vout: u32,
-    amount: u64,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]

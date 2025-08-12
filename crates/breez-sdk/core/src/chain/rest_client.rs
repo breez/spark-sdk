@@ -2,6 +2,7 @@ use std::{sync::OnceLock, time::Duration};
 
 use bitcoin::{Address, address::NetworkUnchecked};
 use reqwest::Response;
+use tracing::info;
 
 use crate::{
     Network,
@@ -19,20 +20,38 @@ pub const RETRYABLE_ERROR_CODES: [u16; 3] = [
 /// Base backoff in milliseconds.
 const BASE_BACKOFF_MILLIS: Duration = Duration::from_millis(256);
 
+pub struct BasicAuth {
+    username: String,
+    password: String,
+}
+
+impl BasicAuth {
+    pub fn new(username: String, password: String) -> Self {
+        Self { username, password }
+    }
+}
+
 pub struct RestClientChainService {
     base_url: String,
     network: Network,
     client: OnceLock<reqwest::Client>,
     max_retries: usize,
+    basic_auth: Option<BasicAuth>,
 }
 
 impl RestClientChainService {
-    pub fn new(base_url: String, network: Network, max_retries: usize) -> Self {
+    pub fn new(
+        base_url: String,
+        network: Network,
+        max_retries: usize,
+        basic_auth: Option<BasicAuth>,
+    ) -> Self {
         Self {
             base_url,
             network,
             client: OnceLock::new(),
             max_retries,
+            basic_auth,
         }
     }
 
@@ -53,6 +72,7 @@ impl RestClientChainService {
         path: &str,
     ) -> Result<T, ChainServiceError> {
         let url = format!("{}{}", self.base_url, path);
+        info!("Fetching response json from {}", url);
         let response = self.get_with_retry(&url, self.get_client()?).await?;
 
         if !response.status().is_success() {
@@ -70,6 +90,7 @@ impl RestClientChainService {
 
     async fn get_response_text(&self, path: &str) -> Result<String, ChainServiceError> {
         let url = format!("{}{}", self.base_url, path);
+        info!("Fetching response text from {}", url);
         let response = self.get_with_retry(&url, self.get_client()?).await?;
 
         if !response.status().is_success() {
@@ -94,7 +115,11 @@ impl RestClientChainService {
         let mut attempts = 0;
 
         loop {
-            match client.get(url).send().await? {
+            let mut request = client.get(url);
+            if let Some(basic_auth) = &self.basic_auth {
+                request = request.basic_auth(&basic_auth.username, Some(&basic_auth.password));
+            }
+            match request.send().await? {
                 resp if attempts < self.max_retries && is_status_retryable(resp.status()) => {
                     tokio::time::sleep(delay).await;
                     attempts += 1;
@@ -218,7 +243,7 @@ mod tests {
             .await;
 
         // Create the service with the mock server URL
-        let service = RestClientChainService::new(server.url(), Network::Mainnet, 3);
+        let service = RestClientChainService::new(server.url(), Network::Mainnet, 3, None);
 
         // Call the method under test
         let mut result = service
@@ -267,7 +292,7 @@ mod tests {
     async fn test_get_address_utxos_invalid_address() {
         let server = Server::new_async().await;
 
-        let service = RestClientChainService::new(server.url(), Network::Mainnet, 3);
+        let service = RestClientChainService::new(server.url(), Network::Mainnet, 3, None);
 
         // Test with invalid address format
         let result = service.get_address_utxos("invalid_address_format").await;
