@@ -37,6 +37,18 @@ impl Network {
             Network::Signet => operator_rpc::spark::Network::Signet,
         }
     }
+
+    pub(crate) fn from_proto_network(network_num: i32) -> Result<Self, String> {
+        let network: operator_rpc::spark::Network =
+            network_num.try_into().map_err(|_| "Invalid network")?;
+        match network {
+            operator_rpc::spark::Network::Mainnet => Ok(Network::Mainnet),
+            operator_rpc::spark::Network::Regtest => Ok(Network::Regtest),
+            operator_rpc::spark::Network::Testnet => Ok(Network::Testnet),
+            operator_rpc::spark::Network::Signet => Ok(Network::Signet),
+            _ => Err("Invalid network".to_string()),
+        }
+    }
 }
 
 impl From<Network> for bitcoin::Network {

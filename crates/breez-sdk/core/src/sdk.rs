@@ -1,8 +1,8 @@
-use bitcoin::consensus::encode::deserialize_hex;
+use bitcoin::{Transaction, consensus::encode::deserialize_hex};
 use breez_sdk_common::input::InputType;
 pub use breez_sdk_common::input::parse as parse_input;
 use spark_wallet::{
-    DefaultSigner, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress, SparkWallet,
+    DefaultSigner, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress, SparkWallet, Utxo,
     WalletEvent,
 };
 use std::{
@@ -61,7 +61,7 @@ pub fn default_storage(data_dir: String) -> Result<Box<dyn Storage>, SdkError> {
 pub fn default_config(network: Network) -> Config {
     Config {
         network,
-        deposits_monitoring_interval: 10 * 60, // every 10 minutes
+        deposits_monitoring_interval: 5 * 60, // every 5 minutes
     }
 }
 
@@ -516,27 +516,62 @@ impl BreezSdk {
         for address in addresses {
             info!("Checking static deposit address: {}", address.to_string());
             let utxos = self
-                .chain_service
-                .get_address_utxos(address.to_string().as_str())
+                .spark_wallet
+                .get_utxos_for_address(&address.to_string())
                 .await;
-            if let Ok(utxos) = utxos {
-                info!("Found {} utxos for address {}", utxos.len(), address);
-                for utxo in utxos {
-                    let tx_hex = self.chain_service.get_transaction_hex(&utxo.txid).await?;
-                    let tx = deserialize_hex(&tx_hex)?;
-                    let quote = self
-                        .spark_wallet
-                        .fetch_static_deposit_claim_quote(tx, Some(utxo.vout))
-                        .await?;
-                    let transfer = self.spark_wallet.claim_static_deposit(quote).await?;
-                    info!(
-                        "Claimed static deopsit transfer: {}",
-                        serde_json::to_string_pretty(&transfer)?
-                    );
+            match utxos {
+                Ok(utxos) => {
+                    info!("Found {} utxos for address {}", utxos.len(), address);
+                    for utxo in utxos {
+                        info!("Processing utxo {}:{}", utxo.txid, utxo.vout);
+                        match self.claim_utxo(&utxo).await {
+                            Ok(_) => info!("Claimed utxo {}:{}", utxo.txid, utxo.vout),
+                            Err(e) => {
+                                error!("Failed to claim utxo {}:{}: {e}", utxo.txid, utxo.vout)
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to get utxos for address {}: {e}", address);
                 }
             }
         }
 
+        Ok(())
+    }
+
+    async fn claim_utxo(&self, utxo: &Utxo) -> Result<(), SdkError> {
+        info!("Claiming utxo {}:{}", utxo.txid, utxo.vout);
+        let tx: Transaction = match utxo.tx.clone() {
+            Some(tx) => tx,
+            None => {
+                let tx_hex = self
+                    .chain_service
+                    .get_transaction_hex(&utxo.txid.to_string())
+                    .await?;
+                deserialize_hex(tx_hex.as_str())?
+            }
+        };
+
+        info!(
+            "Fetching static deposit claim quote for utxo {}:{}",
+            utxo.txid, utxo.vout
+        );
+        let quote = self
+            .spark_wallet
+            .fetch_static_deposit_claim_quote(tx, Some(utxo.vout))
+            .await?;
+
+        info!(
+            "Claiming static deposit for utxo {}:{}",
+            utxo.txid, utxo.vout
+        );
+        let transfer = self.spark_wallet.claim_static_deposit(quote).await?;
+        info!(
+            "Claimed static deopsit transfer: {}",
+            serde_json::to_string_pretty(&transfer)?
+        );
         Ok(())
     }
 }

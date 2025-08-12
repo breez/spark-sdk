@@ -19,10 +19,10 @@ use crate::{
         OperatorPool,
         rpc::{
             self as operator_rpc,
-            spark::{TransferFilter, transfer_filter::Participant},
+            spark::{GetUtxosForAddressRequest, TransferFilter, transfer_filter::Participant},
         },
     },
-    services::Transfer,
+    services::{Transfer, Utxo},
     signer::{PrivateKeySource, Signer},
     ssp::{ClaimStaticDepositInput, ClaimStaticDepositRequestType, ServiceProvider},
     tree::{TreeNode, TreeNodeId},
@@ -136,6 +136,24 @@ impl<S: Signer> DepositService<S> {
             ssp_client,
             signer,
         }
+    }
+
+    pub async fn get_utxos_for_address(&self, address: &str) -> Result<Vec<Utxo>, ServiceError> {
+        let res = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .get_utxos_for_address(GetUtxosForAddressRequest {
+                address: address.to_string(),
+                offset: 0,
+                limit: 100,
+                network: self.network.to_proto_network() as i32,
+            })
+            .await?;
+        res.utxos
+            .into_iter()
+            .map(Utxo::try_from)
+            .collect::<Result<Vec<_>, _>>()
     }
 
     pub async fn claim_deposit(

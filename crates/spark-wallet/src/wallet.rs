@@ -20,7 +20,7 @@ use spark::{
         CoopExitFeeQuote, CoopExitService, DepositService, ExitSpeed, LightningReceivePayment,
         LightningSendPayment, LightningService, QueryTokenTransactionsFilter, StaticDepositQuote,
         Swap, TimelockManager, TokenService, TokenTransaction, Transfer, TransferId,
-        TransferService, TransferTokenOutput,
+        TransferService, TransferTokenOutput, Utxo,
     },
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer},
@@ -306,6 +306,13 @@ impl<S: Signer> SparkWallet<S> {
             .lightning_service
             .get_lightning_receive_payment(id)
             .await?)
+    }
+
+    pub async fn get_utxos_for_address(
+        &self,
+        address: &str,
+    ) -> Result<Vec<Utxo>, SparkWalletError> {
+        Ok(self.deposit_service.get_utxos_for_address(address).await?)
     }
 
     // TODO: In the js sdk this function calls an electrum server to fetch the transaction hex based on a txid.
