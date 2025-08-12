@@ -12,6 +12,8 @@ pub enum AddressError {
     InvalidPublicKey(String),
     #[error("Invalid payment intent: {0}")]
     InvalidPaymentIntent(String),
+    #[error("Invalid signature: {0}")]
+    InvalidSignature(String),
     #[error("Other error: {0}")]
     Other(String),
 }

@@ -266,13 +266,19 @@ impl FromStr for SparkAddress {
             .map(|f| f.try_into())
             .transpose()?;
 
+        let signature = proto_address
+            .signature
+            .map(|s| {
+                Signature::from_compact(&s)
+                    .map_err(|e| AddressError::InvalidSignature(e.to_string()))
+            })
+            .transpose()?;
+
         Ok(SparkAddress::new(
             identity_public_key,
             network,
             invoice_fields,
-            proto_address
-                .signature
-                .map(|s| Signature::from_compact(&s).unwrap()),
+            signature,
         ))
     }
 }
