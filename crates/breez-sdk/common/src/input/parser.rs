@@ -748,8 +748,8 @@ pub enum LnurlRequestData {
 #[cfg(test)]
 #[allow(clippy::similar_names)]
 mod tests {
-
     use serde_json::json;
+    use spark_macros::async_test_all;
 
     use crate::input::error::Bip21Error;
     use crate::input::parser::InputParser;
@@ -757,7 +757,7 @@ mod tests {
     use crate::test_utils::mock_dns_resolver::MockDnsResolver;
     use crate::test_utils::mock_rest_client::{MockResponse, MockRestClient};
 
-    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+    #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
     /// BIP21 amounts which can lead to rounding errors.
@@ -821,7 +821,7 @@ mod tests {
         mock_rest_client.add_response(MockResponse::new(status_code, response_body));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bip21_multiple_params() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -845,7 +845,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::Bip21Error(_))));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bip21_required_parameter() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -870,7 +870,7 @@ mod tests {
         ));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bip21_url_encoded_values() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -890,7 +890,7 @@ mod tests {
         ));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bip21_with_extra_parameters() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -911,7 +911,7 @@ mod tests {
         ));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bip21_with_invalid_amount() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -926,7 +926,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::Bip21Error(_))));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bip21_with_invalid_lightning() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -941,7 +941,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::Bip21Error(_))));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bip21_with_invalid_message_encoding() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -955,7 +955,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::Bip21Error(_))));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bip21_with_invalid_silent_payment() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -973,7 +973,7 @@ mod tests {
         ));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bip21_with_missing_equals() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -988,7 +988,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::Bip21Error(_))));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bip21_without_payment_methods() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1001,7 +1001,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::Bip21Error(_))));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bip353_with_invalid_dns_record() {
         let mock_dns_resolver = MockDnsResolver::new();
         // Simulate a TXT record that's not a valid BIP21 URI
@@ -1017,7 +1017,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::InvalidInput)));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bip353_address() {
         let mock_dns_resolver = MockDnsResolver::new();
         mock_dns_resolver.add_response(vec![String::from("bitcoin:?sp=sp1qqweplq6ylpfrzuq6hfznzmv28djsraupudz0s0dclyt8erh70pgwxqkz2ydatksrdzf770umsntsmcjp4kcz7jqu03jeszh0gdmpjzmrf5u4zh0c&lno=lno1pqps7sjqpgtyzm3qv4uxzmtsd3jjqer9wd3hy6tsw35k7msjzfpy7nz5yqcnygrfdej82um5wf5k2uckyypwa3eyt44h6txtxquqh7lz5djge4afgfjn7k4rgrkuag0jsd5vxg")]);
@@ -1036,7 +1036,7 @@ mod tests {
         // Just check the method exists and runs without crashing
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bip353_address_too_long() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1057,7 +1057,7 @@ mod tests {
         assert!(!matches!(result, Ok(InputType::Bip21(_))));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bitcoin_address() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1077,7 +1077,7 @@ mod tests {
         }
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bitcoin_address_bip21() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1151,7 +1151,7 @@ mod tests {
         ));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bitcoin_address_bip21_rounding() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1173,7 +1173,7 @@ mod tests {
             ));
         }
     }
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bolt11() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1192,7 +1192,7 @@ mod tests {
         assert!(matches!(result, Ok(InputType::Bolt11Invoice(_))));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bolt11_capitalized() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1211,7 +1211,7 @@ mod tests {
         assert!(matches!(result, Ok(InputType::Bolt11Invoice(_))));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bolt11_with_fallback_bitcoin_address() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1240,7 +1240,7 @@ mod tests {
         assert!(matches!(result, Ok(InputType::Bip21(_))));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bolt12_invoice() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1254,7 +1254,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::InvalidInput)));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bolt12_offer() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1276,7 +1276,7 @@ mod tests {
         assert!(matches!(result, Ok(InputType::Bolt12Offer(_))));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_bolt12_offer_in_bip21() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1310,7 +1310,7 @@ mod tests {
         ));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_empty_input() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1324,7 +1324,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::EmptyInput)));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_generic_invalid_input() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1339,7 +1339,7 @@ mod tests {
         ));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_lightning_address() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1357,7 +1357,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_lightning_address_with_prefix() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1374,7 +1374,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_lnurl() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1398,7 +1398,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_lnurl_auth() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1414,7 +1414,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_lnurl_prefixed_schemes() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1442,7 +1442,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_lnurl_withdraw() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1459,7 +1459,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_invalid_bitcoin_address() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
@@ -1471,7 +1471,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::InvalidInput)));
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_trim_input() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();

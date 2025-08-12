@@ -780,10 +780,14 @@ fn find_exact_multiple_match(leaves: &[TreeNode], target_amount_sat: u64) -> Opt
 #[cfg(test)]
 mod tests {
     use bitcoin::{Transaction, absolute::LockTime, transaction::Version};
+    use spark_macros::test_all;
     use uuid::Uuid;
 
     use super::*;
     use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus};
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
     // Helper function to create test leaves with specific values
     fn create_test_leaves(values: &[u64]) -> Vec<TreeNode> {
@@ -817,7 +821,7 @@ mod tests {
             .collect()
     }
 
-    #[test]
+    #[test_all]
     fn test_find_exact_single_match() {
         let leaves = create_test_leaves(&[10000, 5000, 3000, 1000]);
 
@@ -831,7 +835,7 @@ mod tests {
         assert!(result.is_none());
     }
 
-    #[test]
+    #[test_all]
     fn test_find_exact_multiple_match_simple_case() {
         let leaves = create_test_leaves(&[10000, 5000, 3000, 1000]);
 
@@ -850,7 +854,7 @@ mod tests {
         assert!(values.contains(&1000));
     }
 
-    #[test]
+    #[test_all]
     fn test_find_exact_multiple_match_complex_case() {
         let leaves = create_test_leaves(&[10000, 7000, 5000, 3000, 2000, 1000]);
 
@@ -863,7 +867,7 @@ mod tests {
         assert_eq!(total, 12000);
     }
 
-    #[test]
+    #[test_all]
     fn test_find_exact_multiple_match_edge_cases() {
         // Empty leaves
         let leaves = Vec::<TreeNode>::new();
@@ -886,7 +890,7 @@ mod tests {
         assert_eq!(result[0].value, 5000);
     }
 
-    #[test]
+    #[test_all]
     fn test_find_exact_multiple_match_large_values() {
         // Test with larger values to ensure our algorithm scales properly
         let leaves =

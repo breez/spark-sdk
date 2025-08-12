@@ -1068,12 +1068,16 @@ pub struct TransferTokenOutput {
 #[cfg(test)]
 mod tests {
     use bitcoin::secp256k1::PublicKey;
+    use spark_macros::test_all;
 
     use crate::operator::rpc as operator_rpc;
     use crate::services::bech32m_decode_token_id;
     use crate::{Network, services::TokenOutputWithPrevOut};
 
-    #[test]
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test_all]
     fn test_token_output_with_prev_out_roundtrip() {
         let token_id = "123";
         let owner_public_key = PublicKey::from_slice(&[

@@ -606,9 +606,10 @@ impl PrivateKeySource {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use bitcoin::secp256k1::rand::thread_rng;
     use bitcoin::secp256k1::{self, PublicKey, Secp256k1, SecretKey};
+    use spark_macros::{async_test_all, test_all};
     use std::str::FromStr;
 
     use crate::signer::{EncryptedPrivateKey, PrivateKeySource, Signer, SignerError};
@@ -622,8 +623,11 @@ mod test {
         },
     };
 
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
     /// Ensure constants are defined correctly and don't panic.
-    #[test]
+    #[test_all]
     fn test_constant_derivation_paths() {
         identity_derivation_path(Network::Mainnet);
         identity_derivation_path(Network::Testnet);
@@ -646,7 +650,7 @@ mod test {
         DefaultSigner::new(&test_seed, Network::Regtest).expect("Failed to create test signer")
     }
 
-    #[test]
+    #[test_all]
     fn test_sign_verify_signature_ecdsa_round_trip() {
         let signer = create_test_signer();
         let message = "test message";
@@ -663,7 +667,7 @@ mod test {
         .expect("Failed to verify signature");
     }
 
-    #[test]
+    #[test_all]
     fn test_verify_signature_ecdsa_invalid_signature() {
         let signer = create_test_signer();
         let signature = signer
@@ -691,7 +695,7 @@ mod test {
         assert!(matches!(result, Err(secp256k1::Error::IncorrectSignature)));
     }
 
-    #[test]
+    #[test_all]
     fn test_encrypt_decrypt_private_key_ecies_round_trip() {
         let signer = create_test_signer();
         let secp = Secp256k1::new();
@@ -730,7 +734,7 @@ mod test {
         assert_eq!(original_public_key, decrypted_public_key);
     }
 
-    #[test]
+    #[test_all]
     fn test_subtract_private_keys_success() {
         let signer = create_test_signer();
         let mut rng = thread_rng();
@@ -773,7 +777,7 @@ mod test {
         assert_eq!(key_a.secret_bytes(), reconstructed_a.secret_bytes());
     }
 
-    #[test]
+    #[test_all]
     fn test_subtract_private_keys_same_key_error() {
         let signer = create_test_signer();
         let mut rng = thread_rng();
@@ -804,7 +808,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[test_all]
     fn test_encrypt_private_key_for_receiver_success() {
         let signer = create_test_signer();
         let mut rng = thread_rng();
@@ -843,7 +847,7 @@ mod test {
         assert_eq!(private_key.secret_bytes(), decrypted_key.secret_bytes());
     }
 
-    #[test]
+    #[test_all]
     fn test_get_public_key_from_private_key_source() {
         let signer = create_test_signer();
         let secp = Secp256k1::new();
@@ -885,7 +889,7 @@ mod test {
         assert_eq!(expected_public_key, result_public_key);
     }
 
-    #[tokio::test]
+    #[async_test_all]
     async fn test_generate_frost_signing_commitments_nonces_round_trip() {
         let signer = create_test_signer();
         let commitments = signer

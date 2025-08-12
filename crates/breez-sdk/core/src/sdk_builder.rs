@@ -19,7 +19,7 @@ pub struct SdkBuilder {
     config: Config,
     mnemonic: String,
     storage: Box<dyn Storage + Send + Sync>,
-    chain_service: Option<Box<dyn BitcoinChainService + Send + Sync>>,
+    chain_service: Option<Box<dyn BitcoinChainService>>,
 }
 
 impl SdkBuilder {

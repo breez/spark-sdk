@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use bitcoin::hashes::Hash;
 use bitcoin::{Address, OutPoint, Transaction, Txid};
-use prost_types::Timestamp;
 use serde::Serialize;
 use tracing::{debug, trace};
+use web_time::SystemTime;
 
 use crate::address::SparkAddress;
 use crate::core::Network;
@@ -24,6 +24,7 @@ use crate::utils::refund::{
     RefundSignatures, map_refund_signatures, prepare_leaf_refund_signing_data,
     prepare_refund_so_signing_jobs_with_tx_constructor, sign_aggregate_refunds,
 };
+use crate::utils::time::web_time_to_prost_timestamp;
 use crate::utils::transactions::{ConnectorRefundTxsParams, create_connector_refund_txs};
 use crate::{signer::Signer, tree::TreeNode};
 
@@ -286,7 +287,11 @@ where
                         .identity_public_key()
                         .serialize()
                         .to_vec(),
-                    expiry_time: Some(Timestamp::from(SystemTime::now() + expiry_time)),
+                    expiry_time: Some(
+                        web_time_to_prost_timestamp(SystemTime::now() + expiry_time).map_err(
+                            |_| ServiceError::Generic("Invalid expiry time".to_string()),
+                        )?,
+                    ),
                     transfer_package: None,
                     spark_payment_intent,
                 }),

@@ -1,9 +1,0 @@
-UNAME := $(shell uname)
-
-ifeq ($(UNAME), Darwin)
-	CLANG_PREFIX += AR=$(shell brew --prefix llvm)/bin/llvm-ar CC=$(shell brew --prefix llvm)/bin/clang
-endif
-
-# This adds a make command to install a target, e.g. `make install-target-wasm32-unknown-unknown`
-install-target-%:
-	$(CLANG_PREFIX) rustup target add $*

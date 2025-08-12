@@ -3,6 +3,9 @@ name = "spark-wallet"
 version.workspace = true
 edition = "2024"
 
+[features]
+browser-tests = [] # Enable browser wasm-pack tests
+
 [dependencies]
 bitcoin = { workspace = true, features = ["serde"] }
 frost-secp256k1-tr.workspace = true
@@ -12,5 +15,6 @@ serde = { workspace = true, features = ["derive"] }
 spark.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }
+tokio_with_wasm.workspace = true
 tracing.workspace = true
 uuid.workspace = true

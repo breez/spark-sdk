@@ -112,9 +112,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spark_macros::async_test_all;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    #[tokio::test]
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[async_test_all]
     async fn test_pager_empty_result() {
         let result = pager(
             |_| async {
@@ -130,7 +134,7 @@ mod tests {
         assert_eq!(result.unwrap(), Vec::<u32>::new());
     }
 
-    #[tokio::test]
+    #[async_test_all]
     async fn test_pager_single_page() {
         let result = pager(
             |_| async {
@@ -146,7 +150,7 @@ mod tests {
         assert_eq!(result.unwrap(), vec![1, 2, 3]);
     }
 
-    #[tokio::test]
+    #[async_test_all]
     async fn test_pager_error_after_partial_success() {
         let call_count = std::sync::Arc::new(AtomicU64::new(0));
 
@@ -173,7 +177,7 @@ mod tests {
         assert_eq!(call_count.load(Ordering::SeqCst), 2);
     }
 
-    #[tokio::test]
+    #[async_test_all]
     async fn test_pager_multiple_pages() {
         let call_count = std::sync::Arc::new(AtomicU64::new(0));
 
@@ -207,7 +211,7 @@ mod tests {
         assert_eq!(call_count.load(Ordering::SeqCst), 3);
     }
 
-    #[tokio::test]
+    #[async_test_all]
     async fn test_pager_with_custom_filter() {
         let custom_filter = PagingFilter::new(Some(10), Some(5), None);
         let expected_offsets = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -239,7 +243,7 @@ mod tests {
         assert_eq!(*expected_offsets.lock().unwrap(), vec![10, 15, 20]);
     }
 
-    #[tokio::test]
+    #[async_test_all]
     async fn test_pager_error_propagation() {
         let result = pager(
             |_| async { Err::<PagingResult<u32>, _>("test error") },
@@ -250,7 +254,7 @@ mod tests {
         assert_eq!(result.unwrap_err(), "test error");
     }
 
-    #[tokio::test]
+    #[async_test_all]
     async fn test_pager_stops_on_invalid_next_offset() {
         let call_count = std::sync::Arc::new(AtomicU64::new(0));
 
@@ -287,7 +291,7 @@ mod tests {
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 
-    #[tokio::test]
+    #[async_test_all]
     async fn test_pager_stops_on_empty_items_with_next() {
         let call_count = std::sync::Arc::new(AtomicU64::new(0));
 

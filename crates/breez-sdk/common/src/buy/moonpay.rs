@@ -101,11 +101,15 @@ impl BuyBitcoinProviderApi for MoonpayProvider {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use spark_macros::async_test_all;
     use std::collections::HashMap;
 
     use crate::buy::moonpay::{create_moonpay_url, moonpay_config};
 
-    #[breez_sdk_macros::async_test_all]
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[async_test_all]
     async fn test_sign_moonpay_url() -> Result<(), Box<dyn std::error::Error>> {
         let wallet_address = "a wallet address".to_string();
         let quote_amount = "a quote amount".to_string();
@@ -135,7 +139,7 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    #[breez_sdk_macros::async_test_all]
+    #[async_test_all]
     async fn test_sign_moonpay_url_with_redirect() -> Result<(), Box<dyn std::error::Error>> {
         let wallet_address = "a wallet address".to_string();
         let quote_amount = "a quote amount".to_string();

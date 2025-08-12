@@ -9,7 +9,8 @@ members = [
   "crates/breez-sdk/common", 
   "crates/breez-sdk/macros",
   "crates/breez-sdk/core",
-  "crates/breez-sdk/cli"
+  "crates/breez-sdk/cli",
+  "crates/xtask"
 ]
 
 [workspace.package]
@@ -41,7 +42,7 @@ chrono = { version = "0.4.37", features = ["serde"] }
 clap = "4.5.40"
 dns-parser = "0.8.0"
 dotenvy = "0.15.7"
-ecies = "0.2.0"
+ecies = { version = "0.2.7", default-features = false, features = ["pure"] }
 enum_to_enum="0.1.0"
 figment = "0.10.19"
 # frost-core = "2.1.0"
@@ -68,7 +69,7 @@ rusqlite = { git = "https://github.com/Spxg/rusqlite", rev = "8e53118a3e1807dc9a
     "bundled",
 ] }
 rusqlite_migration = { git = "https://github.com/breez/rusqlite_migration", branch = "spxg-rusqlite" }
-rustls = { version = "0.23.28", features = ["ring"] }
+rustls= { version = "0.23.28", default-features = false, features = ["ring"] }
 rustyline = "16.0.0"
 serde = "1.0.219"
 serde_json = "1.0.140"
@@ -88,15 +89,18 @@ thiserror = "2.0.12"
 tokio = { version = "1.45.1", default-features = false }
 tokio-postgres = "0.7.10"
 tokio-test = "0.4.4"
-tonic = { version = "0.12.3", features = [
-    "tls",
-    "tls-webpki-roots",
-    "prost",
-    "channel",
+tokio_with_wasm = { version = "0.8.7", features = [
+    "macros",
+    "rt",
+    "sync",
+    "time",
 ] }
+tonic = { version = "0.12.3", default-features = false }
 tonic-build = { version = "0.12.3", features = ["prost"] }
-tonic-web-wasm-client = "0.7.1"
+tonic-web-wasm-client = "0.6"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 uniffi = "0.28.3"
 uuid = { version = "1.17.0", features = ["v7", "v4"] }
+wasm-bindgen-test = "0.3.33"
+web-time = "1.1.0"

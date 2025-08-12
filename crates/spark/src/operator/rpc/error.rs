@@ -1,10 +1,10 @@
 use thiserror::Error;
-use tonic::{Status, transport::Error as TonicError};
+use tonic::Status;
 
 #[derive(Error, Debug)]
 pub enum OperatorRpcError {
     #[error("Transport error: {0}")]
-    Transport(#[from] TonicError),
+    Transport(String),
 
     #[error("Invalid URI: {0}")]
     InvalidUri(String),
@@ -13,7 +13,7 @@ pub enum OperatorRpcError {
     Authentication(String),
 
     #[error("Connection error: {0}")]
-    Connection(#[from] Status),
+    Connection(Box<Status>),
 
     #[error("Operator not found: {0}")]
     OperatorNotFound(String),
@@ -23,6 +23,12 @@ pub enum OperatorRpcError {
 
     #[error("Signer error: {0}")]
     SignerError(#[from] crate::signer::SignerError),
+}
+
+impl From<Status> for OperatorRpcError {
+    fn from(status: Status) -> Self {
+        OperatorRpcError::Connection(Box::new(status))
+    }
 }
 
 pub type Result<T> = std::result::Result<T, OperatorRpcError>;

@@ -92,6 +92,11 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    use spark_macros::test_all;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
     struct TestListener {
         received: Arc<AtomicBool>,
     }
@@ -102,7 +107,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[test_all]
     fn test_event_emission() {
         let emitter = EventEmitter::new();
         let received = Arc::new(AtomicBool::new(false));
@@ -122,7 +127,7 @@ mod tests {
         assert!(received.load(Ordering::Relaxed));
     }
 
-    #[test]
+    #[test_all]
     fn test_remove_listener() {
         let emitter = EventEmitter::new();
 

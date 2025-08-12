@@ -8,20 +8,22 @@ use super::spark_authn::{
     spark_authn_service_client::SparkAuthnServiceClient,
 };
 use crate::operator::rpc::spark_token::spark_token_service_client::SparkTokenServiceClient;
+use crate::operator::rpc::transport::grpc_client::Transport;
 use crate::signer::Signer;
 use prost::Message;
 use tokio::sync::Mutex;
+use tokio_with_wasm::alias as tokio;
 use tonic::Request;
 use tonic::Status;
 use tonic::metadata::Ascii;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::Channel;
+use web_time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug)]
 pub struct OperatorAuth<S> {
-    channel: Channel,
+    transport: Transport,
     signer: Arc<S>,
     session: Arc<Mutex<Option<OperationSession>>>,
 }
@@ -36,9 +38,9 @@ impl<S> OperatorAuth<S>
 where
     S: Signer,
 {
-    pub fn new(channel: Channel, signer: Arc<S>) -> Self {
+    pub fn new(transport: Transport, signer: Arc<S>) -> Self {
         Self {
-            channel,
+            transport,
             signer,
             session: Arc::new(Mutex::new(None)),
         }
@@ -46,20 +48,20 @@ where
 
     pub async fn spark_service_client(
         &self,
-    ) -> Result<SparkServiceClient<InterceptedService<Channel, OperationSession>>> {
+    ) -> Result<SparkServiceClient<InterceptedService<Transport, OperationSession>>> {
         let session = self.get_authenticated_session().await?;
         Ok(SparkServiceClient::with_interceptor(
-            self.channel.clone(),
+            self.transport.clone(),
             session,
         ))
     }
 
     pub async fn spark_token_service_client(
         &self,
-    ) -> Result<SparkTokenServiceClient<InterceptedService<Channel, OperationSession>>> {
+    ) -> Result<SparkTokenServiceClient<InterceptedService<Transport, OperationSession>>> {
         let session = self.get_authenticated_session().await?;
         Ok(SparkTokenServiceClient::with_interceptor(
-            self.channel.clone(),
+            self.transport.clone(),
             session,
         ))
     }
@@ -67,7 +69,14 @@ where
     pub async fn get_authenticated_session(&self) -> Result<OperationSession> {
         if let Some(session) = self.session.lock().await.as_ref() {
             // Check if the session is still valid
-            if session.expiration > tokio::time::Instant::now().elapsed().as_secs() {
+            if session.expiration
+                > SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|_| {
+                        OperatorRpcError::Unexpected("UNIX_EPOCH is in the future".to_string())
+                    })?
+                    .as_secs()
+            {
                 return Ok(session.clone());
             }
         }
@@ -83,7 +92,7 @@ where
             public_key: pk.serialize().to_vec(),
         };
 
-        let mut auth_client = SparkAuthnServiceClient::new(self.channel.clone());
+        let mut auth_client = SparkAuthnServiceClient::new(self.transport.clone());
 
         // get the challenge from Spark Authn Service
         let spark_authn_response = auth_client

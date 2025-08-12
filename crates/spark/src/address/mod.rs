@@ -3,7 +3,7 @@ pub mod error;
 use std::{
     fmt::{Debug, Display},
     str::FromStr,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use crate::operator::rpc::spark::{
@@ -22,6 +22,7 @@ use prost::Message;
 use error::AddressError;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::Network;
 
@@ -314,6 +315,10 @@ mod tests {
 
     use super::*;
     use bitcoin::secp256k1::Secp256k1;
+    use spark_macros::test_all;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
     fn create_test_public_key() -> PublicKey {
         let secp = Secp256k1::new();
@@ -321,7 +326,7 @@ mod tests {
         PublicKey::from_slice(&secret_key.public_key(&secp).serialize()).unwrap()
     }
 
-    #[test]
+    #[test_all]
     fn test_address_roundtrip() {
         let public_key = create_test_public_key();
         let original_address = SparkAddress::new(public_key, Network::Mainnet, None, None);
@@ -336,7 +341,7 @@ mod tests {
         assert_eq!(parsed_address.network, original_address.network);
     }
 
-    #[test]
+    #[test_all]
     fn test_address_roundtrip_testnet() {
         let public_key = create_test_public_key();
         let original_address = SparkAddress::new(public_key, Network::Testnet, None, None);
@@ -351,7 +356,7 @@ mod tests {
         assert_eq!(parsed_address.network, original_address.network);
     }
 
-    #[test]
+    #[test_all]
     fn test_address_roundtrip_regtest() {
         let public_key = create_test_public_key();
         let original_address = SparkAddress::new(public_key, Network::Regtest, None, None);
@@ -366,7 +371,7 @@ mod tests {
         assert_eq!(parsed_address.network, original_address.network);
     }
 
-    #[test]
+    #[test_all]
     fn test_address_roundtrip_signet() {
         let public_key = create_test_public_key();
         let original_address = SparkAddress::new(public_key, Network::Signet, None, None);
@@ -381,7 +386,7 @@ mod tests {
         assert_eq!(parsed_address.network, original_address.network);
     }
 
-    #[test]
+    #[test_all]
     fn test_parse_specific_regtest_address() {
         let address_str = "sprt1pgssyuuuhnrrdjswal5c3s3rafw9w3y5dd4cjy3duxlf7hjzkp0rqx6dj6mrhu";
         let address = SparkAddress::from_str(address_str).unwrap();
@@ -390,7 +395,7 @@ mod tests {
         assert_eq!(address.identity_public_key.serialize().len(), 33); // Compressed public key
     }
 
-    #[test]
+    #[test_all]
     fn test_invalid_bech32_address() {
         let result = SparkAddress::from_str("invalid-address");
         assert!(result.is_err());
@@ -400,7 +405,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[test_all]
     fn test_unknown_hrp_address() {
         // Create a valid bech32m address but with an unknown HRP
         let public_key = create_test_public_key();
@@ -425,7 +430,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[test_all]
     fn test_invoice_fields_address_roundtrip() {
         let public_key = create_test_public_key();
         let sender_public_key = create_test_public_key();
@@ -489,7 +494,7 @@ mod tests {
         assert_eq!(tokens_payment1.amount, tokens_payment2.amount);
     }
 
-    #[test]
+    #[test_all]
     fn test_invoice_fields_minimal_data() {
         let public_key = create_test_public_key();
         let invoice_fields = SparkInvoiceFields {
@@ -521,7 +526,7 @@ mod tests {
         assert_eq!(parsed_invoice_fields.memo, None);
     }
 
-    #[test]
+    #[test_all]
     fn test_compare_addresses_with_and_without_invoice_fields() {
         let public_key = create_test_public_key();
         let sender_public_key = create_test_public_key();
@@ -561,7 +566,7 @@ mod tests {
         assert!(parsed_with_intent.spark_invoice_fields.is_some());
     }
 
-    #[test]
+    #[test_all]
     fn test_invalid_invoice_fields_data() {
         let public_key = create_test_public_key();
 

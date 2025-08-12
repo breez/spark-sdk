@@ -1,5 +1,4 @@
 mod async_trait;
-mod testing;
 mod wasm_bindgen;
 
 use proc_macro::TokenStream;
@@ -12,7 +11,7 @@ pub fn async_trait(args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Attribute macro to mirror the external struct/enum in WASM
 ///
-/// ```rust
+/// ```rust,ignore
 /// #[sdk_macros::extern_wasm_bindgen(sdk_common::prelude::RouteHint)]
 /// pub struct RouteHint {
 ///     pub hops: Vec<RouteHintHop>,
@@ -27,40 +26,4 @@ pub fn async_trait(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn extern_wasm_bindgen(args: TokenStream, input: TokenStream) -> TokenStream {
     wasm_bindgen::extern_wasm_bindgen(args, input)
-}
-
-/// Attribute macro to async test only non-WASM targets
-#[proc_macro_attribute]
-pub fn async_test_not_wasm(args: TokenStream, input: TokenStream) -> TokenStream {
-    testing::async_test_not_wasm(args, input)
-}
-
-/// Attribute macro to async test only WASM targets
-#[proc_macro_attribute]
-pub fn async_test_wasm(args: TokenStream, input: TokenStream) -> TokenStream {
-    testing::async_test_wasm(args, input)
-}
-
-/// Attribute macro to async test all targets
-#[proc_macro_attribute]
-pub fn async_test_all(args: TokenStream, input: TokenStream) -> TokenStream {
-    testing::async_test_all(args, input)
-}
-
-/// Attribute macro to test only non-WASM targets
-#[proc_macro_attribute]
-pub fn test_not_wasm(args: TokenStream, input: TokenStream) -> TokenStream {
-    testing::test_not_wasm(args, input)
-}
-
-/// Attribute macro to test only WASM targets
-#[proc_macro_attribute]
-pub fn test_wasm(args: TokenStream, input: TokenStream) -> TokenStream {
-    testing::test_wasm(args, input)
-}
-
-/// Attribute macro to test all targets
-#[proc_macro_attribute]
-pub fn test_all(args: TokenStream, input: TokenStream) -> TokenStream {
-    testing::test_all(args, input)
 }

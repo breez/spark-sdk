@@ -13,18 +13,24 @@ impl Resolver {
     }
 }
 
+impl Default for Resolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[breez_sdk_macros::async_trait]
 impl DnsResolver for Resolver {
     async fn txt_lookup(&self, dns_name: String) -> Result<Vec<String>> {
         let mut builder = Builder::new_query(1, true);
         builder.add_question(&dns_name, false, QueryType::TXT, QueryClass::IN);
-        let req_bytes = builder
+        let request_bytes = builder
             .build()
             .map_err(|_| anyhow!("Error building DNS query"))?;
         let client = Client::builder().build()?;
-        let res_bytes = client
+        let result_bytes = client
             .post("https://cloudflare-dns.com/dns-query")
-            .body(req_bytes)
+            .body(request_bytes)
             .header("Accept", "application/dns-message")
             .header("Content-Type", "application/dns-message")
             .send()
@@ -32,7 +38,7 @@ impl DnsResolver for Resolver {
             .error_for_status()?
             .bytes()
             .await?;
-        let packet = Packet::parse(&res_bytes)?;
+        let packet = Packet::parse(&result_bytes)?;
         if packet.header.response_code != ResponseCode::NoError {
             return Err(anyhow!(
                 "Received error response from DNS query: {}",

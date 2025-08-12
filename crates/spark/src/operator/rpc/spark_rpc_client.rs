@@ -10,8 +10,8 @@ use crate::operator::rpc::spark_token::CommitTransactionRequest;
 use crate::operator::rpc::spark_token::CommitTransactionResponse;
 use crate::operator::rpc::spark_token::StartTransactionRequest;
 use crate::operator::rpc::spark_token::StartTransactionResponse;
+use crate::operator::rpc::transport::grpc_client::Transport;
 use crate::signer::Signer;
-use tonic::transport::Channel;
 use tracing::trace;
 
 pub struct QueryAllNodesRequest {
@@ -29,7 +29,7 @@ impl<S> SparkRpcClient<S>
 where
     S: Signer,
 {
-    pub fn new(channel: Channel, signer: Arc<S>) -> Self {
+    pub fn new(channel: Transport, signer: Arc<S>) -> Self {
         Self {
             auth: OperatorAuth::new(channel, signer),
         }

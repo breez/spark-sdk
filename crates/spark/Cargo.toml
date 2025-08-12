@@ -3,6 +3,9 @@ name = "spark"
 version.workspace = true
 edition = "2024"
 
+[features]
+browser-tests = [] # Enable browser wasm-pack tests
+
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true
@@ -21,16 +24,42 @@ prost.workspace = true
 prost-types.workspace = true
 rand.workspace = true
 reqwest = { workspace = true, features = ["json"] }
-rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_with.workspace = true
 spark-macros.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
-tonic.workspace=true
 tracing.workspace = true
+tokio_with_wasm.workspace = true
+web-time.workspace = true
+
+# Non-Wasm dependencies
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+tonic = { workspace = true, features = [
+    "tls",
+    "transport",
+    "tls-roots",
+    "tls-webpki-roots",
+    "prost",
+    "channel",
+    "codegen",
+] }
+rustls.workspace = true
 uuid.workspace = true
+
+# WASM dependencies
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+tonic = { workspace = true, features = [
+    "codegen",
+    "prost",
+] }
+tonic-web-wasm-client.workspace = true
+uuid = { workspace = true, features = ["js"] }
+
+# WASM dev dependencies
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test.workspace = true
 
 [build-dependencies]
 tonic.workspace = true
