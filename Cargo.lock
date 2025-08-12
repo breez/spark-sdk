@@ -618,7 +618,6 @@ dependencies = [
  "chrono",
  "clap",
  "dotenvy",
- "esplora-client",
  "figment",
  "hex",
  "qrcode-rs",
@@ -1327,21 +1326,6 @@ name = "error-code"
 version = "3.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
-
-[[package]]
-name = "esplora-client"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0af349d96a5d9ad77ba59f1437aa6f348b03c5865d4f7d6e7a662d60aedce39"
-dependencies = [
- "bitcoin",
- "hex-conservative 0.2.1",
- "log",
- "minreq",
- "reqwest",
- "serde",
- "tokio",
-]
 
 [[package]]
 name = "etcetera"
@@ -2659,18 +2643,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
 dependencies = [
  "adler2",
-]
-
-[[package]]
-name = "minreq"
-version = "2.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84885312a86831bff4a3cb04a1e54a3f698407e3274c83249313f194d3e0b678"
-dependencies = [
- "base64 0.22.1",
- "log",
- "serde",
- "serde_json",
 ]
 
 [[package]]

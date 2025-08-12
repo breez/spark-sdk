@@ -569,7 +569,7 @@ impl BreezSdk {
         );
         let transfer = self.spark_wallet.claim_static_deposit(quote).await?;
         info!(
-            "Claimed static deopsit transfer: {}",
+            "Claimed static deposit transfer: {}",
             serde_json::to_string_pretty(&transfer)?
         );
         Ok(())
