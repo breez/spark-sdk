@@ -94,12 +94,9 @@ impl RestClientChainService {
                 let encoded_auth = general_purpose::STANDARD.encode(auth_string.as_bytes());
 
                 headers = Some(
-                    vec![(
-                        "Authorization".to_string(),
-                        format!("Basic {}", encoded_auth),
-                    )]
-                    .into_iter()
-                    .collect(),
+                    vec![("Authorization".to_string(), format!("Basic {encoded_auth}"))]
+                        .into_iter()
+                        .collect(),
                 );
             }
 
