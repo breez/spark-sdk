@@ -22,4 +22,4 @@ pub use spark::{
     utils::paging::Order,
     utils::paging::PagingFilter,
 };
-pub use wallet::SparkWallet;
+pub use wallet::{SparkWallet, is_ephemeral_anchor_output};

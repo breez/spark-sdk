@@ -11,7 +11,7 @@ use crate::{
         OperatorPool,
         rpc::{
             SparkRpcClient,
-            spark::{QueryNodesRequest, query_nodes_request::Source},
+            spark::{QueryNodesRequest, TreeNodeIds, query_nodes_request::Source},
         },
     },
     services::{ServiceError, Swap, TimelockManager},
@@ -61,21 +61,24 @@ impl<S: Signer> TreeService<S> {
     async fn query_nodes_inner(
         &self,
         client: &SparkRpcClient<S>,
+        include_parents: bool,
+        source: Option<Source>,
         paging: PagingFilter,
     ) -> Result<PagingResult<TreeNode>, TreeServiceError> {
         trace!(
             "Querying nodes with limit: {:?}, offset: {:?}",
             paging.limit, paging.offset
         );
+        let source = source.unwrap_or(Source::OwnerIdentityPubkey(
+            self.identity_pubkey.serialize().to_vec(),
+        ));
         let nodes = client
             .query_nodes(QueryNodesRequest {
-                include_parents: false,
+                include_parents,
                 limit: paging.limit as i64,
                 offset: paging.offset as i64,
                 network: self.network.to_proto_network().into(),
-                source: Some(Source::OwnerIdentityPubkey(
-                    self.identity_pubkey.serialize().to_vec(),
-                )),
+                source: Some(source),
             })
             .await?;
         Ok(PagingResult {
@@ -94,9 +97,11 @@ impl<S: Signer> TreeService<S> {
     async fn query_nodes(
         &self,
         client: &SparkRpcClient<S>,
+        include_parents: bool,
+        source: Option<Source>,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
         let nodes = pager(
-            |f| self.query_nodes_inner(client, f),
+            |f| self.query_nodes_inner(client, include_parents, source.clone(), f),
             PagingFilter::default(),
         )
         .await?;
@@ -131,6 +136,27 @@ impl<S: Signer> TreeService<S> {
     /// ```
     pub async fn list_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
         Ok(self.state.lock().await.get_leaves())
+    }
+
+    pub async fn fetch_leaves_parents(
+        &self,
+        leaf_ids: Vec<TreeNodeId>,
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        if leaf_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let nodes = self
+            .query_nodes(
+                &self.operator_pool.get_coordinator().client,
+                true,
+                Some(Source::NodeIds(TreeNodeIds {
+                    node_ids: leaf_ids.into_iter().map(|id| id.to_string()).collect(),
+                })),
+            )
+            .await?;
+
+        Ok(nodes)
     }
 
     async fn check_timelock_nodes<F>(
@@ -186,7 +212,7 @@ impl<S: Signer> TreeService<S> {
     /// ```
     pub async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
         let coordinator_leaves = self
-            .query_nodes(&self.operator_pool.get_coordinator().client)
+            .query_nodes(&self.operator_pool.get_coordinator().client, false, None)
             .await?;
 
         let mut leaves_to_ignore: HashSet<TreeNodeId> = HashSet::new();
@@ -194,7 +220,7 @@ impl<S: Signer> TreeService<S> {
         // TODO: on js sdk, leaves missing from operators are not ignored when checking balance
         // TODO: we can optimize this by fetching leaves from all operators in parallel
         for operator in self.operator_pool.get_non_coordinator_operators() {
-            let operator_leaves = self.query_nodes(&operator.client).await?;
+            let operator_leaves = self.query_nodes(&operator.client, false, None).await?;
 
             for leaf in &coordinator_leaves {
                 match operator_leaves.iter().find(|l| l.id == leaf.id) {

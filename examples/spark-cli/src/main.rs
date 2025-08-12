@@ -1,5 +1,6 @@
 mod command;
 mod config;
+mod mempool;
 
 use std::borrow::Cow::{self, Owned};
 use std::fs::{OpenOptions, canonicalize};
