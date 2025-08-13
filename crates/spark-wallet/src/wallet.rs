@@ -654,16 +654,12 @@ impl<S: Signer> SparkWallet<S> {
         Ok(transfer)
     }
 
-    pub async fn unilateral_exit<F>(
+    pub async fn unilateral_exit(
         &self,
         fee_rate: u64,
         leaf_ids: Vec<TreeNodeId>,
         mut utxos: Vec<FeeBumpUtxo>,
-        get_transaction_fn: impl Fn(String) -> F,
-    ) -> Result<Vec<LeafTxFeeBumpPsbts>, SparkWalletError>
-    where
-        F: std::future::Future<Output = Result<Transaction, SparkWalletError>>,
-    {
+    ) -> Result<Vec<LeafTxFeeBumpPsbts>, SparkWalletError> {
         if leaf_ids.is_empty() {
             return Err(SparkWalletError::ValidationError(
                 "At least one leaf ID is required".to_string(),
@@ -729,10 +725,6 @@ impl<S: Signer> SparkWallet<S> {
                 }
 
                 checked_txs.insert(txid);
-                let is_broadcast = get_transaction_fn(txid.to_string()).await.is_ok();
-                if is_broadcast {
-                    continue;
-                }
 
                 // Create the PSBT to fee bump the node tx
                 let psbt = create_fee_bump_psbt(

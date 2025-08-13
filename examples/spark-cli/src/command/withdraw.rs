@@ -9,7 +9,7 @@ use spark_wallet::{
     FeeBumpUtxo, SparkWallet, SparkWalletError, TreeNodeId, is_ephemeral_anchor_output,
 };
 
-use crate::{config::Config, mempool::get_transaction};
+use crate::config::Config;
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum ExitSpeed {
@@ -109,13 +109,8 @@ where
                 .into_iter()
                 .map(|s| FeeBumpUtxo::from_str(&s))
                 .collect::<Result<_, _>>()?;
-            let all_leaf_tx_fee_bump_psbts = wallet
-                .unilateral_exit(fee_rate, leaf_ids, utxos, |txid| async move {
-                    get_transaction(config, txid)
-                        .await
-                        .map_err(|e| SparkWalletError::Generic(e.to_string()))
-                })
-                .await?;
+            let all_leaf_tx_fee_bump_psbts =
+                wallet.unilateral_exit(fee_rate, leaf_ids, utxos).await?;
 
             for leaf_tx_fee_bump_psbts in &all_leaf_tx_fee_bump_psbts {
                 println!();
@@ -125,22 +120,31 @@ where
                 for (index, tx_fee_bump_psbt) in
                     leaf_tx_fee_bump_psbts.tx_fee_bump_psbts.iter().enumerate()
                 {
+                    let index_str = format!("{}. ", index + 1);
+                    let index_spaces = " ".repeat(index_str.len());
                     let node_type = if index == leaf_tx_fee_bump_psbts.tx_fee_bump_psbts.len() - 1 {
                         "Leaf TX"
                     } else {
                         "Node TX"
                     };
 
+                    let txid = tx_fee_bump_psbt.tx.compute_txid();
                     let tx_hex = serialize_hex(&tx_fee_bump_psbt.tx);
-                    println!("{}. {}: {}", index + 1, node_type, tx_hex);
+                    println!("{index_str}{node_type} ID: {txid}");
+                    println!("{index_spaces}{node_type}: {tx_hex}");
 
                     let mut psbt = tx_fee_bump_psbt.psbt.clone();
                     let psbt_hex = psbt.serialize_hex();
-                    println!("{}. PSBT (unsigned): {}", index + 1, psbt_hex);
+                    println!("{index_spaces}PSBT (unsigned): {psbt_hex}");
+
                     if let Some(signing_key) = &signing_key {
                         sign_psbt(&mut psbt, signing_key)?;
-                        let signed_tx_hex = serialize_hex(&psbt.extract_tx()?);
-                        println!("{}. PSBT signed TX: {}", index + 1, signed_tx_hex);
+
+                        let signed_tx = psbt.extract_tx()?;
+                        let signed_txid = signed_tx.compute_txid();
+                        let signed_tx_hex = serialize_hex(&signed_tx);
+                        println!("{index_spaces}PSBT signed TX ID: {signed_txid}");
+                        println!("{index_spaces}PSBT signed TX: {signed_tx_hex}");
                     }
                     println!();
                 }
