@@ -259,7 +259,7 @@ impl From<Network> for SparkNetwork {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub network: Network,
-    pub deposits_monitoring_interval: u32,
+    pub deposits_monitoring_interval_secs: u32,
 }
 
 #[derive(Debug, Clone)]

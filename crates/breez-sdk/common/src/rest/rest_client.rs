@@ -11,6 +11,7 @@ pub trait RestClient: MaybeSend + MaybeSync {
     /// Makes a GET request and logs on DEBUG.
     /// ### Arguments
     /// - `url`: the URL on which GET will be called
+    /// - `headers`: optional headers that will be set on the request
     async fn get(
         &self,
         url: &str,

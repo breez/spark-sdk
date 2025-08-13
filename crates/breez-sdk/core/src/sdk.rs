@@ -61,7 +61,7 @@ pub fn default_storage(data_dir: String) -> Result<Box<dyn Storage>, SdkError> {
 pub fn default_config(network: Network) -> Config {
     Config {
         network,
-        deposits_monitoring_interval: 5 * 60, // every 5 minutes
+        deposits_monitoring_interval_secs: 5 * 60, // every 5 minutes
     }
 }
 
@@ -161,10 +161,20 @@ impl BreezSdk {
                         return;
                     }
                     _ = tokio::time::sleep(Duration::from_secs(deposits_monitoring_interval.into())) => {
-                      if let Err(e) = sdk.check_and_claim_static_deposits().await {
-                        error!("Monitor deposits failed to list static deposit addresses: {e:?}");
+
+                      tokio::select! {
+                        _ = shutdown_receiver.changed() => {
+                          info!("Check claim static deposits shutdown signal received");
+                          return;
+                        }
+                        claim_result = sdk.check_and_claim_static_deposits() => {
+                          if let Err(e) = claim_result {
+                            error!("Monitor deposits failed to claim static deposit: {e:?}");
+                          }
+                        }
                       }
-                      deposits_monitoring_interval = sdk.config.deposits_monitoring_interval;
+
+                      deposits_monitoring_interval = sdk.config.deposits_monitoring_interval_secs;
                     }
                 }
             }
