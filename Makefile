@@ -1,37 +1,61 @@
-SUBDIRS := crates
-EXAMPLE_SUBDIRS := examples
-
-.PHONY: $(SUBDIRS) $(EXAMPLE_SUBDIRS)
-
-$(SUBDIRS):
-	$(MAKE) -C $@ $(MAKECMDGOALS)
-
-$(EXAMPLE_SUBDIRS):
-	$(MAKE) -C $@ $(MAKECMDGOALS)
+XTASK := cargo run -p xtask --
 
 default: check
 
-build: $(SUBDIRS) $(EXAMPLE_SUBDIRS)
+build:
+	$(XTASK) build
 
-build-wasm: $(SUBDIRS)
+build-wasm:
+	$(XTASK) build --target wasm32-unknown-unknown
 
-build-release: $(SUBDIRS)
+# This adds a make command to install a target, e.g. `make install-target-wasm32-unknown-unknown`
+install-target-%:
+	$(CLANG_PREFIX) rustup target add $*
+
+build-target-%: install-target-%
+	$(XTASK) build --target $*
+
+build-release:
+	$(XTASK) build --release
 
 check: fmt-check clippy-check test
 
-clippy-fix: $(SUBDIRS) $(EXAMPLE_SUBDIRS)
+clippy-fix: cargo-clippy-fix wasm-clippy-fix
 
-clippy-check: $(SUBDIRS) $(EXAMPLE_SUBDIRS)
+cargo-clippy-fix:
+	$(XTASK) clippy --fix
+
+wasm-clippy-fix:
+	$(XTASK) wasm-clippy --fix
+
+clippy-check: cargo-clippy-check wasm-clippy-check
+
+cargo-clippy-check:
+	$(XTASK) clippy
+
+wasm-clippy-check:
+	$(XTASK) wasm-clippy
 
 fix: fmt-fix clippy-fix
 
-fmt-fix: $(SUBDIRS) $(EXAMPLE_SUBDIRS)
+fmt-fix:
+	$(XTASK) fmt
 
-fmt-check: $(SUBDIRS) $(EXAMPLE_SUBDIRS)
+fmt-check:
+	$(XTASK) fmt --check
+
+test: cargo-test wasm-test
+
+cargo-test:
+	$(XTASK) test
+
+wasm-test: wasm-test-browser wasm-test-node
+
+wasm-test-browser:
+	$(XTASK) wasm-test
+
+wasm-test-node:
+	$(XTASK) wasm-test --node
 
 itest:
-	$(MAKE) -C crates/spark-itest $(MAKECMDGOALS)
-
-test: $(SUBDIRS) $(EXAMPLE_SUBDIRS)
-
-wasm-clippy-check: $(SUBDIRS)
+	$(XTASK) itest

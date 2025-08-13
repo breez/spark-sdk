@@ -116,11 +116,15 @@ impl TreeState {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use bitcoin::{Transaction, absolute::LockTime, secp256k1::PublicKey, transaction::Version};
     use frost_secp256k1_tr::Identifier;
+    use spark_macros::test_all;
     use std::str::FromStr;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
     fn create_test_tree_node(id: &str, value: u64) -> TreeNode {
         TreeNode {
@@ -159,14 +163,14 @@ mod test {
         }
     }
 
-    #[test]
+    #[test_all]
     fn test_new() {
         let state = TreeState::new();
         assert!(state.leaves.is_empty());
         assert!(state.leaves_reservations.is_empty());
     }
 
-    #[test]
+    #[test_all]
     fn test_add_leaves() {
         let mut state = TreeState::new();
         let leaves = vec![
@@ -190,7 +194,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_all]
     fn test_add_leaves_duplicate_ids() {
         let mut state = TreeState::new();
         let leaf1 = create_test_tree_node("node1", 100);
@@ -205,7 +209,7 @@ mod test {
         assert_eq!(stored_leaves[0].value, 200);
     }
 
-    #[test]
+    #[test_all]
     fn test_set_leaves() {
         let mut state = TreeState::new();
         let initial_leaves = vec![create_test_tree_node("node1", 100)];
@@ -224,7 +228,7 @@ mod test {
         assert!(!stored_leaves.iter().any(|l| l.id.to_string() == "node1"));
     }
 
-    #[test]
+    #[test_all]
     fn test_set_leaves_with_reservations() {
         let mut state = TreeState::new();
         let leaves = vec![
@@ -264,7 +268,7 @@ mod test {
         assert!(main_leaves.iter().any(|l| l.id.to_string() == "node4"));
     }
 
-    #[test]
+    #[test_all]
     fn test_set_leaves_removes_non_existing_from_reservations() {
         let mut state = TreeState::new();
         let leaves = vec![
@@ -285,7 +289,7 @@ mod test {
         assert!(reservation.is_none());
     }
 
-    #[test]
+    #[test_all]
     fn test_reserve_leaves() {
         let mut state = TreeState::new();
         let leaves = vec![
@@ -309,7 +313,7 @@ mod test {
         assert_eq!(main_leaves[0].id, leaves[1].id);
     }
 
-    #[test]
+    #[test_all]
     fn test_cancel_reservation() {
         let mut state = TreeState::new();
         let leaves = vec![
@@ -334,7 +338,7 @@ mod test {
         assert!(main_leaves.iter().any(|l| l.id == leaves[1].id));
     }
 
-    #[test]
+    #[test_all]
     fn test_cancel_reservation_nonexistent() {
         let mut state = TreeState::new();
         let fake_id = "fake-reservation-id".to_string();
@@ -346,7 +350,7 @@ mod test {
         assert!(state.get_leaves().is_empty());
     }
 
-    #[test]
+    #[test_all]
     fn test_finalize_reservation() {
         let mut state = TreeState::new();
         let leaves = vec![
@@ -370,7 +374,7 @@ mod test {
         assert_eq!(main_leaves[0].id, leaves[1].id);
     }
 
-    #[test]
+    #[test_all]
     fn test_finalize_reservation_nonexistent() {
         let mut state = TreeState::new();
         let fake_id = "fake-reservation-id".to_string();
@@ -382,7 +386,7 @@ mod test {
         assert!(state.get_leaves().is_empty());
     }
 
-    #[test]
+    #[test_all]
     fn test_multiple_reservations() {
         let mut state = TreeState::new();
         let leaves = vec![
@@ -417,7 +421,7 @@ mod test {
         assert_eq!(state.get_leaves().len(), 2); // node1 returned, node3 was always there
     }
 
-    #[test]
+    #[test_all]
     fn test_reservation_ids_are_unique() {
         let mut state = TreeState::new();
         let leaf = create_test_tree_node("node1", 100);
@@ -434,7 +438,7 @@ mod test {
         assert_ne!(id1, id2);
     }
 
-    #[test]
+    #[test_all]
     fn test_non_reservable_leaves() {
         let mut state = TreeState::new();
         let leaf = create_test_tree_node("node1", 100);
@@ -449,7 +453,7 @@ mod test {
         assert!(matches!(result, TreeServiceError::NonReservableLeaves));
     }
 
-    #[test]
+    #[test_all]
     fn test_reserve_leaves_empty() {
         let mut state = TreeState::new();
         let err = state.reserve_leaves(&[], false).unwrap_err();
@@ -457,7 +461,7 @@ mod test {
         assert!(matches!(err, TreeServiceError::NonReservableLeaves));
     }
 
-    #[test]
+    #[test_all]
     fn test_remove_leaves() {
         let mut state = TreeState::new();
         let leaves = vec![
@@ -477,7 +481,7 @@ mod test {
         assert_eq!(remaining_leaves[0].id.to_string(), "node2");
     }
 
-    #[test]
+    #[test_all]
     fn test_reserve_leaves_accept_new_leaves() {
         let mut state = TreeState::new();
         let leaf = create_test_tree_node("new_node", 500);
@@ -497,7 +501,7 @@ mod test {
         assert!(state.get_leaves().is_empty());
     }
 
-    #[test]
+    #[test_all]
     fn test_reserve_leaves_mix_existing_and_new() {
         let mut state = TreeState::new();
         let existing_leaf = create_test_tree_node("existing", 100);

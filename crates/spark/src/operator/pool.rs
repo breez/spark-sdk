@@ -4,7 +4,6 @@ use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::Identifier;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
-use tonic::transport::Uri;
 
 use crate::{
     operator::rpc::{ConnectionManager, OperatorRpcError, SparkRpcClient},
@@ -69,8 +68,7 @@ impl OperatorPoolConfig {
 pub struct OperatorConfig {
     pub id: usize,
     pub identifier: Identifier,
-    #[serde_as(as = "DisplayFromStr")]
-    pub address: Uri,
+    pub address: String,
     #[serde_as(as = "DisplayFromStr")]
     pub identity_public_key: PublicKey,
 }
@@ -98,8 +96,8 @@ impl<S: Signer> OperatorPool<S> {
     ) -> Result<Self, OperatorRpcError> {
         let mut operators = Vec::new();
         for operator in &config.operators {
-            let channel = connection_manager.get_channel(operator).await?;
-            let client = SparkRpcClient::new(channel, Arc::clone(&signer));
+            let transport = connection_manager.get_transport(operator).await?;
+            let client = SparkRpcClient::new(transport, Arc::clone(&signer));
             operators.push(Operator {
                 client,
                 id: operator.id,

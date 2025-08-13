@@ -1,3 +1,4 @@
+use maybe_sync::{MaybeSend, MaybeSync};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -15,7 +16,7 @@ pub enum ChainServiceError {
 }
 
 #[breez_sdk_macros::async_trait]
-pub trait BitcoinChainService {
+pub trait BitcoinChainService: MaybeSend + MaybeSync {
     async fn get_address_utxos(&self, address: &str) -> Result<Vec<Utxo>, ChainServiceError>;
     async fn get_transaction_hex(&self, txid: &str) -> Result<String, ChainServiceError>;
 }

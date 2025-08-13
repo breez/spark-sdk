@@ -62,10 +62,14 @@ fn to_sequence(blocks: u16) -> Sequence {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
+    use spark_macros::test_all;
 
-    #[test]
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test_all]
     fn test_initial_sequence() {
         let sequence = initial_cpfp_sequence();
         assert!(sequence.is_height_locked());
@@ -80,7 +84,7 @@ mod test {
         assert_eq!(height.value(), INITIAL_TIME_LOCK);
     }
 
-    #[test]
+    #[test_all]
     fn test_initial_direct_sequence() {
         let sequence = initial_direct_sequence();
         assert!(sequence.is_height_locked());
@@ -95,7 +99,7 @@ mod test {
         assert_eq!(height.value(), INITIAL_TIME_LOCK + DIRECT_TIME_LOCK_OFFSET);
     }
 
-    #[test]
+    #[test_all]
     fn test_next_sequence() {
         let mut cpfp_sequence = initial_cpfp_sequence();
         let mut direct_sequence = initial_direct_sequence();

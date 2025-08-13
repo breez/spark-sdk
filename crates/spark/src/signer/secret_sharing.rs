@@ -180,8 +180,12 @@ fn scalar_to_pubkey(secret: &k256::Scalar) -> Result<PublicKey, SignerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spark_macros::test_all;
 
-    #[test]
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test_all]
     fn test_from_bytes_to_scalar() {
         // Test valid conversion
         let bytes = [42u8; 32];
@@ -200,7 +204,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[test_all]
     fn test_scalar_to_pubkey() {
         // Create a known scalar
         let scalar_bytes = [1u8; 32];
@@ -220,7 +224,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test_all]
     fn test_polynomial_evaluation() {
         // Create a polynomial with known coefficients
         // p(x) = 5 + 3x + 2x² (coefficients [5, 3, 2])
@@ -249,7 +253,7 @@ mod tests {
         assert_eq!(result, Scalar::from(10u64));
     }
 
-    #[test]
+    #[test_all]
     fn test_generate_polynomial() {
         // Create a test secret
         let secret_bytes = [1u8; 32];
@@ -274,7 +278,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[test_all]
     fn test_split_secret_basic() {
         // Create a secret to share
         let secret_bytes = [1u8; 32];
@@ -302,7 +306,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[test_all]
     fn test_split_secret_invalid_params() {
         let secret_bytes = [1u8; 32];
         let secret = from_bytes_to_scalar(&secret_bytes).unwrap();
@@ -330,7 +334,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[test_all]
     fn test_secret_reconstruction() {
         // This is a simplified implementation of Lagrange interpolation to reconstruct the secret
         // In a real implementation, this would be a separate function in the module

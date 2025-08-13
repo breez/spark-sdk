@@ -1,14 +1,16 @@
 use std::collections::HashMap;
 use tokio::sync::Mutex;
-use tonic::transport::{Channel, ClientTlsConfig};
 use tracing::debug;
 
-use crate::operator::OperatorConfig;
+use crate::operator::{
+    OperatorConfig,
+    rpc::transport::grpc_client::{GrpcClient, Transport},
+};
 
-use super::error::{OperatorRpcError, Result};
+use super::error::Result;
 
 pub struct ConnectionManager {
-    connections_map: Mutex<HashMap<String, Channel>>,
+    connections_map: Mutex<HashMap<String, Transport>>,
 }
 
 impl Default for ConnectionManager {
@@ -19,12 +21,15 @@ impl Default for ConnectionManager {
 
 impl ConnectionManager {
     pub fn new() -> ConnectionManager {
-        // if rustls::static_default::
-        if rustls::crypto::ring::default_provider()
-            .install_default()
-            .is_err()
+        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
         {
-            tracing::error!("Failed to install rustls crypto provider, ignoring error");
+            // Install rustls ring crypto provider for native targets only
+            if rustls::crypto::ring::default_provider()
+                .install_default()
+                .is_err()
+            {
+                tracing::error!("Failed to install rustls crypto provider, ignoring error");
+            }
         }
         let connections_map = HashMap::new();
         Self {
@@ -32,20 +37,17 @@ impl ConnectionManager {
         }
     }
 
-    pub async fn get_channel(&self, operator: &OperatorConfig) -> Result<Channel> {
+    pub async fn get_transport(&self, operator: &OperatorConfig) -> Result<Transport> {
         let mut map = self.connections_map.lock().await;
         let operator_connection = map.get(&operator.address.to_string());
         match operator_connection {
             Some(operator_connection) => Ok(operator_connection.clone()),
             None => {
-                let channel = Channel::from_shared(operator.address.to_string())
-                    .map_err(|e| OperatorRpcError::InvalidUri(e.to_string()))?
-                    .tls_config(ClientTlsConfig::new().with_enabled_roots())?
-                    .connect_lazy();
+                let transport = GrpcClient::new(operator.address.to_string())?.into_inner();
 
-                map.insert(operator.address.to_string(), channel.clone());
+                map.insert(operator.address.to_string(), transport.clone());
                 debug!("Created new connection to operator: {}", operator.address);
-                Ok(channel)
+                Ok(transport)
             }
         }
     }

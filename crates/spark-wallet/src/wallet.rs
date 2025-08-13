@@ -28,6 +28,7 @@ use spark::{
     utils::paging::PagingFilter,
 };
 use tokio::sync::{broadcast, watch};
+use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, info, trace};
 
 use crate::{

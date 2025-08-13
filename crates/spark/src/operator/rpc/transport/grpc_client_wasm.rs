@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::operator::rpc::OperatorRpcError;
 
 pub type Transport = tonic_web_wasm_client::Client;
 
@@ -8,9 +8,9 @@ pub struct GrpcClient {
 }
 
 impl GrpcClient {
-    pub fn new(url: &str) -> Result<Self> {
+    pub fn new(url: String) -> Result<Self, OperatorRpcError> {
         Ok(Self {
-            inner: tonic_web_wasm_client::Client::new(url.to_string()),
+            inner: tonic_web_wasm_client::Client::new(url),
         })
     }
 

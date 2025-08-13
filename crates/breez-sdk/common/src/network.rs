@@ -19,7 +19,7 @@ impl From<bitcoin::Network> for BitcoinNetwork {
             bitcoin::Network::Testnet4 => BitcoinNetwork::Testnet4,
             bitcoin::Network::Signet => BitcoinNetwork::Signet,
             bitcoin::Network::Regtest => BitcoinNetwork::Regtest,
-            _ => BitcoinNetwork::Bitcoin, // Default to Bitcoin for other networks
+            bitcoin::Network::Bitcoin => BitcoinNetwork::Bitcoin,
         }
     }
 }

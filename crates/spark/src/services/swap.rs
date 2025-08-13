@@ -1,11 +1,8 @@
-use std::{
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
+use std::{sync::Arc, time::Duration};
 
 use bitcoin::{consensus::serialize, secp256k1::ecdsa::Signature};
-use prost_types::Timestamp;
 use tracing::trace;
+use web_time::SystemTime;
 
 use crate::{
     Network,
@@ -17,9 +14,12 @@ use crate::{
     signer::{PrivateKeySource, Signer, from_bytes_to_scalar},
     ssp::{CompleteLeavesSwapInput, RequestLeavesSwapInput, ServiceProvider, UserLeafInput},
     tree::TreeNode,
-    utils::refund::{
-        map_refund_signatures, prepare_leaf_refund_signing_data, prepare_refund_so_signing_jobs,
-        sign_aggregate_refunds,
+    utils::{
+        refund::{
+            map_refund_signatures, prepare_leaf_refund_signing_data,
+            prepare_refund_so_signing_jobs, sign_aggregate_refunds,
+        },
+        time::web_time_to_prost_timestamp,
     },
 };
 
@@ -121,7 +121,10 @@ impl<S: Signer> Swap<S> {
                     .serialize()
                     .to_vec(),
                 receiver_identity_public_key: receiver_public_key.serialize().to_vec(),
-                expiry_time: Some(Timestamp::from(SystemTime::now() + SWAP_EXPIRY_DURATION)),
+                expiry_time: Some(
+                    web_time_to_prost_timestamp(SystemTime::now() + SWAP_EXPIRY_DURATION)
+                        .map_err(|_| ServiceError::Generic("Invalid expiry time".to_string()))?,
+                ),
                 #[allow(deprecated)]
                 leaves_to_send: signing_jobs,
                 ..Default::default()

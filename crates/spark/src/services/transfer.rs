@@ -26,6 +26,7 @@ use bitcoin::secp256k1::{PublicKey, SecretKey};
 use frost_secp256k1_tr::Identifier;
 use k256::Scalar;
 use prost::Message as ProstMessage;
+use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, trace};
 
 use crate::{

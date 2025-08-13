@@ -5,15 +5,12 @@ use spark_wallet::{
     DefaultSigner, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress, SparkWallet, Utxo,
     WalletEvent,
 };
-use std::{
-    path::PathBuf,
-    str::FromStr,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 use tracing::{error, info, trace};
 
 use tokio::sync::watch;
+use tokio_with_wasm::alias as tokio;
+use web_time::Instant;
 
 use crate::{
     BitcoinChainService, GetPaymentRequest, GetPaymentResponse, Logger, Network, PaymentStatus,
@@ -38,7 +35,7 @@ pub struct BreezSdk {
     config: Config,
     spark_wallet: Arc<SparkWallet<DefaultSigner>>,
     storage: Arc<dyn Storage>,
-    chain_service: Arc<dyn BitcoinChainService + Send + Sync>,
+    chain_service: Arc<dyn BitcoinChainService>,
     event_emitter: Arc<EventEmitter>,
     shutdown_sender: watch::Sender<()>,
     shutdown_receiver: watch::Receiver<()>,
@@ -88,7 +85,7 @@ impl BreezSdk {
         config: Config,
         signer: DefaultSigner,
         storage: Arc<dyn Storage + Send + Sync>,
-        chain_service: Arc<dyn BitcoinChainService + Send + Sync>,
+        chain_service: Arc<dyn BitcoinChainService>,
         shutdown_sender: watch::Sender<()>,
         shutdown_receiver: watch::Receiver<()>,
     ) -> Result<Self, SdkError> {

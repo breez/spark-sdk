@@ -3,6 +3,9 @@ name = "breez-sdk-core"
 edition = "2024"
 version.workspace = true
 
+[features]
+browser-tests = [] # Enable browser wasm-pack tests
+
 [dependencies]
 bip39.workspace = true
 bitcoin.workspace = true
@@ -16,21 +19,35 @@ qrcode-rs.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
-rustyline = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 shellwords.workspace = true
 spark-wallet.workspace = true
 tempdir.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio_with_wasm.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid.workspace = true
 breez-sdk-macros.workspace = true
 async-trait.workspace = true
 base64.workspace = true
+web-time.workspace = true
+
+# Non-Wasm dependencies
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+maybe-sync = { workspace = true, features = ["sync"] }
+
+# WASM dependencies
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+tokio = { workspace = true, features = ["macros"] }
+maybe-sync.workspace = true
 
 [dev-dependencies]
 breez-sdk-common = { workspace = true, features = ["test-utils"] }
+spark-macros.workspace = true
 
+# WASM dev dependencies
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test.workspace = true

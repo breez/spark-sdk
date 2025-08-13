@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Not, sync::Arc, time::SystemTime};
+use std::{collections::HashMap, ops::Not, sync::Arc};
 
 use bitcoin::{
     bech32::{self, Bech32m, Hrp},
@@ -8,6 +8,7 @@ use prost_types::Timestamp;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::warn;
+use web_time::SystemTime;
 
 use crate::{
     Network,
@@ -924,6 +925,7 @@ impl HashableTokenTransaction for rpc::spark_token::TokenTransaction {
 #[cfg(test)]
 mod tests {
     use prost_types::Timestamp;
+    use spark_macros::test_all;
 
     use crate::{
         operator::rpc::{
@@ -935,7 +937,10 @@ mod tests {
         services::tokens::HashableTokenTransaction,
     };
 
-    #[test]
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test_all]
     fn test_compute_token_transaction_hash_non_partial() {
         let tx =
             rpc::spark_token::TokenTransaction {
@@ -1039,7 +1044,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test_all]
     fn test_compute_token_transaction_hash_partial() {
         let tx =
             rpc::spark_token::TokenTransaction {

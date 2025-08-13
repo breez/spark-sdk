@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build ${{ matrix.crate }} ${{ matrix.target }}
+    name: Build ${{ matrix.target }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,7 +22,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build
-        working-directory: crates/${{ matrix.crate }}
         run: make build-target-${{ matrix.target }}
 
       - name: Check git status
@@ -30,11 +29,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        crate:
-          - spark
-          - spark-wallet
-          - breez-sdk/common
-          - breez-sdk/core
         target:
           - x86_64-unknown-linux-gnu
 
@@ -50,7 +44,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Clippy
-        run: make clippy-check
+        run: make cargo-clippy-check
 
   fmt:
     name: Format
@@ -87,22 +81,13 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Tests
-        working-directory: crates/${{ matrix.crate }}
-        run: make test
+        run: make cargo-test
 
       - name: Check git status
         uses: ./.github/actions/check-git-status
-    strategy:
-      matrix:
-        crate:
-          - spark
-          - spark-wallet
-          - breez-sdk/common
-          - breez-sdk/core
 
   wasm-clippy:
     name: Wasm clippy
-    if: false # TODO: Enable this when we start supporting wasm
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -112,5 +97,28 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Setup emsdk
+        uses: mymindstorm/setup-emsdk@v14
+
       - name: Run Clippy
         run: make wasm-clippy-check
+
+  wasm-test:
+    name: Wasm test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup emsdk
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Run Tests
+        run: make wasm-test
+
+      - name: Check git status
+        uses: ./.github/actions/check-git-status

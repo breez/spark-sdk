@@ -121,7 +121,7 @@ impl RestClientChainService {
     }
 }
 
-#[async_trait::async_trait]
+#[breez_sdk_macros::async_trait]
 impl BitcoinChainService for RestClientChainService {
     async fn get_address_utxos(&self, address: &str) -> Result<Vec<Utxo>, ChainServiceError> {
         let address = address
@@ -164,10 +164,15 @@ mod tests {
     use super::*;
     use crate::Network;
 
+    use spark_macros::async_test_all;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
     #[cfg(test)]
     use breez_sdk_common::test_utils::mock_rest_client::{MockResponse, MockRestClient};
 
-    #[tokio::test]
+    #[async_test_all]
     async fn test_get_address_utxos() {
         // Mock JSON response from the actual API call
         let mock_response = r#"[
