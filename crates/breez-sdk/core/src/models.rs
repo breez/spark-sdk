@@ -272,8 +272,8 @@ pub enum Fee {
 impl std::fmt::Display for Fee {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Fee::Fixed { amount } => write!(f, "Fixed: {}", amount),
-            Fee::Rate { sat_per_vbyte } => write!(f, "Rate: {}", sat_per_vbyte),
+            Fee::Fixed { amount } => write!(f, "Fixed: {amount}"),
+            Fee::Rate { sat_per_vbyte } => write!(f, "Rate: {sat_per_vbyte}"),
         }
     }
 }
