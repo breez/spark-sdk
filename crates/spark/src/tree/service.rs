@@ -11,7 +11,7 @@ use crate::{
         OperatorPool,
         rpc::{
             SparkRpcClient,
-            spark::{QueryNodesRequest, TreeNodeIds, query_nodes_request::Source},
+            spark::{QueryNodesRequest, query_nodes_request::Source},
         },
     },
     services::{ServiceError, Swap, TimelockManager},
@@ -136,27 +136,6 @@ impl<S: Signer> TreeService<S> {
     /// ```
     pub async fn list_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
         Ok(self.state.lock().await.get_leaves())
-    }
-
-    pub async fn fetch_leaves_parents(
-        &self,
-        leaf_ids: Vec<TreeNodeId>,
-    ) -> Result<Vec<TreeNode>, TreeServiceError> {
-        if leaf_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let nodes = self
-            .query_nodes(
-                &self.operator_pool.get_coordinator().client,
-                true,
-                Some(Source::NodeIds(TreeNodeIds {
-                    node_ids: leaf_ids.into_iter().map(|id| id.to_string()).collect(),
-                })),
-            )
-            .await?;
-
-        Ok(nodes)
     }
 
     async fn check_timelock_nodes<F>(

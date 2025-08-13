@@ -1,13 +1,15 @@
 use std::str::FromStr;
 
 use bitcoin::{
-    self, PrivateKey, Psbt, Witness, consensus::encode::serialize_hex, ecdsa::Signature,
-    key::Secp256k1, secp256k1::SecretKey, sighash::SighashCache,
+    self, PrivateKey, Psbt, Txid, Witness,
+    consensus::encode::serialize_hex,
+    ecdsa::Signature,
+    key::Secp256k1,
+    secp256k1::{PublicKey, SecretKey},
+    sighash::SighashCache,
 };
 use clap::Subcommand;
-use spark_wallet::{
-    FeeBumpUtxo, SparkWallet, SparkWalletError, TreeNodeId, is_ephemeral_anchor_output,
-};
+use spark_wallet::{SparkWallet, SparkWalletError, TreeNodeId, is_ephemeral_anchor_output};
 
 use crate::config::Config;
 
@@ -25,6 +27,32 @@ impl From<ExitSpeed> for spark_wallet::ExitSpeed {
             ExitSpeed::Medium => spark_wallet::ExitSpeed::Medium,
             ExitSpeed::Slow => spark_wallet::ExitSpeed::Slow,
         }
+    }
+}
+
+struct CpfpUtxo(spark_wallet::CpfpUtxo);
+
+impl std::str::FromStr for CpfpUtxo {
+    type Err = Box<dyn std::error::Error>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 4 {
+            return Err("Invalid format, expected txid:vout:value:pubkey".into());
+        }
+
+        let txid = Txid::from_str(parts[0])?;
+        let vout = parts[1].parse::<u32>()?;
+        let value = parts[2].parse::<u64>()?;
+        let pubkey_bytes = hex::decode(parts[3])?;
+        let pubkey = PublicKey::from_slice(&pubkey_bytes)?;
+
+        Ok(CpfpUtxo(spark_wallet::CpfpUtxo {
+            txid,
+            vout,
+            value,
+            pubkey,
+        }))
     }
 }
 
@@ -107,33 +135,30 @@ where
 
             let utxos = utxos
                 .into_iter()
-                .map(|s| FeeBumpUtxo::from_str(&s))
+                .map(|s| CpfpUtxo::from_str(&s).map(|wrapper| wrapper.0))
                 .collect::<Result<_, _>>()?;
-            let all_leaf_tx_fee_bump_psbts =
-                wallet.unilateral_exit(fee_rate, leaf_ids, utxos).await?;
+            let all_leaf_tx_cpfp_psbts = wallet.unilateral_exit(fee_rate, leaf_ids, utxos).await?;
 
-            for leaf_tx_fee_bump_psbts in &all_leaf_tx_fee_bump_psbts {
+            for leaf_tx_cpfp_psbts in &all_leaf_tx_cpfp_psbts {
                 println!();
-                println!("Leaf ID: {}", leaf_tx_fee_bump_psbts.leaf_id);
+                println!("Leaf ID: {}", leaf_tx_cpfp_psbts.leaf_id);
                 println!();
 
-                for (index, tx_fee_bump_psbt) in
-                    leaf_tx_fee_bump_psbts.tx_fee_bump_psbts.iter().enumerate()
-                {
+                for (index, tx_cpfp_psbt) in leaf_tx_cpfp_psbts.tx_cpfp_psbts.iter().enumerate() {
                     let index_str = format!("{}. ", index + 1);
                     let index_spaces = " ".repeat(index_str.len());
-                    let node_type = if index == leaf_tx_fee_bump_psbts.tx_fee_bump_psbts.len() - 1 {
+                    let node_type = if index == leaf_tx_cpfp_psbts.tx_cpfp_psbts.len() - 1 {
                         "Leaf TX"
                     } else {
                         "Node TX"
                     };
 
-                    let txid = tx_fee_bump_psbt.tx.compute_txid();
-                    let tx_hex = serialize_hex(&tx_fee_bump_psbt.tx);
+                    let txid = tx_cpfp_psbt.parent_tx.compute_txid();
+                    let tx_hex = serialize_hex(&tx_cpfp_psbt.parent_tx);
                     println!("{index_str}{node_type} ID: {txid}");
                     println!("{index_spaces}{node_type}: {tx_hex}");
 
-                    let mut psbt = tx_fee_bump_psbt.psbt.clone();
+                    let mut psbt = tx_cpfp_psbt.child_psbt.clone();
                     let psbt_hex = psbt.serialize_hex();
                     println!("{index_spaces}PSBT (unsigned): {psbt_hex}");
 

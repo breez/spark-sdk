@@ -557,7 +557,6 @@ type LightningSendRequest implements UserRequest & Entity {
 
 enum LightningSendRequestStatus {
   CREATED
-  REQUEST_VALIDATED
   LIGHTNING_PAYMENT_INITIATED
   LIGHTNING_PAYMENT_FAILED
   LIGHTNING_PAYMENT_SUCCEEDED
@@ -568,6 +567,7 @@ enum LightningSendRequestStatus {
   PENDING_USER_SWAP_RETURN
   USER_SWAP_RETURNED
   USER_SWAP_RETURN_FAILED
+  REQUEST_VALIDATED @deprecated(reason: "Use CREATED instead")
 }
 
 """The `Long` scalar type represents a 64 bit integer."""

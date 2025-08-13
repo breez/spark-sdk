@@ -1,6 +1,6 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use bitcoin::{Psbt, Transaction, Txid, secp256k1::PublicKey};
+use bitcoin::{Transaction, secp256k1::PublicKey};
 use serde::{Deserialize, Serialize};
 use spark::{
     Network,
@@ -168,45 +168,4 @@ pub struct ListTokenTransactionsRequest {
     pub token_transaction_hashes: Vec<String>,
     pub token_ids: Vec<String>,
     pub output_ids: Vec<String>,
-}
-
-pub struct FeeBumpUtxo {
-    pub txid: Txid,
-    pub vout: u32,
-    pub value: u64,
-    pub pubkey: PublicKey,
-}
-
-impl std::str::FromStr for FeeBumpUtxo {
-    type Err = Box<dyn std::error::Error>;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 4 {
-            return Err("Invalid format, expected txid:vout:value:pubkey".into());
-        }
-
-        let txid = Txid::from_str(parts[0])?;
-        let vout = parts[1].parse::<u32>()?;
-        let value = parts[2].parse::<u64>()?;
-        let pubkey_bytes = hex::decode(parts[3])?;
-        let pubkey = PublicKey::from_slice(&pubkey_bytes)?;
-
-        Ok(FeeBumpUtxo {
-            txid,
-            vout,
-            value,
-            pubkey,
-        })
-    }
-}
-
-pub struct TxFeeBumpPsbt {
-    pub tx: Transaction,
-    pub psbt: Psbt,
-}
-
-pub struct LeafTxFeeBumpPsbts {
-    pub leaf_id: TreeNodeId,
-    pub tx_fee_bump_psbts: Vec<TxFeeBumpPsbt>,
 }

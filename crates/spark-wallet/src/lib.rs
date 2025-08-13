@@ -13,13 +13,15 @@ pub use spark::{
     Identifier, Network,
     address::SparkAddress,
     services::{
-        ExitSpeed, LightningSendPayment, LightningSendStatus, TransferStatus, TransferTokenOutput,
-        TransferType, Utxo,
+        CpfpUtxo, ExitSpeed, LightningSendPayment, LightningSendStatus, TransferStatus,
+        TransferTokenOutput, TransferType, Utxo,
     },
     signer::{DefaultSigner, Signer},
     ssp::*,
     tree::{SigningKeyshare, TreeNodeId},
-    utils::paging::Order,
-    utils::paging::PagingFilter,
+    utils::{
+        paging::{Order, PagingFilter},
+        transactions::is_ephemeral_anchor_output,
+    },
 };
-pub use wallet::{SparkWallet, is_ephemeral_anchor_output};
+pub use wallet::SparkWallet;
