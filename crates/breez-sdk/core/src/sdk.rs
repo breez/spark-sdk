@@ -16,8 +16,8 @@ use tracing::{error, info, trace};
 use tokio::sync::watch;
 
 use crate::{
-    BitcoinChainService, GetPaymentRequest, GetPaymentResponse, Logger, Network, PaymentStatus,
-    SqliteStorage,
+    BitcoinChainService, Fee, GetPaymentRequest, GetPaymentResponse, Logger, Network,
+    PaymentStatus, SqliteStorage,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -62,6 +62,7 @@ pub fn default_config(network: Network) -> Config {
     Config {
         network,
         deposits_monitoring_interval_secs: 5 * 60, // every 5 minutes
+        max_deposit_claim_fee: None,
     }
 }
 
@@ -534,7 +535,10 @@ impl BreezSdk {
                     info!("Found {} utxos for address {}", utxos.len(), address);
                     for utxo in utxos {
                         info!("Processing utxo {}:{}", utxo.txid, utxo.vout);
-                        match self.claim_utxo(&utxo).await {
+                        match self
+                            .claim_utxo(&utxo, self.config.max_deposit_claim_fee.clone())
+                            .await
+                        {
                             Ok(_) => info!("Claimed utxo {}:{}", utxo.txid, utxo.vout),
                             Err(e) => {
                                 error!("Failed to claim utxo {}:{}: {e}", utxo.txid, utxo.vout)
@@ -551,7 +555,7 @@ impl BreezSdk {
         Ok(())
     }
 
-    async fn claim_utxo(&self, utxo: &Utxo) -> Result<(), SdkError> {
+    async fn claim_utxo(&self, utxo: &Utxo, max_claim_fee: Option<Fee>) -> Result<(), SdkError> {
         info!("Claiming utxo {}:{}", utxo.txid, utxo.vout);
         let tx: Transaction = match utxo.tx.clone() {
             Some(tx) => tx,
@@ -568,11 +572,38 @@ impl BreezSdk {
             "Fetching static deposit claim quote for utxo {}:{}",
             utxo.txid, utxo.vout
         );
+        let utxo_value_sat = tx.output[utxo.vout as usize].value.to_sat();
         let quote = self
             .spark_wallet
-            .fetch_static_deposit_claim_quote(tx, Some(utxo.vout))
+            .fetch_static_deposit_claim_quote(tx.clone(), Some(utxo.vout))
             .await?;
-
+        let spark_requested_fee = utxo_value_sat - quote.credit_amount_sats;
+        if let Some(max_deposit_claim_fee) = max_claim_fee {
+            match max_deposit_claim_fee {
+                Fee::Fixed { amount } => {
+                    if spark_requested_fee > amount {
+                        return Err(SdkError::DepositClaimFeeExceeds(
+                            utxo.txid.to_string(),
+                            utxo.vout,
+                            max_deposit_claim_fee,
+                            spark_requested_fee,
+                        ));
+                    }
+                }
+                Fee::Rate { sat_per_vbyte } => {
+                    let vsize: u64 = tx.vsize().try_into()?;
+                    let user_max_fee = vsize * sat_per_vbyte;
+                    if spark_requested_fee > user_max_fee {
+                        return Err(SdkError::DepositClaimFeeExceeds(
+                            utxo.txid.to_string(),
+                            utxo.vout,
+                            max_deposit_claim_fee,
+                            spark_requested_fee,
+                        ));
+                    }
+                }
+            }
+        }
         info!(
             "Claiming static deposit for utxo {}:{}",
             utxo.txid, utxo.vout

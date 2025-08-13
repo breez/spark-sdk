@@ -260,6 +260,22 @@ impl From<Network> for SparkNetwork {
 pub struct Config {
     pub network: Network,
     pub deposits_monitoring_interval_secs: u32,
+    pub max_deposit_claim_fee: Option<Fee>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Fee {
+    Fixed { amount: u64 },
+    Rate { sat_per_vbyte: u64 },
+}
+
+impl std::fmt::Display for Fee {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Fee::Fixed { amount } => write!(f, "Fixed: {}", amount),
+            Fee::Rate { sat_per_vbyte } => write!(f, "Rate: {}", sat_per_vbyte),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

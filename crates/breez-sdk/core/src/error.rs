@@ -1,4 +1,7 @@
-use crate::persist::{self};
+use crate::{
+    Fee,
+    persist::{self},
+};
 use bitcoin::{address::ParseError, consensus::encode::FromHexError};
 use spark_wallet::SparkWalletError;
 use std::{convert::Infallible, num::TryFromIntError};
@@ -29,6 +32,11 @@ pub enum SdkError {
 
     #[error("Chain service error: {0}")]
     ChainServiceError(#[from] crate::chain::ChainServiceError),
+
+    #[error(
+        "Deposit claim fee exceeds for utxo: {0}:{1} with max fee: {2} and actual fee sat: {3}"
+    )]
+    DepositClaimFeeExceeds(String, u32, Fee, u64),
 
     #[error("General error: {0}")]
     GenericError(String),
