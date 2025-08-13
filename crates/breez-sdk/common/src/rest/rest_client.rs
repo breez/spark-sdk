@@ -11,7 +11,12 @@ pub trait RestClient: MaybeSend + MaybeSync {
     /// Makes a GET request and logs on DEBUG.
     /// ### Arguments
     /// - `url`: the URL on which GET will be called
-    async fn get(&self, url: &str) -> Result<(String, u16), ServiceConnectivityError>;
+    /// - `headers`: optional headers that will be set on the request
+    async fn get(
+        &self,
+        url: &str,
+        headers: Option<HashMap<String, String>>,
+    ) -> Result<(String, u16), ServiceConnectivityError>;
 
     /// Makes a POST request, and logs on DEBUG.
     /// ### Arguments
@@ -40,9 +45,19 @@ impl ReqwestRestClient {
 
 #[breez_sdk_macros::async_trait]
 impl RestClient for ReqwestRestClient {
-    async fn get(&self, url: &str) -> Result<(String, u16), ServiceConnectivityError> {
+    async fn get(
+        &self,
+        url: &str,
+        headers: Option<HashMap<String, String>>,
+    ) -> Result<(String, u16), ServiceConnectivityError> {
         debug!("Making GET request to: {url}");
-        let response = self.client.get(url).timeout(REQUEST_TIMEOUT).send().await?;
+        let mut req = self.client.get(url).timeout(REQUEST_TIMEOUT);
+        if let Some(headers) = headers {
+            for (key, value) in &headers {
+                req = req.header(key, value);
+            }
+        }
+        let response = req.send().await?;
         let status = response.status().into();
         let raw_body = response.text().await?;
         debug!("Received response, status: {status}");
@@ -90,8 +105,9 @@ where
 pub async fn get_and_check_success<C: RestClient + ?Sized>(
     rest_client: &C,
     url: &str,
+    headers: Option<HashMap<String, String>>,
 ) -> Result<(String, u16), ServiceConnectivityError> {
-    let (raw_body, status) = rest_client.get(url).await?;
+    let (raw_body, status) = rest_client.get(url, headers).await?;
     #[allow(clippy::manual_range_contains)]
     if status < 200 || status >= 300 {
         let err = format!("GET request {url} failed with status: {status}");

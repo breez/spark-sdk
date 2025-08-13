@@ -535,6 +535,19 @@ where
             .into_inner())
     }
 
+    pub async fn get_utxos_for_address(
+        &self,
+        req: GetUtxosForAddressRequest,
+    ) -> Result<GetUtxosForAddressResponse> {
+        Ok(self
+            .auth
+            .spark_service_client()
+            .await?
+            .get_utxos_for_address(req)
+            .await?
+            .into_inner())
+    }
+
     pub async fn initiate_utxo_swap(
         &self,
         req: InitiateUtxoSwapRequest,

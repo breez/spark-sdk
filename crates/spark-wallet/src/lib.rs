@@ -14,7 +14,7 @@ pub use spark::{
     address::SparkAddress,
     services::{
         ExitSpeed, LightningSendPayment, LightningSendStatus, TransferStatus, TransferTokenOutput,
-        TransferType,
+        TransferType, Utxo,
     },
     signer::{DefaultSigner, Signer},
     ssp::*,

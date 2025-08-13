@@ -609,9 +609,12 @@ dependencies = [
 name = "breez-sdk-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "base64 0.22.1",
  "bip39",
  "bitcoin",
  "breez-sdk-common",
+ "breez-sdk-macros",
  "chrono",
  "clap",
  "dotenvy",

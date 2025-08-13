@@ -40,7 +40,11 @@ impl MockRestClient {
 
 #[breez_sdk_macros::async_trait]
 impl RestClient for MockRestClient {
-    async fn get(&self, _url: &str) -> Result<(String, u16), ServiceConnectivityError> {
+    async fn get(
+        &self,
+        _url: &str,
+        _headers: Option<HashMap<String, String>>,
+    ) -> Result<(String, u16), ServiceConnectivityError> {
         let mut responses = self.responses.lock().unwrap();
         let response = responses.pop_front().ok_or_else(|| {
             ServiceConnectivityError::new(

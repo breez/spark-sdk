@@ -259,6 +259,13 @@ impl From<Network> for SparkNetwork {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub network: Network,
+    pub deposits_monitoring_interval_secs: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct Credentials {
+    pub username: String,
+    pub password: String,
 }
 
 /// Request to get the balance of the wallet
