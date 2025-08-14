@@ -44,7 +44,7 @@ impl PagingFilter {
     }
 
     pub fn next_from_offset(&self, offset: i64) -> Option<Self> {
-        if offset < 0 {
+        if offset <= 0 {
             return None;
         }
 

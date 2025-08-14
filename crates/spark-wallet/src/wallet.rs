@@ -17,10 +17,11 @@ use spark::{
     events::{SparkEvent, subscribe_server_events},
     operator::{OperatorPool, rpc::ConnectionManager},
     services::{
-        CoopExitFeeQuote, CoopExitService, DepositService, ExitSpeed, LightningReceivePayment,
-        LightningSendPayment, LightningService, QueryTokenTransactionsFilter, StaticDepositQuote,
-        Swap, TimelockManager, TokenService, TokenTransaction, Transfer, TransferId,
-        TransferService, TransferTokenOutput, Utxo,
+        CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, LeafTxCpfpPsbts,
+        LightningReceivePayment, LightningSendPayment, LightningService,
+        QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager, TokenService,
+        TokenTransaction, Transfer, TransferId, TransferService, TransferTokenOutput,
+        UnilateralExitService, Utxo,
     },
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer},
@@ -50,6 +51,7 @@ pub struct SparkWallet<S> {
     signer: Arc<S>,
     tree_service: Arc<TreeService<S>>,
     coop_exit_service: Arc<CoopExitService<S>>,
+    unilateral_exit_service: Arc<UnilateralExitService<S>>,
     transfer_service: Arc<TransferService<S>>,
     lightning_service: Arc<LightningService<S>>,
     ssp_client: Arc<ServiceProvider<S>>,
@@ -117,6 +119,10 @@ impl<S: Signer> SparkWallet<S> {
             config.network,
             Arc::clone(&signer),
         ));
+        let unilateral_exit_service = Arc::new(UnilateralExitService::new(
+            operator_pool.clone(),
+            config.network,
+        ));
 
         let swap_service = Swap::new(
             config.network,
@@ -169,6 +175,7 @@ impl<S: Signer> SparkWallet<S> {
             signer,
             tree_service,
             coop_exit_service,
+            unilateral_exit_service,
             transfer_service,
             lightning_service,
             ssp_client: service_provider.clone(),
@@ -648,6 +655,24 @@ impl<S: Signer> SparkWallet<S> {
             .await?;
 
         Ok(transfer)
+    }
+
+    /// Prepares a package of unilaterial exit PSBTs for each leaf
+    ///
+    /// # Arguments
+    /// * `fee_rate` - The fee rate used to calculate the PSBT fee, in satoshis per vbyte
+    /// * `leaf_ids` - The IDs of the leaves to unilaterally exit
+    /// * `utxos` - The UTXOs to use as inputs for the PSBTs. Currently only supports p2wpkh addresses
+    pub async fn unilateral_exit(
+        &self,
+        fee_rate: u64,
+        leaf_ids: Vec<TreeNodeId>,
+        utxos: Vec<CpfpUtxo>,
+    ) -> Result<Vec<LeafTxCpfpPsbts>, SparkWalletError> {
+        Ok(self
+            .unilateral_exit_service
+            .unilateral_exit(fee_rate, leaf_ids, utxos)
+            .await?)
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<WalletEvent> {

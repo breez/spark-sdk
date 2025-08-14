@@ -9,18 +9,18 @@ const ESTIMATED_TX_SIZE: u64 = 191;
 const DEFAULT_FEE_RATE: u64 = 5;
 const DEFAULT_FEE_SATS: u64 = ESTIMATED_TX_SIZE * DEFAULT_FEE_RATE;
 
-pub struct NodeTransactions {
+pub(crate) struct NodeTransactions {
     pub cpfp_tx: Transaction,
     pub direct_tx: Option<Transaction>,
 }
 
-pub struct RefundTransactions {
+pub(crate) struct RefundTransactions {
     pub cpfp_tx: Transaction,
     pub direct_tx: Option<Transaction>,
     pub direct_from_cpfp_tx: Option<Transaction>,
 }
 
-pub struct ConnectorRefundTxsParams<'a> {
+pub(crate) struct ConnectorRefundTxsParams<'a> {
     pub cpfp_sequence: Sequence,
     pub direct_sequence: Sequence,
     pub cpfp_outpoint: OutPoint,
@@ -107,7 +107,7 @@ fn create_spark_tx(
 /// A `NodeTransactions` struct containing:
 /// - `cpfp_tx`: Always present, includes an anchor output
 /// - `direct_tx`: Only present if `direct_outpoint` is provided, has no anchor output
-pub fn create_node_txs(
+pub(crate) fn create_node_txs(
     cpfp_sequence: Sequence,
     direct_sequence: Sequence,
     cpfp_outpoint: OutPoint,
@@ -171,7 +171,7 @@ pub fn create_node_txs(
 /// - `direct_tx`: Only present if `direct_outpoint` is provided
 /// - `direct_from_cpfp_tx`: Alternative transaction that spends from the CPFP outpoint
 ///   with the direct sequence number (only present if `direct_outpoint` is provided)
-pub fn create_refund_txs(
+pub(crate) fn create_refund_txs(
     cpfp_sequence: Sequence,
     direct_sequence: Sequence,
     cpfp_outpoint: OutPoint,
@@ -258,7 +258,9 @@ pub fn create_refund_txs(
 /// - `direct_tx`: Only present if `direct_outpoint` is provided, spends direct and connector outpoints
 /// - `direct_from_cpfp_tx`: Alternative transaction that spends CPFP and connector outpoints with
 ///   the direct sequence number (only present if `direct_outpoint` is provided)
-pub fn create_connector_refund_txs(params: ConnectorRefundTxsParams<'_>) -> RefundTransactions {
+pub(crate) fn create_connector_refund_txs(
+    params: ConnectorRefundTxsParams<'_>,
+) -> RefundTransactions {
     // TODO: Isolate secp256k1 initialization to avoid multiple initializations
     let secp = Secp256k1::new();
     let network: bitcoin::Network = params.network.into();
@@ -322,7 +324,7 @@ pub fn create_connector_refund_txs(params: ConnectorRefundTxsParams<'_>) -> Refu
     }
 }
 
-pub fn create_static_deposit_refund_tx(
+pub(crate) fn create_static_deposit_refund_tx(
     deposit_outpoint: OutPoint,
     amount_sat: u64,
     refund_address: &Address,
@@ -346,6 +348,10 @@ fn ephemeral_anchor_output() -> TxOut {
         script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]), // Pay-to-anchor (P2A) ephemeral anchor output
         value: Amount::from_sat(0),
     }
+}
+
+pub fn is_ephemeral_anchor_output(tx_out: &TxOut) -> bool {
+    tx_out.value.to_sat() == 0 && tx_out.script_pubkey.as_bytes() == [0x51, 0x02, 0x4e, 0x73]
 }
 
 fn maybe_apply_fee(amount_sats: u64) -> u64 {
