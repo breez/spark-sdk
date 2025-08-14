@@ -6,10 +6,8 @@ use http_body_util::BodyExt;
 use std::{
     future::Future,
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
 };
-use tokio::sync::Mutex;
 use tonic::{Status, body::BoxBody, transport::Error as TransportError};
 use tower_service::Service;
 use tracing::{debug, trace};
@@ -17,7 +15,7 @@ use tracing::{debug, trace};
 /// A channel that retries a gRPC call once if a transport error occurs
 #[derive(Debug, Clone)]
 pub struct RetryChannel<T> {
-    inner: Arc<Mutex<T>>,
+    inner: T,
 }
 
 impl<T> RetryChannel<T>
@@ -25,9 +23,7 @@ where
     T: Clone,
 {
     pub fn new(inner: T) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(inner)),
-        }
+        Self { inner }
     }
 }
 
@@ -44,12 +40,7 @@ where
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // We forward the poll_ready to our inner service
-        let mut inner = self.inner.try_lock();
-        match inner {
-            Ok(ref mut svc) => svc.poll_ready(cx),
-            Err(_) => Poll::Pending, // If the lock is contended, we're not ready
-        }
+        self.inner.poll_ready(cx)
     }
 
     fn call(&mut self, req: Request<BoxBody>) -> Self::Future {
@@ -60,13 +51,13 @@ where
 
         // Attempt to read the request, in order to create two copies of the request below.
         let poll = BoxBody::poll_frame(pinned_body, &mut context);
-        let data_opt = match poll {
+        let maybe_data = match poll {
             Poll::Ready(Some(Ok(frame))) => Some(frame.into_data().unwrap()),
             _ => None,
         };
 
         // Create two copies of the request if possible.
-        let (original_req, retry_req) = if let Some(data) = data_opt {
+        let (original_req, maybe_retry_req) = if let Some(data) = maybe_data {
             let full_body =
                 http_body_util::Full::new(data).map_err(|_| Status::internal("infallible error"));
 
@@ -79,17 +70,17 @@ where
             (Request::from_parts(head, body), None)
         };
 
-        // Get a reference to our inner service for the future
-        let inner = self.inner.clone();
+        // Clone the inner service for both initial call and potential retry
+        let mut inner_clone_for_initial = self.inner.clone();
+        let mut inner_clone_for_retry = self.inner.clone();
 
         Box::pin(async move {
-            // Lock the inner service, ensure it's ready, and make the call
-            let mut inner_guard = inner.lock().await;
-            poll_fn(|cx| inner_guard.poll_ready(cx)).await?;
-            let res = inner_guard.call(original_req).await;
+            // Wait for the initial service to be ready and make the call
+            poll_fn(|cx| inner_clone_for_initial.poll_ready(cx)).await?;
+            let res = inner_clone_for_initial.call(original_req).await;
 
             // Early return if call succeeded or retry_req is None
-            let retry_req = match (&res, retry_req) {
+            let retry_req = match (&res, maybe_retry_req) {
                 (Ok(_), _) => return res,
                 (_, None) => return res,
                 (_, Some(req)) => req,
@@ -114,18 +105,10 @@ where
                 _ => return res,
             };
 
-            // Drop the mutex guard to release the inner service
-            drop(inner_guard);
-
-            // Reacquire the lock for the retry
-            let mut inner_guard = inner.lock().await;
-
-            // Wait for the service to be ready again
-            poll_fn(|cx| inner_guard.poll_ready(cx)).await?;
-
-            // Make the retry call
+            // Wait for the retry clone to be ready and make the call
+            poll_fn(|cx| inner_clone_for_retry.poll_ready(cx)).await?;
             trace!("RetryChannel: making retry call");
-            inner_guard.call(retry_req).await
+            inner_clone_for_retry.call(retry_req).await
         })
     }
 }
