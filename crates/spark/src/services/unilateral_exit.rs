@@ -81,7 +81,7 @@ where
         let mut checked_txs = HashSet::new();
 
         // Fetch leaves and parents for the given leaf IDs
-        let all_leaves: HashMap<TreeNodeId, TreeNode> = self
+        let tree_nodes: HashMap<TreeNodeId, TreeNode> = self
             .fetch_leaves_parents(&leaf_ids)
             .await?
             .into_iter()
@@ -91,12 +91,12 @@ where
             let mut tx_cpfp_psbts = Vec::new();
             let mut nodes = Vec::new();
 
-            let Some(mut leaf) = all_leaves.get(&leaf_id) else {
+            let Some(mut node) = tree_nodes.get(&leaf_id) else {
                 return Err(ServiceError::ValidationError(format!(
                     "Leaf ID {leaf_id} not found in the tree",
                 )));
             };
-            let Some(refund_tx) = &leaf.refund_tx else {
+            let Some(refund_tx) = &node.refund_tx else {
                 return Err(ServiceError::ValidationError(format!(
                     "Leaf ID {leaf_id} does not have a refund transaction",
                 )));
@@ -104,12 +104,12 @@ where
 
             // Loop through the leaf's ancestors and collect them
             loop {
-                nodes.insert(0, leaf);
+                nodes.insert(0, node);
 
-                let Some(parent_node_id) = &leaf.parent_node_id else {
+                let Some(parent_node_id) = &node.parent_node_id else {
                     break;
                 };
-                let Some(parent) = all_leaves.get(parent_node_id) else {
+                let Some(parent) = tree_nodes.get(parent_node_id) else {
                     return Err(ServiceError::ValidationError(format!(
                         "Parent ID {parent_node_id} not found in the tree",
                     )));
@@ -119,10 +119,12 @@ where
                     parent.id,
                     parent.node_tx.compute_txid()
                 );
-                leaf = parent;
+                node = parent;
             }
 
-            // For each node check it hasn't already been processed or broadcasted
+            // For each node, check it hasn't already been processed and create a
+            // child PSBT for its node tx. If the node is a leaf node, create a
+            // child PSBT also for its refund tx.
             for node in nodes {
                 let txid = node.node_tx.compute_txid();
                 if checked_txs.contains(&txid) {
@@ -265,6 +267,7 @@ fn create_tx_cpfp_psbt(
     let mut inputs = Vec::with_capacity(utxos.len() + 1);
 
     // Add all UTXO inputs
+    // TODO: Improve UTXO selection for fees
     for utxo in utxos.iter() {
         inputs.push(TxIn {
             previous_output: OutPoint {
@@ -289,6 +292,8 @@ fn create_tx_cpfp_psbt(
     // Anchor input: ~41 vbytes (smaller because no signature needed for ephemeral anchor)
     // P2WPKH output: ~31 vbytes
     // Transaction overhead: ~10 vbytes
+    // TODO: calculate a better estimate of tx size. p2tr inputs have a different size.
+    //       For most input types we can calculate exact sizes.
     let tx_size_vbytes = (utxos.len() as u64 * 68) + 41 + 31 + 10;
     trace!("Estimated transaction size: {} vbytes", tx_size_vbytes);
 
@@ -329,6 +334,7 @@ fn create_tx_cpfp_psbt(
         let input = PsbtInput {
             witness_utxo: Some(TxOut {
                 value: Amount::from_sat(utxo.value),
+                // TODO: Support p2tr inputs
                 script_pubkey: Address::p2wpkh(&CompressedPublicKey(utxo.pubkey), network)
                     .script_pubkey(),
             }),

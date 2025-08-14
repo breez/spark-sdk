@@ -657,6 +657,12 @@ impl<S: Signer> SparkWallet<S> {
         Ok(transfer)
     }
 
+    /// Prepares a package of unilaterial exit PSBTs for each leaf
+    ///
+    /// # Arguments
+    /// * `fee_rate` - The fee rate used to calculate the PSBT fee, in satoshis per vbyte
+    /// * `leaf_ids` - The IDs of the leaves to unilaterally exit
+    /// * `utxos` - The UTXOs to use as inputs for the PSBTs. Currently only supports p2wpkh addresses
     pub async fn unilateral_exit(
         &self,
         fee_rate: u64,
