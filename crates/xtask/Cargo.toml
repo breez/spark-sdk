@@ -5,10 +5,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
-anyhow = "1.0"
-cargo_metadata = "0.18"
-clap = { version = "4.5", features = ["derive"] }
-xshell = "0.2"
-rayon = "1.10"
-
-
+anyhow.workspace = true
+cargo_metadata.workspace = true
+clap = { workspace = true, features = ["derive"] }
+rayon.workspace = true
+xshell.workspace = true

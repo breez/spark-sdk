@@ -4,7 +4,7 @@ edition = "2024"
 version.workspace = true
 
 [build-dependencies]
-tonic-build = { workspace = true }
+tonic-build.workspace = true
 uniffi = { workspace = true, features = [ "build" ], optional = true }
 
 [dependencies]
@@ -32,13 +32,13 @@ hickory-resolver = { workspace = true, features = ["dnssec-ring"] }
 maybe-sync = { workspace = true, features = ["sync"] }
 prost.workspace = true
 tonic = { workspace = true, features = [
-    "tls",
-    "transport",
-    "tls-roots",
-    "tls-webpki-roots",
-    "prost",
     "channel",
     "codegen",
+    "prost",
+    "tls",
+    "tls-roots",
+    "tls-webpki-roots",
+    "transport",
 ] }
 uniffi = { workspace = true, optional = true }
 
@@ -46,12 +46,12 @@ uniffi = { workspace = true, optional = true }
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 dns-parser.workspace = true
 maybe-sync.workspace = true
-tonic-web-wasm-client.workspace = true
-uniffi = { version = "0.29.2", features = ["wasm-unstable-single-threaded"], optional = true }
 tonic = { workspace = true, features = [
     "codegen",
     "prost",
 ] }
+tonic-web-wasm-client.workspace = true
+uniffi = { version = "0.29.2", features = ["wasm-unstable-single-threaded"], optional = true }
 
 # Wasm dev dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
