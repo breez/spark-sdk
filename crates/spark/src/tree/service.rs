@@ -574,6 +574,7 @@ impl<S: Signer> TreeService<S> {
                 })?;
 
             for n in nodes {
+                let node_id = n.id.clone();
                 if n.status != TreeNodeStatus::Available {
                     warn!("Leaf resulting from extend_time_lock is not available: {n:?}",);
                     // TODO: Handle other statuses appropriately.
@@ -581,15 +582,21 @@ impl<S: Signer> TreeService<S> {
                     continue;
                 }
 
-                let transfer = self
-                    .timelock_manager
-                    .transfer_leaves_to_self(vec![n])
-                    .await
-                    .map_err(|e| {
-                        TreeServiceError::Generic(format!(
+                let transfer_res = self.timelock_manager.transfer_leaves_to_self(vec![n]).await;
+
+                let transfer = match transfer_res {
+                    Ok(transfer) => transfer,
+                    Err(e) => {
+                        if let ServiceError::TransferAlreadyClaimed = e {
+                            warn!("Transfer for leaf {} is already claimed", node_id);
+                            continue;
+                        }
+                        return Err(TreeServiceError::Generic(format!(
                             "Failed to transfer leaves to self: {e:?}"
-                        ))
-                    })?;
+                        )))?;
+                    }
+                };
+
                 resulting_nodes.extend(transfer.into_iter());
             }
         }

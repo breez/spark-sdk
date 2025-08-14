@@ -5,7 +5,7 @@ use crate::Network;
 use crate::operator::OperatorPool;
 use crate::operator::rpc::spark::TransferFilter;
 use crate::operator::rpc::spark::transfer_filter::Participant;
-use crate::operator::rpc::{self as operator_rpc};
+use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{LeafKeyTweak, Transfer, map_signing_nonce_commitments};
 use crate::services::{ProofMap, TransferId, TransferStatus};
 use crate::signer::{
@@ -27,6 +27,7 @@ use frost_secp256k1_tr::Identifier;
 use k256::Scalar;
 use prost::Message as ProstMessage;
 use tokio_with_wasm::alias as tokio;
+use tonic::Code;
 use tracing::{debug, error, trace};
 
 use crate::{
@@ -552,6 +553,10 @@ impl<S: Signer> TransferService<S> {
             {
                 Ok(res) => res,
                 Err(e) => {
+                    if let ServiceError::TransferAlreadyClaimed = e {
+                        return Err(e);
+                    }
+
                     error!("Failed to claim transfer with leaves: {}", e);
                     retry_count += 1;
                     continue;
@@ -600,7 +605,11 @@ impl<S: Signer> TransferService<S> {
         let proof_map = if transfer.status == TransferStatus::SenderKeyTweaked {
             Some(
                 self.claim_transfer_tweak_keys(transfer, &leaves_to_claim)
-                    .await?,
+                    .await
+                    .map_err(|e| {
+                        debug!("Failed to claim transfer tweak keys: {}", e);
+                        e
+                    })?,
             )
         } else {
             None
@@ -609,10 +618,20 @@ impl<S: Signer> TransferService<S> {
         // Sign refunds and get node signatures
         let node_signatures = self
             .claim_transfer_sign_refunds(transfer, &leaves_to_claim, proof_map.as_ref())
-            .await?;
+            .await
+            .map_err(|e| {
+                debug!("Failed to claim transfer sign refunds: {}", e);
+                e
+            })?;
 
         // Finalize the node signatures with the coordinator
-        let finalized_nodes = self.finalize_node_signatures(&node_signatures).await?;
+        let finalized_nodes = self
+            .finalize_node_signatures(&node_signatures)
+            .await
+            .map_err(|e| {
+                debug!("Failed to finalize node signatures: {}", e);
+                e
+            })?;
 
         Ok(finalized_nodes)
     }
@@ -817,7 +836,16 @@ impl<S: Signer> TransferService<S> {
                     .to_vec(),
                 signing_jobs,
             })
-            .await?;
+            .await
+            .map_err(|e| {
+                if let OperatorRpcError::Connection(status) = &e
+                    && status.code() == Code::AlreadyExists
+                {
+                    return ServiceError::TransferAlreadyClaimed;
+                }
+
+                e.into()
+            })?;
 
         // Sign the refunds using FROST
         let node_signatures = sign_aggregate_refunds(
