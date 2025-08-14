@@ -324,8 +324,6 @@ impl<S: Signer> SparkWallet<S> {
         tx: Transaction,
         vout: u32,
     ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
-        // TODO: This entire function happens inside a txid mutex in the js sdk. It seems unnecessary here?
-
         let deposit_nodes = self.deposit_service.claim_deposit(tx, vout).await?;
         debug!("Claimed deposit root node: {:?}", deposit_nodes);
         let collected_leaves = self.tree_service.collect_leaves(deposit_nodes).await?;

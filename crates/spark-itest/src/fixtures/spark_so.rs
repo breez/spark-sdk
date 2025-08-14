@@ -60,6 +60,8 @@ pub struct SparkSoFixture {
     // Store receivers separately to avoid borrowing issues
     startup_receivers: Vec<(usize, oneshot::Receiver<()>)>,
     server_receivers: Vec<(usize, oneshot::Receiver<()>)>,
+    // Store references to log consumers for each operator
+    log_consumers: Vec<(usize, WaitForLogConsumer)>,
 }
 
 impl SparkSoFixture {
@@ -129,6 +131,9 @@ impl SparkSoFixture {
                     server_ready_tx,
                 );
 
+                // Store a reference to the log consumer for later use
+                let log_consumer_ref = log_consumer.clone();
+
                 // Create container for this operator
                 let operator_host_name = format!("spark-so-{i}-{fixture_id}");
                 let container = GenericImage::new("spark-so", "latest")
@@ -178,7 +183,12 @@ impl SparkSoFixture {
                     postgres_connectionstring,
                 };
 
-                Ok::<_, anyhow::Error>((operator, startup_complete_rx, server_ready_rx))
+                Ok::<_, anyhow::Error>((
+                    operator,
+                    startup_complete_rx,
+                    server_ready_rx,
+                    log_consumer_ref,
+                ))
             });
 
             operator_futures.push(operator_future);
@@ -188,14 +198,16 @@ impl SparkSoFixture {
         let mut operators = Vec::with_capacity(NUM_OPERATORS);
         let mut startup_receivers = Vec::with_capacity(NUM_OPERATORS);
         let mut server_receivers = Vec::with_capacity(NUM_OPERATORS);
+        let mut log_consumers = Vec::with_capacity(NUM_OPERATORS);
 
         for future in operator_futures {
             match future.await {
-                Ok(Ok((operator, startup_rx, server_rx))) => {
+                Ok(Ok((operator, startup_rx, server_rx, log_consumer))) => {
                     let index = operator.index;
                     operators.push(operator);
                     startup_receivers.push((index, startup_rx));
                     server_receivers.push((index, server_rx));
+                    log_consumers.push((index, log_consumer));
                 }
                 Ok(Err(e)) => return Err(anyhow::anyhow!("Failed to create operator: {}", e)),
                 Err(e) => return Err(anyhow::anyhow!("Task join error: {}", e)),
@@ -212,6 +224,7 @@ impl SparkSoFixture {
             operators,
             startup_receivers,
             server_receivers,
+            log_consumers,
         })
     }
 
@@ -277,6 +290,49 @@ impl SparkSoFixture {
 
         info!("All operators are initialized and ready");
         Ok(())
+    }
+
+    // Wait for a specific log message to appear in any of the operators' logs
+    pub async fn wait_for_log(&self, log_pattern: &str) -> Result<()> {
+        info!(
+            "Waiting for log pattern: {} in any operator's log",
+            log_pattern
+        );
+
+        // First, check if the log pattern already exists in the buffer of any log consumer
+        for (index, log_consumer) in &self.log_consumers {
+            if log_consumer.check_log_buffer(log_pattern) {
+                info!(
+                    "Log pattern '{}' already found in operator {}'s logs",
+                    log_pattern, index
+                );
+                return Ok(());
+            }
+        }
+
+        // If not found in buffer, we need to set up a watch for the pattern on one of the operators
+        // Here we'll just pick the first operator's log consumer
+        if let Some((index, log_consumer)) = self.log_consumers.first() {
+            let (tx, rx) = oneshot::channel();
+
+            log_consumer.set_custom_pattern(log_pattern.to_string(), tx);
+            info!(
+                "Set up pattern watcher for '{}' on operator {}",
+                log_pattern, index
+            );
+
+            rx.await?;
+            return Ok(());
+        }
+
+        warn!(
+            "No log consumers available to watch for pattern: {}",
+            log_pattern
+        );
+        Err(anyhow::anyhow!(
+            "No log consumers available to watch for pattern: {}",
+            log_pattern
+        ))
     }
 
     // Wait for signing keyshares to be available in all operator databases
