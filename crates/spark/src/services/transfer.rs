@@ -945,10 +945,12 @@ impl<S: Signer> TransferService<S> {
     pub async fn query_transfers(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<Transfer>, ServiceError> {
+    ) -> Result<PagingResult<Transfer>, ServiceError> {
         let transfers = match paging {
-            Some(paging) => self.query_transfers_inner(paging).await?.items,
-            None => pager(|f| self.query_transfers_inner(f), PagingFilter::default()).await?,
+            Some(paging) => self.query_transfers_inner(paging).await?,
+            None => PagingResult::complete(
+                pager(|f| self.query_transfers_inner(f), PagingFilter::default()).await?,
+            ),
         };
         Ok(transfers)
     }
@@ -990,16 +992,16 @@ impl<S: Signer> TransferService<S> {
     pub async fn query_pending_transfers(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<Transfer>, ServiceError> {
+    ) -> Result<PagingResult<Transfer>, ServiceError> {
         let transfers = match paging {
-            Some(paging) => self.query_pending_transfers_inner(paging).await?.items,
-            None => {
+            Some(paging) => self.query_pending_transfers_inner(paging).await?,
+            None => PagingResult::complete(
                 pager(
                     |f| self.query_pending_transfers_inner(f),
                     PagingFilter::default(),
                 )
-                .await?
-            }
+                .await?,
+            ),
         };
         Ok(transfers)
     }
