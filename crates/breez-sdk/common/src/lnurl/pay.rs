@@ -166,6 +166,10 @@ pub struct LnurlPayRequestData {
     #[serde(skip)]
     pub url: String,
 
+    /// Optional lightning address if that was used to resolve the lnurl.
+    #[serde(skip)]
+    pub address: Option<String>,
+
     /// Value indicating whether the recipient supports Nostr Zaps through NIP-57.
     ///
     /// See <https://github.com/nostr-protocol/nips/blob/master/57.md>
@@ -426,6 +430,7 @@ pub(crate) mod tests {
             allows_nostr: false,
             nostr_pubkey: None,
             url: "http://localhost:8080/pay".into(),
+            address: None,
         }
     }
 

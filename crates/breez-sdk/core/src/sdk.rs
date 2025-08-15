@@ -3,7 +3,6 @@ use bitcoin::{
     consensus::encode::deserialize_hex,
     hashes::{Hash, sha256},
 };
-use breez_sdk_common::input::InputType;
 pub use breez_sdk_common::input::parse as parse_input;
 use breez_sdk_common::{
     input::InputType,
@@ -29,8 +28,9 @@ use web_time::Instant;
 
 use crate::{
     BitcoinChainService, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee,
-    GetPaymentRequest, GetPaymentResponse, LnurlPayRequest, LnurlPayResponse, Logger, Network,
-    PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse, SqliteStorage,
+    GetPaymentRequest, GetPaymentResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
+    Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    SqliteStorage,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -374,7 +374,7 @@ impl BreezSdk {
     }
 
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
-        let payment = self
+        let mut payment = self
             .send_payment(SendPaymentRequest {
                 prepare_response: PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::Bolt11Invoice {
@@ -389,6 +389,22 @@ impl BreezSdk {
 
         let success_action =
             process_success_action(&payment, request.prepare_response.success_action).await?;
+
+        let lnurl_info = LnurlPayInfo {
+            ln_address: request.prepare_response.data.address,
+            comment: request.prepare_response.comment,
+            domain: Some(request.prepare_response.data.domain),
+            metadata: Some(request.prepare_response.data.metadata_str),
+            success_action: success_action.clone(),
+            unprocessed_success_action: None,
+        };
+        let PaymentDetails::Lightning { lnurl_pay_info, .. } = &mut payment.details else {
+            return Err(SdkError::GenericError(
+                "Expected Lightning payment details".to_string(),
+            ));
+        };
+        *lnurl_pay_info = Some(lnurl_info);
+
         Ok(LnurlPayResponse {
             payment,
             success_action,

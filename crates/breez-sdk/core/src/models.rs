@@ -108,6 +108,9 @@ pub enum PaymentDetails {
 
         /// The invoice destination/payee pubkey
         destination_pubkey: String,
+
+        /// Lnurl payment information if this was an lnurl payment.
+        lnurl_pay_info: Option<LnurlPayInfo>,
     },
     Withdraw {
         tx_id: String,
@@ -136,6 +139,7 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
                     invoice: request.invoice.encoded_invoice,
                     payment_hash: request.invoice.payment_hash,
                     destination_pubkey: detailed_invoice.payee_pubkey,
+                    lnurl_pay_info: None,
                 }
             }
             SspUserRequest::LightningSendRequest(request) => {
@@ -150,6 +154,7 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
                     invoice: request.encoded_invoice,
                     payment_hash: detailed_invoice.payment_hash,
                     destination_pubkey: detailed_invoice.payee_pubkey,
+                    lnurl_pay_info: None,
                 }
             }
             SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
@@ -222,6 +227,7 @@ impl Payment {
             invoice: payment.encoded_invoice,
             payment_hash: detailed_invoice.payment_hash,
             destination_pubkey: detailed_invoice.payee_pubkey,
+            lnurl_pay_info: None,
         };
 
         Ok(Payment {
@@ -417,6 +423,17 @@ pub struct LnurlPayRequest {
 pub struct LnurlPayResponse {
     pub payment: Payment,
     pub success_action: Option<SuccessActionProcessed>,
+}
+
+/// Represents the payment LNURL info
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct LnurlPayInfo {
+    pub ln_address: Option<String>,
+    pub comment: Option<String>,
+    pub domain: Option<String>,
+    pub metadata: Option<String>,
+    pub success_action: Option<SuccessActionProcessed>,
+    pub unprocessed_success_action: Option<SuccessAction>,
 }
 
 pub struct PrepareSendPaymentRequest {

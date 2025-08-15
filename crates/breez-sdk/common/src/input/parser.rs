@@ -195,8 +195,11 @@ where
         let address = format!("{user}@{domain}");
         match input_type {
             InputType::LnurlPay(pay_request) => Some(LightningAddress {
-                address,
-                pay_request,
+                address: address.clone(),
+                pay_request: LnurlPayRequestData {
+                    address: Some(address),
+                    ..pay_request
+                },
             }),
             _ => None, // TODO: log or return error.
         }
