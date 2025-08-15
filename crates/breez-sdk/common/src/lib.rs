@@ -5,6 +5,7 @@ pub mod error;
 pub mod fiat;
 pub mod grpc;
 pub mod input;
+pub mod invoice;
 pub mod lnurl;
 pub mod network;
 pub mod rest;

@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod error;
+pub mod pay;
 
 use serde::{Deserialize, Serialize};
 
@@ -32,4 +33,14 @@ pub enum LnurlCallbackStatus {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LnurlErrorData {
     pub reason: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use rand;
+    use rand::distributions::{Alphanumeric, DistString};
+
+    pub fn rand_string(len: usize) -> String {
+        Alphanumeric.sample_string(&mut rand::thread_rng(), len)
+    }
 }

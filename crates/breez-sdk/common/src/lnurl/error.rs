@@ -2,7 +2,7 @@ use std::array::TryFromSliceError;
 
 use thiserror::Error;
 
-use crate::error::ServiceConnectivityError;
+use crate::{error::ServiceConnectivityError, invoice::InvoiceError};
 
 pub type LnurlResult<T, E = LnurlError> = Result<T, E>;
 
@@ -29,12 +29,39 @@ pub enum LnurlError {
     General(String),
     #[error("lnurl has unknown scheme")]
     UnknownScheme,
-    #[error("lnurl has unknown scheme")]
-    InvalidUri,
+    #[error("lnurl has invalid uri: {0}")]
+    InvalidUri(String),
+    #[error("lnurl has invalid invoice: {0}")]
+    InvalidInvoice(String),
+    #[error("lnurl has invalid response: {0}")]
+    InvalidResponse(String),
+}
+
+impl LnurlError {
+    /// Returns a generic error message for the LNURL error
+    pub fn general(msg: impl Into<String>) -> Self {
+        Self::General(msg.into())
+    }
+
+    pub fn invalid_uri(msg: impl Into<String>) -> Self {
+        Self::InvalidUri(msg.into())
+    }
 }
 
 impl From<TryFromSliceError> for LnurlError {
     fn from(err: TryFromSliceError) -> Self {
+        Self::General(err.to_string())
+    }
+}
+
+impl From<InvoiceError> for LnurlError {
+    fn from(value: InvoiceError) -> Self {
+        LnurlError::InvalidInvoice(format!("{value}"))
+    }
+}
+
+impl From<base64::DecodeError> for LnurlError {
+    fn from(err: base64::DecodeError) -> Self {
         Self::General(err.to_string())
     }
 }

@@ -13,6 +13,7 @@ use crate::{
         LnurlErrorData,
         auth::{self, LnurlAuthRequestData},
         error::LnurlError,
+        pay::LnurlPayRequestData,
     },
     rest::{ReqwestRestClient, RestClient},
 };
@@ -20,8 +21,7 @@ use crate::{
 use super::{
     Bip21, BitcoinAddress, Bolt11RouteHint, Bolt11RouteHintHop, Bolt12InvoiceRequest, Bolt12Offer,
     Bolt12OfferBlindedPath, DetailedBolt11Invoice, DetailedBolt12Invoice, DetailedBolt12Offer,
-    InputType, LightningAddress, LnurlPayRequest, LnurlWithdrawRequestData, SilentPaymentAddress,
-    error::Bip21Error,
+    InputType, LightningAddress, LnurlWithdrawRequestData, SilentPaymentAddress, error::Bip21Error,
 };
 
 const BIP_21_PREFIX: &str = "bitcoin:";
@@ -301,7 +301,7 @@ where
             parse_json(&response).map_err(LnurlError::ServiceConnectivity)?;
         let domain = url.host().ok_or(LnurlError::MissingDomain)?.to_string();
         Ok(match lnurl_data {
-            LnurlRequestData::PayRequest { data } => InputType::LnurlPay(LnurlPayRequest {
+            LnurlRequestData::PayRequest { data } => InputType::LnurlPay(LnurlPayRequestData {
                 domain,
                 url: url.to_string(),
                 ..data
@@ -728,7 +728,7 @@ fn parse_silent_payment_address(
 pub enum LnurlRequestData {
     PayRequest {
         #[serde(flatten)]
-        data: LnurlPayRequest,
+        data: LnurlPayRequestData,
     },
     WithdrawRequest {
         #[serde(flatten)]

@@ -63,7 +63,7 @@ pub async fn perform_lnurl_auth<C: RestClient + ?Sized, S: LnurlAuthSigner>(
 ) -> LnurlResult<LnurlCallbackStatus> {
     let url = Url::from_str(&req_data.url).map_err(|e| {
         warn!("Lnurl auth URL is invalid: {:?}", e);
-        LnurlError::InvalidUri
+        LnurlError::invalid_uri("invalid lnurl auth uri")
     })?;
     let derivation_path = get_derivation_path(signer, url).await?;
     let sig = signer
@@ -81,7 +81,7 @@ pub async fn perform_lnurl_auth<C: RestClient + ?Sized, S: LnurlAuthSigner>(
     // <LNURL_hostname_and_path>?<LNURL_existing_query_parameters>&sig=<hex(sign(utf8ToBytes(k1), linkingPrivKey))>&key=<hex(linkingKey)>
     let mut callback_url = Url::from_str(&req_data.url).map_err(|e| {
         warn!("Lnurl auth callback URL is invalid: {:?}", e);
-        LnurlError::InvalidUri
+        LnurlError::invalid_uri("invalid lnurl auth callback uri")
     })?;
     callback_url
         .query_pairs_mut()
@@ -130,7 +130,9 @@ pub async fn get_derivation_path<S: LnurlAuthSigner>(
     signer: &S,
     url: Url,
 ) -> LnurlResult<Vec<ChildNumber>> {
-    let domain = url.domain().ok_or(LnurlError::InvalidUri)?;
+    let domain = url
+        .domain()
+        .ok_or(LnurlError::invalid_uri("invalid lnurl auth uri"))?;
 
     let c138 = ChildNumber::from_hardened_idx(138)
         .map_err(|_| LnurlError::General("failed to derive child auth key".to_string()))?;

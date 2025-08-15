@@ -1,25 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{lnurl::auth::LnurlAuthRequestData, network::BitcoinNetwork, utils::default_true};
-
-/// Wrapper for the decrypted [`AesSuccessActionData`] payload
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct AesSuccessActionDataDecrypted {
-    /// Contents description, up to 144 characters
-    pub description: String,
-
-    /// Decrypted content
-    pub plaintext: String,
-}
-
-/// Result of decryption of [`AesSuccessActionData`] payload
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum AesSuccessActionDataResult {
-    Decrypted { data: AesSuccessActionDataDecrypted },
-    ErrorStatus { reason: String },
-}
+use crate::{
+    lnurl::{auth::LnurlAuthRequestData, pay::LnurlPayRequestData},
+    network::BitcoinNetwork,
+};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -167,7 +151,7 @@ pub enum InputType {
     Bolt12Invoice(DetailedBolt12Invoice),
     Bolt12Offer(DetailedBolt12Offer),
     LightningAddress(LightningAddress),
-    LnurlPay(LnurlPayRequest),
+    LnurlPay(LnurlPayRequestData),
     SilentPaymentAddress(SilentPaymentAddress),
     LnurlAuth(LnurlAuthRequestData),
     Url(String),
@@ -180,50 +164,7 @@ pub enum InputType {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LightningAddress {
     pub address: String,
-    pub pay_request: LnurlPayRequest,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct LnurlPayRequest {
-    pub callback: String,
-    /// The minimum amount, in millisats, that this LNURL-pay endpoint accepts
-    pub min_sendable: u64,
-    /// The maximum amount, in millisats, that this LNURL-pay endpoint accepts
-    pub max_sendable: u64,
-    /// As per LUD-06, `metadata` is a raw string (e.g. a json representation of the inner map).
-    /// Use `metadata_vec()` to get the parsed items.
-    #[serde(rename(deserialize = "metadata"))]
-    pub metadata_str: String,
-    /// The comment length accepted by this endpoint
-    ///
-    /// See <https://github.com/lnurl/luds/blob/luds/12.md>
-    #[serde(default)]
-    pub comment_allowed: u16,
-
-    /// Indicates the domain of the LNURL-pay service, to be shown to the user when asking for
-    /// payment input, as per LUD-06 spec.
-    ///
-    /// Note: this is not the domain of the callback, but the domain of the LNURL-pay endpoint.
-    #[serde(skip)]
-    pub domain: String,
-
-    #[serde(skip)]
-    pub url: String,
-
-    /// Value indicating whether the recipient supports Nostr Zaps through NIP-57.
-    ///
-    /// See <https://github.com/nostr-protocol/nips/blob/master/57.md>
-    #[serde(default)]
-    pub allows_nostr: bool,
-
-    /// Optional recipient's lnurl provider's Nostr pubkey for NIP-57. If it exists it should be a
-    /// valid BIP 340 public key in hex.
-    ///
-    /// See <https://github.com/nostr-protocol/nips/blob/master/57.md>
-    /// See <https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki>
-    pub nostr_pubkey: Option<String>,
+    pub pay_request: LnurlPayRequestData,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -239,12 +180,6 @@ pub struct LnurlWithdrawRequestData {
     pub max_withdrawable: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct MessageSuccessActionData {
-    pub message: String,
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PaymentRequestSource {
@@ -258,38 +193,4 @@ pub struct SilentPaymentAddress {
     pub address: String,
     pub network: BitcoinNetwork,
     pub source: PaymentRequestSource,
-}
-
-/// [`SuccessAction`] where contents are ready to be consumed by the caller
-///
-/// Contents are identical to [`SuccessAction`], except for AES where the ciphertext is decrypted.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum SuccessActionProcessed {
-    /// See [`SuccessAction::Aes`] for received payload
-    ///
-    /// See [`AesSuccessActionDataDecrypted`] for decrypted payload
-    Aes { result: AesSuccessActionDataResult },
-
-    /// See [`SuccessAction::Message`]
-    Message { data: MessageSuccessActionData },
-
-    /// See [`SuccessAction::Url`]
-    Url { data: UrlSuccessActionData },
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct UrlSuccessActionData {
-    /// Contents description, up to 144 characters
-    pub description: String,
-
-    /// URL of the success action
-    pub url: String,
-
-    /// Indicates the success URL domain matches the LNURL callback domain.
-    ///
-    /// See <https://github.com/lnurl/luds/blob/luds/09.md>
-    #[serde(default = "default_true")]
-    pub matches_callback_domain: bool,
 }
