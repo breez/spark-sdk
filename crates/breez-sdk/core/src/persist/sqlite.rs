@@ -6,7 +6,7 @@ use rusqlite_migration::{M, Migrations};
 use std::path::{Path, PathBuf};
 
 use crate::{
-    DepositInfo, PaymentDetails,
+    DepositInfo, LnurlPayInfo, PaymentDetails,
     error::DepositClaimError,
     models::{PaymentStatus, PaymentType},
     persist::PaymentMetadata,
@@ -106,7 +106,11 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         let query = format!(
-            "SELECT id, payment_type, status, amount, fees, timestamp, details FROM payments ORDER BY timestamp DESC LIMIT {} OFFSET {}",
+            "SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, pm.lnurl_pay_info
+             FROM payments p
+             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             ORDER BY p.timestamp DESC 
+             LIMIT {} OFFSET {}",
             limit.unwrap_or(u32::MAX),
             offset.unwrap_or(0)
         );
@@ -114,6 +118,11 @@ impl Storage for SqliteStorage {
         let mut stmt = connection.prepare(&query)?;
 
         let payment_iter = stmt.query_map(params![], |row| {
+            let mut details = row.get(6)?;
+            if let PaymentDetails::Lightning { lnurl_pay_info, .. } = &mut details {
+                *lnurl_pay_info = row.get(7)?;
+            }
+
             Ok(Payment {
                 id: row.get(0)?,
                 payment_type: PaymentType::from(row.get::<_, String>(1)?.as_str()),
@@ -121,7 +130,7 @@ impl Storage for SqliteStorage {
                 amount: row.get(3)?,
                 fees: row.get(4)?,
                 timestamp: row.get(5)?,
-                details: row.get(6)?,
+                details,
             })
         })?;
 
@@ -162,14 +171,7 @@ impl Storage for SqliteStorage {
 
         connection.execute(
             "INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info) VALUES (?, ?)",
-            params![
-                payment_id,
-                metadata
-                    .lnurl_pay_info
-                    .as_ref()
-                    .map(|info| serde_json::to_string(&info))
-                    .transpose()?
-            ],
+            params![payment_id, metadata.lnurl_pay_info],
         )?;
 
         Ok(())
@@ -318,6 +320,14 @@ impl ToSql for DepositClaimError {
     }
 }
 
+impl ToSql for LnurlPayInfo {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        let json = serde_json::to_string(self)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        Ok(rusqlite::types::ToSqlOutput::from(json))
+    }
+}
+
 impl FromSql for DepositClaimError {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         match value {
@@ -326,6 +336,20 @@ impl FromSql for DepositClaimError {
                 let deposit_claim_error: DepositClaimError =
                     serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
                 Ok(deposit_claim_error)
+            }
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
+
+impl FromSql for LnurlPayInfo {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value {
+            ValueRef::Text(i) => {
+                let s = std::str::from_utf8(i).map_err(FromSqlError::other)?;
+                let lnurl_pay_info: LnurlPayInfo =
+                    serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
+                Ok(lnurl_pay_info)
             }
             _ => Err(FromSqlError::InvalidType),
         }
