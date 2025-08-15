@@ -785,7 +785,7 @@ fn find_exact_multiple_match(leaves: &[TreeNode], target_amount_sat: u64) -> Opt
 #[cfg(test)]
 mod tests {
     use bitcoin::{Transaction, absolute::LockTime, transaction::Version};
-    use spark_macros::test_all;
+    use macros::test_all;
     use uuid::Uuid;
 
     use super::*;

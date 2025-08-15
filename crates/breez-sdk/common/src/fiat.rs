@@ -27,7 +27,7 @@ pub struct CurrencyInfo {
 }
 
 /// Trait covering fiat-related functionality
-#[breez_sdk_macros::async_trait]
+#[macros::async_trait]
 pub trait FiatAPI: MaybeSend + MaybeSync {
     /// List all supported fiat currencies for which there is a known exchange rate.
     async fn fetch_fiat_currencies(&self) -> Result<Vec<FiatCurrency>, ServiceConnectivityError>;
@@ -40,7 +40,7 @@ fn convert_to_fiat_currency_with_id(id: String, info: CurrencyInfo) -> FiatCurre
     FiatCurrency { id, info }
 }
 
-#[breez_sdk_macros::async_trait]
+#[macros::async_trait]
 impl FiatAPI for BreezServer {
     async fn fetch_fiat_currencies(&self) -> Result<Vec<FiatCurrency>, ServiceConnectivityError> {
         let known_rates = self.fetch_fiat_rates().await?;

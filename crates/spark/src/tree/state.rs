@@ -120,7 +120,7 @@ mod tests {
     use super::*;
     use bitcoin::{Transaction, absolute::LockTime, secp256k1::PublicKey, transaction::Version};
     use frost_secp256k1_tr::Identifier;
-    use spark_macros::test_all;
+    use macros::test_all;
     use std::str::FromStr;
 
     #[cfg(feature = "browser-tests")]

@@ -6,7 +6,7 @@ use tracing::{debug, error, trace};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[breez_sdk_macros::async_trait]
+#[macros::async_trait]
 pub trait RestClient: MaybeSend + MaybeSync {
     /// Makes a GET request and logs on DEBUG.
     /// ### Arguments
@@ -43,7 +43,7 @@ impl ReqwestRestClient {
     }
 }
 
-#[breez_sdk_macros::async_trait]
+#[macros::async_trait]
 impl RestClient for ReqwestRestClient {
     async fn get(
         &self,

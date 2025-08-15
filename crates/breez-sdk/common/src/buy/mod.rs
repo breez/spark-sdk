@@ -3,7 +3,7 @@ use maybe_sync::{MaybeSend, MaybeSync};
 
 pub mod moonpay;
 
-#[breez_sdk_macros::async_trait]
+#[macros::async_trait]
 pub trait BuyBitcoinProviderApi: MaybeSend + MaybeSync {
     /// Configure buying Bitcoin and return a URL to continue
     async fn buy_bitcoin(

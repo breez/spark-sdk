@@ -1,16 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/spark", 
-  "crates/spark-wallet", 
-  "crates/spark-itest",
-  "examples/spark-cli", 
-  "crates/breez-sdk/core", 
-  "crates/breez-sdk/common", 
-  "crates/breez-sdk/macros",
-  "crates/breez-sdk/core",
   "crates/breez-sdk/cli",
-  "crates/xtask"
+  "crates/breez-sdk/common",
+  "crates/breez-sdk/core", 
+  "crates/macros",
+  "crates/spark",
+  "crates/spark-itest",
+  "crates/spark-wallet", 
+  "crates/xtask",
+  "examples/spark-cli", 
 ]
 
 [workspace.package]
@@ -56,11 +55,14 @@ hickory-resolver = "0.25.2"
 k256 = { version = "0.13.0", features = ["arithmetic", "schnorr", "ecdsa"] }
 lightning = "0.1.3"
 lightning-invoice = "0.33.1"
+macros = { path = "crates/macros" }
 maybe-sync = "0.1.1"
 percent-encoding-rfc3986 = "0.1.3"
+proc-macro2 = "1.0.97"
 prost = "0.13.4"
 prost-types = "0.13.4"
 qrcode-rs = { version = "0.1", default-features = false }
+quote = "1.0.40"
 rand = "0.8"
 reqwest = { version = "0.12.18", features = ["json"] }
 rstest = "0.26.1"
@@ -76,10 +78,10 @@ serde_json = "1.0.140"
 serde_with = "3.13.0"
 shellwords = "1.1.0"
 spark = { path = "crates/spark" }
-spark-macros = { path = "crates/spark-macros" }
 spark-wallet = { path = "crates/spark-wallet" }
 strum = "0.27.1"
 strum_macros = "0.27.1"
+syn = "2.0.105"
 tempdir = "0.3.7"
 test-log = { version = "0.2.18", default-features = false }
 testcontainers = "0.24.0"

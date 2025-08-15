@@ -748,8 +748,8 @@ pub enum LnurlRequestData {
 #[cfg(test)]
 #[allow(clippy::similar_names)]
 mod tests {
+    use macros::async_test_all;
     use serde_json::json;
-    use spark_macros::async_test_all;
 
     use crate::input::error::Bip21Error;
     use crate::input::parser::InputParser;

@@ -69,7 +69,7 @@ impl MoonpayProvider {
     }
 }
 
-#[breez_sdk_macros::async_trait]
+#[macros::async_trait]
 impl BuyBitcoinProviderApi for MoonpayProvider {
     async fn buy_bitcoin(
         &self,
@@ -101,7 +101,7 @@ impl BuyBitcoinProviderApi for MoonpayProvider {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use spark_macros::async_test_all;
+    use macros::async_test_all;
     use std::collections::HashMap;
 
     use crate::buy::moonpay::{create_moonpay_url, moonpay_config};

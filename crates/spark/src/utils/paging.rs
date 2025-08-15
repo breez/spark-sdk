@@ -112,7 +112,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spark_macros::async_test_all;
+    use macros::async_test_all;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[cfg(feature = "browser-tests")]

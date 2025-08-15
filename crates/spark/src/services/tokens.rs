@@ -924,8 +924,8 @@ impl HashableTokenTransaction for rpc::spark_token::TokenTransaction {
 
 #[cfg(test)]
 mod tests {
+    use macros::test_all;
     use prost_types::Timestamp;
-    use spark_macros::test_all;
 
     use crate::{
         operator::rpc::{

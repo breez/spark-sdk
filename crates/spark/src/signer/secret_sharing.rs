@@ -180,7 +180,7 @@ fn scalar_to_pubkey(secret: &k256::Scalar) -> Result<PublicKey, SignerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spark_macros::test_all;
+    use macros::test_all;
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);

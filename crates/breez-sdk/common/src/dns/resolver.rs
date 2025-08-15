@@ -31,7 +31,7 @@ impl Default for Resolver {
     }
 }
 
-#[breez_sdk_macros::async_trait]
+#[macros::async_trait]
 impl DnsResolver for Resolver {
     async fn txt_lookup(&self, dns_name: String) -> Result<Vec<String>> {
         let txt_lookup = self.resolver.txt_lookup(dns_name).await?;

@@ -121,7 +121,7 @@ impl RestClientChainService {
     }
 }
 
-#[breez_sdk_macros::async_trait]
+#[macros::async_trait]
 impl BitcoinChainService for RestClientChainService {
     async fn get_address_utxos(&self, address: &str) -> Result<Vec<Utxo>, ChainServiceError> {
         let address = address
@@ -164,7 +164,7 @@ mod tests {
     use super::*;
     use crate::Network;
 
-    use spark_macros::async_test_all;
+    use macros::async_test_all;
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);

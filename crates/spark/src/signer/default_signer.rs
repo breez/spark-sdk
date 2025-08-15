@@ -609,7 +609,7 @@ impl PrivateKeySource {
 mod tests {
     use bitcoin::secp256k1::rand::thread_rng;
     use bitcoin::secp256k1::{self, PublicKey, Secp256k1, SecretKey};
-    use spark_macros::{async_test_all, test_all};
+    use macros::{async_test_all, test_all};
     use std::str::FromStr;
 
     use crate::signer::{EncryptedPrivateKey, PrivateKeySource, Signer, SignerError};

@@ -38,7 +38,7 @@ impl MockRestClient {
     }
 }
 
-#[breez_sdk_macros::async_trait]
+#[macros::async_trait]
 impl RestClient for MockRestClient {
     async fn get(
         &self,

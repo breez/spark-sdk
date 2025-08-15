@@ -37,7 +37,7 @@ pub struct LnurlAuthRequestData {
     pub url: String,
 }
 
-#[breez_sdk_macros::async_trait]
+#[macros::async_trait]
 pub trait LnurlAuthSigner {
     async fn derive_bip32_pub_key(&self, derivation_path: &[ChildNumber]) -> LnurlResult<Vec<u8>>;
     async fn sign_ecdsa(&self, msg: &[u8], derivation_path: &[ChildNumber])

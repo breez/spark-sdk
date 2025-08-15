@@ -315,7 +315,7 @@ mod tests {
 
     use super::*;
     use bitcoin::secp256k1::Secp256k1;
-    use spark_macros::test_all;
+    use macros::test_all;
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);

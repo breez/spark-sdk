@@ -21,7 +21,7 @@ impl MockDnsResolver {
     }
 }
 
-#[breez_sdk_macros::async_trait]
+#[macros::async_trait]
 impl DnsResolver for MockDnsResolver {
     async fn txt_lookup(&self, dns_name: String) -> Result<Vec<String>> {
         let mut responses = self.responses.lock().unwrap();

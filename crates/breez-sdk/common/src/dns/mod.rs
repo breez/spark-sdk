@@ -7,7 +7,7 @@ mod resolver;
 use anyhow::Result;
 pub use resolver::Resolver;
 
-#[breez_sdk_macros::async_trait]
+#[macros::async_trait]
 pub trait DnsResolver {
     async fn txt_lookup(&self, dns_name: String) -> Result<Vec<String>>;
 }
