@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub use sqlite::SqliteStorage;
 use thiserror::Error;
 
-use crate::{DepositInfo, models::Payment};
+use crate::{DepositInfo, LnurlPayInfo, models::Payment};
 
 /// Errors that can occur during storage operations
 #[derive(Debug, Error, Clone)]
@@ -27,6 +27,11 @@ impl From<serde_json::Error> for StorageError {
     fn from(e: serde_json::Error) -> Self {
         StorageError::Serialization(e.to_string())
     }
+}
+
+/// Metadata associated with a payment that cannot be extracted from the Spark operator.
+pub struct PaymentMetadata {
+    pub lnurl_pay_info: Option<LnurlPayInfo>,
 }
 
 /// Trait for persistent storage
@@ -59,6 +64,22 @@ pub trait Storage: Send + Sync {
     ///
     /// Success or a `StorageError`
     fn insert_payment(&self, payment: &Payment) -> Result<(), StorageError>;
+
+    /// Inserts payment metadata into storage
+    ///
+    /// # Arguments
+    ///
+    /// * `payment_id` - The ID of the payment
+    /// * `metadata` - The metadata to insert
+    ///
+    /// # Returns
+    ///
+    /// Success or a `StorageError`
+    fn set_payment_metadata(
+        &self,
+        payment_id: &str,
+        metadata: &PaymentMetadata,
+    ) -> Result<(), StorageError>;
 
     /// Gets a payment by its ID
     /// # Arguments

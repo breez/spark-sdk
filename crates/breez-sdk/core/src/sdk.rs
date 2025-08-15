@@ -41,7 +41,7 @@ use crate::{
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentMethod, SendPaymentRequest,
         SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
-    persist::{CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, Storage},
+    persist::{CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, PaymentMetadata, Storage},
 };
 
 /// `BreezSDK` is a wrapper around `SparkSDK` that provides a more structured API
@@ -403,7 +403,14 @@ impl BreezSdk {
                 "Expected Lightning payment details".to_string(),
             ));
         };
-        *lnurl_pay_info = Some(lnurl_info);
+        *lnurl_pay_info = Some(lnurl_info.clone());
+
+        self.storage.set_payment_metadata(
+            &payment.id,
+            &PaymentMetadata {
+                lnurl_pay_info: Some(lnurl_info),
+            },
+        )?;
 
         Ok(LnurlPayResponse {
             payment,

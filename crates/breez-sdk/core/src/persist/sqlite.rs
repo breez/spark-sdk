@@ -9,6 +9,7 @@ use crate::{
     DepositInfo, PaymentDetails,
     error::DepositClaimError,
     models::{PaymentStatus, PaymentType},
+    persist::PaymentMetadata,
 };
 
 use super::{Payment, Storage, StorageError};
@@ -76,6 +77,10 @@ impl SqliteStorage {
               error TEXT,
               PRIMARY KEY (txid, vout)
             );",
+            "CREATE TABLE IF NOT EXISTS payment_metadata (
+              payment_id TEXT PRIMARY KEY,
+              lnurl_pay_info TEXT
+            );",
         ]
     }
 }
@@ -142,6 +147,28 @@ impl Storage for SqliteStorage {
                 payment.fees,
                 payment.timestamp,
                 payment.details,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    fn set_payment_metadata(
+        &self,
+        payment_id: &str,
+        metadata: &PaymentMetadata,
+    ) -> Result<(), StorageError> {
+        let connection = self.get_connection()?;
+
+        connection.execute(
+            "INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info) VALUES (?, ?)",
+            params![
+                payment_id,
+                metadata
+                    .lnurl_pay_info
+                    .as_ref()
+                    .map(|info| serde_json::to_string(&info))
+                    .transpose()?
             ],
         )?;
 
