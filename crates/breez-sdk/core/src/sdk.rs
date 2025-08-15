@@ -38,7 +38,6 @@ pub struct BreezSdk {
     chain_service: Arc<dyn BitcoinChainService>,
     event_emitter: Arc<EventEmitter>,
     shutdown_sender: watch::Sender<()>,
-    shutdown_receiver: watch::Receiver<()>,
 }
 
 pub async fn init_logging(
@@ -87,7 +86,6 @@ impl BreezSdk {
         storage: Arc<dyn Storage + Send + Sync>,
         chain_service: Arc<dyn BitcoinChainService>,
         shutdown_sender: watch::Sender<()>,
-        shutdown_receiver: watch::Receiver<()>,
     ) -> Result<Self, SdkError> {
         let spark_wallet_config =
             spark_wallet::SparkWalletConfig::default_config(config.clone().network.into());
@@ -100,7 +98,6 @@ impl BreezSdk {
             chain_service,
             event_emitter: Arc::new(EventEmitter::new()),
             shutdown_sender,
-            shutdown_receiver,
         };
 
         Ok(sdk)
@@ -145,7 +142,7 @@ impl BreezSdk {
 
     fn monitor_deposits(&self) {
         let sdk = self.clone();
-        let mut shutdown_receiver = sdk.shutdown_receiver.clone();
+        let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
 
         info!("Monitoring deposits started");
         // First interval is immediate, after first iteration we change it according to the configuration
@@ -180,7 +177,7 @@ impl BreezSdk {
 
     fn periodic_sync(&self) {
         let sdk = self.clone();
-        let mut shutdown_receiver = sdk.shutdown_receiver.clone();
+        let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
         let mut subscription = sdk.spark_wallet.subscribe_events();
         tokio::spawn(async move {
             loop {
@@ -239,10 +236,12 @@ impl BreezSdk {
     ///
     /// Result containing either success or an `SdkError` if the background task couldn't be stopped
     pub async fn disconnect(&self) -> Result<(), SdkError> {
+        info!("Disconnecting Breez SDK");
         self.shutdown_sender
             .send(())
             .map_err(|_| SdkError::GenericError("Failed to send shutdown signal".to_string()))?;
-
+        self.shutdown_sender.closed().await;
+        info!("Breez SDK disconnected");
         Ok(())
     }
 
