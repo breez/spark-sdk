@@ -97,34 +97,31 @@ impl Storage for SqliteStorage {
 
         let mut stmt = connection.prepare(&query)?;
 
-        let payment_iter = stmt.query_map(params![], |row| {
-            Ok(Payment {
-                id: row.get(0)?,
-                payment_type: row.get::<_, String>(1)?.parse().map_err(|_| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        1,
-                        rusqlite::types::Type::Text,
-                        "Failed to parse payment type".into(),
-                    )
-                })?,
-                status: row.get::<_, String>(2)?.parse().map_err(|_| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        2,
-                        rusqlite::types::Type::Text,
-                        "Failed to parse payment status".into(),
-                    )
-                })?,
-                amount: row.get(3)?,
-                fees: row.get(4)?,
-                timestamp: row.get(5)?,
-                details: row.get(6)?,
-            })
-        })?;
-
-        let mut payments = Vec::new();
-        for payment in payment_iter {
-            payments.push(payment?);
-        }
+        let payments = stmt
+            .query_map(params![], |row| {
+                Ok(Payment {
+                    id: row.get(0)?,
+                    payment_type: row.get::<_, String>(1)?.parse().map_err(|_| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            1,
+                            rusqlite::types::Type::Text,
+                            "Failed to parse payment type".into(),
+                        )
+                    })?,
+                    status: row.get::<_, String>(2)?.parse().map_err(|_| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            "Failed to parse payment status".into(),
+                        )
+                    })?,
+                    amount: row.get(3)?,
+                    fees: row.get(4)?,
+                    timestamp: row.get(5)?,
+                    details: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(payments)
     }
