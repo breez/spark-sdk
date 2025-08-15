@@ -228,11 +228,11 @@ fn wasm_test_cmd(
             c.args(["--", "--features", "browser-tests"]);
         }
         // On macOS, auto-detect Homebrew LLVM and set CC/AR for wasm cross-compiles
-        if cfg!(target_os = "macos") {
-            if let Some((clang_path, llvm_ar_path)) = detect_brew_llvm_paths(&sh) {
-                c.env("CC_wasm32_unknown_unknown", &clang_path);
-                c.env("AR_wasm32_unknown_unknown", &llvm_ar_path);
-            }
+        if cfg!(target_os = "macos")
+            && let Some((clang_path, llvm_ar_path)) = detect_brew_llvm_paths(&sh)
+        {
+            c.env("CC_wasm32_unknown_unknown", &clang_path);
+            c.env("AR_wasm32_unknown_unknown", &llvm_ar_path);
         }
         for (k, v) in &envs {
             c.env(k, v);
@@ -373,11 +373,12 @@ fn build_cmd(release: bool, target: Option<String>, package: Option<String>) -> 
                 if release {
                     c.arg("--release");
                 }
-                if cfg!(target_os = "macos") && t == "wasm32-unknown-unknown" {
-                    if let Some((clang_path, llvm_ar_path)) = detect_brew_llvm_paths(&sh) {
-                        c.env("CC_wasm32_unknown_unknown", &clang_path);
-                        c.env("AR_wasm32_unknown_unknown", &llvm_ar_path);
-                    }
+                if cfg!(target_os = "macos")
+                    && t == "wasm32-unknown-unknown"
+                    && let Some((clang_path, llvm_ar_path)) = detect_brew_llvm_paths(&sh)
+                {
+                    c.env("CC_wasm32_unknown_unknown", &clang_path);
+                    c.env("AR_wasm32_unknown_unknown", &llvm_ar_path);
                 }
                 let status = c
                     .status()
@@ -394,11 +395,12 @@ fn build_cmd(release: bool, target: Option<String>, package: Option<String>) -> 
                     if release {
                         c.arg("--release");
                     }
-                    if cfg!(target_os = "macos") && t == "wasm32-unknown-unknown" {
-                        if let Some((clang_path, llvm_ar_path)) = detect_brew_llvm_paths(&sh) {
-                            c.env("CC_wasm32_unknown_unknown", &clang_path);
-                            c.env("AR_wasm32_unknown_unknown", &llvm_ar_path);
-                        }
+                    if cfg!(target_os = "macos")
+                        && t == "wasm32-unknown-unknown"
+                        && let Some((clang_path, llvm_ar_path)) = detect_brew_llvm_paths(&sh)
+                    {
+                        c.env("CC_wasm32_unknown_unknown", &clang_path);
+                        c.env("AR_wasm32_unknown_unknown", &llvm_ar_path);
                     }
                     let status = c
                         .status()
@@ -441,11 +443,11 @@ fn wasm_clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
                 c.arg(r);
             }
         }
-        if cfg!(target_os = "macos") {
-            if let Some((clang_path, llvm_ar_path)) = detect_brew_llvm_paths(&sh) {
-                c.env("CC_wasm32_unknown_unknown", &clang_path);
-                c.env("AR_wasm32_unknown_unknown", &llvm_ar_path);
-            }
+        if cfg!(target_os = "macos")
+            && let Some((clang_path, llvm_ar_path)) = detect_brew_llvm_paths(&sh)
+        {
+            c.env("CC_wasm32_unknown_unknown", &clang_path);
+            c.env("AR_wasm32_unknown_unknown", &llvm_ar_path);
         }
         let status = c.status().with_context(|| {
             format!("failed to run cargo clippy for wasm target on {}", pkg.name)
