@@ -120,7 +120,7 @@ impl Storage for SqliteStorage {
         let payment_iter = stmt.query_map(params![], |row| {
             let mut details = row.get(6)?;
             if let PaymentDetails::Lightning { lnurl_pay_info, .. } = &mut details {
-                *lnurl_pay_info = row.get(7)?;
+                *lnurl_pay_info = Box::new(row.get(7)?);
             }
 
             Ok(Payment {

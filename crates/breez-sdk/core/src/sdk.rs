@@ -403,7 +403,7 @@ impl BreezSdk {
                 "Expected Lightning payment details".to_string(),
             ));
         };
-        *lnurl_pay_info = Some(lnurl_info.clone());
+        *lnurl_pay_info = Box::new(Some(lnurl_info.clone()));
 
         self.storage.set_payment_metadata(
             &payment.id,
