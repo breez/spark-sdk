@@ -99,7 +99,7 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
         .join(path_suffix);
     fs::create_dir_all(&wallet_data_dir)?;
 
-    let config = default_config(network.clone());
+    let config = default_config(network);
     let storage = default_storage(wallet_data_dir.to_string_lossy().to_string())?;
     let sdk = SdkBuilder::new(config, mnemonic.to_string(), storage)
         .build()

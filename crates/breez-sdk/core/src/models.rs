@@ -1,4 +1,8 @@
-use breez_sdk_common::input::{self, BitcoinAddress, DetailedBolt11Invoice};
+use breez_sdk_common::{
+    input::{self, BitcoinAddress, DetailedBolt11Invoice},
+    lnurl::pay::{LnurlPayRequestData, SuccessAction, SuccessActionProcessed},
+    network::BitcoinNetwork,
+};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
@@ -232,7 +236,7 @@ impl Payment {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Network {
     Mainnet,
     Regtest,
@@ -252,6 +256,15 @@ impl From<Network> for SparkNetwork {
         match network {
             Network::Mainnet => SparkNetwork::Mainnet,
             Network::Regtest => SparkNetwork::Regtest,
+        }
+    }
+}
+
+impl From<Network> for BitcoinNetwork {
+    fn from(network: Network) -> Self {
+        match network {
+            Network::Mainnet => BitcoinNetwork::Bitcoin,
+            Network::Regtest => BitcoinNetwork::Regtest,
         }
     }
 }
@@ -379,6 +392,31 @@ pub struct ReceivePaymentRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReceivePaymentResponse {
     pub payment_request: String,
+}
+
+pub struct PrepareLnurlPayRequest {
+    pub amount_sats: u64,
+    pub comment: Option<String>,
+    pub data: LnurlPayRequestData,
+    pub validate_success_action_url: Option<bool>,
+}
+
+pub struct PrepareLnurlPayResponse {
+    pub amount_sats: u64,
+    pub comment: Option<String>,
+    pub data: LnurlPayRequestData,
+    pub fee_sats: u64,
+    pub detailed_invoice: DetailedBolt11Invoice,
+    pub success_action: Option<SuccessAction>,
+}
+
+pub struct LnurlPayRequest {
+    pub prepare_response: PrepareLnurlPayResponse,
+}
+
+pub struct LnurlPayResponse {
+    pub payment: Payment,
+    pub success_action: Option<SuccessActionProcessed>,
 }
 
 pub struct PrepareSendPaymentRequest {

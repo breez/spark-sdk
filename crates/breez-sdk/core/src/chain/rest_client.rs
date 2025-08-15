@@ -126,7 +126,7 @@ impl BitcoinChainService for RestClientChainService {
     async fn get_address_utxos(&self, address: &str) -> Result<Vec<Utxo>, ChainServiceError> {
         let address = address
             .parse::<Address<NetworkUnchecked>>()?
-            .require_network(self.network.clone().try_into()?)?;
+            .require_network(self.network.try_into()?)?;
 
         let utxos = self
             .get_response_json::<Vec<Utxo>>(format!("/address/{address}/utxo").as_str())

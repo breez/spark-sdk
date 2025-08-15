@@ -1,6 +1,21 @@
-use bitcoin::{Transaction, Txid, consensus::encode::deserialize_hex};
+use bitcoin::{
+    Transaction, Txid,
+    consensus::encode::deserialize_hex,
+    hashes::{Hash, sha256},
+};
 use breez_sdk_common::input::InputType;
 pub use breez_sdk_common::input::parse as parse_input;
+use breez_sdk_common::{
+    input::InputType,
+    lnurl::{
+        error::LnurlError,
+        pay::{
+            AesSuccessActionDataResult, SuccessAction, SuccessActionProcessed,
+            ValidatedCallbackResponse, validate_lnurl_pay,
+        },
+    },
+    rest::RestClient,
+};
 use spark_wallet::{
     DefaultSigner, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress, SparkWallet, Utxo,
     WalletEvent, WalletTransfer,
@@ -14,7 +29,8 @@ use web_time::Instant;
 
 use crate::{
     BitcoinChainService, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee,
-    GetPaymentRequest, GetPaymentResponse, Logger, Network, PaymentStatus, SqliteStorage,
+    GetPaymentRequest, GetPaymentResponse, LnurlPayRequest, LnurlPayResponse, Logger, Network,
+    PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse, SqliteStorage,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -36,6 +52,7 @@ pub struct BreezSdk {
     spark_wallet: Arc<SparkWallet<DefaultSigner>>,
     storage: Arc<dyn Storage>,
     chain_service: Arc<dyn BitcoinChainService>,
+    lnurl_client: Arc<dyn RestClient>,
     event_emitter: Arc<EventEmitter>,
     shutdown_sender: watch::Sender<()>,
     shutdown_receiver: watch::Receiver<()>,
@@ -87,6 +104,7 @@ impl BreezSdk {
         signer: DefaultSigner,
         storage: Arc<dyn Storage + Send + Sync>,
         chain_service: Arc<dyn BitcoinChainService>,
+        lnurl_client: Arc<dyn RestClient>,
         shutdown_sender: watch::Sender<()>,
         shutdown_receiver: watch::Receiver<()>,
     ) -> Result<Self, SdkError> {
@@ -99,6 +117,7 @@ impl BreezSdk {
             spark_wallet: Arc::new(spark_wallet),
             storage,
             chain_service,
+            lnurl_client,
             event_emitter: Arc::new(EventEmitter::new()),
             shutdown_sender,
             shutdown_receiver,
@@ -310,6 +329,72 @@ impl BreezSdk {
         }
     }
 
+    pub async fn prepare_lnurl_pay(
+        &self,
+        request: PrepareLnurlPayRequest,
+    ) -> Result<PrepareLnurlPayResponse, SdkError> {
+        let success_data = match validate_lnurl_pay(
+            self.lnurl_client.as_ref(),
+            request.amount_sats,
+            &None,
+            &request.data,
+            self.config.network.into(),
+            request.validate_success_action_url,
+        )
+        .await?
+        {
+            ValidatedCallbackResponse::EndpointError { data } => {
+                return Err(LnurlError::EndpointError(data.reason).into());
+            }
+            ValidatedCallbackResponse::EndpointSuccess { data } => data,
+        };
+
+        let prepare_response = self
+            .prepare_send_payment(PrepareSendPaymentRequest {
+                payment_request: success_data.pr,
+                amount_sats: Some(request.amount_sats),
+            })
+            .await?;
+
+        let SendPaymentMethod::Bolt11Invoice { detailed_invoice } = prepare_response.payment_method
+        else {
+            return Err(SdkError::GenericError(
+                "Expected Bolt11Invoice payment method".to_string(),
+            ));
+        };
+
+        Ok(PrepareLnurlPayResponse {
+            amount_sats: request.amount_sats,
+            comment: request.comment,
+            data: request.data,
+            detailed_invoice,
+            fee_sats: prepare_response.fee_sats,
+            success_action: success_data.success_action,
+        })
+    }
+
+    pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
+        let payment = self
+            .send_payment(SendPaymentRequest {
+                prepare_response: PrepareSendPaymentResponse {
+                    payment_method: SendPaymentMethod::Bolt11Invoice {
+                        detailed_invoice: request.prepare_response.detailed_invoice,
+                    },
+                    amount_sats: request.prepare_response.amount_sats,
+                    fee_sats: request.prepare_response.fee_sats,
+                },
+            })
+            .await?
+            .payment;
+
+        let success_action =
+            process_success_action(&payment, request.prepare_response.success_action).await?;
+        Ok(LnurlPayResponse {
+            payment,
+            success_action,
+        })
+    }
+
     pub async fn prepare_send_payment(
         &self,
         request: PrepareSendPaymentRequest,
@@ -329,7 +414,7 @@ impl BreezSdk {
         // Then check for other types of inputs
         let parsed_input = parse(&request.payment_request).await?;
         match &parsed_input {
-            breez_sdk_common::input::InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
+            InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
                 let fee_estimation = self
                     .spark_wallet
                     .fetch_lightning_send_fee_estimate(
@@ -348,7 +433,6 @@ impl BreezSdk {
                         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
                 })
             }
-            breez_sdk_common::input::InputType::BitcoinAddress(_bitcoin_address) => todo!(),
             _ => Err(SdkError::GenericError("Unsupported input type".to_string())),
         }
     }
@@ -731,4 +815,44 @@ impl From<DetailedUtxo> for DepositInfo {
             error: None,
         }
     }
+}
+
+async fn process_success_action(
+    payment: &Payment,
+    success_action: Option<SuccessAction>,
+) -> Result<Option<SuccessActionProcessed>, LnurlError> {
+    let Some(success_action) = success_action else {
+        return Ok(None);
+    };
+
+    let data = match success_action {
+        SuccessAction::Aes { data } => data,
+        SuccessAction::Message { data } => {
+            return Ok(Some(SuccessActionProcessed::Message { data }));
+        }
+        SuccessAction::Url { data } => return Ok(Some(SuccessActionProcessed::Url { data })),
+    };
+
+    let PaymentDetails::Lightning { preimage, .. } = &payment.details else {
+        return Err(LnurlError::general(format!(
+            "Invalid payment type: expected type `PaymentDetails::Lightning`, got payment details {:?}.",
+            payment.details
+        )));
+    };
+
+    let Some(preimage) = preimage else {
+        return Ok(None);
+    };
+
+    let preimage =
+        sha256::Hash::from_str(preimage).map_err(|_| LnurlError::general("Invalid preimage"))?;
+    let preimage = preimage.as_byte_array();
+    let result = match (data, preimage).try_into() {
+        Ok(data) => AesSuccessActionDataResult::Decrypted { data },
+        Err(e) => AesSuccessActionDataResult::ErrorStatus {
+            reason: e.to_string(),
+        },
+    };
+
+    Ok(Some(SuccessActionProcessed::Aes { result }))
 }

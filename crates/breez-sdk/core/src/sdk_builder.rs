@@ -1,4 +1,6 @@
-use breez_sdk_common::rest::ReqwestRestClient as CommonRequestRestClient;
+use std::sync::Arc;
+
+use breez_sdk_common::rest::{ReqwestRestClient as CommonRequestRestClient, RestClient};
 use spark_wallet::DefaultSigner;
 use tokio::sync::watch;
 
@@ -20,6 +22,7 @@ pub struct SdkBuilder {
     mnemonic: String,
     storage: Box<dyn Storage + Send + Sync>,
     chain_service: Option<Box<dyn BitcoinChainService>>,
+    lnurl_client: Option<Box<dyn RestClient>>,
 }
 
 impl SdkBuilder {
@@ -30,6 +33,7 @@ impl SdkBuilder {
             mnemonic,
             storage,
             chain_service: None,
+            lnurl_client: None,
         }
     }
 
@@ -48,11 +52,16 @@ impl SdkBuilder {
     ) -> Self {
         self.chain_service = Some(Box::new(RestClientChainService::new(
             url,
-            self.config.network.clone(),
+            self.config.network,
             5,
             Box::new(CommonRequestRestClient::new().unwrap()),
             credentials.map(|c| BasicAuth::new(c.username, c.password)),
         )));
+        self
+    }
+
+    pub fn with_lnurl_client(mut self, lnurl_client: Box<dyn RestClient>) -> Self {
+        self.lnurl_client = Some(lnurl_client);
         self
     }
 
@@ -61,7 +70,7 @@ impl SdkBuilder {
         // Create the signer from mnemonic
         let mnemonic = bip39::Mnemonic::parse(&self.mnemonic)
             .map_err(|e| SdkError::GenericError(e.to_string()))?;
-        let signer = DefaultSigner::new(&mnemonic.to_seed(""), self.config.network.clone().into())
+        let signer = DefaultSigner::new(&mnemonic.to_seed(""), self.config.network.into())
             .map_err(|e| SdkError::GenericError(e.to_string()))?;
         let chain_service = match self.chain_service {
             Some(service) => service,
@@ -71,14 +80,14 @@ impl SdkBuilder {
                 match self.config.network {
                     Network::Mainnet => Box::new(RestClientChainService::new(
                         "https://blockstream.info/api".to_string(),
-                        self.config.network.clone(),
+                        self.config.network,
                         5,
                         Box::new(inner_client),
                         None,
                     )),
                     Network::Regtest => Box::new(RestClientChainService::new(
                         "https://regtest-mempool.loadtest.dev.sparkinfra.net/api".to_string(),
-                        self.config.network.clone(),
+                        self.config.network,
                         5,
                         Box::new(inner_client),
                         match (
@@ -94,6 +103,13 @@ impl SdkBuilder {
                 }
             }
         };
+        let lnurl_client: Arc<dyn RestClient> = match self.lnurl_client {
+            Some(client) => client.into(),
+            None => Arc::new(
+                CommonRequestRestClient::new()
+                    .map_err(|e| SdkError::GenericError(e.to_string()))?,
+            ),
+        };
         let (shutdown_sender, shutdown_receiver) = watch::channel::<()>(());
         // Create the SDK instance
         let sdk = BreezSdk::new(
@@ -101,6 +117,7 @@ impl SdkBuilder {
             signer,
             self.storage.into(),
             chain_service.into(),
+            lnurl_client,
             shutdown_sender,
             shutdown_receiver,
         )

@@ -16,6 +16,7 @@ pub enum SdkError {
 
     #[error("Invalid UUID: {0}")]
     InvalidUuid(#[from] uuid::Error),
+
     /// Invalid input error
     #[error("Invalid input: {0}")]
     InvalidInput(String),
@@ -47,6 +48,10 @@ pub enum SdkError {
     #[error("Missing utxo: {tx}:{vout}")]
     MissingUtxo { tx: String, vout: u32 },
     #[error("Generic error: {0}")]
+    #[error("lnurl error: {0}")]
+    LnurlError(#[from] breez_sdk_common::lnurl::error::LnurlError),
+
+    #[error("General error: {0}")]
     GenericError(String),
 }
 
