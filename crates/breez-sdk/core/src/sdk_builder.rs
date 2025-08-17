@@ -94,7 +94,7 @@ impl SdkBuilder {
                 }
             }
         };
-        let (shutdown_sender, shutdown_receiver) = watch::channel::<()>(());
+        let (shutdown_sender, _) = watch::channel::<()>(());
         // Create the SDK instance
         let sdk = BreezSdk::new(
             self.config,
@@ -102,7 +102,6 @@ impl SdkBuilder {
             self.storage.into(),
             chain_service.into(),
             shutdown_sender,
-            shutdown_receiver,
         )
         .await?;
 

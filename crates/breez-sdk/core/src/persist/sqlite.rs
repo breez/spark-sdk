@@ -5,10 +5,7 @@ use rusqlite::{
 use rusqlite_migration::{M, Migrations};
 use std::path::{Path, PathBuf};
 
-use crate::{
-    PaymentDetails,
-    models::{PaymentStatus, PaymentType},
-};
+use crate::PaymentDetails;
 
 use super::{Payment, Storage, StorageError};
 
@@ -100,22 +97,31 @@ impl Storage for SqliteStorage {
 
         let mut stmt = connection.prepare(&query)?;
 
-        let payment_iter = stmt.query_map(params![], |row| {
-            Ok(Payment {
-                id: row.get(0)?,
-                payment_type: PaymentType::from(row.get::<_, String>(1)?.as_str()),
-                status: PaymentStatus::from(row.get::<_, String>(2)?.as_str()),
-                amount: row.get(3)?,
-                fees: row.get(4)?,
-                timestamp: row.get(5)?,
-                details: row.get(6)?,
-            })
-        })?;
-
-        let mut payments = Vec::new();
-        for payment in payment_iter {
-            payments.push(payment?);
-        }
+        let payments = stmt
+            .query_map(params![], |row| {
+                Ok(Payment {
+                    id: row.get(0)?,
+                    payment_type: row.get::<_, String>(1)?.parse().map_err(|_| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            1,
+                            rusqlite::types::Type::Text,
+                            "Failed to parse payment type".into(),
+                        )
+                    })?,
+                    status: row.get::<_, String>(2)?.parse().map_err(|_| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            "Failed to parse payment status".into(),
+                        )
+                    })?,
+                    amount: row.get(3)?,
+                    fees: row.get(4)?,
+                    timestamp: row.get(5)?,
+                    details: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(payments)
     }
@@ -178,8 +184,20 @@ impl Storage for SqliteStorage {
         let result = stmt.query_row(params![id], |row| {
             Ok(Payment {
                 id: row.get(0)?,
-                payment_type: PaymentType::from(row.get::<_, String>(1)?.as_str()),
-                status: PaymentStatus::from(row.get::<_, String>(2)?.as_str()),
+                payment_type: row.get::<_, String>(1)?.parse().map_err(|_| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        1,
+                        rusqlite::types::Type::Text,
+                        "Failed to parse payment type".into(),
+                    )
+                })?,
+                status: row.get::<_, String>(2)?.parse().map_err(|_| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        "Failed to parse payment status".into(),
+                    )
+                })?,
                 amount: row.get(3)?,
                 fees: row.get(4)?,
                 timestamp: row.get(5)?,
@@ -214,6 +232,8 @@ impl FromSql for PaymentDetails {
 
 #[cfg(test)]
 mod tests {
+    use crate::{PaymentStatus, PaymentType};
+
     use super::*;
     use chrono::Utc;
 

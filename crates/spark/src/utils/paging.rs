@@ -67,6 +67,30 @@ pub struct PagingResult<T> {
     pub next: Option<PagingFilter>,
 }
 
+impl<T> PagingResult<T> {
+    pub fn complete(items: Vec<T>) -> Self {
+        Self { items, next: None }
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub fn map<U, F>(self, f: F) -> PagingResult<U>
+    where
+        F: Fn(T) -> U,
+    {
+        PagingResult {
+            items: self.items.into_iter().map(f).collect(),
+            next: self.next,
+        }
+    }
+}
+
 impl<T: Debug> Debug for PagingResult<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PagingResult")

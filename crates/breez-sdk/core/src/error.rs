@@ -52,12 +52,6 @@ impl From<String> for SdkError {
     }
 }
 
-impl From<&str> for SdkError {
-    fn from(s: &str) -> Self {
-        Self::GenericError(s.to_string())
-    }
-}
-
 impl From<TryFromIntError> for SdkError {
     fn from(e: TryFromIntError) -> Self {
         SdkError::GenericError(e.to_string())

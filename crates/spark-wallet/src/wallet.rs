@@ -26,7 +26,7 @@ use spark::{
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer},
     tree::{LeavesReservation, TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeState},
-    utils::paging::PagingFilter,
+    utils::paging::{PagingFilter, PagingResult},
 };
 use tokio::sync::{broadcast, watch};
 use tokio_with_wasm::alias as tokio;
@@ -401,29 +401,24 @@ impl<S: Signer> SparkWallet<S> {
     pub async fn list_static_deposit_addresses(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<Address>, SparkWalletError> {
+    ) -> Result<PagingResult<Address>, SparkWalletError> {
         let static_addresses = self
             .deposit_service
             .query_static_deposit_addresses(paging)
             .await?;
-        Ok(static_addresses
-            .into_iter()
-            .map(|addr| addr.address)
-            .collect())
+
+        Ok(static_addresses.map(|addr| addr.address))
     }
 
     pub async fn list_unused_deposit_addresses(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<Address>, SparkWalletError> {
+    ) -> Result<PagingResult<Address>, SparkWalletError> {
         let deposit_addresses = self
             .deposit_service
             .query_unused_deposit_addresses(paging)
             .await?;
-        Ok(deposit_addresses
-            .into_iter()
-            .map(|addr| addr.address)
-            .collect())
+        Ok(deposit_addresses.map(|addr| addr.address))
     }
 
     /// Fetches a quote for the creditable amount when claiming a static deposit.
@@ -507,22 +502,32 @@ impl<S: Signer> SparkWallet<S> {
     pub async fn list_transfers(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+    ) -> Result<PagingResult<WalletTransfer>, SparkWalletError> {
         let our_pubkey = self.identity_public_key;
         let transfers = self.transfer_service.query_transfers(paging).await?;
-        create_transfers(transfers, &self.ssp_client, our_pubkey).await
+        let mapped_transfers =
+            create_transfers(transfers.items, &self.ssp_client, our_pubkey).await?;
+        Ok(PagingResult {
+            items: mapped_transfers,
+            next: transfers.next,
+        })
     }
 
     pub async fn list_pending_transfers(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+    ) -> Result<PagingResult<WalletTransfer>, SparkWalletError> {
         let our_pubkey = self.identity_public_key;
         let transfers = self
             .transfer_service
             .query_pending_transfers(paging)
             .await?;
-        create_transfers(transfers, &self.ssp_client, our_pubkey).await
+        let mapped_transfers =
+            create_transfers(transfers.items, &self.ssp_client, our_pubkey).await?;
+        Ok(PagingResult {
+            items: mapped_transfers,
+            next: transfers.next,
+        })
     }
 
     /// Signs a message with the identity key using ECDSA and returns the signature.

@@ -80,7 +80,10 @@ pub(crate) async fn execute_command(
     sdk: &BreezSdk,
 ) -> Result<bool, anyhow::Error> {
     match command {
-        Command::Exit => Ok(false),
+        Command::Exit => {
+            sdk.disconnect().await?;
+            Ok(false)
+        }
         Command::GetInfo => {
             let value = sdk.get_info(GetInfoRequest {}).await?;
             print_value(&value)?;

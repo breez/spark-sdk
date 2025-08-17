@@ -124,7 +124,7 @@ where
                 None
             };
             let addresses = wallet.list_static_deposit_addresses(paging).await?;
-            println!("{}", serde_json::to_string_pretty(&addresses)?);
+            println!("{}", serde_json::to_string_pretty(&addresses.items)?);
         }
         DepositCommand::ListUnusedAddresses { limit, offset } => {
             let paging = if limit.is_some() || offset.is_some() {
@@ -133,7 +133,7 @@ where
                 None
             };
             let addresses = wallet.list_unused_deposit_addresses(paging).await?;
-            println!("{}", serde_json::to_string_pretty(&addresses)?);
+            println!("{}", serde_json::to_string_pretty(&addresses.items)?);
         }
         DepositCommand::Refund {
             txid,

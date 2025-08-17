@@ -5,7 +5,7 @@ use spark_wallet::{
     CurrencyAmount, LightningSendPayment, LightningSendStatus, Network as SparkNetwork,
     SspUserRequest, TransferDirection, TransferStatus, WalletTransfer,
 };
-use std::time::UNIX_EPOCH;
+use std::{str::FromStr, time::UNIX_EPOCH};
 
 use crate::SdkError;
 
@@ -27,12 +27,14 @@ impl fmt::Display for PaymentType {
     }
 }
 
-impl From<&str> for PaymentType {
-    fn from(s: &str) -> Self {
-        match s {
+impl FromStr for PaymentType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "receive" => PaymentType::Receive,
-            _ => PaymentType::Send, // Default to Send if unknown or 'send'
-        }
+            _ => return Err("unknown payment type".into()),
+        })
     }
 }
 
@@ -57,13 +59,15 @@ impl fmt::Display for PaymentStatus {
     }
 }
 
-impl From<&str> for PaymentStatus {
-    fn from(s: &str) -> Self {
-        match s {
+impl FromStr for PaymentStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "completed" => PaymentStatus::Completed,
             "failed" => PaymentStatus::Failed,
-            _ => PaymentStatus::Pending, // Default to Pending if unknown or 'pending'
-        }
+            _ => return Err("unknown payment status".into()),
+        })
     }
 }
 
