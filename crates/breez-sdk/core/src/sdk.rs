@@ -567,7 +567,6 @@ impl BreezSdk {
                 deserialize_hex(tx_hex.as_str())?
             }
         };
-
         info!(
             "Fetching static deposit claim quote for utxo {}:{}",
             utxo.txid, utxo.vout
@@ -591,8 +590,9 @@ impl BreezSdk {
                     }
                 }
                 Fee::Rate { sat_per_vbyte } => {
-                    let vsize: u64 = tx.vsize().try_into()?;
-                    let user_max_fee = vsize * sat_per_vbyte;
+                    // The claim tx size is 99 vbytes
+                    const CLAIM_TX_SIZE: u64 = 99;
+                    let user_max_fee = CLAIM_TX_SIZE * sat_per_vbyte;
                     if spark_requested_fee > user_max_fee {
                         return Err(SdkError::DepositClaimFeeExceeds(
                             utxo.txid.to_string(),
