@@ -262,7 +262,7 @@ pub struct Config {
     pub deposits_monitoring_interval_secs: u32,
 
     // The maximum fee that can be paid for a static deposit claim
-    // If not set than any fee is allowed
+    // If not set then any fee is allowed
     pub max_deposit_claim_fee: Option<Fee>,
 }
 
