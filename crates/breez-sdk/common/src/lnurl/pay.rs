@@ -318,11 +318,11 @@ pub struct AesSuccessActionDataDecrypted {
     pub plaintext: String,
 }
 
-impl TryFrom<(AesSuccessActionData, &[u8; 32])> for AesSuccessActionDataDecrypted {
+impl TryFrom<(&AesSuccessActionData, &[u8; 32])> for AesSuccessActionDataDecrypted {
     type Error = anyhow::Error;
 
     fn try_from(
-        value: (AesSuccessActionData, &[u8; 32]),
+        value: (&AesSuccessActionData, &[u8; 32]),
     ) -> std::result::Result<Self, Self::Error> {
         let data = value.0;
         let key = value.1;

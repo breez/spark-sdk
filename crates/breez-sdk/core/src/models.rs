@@ -432,8 +432,8 @@ pub struct LnurlPayInfo {
     pub comment: Option<String>,
     pub domain: Option<String>,
     pub metadata: Option<String>,
-    pub success_action: Option<SuccessActionProcessed>,
-    pub unprocessed_success_action: Option<SuccessAction>,
+    pub processed_success_action: Option<SuccessActionProcessed>,
+    pub raw_success_action: Option<SuccessAction>,
 }
 
 pub struct PrepareSendPaymentRequest {

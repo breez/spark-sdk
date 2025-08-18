@@ -388,15 +388,16 @@ impl BreezSdk {
             .payment;
 
         let success_action =
-            process_success_action(&payment, request.prepare_response.success_action).await?;
+            process_success_action(&payment, request.prepare_response.success_action.as_ref())
+                .await?;
 
         let lnurl_info = LnurlPayInfo {
             ln_address: request.prepare_response.data.address,
             comment: request.prepare_response.comment,
             domain: Some(request.prepare_response.data.domain),
             metadata: Some(request.prepare_response.data.metadata_str),
-            success_action: success_action.clone(),
-            unprocessed_success_action: None,
+            processed_success_action: success_action.clone(),
+            raw_success_action: request.prepare_response.success_action,
         };
         let PaymentDetails::Lightning { lnurl_pay_info, .. } = &mut payment.details else {
             return Err(SdkError::GenericError(
@@ -842,7 +843,7 @@ impl From<DetailedUtxo> for DepositInfo {
 
 async fn process_success_action(
     payment: &Payment,
-    success_action: Option<SuccessAction>,
+    success_action: Option<&SuccessAction>,
 ) -> Result<Option<SuccessActionProcessed>, LnurlError> {
     let Some(success_action) = success_action else {
         return Ok(None);
@@ -851,9 +852,11 @@ async fn process_success_action(
     let data = match success_action {
         SuccessAction::Aes { data } => data,
         SuccessAction::Message { data } => {
-            return Ok(Some(SuccessActionProcessed::Message { data }));
+            return Ok(Some(SuccessActionProcessed::Message { data: data.clone() }));
         }
-        SuccessAction::Url { data } => return Ok(Some(SuccessActionProcessed::Url { data })),
+        SuccessAction::Url { data } => {
+            return Ok(Some(SuccessActionProcessed::Url { data: data.clone() }));
+        }
     };
 
     let PaymentDetails::Lightning { preimage, .. } = &payment.details else {
@@ -870,7 +873,7 @@ async fn process_success_action(
     let preimage =
         sha256::Hash::from_str(preimage).map_err(|_| LnurlError::general("Invalid preimage"))?;
     let preimage = preimage.as_byte_array();
-    let result = match (data, preimage).try_into() {
+    let result: AesSuccessActionDataResult = match (data, preimage).try_into() {
         Ok(data) => AesSuccessActionDataResult::Decrypted { data },
         Err(e) => AesSuccessActionDataResult::ErrorStatus {
             reason: e.to_string(),
