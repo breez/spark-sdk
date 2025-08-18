@@ -353,6 +353,7 @@ impl BreezSdk {
             .prepare_send_payment(PrepareSendPaymentRequest {
                 payment_request: success_data.pr,
                 amount_sats: Some(request.amount_sats),
+                prefer_spark: Some(false),
             })
             .await?;
 
@@ -382,6 +383,7 @@ impl BreezSdk {
                     },
                     amount_sats: request.prepare_response.amount_sats,
                     fee_sats: request.prepare_response.fee_sats,
+                    prefer_spark: false,
                 },
             })
             .await?
@@ -433,6 +435,7 @@ impl BreezSdk {
                 amount_sats: request
                     .amount_sats
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                prefer_spark: request.prefer_spark.unwrap_or(true),
             });
         }
         // Then check for other types of inputs
@@ -455,6 +458,7 @@ impl BreezSdk {
                         .amount_sats
                         .or(detailed_bolt11_invoice.amount_msat.map(|msat| msat / 1000))
                         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                    prefer_spark: request.prefer_spark.unwrap_or(true),
                 })
             }
             _ => Err(SdkError::GenericError("Unsupported input type".to_string())),
@@ -491,7 +495,7 @@ impl BreezSdk {
                         &detailed_invoice.invoice.bolt11,
                         amount_to_send,
                         Some(request.prepare_response.fee_sats),
-                        true,
+                        request.prepare_response.prefer_spark,
                     )
                     .await?;
                 let payment = match payment_response {

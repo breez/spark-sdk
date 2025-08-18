@@ -439,6 +439,10 @@ pub struct LnurlPayInfo {
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
     pub amount_sats: Option<u64>,
+
+    /// Value indicating whether internal spark payments are preferred over lightning payments.
+    /// Default `true`.
+    pub prefer_spark: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -446,6 +450,7 @@ pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     pub amount_sats: u64,
     pub fee_sats: u64,
+    pub prefer_spark: bool,
 }
 
 pub struct SendPaymentRequest {
