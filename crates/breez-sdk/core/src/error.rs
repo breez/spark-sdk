@@ -36,7 +36,7 @@ pub enum SdkError {
     #[error(
         "Deposit claim fee exceeds for utxo: {tx}:{vout} with max fee: {max_fee} and actual fee sat: {actual_fee}"
     )]
-    DepositClaimFeeExceeds {
+    DepositClaimFeeExceeded {
         tx: String,
         vout: u32,
         max_fee: Fee,

@@ -581,7 +581,7 @@ impl BreezSdk {
             match max_deposit_claim_fee {
                 Fee::Fixed { amount } => {
                     if spark_requested_fee > amount {
-                        return Err(SdkError::DepositClaimFeeExceeds {
+                        return Err(SdkError::DepositClaimFeeExceeded {
                             tx: utxo.txid.to_string(),
                             vout: utxo.vout,
                             max_fee: max_deposit_claim_fee,
@@ -594,7 +594,7 @@ impl BreezSdk {
                     const CLAIM_TX_SIZE: u64 = 99;
                     let user_max_fee = CLAIM_TX_SIZE * sat_per_vbyte;
                     if spark_requested_fee > user_max_fee {
-                        return Err(SdkError::DepositClaimFeeExceeds {
+                        return Err(SdkError::DepositClaimFeeExceeded {
                             tx: utxo.txid.to_string(),
                             vout: utxo.vout,
                             max_fee: max_deposit_claim_fee,
