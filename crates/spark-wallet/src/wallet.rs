@@ -331,8 +331,6 @@ impl<S: Signer> SparkWallet<S> {
         tx: Transaction,
         vout: u32,
     ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
-        // TODO: This entire function happens inside a txid mutex in the js sdk. It seems unnecessary here?
-
         let deposit_nodes = self.deposit_service.claim_deposit(tx, vout).await?;
         debug!("Claimed deposit root node: {:?}", deposit_nodes);
         let collected_leaves = self.tree_service.collect_leaves(deposit_nodes).await?;
@@ -926,7 +924,8 @@ impl<S: Signer> BackgroundProcessor<S> {
 
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
         let id = deposit.id.clone();
-        self.tree_service.collect_leaves(vec![deposit]).await?;
+        let leaves = self.tree_service.collect_leaves(vec![deposit]).await?;
+        debug!("Collected deposit leaves: {:?}", leaves);
         self.event_manager
             .notify_listeners(WalletEvent::DepositConfirmed(id));
         Ok(())

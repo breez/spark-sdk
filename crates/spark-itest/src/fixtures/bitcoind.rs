@@ -21,7 +21,7 @@ const BITCOIND_VERSION: &str = "v28.0";
 const BITCOIND_DOCKER_IMAGE: &str = "lncm/bitcoind";
 const REGTEST_RPC_USER: &str = "rpcuser";
 const REGTEST_RPC_PASSWORD: &str = "rpcpassword";
-const REGTEST_RPC_PORT: u16 = 18443;
+const REGTEST_RPC_PORT: u16 = 8332;
 const ZMQPUBRAWBLOCK_RPC_PORT: u16 = 28332;
 const DEFAULT_MINING_ADDRESS: &str = "bcrt1qs758ursh4q9z627kt3pp5yysm78ddny6txaqgw";
 
@@ -60,7 +60,6 @@ impl BitcoindFixture {
             .with_cmd([
                 "-regtest",
                 "-server",
-                "-rest",
                 "-logtimestamps",
                 "-nolisten",
                 "-addresstype=bech32",
@@ -87,7 +86,7 @@ impl BitcoindFixture {
         let rpc_url = format!("http://127.0.0.1:{host_rpc_port}/");
         let zmqpubrawblock_url = format!("tcp://127.0.0.1:{host_zmq_port}");
 
-        let internal_rpc_url = format!("tcp://{container_name}:{REGTEST_RPC_PORT}");
+        let internal_rpc_url = format!("{container_name}:{REGTEST_RPC_PORT}");
         let internal_zmqpubrawblock_url =
             format!("tcp://{container_name}:{ZMQPUBRAWBLOCK_RPC_PORT}");
         info!(
