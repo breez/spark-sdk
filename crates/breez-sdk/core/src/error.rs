@@ -34,9 +34,14 @@ pub enum SdkError {
     ChainServiceError(#[from] crate::chain::ChainServiceError),
 
     #[error(
-        "Deposit claim fee exceeds for utxo: {0}:{1} with max fee: {2} and actual fee sat: {3}"
+        "Deposit claim fee exceeds for utxo: {tx}:{vout} with max fee: {max_fee} and actual fee sat: {actual_fee}"
     )]
-    DepositClaimFeeExceeds(String, u32, Fee, u64),
+    DepositClaimFeeExceeds {
+        tx: String,
+        vout: u32,
+        max_fee: Fee,
+        actual_fee: u64,
+    },
 
     #[error("General error: {0}")]
     GenericError(String),

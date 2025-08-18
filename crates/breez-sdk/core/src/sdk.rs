@@ -574,19 +574,19 @@ impl BreezSdk {
         let utxo_value_sat = tx.output[utxo.vout as usize].value.to_sat();
         let quote = self
             .spark_wallet
-            .fetch_static_deposit_claim_quote(tx.clone(), Some(utxo.vout))
+            .fetch_static_deposit_claim_quote(tx, Some(utxo.vout))
             .await?;
         let spark_requested_fee = utxo_value_sat - quote.credit_amount_sats;
         if let Some(max_deposit_claim_fee) = max_claim_fee {
             match max_deposit_claim_fee {
                 Fee::Fixed { amount } => {
                     if spark_requested_fee > amount {
-                        return Err(SdkError::DepositClaimFeeExceeds(
-                            utxo.txid.to_string(),
-                            utxo.vout,
-                            max_deposit_claim_fee,
-                            spark_requested_fee,
-                        ));
+                        return Err(SdkError::DepositClaimFeeExceeds {
+                            tx: utxo.txid.to_string(),
+                            vout: utxo.vout,
+                            max_fee: max_deposit_claim_fee,
+                            actual_fee: spark_requested_fee,
+                        });
                     }
                 }
                 Fee::Rate { sat_per_vbyte } => {
@@ -594,12 +594,12 @@ impl BreezSdk {
                     const CLAIM_TX_SIZE: u64 = 99;
                     let user_max_fee = CLAIM_TX_SIZE * sat_per_vbyte;
                     if spark_requested_fee > user_max_fee {
-                        return Err(SdkError::DepositClaimFeeExceeds(
-                            utxo.txid.to_string(),
-                            utxo.vout,
-                            max_deposit_claim_fee,
-                            spark_requested_fee,
-                        ));
+                        return Err(SdkError::DepositClaimFeeExceeds {
+                            tx: utxo.txid.to_string(),
+                            vout: utxo.vout,
+                            max_fee: max_deposit_claim_fee,
+                            actual_fee: spark_requested_fee,
+                        });
                     }
                 }
             }
