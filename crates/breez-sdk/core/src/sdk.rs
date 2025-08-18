@@ -1,4 +1,4 @@
-use bitcoin::{Transaction, consensus::encode::deserialize_hex};
+use bitcoin::{Transaction, Txid, consensus::encode::deserialize_hex};
 use breez_sdk_common::input::InputType;
 pub use breez_sdk_common::input::parse as parse_input;
 use spark_wallet::{
@@ -13,7 +13,7 @@ use tokio_with_wasm::alias as tokio;
 use web_time::Instant;
 
 use crate::{
-    BitcoinChainService, Fee, GetPaymentRequest, GetPaymentResponse, Logger, Network,
+    BitcoinChainService, DepositInfo, Fee, GetPaymentRequest, GetPaymentResponse, Logger, Network,
     PaymentStatus, SqliteStorage,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
@@ -516,6 +516,12 @@ impl BreezSdk {
         Ok(GetPaymentResponse { payment })
     }
 
+    pub async fn list_unclaimed_deposits(&self) -> Result<Vec<DepositInfo>, SdkError> {
+        let object_repository = ObjectCacheRepository::new(self.storage.clone());
+        let unclaimed_deposits = object_repository.fetch_unclaimed_deposits()?;
+        Ok(unclaimed_deposits.unwrap_or_default())
+    }
+
     async fn check_and_claim_static_deposits(&self) -> Result<(), SdkError> {
         let addresses = self
             .spark_wallet
@@ -530,17 +536,48 @@ impl BreezSdk {
             match utxos {
                 Ok(utxos) => {
                     info!("Found {} utxos for address {}", utxos.len(), address);
+                    let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
+                    let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
                     for utxo in utxos {
                         info!("Processing utxo {}:{}", utxo.txid, utxo.vout);
+                        let detailed_utxo = match self.fetch_detailed_utxo(&utxo).await {
+                            Ok(detailed_utxo) => detailed_utxo,
+                            Err(e) => {
+                                error!("Failed to convert utxo {}:{}: {e}", utxo.txid, utxo.vout);
+                                let mut unclaimed_deposit: DepositInfo = utxo.into();
+                                unclaimed_deposit.error = Some(e.into());
+                                unclaimed_deposits.push(unclaimed_deposit);
+                                continue;
+                            }
+                        };
                         match self
-                            .claim_utxo(&utxo, self.config.max_deposit_claim_fee.clone())
+                            .claim_utxo(&detailed_utxo, self.config.max_deposit_claim_fee.clone())
                             .await
                         {
-                            Ok(_) => info!("Claimed utxo {}:{}", utxo.txid, utxo.vout),
+                            Ok(_) => {
+                                info!("Claimed utxo {}:{}", utxo.txid, utxo.vout);
+                                claimed_deposits.push(detailed_utxo.into());
+                            }
                             Err(e) => {
-                                error!("Failed to claim utxo {}:{}: {e}", utxo.txid, utxo.vout)
+                                error!("Failed to claim utxo {}:{}: {e}", utxo.txid, utxo.vout);
+                                let mut unclaimed_deposit: DepositInfo = detailed_utxo.into();
+                                unclaimed_deposit.error = Some(e.into());
+                                unclaimed_deposits.push(unclaimed_deposit);
                             }
                         }
+                    }
+
+                    info!("background claim completed, unclaimed deposits: {unclaimed_deposits:?}");
+                    let object_repository = ObjectCacheRepository::new(self.storage.clone());
+                    object_repository.save_unclaimed_deposits(&unclaimed_deposits)?;
+
+                    if !unclaimed_deposits.is_empty() {
+                        self.event_emitter
+                            .emit(&SdkEvent::ClaimDepositsFailed { unclaimed_deposits });
+                    }
+                    if !claimed_deposits.is_empty() {
+                        self.event_emitter
+                            .emit(&SdkEvent::ClaimDepositsSucceeded { claimed_deposits });
                     }
                 }
                 Err(e) => {
@@ -552,8 +589,7 @@ impl BreezSdk {
         Ok(())
     }
 
-    async fn claim_utxo(&self, utxo: &Utxo, max_claim_fee: Option<Fee>) -> Result<(), SdkError> {
-        info!("Claiming utxo {}:{}", utxo.txid, utxo.vout);
+    async fn fetch_detailed_utxo(&self, utxo: &Utxo) -> Result<DetailedUtxo, SdkError> {
         let tx: Transaction = match utxo.tx.clone() {
             Some(tx) => tx,
             None => {
@@ -564,23 +600,44 @@ impl BreezSdk {
                 deserialize_hex(tx_hex.as_str())?
             }
         };
+        let txout = tx
+            .output
+            .get(utxo.vout as usize)
+            .ok_or(SdkError::MissingUtxo {
+                tx: utxo.txid.to_string(),
+                vout: utxo.vout,
+            })?;
+        let amount_sats = txout.value.to_sat();
+        Ok(DetailedUtxo {
+            tx,
+            vout: utxo.vout,
+            txid: utxo.txid,
+            value: amount_sats,
+        })
+    }
+
+    async fn claim_utxo(
+        &self,
+        detailed_utxo: &DetailedUtxo,
+        max_claim_fee: Option<Fee>,
+    ) -> Result<(), SdkError> {
         info!(
-            "Fetching static deposit claim quote for utxo {}:{}",
-            utxo.txid, utxo.vout
+            "Fetching static deposit claim quote for deposit tx {}:{} and amount: {}",
+            detailed_utxo.txid, detailed_utxo.vout, detailed_utxo.value
         );
-        let utxo_value_sat = tx.output[utxo.vout as usize].value.to_sat();
+
         let quote = self
             .spark_wallet
-            .fetch_static_deposit_claim_quote(tx, Some(utxo.vout))
+            .fetch_static_deposit_claim_quote(detailed_utxo.tx.clone(), Some(detailed_utxo.vout))
             .await?;
-        let spark_requested_fee = utxo_value_sat - quote.credit_amount_sats;
+        let spark_requested_fee = detailed_utxo.value - quote.credit_amount_sats;
         if let Some(max_deposit_claim_fee) = max_claim_fee {
             match max_deposit_claim_fee {
                 Fee::Fixed { amount } => {
                     if spark_requested_fee > amount {
                         return Err(SdkError::DepositClaimFeeExceeded {
-                            tx: utxo.txid.to_string(),
-                            vout: utxo.vout,
+                            tx: detailed_utxo.txid.to_string(),
+                            vout: detailed_utxo.vout,
                             max_fee: max_deposit_claim_fee,
                             actual_fee: spark_requested_fee,
                         });
@@ -592,8 +649,8 @@ impl BreezSdk {
                     let user_max_fee = CLAIM_TX_SIZE * sat_per_vbyte;
                     if spark_requested_fee > user_max_fee {
                         return Err(SdkError::DepositClaimFeeExceeded {
-                            tx: utxo.txid.to_string(),
-                            vout: utxo.vout,
+                            tx: detailed_utxo.txid.to_string(),
+                            vout: detailed_utxo.vout,
                             max_fee: max_deposit_claim_fee,
                             actual_fee: spark_requested_fee,
                         });
@@ -603,7 +660,7 @@ impl BreezSdk {
         }
         info!(
             "Claiming static deposit for utxo {}:{}",
-            utxo.txid, utxo.vout
+            detailed_utxo.txid, detailed_utxo.vout
         );
         let transfer = self.spark_wallet.claim_static_deposit(quote).await?;
         info!(
@@ -611,5 +668,23 @@ impl BreezSdk {
             serde_json::to_string_pretty(&transfer)?
         );
         Ok(())
+    }
+}
+
+struct DetailedUtxo {
+    tx: Transaction,
+    vout: u32,
+    txid: Txid,
+    value: u64,
+}
+
+impl From<DetailedUtxo> for DepositInfo {
+    fn from(detailed_utxo: DetailedUtxo) -> Self {
+        DepositInfo {
+            txid: detailed_utxo.txid.to_string(),
+            vout: detailed_utxo.vout,
+            amount_sats: Some(detailed_utxo.value),
+            error: None,
+        }
     }
 }

@@ -60,6 +60,7 @@ pub enum Command {
         #[arg(long)]
         amount_sat: Option<u64>,
     },
+    ListUnclaimedDeposits,
 }
 
 #[derive(Helper, Completer, Hinter, Validator)]
@@ -100,6 +101,11 @@ pub(crate) async fn execute_command(
         }
         Command::Sync => {
             let value = sdk.sync_wallet(SyncWalletRequest {}).await?;
+            print_value(&value)?;
+            Ok(true)
+        }
+        Command::ListUnclaimedDeposits => {
+            let value = sdk.list_unclaimed_deposits().await?;
             print_value(&value)?;
             Ok(true)
         }

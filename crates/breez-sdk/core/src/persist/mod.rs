@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub use sqlite::SqliteStorage;
 use thiserror::Error;
 
-use crate::models::Payment;
+use crate::{DepositInfo, models::Payment};
 
 /// Errors that can occur during storage operations
 #[derive(Debug, Error)]
@@ -96,6 +96,25 @@ impl ObjectCacheRepository {
 
     pub(crate) fn fetch_sync_info(&self) -> Result<Option<CachedSyncInfo>, StorageError> {
         let value = self.storage.get_cached_item("sync_offset")?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) fn save_unclaimed_deposits(
+        &self,
+        value: &Vec<DepositInfo>,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item("unclaimed_deposits", serde_json::to_string(value)?)?;
+        Ok(())
+    }
+
+    pub(crate) fn fetch_unclaimed_deposits(
+        &self,
+    ) -> Result<Option<Vec<DepositInfo>>, StorageError> {
+        let value = self.storage.get_cached_item("unclaimed_deposits")?;
         match value {
             Some(value) => Ok(Some(serde_json::from_str(&value)?)),
             None => Ok(None),
