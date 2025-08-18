@@ -3,7 +3,7 @@ use breez_sdk_common::input::InputType;
 pub use breez_sdk_common::input::parse as parse_input;
 use spark_wallet::{
     DefaultSigner, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress, SparkWallet, Utxo,
-    WalletEvent,
+    WalletEvent, WalletTransfer,
 };
 use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 use tracing::{error, info, trace};
@@ -13,8 +13,8 @@ use tokio_with_wasm::alias as tokio;
 use web_time::Instant;
 
 use crate::{
-    BitcoinChainService, DepositInfo, Fee, GetPaymentRequest, GetPaymentResponse, Logger, Network,
-    PaymentStatus, SqliteStorage,
+    BitcoinChainService, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee,
+    GetPaymentRequest, GetPaymentResponse, Logger, Network, PaymentStatus, SqliteStorage,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -516,6 +516,51 @@ impl BreezSdk {
         Ok(GetPaymentResponse { payment })
     }
 
+    pub async fn claim_deposit(
+        &self,
+        request: ClaimDepositRequest,
+    ) -> Result<ClaimDepositResponse, SdkError> {
+        let detailed_utxo = self
+            .fetch_detailed_utxo(&Utxo {
+                txid: request
+                    .txid
+                    .parse()
+                    .map_err(|_| SdkError::InvalidInput("Invalid txid".to_string()))?,
+                vout: request.vout,
+                tx: None,
+                network: self.config.network.clone().into(),
+            })
+            .await?;
+
+        let max_fee = request
+            .max_fee
+            .or(self.config.max_deposit_claim_fee.clone());
+        match self.claim_utxo(&detailed_utxo, max_fee).await {
+            Ok(transfer) => Ok(ClaimDepositResponse {
+                payment: transfer.try_into()?,
+            }),
+            Err(e) => {
+                error!("Failed to claim deposit: {e:?}");
+                let object_repository = ObjectCacheRepository::new(self.storage.clone());
+                let mut unclaimed_deposits = object_repository
+                    .fetch_unclaimed_deposits()?
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|deposit| {
+                        deposit.txid != detailed_utxo.txid.to_string()
+                            && deposit.vout != detailed_utxo.vout
+                    })
+                    .collect::<Vec<_>>();
+
+                let mut deposit_info = DepositInfo::from(detailed_utxo);
+                deposit_info.error = Some(e.clone().into());
+                unclaimed_deposits.push(deposit_info);
+                object_repository.save_unclaimed_deposits(&unclaimed_deposits)?;
+                Err(e)
+            }
+        }
+    }
+
     pub async fn list_unclaimed_deposits(&self) -> Result<Vec<DepositInfo>, SdkError> {
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
         let unclaimed_deposits = object_repository.fetch_unclaimed_deposits()?;
@@ -620,7 +665,7 @@ impl BreezSdk {
         &self,
         detailed_utxo: &DetailedUtxo,
         max_claim_fee: Option<Fee>,
-    ) -> Result<(), SdkError> {
+    ) -> Result<WalletTransfer, SdkError> {
         info!(
             "Fetching static deposit claim quote for deposit tx {}:{} and amount: {}",
             detailed_utxo.txid, detailed_utxo.vout, detailed_utxo.value
@@ -634,6 +679,10 @@ impl BreezSdk {
         if let Some(max_deposit_claim_fee) = max_claim_fee {
             match max_deposit_claim_fee {
                 Fee::Fixed { amount } => {
+                    info!(
+                        "User max fee: {} spark requested fee: {}",
+                        amount, spark_requested_fee
+                    );
                     if spark_requested_fee > amount {
                         return Err(SdkError::DepositClaimFeeExceeded {
                             tx: detailed_utxo.txid.to_string(),
@@ -647,6 +696,10 @@ impl BreezSdk {
                     // The claim tx size is 99 vbytes
                     const CLAIM_TX_SIZE: u64 = 99;
                     let user_max_fee = CLAIM_TX_SIZE * sat_per_vbyte;
+                    info!(
+                        "User max fee: {} spark requested fee: {}",
+                        user_max_fee, spark_requested_fee
+                    );
                     if spark_requested_fee > user_max_fee {
                         return Err(SdkError::DepositClaimFeeExceeded {
                             tx: detailed_utxo.txid.to_string(),
@@ -667,7 +720,7 @@ impl BreezSdk {
             "Claimed static deposit transfer: {}",
             serde_json::to_string_pretty(&transfer)?
         );
-        Ok(())
+        Ok(transfer)
     }
 }
 

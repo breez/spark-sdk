@@ -9,7 +9,7 @@ use std::{convert::Infallible, num::TryFromIntError};
 use thiserror::Error;
 
 /// Error type for the `BreezSdk`
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum SdkError {
     #[error("SparkSdkError: {0}")]
     SparkError(#[from] SparkWalletError),

@@ -5,7 +5,7 @@ use crate::commands::CliHelper;
 use crate::persist::CliPersistence;
 use anyhow::{Result, anyhow};
 use bitcoin::hashes::{Hash, sha256};
-use breez_sdk_core::{EventListener, SdkEvent};
+use breez_sdk_core::{EventListener, Fee, SdkEvent};
 use breez_sdk_core::{Network, SdkBuilder, default_config, default_storage};
 use clap::Parser;
 use commands::{Command, execute_command};
@@ -99,7 +99,8 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
         .join(path_suffix);
     fs::create_dir_all(&wallet_data_dir)?;
 
-    let config = default_config(network.clone());
+    let mut config = default_config(network.clone());
+    config.max_deposit_claim_fee = Some(Fee::Rate { sat_per_vbyte: 0 });
     let storage = default_storage(wallet_data_dir.to_string_lossy().to_string())?;
     let sdk = SdkBuilder::new(config, mnemonic.to_string(), storage)
         .build()

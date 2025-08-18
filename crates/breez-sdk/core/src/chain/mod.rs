@@ -5,7 +5,7 @@ use thiserror::Error;
 use crate::Network;
 pub mod rest_client;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum ChainServiceError {
     #[error("Invalid address: {0}")]
     InvalidAddress(String),

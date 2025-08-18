@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ServiceConnectivityErrorKind {
     Builder,
@@ -20,7 +20,7 @@ impl std::fmt::Display for ServiceConnectivityErrorKind {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 #[error("{kind}: {err}")]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ServiceConnectivityError {

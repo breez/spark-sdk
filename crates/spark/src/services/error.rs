@@ -3,7 +3,7 @@ use tonic::Status;
 
 use crate::{operator::rpc::OperatorRpcError, tree::TreeNode};
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum ServiceError {
     // Deposit related errors
     #[error("deposit address already used")]
@@ -87,7 +87,7 @@ pub enum ServiceError {
     #[error("frost error: {0}")]
     FrostError(#[from] frost_secp256k1_tr::Error),
     #[error("bitcoin io error: {0}")]
-    BitcoinIOError(#[from] bitcoin::io::Error),
+    BitcoinIOError(String),
     #[error("request error: {0}")]
     RequestError(Box<Status>),
     #[error("service provider error: {0}")]
@@ -104,6 +104,12 @@ pub enum ServiceError {
     UnknownStatus(String),
     #[error("generic error: {0}")]
     Generic(String),
+}
+
+impl From<bitcoin::io::Error> for ServiceError {
+    fn from(error: bitcoin::io::Error) -> Self {
+        ServiceError::BitcoinIOError(error.to_string())
+    }
 }
 
 impl From<Status> for ServiceError {

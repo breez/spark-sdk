@@ -9,7 +9,7 @@ use thiserror::Error;
 use crate::{DepositInfo, models::Payment};
 
 /// Errors that can occur during storage operations
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum StorageError {
     /// `SQLite` error
     #[error("Underline implementation error: {0}")]
@@ -20,7 +20,13 @@ pub enum StorageError {
     InitializationError(String),
 
     #[error("Failed to serialize/deserialize data: {0}")]
-    Serialization(#[from] serde_json::Error),
+    Serialization(String),
+}
+
+impl From<serde_json::Error> for StorageError {
+    fn from(e: serde_json::Error) -> Self {
+        StorageError::Serialization(e.to_string())
+    }
 }
 
 /// Trait for persistent storage

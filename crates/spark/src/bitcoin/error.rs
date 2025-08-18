@@ -1,7 +1,7 @@
 use bitcoin::sighash::TaprootError;
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum BitcoinError {
     #[error("failed to combine key: {0}")]
     KeyCombinationError(String),

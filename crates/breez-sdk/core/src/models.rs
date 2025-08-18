@@ -293,6 +293,17 @@ impl From<Utxo> for DepositInfo {
     }
 }
 
+pub struct ClaimDepositRequest {
+    pub txid: String,
+    pub vout: u32,
+    pub max_fee: Option<Fee>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClaimDepositResponse {
+    pub payment: Payment,
+}
+
 impl std::fmt::Display for Fee {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

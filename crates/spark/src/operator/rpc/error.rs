@@ -1,7 +1,7 @@
 use thiserror::Error;
 use tonic::Status;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum OperatorRpcError {
     #[error("Transport error: {0}")]
     Transport(String),

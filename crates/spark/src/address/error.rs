@@ -1,4 +1,4 @@
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum AddressError {
     #[error("Invalid bech32m address: {0}")]
     InvalidBech32mAddress(String),
