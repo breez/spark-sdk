@@ -268,7 +268,9 @@ pub struct Config {
 
 #[derive(Debug, Clone)]
 pub enum Fee {
+    // Fixed fee amount in sats
     Fixed { amount: u64 },
+    // Relative fee rate in satoshis per vbyte
     Rate { sat_per_vbyte: u64 },
 }
 
