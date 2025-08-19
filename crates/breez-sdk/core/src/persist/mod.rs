@@ -69,6 +69,43 @@ pub trait Storage: Send + Sync {
     ///
     /// The payment if found or None if not found
     fn get_payment_by_id(&self, id: &str) -> Result<Payment, StorageError>;
+
+    /// Adds an unclaimed deposit to storage
+    /// # Arguments
+    ///
+    /// * `deposit_info` - The deposit information to store
+    ///
+    /// # Returns
+    ///
+    /// Success or a `StorageError`
+    fn add_unclaimed_deposit(&self, deposit_info: &DepositInfo) -> Result<(), StorageError>;
+
+    /// Removes an unclaimed deposit from storage
+    /// # Arguments
+    ///
+    /// * `txid` - The transaction ID of the deposit
+    /// * `vout` - The output index of the deposit
+    ///
+    /// # Returns
+    ///
+    /// Success or a `StorageError`
+    fn remove_unclaimed_deposit(&self, txid: &str, vout: u32) -> Result<(), StorageError>;
+
+    /// Lists all unclaimed deposits from storage
+    /// # Returns
+    ///
+    /// A vector of `DepositInfo` or a `StorageError`
+    fn list_unclaimed_deposits(&self) -> Result<Vec<DepositInfo>, StorageError>;
+
+    /// Replaces all unclaimed deposits in storage with the provided list
+    /// # Arguments
+    ///
+    /// * `deposits` - The list of deposits to store
+    ///
+    /// # Returns
+    ///
+    /// Success or a `StorageError`
+    fn set_unclaimed_deposits(&self, deposits: &[DepositInfo]) -> Result<(), StorageError>;
 }
 
 pub(crate) struct ObjectCacheRepository {
@@ -102,25 +139,6 @@ impl ObjectCacheRepository {
 
     pub(crate) fn fetch_sync_info(&self) -> Result<Option<CachedSyncInfo>, StorageError> {
         let value = self.storage.get_cached_item("sync_offset")?;
-        match value {
-            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
-            None => Ok(None),
-        }
-    }
-
-    pub(crate) fn save_unclaimed_deposits(
-        &self,
-        value: &Vec<DepositInfo>,
-    ) -> Result<(), StorageError> {
-        self.storage
-            .set_cached_item("unclaimed_deposits", serde_json::to_string(value)?)?;
-        Ok(())
-    }
-
-    pub(crate) fn fetch_unclaimed_deposits(
-        &self,
-    ) -> Result<Option<Vec<DepositInfo>>, StorageError> {
-        let value = self.storage.get_cached_item("unclaimed_deposits")?;
         match value {
             Some(value) => Ok(Some(serde_json::from_str(&value)?)),
             None => Ok(None),

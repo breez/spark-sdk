@@ -90,6 +90,7 @@ impl Highlighter for CliHelper {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn execute_command(
     rl: &mut Editor<CliHelper, DefaultHistory>,
     command: Command,

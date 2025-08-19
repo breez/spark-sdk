@@ -536,35 +536,28 @@ impl BreezSdk {
             .max_fee
             .or(self.config.max_deposit_claim_fee.clone());
         match self.claim_utxo(&detailed_utxo, max_fee).await {
-            Ok(transfer) => Ok(ClaimDepositResponse {
-                payment: transfer.try_into()?,
-            }),
+            Ok(transfer) => {
+                self.storage.remove_unclaimed_deposit(
+                    &detailed_utxo.txid.to_string(),
+                    detailed_utxo.vout,
+                )?;
+                Ok(ClaimDepositResponse {
+                    payment: transfer.try_into()?,
+                })
+            }
             Err(e) => {
                 error!("Failed to claim deposit: {e:?}");
-                let object_repository = ObjectCacheRepository::new(self.storage.clone());
-                let mut unclaimed_deposits = object_repository
-                    .fetch_unclaimed_deposits()?
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|deposit| {
-                        deposit.txid != detailed_utxo.txid.to_string()
-                            && deposit.vout != detailed_utxo.vout
-                    })
-                    .collect::<Vec<_>>();
-
                 let mut deposit_info = DepositInfo::from(detailed_utxo);
                 deposit_info.error = Some(e.clone().into());
-                unclaimed_deposits.push(deposit_info);
-                object_repository.save_unclaimed_deposits(&unclaimed_deposits)?;
+                self.storage.add_unclaimed_deposit(&deposit_info)?;
                 Err(e)
             }
         }
     }
 
     pub async fn list_unclaimed_deposits(&self) -> Result<Vec<DepositInfo>, SdkError> {
-        let object_repository = ObjectCacheRepository::new(self.storage.clone());
-        let unclaimed_deposits = object_repository.fetch_unclaimed_deposits()?;
-        Ok(unclaimed_deposits.unwrap_or_default())
+        let unclaimed_deposits = self.storage.list_unclaimed_deposits()?;
+        Ok(unclaimed_deposits)
     }
 
     async fn check_and_claim_static_deposits(&self) -> Result<(), SdkError> {
@@ -613,9 +606,7 @@ impl BreezSdk {
                     }
 
                     info!("background claim completed, unclaimed deposits: {unclaimed_deposits:?}");
-                    let object_repository = ObjectCacheRepository::new(self.storage.clone());
-                    object_repository.save_unclaimed_deposits(&unclaimed_deposits)?;
-
+                    self.storage.set_unclaimed_deposits(&unclaimed_deposits)?;
                     if !unclaimed_deposits.is_empty() {
                         self.event_emitter
                             .emit(&SdkEvent::ClaimDepositsFailed { unclaimed_deposits });
