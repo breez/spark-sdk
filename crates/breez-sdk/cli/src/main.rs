@@ -5,7 +5,7 @@ use crate::commands::CliHelper;
 use crate::persist::CliPersistence;
 use anyhow::{Result, anyhow};
 use bitcoin::hashes::{Hash, sha256};
-use breez_sdk_core::{EventListener, Fee, SdkEvent};
+use breez_sdk_core::{EventListener, SdkEvent};
 use breez_sdk_core::{Network, SdkBuilder, default_config, default_storage};
 use clap::Parser;
 use commands::{Command, execute_command};
