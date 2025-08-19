@@ -46,12 +46,12 @@ pub enum SdkError {
 
     #[error("Missing utxo: {tx}:{vout}")]
     MissingUtxo { tx: String, vout: u32 },
-    #[error("General error: {0}")]
+    #[error("Generic error: {0}")]
     GenericError(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Error)]
-pub enum UnclaimedDepositError {
+pub enum DepositClaimError {
     #[error(
         "Deposit claim fee exceeds for utxo: {tx}:{vout} with max fee: {max_fee} and actual fee sat: {actual_fee}"
     )]
@@ -65,11 +65,11 @@ pub enum UnclaimedDepositError {
     #[error("Missing utxo: {tx}:{vout}")]
     MissingUtxo { tx: String, vout: u32 },
 
-    #[error("General error: {0}")]
+    #[error("Generic error: {0}")]
     Generic(String),
 }
 
-impl From<SdkError> for UnclaimedDepositError {
+impl From<SdkError> for DepositClaimError {
     fn from(value: SdkError) -> Self {
         match value {
             SdkError::DepositClaimFeeExceeded {
@@ -77,15 +77,15 @@ impl From<SdkError> for UnclaimedDepositError {
                 vout,
                 max_fee,
                 actual_fee,
-            } => UnclaimedDepositError::DepositClaimFeeExceeded {
+            } => DepositClaimError::DepositClaimFeeExceeded {
                 tx,
                 vout,
                 max_fee,
                 actual_fee,
             },
-            SdkError::MissingUtxo { tx, vout } => UnclaimedDepositError::MissingUtxo { tx, vout },
-            SdkError::GenericError(e) => UnclaimedDepositError::Generic(e),
-            _ => UnclaimedDepositError::Generic(value.to_string()),
+            SdkError::MissingUtxo { tx, vout } => DepositClaimError::MissingUtxo { tx, vout },
+            SdkError::GenericError(e) => DepositClaimError::Generic(e),
+            _ => DepositClaimError::Generic(value.to_string()),
         }
     }
 }

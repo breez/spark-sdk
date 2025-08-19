@@ -7,7 +7,7 @@ use spark_wallet::{
 };
 use std::time::UNIX_EPOCH;
 
-use crate::{SdkError, error::UnclaimedDepositError};
+use crate::{SdkError, error::DepositClaimError};
 
 /// The type of payment
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -278,8 +278,9 @@ pub enum Fee {
 pub struct DepositInfo {
     pub txid: String,
     pub vout: u32,
+    // The amount of the deposit in sats. Can be None if we couldn't find the utxo.
     pub amount_sats: Option<u64>,
-    pub error: Option<UnclaimedDepositError>,
+    pub error: Option<DepositClaimError>,
 }
 
 impl From<Utxo> for DepositInfo {

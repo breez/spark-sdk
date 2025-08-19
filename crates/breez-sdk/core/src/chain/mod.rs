@@ -11,7 +11,7 @@ pub enum ChainServiceError {
     InvalidAddress(String),
     #[error("Http error: {status} - {message}")]
     HttpError { status: u16, message: String },
-    #[error("General error: {0}")]
+    #[error("Generic error: {0}")]
     GenericError(String),
 }
 
