@@ -96,21 +96,21 @@ impl SparkWalletConfig {
                     Self::create_operator_config(
                         0,
                         "0000000000000000000000000000000000000000000000000000000000000001",
-                        "https://0.spark.loadtest.dev.sparkinfra.net/",
+                        "https://0.spark.loadtest.dev.sparkinfra.net",
                         "03d8d2d331e07f572636dfd371a30dfa139a8bdc99ea98f1f48e27dcc664589ecc",
                     )
                     .unwrap(),
                     Self::create_operator_config(
                         1,
                         "0000000000000000000000000000000000000000000000000000000000000002",
-                        "https://1.spark.loadtest.dev.sparkinfra.net/",
+                        "https://1.spark.loadtest.dev.sparkinfra.net",
                         "023b1f3e062137ffc541a8edeaab7a4648aafa506d0208956123507d66d3886ac6",
                     )
                     .unwrap(),
                     Self::create_operator_config(
                         2,
                         "0000000000000000000000000000000000000000000000000000000000000003",
-                        "https://2.spark.loadtest.dev.sparkinfra.net/",
+                        "https://2.spark.loadtest.dev.sparkinfra.net",
                         "02a2c62aa3230d9a51759b3d67399f57223455656369d28120fb39ef062b4469c8",
                     )
                     .unwrap(),

@@ -1,0 +1,19 @@
+[package]
+name = "breez-sdk-spark-wasm"
+edition = "2024"
+version.workspace = true
+
+[lib]
+name = "breez_sdk_spark_wasm"
+crate-type = ["cdylib"]
+
+[dependencies]
+breez-sdk-common.workspace = true
+breez-sdk-core.workspace = true
+macros.workspace = true
+serde.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tsify-next.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true

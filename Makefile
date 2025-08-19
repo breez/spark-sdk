@@ -1,61 +1,59 @@
-XTASK := cargo run -p xtask --
-
 default: check
 
 build:
-	$(XTASK) build
+	cargo xtask build
 
 build-wasm:
-	$(XTASK) build --target wasm32-unknown-unknown
+	cargo xtask build --target wasm32-unknown-unknown
 
 # This adds a make command to install a target, e.g. `make install-target-wasm32-unknown-unknown`
 install-target-%:
 	$(CLANG_PREFIX) rustup target add $*
 
 build-target-%: install-target-%
-	$(XTASK) build --target $*
+	cargo xtask build --target $*
 
 build-release:
-	$(XTASK) build --release
+	cargo xtask build --release
 
 check: fmt-check clippy-check test
 
 clippy-fix: cargo-clippy-fix wasm-clippy-fix
 
 cargo-clippy-fix:
-	$(XTASK) clippy --fix
+	cargo xtask clippy --fix
 
 wasm-clippy-fix:
-	$(XTASK) wasm-clippy --fix
+	cargo xtask wasm-clippy --fix
 
 clippy-check: cargo-clippy-check wasm-clippy-check
 
 cargo-clippy-check:
-	$(XTASK) clippy
+	cargo xtask clippy
 
 wasm-clippy-check:
-	$(XTASK) wasm-clippy
+	cargo xtask wasm-clippy
 
 fix: fmt-fix clippy-fix
 
 fmt-fix:
-	$(XTASK) fmt
+	cargo xtask fmt
 
 fmt-check:
-	$(XTASK) fmt --check
+	cargo xtask fmt --check
 
 test: cargo-test wasm-test
 
 cargo-test:
-	$(XTASK) test
+	cargo xtask test
 
 wasm-test: wasm-test-browser wasm-test-node
 
 wasm-test-browser:
-	$(XTASK) wasm-test
+	cargo xtask wasm-test
 
 wasm-test-node:
-	$(XTASK) wasm-test --node
+	cargo xtask wasm-test --node
 
 itest:
-	$(XTASK) itest
+	cargo xtask itest
