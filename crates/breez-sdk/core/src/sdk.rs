@@ -77,7 +77,7 @@ pub fn default_storage(data_dir: String) -> Result<Box<dyn Storage>, SdkError> {
 pub fn default_config(network: Network) -> Config {
     Config {
         network,
-        deposits_monitoring_interval_secs: 1 * 60, // every 5 minutes
+        deposits_monitoring_interval_secs: 60, // every 1 minute
         max_deposit_claim_fee: None,
     }
 }
