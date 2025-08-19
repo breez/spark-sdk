@@ -159,6 +159,7 @@ pub(crate) async fn execute_command(
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request,
                     amount_sats: amount,
+                    prefer_spark: None,
                 })
                 .await;
 

@@ -47,7 +47,7 @@ pub enum SdkError {
 
     #[error("Missing utxo: {tx}:{vout}")]
     MissingUtxo { tx: String, vout: u32 },
-    #[error("Generic error: {0}")]
+
     #[error("lnurl error: {0}")]
     LnurlError(#[from] breez_sdk_common::lnurl::error::LnurlError),
 
