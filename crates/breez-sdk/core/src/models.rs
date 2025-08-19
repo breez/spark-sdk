@@ -293,6 +293,24 @@ pub enum Fee {
     Rate { sat_per_vbyte: u64 },
 }
 
+impl Fee {
+    pub fn sats_for_vbytes(&self, vbytes: u64) -> u64 {
+        match self {
+            Fee::Fixed { amount } => *amount,
+            Fee::Rate { sat_per_vbyte } => sat_per_vbyte * vbytes,
+        }
+    }
+}
+
+impl From<Fee> for spark_wallet::Fee {
+    fn from(fee: Fee) -> Self {
+        match fee {
+            Fee::Fixed { amount } => spark_wallet::Fee::Fixed { amount },
+            Fee::Rate { sat_per_vbyte } => spark_wallet::Fee::Rate { sat_per_vbyte },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DepositInfo {
     pub txid: String,
@@ -300,6 +318,14 @@ pub struct DepositInfo {
     // The amount of the deposit in sats. Can be None if we couldn't find the utxo.
     pub amount_sats: Option<u64>,
     pub error: Option<DepositClaimError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepositRefund {
+    pub deposit_tx_id: String,
+    pub deposit_vout: u32,
+    pub refund_tx: String,
+    pub refund_tx_id: String,
 }
 
 impl From<Utxo> for DepositInfo {
@@ -322,6 +348,34 @@ pub struct ClaimDepositRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct ClaimDepositResponse {
     pub payment: Payment,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RefundDepositRequest {
+    pub txid: String,
+    pub vout: u32,
+    pub destination_address: String,
+    pub fee: Fee,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RefundDepositResponse {
+    pub tx_id: String,
+    pub tx_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListUnclaimedDepositsRequest {}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListUnclaimedDepositsResponse {
+    pub deposits: Vec<UnclaimedDeposit>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UnclaimedDeposit {
+    pub deposit: DepositInfo,
+    pub refund_info: Option<DepositRefund>,
 }
 
 impl std::fmt::Display for Fee {

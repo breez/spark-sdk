@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub use sqlite::SqliteStorage;
 use thiserror::Error;
 
-use crate::{DepositInfo, LnurlPayInfo, models::Payment};
+use crate::{DepositInfo, DepositRefund, LnurlPayInfo, models::Payment};
 
 /// Errors that can occur during storage operations
 #[derive(Debug, Error, Clone)]
@@ -127,6 +127,25 @@ pub trait Storage: Send + Sync {
     ///
     /// Success or a `StorageError`
     fn set_unclaimed_deposits(&self, deposits: &[DepositInfo]) -> Result<(), StorageError>;
+
+    /// Updates or inserts refund transaction details for a deposit
+    /// # Arguments
+    ///
+    /// * `deposit_refund` - The refund information to store
+    ///
+    /// # Returns
+    ///
+    /// Success or a `StorageError`
+    fn update_deposit_refund(
+        &self,
+        deposit_refund: &crate::DepositRefund,
+    ) -> Result<(), StorageError>;
+
+    fn get_deposit_refund(
+        &self,
+        txid: &str,
+        vout: u32,
+    ) -> Result<Option<DepositRefund>, StorageError>;
 }
 
 pub(crate) struct ObjectCacheRepository {

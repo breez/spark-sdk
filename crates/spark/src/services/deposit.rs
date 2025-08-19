@@ -1,7 +1,7 @@
 use std::{collections::HashSet, str::FromStr, sync::Arc};
 
 use bitcoin::{
-    Address, OutPoint, Transaction, TxOut, Txid, Witness,
+    Address, Amount, OutPoint, Transaction, TxOut, Txid, Witness,
     address::NetworkUnchecked,
     consensus::{deserialize, serialize},
     hashes::{Hash, sha256},
@@ -46,6 +46,20 @@ pub struct DepositAddress {
     pub leaf_id: TreeNodeId,
     pub user_signing_public_key: PublicKey,
     pub verifying_public_key: PublicKey,
+}
+
+pub enum Fee {
+    Fixed { amount: u64 },
+    Rate { sat_per_vbyte: u64 },
+}
+
+impl Fee {
+    pub fn sats_for_vbytes(&self, vbytes: u64) -> u64 {
+        match self {
+            Fee::Fixed { amount } => *amount,
+            Fee::Rate { sat_per_vbyte } => sat_per_vbyte * vbytes,
+        }
+    }
 }
 
 impl TryFrom<(operator_rpc::spark::DepositAddressQueryResult, Network)> for DepositAddress {
@@ -259,15 +273,8 @@ impl<S: Signer> DepositService<S> {
         tx: Transaction,
         output_index: Option<u32>,
         refund_address: Address,
-        fee_sats: u64,
+        fee: Fee,
     ) -> Result<Transaction, ServiceError> {
-        // TODO: Take a fee rate as a parameter instead of a fixed fee
-        if fee_sats <= 300 {
-            return Err(ServiceError::Generic(
-                "fee must be more than 300 sats".to_string(),
-            ));
-        }
-
         let txid = tx.compute_txid();
         let output_index = match output_index {
             Some(v) => v,
@@ -280,7 +287,31 @@ impl<S: Signer> DepositService<S> {
             .output
             .get(output_index as usize)
             .ok_or(ServiceError::InvalidOutputIndex)?;
+
+        // Create the refund transaction.
+        // We populate dummy values for output amount and input witness so
+        // we can calculate the vsize.
+        let mut refund_tx = create_static_deposit_refund_tx(
+            OutPoint {
+                txid,
+                vout: output_index,
+            },
+            0, // temporary value for calculating the vsize. We set the real value bellow.
+            &refund_address,
+        );
+        let mut witness = Witness::new();
+        witness.push([0; 64]);
+        refund_tx.input[0].witness = witness;
+
+        let fee_sats = fee.sats_for_vbytes(refund_tx.vsize() as u64);
+        if fee_sats <= 300 {
+            return Err(ServiceError::Generic(
+                "fee must be more than 300 sats".to_string(),
+            ));
+        }
+
         let credit_amount_sats = tx_out.value.to_sat().saturating_sub(fee_sats);
+        refund_tx.output[0].value = Amount::from_sat(credit_amount_sats);
 
         if credit_amount_sats == 0 {
             return Err(ServiceError::Generic(
@@ -291,15 +322,6 @@ impl<S: Signer> DepositService<S> {
             "Refunding static deposit txid: {txid}, output_index: {output_index}, credit_amount_sats: {credit_amount_sats}, fee_sats: {fee_sats}"
         );
 
-        // Create the refund transaction
-        let mut refund_tx = create_static_deposit_refund_tx(
-            OutPoint {
-                txid,
-                vout: output_index,
-            },
-            credit_amount_sats,
-            &refund_address,
-        );
         let spend_tx_sighash = sighash_from_tx(&refund_tx, 0, tx_out)?;
         let spend_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
 
@@ -385,6 +407,7 @@ impl<S: Signer> DepositService<S> {
         let mut witness = Witness::new();
         witness.push(&spend_signature.serialize()?);
         refund_tx.input[0].witness = witness;
+        println!("vsize after witness = {}", refund_tx.vsize());
 
         Ok(refund_tx)
     }

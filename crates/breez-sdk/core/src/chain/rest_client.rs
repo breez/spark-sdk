@@ -141,6 +141,12 @@ impl BitcoinChainService for RestClientChainService {
             .await?;
         Ok(tx)
     }
+
+    async fn broadcast_transaction(&self, tx: &str) -> Result<(), ChainServiceError> {
+        let url = format!("{}{}", self.base_url, "/tx");
+        self.client.post(&url, None, Some(tx.into())).await?;
+        Ok(())
+    }
 }
 
 impl From<reqwest::Error> for ChainServiceError {

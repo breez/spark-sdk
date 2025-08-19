@@ -19,6 +19,7 @@ pub enum ChainServiceError {
 pub trait BitcoinChainService: MaybeSend + MaybeSync {
     async fn get_address_utxos(&self, address: &str) -> Result<Vec<Utxo>, ChainServiceError>;
     async fn get_transaction_hex(&self, txid: &str) -> Result<String, ChainServiceError>;
+    async fn broadcast_transaction(&self, tx: &str) -> Result<(), ChainServiceError>;
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]

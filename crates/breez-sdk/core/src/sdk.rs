@@ -1,11 +1,12 @@
 use bitcoin::{
     Transaction, Txid,
-    consensus::encode::deserialize_hex,
+    consensus::{encode::deserialize_hex, serialize},
     hashes::{Hash, sha256},
+    hex::DisplayHex,
 };
+use breez_sdk_common::input::InputType;
 pub use breez_sdk_common::input::parse as parse_input;
 use breez_sdk_common::{
-    input::InputType,
     lnurl::{
         error::LnurlError,
         pay::{
@@ -27,10 +28,11 @@ use tokio_with_wasm::alias as tokio;
 use web_time::Instant;
 
 use crate::{
-    BitcoinChainService, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee,
-    GetPaymentRequest, GetPaymentResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
+    BitcoinChainService, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, DepositRefund,
+    Fee, GetPaymentRequest, GetPaymentResponse, ListUnclaimedDepositsRequest,
+    ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
     Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    SqliteStorage,
+    RefundDepositRequest, RefundDepositResponse, SqliteStorage, UnclaimedDeposit,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -75,7 +77,7 @@ pub fn default_storage(data_dir: String) -> Result<Box<dyn Storage>, SdkError> {
 pub fn default_config(network: Network) -> Config {
     Config {
         network,
-        deposits_monitoring_interval_secs: 5 * 60, // every 5 minutes
+        deposits_monitoring_interval_secs: 1 * 60, // every 5 minutes
         max_deposit_claim_fee: None,
     }
 }
@@ -122,7 +124,6 @@ impl BreezSdk {
             shutdown_sender,
             shutdown_receiver,
         };
-
         Ok(sdk)
     }
 
@@ -667,9 +668,71 @@ impl BreezSdk {
         }
     }
 
-    pub async fn list_unclaimed_deposits(&self) -> Result<Vec<DepositInfo>, SdkError> {
+    pub async fn refund_deposit(
+        &self,
+        request: RefundDepositRequest,
+    ) -> Result<RefundDepositResponse, SdkError> {
+        let detailed_utxo = self
+            .fetch_detailed_utxo(&Utxo {
+                txid: request
+                    .txid
+                    .parse()
+                    .map_err(|_| SdkError::InvalidInput("Invalid txid".to_string()))?,
+                vout: request.vout,
+                tx: None,
+                network: self.config.network.clone().into(),
+            })
+            .await?;
+        let tx = self
+            .spark_wallet
+            .refund_static_deposit(
+                detailed_utxo.clone().tx,
+                Some(detailed_utxo.vout),
+                &request.destination_address,
+                request.fee.into(),
+            )
+            .await?;
+        let deposit: DepositInfo = detailed_utxo.into();
+        let tx_hex = serialize(&tx).as_hex().to_string();
+        let tx_id = tx.compute_txid().to_string();
+
+        // Store the deposit info
+        self.storage.update_deposit_refund(&DepositRefund {
+            deposit_tx_id: deposit.txid.clone(),
+            deposit_vout: deposit.vout,
+            refund_tx: tx_hex.clone(),
+            refund_tx_id: tx_id.clone(),
+        })?;
+
+        // Store the refund transaction details separately
+        let deposit_refund = crate::DepositRefund {
+            deposit_tx_id: deposit.txid.clone(),
+            deposit_vout: deposit.vout,
+            refund_tx: tx_hex.clone(),
+            refund_tx_id: tx_id.clone(),
+        };
+        self.storage.update_deposit_refund(&deposit_refund)?;
+
+        self.chain_service.broadcast_transaction(&tx_hex).await?;
+        Ok(RefundDepositResponse { tx_id, tx_hex })
+    }
+
+    pub async fn list_unclaimed_deposits(
+        &self,
+        _: ListUnclaimedDepositsRequest,
+    ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
         let unclaimed_deposits = self.storage.list_unclaimed_deposits()?;
-        Ok(unclaimed_deposits)
+        let mut response = Vec::new();
+        for deposit in unclaimed_deposits {
+            let deposit_refund = self
+                .storage
+                .get_deposit_refund(&deposit.txid, deposit.vout)?;
+            response.push(UnclaimedDeposit {
+                deposit,
+                refund_info: deposit_refund,
+            });
+        }
+        Ok(ListUnclaimedDepositsResponse { deposits: response })
     }
 
     async fn check_and_claim_static_deposits(&self) -> Result<(), SdkError> {
@@ -827,6 +890,7 @@ impl BreezSdk {
     }
 }
 
+#[derive(Debug, Clone)]
 struct DetailedUtxo {
     tx: Transaction,
     vout: u32,

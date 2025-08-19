@@ -17,8 +17,8 @@ use spark::{
     events::{SparkEvent, subscribe_server_events},
     operator::{OperatorPool, rpc::ConnectionManager},
     services::{
-        CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, LeafTxCpfpPsbts,
-        LightningReceivePayment, LightningSendPayment, LightningService,
+        CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
+        LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment, LightningService,
         QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager, TokenService,
         TokenTransaction, Transfer, TransferId, TransferService, TransferTokenOutput,
         UnilateralExitService, Utxo,
@@ -356,7 +356,7 @@ impl<S: Signer> SparkWallet<S> {
         tx: Transaction,
         output_index: Option<u32>,
         refund_address: &str,
-        fee_sats: u64,
+        fee: Fee,
     ) -> Result<Transaction, SparkWalletError> {
         let refund_address = refund_address
             .parse::<Address<NetworkUnchecked>>()
@@ -370,7 +370,7 @@ impl<S: Signer> SparkWallet<S> {
 
         let refund_tx = self
             .deposit_service
-            .refund_static_deposit(tx, output_index, refund_address, fee_sats)
+            .refund_static_deposit(tx, output_index, refund_address, fee)
             .await?;
 
         Ok(refund_tx)
