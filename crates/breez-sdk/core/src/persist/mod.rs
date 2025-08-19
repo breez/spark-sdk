@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 pub use sqlite::SqliteStorage;
 use thiserror::Error;
 
-use crate::models::Payment;
+use crate::{DepositInfo, models::Payment};
 
 /// Errors that can occur during storage operations
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum StorageError {
     /// `SQLite` error
     #[error("Underline implementation error: {0}")]
@@ -20,7 +20,13 @@ pub enum StorageError {
     InitializationError(String),
 
     #[error("Failed to serialize/deserialize data: {0}")]
-    Serialization(#[from] serde_json::Error),
+    Serialization(String),
+}
+
+impl From<serde_json::Error> for StorageError {
+    fn from(e: serde_json::Error) -> Self {
+        StorageError::Serialization(e.to_string())
+    }
 }
 
 /// Trait for persistent storage
@@ -63,6 +69,43 @@ pub trait Storage: Send + Sync {
     ///
     /// The payment if found or None if not found
     fn get_payment_by_id(&self, id: &str) -> Result<Payment, StorageError>;
+
+    /// Adds an unclaimed deposit to storage
+    /// # Arguments
+    ///
+    /// * `deposit_info` - The deposit information to store
+    ///
+    /// # Returns
+    ///
+    /// Success or a `StorageError`
+    fn add_unclaimed_deposit(&self, deposit_info: &DepositInfo) -> Result<(), StorageError>;
+
+    /// Removes an unclaimed deposit from storage
+    /// # Arguments
+    ///
+    /// * `txid` - The transaction ID of the deposit
+    /// * `vout` - The output index of the deposit
+    ///
+    /// # Returns
+    ///
+    /// Success or a `StorageError`
+    fn remove_unclaimed_deposit(&self, txid: &str, vout: u32) -> Result<(), StorageError>;
+
+    /// Lists all unclaimed deposits from storage
+    /// # Returns
+    ///
+    /// A vector of `DepositInfo` or a `StorageError`
+    fn list_unclaimed_deposits(&self) -> Result<Vec<DepositInfo>, StorageError>;
+
+    /// Replaces all unclaimed deposits in storage with the provided list
+    /// # Arguments
+    ///
+    /// * `deposits` - The list of deposits to store
+    ///
+    /// # Returns
+    ///
+    /// Success or a `StorageError`
+    fn set_unclaimed_deposits(&self, deposits: &[DepositInfo]) -> Result<(), StorageError>;
 }
 
 pub(crate) struct ObjectCacheRepository {

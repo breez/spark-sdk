@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use crate::{operator::rpc::OperatorRpcError, signer::SignerError};
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum TreeServiceError {
     #[error("insufficient funds")]
     InsufficientFunds,

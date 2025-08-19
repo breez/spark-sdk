@@ -1,7 +1,7 @@
 use breez_sdk_core::{
-    BreezSdk, GetInfoRequest, GetPaymentRequest, ListPaymentsRequest, PrepareReceivePaymentRequest,
-    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SendPaymentRequest,
-    SyncWalletRequest,
+    BreezSdk, ClaimDepositRequest, Fee, GetInfoRequest, GetPaymentRequest, ListPaymentsRequest,
+    PrepareReceivePaymentRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
+    ReceivePaymentRequest, SendPaymentRequest, SyncWalletRequest,
 };
 use clap::Parser;
 use rustyline::{
@@ -60,6 +60,22 @@ pub enum Command {
         #[arg(long)]
         amount_sat: Option<u64>,
     },
+    ClaimDeposit {
+        /// The txid of the deposit
+        txid: String,
+
+        /// The vout of the deposit
+        vout: u32,
+
+        /// The max fee to claim the deposit
+        #[arg(long)]
+        fee_sat: Option<u64>,
+
+        /// The max fee per vbyte to claim the deposit
+        #[arg(long)]
+        sat_per_vbyte: Option<u64>,
+    },
+    ListUnclaimedDeposits,
 }
 
 #[derive(Helper, Completer, Hinter, Validator)]
@@ -74,6 +90,7 @@ impl Highlighter for CliHelper {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn execute_command(
     rl: &mut Editor<CliHelper, DefaultHistory>,
     command: Command,
@@ -100,6 +117,37 @@ pub(crate) async fn execute_command(
         }
         Command::Sync => {
             let value = sdk.sync_wallet(SyncWalletRequest {}).await?;
+            print_value(&value)?;
+            Ok(true)
+        }
+        Command::ListUnclaimedDeposits => {
+            let value = sdk.list_unclaimed_deposits().await?;
+            print_value(&value)?;
+            Ok(true)
+        }
+        Command::ClaimDeposit {
+            txid,
+            vout,
+            fee_sat,
+            sat_per_vbyte,
+        } => {
+            let max_fee = match (fee_sat, sat_per_vbyte) {
+                (Some(_), Some(_)) => {
+                    return Err(anyhow::anyhow!(
+                        "Cannot specify both fee_sat and sat_per_vbyte"
+                    ));
+                }
+                (Some(fee_sat), None) => Some(Fee::Fixed { amount: fee_sat }),
+                (None, Some(sat_per_vbyte)) => Some(Fee::Rate { sat_per_vbyte }),
+                (None, None) => None,
+            };
+            let value = sdk
+                .claim_deposit(ClaimDepositRequest {
+                    txid,
+                    vout,
+                    max_fee,
+                })
+                .await?;
             print_value(&value)?;
             Ok(true)
         }

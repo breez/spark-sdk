@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum SparkWalletError {
     #[error("Validation error: {0}")]
     ValidationError(String),

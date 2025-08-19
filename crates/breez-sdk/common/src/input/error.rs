@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use crate::{error::ServiceConnectivityError, lnurl::error::LnurlError};
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum Bip21Error {
     #[error("bip21 contains invalid address")]
@@ -33,7 +33,7 @@ impl Bip21Error {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum ParseError {
     #[error("empty input")]

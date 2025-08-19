@@ -5,13 +5,13 @@ use thiserror::Error;
 use crate::Network;
 pub mod rest_client;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum ChainServiceError {
     #[error("Invalid address: {0}")]
     InvalidAddress(String),
     #[error("Http error: {status} - {message}")]
     HttpError { status: u16, message: String },
-    #[error("General error: {0}")]
+    #[error("Generic error: {0}")]
     GenericError(String),
 }
 

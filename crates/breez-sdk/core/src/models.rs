@@ -3,11 +3,11 @@ use core::fmt;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
     CurrencyAmount, LightningSendPayment, LightningSendStatus, Network as SparkNetwork,
-    SspUserRequest, TransferDirection, TransferStatus, WalletTransfer,
+    SspUserRequest, TransferDirection, TransferStatus, Utxo, WalletTransfer,
 };
 use std::time::UNIX_EPOCH;
 
-use crate::SdkError;
+use crate::{SdkError, error::DepositClaimError};
 
 /// The type of payment
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -266,12 +266,43 @@ pub struct Config {
     pub max_deposit_claim_fee: Option<Fee>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Fee {
     // Fixed fee amount in sats
     Fixed { amount: u64 },
     // Relative fee rate in satoshis per vbyte
     Rate { sat_per_vbyte: u64 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepositInfo {
+    pub txid: String,
+    pub vout: u32,
+    // The amount of the deposit in sats. Can be None if we couldn't find the utxo.
+    pub amount_sats: Option<u64>,
+    pub error: Option<DepositClaimError>,
+}
+
+impl From<Utxo> for DepositInfo {
+    fn from(utxo: Utxo) -> Self {
+        DepositInfo {
+            txid: utxo.txid.to_string(),
+            vout: utxo.vout,
+            amount_sats: None,
+            error: None,
+        }
+    }
+}
+
+pub struct ClaimDepositRequest {
+    pub txid: String,
+    pub vout: u32,
+    pub max_fee: Option<Fee>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClaimDepositResponse {
+    pub payment: Payment,
 }
 
 impl std::fmt::Display for Fee {

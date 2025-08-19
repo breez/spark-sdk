@@ -4,17 +4,32 @@ use std::{collections::HashMap, sync::RwLock};
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::DepositInfo;
+
 /// Events emitted by the SDK
 #[derive(Debug, Clone, Serialize)]
 pub enum SdkEvent {
     /// Emitted when the wallet has been synchronized with the network
     Synced,
+    /// Emitted when the wallet failed to claim some deposits
+    ClaimDepositsFailed {
+        unclaimed_deposits: Vec<DepositInfo>,
+    },
+    ClaimDepositsSucceeded {
+        claimed_deposits: Vec<DepositInfo>,
+    },
 }
 
 impl fmt::Display for SdkEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SdkEvent::Synced => write!(f, "Synced"),
+            SdkEvent::ClaimDepositsFailed { unclaimed_deposits } => {
+                write!(f, "ClaimDepositsFailed: {unclaimed_deposits:?}")
+            }
+            SdkEvent::ClaimDepositsSucceeded { claimed_deposits } => {
+                write!(f, "ClaimDepositsSucceeded: {claimed_deposits:?}")
+            }
         }
     }
 }
