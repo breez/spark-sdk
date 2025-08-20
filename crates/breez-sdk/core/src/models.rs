@@ -469,6 +469,7 @@ pub struct PrepareLnurlPayRequest {
     pub validate_success_action_url: Option<bool>,
 }
 
+#[derive(Debug)]
 pub struct PrepareLnurlPayResponse {
     pub amount_sats: u64,
     pub comment: Option<String>,
@@ -482,6 +483,7 @@ pub struct LnurlPayRequest {
     pub prepare_response: PrepareLnurlPayResponse,
 }
 
+#[derive(Debug, Serialize)]
 pub struct LnurlPayResponse {
     pub payment: Payment,
     pub success_action: Option<SuccessActionProcessed>,
