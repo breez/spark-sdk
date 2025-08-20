@@ -294,7 +294,7 @@ pub enum Fee {
 }
 
 impl Fee {
-    pub fn sats_for_vbytes(&self, vbytes: u64) -> u64 {
+    pub fn to_sats(&self, vbytes: u64) -> u64 {
         match self {
             Fee::Fixed { amount } => *amount,
             Fee::Rate { sat_per_vbyte } => sat_per_vbyte * vbytes,

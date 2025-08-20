@@ -54,7 +54,7 @@ pub enum Fee {
 }
 
 impl Fee {
-    pub fn sats_for_vbytes(&self, vbytes: u64) -> u64 {
+    pub fn to_sats(&self, vbytes: u64) -> u64 {
         match self {
             Fee::Fixed { amount } => *amount,
             Fee::Rate { sat_per_vbyte } => sat_per_vbyte * vbytes,
@@ -303,7 +303,7 @@ impl<S: Signer> DepositService<S> {
         witness.push([0; 64]);
         refund_tx.input[0].witness = witness;
 
-        let fee_sats = fee.sats_for_vbytes(refund_tx.vsize() as u64);
+        let fee_sats = fee.to_sats(refund_tx.vsize() as u64);
         if fee_sats <= 300 {
             return Err(ServiceError::Generic(
                 "fee must be more than 300 sats".to_string(),
