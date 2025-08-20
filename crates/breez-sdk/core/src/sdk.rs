@@ -680,7 +680,7 @@ impl BreezSdk {
                     .map_err(|_| SdkError::InvalidInput("Invalid txid".to_string()))?,
                 vout: request.vout,
                 tx: None,
-                network: self.config.network.clone().into(),
+                network: self.config.network.into(),
             })
             .await?;
         let tx = self
