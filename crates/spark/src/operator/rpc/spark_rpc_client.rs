@@ -552,8 +552,6 @@ where
         &self,
         req: InitiateStaticDepositUtxoRefundRequest,
     ) -> Result<InitiateStaticDepositUtxoRefundResponse> {
-        // TODO: update to drop use of deprecated initiate_utxo_swap call
-        #[allow(deprecated)]
         Ok(self
             .auth
             .spark_service_client()
