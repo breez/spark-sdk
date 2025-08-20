@@ -409,6 +409,35 @@ pub struct ReceivePaymentResponse {
     pub payment_request: String,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_core::PrepareLnurlPayRequest)]
+pub struct PrepareLnurlPayRequest {
+    pub amount_sats: u64,
+    pub comment: Option<String>,
+    pub data: LnurlPayRequestData,
+    pub validate_success_action_url: Option<bool>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_core::PrepareLnurlPayResponse)]
+pub struct PrepareLnurlPayResponse {
+    pub amount_sats: u64,
+    pub comment: Option<String>,
+    pub data: LnurlPayRequestData,
+    pub fee_sats: u64,
+    pub detailed_invoice: DetailedBolt11Invoice,
+    pub success_action: Option<SuccessAction>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_core::LnurlPayRequest)]
+pub struct LnurlPayRequest {
+    pub prepare_response: PrepareLnurlPayResponse,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_core::LnurlPayResponse)]
+pub struct LnurlPayResponse {
+    pub payment: Payment,
+    pub success_action: Option<SuccessActionProcessed>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_core::PrepareSendPaymentRequest)]
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
