@@ -137,7 +137,7 @@ impl RestClientChainService {
             url,
             body.clone().unwrap_or_default()
         );
-        let (body, status) = self.client.post(&url, headers, body).await?;
+        let (body, status) = self.client.post(url, headers, body).await?;
         if !(200..300).contains(&status) {
             return Err(ChainServiceError::HttpError {
                 status,
