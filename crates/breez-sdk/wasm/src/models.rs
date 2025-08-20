@@ -1,6 +1,37 @@
 #[macros::extern_wasm_bindgen(breez_sdk_core::SdkEvent)]
 pub enum SdkEvent {
     Synced,
+    ClaimDepositsFailed {
+        unclaimed_deposits: Vec<DepositInfo>,
+    },
+    ClaimDepositsSucceeded {
+        claimed_deposits: Vec<DepositInfo>,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_core::DepositInfo)]
+pub struct DepositInfo {
+    pub txid: String,
+    pub vout: u32,
+    pub amount_sats: Option<u64>,
+    pub error: Option<DepositClaimError>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_core::DepositClaimError)]
+pub enum DepositClaimError {
+    DepositClaimFeeExceeded {
+        tx: String,
+        vout: u32,
+        max_fee: Fee,
+        actual_fee: u64,
+    },
+    MissingUtxo {
+        tx: String,
+        vout: u32,
+    },
+    Generic {
+        message: String,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_common::input::InputType)]
@@ -10,7 +41,7 @@ pub enum InputType {
     Bolt12Invoice(DetailedBolt12Invoice),
     Bolt12Offer(DetailedBolt12Offer),
     LightningAddress(LightningAddress),
-    LnurlPay(LnurlPayRequest),
+    LnurlPay(LnurlPayRequestData),
     SilentPaymentAddress(SilentPaymentAddress),
     LnurlAuth(LnurlAuthRequestData),
     Url(String),
@@ -128,11 +159,11 @@ pub enum Amount {
 #[macros::extern_wasm_bindgen(breez_sdk_common::input::LightningAddress)]
 pub struct LightningAddress {
     pub address: String,
-    pub pay_request: LnurlPayRequest,
+    pub pay_request: LnurlPayRequestData,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::LnurlPayRequest)]
-pub struct LnurlPayRequest {
+#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::LnurlPayRequestData)]
+pub struct LnurlPayRequestData {
     pub callback: String,
     pub min_sendable: u64,
     pub max_sendable: u64,
@@ -140,6 +171,7 @@ pub struct LnurlPayRequest {
     pub comment_allowed: u16,
     pub domain: String,
     pub url: String,
+    pub address: Option<String>,
     pub allows_nostr: bool,
     pub nostr_pubkey: Option<String>,
 }
@@ -225,6 +257,7 @@ pub enum PaymentDetails {
         invoice: String,
         payment_hash: String,
         destination_pubkey: String,
+        lnurl_pay_info: Option<LnurlPayInfo>,
     },
     Withdraw {
         tx_id: String,
@@ -232,6 +265,61 @@ pub enum PaymentDetails {
     Deposit {
         tx_id: String,
     },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_core::LnurlPayInfo)]
+pub struct LnurlPayInfo {
+    pub ln_address: Option<String>,
+    pub comment: Option<String>,
+    pub domain: Option<String>,
+    pub metadata: Option<String>,
+    pub processed_success_action: Option<SuccessActionProcessed>,
+    pub raw_success_action: Option<SuccessAction>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::SuccessActionProcessed)]
+pub enum SuccessActionProcessed {
+    Aes { result: AesSuccessActionDataResult },
+    Message { data: MessageSuccessActionData },
+    Url { data: UrlSuccessActionData },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::AesSuccessActionDataResult)]
+pub enum AesSuccessActionDataResult {
+    Decrypted { data: AesSuccessActionDataDecrypted },
+    ErrorStatus { reason: String },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::AesSuccessActionDataDecrypted)]
+pub struct AesSuccessActionDataDecrypted {
+    pub description: String,
+    pub plaintext: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::MessageSuccessActionData)]
+pub struct MessageSuccessActionData {
+    pub message: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::UrlSuccessActionData)]
+pub struct UrlSuccessActionData {
+    pub description: String,
+    pub url: String,
+    pub matches_callback_domain: bool,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::SuccessAction)]
+pub enum SuccessAction {
+    Aes { data: AesSuccessActionData },
+    Message { data: MessageSuccessActionData },
+    Url { data: UrlSuccessActionData },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::AesSuccessActionData)]
+pub struct AesSuccessActionData {
+    pub description: String,
+    pub ciphertext: String,
+    pub iv: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_core::Network)]
@@ -321,6 +409,7 @@ pub struct ReceivePaymentResponse {
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
     pub amount_sats: Option<u64>,
+    pub prefer_spark: Option<bool>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_core::PrepareSendPaymentResponse)]
@@ -328,6 +417,7 @@ pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     pub amount_sats: u64,
     pub fee_sats: u64,
+    pub prefer_spark: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_core::SendPaymentRequest)]

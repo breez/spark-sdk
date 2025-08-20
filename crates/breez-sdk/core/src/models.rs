@@ -90,6 +90,7 @@ pub struct Payment {
     pub details: PaymentDetails,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PaymentDetails {
     Spark,
@@ -110,7 +111,7 @@ pub enum PaymentDetails {
         destination_pubkey: String,
 
         /// Lnurl payment information if this was an lnurl payment.
-        lnurl_pay_info: Box<Option<LnurlPayInfo>>,
+        lnurl_pay_info: Option<LnurlPayInfo>,
     },
     Withdraw {
         tx_id: String,
@@ -139,7 +140,7 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
                     invoice: request.invoice.encoded_invoice,
                     payment_hash: request.invoice.payment_hash,
                     destination_pubkey: detailed_invoice.payee_pubkey,
-                    lnurl_pay_info: Box::new(None),
+                    lnurl_pay_info: None,
                 }
             }
             SspUserRequest::LightningSendRequest(request) => {
@@ -154,7 +155,7 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
                     invoice: request.encoded_invoice,
                     payment_hash: detailed_invoice.payment_hash,
                     destination_pubkey: detailed_invoice.payee_pubkey,
-                    lnurl_pay_info: Box::new(None),
+                    lnurl_pay_info: None,
                 }
             }
             SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
@@ -227,7 +228,7 @@ impl Payment {
             invoice: payment.encoded_invoice,
             payment_hash: detailed_invoice.payment_hash,
             destination_pubkey: detailed_invoice.payee_pubkey,
-            lnurl_pay_info: Box::new(None),
+            lnurl_pay_info: None,
         };
 
         Ok(Payment {
