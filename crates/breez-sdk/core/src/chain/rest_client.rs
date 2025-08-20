@@ -121,23 +121,20 @@ impl RestClientChainService {
     }
 
     async fn post(&self, url: &str, body: Option<String>) -> Result<String, ChainServiceError> {
-        let mut headers: Option<HashMap<String, String>> = None;
+        let mut headers: HashMap<String, String> = HashMap::new();
+        headers.insert("Content-Type".to_string(), "text/plain".to_string());
         if let Some(basic_auth) = &self.basic_auth {
             let auth_string = format!("{}:{}", basic_auth.username, basic_auth.password);
             let encoded_auth = general_purpose::STANDARD.encode(auth_string.as_bytes());
-
-            headers = Some(
-                vec![("Authorization".to_string(), format!("Basic {encoded_auth}"))]
-                    .into_iter()
-                    .collect(),
-            );
+            headers.insert("Authorization".to_string(), format!("Basic {encoded_auth}"));
         }
-        println!(
-            "Posting to {} with body {}",
+        info!(
+            "Posting to {} with body {} and headers {:?}",
             url,
-            body.clone().unwrap_or_default()
+            body.clone().unwrap_or_default(),
+            headers
         );
-        let (body, status) = self.client.post(url, headers, body).await?;
+        let (body, status) = self.client.post(url, Some(headers), body).await?;
         if !(200..300).contains(&status) {
             return Err(ChainServiceError::HttpError {
                 status,
