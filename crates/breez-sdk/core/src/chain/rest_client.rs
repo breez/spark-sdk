@@ -119,6 +119,34 @@ impl RestClientChainService {
             }
         }
     }
+
+    async fn post(&self, url: &str, body: Option<String>) -> Result<String, ChainServiceError> {
+        let mut headers: Option<HashMap<String, String>> = None;
+        if let Some(basic_auth) = &self.basic_auth {
+            let auth_string = format!("{}:{}", basic_auth.username, basic_auth.password);
+            let encoded_auth = general_purpose::STANDARD.encode(auth_string.as_bytes());
+
+            headers = Some(
+                vec![("Authorization".to_string(), format!("Basic {encoded_auth}"))]
+                    .into_iter()
+                    .collect(),
+            );
+        }
+        println!(
+            "Posting to {} with body {}",
+            url,
+            body.clone().unwrap_or_default()
+        );
+        let (body, status) = self.client.post(&url, headers, body).await?;
+        if !(200..300).contains(&status) {
+            return Err(ChainServiceError::HttpError {
+                status,
+                message: body,
+            });
+        }
+
+        Ok(body)
+    }
 }
 
 #[macros::async_trait]
@@ -144,7 +172,7 @@ impl BitcoinChainService for RestClientChainService {
 
     async fn broadcast_transaction(&self, tx: &str) -> Result<(), ChainServiceError> {
         let url = format!("{}{}", self.base_url, "/tx");
-        self.client.post(&url, None, Some(tx.into())).await?;
+        self.post(&url, Some(tx.into())).await?;
         Ok(())
     }
 }

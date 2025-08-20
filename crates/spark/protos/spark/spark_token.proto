@@ -48,8 +48,8 @@ message TokenMintInput {
 
 message TokenCreateInput {
     bytes issuer_public_key = 1 [(validate.rules).bytes.len = 33];
-    string token_name = 2 [(validate.rules).string = {min_len: 3, max_len: 20}];
-    string token_ticker = 3 [(validate.rules).string = {min_len: 3, max_len: 6}];
+    string token_name = 2 [(validate.rules).string = {max_len: 20}]; // No minimum length because a single utf-8 character can be 3 bytes.
+    string token_ticker = 3 [(validate.rules).string = {max_len: 6}]; // No minimum length because a single utf-8 character can be 3 bytes.
     uint32 decimals = 4 [(validate.rules).uint32.lte = 255];
     bytes max_supply = 5 [(validate.rules).bytes.len = 16]; // Decoded uint128
     bool is_freezable = 6;
@@ -155,7 +155,21 @@ message CommitTransactionRequest {
     bytes owner_identity_public_key = 4 [(validate.rules).bytes.len = 33];
 }
 
-message CommitTransactionResponse {}
+enum CommitStatus {
+    COMMIT_UNSPECIFIED = 0;
+    COMMIT_PROCESSING = 1;
+    COMMIT_FINALIZED = 2;
+}
+
+message CommitProgress {
+    repeated bytes committed_operator_public_keys = 1 [(validate.rules).repeated .items.bytes.len = 33];
+    repeated bytes uncommitted_operator_public_keys = 2 [(validate.rules).repeated .items.bytes.len = 33];
+}
+
+message CommitTransactionResponse {
+    CommitStatus commit_status = 1;
+    CommitProgress commit_progress = 2;
+}
 
 message QueryTokenMetadataRequest {
     repeated bytes token_identifiers = 1 [(validate.rules).repeated .items.bytes.len = 32];
@@ -164,8 +178,8 @@ message QueryTokenMetadataRequest {
 
 message TokenMetadata {
     bytes issuer_public_key = 1 [(validate.rules).bytes.len = 33];
-    string token_name = 2 [(validate.rules).string = {min_len: 3, max_len: 20}];
-    string token_ticker = 3 [(validate.rules).string = {min_len: 3, max_len: 6}];
+    string token_name = 2 [(validate.rules).string = {max_len: 20}];
+    string token_ticker = 3 [(validate.rules).string = {max_len: 6}];
     uint32 decimals = 4 [(validate.rules).uint32.lte = 255];
     bytes max_supply = 5 [(validate.rules).bytes.len = 16]; // Decoded uint128
     bool is_freezable = 6;
