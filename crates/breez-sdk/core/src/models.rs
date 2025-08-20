@@ -90,6 +90,8 @@ pub struct Payment {
     pub details: PaymentDetails,
 }
 
+// TODO: fix large enum variant lint - may be done by boxing lnurl_pay_info but that requires
+//  some changes to the wasm bindgen macro
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PaymentDetails {
