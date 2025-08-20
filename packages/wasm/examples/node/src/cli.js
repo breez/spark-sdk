@@ -1,6 +1,6 @@
 const { Command, Option } = require('commander')
 const { parse: parseShell } = require('shell-quote')
-const { disconnect, getInfo, receivePayment, sendPayment, syncWallet, listPayments, getPayment } = require('./action.js')
+const { disconnect, getInfo, receivePayment, sendPayment, syncWallet, listPayments, getPayment, lnurlPay } = require('./action.js')
 const { prompt } = require('./prompt.js')
 
 const initCommand = () => {
@@ -40,6 +40,21 @@ const initCommand = () => {
                 .argParser(parseInt)
         )
         .action(sendPayment)
+
+    program
+        .command('lnurl-pay')
+        .description('Pay using LNURL')
+        .addOption(
+            new Option('-l, --lnurl <text>', 'LNURL to pay')
+                .makeOptionMandatory(true)
+        )
+        .addOption(
+            new Option('-c, --comment <text>', 'Comment for the payment')
+        )
+        .addOption(
+            new Option('-v, --validate-success-url <boolean>', 'Validate the success action URL')
+        )
+        .action(lnurlPay)
 
     program.command('sync-wallet').description('Sync the wallet').action(syncWallet)
 

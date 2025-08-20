@@ -43,6 +43,7 @@
           <div class="action-buttons">
             <button id="receive-btn" class="primary-btn">Receive Payment</button>
             <button id="send-btn" class="primary-btn">Send Payment</button>
+            <button id="lnurl-pay-btn" class="primary-btn">LNURL Pay</button>
           </div>
         </section>
 
@@ -122,6 +123,52 @@
               <div class="modal-actions">
                 <button id="confirm-send-btn" class="primary-btn">Send Payment</button>
                 <button id="cancel-confirm-btn" class="secondary-btn">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="lnurl-pay-modal" class="modal" style="display: none;">
+          <div class="modal-content">
+            <h3>LNURL Pay</h3>
+            <div class="form-group">
+              <label for="lnurl-input">LNURL or Lightning Address:</label>
+              <textarea id="lnurl-input" placeholder="Paste LNURL or lightning address (e.g., user@domain.com)"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="lnurl-comment">Comment (optional):</label>
+              <input type="text" id="lnurl-comment" placeholder="Payment comment">
+            </div>
+            <div id="lnurl-amount-section" style="display: none;">
+              <div class="form-group">
+                <label for="lnurl-amount">Amount (sats):</label>
+                <input type="number" id="lnurl-amount" placeholder="Amount in satoshis">
+                <small id="lnurl-amount-range" class="form-help"></small>
+              </div>
+            </div>
+            <div class="modal-actions">
+              <button id="prepare-lnurl-btn" class="primary-btn">Prepare</button>
+              <button id="cancel-lnurl-btn" class="secondary-btn">Cancel</button>
+            </div>
+            <div id="lnurl-confirmation" style="display: none;">
+              <h4>Confirm LNURL Payment</h4>
+              <div class="confirmation-details">
+                <div class="detail-item">
+                  <label>Amount:</label>
+                  <span id="lnurl-confirm-amount">0 sats</span>
+                </div>
+                <div class="detail-item">
+                  <label>Fee:</label>
+                  <span id="lnurl-confirm-fee">0 sats</span>
+                </div>
+                <div class="detail-item" id="lnurl-confirm-comment-section" style="display: none;">
+                  <label>Comment:</label>
+                  <span id="lnurl-confirm-comment"></span>
+                </div>
+              </div>
+              <div class="modal-actions">
+                <button id="confirm-lnurl-btn" class="primary-btn">Send Payment</button>
+                <button id="cancel-lnurl-confirm-btn" class="secondary-btn">Cancel</button>
               </div>
             </div>
           </div>
