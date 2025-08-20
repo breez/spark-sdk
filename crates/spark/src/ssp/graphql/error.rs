@@ -27,6 +27,10 @@ pub(crate) enum GraphQLError {
     /// Error during serialization or deserialization
     #[error("serialization error: {0}")]
     Serialization(String),
+
+    /// Generic error for various operations
+    #[error("error: {0}")]
+    Generic(String),
 }
 
 impl GraphQLError {
@@ -38,6 +42,11 @@ impl GraphQLError {
     /// Creates a new serialization error
     pub fn serialization<S: Into<String>>(reason: S) -> Self {
         Self::Serialization(reason.into())
+    }
+
+    /// Creates a new generic error
+    pub fn generic<S: Into<String>>(reason: S) -> Self {
+        Self::Generic(reason.into())
     }
 
     /// Creates a new GraphQL error from GraphQL error objects

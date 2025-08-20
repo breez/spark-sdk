@@ -30,6 +30,9 @@ pub enum ServiceProviderError {
 
     #[error("parse error: {0}")]
     ParseError(String),
+
+    #[error("error: {0}")]
+    Generic(String),
 }
 
 impl From<GraphQLError> for ServiceProviderError {
@@ -40,6 +43,7 @@ impl From<GraphQLError> for ServiceProviderError {
             GraphQLError::Network { reason, code } => Self::Network { reason, code },
             GraphQLError::Signer(reason) => Self::Signer(reason),
             GraphQLError::Serialization(reason) => Self::Serialization(reason),
+            GraphQLError::Generic(reason) => Self::Generic(reason),
         }
     }
 }

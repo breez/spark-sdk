@@ -55,7 +55,7 @@ pub struct BreezSdk {
     storage: Arc<dyn Storage>,
     chain_service: Arc<dyn BitcoinChainService>,
     lnurl_client: Arc<dyn RestClient>,
-    event_emitter: Arc<EventEmitter>,
+    event_emitter: breez_sdk_common::utils::Arc<EventEmitter>,
     shutdown_sender: watch::Sender<()>,
     shutdown_receiver: watch::Receiver<()>,
 }
@@ -120,7 +120,7 @@ impl BreezSdk {
             storage,
             chain_service,
             lnurl_client,
-            event_emitter: Arc::new(EventEmitter::new()),
+            event_emitter: breez_sdk_common::utils::Arc::new(EventEmitter::new()),
             shutdown_sender,
             shutdown_receiver,
         };
@@ -407,7 +407,7 @@ impl BreezSdk {
                 "Expected Lightning payment details".to_string(),
             ));
         };
-        *lnurl_pay_info = Box::new(Some(lnurl_info.clone()));
+        *lnurl_pay_info = Some(lnurl_info.clone());
 
         self.storage.set_payment_metadata(
             &payment.id,

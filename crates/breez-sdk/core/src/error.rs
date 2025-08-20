@@ -70,8 +70,8 @@ pub enum DepositClaimError {
     #[error("Missing utxo: {tx}:{vout}")]
     MissingUtxo { tx: String, vout: u32 },
 
-    #[error("Generic error: {0}")]
-    Generic(String),
+    #[error("Generic error: {message}")]
+    Generic { message: String },
 }
 
 impl From<SdkError> for DepositClaimError {
@@ -89,8 +89,10 @@ impl From<SdkError> for DepositClaimError {
                 actual_fee,
             },
             SdkError::MissingUtxo { tx, vout } => DepositClaimError::MissingUtxo { tx, vout },
-            SdkError::GenericError(e) => DepositClaimError::Generic(e),
-            _ => DepositClaimError::Generic(value.to_string()),
+            SdkError::GenericError(e) => DepositClaimError::Generic { message: e },
+            _ => DepositClaimError::Generic {
+                message: value.to_string(),
+            },
         }
     }
 }

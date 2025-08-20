@@ -126,7 +126,7 @@ impl Storage for SqliteStorage {
         let payment_iter = stmt.query_map(params![], |row| {
             let mut details = row.get(6)?;
             if let PaymentDetails::Lightning { lnurl_pay_info, .. } = &mut details {
-                *lnurl_pay_info = Box::new(row.get(7)?);
+                *lnurl_pay_info = row.get(7)?;
             }
 
             Ok(Payment {
@@ -464,7 +464,9 @@ mod tests {
             txid: "tx456".to_string(),
             vout: 1,
             amount_sats: Some(75000),
-            error: Some(DepositClaimError::Generic("Test error".to_string())),
+            error: Some(DepositClaimError::Generic {
+                message: "Test error".to_string(),
+            }),
         };
 
         // Initially, list should be empty
@@ -520,7 +522,9 @@ mod tests {
                 txid: "tx2".to_string(),
                 vout: 1,
                 amount_sats: Some(20000),
-                error: Some(DepositClaimError::Generic("Error 1".to_string())),
+                error: Some(DepositClaimError::Generic {
+                    message: "Error 1".to_string(),
+                }),
             },
             crate::DepositInfo {
                 txid: "tx3".to_string(),
@@ -584,7 +588,9 @@ mod tests {
             txid: "tx123".to_string(),
             vout: 0,
             amount_sats: Some(50000),
-            error: Some(DepositClaimError::Generic("Updated error".to_string())),
+            error: Some(DepositClaimError::Generic {
+                message: "Updated error".to_string(),
+            }),
         };
 
         storage.add_unclaimed_deposit(&deposit1_updated).unwrap();

@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use tokio::sync::Mutex;
+use web_time::SystemTime;
 
 use crate::ssp::graphql::error::GraphQLError;
 
@@ -40,8 +41,25 @@ impl AuthProvider {
         let token_exists = self.session_token.lock().await.is_some();
         let valid_until = self.valid_until.lock().await;
 
-        // TODO: WASM handling of now()
-        Ok(token_exists && valid_until.as_ref().is_some_and(|date| *date > Utc::now()))
+        if !token_exists {
+            return Ok(false);
+        }
+
+        if let Some(date) = valid_until.as_ref() {
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map_err(|e| GraphQLError::generic(format!("Failed to get system time: {}", e)))?;
+
+            let current_time =
+                chrono::DateTime::from_timestamp(now.as_secs() as i64, now.subsec_nanos())
+                    .ok_or_else(|| {
+                        GraphQLError::generic("Failed to convert system time to DateTime")
+                    })?;
+
+            Ok(date.naive_utc() > current_time.naive_utc())
+        } else {
+            Ok(false)
+        }
     }
 
     /// Set authentication token and expiry
