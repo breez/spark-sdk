@@ -1,6 +1,5 @@
 use std::rc::Rc;
 
-use breez_sdk_core::BreezSdk;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use wasm_bindgen::prelude::*;
 
@@ -12,8 +11,8 @@ use crate::{
 };
 
 #[wasm_bindgen]
-pub struct BindingBreezSdk {
-    pub(crate) sdk: Rc<BreezSdk>,
+pub struct BreezSdk {
+    pub(crate) sdk: Rc<breez_sdk_core::BreezSdk>,
 }
 
 #[wasm_bindgen(js_name = "initLogging")]
@@ -43,7 +42,7 @@ pub async fn parse(input: &str) -> WasmResult<InputType> {
 }
 
 #[wasm_bindgen]
-impl BindingBreezSdk {
+impl BreezSdk {
     #[wasm_bindgen(js_name = "addEventListener")]
     pub async fn add_event_listener(&self, listener: EventListener) -> String {
         self.sdk

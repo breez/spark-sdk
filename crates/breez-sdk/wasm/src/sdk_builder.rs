@@ -1,26 +1,26 @@
 use std::rc::Rc;
 
-use breez_sdk_core::{SdkBuilder, default_storage};
+use breez_sdk_core::default_storage;
 use wasm_bindgen::prelude::*;
 
 use crate::{
     error::WasmResult,
     models::{Config, Credentials},
-    sdk::BindingBreezSdk,
+    sdk::BreezSdk,
 };
 
 #[wasm_bindgen]
-pub struct BindingSdkBuilder {
-    builder: SdkBuilder,
+pub struct SdkBuilder {
+    builder: breez_sdk_core::SdkBuilder,
 }
 
 #[wasm_bindgen]
-impl BindingSdkBuilder {
+impl SdkBuilder {
     #[wasm_bindgen(js_name = "new")]
     pub fn new(config: Config, mnemonic: String, data_dir: String) -> WasmResult<Self> {
         let storage = default_storage(data_dir)?;
         Ok(Self {
-            builder: SdkBuilder::new(config.into(), mnemonic, storage),
+            builder: breez_sdk_core::SdkBuilder::new(config.into(), mnemonic, storage),
         })
     }
 
@@ -37,8 +37,8 @@ impl BindingSdkBuilder {
     }
 
     #[wasm_bindgen(js_name = "build")]
-    pub async fn build(self) -> WasmResult<BindingBreezSdk> {
+    pub async fn build(self) -> WasmResult<BreezSdk> {
         let sdk = self.builder.build().await?;
-        Ok(BindingBreezSdk { sdk: Rc::new(sdk) })
+        Ok(BreezSdk { sdk: Rc::new(sdk) })
     }
 }

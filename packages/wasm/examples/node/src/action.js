@@ -1,4 +1,4 @@
-const { initLogging, defaultConfig, BindingSdkBuilder } = require('@breeztech/breez-sdk-spark/nodejs')
+const { initLogging, defaultConfig, SdkBuilder } = require('@breeztech/breez-sdk-spark/nodejs')
 const fs = require('fs')
 const qrcode = require('qrcode')
 const { question, confirm } = require('./prompt.js')
@@ -40,7 +40,7 @@ const initSdk = async () => {
     // Connect using the config
     let config = defaultConfig('regtest')
 
-    let sdkBuilder = BindingSdkBuilder.new(config, mnemonic, './.data')
+    let sdkBuilder = SdkBuilder.new(config, mnemonic, './.data')
     sdkBuilder = sdkBuilder.withRestChainService('https://regtest-mempool.loadtest.dev.sparkinfra.net/api', {
         username: process.env.CHAIN_SERVICE_USERNAME,
         password: process.env.CHAIN_SERVICE_PASSWORD
