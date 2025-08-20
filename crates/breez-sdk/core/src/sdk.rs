@@ -340,7 +340,7 @@ impl BreezSdk {
     ) -> Result<PrepareLnurlPayResponse, SdkError> {
         let success_data = match validate_lnurl_pay(
             self.lnurl_client.as_ref(),
-            request.amount_sats,
+            request.amount_sats * 1_000,
             &None,
             &request.data,
             self.config.network.into(),
