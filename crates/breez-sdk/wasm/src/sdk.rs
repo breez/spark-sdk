@@ -17,12 +17,12 @@ pub struct BindingBreezSdk {
 }
 
 #[wasm_bindgen(js_name = "initLogging")]
-pub async fn init_logging(logger: Logger) -> WasmResult<()> {
+pub async fn init_logging(logger: Logger, filter: Option<String>) -> WasmResult<()> {
     crate::logger::WASM_LOGGER.set(Some(logger));
 
-    let filter = EnvFilter::new(
-        "debug,h2=warn,rustls=warn,rustyline=warn,hyper=warn,hyper_util=warn,tower=warn,Connection=warn,tonic=warn",
-    );
+    let filter = EnvFilter::new(filter.unwrap_or(
+        "debug,h2=warn,rustls=warn,rustyline=warn,hyper=warn,hyper_util=warn,tower=warn,Connection=warn,tonic=warn".to_string(),
+    ));
     let subscriber = tracing_subscriber::registry()
         .with(filter)
         .with(WasmTracingLayer {});
