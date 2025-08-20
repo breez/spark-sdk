@@ -6,7 +6,7 @@ use bitcoin::{
 };
 use clap::Subcommand;
 use reqwest::header::CONTENT_TYPE;
-use spark_wallet::{PagingFilter, SparkWallet};
+use spark_wallet::{Fee, PagingFilter, SparkWallet};
 
 use crate::config::Config;
 
@@ -60,7 +60,9 @@ pub enum DepositCommand {
         /// The address to send the refund to.
         refund_address: String,
         /// The fee to pay for the refund transaction.
-        fee_sats: u64,
+        fee_sat: Option<u64>,
+        /// The fee rate to pay for the refund transaction.
+        sat_per_vbyte: Option<u64>,
         /// The output index of the static deposit transaction to refund.
         output_index: Option<u32>,
     },
@@ -138,12 +140,26 @@ where
         DepositCommand::Refund {
             txid,
             refund_address,
-            fee_sats,
+            fee_sat,
+            sat_per_vbyte,
             output_index,
         } => {
+            let fee = match (fee_sat, sat_per_vbyte) {
+                (Some(_), Some(_)) => {
+                    println!("Cannot specify both fee_sat and sat_per_vbyte");
+                    return Ok(());
+                }
+                (Some(fee_sat), None) => Fee::Fixed { amount: fee_sat },
+                (None, Some(sat_per_vbyte)) => Fee::Rate { sat_per_vbyte },
+                (None, None) => {
+                    println!("Must specify either fee_sat or sat_per_vbyte");
+                    return Ok(());
+                }
+            };
+
             let tx = get_transaction(config, txid.clone()).await?;
             let refund_tx = wallet
-                .refund_static_deposit(tx, output_index, &refund_address, fee_sats)
+                .refund_static_deposit(tx, output_index, &refund_address, fee)
                 .await?;
             let txid = broadcast_transaction(config, refund_tx).await?;
             println!("Refund txid: {txid}");

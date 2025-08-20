@@ -1,7 +1,7 @@
 use std::{collections::HashSet, str::FromStr, sync::Arc};
 
 use bitcoin::{
-    Address, OutPoint, Transaction, TxOut, Txid, Witness,
+    Address, Amount, OutPoint, Transaction, TxOut, Txid, Witness,
     address::NetworkUnchecked,
     consensus::{deserialize, serialize},
     hashes::{Hash, sha256},
@@ -46,6 +46,20 @@ pub struct DepositAddress {
     pub leaf_id: TreeNodeId,
     pub user_signing_public_key: PublicKey,
     pub verifying_public_key: PublicKey,
+}
+
+pub enum Fee {
+    Fixed { amount: u64 },
+    Rate { sat_per_vbyte: u64 },
+}
+
+impl Fee {
+    pub fn to_sats(&self, vbytes: u64) -> u64 {
+        match self {
+            Fee::Fixed { amount } => *amount,
+            Fee::Rate { sat_per_vbyte } => sat_per_vbyte * vbytes,
+        }
+    }
 }
 
 impl TryFrom<(operator_rpc::spark::DepositAddressQueryResult, Network)> for DepositAddress {
@@ -259,15 +273,8 @@ impl<S: Signer> DepositService<S> {
         tx: Transaction,
         output_index: Option<u32>,
         refund_address: Address,
-        fee_sats: u64,
+        fee: Fee,
     ) -> Result<Transaction, ServiceError> {
-        // TODO: Take a fee rate as a parameter instead of a fixed fee
-        if fee_sats <= 300 {
-            return Err(ServiceError::Generic(
-                "fee must be more than 300 sats".to_string(),
-            ));
-        }
-
         let txid = tx.compute_txid();
         let output_index = match output_index {
             Some(v) => v,
@@ -280,7 +287,31 @@ impl<S: Signer> DepositService<S> {
             .output
             .get(output_index as usize)
             .ok_or(ServiceError::InvalidOutputIndex)?;
+
+        // Create the refund transaction.
+        // We populate dummy values for output amount and input witness so
+        // we can calculate the vsize.
+        let mut refund_tx = create_static_deposit_refund_tx(
+            OutPoint {
+                txid,
+                vout: output_index,
+            },
+            0, // temporary value for calculating the vsize. We set the real value bellow.
+            &refund_address,
+        );
+        let mut witness = Witness::new();
+        witness.push([0; 64]);
+        refund_tx.input[0].witness = witness;
+
+        let fee_sats = fee.to_sats(refund_tx.vsize() as u64);
+        if fee_sats <= 300 {
+            return Err(ServiceError::Generic(
+                "fee must be more than 300 sats".to_string(),
+            ));
+        }
+
         let credit_amount_sats = tx_out.value.to_sat().saturating_sub(fee_sats);
+        refund_tx.output[0].value = Amount::from_sat(credit_amount_sats);
 
         if credit_amount_sats == 0 {
             return Err(ServiceError::Generic(
@@ -291,15 +322,6 @@ impl<S: Signer> DepositService<S> {
             "Refunding static deposit txid: {txid}, output_index: {output_index}, credit_amount_sats: {credit_amount_sats}, fee_sats: {fee_sats}"
         );
 
-        // Create the refund transaction
-        let mut refund_tx = create_static_deposit_refund_tx(
-            OutPoint {
-                txid,
-                vout: output_index,
-            },
-            credit_amount_sats,
-            &refund_address,
-        );
         let spend_tx_sighash = sighash_from_tx(&refund_tx, 0, tx_out)?;
         let spend_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
 
@@ -315,49 +337,44 @@ impl<S: Signer> DepositService<S> {
         let signature = self.signer.sign_message_ecdsa_with_identity_key(&payload)?;
 
         // Create the UTXO swap request
-        let utxo_swap_resp = self
+        let refund_resp = self
             .operator_pool
             .get_coordinator()
             .client
-            .initiate_utxo_swap(operator_rpc::spark::InitiateUtxoSwapRequest {
-                on_chain_utxo: Some(operator_rpc::spark::Utxo {
-                    vout: output_index,
-                    network: self.network.to_proto_network() as i32,
-                    txid: hex::decode(txid.to_string())
-                        .map_err(|_| ServiceError::InvalidTransaction)?,
-                    ..Default::default()
-                }),
-                request_type: operator_rpc::spark::UtxoSwapRequestType::Refund as i32,
-                ssp_signature: Vec::new(),
-                user_signature: signature.serialize_der().to_vec(),
-                transfer: Some(operator_rpc::spark::StartTransferRequest {
-                    transfer_id: uuid::Uuid::now_v7().to_string(),
-                    owner_identity_public_key: self.identity_public_key.serialize().to_vec(),
-                    receiver_identity_public_key: self.identity_public_key.serialize().to_vec(),
-                    ..Default::default()
-                }),
-                spend_tx_signing_job: Some(operator_rpc::spark::SigningJob {
-                    signing_public_key: self
-                        .signer
-                        .get_static_deposit_public_key(0)?
-                        .serialize()
-                        .to_vec(),
-                    raw_tx: serialize(&refund_tx),
-                    signing_nonce_commitment: Some(spend_nonce_commitment.commitments.try_into()?),
-                }),
-                amount: None,
-            })
+            .initiate_static_deposit_utxo_refund(
+                operator_rpc::spark::InitiateStaticDepositUtxoRefundRequest {
+                    on_chain_utxo: Some(operator_rpc::spark::Utxo {
+                        vout: output_index,
+                        network: self.network.to_proto_network() as i32,
+                        txid: hex::decode(txid.to_string())
+                            .map_err(|_| ServiceError::InvalidTransaction)?,
+                        ..Default::default()
+                    }),
+                    user_signature: signature.serialize_der().to_vec(),
+                    refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
+                        signing_public_key: self
+                            .signer
+                            .get_static_deposit_public_key(0)?
+                            .serialize()
+                            .to_vec(),
+                        raw_tx: serialize(&refund_tx),
+                        signing_nonce_commitment: Some(
+                            spend_nonce_commitment.commitments.try_into()?,
+                        ),
+                    }),
+                },
+            )
             .await?;
 
         // Collect and map the signing results
-        let signing_result = utxo_swap_resp
-            .spend_tx_signing_result
+        let signing_result = refund_resp
+            .refund_tx_signing_result
             .as_ref()
             .map(|sr| sr.try_into())
             .transpose()?
             .ok_or(ServiceError::MissingTreeSignatures)?;
 
-        let verifying_public_key = utxo_swap_resp
+        let verifying_public_key = refund_resp
             .deposit_address
             .map(|da| PublicKey::from_slice(&da.verifying_public_key))
             .transpose()

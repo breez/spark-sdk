@@ -1,7 +1,8 @@
 use breez_sdk_core::{
     BreezSdk, ClaimDepositRequest, Fee, GetInfoRequest, GetPaymentRequest, ListPaymentsRequest,
-    PrepareReceivePaymentRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, SendPaymentRequest, SyncWalletRequest,
+    ListUnclaimedDepositsRequest, PrepareReceivePaymentRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest, SendPaymentRequest,
+    SyncWalletRequest,
 };
 use clap::Parser;
 use rustyline::{
@@ -75,6 +76,24 @@ pub enum Command {
         #[arg(long)]
         sat_per_vbyte: Option<u64>,
     },
+    RefundDeposit {
+        /// The txid of the deposit
+        txid: String,
+
+        /// The vout of the deposit
+        vout: u32,
+
+        /// Destination address
+        destination_address: String,
+
+        /// The max fee to refund the deposit
+        #[arg(long)]
+        fee_sat: Option<u64>,
+
+        /// The max fee per vbyte to refund the deposit
+        #[arg(long)]
+        sat_per_vbyte: Option<u64>,
+    },
     ListUnclaimedDeposits,
 }
 
@@ -121,7 +140,9 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::ListUnclaimedDeposits => {
-            let value = sdk.list_unclaimed_deposits().await?;
+            let value = sdk
+                .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+                .await?;
             print_value(&value)?;
             Ok(true)
         }
@@ -146,6 +167,38 @@ pub(crate) async fn execute_command(
                     txid,
                     vout,
                     max_fee,
+                })
+                .await?;
+            print_value(&value)?;
+            Ok(true)
+        }
+        Command::RefundDeposit {
+            txid,
+            vout,
+            destination_address,
+            fee_sat,
+            sat_per_vbyte,
+        } => {
+            let fee = match (fee_sat, sat_per_vbyte) {
+                (Some(_), Some(_)) => {
+                    return Err(anyhow::anyhow!(
+                        "Cannot specify both fee_sat and sat_per_vbyte"
+                    ));
+                }
+                (Some(fee_sat), None) => Fee::Fixed { amount: fee_sat },
+                (None, Some(sat_per_vbyte)) => Fee::Rate { sat_per_vbyte },
+                (None, None) => {
+                    return Err(anyhow::anyhow!(
+                        "Must specify either fee_sat or sat_per_vbyte"
+                    ));
+                }
+            };
+            let value = sdk
+                .refund_deposit(RefundDepositRequest {
+                    txid,
+                    vout,
+                    destination_address,
+                    fee,
                 })
                 .await?;
             print_value(&value)?;

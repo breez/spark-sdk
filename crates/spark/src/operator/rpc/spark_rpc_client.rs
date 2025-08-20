@@ -548,6 +548,19 @@ where
             .into_inner())
     }
 
+    pub async fn initiate_static_deposit_utxo_refund(
+        &self,
+        req: InitiateStaticDepositUtxoRefundRequest,
+    ) -> Result<InitiateStaticDepositUtxoRefundResponse> {
+        Ok(self
+            .auth
+            .spark_service_client()
+            .await?
+            .initiate_static_deposit_utxo_refund(req)
+            .await?
+            .into_inner())
+    }
+
     pub async fn initiate_utxo_swap(
         &self,
         req: InitiateUtxoSwapRequest,
