@@ -79,7 +79,7 @@ impl SqliteStorage {
             );",
             "CREATE TABLE IF NOT EXISTS payment_metadata (
               payment_id TEXT PRIMARY KEY,
-              lnurl_pay_info TEXT)'",
+              lnurl_pay_info TEXT);",
             "CREATE TABLE IF NOT EXISTS deposit_refunds (
               deposit_tx_id TEXT NOT NULL,
               deposit_vout INTEGER NOT NULL,

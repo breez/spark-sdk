@@ -696,22 +696,13 @@ impl BreezSdk {
         let tx_hex = serialize(&tx).as_hex().to_string();
         let tx_id = tx.compute_txid().to_string();
 
-        // Store the deposit info
+        // Store the refund transaction details separately
         self.storage.update_deposit_refund(&DepositRefund {
             deposit_tx_id: deposit.txid.clone(),
             deposit_vout: deposit.vout,
             refund_tx: tx_hex.clone(),
             refund_tx_id: tx_id.clone(),
         })?;
-
-        // Store the refund transaction details separately
-        let deposit_refund = crate::DepositRefund {
-            deposit_tx_id: deposit.txid.clone(),
-            deposit_vout: deposit.vout,
-            refund_tx: tx_hex.clone(),
-            refund_tx_id: tx_id.clone(),
-        };
-        self.storage.update_deposit_refund(&deposit_refund)?;
 
         self.chain_service.broadcast_transaction(&tx_hex).await?;
         Ok(RefundDepositResponse { tx_id, tx_hex })
