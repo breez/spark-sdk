@@ -56,11 +56,6 @@ impl BindingBreezSdk {
         self.sdk.remove_event_listener(id).await
     }
 
-    #[wasm_bindgen(js_name = "start")]
-    pub fn start(&self) -> WasmResult<()> {
-        Ok(self.sdk.start()?)
-    }
-
     #[wasm_bindgen(js_name = "disconnect")]
     pub async fn disconnect(&self) -> WasmResult<()> {
         Ok(self.sdk.disconnect().await?)

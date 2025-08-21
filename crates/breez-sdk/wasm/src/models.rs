@@ -7,6 +7,9 @@ pub enum SdkEvent {
     ClaimDepositsSucceeded {
         claimed_deposits: Vec<DepositInfo>,
     },
+    PaymentSucceeded {
+        payment: Payment,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_core::DepositInfo)]

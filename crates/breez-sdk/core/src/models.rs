@@ -177,6 +177,11 @@ impl TryFrom<WalletTransfer> for Payment {
         };
         let status = match transfer.status {
             TransferStatus::Completed => PaymentStatus::Completed,
+            TransferStatus::SenderKeyTweaked
+                if transfer.direction == TransferDirection::Outgoing =>
+            {
+                PaymentStatus::Completed
+            }
             TransferStatus::Expired => PaymentStatus::Failed,
             TransferStatus::Returned => PaymentStatus::Failed,
             _ => PaymentStatus::Pending,
