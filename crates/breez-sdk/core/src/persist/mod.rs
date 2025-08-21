@@ -160,9 +160,9 @@ impl ObjectCacheRepository {
         ObjectCacheRepository { storage }
     }
 
-    pub(crate) fn save_account_info(&self, value: CachedAccountInfo) -> Result<(), StorageError> {
+    pub(crate) fn save_account_info(&self, value: &CachedAccountInfo) -> Result<(), StorageError> {
         self.storage
-            .set_cached_item(ACCOUNT_INFO_KEY.to_string(), serde_json::to_string(&value)?)?;
+            .set_cached_item(ACCOUNT_INFO_KEY.to_string(), serde_json::to_string(value)?)?;
         Ok(())
     }
 
@@ -174,9 +174,9 @@ impl ObjectCacheRepository {
         }
     }
 
-    pub(crate) fn save_sync_info(&self, value: CachedSyncInfo) -> Result<(), StorageError> {
+    pub(crate) fn save_sync_info(&self, value: &CachedSyncInfo) -> Result<(), StorageError> {
         self.storage
-            .set_cached_item(SYNC_OFFSET_KEY.to_string(), serde_json::to_string(&value)?)?;
+            .set_cached_item(SYNC_OFFSET_KEY.to_string(), serde_json::to_string(value)?)?;
         Ok(())
     }
 

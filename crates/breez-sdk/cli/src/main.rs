@@ -106,7 +106,7 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
         .await?;
 
     let listener = Box::new(CliEventListener {});
-    sdk.add_event_listener(listener).await;
+    sdk.add_event_listener(listener);
 
     println!("Breez SDK CLI Interactive Mode");
     println!("Type 'help' for available commands or 'exit' to quit");
@@ -158,7 +158,7 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
         }
     }
 
-    if let Err(e) = sdk.disconnect().await {
+    if let Err(e) = sdk.disconnect() {
         error!("Failed to gracefully stop SDK: {:?}", e);
     }
 

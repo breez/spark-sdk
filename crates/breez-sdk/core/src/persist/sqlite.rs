@@ -454,14 +454,14 @@ mod tests {
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
         // Create test deposit info
-        let deposit1 = crate::DepositInfo {
+        let deposit_1 = crate::DepositInfo {
             txid: "tx123".to_string(),
             vout: 0,
             amount_sats: Some(50000),
             error: None,
         };
 
-        let deposit2 = crate::DepositInfo {
+        let deposit_2 = crate::DepositInfo {
             txid: "tx456".to_string(),
             vout: 1,
             amount_sats: Some(75000),
@@ -475,7 +475,7 @@ mod tests {
         assert_eq!(deposits.len(), 0);
 
         // Add first deposit
-        storage.add_unclaimed_deposit(deposit1).unwrap();
+        storage.add_unclaimed_deposit(deposit_1).unwrap();
         let deposits = storage.list_unclaimed_deposits().unwrap();
         assert_eq!(deposits.len(), 1);
         assert_eq!(deposits[0].txid, "tx123");
@@ -484,7 +484,7 @@ mod tests {
         assert!(deposits[0].error.is_none());
 
         // Add second deposit
-        storage.add_unclaimed_deposit(deposit2).unwrap();
+        storage.add_unclaimed_deposit(deposit_2).unwrap();
         let deposits = storage.list_unclaimed_deposits().unwrap();
         assert_eq!(deposits.len(), 2);
 
@@ -575,7 +575,7 @@ mod tests {
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
         // Create initial deposit
-        let deposit1 = crate::DepositInfo {
+        let deposit_1 = crate::DepositInfo {
             txid: "tx123".to_string(),
             vout: 0,
             amount_sats: Some(50000),
@@ -583,7 +583,7 @@ mod tests {
         };
 
         // Add deposit
-        storage.add_unclaimed_deposit(deposit1).unwrap();
+        storage.add_unclaimed_deposit(deposit_1).unwrap();
         let deposits = storage.list_unclaimed_deposits().unwrap();
         assert_eq!(deposits.len(), 1);
         assert!(deposits[0].error.is_none());
@@ -628,7 +628,7 @@ mod tests {
         let deposit = crate::DepositInfo {
             txid: "test_tx_123".to_string(),
             vout: 0,
-            amount_sats: Some(100000),
+            amount_sats: Some(100_000),
             error: None,
         };
 
@@ -638,7 +638,7 @@ mod tests {
         assert_eq!(deposits.len(), 1);
         assert_eq!(deposits[0].txid, "test_tx_123");
         assert_eq!(deposits[0].vout, 0);
-        assert_eq!(deposits[0].amount_sats, Some(100000));
+        assert_eq!(deposits[0].amount_sats, Some(100_000));
         assert!(deposits[0].error.is_none());
 
         // Add refund transaction details using the new separate table
@@ -657,7 +657,7 @@ mod tests {
         assert_eq!(deposits.len(), 1);
         assert_eq!(deposits[0].txid, "test_tx_123");
         assert_eq!(deposits[0].vout, 0);
-        assert_eq!(deposits[0].amount_sats, Some(100000));
+        assert_eq!(deposits[0].amount_sats, Some(100_000));
         assert!(deposits[0].error.is_none());
 
         // Verify that refund data is stored separately (would need a query method to fully test)

@@ -1,3 +1,7 @@
+#![cfg_attr(
+    all(target_family = "wasm", target_os = "unknown"),
+    allow(clippy::arc_with_non_send_sync)
+)]
 use std::sync::Arc;
 
 use breez_sdk_common::rest::{ReqwestRestClient as CommonRequestRestClient, RestClient};
@@ -45,6 +49,7 @@ impl SdkBuilder {
     /// Sets the chain service to be used by the SDK.
     /// Arguments:
     /// - `chain_service`: The chain service to be used.
+    #[must_use]
     pub fn with_chain_service(mut self, chain_service: Arc<dyn BitcoinChainService>) -> Self {
         self.chain_service = Some(chain_service);
         self
@@ -54,6 +59,7 @@ impl SdkBuilder {
     /// Arguments:
     /// - `url`: The base URL of the REST API.
     /// - `credentials`: Optional credentials for basic authentication.
+    #[must_use]
     pub fn with_rest_chain_service(
         mut self,
         url: String,
@@ -69,6 +75,7 @@ impl SdkBuilder {
         self
     }
 
+    #[must_use]
     pub fn with_lnurl_client(mut self, lnurl_client: Arc<dyn RestClient>) -> Self {
         self.lnurl_client = Some(lnurl_client);
         self
@@ -81,39 +88,36 @@ impl SdkBuilder {
             bip39::Mnemonic::parse(&self.mnemonic).map_err(|e| SdkError::Generic(e.to_string()))?;
         let signer = DefaultSigner::new(&mnemonic.to_seed(""), self.config.network.into())
             .map_err(|e| SdkError::Generic(e.to_string()))?;
-        let chain_service = match self.chain_service {
-            Some(service) => service,
-            None => {
-                let inner_client =
-                    CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?;
-                match self.config.network {
-                    Network::Mainnet => Arc::new(RestClientChainService::new(
-                        "https://blockstream.info/api".to_string(),
-                        self.config.network,
-                        5,
-                        Box::new(inner_client),
-                        None,
-                    )),
-                    Network::Regtest => Arc::new(RestClientChainService::new(
-                        "https://regtest-mempool.loadtest.dev.sparkinfra.net/api".to_string(),
-                        self.config.network,
-                        5,
-                        Box::new(inner_client),
-                        match (
-                            std::env::var("CHAIN_SERVICE_USERNAME"),
-                            std::env::var("CHAIN_SERVICE_PASSWORD"),
-                        ) {
-                            (Ok(username), Ok(password)) => {
-                                Some(BasicAuth::new(username, password))
-                            }
-                            _ => None,
-                        },
-                    )),
-                }
+        let chain_service = if let Some(service) = self.chain_service {
+            service
+        } else {
+            let inner_client =
+                CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?;
+            match self.config.network {
+                Network::Mainnet => Arc::new(RestClientChainService::new(
+                    "https://blockstream.info/api".to_string(),
+                    self.config.network,
+                    5,
+                    Box::new(inner_client),
+                    None,
+                )),
+                Network::Regtest => Arc::new(RestClientChainService::new(
+                    "https://regtest-mempool.loadtest.dev.sparkinfra.net/api".to_string(),
+                    self.config.network,
+                    5,
+                    Box::new(inner_client),
+                    match (
+                        std::env::var("CHAIN_SERVICE_USERNAME"),
+                        std::env::var("CHAIN_SERVICE_PASSWORD"),
+                    ) {
+                        (Ok(username), Ok(password)) => Some(BasicAuth::new(username, password)),
+                        _ => None,
+                    },
+                )),
             }
         };
         let lnurl_client: Arc<dyn RestClient> = match self.lnurl_client {
-            Some(client) => client.into(),
+            Some(client) => client,
             None => Arc::new(
                 CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?,
             ),
@@ -123,15 +127,15 @@ impl SdkBuilder {
         let sdk = BreezSdk::new(
             self.config,
             signer,
-            self.storage.into(),
-            chain_service.into(),
+            self.storage,
+            chain_service,
             lnurl_client,
             shutdown_sender,
             shutdown_receiver,
         )
         .await?;
 
-        sdk.start()?;
+        sdk.start();
         Ok(sdk)
     }
 }

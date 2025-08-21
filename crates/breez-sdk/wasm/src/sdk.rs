@@ -44,37 +44,32 @@ pub async fn parse(input: &str) -> WasmResult<InputType> {
 #[wasm_bindgen]
 impl BreezSdk {
     #[wasm_bindgen(js_name = "addEventListener")]
-    pub async fn add_event_listener(&self, listener: EventListener) -> String {
+    pub fn add_event_listener(&self, listener: EventListener) -> String {
         self.sdk
             .add_event_listener(Box::new(WasmEventListener { listener }))
-            .await
     }
 
     #[wasm_bindgen(js_name = "removeEventListener")]
-    pub async fn remove_event_listener(&self, id: &str) -> bool {
-        self.sdk.remove_event_listener(id).await
+    pub fn remove_event_listener(&self, id: &str) -> bool {
+        self.sdk.remove_event_listener(id)
     }
 
     #[wasm_bindgen(js_name = "disconnect")]
-    pub async fn disconnect(&self) -> WasmResult<()> {
-        Ok(self.sdk.disconnect().await?)
+    pub fn disconnect(&self) -> WasmResult<()> {
+        Ok(self.sdk.disconnect()?)
     }
 
     #[wasm_bindgen(js_name = "getInfo")]
-    pub async fn get_info(&self, request: GetInfoRequest) -> WasmResult<GetInfoResponse> {
-        Ok(self.sdk.get_info(request.into()).await?.into())
+    pub fn get_info(&self, request: GetInfoRequest) -> WasmResult<GetInfoResponse> {
+        Ok(self.sdk.get_info(request.into())?.into())
     }
 
     #[wasm_bindgen(js_name = "prepareReceivePayment")]
-    pub async fn prepare_receive_payment(
+    pub fn prepare_receive_payment(
         &self,
         request: PrepareReceivePaymentRequest,
     ) -> WasmResult<PrepareReceivePaymentResponse> {
-        Ok(self
-            .sdk
-            .prepare_receive_payment(request.into())
-            .await?
-            .into())
+        Ok(self.sdk.prepare_receive_payment(request.into())?.into())
     }
 
     #[wasm_bindgen(js_name = "receivePayment")]
@@ -120,15 +115,12 @@ impl BreezSdk {
     }
 
     #[wasm_bindgen(js_name = "listPayments")]
-    pub async fn list_payments(
-        &self,
-        request: ListPaymentsRequest,
-    ) -> WasmResult<ListPaymentsResponse> {
-        Ok(self.sdk.list_payments(request.into()).await?.into())
+    pub fn list_payments(&self, request: ListPaymentsRequest) -> WasmResult<ListPaymentsResponse> {
+        Ok(self.sdk.list_payments(request.into())?.into())
     }
 
     #[wasm_bindgen(js_name = "getPayment")]
-    pub async fn get_payment(&self, request: GetPaymentRequest) -> WasmResult<GetPaymentResponse> {
-        Ok(self.sdk.get_payment(request.into()).await?.into())
+    pub fn get_payment(&self, request: GetPaymentRequest) -> WasmResult<GetPaymentResponse> {
+        Ok(self.sdk.get_payment(request.into())?.into())
     }
 }

@@ -185,8 +185,7 @@ impl TryFrom<WalletTransfer> for Payment {
             {
                 PaymentStatus::Completed
             }
-            TransferStatus::Expired => PaymentStatus::Failed,
-            TransferStatus::Returned => PaymentStatus::Failed,
+            TransferStatus::Expired | TransferStatus::Returned => PaymentStatus::Failed,
             _ => PaymentStatus::Pending,
         };
         let fees: CurrencyAmount = match transfer.clone().user_request {
@@ -247,7 +246,7 @@ impl Payment {
             status,
             amount: amount_sat,
             fees: payment.fee_sat,
-            timestamp: payment.created_at as u64,
+            timestamp: payment.created_at.cast_unsigned(),
             details,
         })
     }
@@ -311,7 +310,7 @@ impl Fee {
     pub fn to_sats(&self, vbytes: u64) -> u64 {
         match self {
             Fee::Fixed { amount } => *amount,
-            Fee::Rate { sat_per_vbyte } => sat_per_vbyte * vbytes,
+            Fee::Rate { sat_per_vbyte } => sat_per_vbyte.saturating_mul(vbytes),
         }
     }
 }

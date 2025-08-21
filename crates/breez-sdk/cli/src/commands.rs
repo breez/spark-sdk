@@ -133,19 +133,17 @@ pub(crate) async fn execute_command(
     match command {
         Command::Exit => Ok(false),
         Command::GetInfo => {
-            let value = sdk.get_info(GetInfoRequest {}).await?;
+            let value = sdk.get_info(GetInfoRequest {})?;
             print_value(&value)?;
             Ok(true)
         }
         Command::GetPayment { payment_id } => {
-            let value = sdk.get_payment(GetPaymentRequest { payment_id }).await?;
+            let value = sdk.get_payment(GetPaymentRequest { payment_id })?;
             print_value(&value)?;
             Ok(true)
         }
         Command::ListPayments { limit, offset } => {
-            let value = sdk
-                .list_payments(ListPaymentsRequest { limit, offset })
-                .await?;
+            let value = sdk.list_payments(ListPaymentsRequest { limit, offset })?;
             print_value(&value)?;
             Ok(true)
         }
@@ -155,9 +153,7 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::ListUnclaimedDeposits => {
-            let value = sdk
-                .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
-                .await?;
+            let value = sdk.list_unclaimed_deposits(ListUnclaimedDepositsRequest {})?;
             print_value(&value)?;
             Ok(true)
         }
@@ -234,9 +230,8 @@ pub(crate) async fn execute_command(
                 _ => return Err(anyhow::anyhow!("Invalid payment method")),
             };
 
-            let prepare_response = sdk
-                .prepare_receive_payment(PrepareReceivePaymentRequest { payment_method })
-                .await?;
+            let prepare_response =
+                sdk.prepare_receive_payment(PrepareReceivePaymentRequest { payment_method })?;
 
             if prepare_response.fee_sats > 0 {
                 println!(

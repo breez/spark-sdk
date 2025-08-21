@@ -2,7 +2,7 @@ use crate::error::ServiceConnectivityError;
 use maybe_sync::{MaybeSend, MaybeSync};
 use reqwest::Client;
 use std::{collections::HashMap, time::Duration};
-use tracing::{debug, error, trace};
+use tracing::{debug, trace};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -70,7 +70,7 @@ impl RestClient for ReqwestRestClient {
         debug!("Received response, status: {status}");
         trace!("raw response body: {body}");
 
-        Ok(RestResponse { body, status })
+        Ok(RestResponse { status, body })
     }
 
     async fn post(
@@ -96,8 +96,8 @@ impl RestClient for ReqwestRestClient {
         trace!("raw response body: {body}");
 
         Ok(RestResponse {
-            body,
             status: status.into(),
+            body,
         })
     }
 }
@@ -107,21 +107,4 @@ where
     for<'a> T: serde::de::Deserialize<'a>,
 {
     serde_json::from_str::<T>(json).map_err(|e| ServiceConnectivityError::Json(e.to_string()))
-}
-
-#[allow(dead_code)]
-pub async fn get_and_check_success<C: RestClient + ?Sized>(
-    rest_client: &C,
-    url: &str,
-    headers: Option<HashMap<String, String>>,
-) -> Result<RestResponse, ServiceConnectivityError> {
-    let RestResponse { body, status } = rest_client.get(url.to_string(), headers).await?;
-    #[allow(clippy::manual_range_contains)]
-    if status < 200 || status >= 300 {
-        let err = format!("GET request {url} failed with status: {status}");
-        error!("{err}");
-        return Err(ServiceConnectivityError::Status { status, body });
-    }
-
-    Ok(RestResponse { status, body })
 }

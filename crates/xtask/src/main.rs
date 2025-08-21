@@ -628,7 +628,7 @@ fn package_wasm_cmd(wasm_package: WasmPackages) -> Result<()> {
         vec![]
     };
 
-    println!("Packaging WASM target: {:?}", wasm_package);
+    println!("Packaging WASM target: {wasm_package:?}");
 
     match wasm_package {
         WasmPackages::All => {
@@ -689,12 +689,12 @@ fn package_wasm_target(
 
     let status = c
         .status()
-        .with_context(|| format!("failed to build wasm target {}", target))?;
+        .with_context(|| format!("failed to build wasm target {target}"))?;
 
     if !status.success() {
-        bail!("wasm-pack build failed for target {}", target);
+        bail!("wasm-pack build failed for target {target}");
     }
 
-    println!("Successfully built WASM target: {}", target);
+    println!("Successfully built WASM target: {target}");
     Ok(())
 }

@@ -53,7 +53,7 @@ impl RestClient for MockRestClient {
         let status = response.status_code;
         let body = response.text;
 
-        Ok(RestResponse { body, status })
+        Ok(RestResponse { status, body })
     }
 
     async fn post(
@@ -70,6 +70,6 @@ impl RestClient for MockRestClient {
         let status = response.status_code;
         let body = response.text;
 
-        Ok(RestResponse { body, status })
+        Ok(RestResponse { status, body })
     }
 }

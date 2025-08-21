@@ -4,6 +4,7 @@ use breez_sdk_common::rest::RestClient as CommonRestClient;
 use breez_sdk_common::{error::ServiceConnectivityError, rest::RestResponse};
 use std::collections::HashMap;
 use std::time::Duration;
+use tokio_with_wasm::alias as tokio;
 use tracing::info;
 
 use crate::{
@@ -104,8 +105,8 @@ impl RestClientChainService {
             match status {
                 status if attempts < self.max_retries && is_status_retryable(status) => {
                     tokio::time::sleep(delay).await;
-                    attempts += 1;
-                    delay *= 2;
+                    attempts = attempts.saturating_add(1);
+                    delay = delay.saturating_mul(2);
                 }
                 _ => {
                     if !(200..300).contains(&status) {
@@ -166,7 +167,7 @@ impl BitcoinChainService for RestClientChainService {
 
     async fn broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError> {
         let url = format!("{}{}", self.base_url, "/tx");
-        self.post(&url, Some(tx.into())).await?;
+        self.post(&url, Some(tx)).await?;
         Ok(())
     }
 }
@@ -281,7 +282,7 @@ mod tests {
         );
         assert_eq!(result[0].vout, 74);
         assert!(result[0].status.confirmed);
-        assert_eq!(result[0].status.block_height, Some(726892));
+        assert_eq!(result[0].status.block_height, Some(726_892));
 
         assert_eq!(result[1].value, 6127);
         assert_eq!(

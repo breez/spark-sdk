@@ -51,7 +51,7 @@ impl From<reqwest::Error> for ServiceConnectivityError {
         };
         #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
         if err.is_connect() {
-            res = Self::Connect(err.to_string())
+            res = Self::Connect(err.to_string());
         }
         res
     }
