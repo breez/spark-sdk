@@ -27,7 +27,6 @@ pub enum UpdateDepositPayload {
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum StorageError {
-    /// `SQLite` error
     #[error("Underline implementation error: {0}")]
     Implementation(String),
 
@@ -46,6 +45,7 @@ impl From<serde_json::Error> for StorageError {
 }
 
 /// Metadata associated with a payment that cannot be extracted from the Spark operator.
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,

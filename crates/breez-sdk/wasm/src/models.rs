@@ -535,3 +535,19 @@ pub struct LogEntry {
     pub line: String,
     pub level: String,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentMetadata)]
+pub struct PaymentMetadata {
+    pub lnurl_pay_info: Option<LnurlPayInfo>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateDepositPayload)]
+pub enum UpdateDepositPayload {
+    ClaimError {
+        error: DepositClaimError,
+    },
+    Refund {
+        refund_txid: String,
+        refund_tx: String,
+    },
+}

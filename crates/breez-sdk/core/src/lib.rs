@@ -17,7 +17,7 @@ pub use chain::{BitcoinChainService, ChainServiceError, rest_client::RestClientC
 pub use error::{DepositClaimError, SdkError};
 pub use events::{EventEmitter, EventListener, SdkEvent};
 pub use models::*;
-pub use persist::{SqliteStorage, Storage};
+pub use persist::{PaymentMetadata, SqliteStorage, Storage, StorageError, UpdateDepositPayload};
 pub use sdk::{BreezSdk, default_config, default_storage, init_logging, parse_input};
 #[cfg(not(feature = "uniffi"))]
 pub use sdk_builder::SdkBuilder;
