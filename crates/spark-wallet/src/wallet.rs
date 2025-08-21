@@ -306,6 +306,15 @@ impl<S: Signer> SparkWallet<S> {
             .await?)
     }
 
+    pub fn extract_spark_address(
+        &self,
+        invoice: &str,
+    ) -> Result<Option<SparkAddress>, SparkWalletError> {
+        Ok(self
+            .lightning_service
+            .extract_spark_address_from_invoice(invoice)?)
+    }
+
     pub async fn fetch_lightning_receive_payment(
         &self,
         id: &str,

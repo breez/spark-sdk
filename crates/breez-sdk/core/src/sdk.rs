@@ -456,8 +456,14 @@ impl BreezSdk {
         let parsed_input = parse(&request.payment_request).await?;
         match &parsed_input {
             InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
-                let fee_sats = match request.prefer_spark {
-                    Some(false) => {
+                let spark_address = self
+                    .spark_wallet
+                    .extract_spark_address(&request.payment_request)?;
+                let fee_sats = match (request.prefer_spark.unwrap_or(true), spark_address) {
+                    // prefer spark and spark address found
+                    (true, Some(_)) => 0,
+                    // prefer lightning or no spark address found
+                    _ => {
                         self.spark_wallet
                             .fetch_lightning_send_fee_estimate(
                                 &request.payment_request,
@@ -465,7 +471,6 @@ impl BreezSdk {
                             )
                             .await?
                     }
-                    _ => 0,
                 };
 
                 Ok(PrepareSendPaymentResponse {

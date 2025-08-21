@@ -398,6 +398,12 @@ impl<S: Signer> LightningService<S> {
         Ok((fee_sat + to_pay_sat, None))
     }
 
+    pub fn extract_spark_address_from_invoice(&self, invoice: &str) -> Result<Option<SparkAddress>, ServiceError> {
+        let decoded_invoice = Bolt11Invoice::from_str(invoice)
+            .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
+        Ok(self.extract_spark_address(&decoded_invoice))
+    }
+
     fn extract_spark_address(&self, decoded_invoice: &Bolt11Invoice) -> Option<SparkAddress> {
         for route_hint in decoded_invoice.route_hints() {
             for node in route_hint.0 {
