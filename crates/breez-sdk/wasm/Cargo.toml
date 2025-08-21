@@ -3,6 +3,9 @@ name = "breez-sdk-spark-wasm"
 edition = "2024"
 version.workspace = true
 
+[features]
+browser-tests = [] # Enable browser wasm-pack tests
+
 [lib]
 name = "breez_sdk_spark_wasm"
 crate-type = ["cdylib"]
@@ -17,3 +20,6 @@ tracing-subscriber.workspace = true
 tsify-next.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
+
+[dev-dependencies]
+wasm-bindgen-test.workspace = true

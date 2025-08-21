@@ -354,7 +354,7 @@ pub struct Config {
     pub max_deposit_claim_fee: Option<Fee>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Fee {
     // Fixed fee amount in sats

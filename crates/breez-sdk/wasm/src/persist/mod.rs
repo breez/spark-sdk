@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use wasm_bindgen::prelude::*;
 
 use crate::models::{DepositInfo, Payment, PaymentMetadata, UpdateDepositPayload};
