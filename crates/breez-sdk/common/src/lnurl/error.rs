@@ -7,7 +7,6 @@ use crate::{error::ServiceConnectivityError, invoice::InvoiceError};
 pub type LnurlResult<T, E = LnurlError> = Result<T, E>;
 
 #[derive(Debug, Error, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum LnurlError {
     #[error("lnurl missing k1 parameter")]
     MissingK1,

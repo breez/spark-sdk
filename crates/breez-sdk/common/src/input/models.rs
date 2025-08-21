@@ -22,7 +22,7 @@ pub enum Amount {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct Bip21 {
+pub struct Bip21Details {
     pub amount_sat: Option<u64>,
     pub asset_id: Option<String>,
     pub uri: String,
@@ -41,7 +41,7 @@ pub struct Bip21Extra {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct BitcoinAddress {
+pub struct BitcoinAddressDetails {
     pub address: String,
     pub network: BitcoinNetwork,
     pub source: PaymentRequestSource,
@@ -88,7 +88,7 @@ pub struct Bolt12Invoice {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct Bolt12InvoiceRequest {
+pub struct Bolt12InvoiceRequestDetails {
     // TODO: Fill fields
 }
 
@@ -100,7 +100,7 @@ pub struct Bolt12OfferBlindedPath {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct DetailedBolt11Invoice {
+pub struct Bolt11InvoiceDetails {
     pub amount_msat: Option<u64>,
     pub description: Option<String>,
     pub description_hash: Option<String>,
@@ -117,7 +117,7 @@ pub struct DetailedBolt11Invoice {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct DetailedBolt12Invoice {
+pub struct Bolt12InvoiceDetails {
     // TODO: Fill fields
     pub amount_msat: u64,
     pub invoice: Bolt12Invoice,
@@ -132,7 +132,7 @@ pub struct Bolt12Offer {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct DetailedBolt12Offer {
+pub struct Bolt12OfferDetails {
     pub absolute_expiry: Option<u64>,
     pub chains: Vec<String>,
     pub description: Option<String>,
@@ -146,23 +146,23 @@ pub struct DetailedBolt12Offer {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum InputType {
-    BitcoinAddress(BitcoinAddress),
-    Bolt11Invoice(DetailedBolt11Invoice),
-    Bolt12Invoice(DetailedBolt12Invoice),
-    Bolt12Offer(DetailedBolt12Offer),
-    LightningAddress(LightningAddress),
+    BitcoinAddress(BitcoinAddressDetails),
+    Bolt11Invoice(Bolt11InvoiceDetails),
+    Bolt12Invoice(Bolt12InvoiceDetails),
+    Bolt12Offer(Bolt12OfferDetails),
+    LightningAddress(LightningAddressDetails),
     LnurlPay(LnurlPayRequestData),
-    SilentPaymentAddress(SilentPaymentAddress),
+    SilentPaymentAddress(SilentPaymentAddressDetails),
     LnurlAuth(LnurlAuthRequestData),
     Url(String),
-    Bip21(Bip21),
-    Bolt12InvoiceRequest(Bolt12InvoiceRequest),
+    Bip21(Bip21Details),
+    Bolt12InvoiceRequest(Bolt12InvoiceRequestDetails),
     LnurlWithdraw(LnurlWithdrawRequestData),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct LightningAddress {
+pub struct LightningAddressDetails {
     pub address: String,
     pub pay_request: LnurlPayRequestData,
 }
@@ -189,7 +189,7 @@ pub struct PaymentRequestSource {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct SilentPaymentAddress {
+pub struct SilentPaymentAddressDetails {
     pub address: String,
     pub network: BitcoinNetwork,
     pub source: PaymentRequestSource,

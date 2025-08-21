@@ -1,3 +1,5 @@
+#[cfg(feature = "uniffi")]
+mod bindings;
 mod chain;
 mod error;
 mod events;
@@ -7,6 +9,8 @@ mod persist;
 mod sdk;
 mod sdk_builder;
 
+#[cfg(feature = "uniffi")]
+pub use bindings::*;
 pub use breez_sdk_common::input::{InputType, ParseError, parse};
 pub use chain::{BitcoinChainService, ChainServiceError, rest_client::RestClientChainService};
 pub use error::{DepositClaimError, SdkError};
@@ -14,4 +18,8 @@ pub use events::{EventEmitter, EventListener, SdkEvent};
 pub use models::*;
 pub use persist::{SqliteStorage, Storage};
 pub use sdk::{BreezSdk, default_config, default_storage, init_logging, parse_input};
+#[cfg(not(feature = "uniffi"))]
 pub use sdk_builder::SdkBuilder;
+
+#[cfg(feature = "uniffi")]
+uniffi::setup_scaffolding!();

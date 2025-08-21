@@ -7,7 +7,7 @@ version.workspace = true
 anyhow.workspace = true
 bip39 = { workspace = true, features = ["rand"] }
 bitcoin.workspace = true
-breez-sdk-core.workspace = true
+breez-sdk-spark.workspace = true
 clap = { workspace = true, features = ["derive"] }
 dirs.workspace = true
 rustyline = { workspace = true, features = ["derive"] }

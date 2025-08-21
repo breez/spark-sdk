@@ -1,10 +1,23 @@
 [package]
-name = "breez-sdk-core"
+name = "breez-sdk-spark"
 edition = "2024"
 version.workspace = true
 
 [features]
+default = []
 browser-tests = [] # Enable browser wasm-pack tests
+uniffi = [
+    "breez-sdk-common/uniffi",
+    "reqwest/native-tls-vendored",
+    "dep:uniffi",
+]
+
+[lib]
+crate-type = ["staticlib", "cdylib", "lib"]
+name = "breez_sdk_spark"
+
+[lints]
+workspace = true
 
 [dependencies]
 async-trait.workspace = true
@@ -38,11 +51,13 @@ web-time.workspace = true
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 maybe-sync = { workspace = true, features = ["sync"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+uniffi = { workspace = true, optional = true }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 maybe-sync.workspace = true
 tokio = { workspace = true, features = ["macros"] }
+uniffi = { workspace = true, optional = true }
 
 [dev-dependencies]
 breez-sdk-common = { workspace = true, features = ["test-utils"] }
@@ -50,3 +65,6 @@ breez-sdk-common = { workspace = true, features = ["test-utils"] }
 # WASM dev dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test.workspace = true
+
+[build-dependencies]
+uniffi = { workspace = true, features = ["build"], optional = true }

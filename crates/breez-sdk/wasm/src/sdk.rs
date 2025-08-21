@@ -12,7 +12,7 @@ use crate::{
 
 #[wasm_bindgen]
 pub struct BreezSdk {
-    pub(crate) sdk: Rc<breez_sdk_core::BreezSdk>,
+    pub(crate) sdk: Rc<breez_sdk_spark::BreezSdk>,
 }
 
 #[wasm_bindgen(js_name = "initLogging")]
@@ -33,12 +33,12 @@ pub async fn init_logging(logger: Logger, filter: Option<String>) -> WasmResult<
 
 #[wasm_bindgen(js_name = "defaultConfig")]
 pub fn default_config(network: Network) -> Config {
-    breez_sdk_core::default_config(network.into()).into()
+    breez_sdk_spark::default_config(network.into()).into()
 }
 
 #[wasm_bindgen(js_name = "parse")]
 pub async fn parse(input: &str) -> WasmResult<InputType> {
-    Ok(breez_sdk_core::parse(input).await?.into())
+    Ok(breez_sdk_spark::parse(input).await?.into())
 }
 
 #[wasm_bindgen]

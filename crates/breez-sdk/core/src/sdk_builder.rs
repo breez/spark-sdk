@@ -17,17 +17,22 @@ use crate::{
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
+#[derive(Clone)]
 pub struct SdkBuilder {
     config: Config,
     mnemonic: String,
-    storage: Box<dyn Storage + Send + Sync>,
-    chain_service: Option<Box<dyn BitcoinChainService>>,
-    lnurl_client: Option<Box<dyn RestClient>>,
+    storage: Arc<dyn Storage>,
+    chain_service: Option<Arc<dyn BitcoinChainService>>,
+    lnurl_client: Option<Arc<dyn RestClient>>,
 }
 
 impl SdkBuilder {
     /// Creates a new `SdkBuilder` with the provided configuration.
-    pub fn new(config: Config, mnemonic: String, storage: Box<dyn Storage + Send + Sync>) -> Self {
+    /// Arguments:
+    /// - `config`: The configuration to be used.
+    /// - `mnemonic`: The mnemonic phrase for the wallet.
+    /// - `storage`: The storage backend to be used.
+    pub fn new(config: Config, mnemonic: String, storage: Arc<dyn Storage>) -> Self {
         SdkBuilder {
             config,
             mnemonic,
@@ -37,20 +42,24 @@ impl SdkBuilder {
         }
     }
 
-    pub fn with_chain_service(
-        mut self,
-        chain_service: Box<dyn BitcoinChainService + Send + Sync>,
-    ) -> Self {
+    /// Sets the chain service to be used by the SDK.
+    /// Arguments:
+    /// - `chain_service`: The chain service to be used.
+    pub fn with_chain_service(mut self, chain_service: Arc<dyn BitcoinChainService>) -> Self {
         self.chain_service = Some(chain_service);
         self
     }
 
+    /// Sets the REST chain service to be used by the SDK.
+    /// Arguments:
+    /// - `url`: The base URL of the REST API.
+    /// - `credentials`: Optional credentials for basic authentication.
     pub fn with_rest_chain_service(
         mut self,
         url: String,
         credentials: Option<Credentials>,
     ) -> Self {
-        self.chain_service = Some(Box::new(RestClientChainService::new(
+        self.chain_service = Some(Arc::new(RestClientChainService::new(
             url,
             self.config.network,
             5,
@@ -60,7 +69,7 @@ impl SdkBuilder {
         self
     }
 
-    pub fn with_lnurl_client(mut self, lnurl_client: Box<dyn RestClient>) -> Self {
+    pub fn with_lnurl_client(mut self, lnurl_client: Arc<dyn RestClient>) -> Self {
         self.lnurl_client = Some(lnurl_client);
         self
     }
@@ -68,24 +77,24 @@ impl SdkBuilder {
     /// Builds the `BreezSdk` instance with the configured components.
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
         // Create the signer from mnemonic
-        let mnemonic = bip39::Mnemonic::parse(&self.mnemonic)
-            .map_err(|e| SdkError::GenericError(e.to_string()))?;
+        let mnemonic =
+            bip39::Mnemonic::parse(&self.mnemonic).map_err(|e| SdkError::Generic(e.to_string()))?;
         let signer = DefaultSigner::new(&mnemonic.to_seed(""), self.config.network.into())
-            .map_err(|e| SdkError::GenericError(e.to_string()))?;
+            .map_err(|e| SdkError::Generic(e.to_string()))?;
         let chain_service = match self.chain_service {
             Some(service) => service,
             None => {
-                let inner_client = CommonRequestRestClient::new()
-                    .map_err(|e| SdkError::GenericError(e.to_string()))?;
+                let inner_client =
+                    CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?;
                 match self.config.network {
-                    Network::Mainnet => Box::new(RestClientChainService::new(
+                    Network::Mainnet => Arc::new(RestClientChainService::new(
                         "https://blockstream.info/api".to_string(),
                         self.config.network,
                         5,
                         Box::new(inner_client),
                         None,
                     )),
-                    Network::Regtest => Box::new(RestClientChainService::new(
+                    Network::Regtest => Arc::new(RestClientChainService::new(
                         "https://regtest-mempool.loadtest.dev.sparkinfra.net/api".to_string(),
                         self.config.network,
                         5,
@@ -106,8 +115,7 @@ impl SdkBuilder {
         let lnurl_client: Arc<dyn RestClient> = match self.lnurl_client {
             Some(client) => client.into(),
             None => Arc::new(
-                CommonRequestRestClient::new()
-                    .map_err(|e| SdkError::GenericError(e.to_string()))?,
+                CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?,
             ),
         };
         let (shutdown_sender, shutdown_receiver) = watch::channel::<()>(());

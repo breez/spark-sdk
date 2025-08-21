@@ -7,7 +7,7 @@ use tracing::{debug, error};
 
 use crate::{
     dns::{self, DnsResolver},
-    error::{ServiceConnectivityError, ServiceConnectivityErrorKind},
+    error::ServiceConnectivityError,
     input::{Bip21Extra, ParseError, PaymentRequestSource},
     lnurl::{
         LnurlErrorData,
@@ -15,13 +15,14 @@ use crate::{
         error::LnurlError,
         pay::LnurlPayRequestData,
     },
-    rest::{ReqwestRestClient, RestClient},
+    rest::{ReqwestRestClient, RestClient, RestResponse},
 };
 
 use super::{
-    Bip21, BitcoinAddress, Bolt11RouteHint, Bolt11RouteHintHop, Bolt12InvoiceRequest, Bolt12Offer,
-    Bolt12OfferBlindedPath, DetailedBolt11Invoice, DetailedBolt12Invoice, DetailedBolt12Offer,
-    InputType, LightningAddress, LnurlWithdrawRequestData, SilentPaymentAddress, error::Bip21Error,
+    Bip21Details, BitcoinAddressDetails, Bolt11InvoiceDetails, Bolt11RouteHint, Bolt11RouteHintHop,
+    Bolt12InvoiceDetails, Bolt12InvoiceRequestDetails, Bolt12Offer, Bolt12OfferBlindedPath,
+    Bolt12OfferDetails, InputType, LightningAddressDetails, LnurlWithdrawRequestData,
+    SilentPaymentAddressDetails, error::Bip21Error,
 };
 
 const BIP_21_PREFIX: &str = "bitcoin:";
@@ -36,7 +37,7 @@ pub async fn parse(input: &str) -> Result<InputType, ParseError> {
         .await
 }
 
-pub fn parse_invoice(input: &str) -> Option<DetailedBolt11Invoice> {
+pub fn parse_invoice(input: &str) -> Option<Bolt11InvoiceDetails> {
     parse_bolt11(input, &PaymentRequestSource::default())
 }
 
@@ -95,7 +96,7 @@ where
         Err(ParseError::InvalidInput)
     }
 
-    async fn parse_bip_353(&self, input: &str) -> Result<Option<Bip21>, Bip21Error> {
+    async fn parse_bip_353(&self, input: &str) -> Result<Option<Bip21Details>, Bip21Error> {
         // BIP-353 addresses may have a ₿ prefix, so strip it if present
         let Some((local_part, domain)) = input.strip_prefix('₿').unwrap_or(input).split_once('@')
         else {
@@ -158,7 +159,7 @@ where
         Ok(None)
     }
 
-    async fn parse_lightning_address(&self, input: &str) -> Option<LightningAddress> {
+    async fn parse_lightning_address(&self, input: &str) -> Option<LightningAddressDetails> {
         if !input.contains('@') {
             return None;
         }
@@ -194,7 +195,7 @@ where
 
         let address = format!("{user}@{domain}");
         match input_type {
-            InputType::LnurlPay(pay_request) => Some(LightningAddress {
+            InputType::LnurlPay(pay_request) => Some(LightningAddressDetails {
                 address: address.clone(),
                 pay_request: LnurlPayRequestData {
                     address: Some(address),
@@ -295,13 +296,8 @@ where
             return Ok(InputType::LnurlAuth(data));
         }
 
-        let (response, _) = self
-            .rest_client
-            .get(url.as_ref(), None)
-            .await
-            .map_err(LnurlError::ServiceConnectivity)?;
-        let lnurl_data: LnurlRequestData =
-            parse_json(&response).map_err(LnurlError::ServiceConnectivity)?;
+        let RestResponse { body, .. } = self.rest_client.get(url.to_string(), None).await?;
+        let lnurl_data: LnurlRequestData = parse_json(&body)?;
         let domain = url.host().ok_or(LnurlError::MissingDomain)?.to_string();
         Ok(match lnurl_data {
             LnurlRequestData::PayRequest { data } => InputType::LnurlPay(LnurlPayRequestData {
@@ -371,7 +367,10 @@ fn extract_bip353_record(records: Vec<String>) -> Option<String> {
     bip353_record.into_iter().next()
 }
 
-fn parse_bip_21(input: &str, source: &PaymentRequestSource) -> Result<Option<Bip21>, Bip21Error> {
+fn parse_bip_21(
+    input: &str,
+    source: &PaymentRequestSource,
+) -> Result<Option<Bip21Details>, Bip21Error> {
     // TODO: Support liquid BIP-21
     if !has_bip_21_prefix(input) {
         return Ok(None);
@@ -380,7 +379,7 @@ fn parse_bip_21(input: &str, source: &PaymentRequestSource) -> Result<Option<Bip
     println!("{input}");
     let uri = input.to_string();
     let input = &input[BIP_21_PREFIX.len()..];
-    let mut bip_21 = Bip21 {
+    let mut bip_21 = Bip21Details {
         uri,
         ..Default::default()
     };
@@ -414,7 +413,7 @@ fn parse_bip_21(input: &str, source: &PaymentRequestSource) -> Result<Option<Bip
         .into();
         bip_21
             .payment_methods
-            .push(InputType::BitcoinAddress(BitcoinAddress {
+            .push(InputType::BitcoinAddress(BitcoinAddressDetails {
                 address: address.assume_checked().to_string(),
                 network,
                 source: source.clone(),
@@ -446,7 +445,7 @@ fn parse_bip_21(input: &str, source: &PaymentRequestSource) -> Result<Option<Bip
 
 fn parse_bip21_key(
     source: &PaymentRequestSource,
-    bip_21: &mut Bip21,
+    bip_21: &mut Bip21Details,
     original_key: &str,
     value: &str,
     key: &str,
@@ -552,7 +551,10 @@ fn parse_bitcoin(input: &str, source: &PaymentRequestSource) -> Option<InputType
     None
 }
 
-fn parse_bitcoin_address(input: &str, source: &PaymentRequestSource) -> Option<BitcoinAddress> {
+fn parse_bitcoin_address(
+    input: &str,
+    source: &PaymentRequestSource,
+) -> Option<BitcoinAddressDetails> {
     if input.is_empty() {
         return None;
     }
@@ -567,20 +569,20 @@ fn parse_bitcoin_address(input: &str, source: &PaymentRequestSource) -> Option<B
         _ => return None,
     }
     .into();
-    Some(BitcoinAddress {
+    Some(BitcoinAddressDetails {
         address: address.assume_checked().to_string(),
         network,
         source: source.clone(),
     })
 }
 
-fn parse_bolt11(input: &str, source: &PaymentRequestSource) -> Option<DetailedBolt11Invoice> {
+fn parse_bolt11(input: &str, source: &PaymentRequestSource) -> Option<Bolt11InvoiceDetails> {
     let bolt11: lightning::bolt11_invoice::Bolt11Invoice = match input.parse() {
         Ok(invoice) => invoice,
         Err(_) => return None,
     };
 
-    Some(DetailedBolt11Invoice {
+    Some(Bolt11InvoiceDetails {
         amount_msat: bolt11.amount_milli_satoshis(),
         description: match bolt11.description() {
             Bolt11InvoiceDescriptionRef::Direct(description) => Some(description.to_string()),
@@ -623,7 +625,7 @@ fn parse_bolt11(input: &str, source: &PaymentRequestSource) -> Option<DetailedBo
     })
 }
 
-fn parse_bolt12_offer(input: &str, source: &PaymentRequestSource) -> Option<DetailedBolt12Offer> {
+fn parse_bolt12_offer(input: &str, source: &PaymentRequestSource) -> Option<Bolt12OfferDetails> {
     let offer: lightning::offers::offer::Offer = match input.parse() {
         Ok(offer) => offer,
         Err(_) => return None,
@@ -645,7 +647,7 @@ fn parse_bolt12_offer(input: &str, source: &PaymentRequestSource) -> Option<Deta
         None => None,
     };
 
-    Some(DetailedBolt12Offer {
+    Some(Bolt12OfferDetails {
         absolute_expiry: offer.absolute_expiry().map(|e| e.as_secs()),
         chains: offer.chains().into_iter().map(|c| c.to_string()).collect(),
         description: offer.description().map(|d| d.to_string()),
@@ -673,7 +675,7 @@ fn parse_bolt12_offer(input: &str, source: &PaymentRequestSource) -> Option<Deta
 fn parse_bolt12_invoice(
     _input: &str,
     _source: &PaymentRequestSource,
-) -> Option<DetailedBolt12Invoice> {
+) -> Option<Bolt12InvoiceDetails> {
     // TODO: Implement parsing of Bolt12 invoices
     None
 }
@@ -681,7 +683,7 @@ fn parse_bolt12_invoice(
 fn parse_bolt12_invoice_request(
     _input: &str,
     _source: &PaymentRequestSource,
-) -> Option<Bolt12InvoiceRequest> {
+) -> Option<Bolt12InvoiceRequestDetails> {
     // TODO: Implement parsing of Bolt12 invoice requests
     None
 }
@@ -690,9 +692,7 @@ pub fn parse_json<T>(json: &str) -> Result<T, ServiceConnectivityError>
 where
     for<'a> T: serde::de::Deserialize<'a>,
 {
-    serde_json::from_str::<T>(json).map_err(|e| {
-        ServiceConnectivityError::new(ServiceConnectivityErrorKind::Json, e.to_string())
-    })
+    serde_json::from_str::<T>(json).map_err(|e| ServiceConnectivityError::Json(e.to_string()))
 }
 
 fn parse_lightning_payment_method(input: &str, source: &PaymentRequestSource) -> Option<InputType> {
@@ -720,7 +720,7 @@ fn parse_lightning_payment_method(input: &str, source: &PaymentRequestSource) ->
 fn parse_silent_payment_address(
     _input: &str,
     _source: &PaymentRequestSource,
-) -> Option<SilentPaymentAddress> {
+) -> Option<SilentPaymentAddressDetails> {
     // TODO: Support silent payment addresses
     None
 }
@@ -756,7 +756,7 @@ mod tests {
 
     use crate::input::error::Bip21Error;
     use crate::input::parser::InputParser;
-    use crate::input::{Bip21, Bip21Extra, BitcoinAddress, InputType, ParseError};
+    use crate::input::{Bip21Details, Bip21Extra, BitcoinAddressDetails, InputType, ParseError};
     use crate::test_utils::mock_dns_resolver::MockDnsResolver;
     use crate::test_utils::mock_rest_client::{MockResponse, MockRestClient};
 
@@ -1103,8 +1103,8 @@ mod tests {
         println!("Debug - valid bip21 address result for '{bip21_addr}': {result:?}");
         assert!(matches!(
             result,
-            Ok(InputType::Bip21(Bip21 { amount_sat: _, asset_id: _, uri: _, extras: _, label: _, message: _, payment_methods }))
-            if payment_methods.len() == 1 && matches!(&payment_methods[0], InputType::BitcoinAddress(BitcoinAddress { address, network: _, source: _ }) if address == addr)
+            Ok(InputType::Bip21(Bip21Details { amount_sat: _, asset_id: _, uri: _, extras: _, label: _, message: _, payment_methods }))
+            if payment_methods.len() == 1 && matches!(&payment_methods[0], InputType::BitcoinAddress(BitcoinAddressDetails { address, network: _, source: _ }) if address == addr)
         ));
 
         // Address with amount
@@ -1113,10 +1113,10 @@ mod tests {
         println!("Debug - bip21 with amount result for '{bip21_addr_amount}': {result:?}");
         assert!(matches!(
             result,
-            Ok(InputType::Bip21(Bip21 { amount_sat, asset_id: _, uri: _, extras: _, label: _, message: _, payment_methods }))
+            Ok(InputType::Bip21(Bip21Details { amount_sat, asset_id: _, uri: _, extras: _, label: _, message: _, payment_methods }))
             if payment_methods.len() == 1
                 && amount_sat == Some(2000)
-                && matches!(&payment_methods[0], InputType::BitcoinAddress(BitcoinAddress { address, network: _, source: _ }) if address == addr)
+                && matches!(&payment_methods[0], InputType::BitcoinAddress(BitcoinAddressDetails { address, network: _, source: _ }) if address == addr)
         ));
 
         // Address with amount and label
@@ -1128,11 +1128,11 @@ mod tests {
         );
         assert!(matches!(
             result,
-            Ok(InputType::Bip21(Bip21 { amount_sat, asset_id: _, uri: _, extras: _, label, message: _, payment_methods }))
+            Ok(InputType::Bip21(Bip21Details { amount_sat, asset_id: _, uri: _, extras: _, label, message: _, payment_methods }))
             if payment_methods.len() == 1
                 && amount_sat == Some(2000)
                 && label.as_deref() == Some(lbl)
-                && matches!(&payment_methods[0], InputType::BitcoinAddress(BitcoinAddress { address, network: _, source: _ }) if address == addr)
+                && matches!(&payment_methods[0], InputType::BitcoinAddress(BitcoinAddressDetails { address, network: _, source: _ }) if address == addr)
         ));
 
         // Address with amount, label and message
@@ -1145,12 +1145,12 @@ mod tests {
         );
         assert!(matches!(
             result,
-            Ok(InputType::Bip21(Bip21 { amount_sat, asset_id: _, uri: _, extras: _, label, message, payment_methods }))
+            Ok(InputType::Bip21(Bip21Details { amount_sat, asset_id: _, uri: _, extras: _, label, message, payment_methods }))
             if payment_methods.len() == 1
                 && amount_sat == Some(2000)
                 && label.as_deref() == Some(lbl)
                 && message.as_deref() == Some(msg)
-                && matches!(&payment_methods[0], InputType::BitcoinAddress(BitcoinAddress { address, network: _, source: _ }) if address == addr)
+                && matches!(&payment_methods[0], InputType::BitcoinAddress(BitcoinAddressDetails { address, network: _, source: _ }) if address == addr)
         ));
     }
 
@@ -1169,10 +1169,10 @@ mod tests {
 
             assert!(matches!(
                 result,
-                Ok(InputType::Bip21(Bip21 { amount_sat, asset_id: _, uri: _, extras: _, label: _, message: _, payment_methods }))
+                Ok(InputType::Bip21(Bip21Details { amount_sat, asset_id: _, uri: _, extras: _, label: _, message: _, payment_methods }))
                 if payment_methods.len() == 1
                     && amount_sat == Some(amt)
-                    && matches!(&payment_methods[0], InputType::BitcoinAddress(BitcoinAddress { address, network: _, source: _ }) if address == addr)
+                    && matches!(&payment_methods[0], InputType::BitcoinAddress(BitcoinAddressDetails { address, network: _, source: _ }) if address == addr)
             ));
         }
     }

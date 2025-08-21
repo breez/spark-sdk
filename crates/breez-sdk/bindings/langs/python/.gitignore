@@ -1,0 +1,5 @@
+src/breez_sdk_spark/*
+!src/breez_sdk_spark/__init__.py
+*.egg-info
+build
+dist

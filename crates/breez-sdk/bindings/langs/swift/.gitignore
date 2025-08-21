@@ -1,0 +1,9 @@
+.swiftpm/
+.build/
+.index-build/
+*.xcodeproj
+*.podspec
+Sources/BreezSdkSpark/breez_sdk_*.swift
+**/breez_sdk_*FFI.h
+**/breez_sdk_*FFI
+**/breez_sdk_*FFI.modulemap

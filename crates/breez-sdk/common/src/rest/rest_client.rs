@@ -1,4 +1,4 @@
-use crate::error::{ServiceConnectivityError, ServiceConnectivityErrorKind};
+use crate::error::ServiceConnectivityError;
 use maybe_sync::{MaybeSend, MaybeSync};
 use reqwest::Client;
 use std::{collections::HashMap, time::Duration};
@@ -6,6 +6,13 @@ use tracing::{debug, error, trace};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RestResponse {
+    pub status: u16,
+    pub body: String,
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
 pub trait RestClient: MaybeSend + MaybeSync {
     /// Makes a GET request and logs on DEBUG.
@@ -14,9 +21,9 @@ pub trait RestClient: MaybeSend + MaybeSync {
     /// - `headers`: optional headers that will be set on the request
     async fn get(
         &self,
-        url: &str,
+        url: String,
         headers: Option<HashMap<String, String>>,
-    ) -> Result<(String, u16), ServiceConnectivityError>;
+    ) -> Result<RestResponse, ServiceConnectivityError>;
 
     /// Makes a POST request, and logs on DEBUG.
     /// ### Arguments
@@ -25,10 +32,10 @@ pub trait RestClient: MaybeSend + MaybeSync {
     /// - `body`: the optional POST body
     async fn post(
         &self,
-        url: &str,
+        url: String,
         headers: Option<HashMap<String, String>>,
         body: Option<String>,
-    ) -> Result<(String, u16), ServiceConnectivityError>;
+    ) -> Result<RestResponse, ServiceConnectivityError>;
 }
 
 pub struct ReqwestRestClient {
@@ -47,9 +54,9 @@ impl ReqwestRestClient {
 impl RestClient for ReqwestRestClient {
     async fn get(
         &self,
-        url: &str,
+        url: String,
         headers: Option<HashMap<String, String>>,
-    ) -> Result<(String, u16), ServiceConnectivityError> {
+    ) -> Result<RestResponse, ServiceConnectivityError> {
         debug!("Making GET request to: {url}");
         let mut req = self.client.get(url).timeout(REQUEST_TIMEOUT);
         if let Some(headers) = headers {
@@ -59,19 +66,19 @@ impl RestClient for ReqwestRestClient {
         }
         let response = req.send().await?;
         let status = response.status().into();
-        let raw_body = response.text().await?;
+        let body = response.text().await?;
         debug!("Received response, status: {status}");
-        trace!("raw response body: {raw_body}");
+        trace!("raw response body: {body}");
 
-        Ok((raw_body, status))
+        Ok(RestResponse { body, status })
     }
 
     async fn post(
         &self,
-        url: &str,
+        url: String,
         headers: Option<HashMap<String, String>>,
         body: Option<String>,
-    ) -> Result<(String, u16), ServiceConnectivityError> {
+    ) -> Result<RestResponse, ServiceConnectivityError> {
         debug!("Making POST request to: {url}");
         let mut req = self.client.post(url).timeout(REQUEST_TIMEOUT);
         if let Some(headers) = headers {
@@ -84,11 +91,14 @@ impl RestClient for ReqwestRestClient {
         }
         let response = req.send().await?;
         let status = response.status();
-        let raw_body = response.text().await?;
+        let body = response.text().await?;
         debug!("Received response, status: {status}");
-        trace!("raw response body: {raw_body}");
+        trace!("raw response body: {body}");
 
-        Ok((raw_body, status.into()))
+        Ok(RestResponse {
+            body,
+            status: status.into(),
+        })
     }
 }
 
@@ -96,9 +106,7 @@ pub fn parse_json<T>(json: &str) -> Result<T, ServiceConnectivityError>
 where
     for<'a> T: serde::de::Deserialize<'a>,
 {
-    serde_json::from_str::<T>(json).map_err(|e| {
-        ServiceConnectivityError::new(ServiceConnectivityErrorKind::Json, e.to_string())
-    })
+    serde_json::from_str::<T>(json).map_err(|e| ServiceConnectivityError::Json(e.to_string()))
 }
 
 #[allow(dead_code)]
@@ -106,17 +114,14 @@ pub async fn get_and_check_success<C: RestClient + ?Sized>(
     rest_client: &C,
     url: &str,
     headers: Option<HashMap<String, String>>,
-) -> Result<(String, u16), ServiceConnectivityError> {
-    let (raw_body, status) = rest_client.get(url, headers).await?;
+) -> Result<RestResponse, ServiceConnectivityError> {
+    let RestResponse { body, status } = rest_client.get(url.to_string(), headers).await?;
     #[allow(clippy::manual_range_contains)]
     if status < 200 || status >= 300 {
         let err = format!("GET request {url} failed with status: {status}");
         error!("{err}");
-        return Err(ServiceConnectivityError::new(
-            ServiceConnectivityErrorKind::Status,
-            err,
-        ));
+        return Err(ServiceConnectivityError::Status { status, body });
     }
 
-    Ok((raw_body, status))
+    Ok(RestResponse { status, body })
 }

@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 breez-sdk-common.workspace = true
-breez-sdk-core.workspace = true
+breez-sdk-spark.workspace = true
 macros.workspace = true
 serde.workspace = true
 tracing.workspace = true

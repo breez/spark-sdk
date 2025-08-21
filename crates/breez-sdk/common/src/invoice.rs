@@ -1,4 +1,4 @@
-use crate::{input::DetailedBolt11Invoice, network::BitcoinNetwork};
+use crate::{input::Bolt11InvoiceDetails, network::BitcoinNetwork};
 
 pub type InvoiceResult<T, E = InvoiceError> = Result<T, E>;
 
@@ -30,7 +30,7 @@ impl InvoiceError {
 
 // Validate that the LNInvoice network matches the provided network
 pub fn validate_network(
-    invoice: &DetailedBolt11Invoice,
+    invoice: &Bolt11InvoiceDetails,
     network: BitcoinNetwork,
 ) -> InvoiceResult<()> {
     if invoice.network != network {

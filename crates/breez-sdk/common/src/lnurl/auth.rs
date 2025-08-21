@@ -5,7 +5,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tracing::{error, warn};
 
-use crate::rest::{RestClient, parse_json};
+use crate::rest::{RestClient, RestResponse, parse_json};
 
 use super::{
     LnurlCallbackStatus,
@@ -89,8 +89,8 @@ pub async fn perform_lnurl_auth<C: RestClient + ?Sized, S: LnurlAuthSigner>(
     callback_url
         .query_pairs_mut()
         .append_pair("key", &xpub.public_key.to_string());
-    let (response, _) = rest_client.get(callback_url.as_ref(), None).await?;
-    Ok(parse_json(&response)?)
+    let RestResponse { body, .. } = rest_client.get(callback_url.to_string(), None).await?;
+    Ok(parse_json(&body)?)
 }
 
 pub fn validate_request(url: &reqwest::Url) -> Result<LnurlAuthRequestData, LnurlError> {

@@ -13,7 +13,7 @@ use crate::{
         error::{LnurlError, LnurlResult},
     },
     network::BitcoinNetwork,
-    rest::RestClient,
+    rest::{RestClient, RestResponse},
     utils::default_true,
 };
 
@@ -41,13 +41,13 @@ pub async fn validate_lnurl_pay<C: RestClient + ?Sized>(
     )?;
 
     let callback_url = build_pay_callback_url(user_amount_msat, comment, req_data)?;
-    let (response, _) = rest_client.get(&callback_url, None).await?;
-    if let Ok(err) = serde_json::from_str::<LnurlErrorData>(&response) {
+    let RestResponse { body, .. } = rest_client.get(callback_url, None).await?;
+    if let Ok(err) = serde_json::from_str::<LnurlErrorData>(&body) {
         return Ok(ValidatedCallbackResponse::EndpointError { data: err });
     }
 
     let mut callback_resp: CallbackResponse =
-        serde_json::from_str(&response).map_err(|e| LnurlError::InvalidResponse(e.to_string()))?;
+        serde_json::from_str(&body).map_err(|e| LnurlError::InvalidResponse(e.to_string()))?;
     if let Some(ref sa) = callback_resp.success_action {
         match sa {
             SuccessAction::Aes { data } => data.validate()?,
@@ -203,6 +203,7 @@ pub struct CallbackResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(tag = "tag")]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SuccessAction {
     /// AES type, described in LUD-10
     Aes {
@@ -245,6 +246,7 @@ pub enum SuccessActionProcessed {
 ///
 /// See [`AesSuccessActionDataDecrypted`] for a similar wrapper containing the decrypted payload
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct AesSuccessActionData {
     /// Contents description, up to 144 characters
     pub description: String,
@@ -335,6 +337,7 @@ impl TryFrom<(&AesSuccessActionData, &[u8; 32])> for AesSuccessActionDataDecrypt
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct MessageSuccessActionData {
     pub message: String,
 }
@@ -351,6 +354,7 @@ impl MessageSuccessActionData {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct UrlSuccessActionData {
     /// Contents description, up to 144 characters
     pub description: String,

@@ -1,4 +1,4 @@
-use breez_sdk_core::{
+use breez_sdk_spark::{
     BreezSdk, ClaimDepositRequest, Fee, GetInfoRequest, GetPaymentRequest, InputType,
     ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, PrepareLnurlPayRequest,
     PrepareReceivePaymentRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
