@@ -14,6 +14,7 @@ use crate::ssp::{
     ServiceProvider,
 };
 use crate::utils::refund::SignedRefundTransactions;
+use crate::utils::time::web_time_to_prost_timestamp;
 use crate::utils::{leaf_key_tweak::prepare_leaf_key_tweaks_to_send, refund::sign_refunds};
 use crate::{signer::Signer, tree::TreeNode};
 use bitcoin::hashes::{Hash, sha256};
@@ -24,6 +25,8 @@ use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
+use web_time::SystemTime;
 
 use super::LeafKeyTweak;
 use super::models::{LightningSendRequestStatus, map_signing_nonce_commitments};
@@ -398,7 +401,10 @@ impl<S: Signer> LightningService<S> {
         Ok((fee_sat + to_pay_sat, None))
     }
 
-    pub fn extract_spark_address_from_invoice(&self, invoice: &str) -> Result<Option<SparkAddress>, ServiceError> {
+    pub fn extract_spark_address_from_invoice(
+        &self,
+        invoice: &str,
+    ) -> Result<Option<SparkAddress>, ServiceError> {
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
         Ok(self.extract_spark_address(&decoded_invoice))
@@ -533,7 +539,10 @@ impl<S: Signer> LightningService<S> {
                     .serialize()
                     .to_vec(),
                 receiver_identity_public_key: req.receiver_pubkey.serialize().to_vec(),
-                expiry_time: Default::default(),
+                expiry_time: Some(
+                    web_time_to_prost_timestamp(SystemTime::now() + Duration::from_secs(2 * 60))
+                        .map_err(|_| ServiceError::Generic("Invalid expiry time".to_string()))?,
+                ),
                 leaves_to_send: cpfp_signed_tx
                     .into_iter()
                     .map(|l| l.try_into())

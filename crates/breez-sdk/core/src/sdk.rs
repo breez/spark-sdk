@@ -21,7 +21,7 @@ use spark_wallet::{
     WalletEvent, WalletTransfer,
 };
 use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
-use tracing::{error, info, trace};
+use tracing::{error, info};
 
 use tokio::sync::watch;
 use tokio_with_wasm::alias as tokio;
@@ -242,10 +242,6 @@ impl BreezSdk {
             }
             WalletEvent::Synced => {
                 info!("Synced");
-                if let Err(e) = self.sync_payments_to_storage().await {
-                    error!("Failed to sync payments to storage: {e:?}");
-                }
-                self.event_emitter.emit(&SdkEvent::Synced);
             }
             WalletEvent::TransferClaimed(transfer) => {
                 info!("Transfer claimed");
@@ -567,7 +563,7 @@ impl BreezSdk {
         self.spark_wallet.sync().await?;
         self.sync_payments_to_storage().await?;
         let elapsed = start_time.elapsed();
-        trace!("Wallet sync completed in {elapsed:?}");
+        info!("Wallet sync completed in {elapsed:?}");
         self.event_emitter.emit(&SdkEvent::Synced {});
         Ok(())
     }
