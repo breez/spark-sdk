@@ -101,7 +101,7 @@ impl BreezSdk {
     /// # Returns
     ///
     /// Result containing either the initialized `BreezSdk` or an `SdkError`
-    pub async fn new(
+    pub(crate) async fn new(
         config: Config,
         signer: DefaultSigner,
         storage: Arc<dyn Storage + Send + Sync>,
@@ -158,7 +158,7 @@ impl BreezSdk {
     /// This method initiates the following backround tasks:
     /// 1. `periodic_sync`: the wallet with the Spark network    
     ///
-    pub fn start(&self) -> Result<(), SdkError> {
+    pub(crate) fn start(&self) -> Result<(), SdkError> {
         self.periodic_sync();
         self.monitor_deposits();
         Ok(())
@@ -170,7 +170,7 @@ impl BreezSdk {
 
         info!("Monitoring deposits started");
         // First interval is immediate, after first iteration we change it according to the configuration
-        let mut deposits_monitoring_interval = 1;
+        let mut deposits_monitoring_interval = 10;
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -233,6 +233,9 @@ impl BreezSdk {
             }
             WalletEvent::StreamConnected => {
                 info!("Stream connected");
+                if let Err(e) = self.sync_wallet_internal().await {
+                    error!("Failed to sync wallet: {e:?}");
+                }
             }
             WalletEvent::StreamDisconnected => {
                 info!("Stream disconnected");
@@ -242,9 +245,14 @@ impl BreezSdk {
                 if let Err(e) = self.sync_payments_to_storage().await {
                     error!("Failed to sync payments to storage: {e:?}");
                 }
+                self.event_emitter.emit(&SdkEvent::Synced);
             }
-            WalletEvent::TransferClaimed(_) => {
+            WalletEvent::TransferClaimed(transfer) => {
                 info!("Transfer claimed");
+                if let Ok(payment) = transfer.try_into() {
+                    self.event_emitter
+                        .emit(&SdkEvent::PaymentSucceeded { payment });
+                }
                 if let Err(e) = self.sync_payments_to_storage().await {
                     error!("Failed to sync payments to storage: {e:?}");
                 }
@@ -377,16 +385,19 @@ impl BreezSdk {
 
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
         let mut payment = self
-            .send_payment(SendPaymentRequest {
-                prepare_response: PrepareSendPaymentResponse {
-                    payment_method: SendPaymentMethod::Bolt11Invoice {
-                        detailed_invoice: request.prepare_response.detailed_invoice,
+            .send_payment_internal(
+                SendPaymentRequest {
+                    prepare_response: PrepareSendPaymentResponse {
+                        payment_method: SendPaymentMethod::Bolt11Invoice {
+                            detailed_invoice: request.prepare_response.detailed_invoice,
+                        },
+                        amount_sats: request.prepare_response.amount_sats,
+                        fee_sats: request.prepare_response.fee_sats,
+                        prefer_spark: false,
                     },
-                    amount_sats: request.prepare_response.amount_sats,
-                    fee_sats: request.prepare_response.fee_sats,
-                    prefer_spark: false,
                 },
-            })
+                true,
+            )
             .await?
             .payment;
 
@@ -415,7 +426,9 @@ impl BreezSdk {
                 lnurl_pay_info: Some(lnurl_info),
             },
         )?;
-
+        self.event_emitter.emit(&SdkEvent::PaymentSucceeded {
+            payment: payment.clone(),
+        });
         Ok(LnurlPayResponse {
             payment,
             success_action,
@@ -443,18 +456,25 @@ impl BreezSdk {
         let parsed_input = parse(&request.payment_request).await?;
         match &parsed_input {
             InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
-                let fee_estimation = self
-                    .spark_wallet
-                    .fetch_lightning_send_fee_estimate(
-                        &request.payment_request,
-                        request.amount_sats,
-                    )
-                    .await?;
+                let fee_sats = match request.prefer_spark {
+                    Some(false) => {
+                        let fee_estimation = self
+                            .spark_wallet
+                            .fetch_lightning_send_fee_estimate(
+                                &request.payment_request,
+                                request.amount_sats,
+                            )
+                            .await?;
+                        fee_estimation
+                    }
+                    _ => 0,
+                };
+
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::Bolt11Invoice {
                         detailed_invoice: detailed_bolt11_invoice.clone(),
                     },
-                    fee_sats: fee_estimation,
+                    fee_sats,
                     amount_sats: request
                         .amount_sats
                         .or(detailed_bolt11_invoice.amount_msat.map(|msat| msat / 1000))
@@ -470,7 +490,15 @@ impl BreezSdk {
         &self,
         request: SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
-        match request.prepare_response.payment_method {
+        self.send_payment_internal(request, false).await
+    }
+
+    async fn send_payment_internal(
+        &self,
+        request: SendPaymentRequest,
+        suppress_payment_event: bool,
+    ) -> Result<SendPaymentResponse, SdkError> {
+        let res = match request.prepare_response.payment_method {
             SendPaymentMethod::SparkAddress { address } => {
                 let spark_address = address
                     .parse::<SparkAddress>()
@@ -508,7 +536,16 @@ impl BreezSdk {
                 Ok(SendPaymentResponse { payment })
             }
             SendPaymentMethod::BitcoinAddress { address: _ } => todo!(),
+        };
+        if let Ok(response) = &res {
+            self.storage.insert_payment(&response.payment)?;
+            if !suppress_payment_event {
+                self.event_emitter.emit(&SdkEvent::PaymentSucceeded {
+                    payment: response.payment.clone(),
+                });
+            }
         }
+        res
     }
 
     /// Synchronizes the wallet with the Spark network

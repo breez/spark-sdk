@@ -158,7 +158,7 @@ pub struct TreeNodeTransactionSequence {
     pub needs_refresh: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SigningKeyshare {
     /// The identifiers of the owners of the keyshare.
     pub owner_identifiers: Vec<Identifier>,

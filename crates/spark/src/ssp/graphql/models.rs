@@ -99,7 +99,7 @@ pub(crate) struct GraphQLClientConfig {
 }
 
 /// Bitcoin network enum
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum BitcoinNetwork {
     Mainnet,
@@ -109,7 +109,7 @@ pub enum BitcoinNetwork {
 }
 
 /// Currency unit enum
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CurrencyUnit {
     Bitcoin,
@@ -227,7 +227,7 @@ pub struct VerifyChallengeOutput {
 }
 
 /// Lightning invoice structure
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(RequestLightningReceiveInvoiceFragment)]
 #[macros::derive_from(UserRequestInvoiceFragment)]
 #[macros::derive_from(TransfersInvoiceFragment)]
@@ -242,7 +242,7 @@ pub struct LightningInvoice {
 }
 
 /// Currency amount structure
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(CompleteCoopExitCurrencyAmountFragment)]
 #[macros::derive_from(CompleteLeavesSwapCurrencyAmountFragment)]
 #[macros::derive_from(CoopExitFeeQuoteCurrencyAmountFragment)]
@@ -275,7 +275,7 @@ impl Default for CurrencyAmount {
 }
 
 /// Transfer structure
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(CompleteCoopExitTransferFragment)]
 #[macros::derive_from(CompleteLeavesSwapTransferFragment)]
 #[macros::derive_from(RequestCoopExitTransferFragment)]
@@ -291,7 +291,7 @@ pub struct Transfer {
 }
 
 /// UserRequest structure
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(CompleteCoopExitUserRequestFragment)]
 #[macros::derive_from(CompleteLeavesSwapUserRequestFragment)]
 #[macros::derive_from(RequestCoopExitUserRequestFragment)]
@@ -305,7 +305,7 @@ pub struct UserRequest {
     pub on: TransferFragmentUserRequestOn,
 }
 
-#[derive(FromEnum, Debug, Clone, Deserialize, Serialize)]
+#[derive(FromEnum, Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[from_enum(CompleteLeavesSwapUserRequestFragmentOn)]
 #[from_enum(RequestCoopExitUserRequestFragmentOn)]
 #[from_enum(RequestLeavesSwapUserRequestFragmentOn)]
@@ -331,7 +331,7 @@ pub struct SspTransfer {
     pub user_request: Option<SspUserRequest>,
 }
 
-#[derive(FromEnum, Debug, Clone, Deserialize, Serialize)]
+#[derive(FromEnum, Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[from_enum(TransferUserRequestFragment)]
 pub enum SspUserRequest {
     ClaimStaticDeposit(ClaimStaticDepositInfo),
@@ -342,7 +342,7 @@ pub enum SspUserRequest {
 }
 
 #[macros::derive_from(TransfersClaimStaticDepositFragment)]
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ClaimStaticDepositInfo {
     pub id: String,
     pub created_at: DateTime<Utc>,
@@ -357,7 +357,7 @@ pub struct ClaimStaticDepositInfo {
     pub transfer_spark_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClaimStaticDepositStatus {
     Created,
@@ -399,7 +399,7 @@ impl From<TransfersClaimStaticDepositStatus> for ClaimStaticDepositStatus {
 }
 
 /// LightningReceiveRequest structure
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(RequestLightningReceiveLightningReceiveRequestFragment)]
 #[macros::derive_from(UserRequestLightningReceiveRequestFragment)]
 #[macros::derive_from(TransfersLightningReceiveRequestFragment)]
@@ -415,7 +415,7 @@ pub struct LightningReceiveRequest {
 }
 
 /// LightningSendRequest structure
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(RequestLightningSendLightningSendRequestFragment)]
 #[macros::derive_from(UserRequestLightningSendRequestFragment)]
 #[macros::derive_from(TransfersLightningSendRequestFragment)]
@@ -433,7 +433,7 @@ pub struct LightningSendRequest {
 }
 
 /// SwapLeaf structure
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(CompleteLeavesSwapSwapLeafFragment)]
 #[macros::derive_from(RequestLeavesSwapSwapLeafFragment)]
 #[macros::derive_from(UserRequestSwapLeafFragment)]
@@ -445,7 +445,7 @@ pub struct SwapLeaf {
 }
 
 /// LeavesSwapRequest structure
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(CompleteLeavesSwapLeavesSwapRequestFragment)]
 #[macros::derive_from(RequestLeavesSwapLeavesSwapRequestFragment)]
 #[macros::derive_from(UserRequestLeavesSwapRequestFragment)]
@@ -466,7 +466,7 @@ pub struct LeavesSwapRequest {
 }
 
 /// CoopExitRequest structure
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(CompleteCoopExitCoopExitRequestFragment)]
 #[macros::derive_from(RequestCoopExitCoopExitRequestFragment)]
 #[macros::derive_from(UserRequestCoopExitRequestFragment)]

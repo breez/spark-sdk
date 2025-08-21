@@ -13,13 +13,13 @@ use spark::{
     utils::paging::PagingFilter,
 };
 
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub enum WalletEvent {
     DepositConfirmed(TreeNodeId),
     StreamConnected,
     StreamDisconnected,
     Synced,
-    TransferClaimed(TransferId),
+    TransferClaimed(WalletTransfer),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -28,7 +28,7 @@ pub struct WalletInfo {
     pub network: Network,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct WalletTransfer {
     pub id: TransferId,
     pub sender_id: PublicKey,
@@ -85,7 +85,7 @@ pub enum PayLightningInvoiceResult {
     Transfer(WalletTransfer),
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct WalletTransferLeaf {
     pub leaf: WalletLeaf,
     pub secret_cipher: String,
@@ -109,7 +109,7 @@ impl From<TransferLeaf> for WalletTransferLeaf {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct WalletLeaf {
     pub id: TreeNodeId,
     pub tree_id: String,
@@ -148,7 +148,7 @@ impl From<TreeNode> for WalletLeaf {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub enum TransferDirection {
     Incoming,
     Outgoing,

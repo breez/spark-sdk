@@ -25,7 +25,7 @@ class WebEventListener {
       console.log('Wallet synced - updating UI...')
       updateWalletInfo()
       loadPayments()
-      
+
       // Show a brief notification to user
       showSyncNotification()
     }
@@ -49,16 +49,16 @@ const elements = {
   syncBtn: document.getElementById('sync-btn'),
   receiveBtn: document.getElementById('receive-btn'),
   sendBtn: document.getElementById('send-btn'),
-  
+
   // Modals
   receiveModal: document.getElementById('receive-modal'),
   sendModal: document.getElementById('send-modal'),
   loadingOverlay: document.getElementById('loading-overlay'),
-  
+
   // Wallet info
   balance: document.getElementById('balance'),
   paymentsList: document.getElementById('payments-list'),
-  
+
   // Receive modal
   paymentMethod: document.getElementById('payment-method'),
   description: document.getElementById('description'),
@@ -70,7 +70,7 @@ const elements = {
   qrCode: document.getElementById('qr-code'),
   paymentRequest: document.getElementById('payment-request'),
   copyPaymentRequest: document.getElementById('copy-payment-request'),
-  
+
   // Send modal
   paymentRequestInput: document.getElementById('payment-request-input'),
   sendAmount: document.getElementById('send-amount'),
@@ -81,7 +81,7 @@ const elements = {
   confirmFee: document.getElementById('confirm-fee'),
   confirmSendBtn: document.getElementById('confirm-send-btn'),
   cancelConfirmBtn: document.getElementById('cancel-confirm-btn'),
-  
+
   loadingText: document.getElementById('loading-text'),
 }
 
@@ -142,7 +142,7 @@ function showNotification(message, backgroundColor = '#646cff') {
   `
   notification.textContent = message
   document.body.appendChild(notification)
-  
+
   // Remove after 4 seconds
   setTimeout(() => {
     notification.style.opacity = '0'
@@ -157,27 +157,27 @@ function showNotification(message, backgroundColor = '#646cff') {
 async function initializeSdk() {
   try {
     showLoading('Initializing WASM...')
-    
+
     // Initialize WASM
     await init()
-    
+
     showLoading('Setting up SDK...')
-    
+
     // Initialize logging
     const logger = new WebLogger()
     await initLogging(logger)
-    
+
     // Check if we have required configuration
     if (!CONFIG.mnemonic) {
       throw new Error('Mnemonic is required')
     }
-    
+
     // Get default config
     const config = defaultConfig(CONFIG.network)
-    
+
     // Create SDK builder
     let sdkBuilder = SdkBuilder.new(config, CONFIG.mnemonic, './.data')
-    
+
     // Add chain service if configured
     if (CONFIG.chainServiceUrl && CONFIG.chainServiceUsername && CONFIG.chainServicePassword) {
       sdkBuilder = sdkBuilder.withRestChainService(CONFIG.chainServiceUrl, {
@@ -185,25 +185,22 @@ async function initializeSdk() {
         password: CONFIG.chainServicePassword
       })
     }
-    
+
     showLoading('Building SDK...')
-    
+
     // Build the SDK
     sdk = await sdkBuilder.build()
-    
+
     // Add event listener
     const eventListener = new WebEventListener()
     await sdk.addEventListener(eventListener)
-    
+
     showLoading('Starting SDK...')
-    
-    // Start the SDK
-    sdk.start()
-    
+
     updateConnectionStatus(true)
     await updateWalletInfo()
     await loadPayments()
-    
+
     hideLoading()
   } catch (error) {
     hideLoading()
@@ -214,7 +211,7 @@ async function initializeSdk() {
 
 async function updateWalletInfo() {
   if (!sdk) return
-  
+
   try {
     const info = await sdk.getInfo({})
     elements.balance.textContent = `${info.balanceSats.toLocaleString()} sats`
@@ -225,7 +222,7 @@ async function updateWalletInfo() {
 
 async function loadPayments() {
   if (!sdk) return
-  
+
   try {
     const response = await sdk.listPayments({ limit: 10 })
     displayPayments(response.payments)
@@ -236,25 +233,25 @@ async function loadPayments() {
 
 function displayPayments(payments) {
   elements.paymentsList.innerHTML = ''
-  
+
   if (payments.length === 0) {
     elements.paymentsList.innerHTML = '<div style="padding: 1rem; text-align: center; color: #888;">No payments found</div>'
     return
   }
-  
+
   payments.forEach(payment => {
     const paymentDiv = document.createElement('div')
     paymentDiv.className = 'payment-item'
-    
+
     const direction = payment.paymentType === 'receive' ? 'Received' : 'Sent'
     const amount = payment.amount || 0
-    
+
     // Extract description from payment details
     let description = 'No description'
     if (payment.details && payment.details.type === 'lightning' && payment.details.description) {
       description = payment.details.description
     }
-    
+
     paymentDiv.innerHTML = `
       <div class="payment-info">
         <div><strong>${direction}: ${amount.toLocaleString()} sats</strong></div>
@@ -263,14 +260,14 @@ function displayPayments(payments) {
     </div>
       <div class="payment-status ${payment.status.toLowerCase()}">${payment.status}</div>
     `
-    
+
     elements.paymentsList.appendChild(paymentDiv)
   })
 }
 
 async function syncWallet() {
   if (!sdk) return
-  
+
   try {
     showLoading('Syncing wallet...')
     await sdk.syncWallet({})
@@ -291,7 +288,7 @@ async function prepareReceive() {
     const description = elements.description.value
     const amountStr = elements.amount.value
     const amountSats = amountStr ? parseInt(amountStr) : undefined
-    
+
     let paymentMethod
     if (paymentMethodType === 'bolt11Invoice') {
       if (!description) {
@@ -307,39 +304,39 @@ async function prepareReceive() {
       // For sparkAddress and bitcoinAddress, just pass the type
       paymentMethod = { type: paymentMethodType }
     }
-    
+
     showLoading('Preparing receive payment...')
-    
+
     prepareReceiveResponse = await sdk.prepareReceivePayment({ paymentMethod })
-    
+
     const fees = prepareReceiveResponse.feeSats
-    
+
     if (!confirm(`Fees: ${fees} sat. Are the fees acceptable?`)) {
       hideLoading()
       return
     }
-    
+
     showLoading('Generating payment request...')
-    
+
     const result = await sdk.receivePayment({ prepareResponse: prepareReceiveResponse })
-    
+
     elements.paymentRequest.value = result.paymentRequest
-    
+
     // Generate QR code
     elements.qrCode.innerHTML = ''
     const canvas = document.createElement('canvas')
     await QRCode.toCanvas(canvas, result.paymentRequest, { width: 256 })
     elements.qrCode.appendChild(canvas)
-    
+
     elements.receiveResult.style.display = 'block'
     hideLoading()
-    
+
     // Refresh wallet data after creating payment request
     setTimeout(async () => {
       await updateWalletInfo()
       await loadPayments()
     }, 1000)
-    
+
   } catch (error) {
     hideLoading()
     console.error('Failed to prepare receive payment:', error)
@@ -352,25 +349,25 @@ async function prepareSend() {
     const paymentRequest = elements.paymentRequestInput.value.trim()
     const amountStr = elements.sendAmount.value
     const amountSats = amountStr ? parseInt(amountStr) : undefined
-    
+
     if (!paymentRequest) {
       alert('Payment request is required')
       return
     }
-    
+
     showLoading('Preparing send payment...')
-    
+
     prepareSendResponse = await sdk.prepareSendPayment({
       paymentRequest: paymentRequest,
       amountSats: amountSats
     })
-    
+
     elements.confirmAmount.textContent = `${prepareSendResponse.amountSats.toLocaleString()} sats`
     elements.confirmFee.textContent = `${prepareSendResponse.feeSats.toLocaleString()} sats`
-    
+
     elements.sendConfirmation.style.display = 'block'
     hideLoading()
-    
+
   } catch (error) {
     hideLoading()
     console.error('Failed to prepare send payment:', error)
@@ -381,25 +378,25 @@ async function prepareSend() {
 async function sendPayment() {
   try {
     showLoading('Sending payment...')
-    
+
     const result = await sdk.sendPayment({ prepareResponse: prepareSendResponse })
-    
+
     hideLoading()
     hideModal(elements.sendModal)
-    
+
     // Show success notification
     showPaymentNotification('Payment sent successfully!', 'success')
-    
+
     // Refresh wallet data immediately and then again after a delay
     await updateWalletInfo()
     await loadPayments()
-    
+
     // Refresh again after a few seconds to catch any delayed updates
     setTimeout(async () => {
       await updateWalletInfo()
       await loadPayments()
     }, 3000)
-    
+
   } catch (error) {
     hideLoading()
     console.error('Failed to send payment:', error)
@@ -445,7 +442,7 @@ elements.sendBtn.addEventListener('click', () => {
 })
 
 elements.paymentMethod.addEventListener('change', () => {
-  elements.bolt11Fields.style.display = 
+  elements.bolt11Fields.style.display =
     elements.paymentMethod.value === 'bolt11Invoice' ? 'block' : 'none'
 })
 
