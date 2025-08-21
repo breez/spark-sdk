@@ -13,6 +13,7 @@ use spark::{
     utils::paging::PagingFilter,
 };
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub enum WalletEvent {
     DepositConfirmed(TreeNodeId),

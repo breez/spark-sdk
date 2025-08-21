@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::{DepositInfo, Payment};
 
 /// Events emitted by the SDK
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize)]
 pub enum SdkEvent {
     /// Emitted when the wallet has been synchronized with the network

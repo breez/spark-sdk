@@ -1,3 +1,4 @@
+#[allow(clippy::large_enum_variant)]
 #[macros::extern_wasm_bindgen(breez_sdk_core::SdkEvent)]
 pub enum SdkEvent {
     Synced,

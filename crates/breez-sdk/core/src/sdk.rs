@@ -458,14 +458,12 @@ impl BreezSdk {
             InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
                 let fee_sats = match request.prefer_spark {
                     Some(false) => {
-                        let fee_estimation = self
-                            .spark_wallet
+                        self.spark_wallet
                             .fetch_lightning_send_fee_estimate(
                                 &request.payment_request,
                                 request.amount_sats,
                             )
-                            .await?;
-                        fee_estimation
+                            .await?
                     }
                     _ => 0,
                 };
