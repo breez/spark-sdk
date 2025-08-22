@@ -1,4 +1,4 @@
-const { initLogging, defaultConfig, SdkBuilder } = require('@breeztech/breez-sdk-spark/nodejs')
+const { initLogging, defaultConfig, SdkBuilder, parse } = require('@breeztech/breez-sdk-spark/nodejs')
 const fs = require('fs')
 const qrcode = require('qrcode')
 const { question, confirm } = require('./prompt.js')
@@ -131,6 +131,42 @@ const sendPayment = async (options) => {
     }
 }
 
+const lnurlPay = async (options) => {
+    const sdk = await initSdk()
+    const input = await parse(options.lnurl)
+    
+    if (input.type !== 'lnurlPay') {
+        throw new Error('Invalid input: expected LNURL pay request')
+    }
+    
+    const data = input
+    const minSendable = Math.ceil(data.minSendable / 1000)
+    const maxSendable = Math.floor(data.maxSendable / 1000)
+    
+    
+    const amountStr = await question(`Amount to pay (min ${minSendable} sat, max ${maxSendable} sat): `)
+    const amountSats = parseInt(amountStr)
+    if (isNaN(amountSats)) {
+        throw new Error('Invalid amount provided')
+    }
+    
+    
+    const prepareResponse = await sdk.prepareLnurlPay({
+        amountSats: amountSats,
+        comment: options.comment,
+        data: data,
+        validateSuccessActionUrl: options.validateSuccessUrl
+    })
+    
+    console.log(`Prepared payment: ${JSON.stringify(prepareResponse, null, 2)}`)
+    
+    const message = `Amount: ${prepareResponse.amountSats} sat. Fees: ${prepareResponse.feeSats} sat. Are the fees acceptable?`
+    if (await confirm(message)) {
+        const payRes = await sdk.lnurlPay({ prepareResponse })
+        console.log(JSON.stringify(payRes, null, 2))
+    }
+}
+
 const syncWallet = async () => {
     const sdk = await initSdk()
     const res = await sdk.syncWallet({})
@@ -157,6 +193,7 @@ module.exports = {
     getInfo,
     receivePayment,
     sendPayment,
+    lnurlPay,
     syncWallet,
     listPayments,
     getPayment

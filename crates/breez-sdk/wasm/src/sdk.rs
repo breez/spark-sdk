@@ -93,6 +93,19 @@ impl BreezSdk {
         Ok(self.sdk.prepare_send_payment(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "prepareLnurlPay")]
+    pub async fn prepare_lnurl_pay(
+        &self,
+        request: PrepareLnurlPayRequest,
+    ) -> WasmResult<PrepareLnurlPayResponse> {
+        Ok(self.sdk.prepare_lnurl_pay(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "lnurlPay")]
+    pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> WasmResult<LnurlPayResponse> {
+        Ok(self.sdk.lnurl_pay(request.into()).await?.into())
+    }
+
     #[wasm_bindgen(js_name = "sendPayment")]
     pub async fn send_payment(
         &self,

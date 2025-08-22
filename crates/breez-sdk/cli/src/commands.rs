@@ -1,8 +1,8 @@
 use breez_sdk_core::{
-    BreezSdk, ClaimDepositRequest, Fee, GetInfoRequest, GetPaymentRequest, ListPaymentsRequest,
-    ListUnclaimedDepositsRequest, PrepareReceivePaymentRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest, SendPaymentRequest,
-    SyncWalletRequest,
+    BreezSdk, ClaimDepositRequest, Fee, GetInfoRequest, GetPaymentRequest, InputType,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, PrepareLnurlPayRequest,
+    PrepareReceivePaymentRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
+    ReceivePaymentRequest, RefundDepositRequest, SendPaymentRequest, SyncWalletRequest, parse,
 };
 use clap::Parser;
 use rustyline::{
@@ -37,17 +37,6 @@ pub enum Command {
         offset: Option<u32>,
     },
 
-    /// Pay the given payment request
-    Pay {
-        /// The payment request to pay
-        #[arg(short = 'r', long)]
-        payment_request: String,
-
-        /// Optional amount to pay in satoshis
-        #[arg(short = 'a', long)]
-        amount: Option<u64>,
-    },
-
     /// Receive
     Receive {
         #[arg(short = 'm', long = "method")]
@@ -61,6 +50,32 @@ pub enum Command {
         #[arg(long)]
         amount_sat: Option<u64>,
     },
+
+    /// Pay the given payment request
+    Pay {
+        /// The payment request to pay
+        #[arg(short = 'r', long)]
+        payment_request: String,
+
+        /// Optional amount to pay in satoshis
+        #[arg(short = 'a', long)]
+        amount: Option<u64>,
+    },
+
+    /// Pay using LNURL
+    LnurlPay {
+        /// LN Address or LNURL-pay endpoint
+        lnurl: String,
+
+        /// Optional comment, which is to be included in the invoice request sent to the LNURL endpoint
+        #[clap(short, long)]
+        comment: Option<String>,
+
+        /// Validates the success action URL
+        #[clap(name = "validate_success_url", short = 'v', long = "validate")]
+        validate_success_url: Option<bool>,
+    },
+
     ClaimDeposit {
         /// The txid of the deposit
         txid: String,
@@ -204,37 +219,6 @@ pub(crate) async fn execute_command(
             print_value(&value)?;
             Ok(true)
         }
-        Command::Pay {
-            payment_request,
-            amount,
-        } => {
-            let prepared_payment = sdk
-                .prepare_send_payment(PrepareSendPaymentRequest {
-                    payment_request,
-                    amount_sats: amount,
-                    prefer_spark: None,
-                })
-                .await;
-
-            let Ok(prepare_response) = prepared_payment else {
-                return Err(anyhow::anyhow!(
-                    "Failed to prepare payment: {}",
-                    prepared_payment.err().unwrap()
-                ));
-            };
-            println!("Prepared payment: {prepare_response:#?}\n Do you want to continue? (y/n)");
-            let line = rl.readline_with_initial("", ("y", ""))?.to_lowercase();
-            if line != "y" {
-                return Ok(true);
-            }
-
-            let send_payment_response = sdk
-                .send_payment(SendPaymentRequest { prepare_response })
-                .await?;
-
-            print_value(&send_payment_response)?;
-            Ok(true)
-        }
         Command::Receive {
             payment_method,
             description,
@@ -270,6 +254,78 @@ pub(crate) async fn execute_command(
                 .await?;
 
             print_value(&receive_result)?;
+            Ok(true)
+        }
+        Command::Pay {
+            payment_request,
+            amount,
+        } => {
+            let prepared_payment = sdk
+                .prepare_send_payment(PrepareSendPaymentRequest {
+                    payment_request,
+                    amount_sats: amount,
+                    prefer_spark: None,
+                })
+                .await;
+
+            let Ok(prepare_response) = prepared_payment else {
+                return Err(anyhow::anyhow!(
+                    "Failed to prepare payment: {}",
+                    prepared_payment.err().unwrap()
+                ));
+            };
+            println!("Prepared payment: {prepare_response:#?}\n Do you want to continue? (y/n)");
+            let line = rl.readline_with_initial("", ("y", ""))?.to_lowercase();
+            if line != "y" {
+                return Ok(true);
+            }
+
+            let send_payment_response = sdk
+                .send_payment(SendPaymentRequest { prepare_response })
+                .await?;
+
+            print_value(&send_payment_response)?;
+            Ok(true)
+        }
+        Command::LnurlPay {
+            lnurl,
+            comment,
+            validate_success_url,
+        } => {
+            let input = parse(&lnurl).await?;
+            let res = match input {
+                InputType::LnurlPay(data) => {
+                    let min_sendable = data.min_sendable.div_ceil(1000);
+                    let max_sendable = data.max_sendable / 1000;
+                    let prompt =
+                        format!("Amount to pay (min {min_sendable} sat, max {max_sendable} sat): ");
+                    let amount_sats = rl.readline(&prompt)?.parse::<u64>()?;
+
+                    let prepare_response = sdk
+                        .prepare_lnurl_pay(PrepareLnurlPayRequest {
+                            amount_sats,
+                            comment,
+                            data,
+                            validate_success_action_url: validate_success_url,
+                        })
+                        .await?;
+
+                    println!(
+                        "Prepared payment: {prepare_response:#?}\n Do you want to continue? (y/n)"
+                    );
+                    let line = rl.readline_with_initial("", ("y", ""))?.to_lowercase();
+                    if line != "y" {
+                        return Ok(true);
+                    }
+
+                    let pay_res =
+                        Box::pin(sdk.lnurl_pay(LnurlPayRequest { prepare_response })).await?;
+                    Ok(pay_res)
+                }
+                _ => Err(anyhow::anyhow!("Invalid input")),
+            }?;
+
+            print_value(&res)?;
             Ok(true)
         }
     }

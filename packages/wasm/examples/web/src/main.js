@@ -1,6 +1,6 @@
 import './style.css'
 import QRCode from 'qrcode'
-import init, { initLogging, defaultConfig, SdkBuilder } from '@breeztech/breez-sdk-spark/web'
+import init, { initLogging, defaultConfig, SdkBuilder, parse } from '@breeztech/breez-sdk-spark/web'
 
 // Configuration loaded from environment variables
 const CONFIG = {
@@ -35,6 +35,7 @@ class WebEventListener {
 let sdk = null
 let prepareReceiveResponse = null
 let prepareSendResponse = null
+let prepareLnurlResponse = null
 let autoRefreshInterval = null
 
 // UI Elements
@@ -49,10 +50,12 @@ const elements = {
   syncBtn: document.getElementById('sync-btn'),
   receiveBtn: document.getElementById('receive-btn'),
   sendBtn: document.getElementById('send-btn'),
-
+  lnurlPayBtn: document.getElementById('lnurl-pay-btn'),
+  
   // Modals
   receiveModal: document.getElementById('receive-modal'),
   sendModal: document.getElementById('send-modal'),
+  lnurlPayModal: document.getElementById('lnurl-pay-modal'),
   loadingOverlay: document.getElementById('loading-overlay'),
 
   // Wallet info
@@ -81,7 +84,23 @@ const elements = {
   confirmFee: document.getElementById('confirm-fee'),
   confirmSendBtn: document.getElementById('confirm-send-btn'),
   cancelConfirmBtn: document.getElementById('cancel-confirm-btn'),
-
+  
+  // LNURL Pay modal
+  lnurlInput: document.getElementById('lnurl-input'),
+  lnurlComment: document.getElementById('lnurl-comment'),
+  lnurlAmountSection: document.getElementById('lnurl-amount-section'),
+  lnurlAmount: document.getElementById('lnurl-amount'),
+  lnurlAmountRange: document.getElementById('lnurl-amount-range'),
+  prepareLnurlBtn: document.getElementById('prepare-lnurl-btn'),
+  cancelLnurlBtn: document.getElementById('cancel-lnurl-btn'),
+  lnurlConfirmation: document.getElementById('lnurl-confirmation'),
+  lnurlConfirmAmount: document.getElementById('lnurl-confirm-amount'),
+  lnurlConfirmFee: document.getElementById('lnurl-confirm-fee'),
+  lnurlConfirmCommentSection: document.getElementById('lnurl-confirm-comment-section'),
+  lnurlConfirmComment: document.getElementById('lnurl-confirm-comment'),
+  confirmLnurlBtn: document.getElementById('confirm-lnurl-btn'),
+  cancelLnurlConfirmBtn: document.getElementById('cancel-lnurl-confirm-btn'),
+  
   loadingText: document.getElementById('loading-text'),
 }
 
@@ -404,6 +423,119 @@ async function sendPayment() {
   }
 }
 
+async function prepareLnurlPay() {
+  try {
+    const lnurlInput = elements.lnurlInput.value.trim()
+    
+    if (!lnurlInput) {
+      alert('LNURL or Lightning Address is required')
+      return
+    }
+    
+    showLoading('Parsing LNURL...')
+    
+    // Parse the LNURL
+    const input = await parse(lnurlInput)
+    
+    if (input.type !== 'lnurlPay') {
+      hideLoading()
+      alert('Invalid input: expected LNURL pay request or Lightning Address')
+      return
+    }
+    
+    // Show amount section with min/max range
+    const minSendable = Math.ceil(input.minSendable / 1000)
+    const maxSendable = Math.floor(input.maxSendable / 1000)
+    
+    elements.lnurlAmountRange.textContent = `Min: ${minSendable.toLocaleString()} sats, Max: ${maxSendable.toLocaleString()} sats`
+    elements.lnurlAmountSection.style.display = 'block'
+    elements.lnurlAmount.min = minSendable
+    elements.lnurlAmount.max = maxSendable
+    
+    hideLoading()
+    
+    // Focus on amount input
+    elements.lnurlAmount.focus()
+    
+    // Change the prepare button to continue with amount
+    elements.prepareLnurlBtn.textContent = 'Continue'
+    elements.prepareLnurlBtn.onclick = async () => {
+      const amountStr = elements.lnurlAmount.value
+      const amountSats = amountStr ? parseInt(amountStr) : undefined
+      
+      if (!amountSats || amountSats < minSendable || amountSats > maxSendable) {
+        alert(`Please enter a valid amount between ${minSendable} and ${maxSendable} satoshis`)
+        return
+      }
+      
+      showLoading('Preparing LNURL payment...')
+      
+      try {
+        const comment = elements.lnurlComment.value || null
+        
+        prepareLnurlResponse = await sdk.prepareLnurlPay({
+          amountSats: amountSats,
+          comment: comment,
+          data: input,
+          validateSuccessActionUrl: true
+        })
+        
+        elements.lnurlConfirmAmount.textContent = `${prepareLnurlResponse.amountSats.toLocaleString()} sats`
+        elements.lnurlConfirmFee.textContent = `${prepareLnurlResponse.feeSats.toLocaleString()} sats`
+        
+        if (comment) {
+          elements.lnurlConfirmComment.textContent = comment
+          elements.lnurlConfirmCommentSection.style.display = 'block'
+        } else {
+          elements.lnurlConfirmCommentSection.style.display = 'none'
+        }
+        
+        elements.lnurlConfirmation.style.display = 'block'
+        hideLoading()
+        
+      } catch (error) {
+        hideLoading()
+        console.error('Failed to prepare LNURL payment:', error)
+        alert(`Failed to prepare LNURL payment: ${error.message}`)
+      }
+    }
+    
+  } catch (error) {
+    hideLoading()
+    console.error('Failed to parse LNURL:', error)
+    alert(`Failed to parse LNURL: ${error.message}`)
+  }
+}
+
+async function lnurlPay() {
+  try {
+    showLoading('Sending LNURL payment...')
+    
+    const result = await sdk.lnurlPay({ prepareResponse: prepareLnurlResponse })
+    
+    hideLoading()
+    hideModal(elements.lnurlPayModal)
+    
+    // Show success notification
+    showPaymentNotification('LNURL payment sent successfully!', 'success')
+    
+    // Refresh wallet data immediately and then again after a delay
+    await updateWalletInfo()
+    await loadPayments()
+    
+    // Refresh again after a few seconds to catch any delayed updates
+    setTimeout(async () => {
+      await updateWalletInfo()
+      await loadPayments()
+    }, 3000)
+    
+  } catch (error) {
+    hideLoading()
+    console.error('Failed to send LNURL payment:', error)
+    alert(`Failed to send LNURL payment: ${error.message}`)
+  }
+}
+
 async function disconnectSdk() {
   if (sdk) {
     try {
@@ -432,13 +564,25 @@ elements.syncBtn.addEventListener('click', syncWallet)
 elements.receiveBtn.addEventListener('click', () => {
   elements.receiveResult.style.display = 'none'
   elements.sendConfirmation.style.display = 'none'
+  elements.lnurlConfirmation.style.display = 'none'
   showModal(elements.receiveModal)
 })
 
 elements.sendBtn.addEventListener('click', () => {
   elements.receiveResult.style.display = 'none'
   elements.sendConfirmation.style.display = 'none'
+  elements.lnurlConfirmation.style.display = 'none'
   showModal(elements.sendModal)
+})
+
+elements.lnurlPayBtn.addEventListener('click', () => {
+  elements.receiveResult.style.display = 'none'
+  elements.sendConfirmation.style.display = 'none'
+  elements.lnurlConfirmation.style.display = 'none'
+  elements.lnurlAmountSection.style.display = 'none'
+  elements.prepareLnurlBtn.textContent = 'Prepare'
+  elements.prepareLnurlBtn.onclick = null
+  showModal(elements.lnurlPayModal)
 })
 
 elements.paymentMethod.addEventListener('change', () => {
@@ -457,6 +601,14 @@ elements.cancelConfirmBtn.addEventListener('click', () => {
   elements.sendConfirmation.style.display = 'none'
 })
 
+elements.prepareLnurlBtn.addEventListener('click', prepareLnurlPay)
+elements.cancelLnurlBtn.addEventListener('click', () => hideModal(elements.lnurlPayModal))
+
+elements.confirmLnurlBtn.addEventListener('click', lnurlPay)
+elements.cancelLnurlConfirmBtn.addEventListener('click', () => {
+  elements.lnurlConfirmation.style.display = 'none'
+})
+
 elements.copyPaymentRequest.addEventListener('click', () => {
   copyToClipboard(elements.paymentRequest.value)
 })
@@ -471,6 +623,12 @@ elements.receiveModal.addEventListener('click', (e) => {
 elements.sendModal.addEventListener('click', (e) => {
   if (e.target === elements.sendModal) {
     hideModal(elements.sendModal)
+  }
+})
+
+elements.lnurlPayModal.addEventListener('click', (e) => {
+  if (e.target === elements.lnurlPayModal) {
+    hideModal(elements.lnurlPayModal)
   }
 })
 
