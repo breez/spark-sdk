@@ -306,6 +306,15 @@ impl<S: Signer> SparkWallet<S> {
             .await?)
     }
 
+    pub fn extract_spark_address(
+        &self,
+        invoice: &str,
+    ) -> Result<Option<SparkAddress>, SparkWalletError> {
+        Ok(self
+            .lightning_service
+            .extract_spark_address_from_invoice(invoice)?)
+    }
+
     pub async fn fetch_lightning_receive_payment(
         &self,
         id: &str,
@@ -879,7 +888,7 @@ impl<S: Signer> BackgroundProcessor<S> {
                 debug!("Claimed {} pending transfers on startup", transfers.len());
                 for transfer in &transfers {
                     self.event_manager
-                        .notify_listeners(WalletEvent::TransferClaimed(transfer.id.clone()));
+                        .notify_listeners(WalletEvent::TransferClaimed(transfer.clone()));
                 }
                 transfers.into_iter().map(|t| t.id).collect()
             }
@@ -942,7 +951,11 @@ impl<S: Signer> BackgroundProcessor<S> {
 
         claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
         self.event_manager
-            .notify_listeners(WalletEvent::TransferClaimed(transfer.id));
+            .notify_listeners(WalletEvent::TransferClaimed(WalletTransfer::from_transfer(
+                transfer,
+                None,
+                self.identity_public_key,
+            )));
         Ok(())
     }
 

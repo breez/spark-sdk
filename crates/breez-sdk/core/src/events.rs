@@ -5,9 +5,10 @@ use maybe_sync::{MaybeSend, MaybeSync};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::DepositInfo;
+use crate::{DepositInfo, Payment};
 
 /// Events emitted by the SDK
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize)]
 pub enum SdkEvent {
     /// Emitted when the wallet has been synchronized with the network
@@ -18,6 +19,9 @@ pub enum SdkEvent {
     },
     ClaimDepositsSucceeded {
         claimed_deposits: Vec<DepositInfo>,
+    },
+    PaymentSucceeded {
+        payment: Payment,
     },
 }
 
@@ -30,6 +34,9 @@ impl fmt::Display for SdkEvent {
             }
             SdkEvent::ClaimDepositsSucceeded { claimed_deposits } => {
                 write!(f, "ClaimDepositsSucceeded: {claimed_deposits:?}")
+            }
+            SdkEvent::PaymentSucceeded { payment } => {
+                write!(f, "PaymentSucceeded: {payment:?}")
             }
         }
     }
