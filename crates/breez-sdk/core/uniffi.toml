@@ -11,7 +11,3 @@ disable_java_cleaner = true
 ffi_module_name = "breez_sdk_sparkFFI"
 ffi_module_filename = "breez_sdk_sparkFFI"
 cdylib_name = "breez_sdk_spark_bindings"
-
-[bindings.python.external_packages]
-# This fixture does not create a Python package, so we want all modules to be top-level modules.
-breez_sdk_common = ""

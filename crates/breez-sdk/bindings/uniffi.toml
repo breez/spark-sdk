@@ -16,10 +16,6 @@ cdylib_name = "breez_sdk_spark_bindings"
 [bindings.python]
 cdylib_name = "breez_sdk_spark_bindings"
 
-[bindings.python.external_packages]
-# This fixture does not create a Python package, so we want all modules to be top-level modules.
-breez_sdk_core = ""
-
 # https://github.com/NordSecurity/uniffi-bindgen-cs/blob/main/docs/CONFIGURATION.md
 [bindings.csharp]
 package_name = "breez_sdk_spark"

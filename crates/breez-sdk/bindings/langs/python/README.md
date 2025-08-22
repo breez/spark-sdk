@@ -25,14 +25,3 @@ It will create wheels for the following Python versions and Platforms and upload
 | **Python 3.11** | ✅               | ✅                 | ✅            | ✅             | ✅              | ✅         |
 | **Python 3.12** | ✅               | ✅                 | ✅            | ✅             | ✅              | ✅         |
 | **Python 3.13** | ✅               | ✅                 | ✅            | ✅             | ✅              | ✅         |
-
-## Building Manually
-
-To build the package manually inside this directory use the supplied `makefile`:
-
-``` shell
-make darwin # builds the package for macos
-make linux # builds the package for linux
-```
-
-The artifacts will be placed in `src/breez_sdk_spark/`.
