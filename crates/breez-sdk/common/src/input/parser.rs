@@ -10,10 +10,10 @@ use crate::{
     error::ServiceConnectivityError,
     input::{Bip21Extra, ParseError, PaymentRequestSource},
     lnurl::{
-        LnurlErrorData,
-        auth::{self, LnurlAuthRequestData},
+        LnurlErrorDetails,
+        auth::{self, LnurlAuthRequestDetails},
         error::LnurlError,
-        pay::LnurlPayRequestData,
+        pay::LnurlPayRequestDetails,
     },
     rest::{ReqwestRestClient, RestClient, RestResponse},
 };
@@ -21,7 +21,7 @@ use crate::{
 use super::{
     Bip21Details, BitcoinAddressDetails, Bolt11InvoiceDetails, Bolt11RouteHint, Bolt11RouteHintHop,
     Bolt12InvoiceDetails, Bolt12InvoiceRequestDetails, Bolt12Offer, Bolt12OfferBlindedPath,
-    Bolt12OfferDetails, InputType, LightningAddressDetails, LnurlWithdrawRequestData,
+    Bolt12OfferDetails, InputType, LightningAddressDetails, LnurlWithdrawRequestDetails,
     SilentPaymentAddressDetails, error::Bip21Error,
 };
 
@@ -197,7 +197,7 @@ where
         match input_type {
             InputType::LnurlPay(pay_request) => Some(LightningAddressDetails {
                 address: address.clone(),
-                pay_request: LnurlPayRequestData {
+                pay_request: LnurlPayRequestDetails {
                     address: Some(address),
                     ..pay_request
                 },
@@ -297,17 +297,23 @@ where
         }
 
         let RestResponse { body, .. } = self.rest_client.get(url.to_string(), None).await?;
-        let lnurl_data: LnurlRequestData = parse_json(&body)?;
+        let lnurl_data: LnurlRequestDetails = parse_json(&body)?;
         let domain = url.host().ok_or(LnurlError::MissingDomain)?.to_string();
         Ok(match lnurl_data {
-            LnurlRequestData::PayRequest { data } => InputType::LnurlPay(LnurlPayRequestData {
-                domain,
-                url: url.to_string(),
-                ..data
-            }),
-            LnurlRequestData::WithdrawRequest { data } => InputType::LnurlWithdraw(data),
-            LnurlRequestData::AuthRequest { data } => InputType::LnurlAuth(data),
-            LnurlRequestData::Error { data } => return Err(LnurlError::EndpointError(data.reason)),
+            LnurlRequestDetails::PayRequest { pay_request } => {
+                InputType::LnurlPay(LnurlPayRequestDetails {
+                    domain,
+                    url: url.to_string(),
+                    ..pay_request
+                })
+            }
+            LnurlRequestDetails::WithdrawRequest { withdraw_request } => {
+                InputType::LnurlWithdraw(withdraw_request)
+            }
+            LnurlRequestDetails::AuthRequest { auth_request } => InputType::LnurlAuth(auth_request),
+            LnurlRequestDetails::Error { error_details: error } => {
+                return Err(LnurlError::EndpointError(error.reason));
+            }
         })
     }
 }
@@ -728,23 +734,23 @@ fn parse_silent_payment_address(
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 #[serde(untagged)]
-pub enum LnurlRequestData {
+pub enum LnurlRequestDetails {
     PayRequest {
         #[serde(flatten)]
-        data: LnurlPayRequestData,
+        pay_request: LnurlPayRequestDetails,
     },
     WithdrawRequest {
         #[serde(flatten)]
-        data: LnurlWithdrawRequestData,
+        withdraw_request: LnurlWithdrawRequestDetails,
     },
     #[serde(rename = "login")]
     AuthRequest {
         #[serde(flatten)]
-        data: LnurlAuthRequestData,
+        auth_request: LnurlAuthRequestDetails,
     },
     Error {
         #[serde(flatten)]
-        data: LnurlErrorData,
+        error_details: LnurlErrorDetails,
     },
 }
 

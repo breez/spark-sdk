@@ -11,7 +11,8 @@ Python language bindings for the [Breez Spark SDK](https://github.com/breez/spar
 pip install breez_sdk_spark
 ```
 """
-
+# Setup the wheel for publishing.
+# The version is replaced with the actual version during building/publishing the wheels.
 setup(
     name="breez_sdk_spark",
     version="0.2.7.dev9",

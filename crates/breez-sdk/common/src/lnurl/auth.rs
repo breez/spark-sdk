@@ -19,7 +19,7 @@ use super::{
 /// See <https://github.com/lnurl/luds/blob/luds/04.md>
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct LnurlAuthRequestData {
+pub struct LnurlAuthRequestDetails {
     /// Hex encoded 32 bytes of challenge
     pub k1: String,
 
@@ -58,17 +58,17 @@ pub trait LnurlAuthSigner {
 /// See the [`parse`] docs for more detail on the full workflow.
 pub async fn perform_lnurl_auth<C: RestClient + ?Sized, S: LnurlAuthSigner>(
     rest_client: &C,
-    req_data: &LnurlAuthRequestData,
+    auth_request: &LnurlAuthRequestDetails,
     signer: &S,
 ) -> LnurlResult<LnurlCallbackStatus> {
-    let url = Url::from_str(&req_data.url).map_err(|e| {
+    let url = Url::from_str(&auth_request.url).map_err(|e| {
         warn!("Lnurl auth URL is invalid: {:?}", e);
         LnurlError::invalid_uri("invalid lnurl auth uri")
     })?;
     let derivation_path = get_derivation_path(signer, url).await?;
     let sig = signer
         .sign_ecdsa(
-            &hex::decode(&req_data.k1).map_err(|_| LnurlError::InvalidK1)?,
+            &hex::decode(&auth_request.k1).map_err(|_| LnurlError::InvalidK1)?,
             &derivation_path,
         )
         .await?;
@@ -79,7 +79,7 @@ pub async fn perform_lnurl_auth<C: RestClient + ?Sized, S: LnurlAuthSigner>(
     })?;
 
     // <LNURL_hostname_and_path>?<LNURL_existing_query_parameters>&sig=<hex(sign(utf8ToBytes(k1), linkingPrivKey))>&key=<hex(linkingKey)>
-    let mut callback_url = Url::from_str(&req_data.url).map_err(|e| {
+    let mut callback_url = Url::from_str(&auth_request.url).map_err(|e| {
         warn!("Lnurl auth callback URL is invalid: {:?}", e);
         LnurlError::invalid_uri("invalid lnurl auth callback uri")
     })?;
@@ -93,7 +93,7 @@ pub async fn perform_lnurl_auth<C: RestClient + ?Sized, S: LnurlAuthSigner>(
     Ok(parse_json(&body)?)
 }
 
-pub fn validate_request(url: &reqwest::Url) -> Result<LnurlAuthRequestData, LnurlError> {
+pub fn validate_request(url: &reqwest::Url) -> Result<LnurlAuthRequestDetails, LnurlError> {
     let query_pairs = url.query_pairs();
 
     let k1 = query_pairs
@@ -118,7 +118,7 @@ pub fn validate_request(url: &reqwest::Url) -> Result<LnurlAuthRequestData, Lnur
         return Err(LnurlError::UnsupportedAction);
     }
 
-    Ok(LnurlAuthRequestData {
+    Ok(LnurlAuthRequestDetails {
         k1,
         action: maybe_action,
         domain: url.domain().ok_or(LnurlError::MissingDomain)?.to_string(),

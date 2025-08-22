@@ -289,9 +289,9 @@ pub(crate) async fn execute_command(
         } => {
             let input = parse(&lnurl).await?;
             let res = match input {
-                InputType::LnurlPay(data) => {
-                    let min_sendable = data.min_sendable.div_ceil(1000);
-                    let max_sendable = data.max_sendable / 1000;
+                InputType::LnurlPay(pay_request) => {
+                    let min_sendable = pay_request.min_sendable.div_ceil(1000);
+                    let max_sendable = pay_request.max_sendable / 1000;
                     let prompt =
                         format!("Amount to pay (min {min_sendable} sat, max {max_sendable} sat): ");
                     let amount_sats = rl.readline(&prompt)?.parse::<u64>()?;
@@ -300,7 +300,7 @@ pub(crate) async fn execute_command(
                         .prepare_lnurl_pay(PrepareLnurlPayRequest {
                             amount_sats,
                             comment,
-                            data,
+                            pay_request,
                             validate_success_action_url: validate_success_url,
                         })
                         .await?;

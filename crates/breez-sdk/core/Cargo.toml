@@ -4,7 +4,6 @@ edition = "2024"
 version.workspace = true
 
 [features]
-default = []
 browser-tests = [] # Enable browser wasm-pack tests
 uniffi = [
     "breez-sdk-common/uniffi",
@@ -45,19 +44,18 @@ tokio_with_wasm.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid.workspace = true
+uniffi = { workspace = true, optional = true }
 web-time.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 maybe-sync = { workspace = true, features = ["sync"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-uniffi = { workspace = true, optional = true }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 maybe-sync.workspace = true
 tokio = { workspace = true, features = ["macros"] }
-uniffi = { workspace = true, optional = true }
 
 [dev-dependencies]
 breez-sdk-common = { workspace = true, features = ["test-utils"] }

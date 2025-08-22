@@ -142,19 +142,17 @@ const lnurlPay = async (options) => {
     const data = input
     const minSendable = Math.ceil(data.minSendable / 1000)
     const maxSendable = Math.floor(data.maxSendable / 1000)
-    
-    
+
     const amountStr = await question(`Amount to pay (min ${minSendable} sat, max ${maxSendable} sat): `)
     const amountSats = parseInt(amountStr)
     if (isNaN(amountSats)) {
         throw new Error('Invalid amount provided')
     }
     
-    
     const prepareResponse = await sdk.prepareLnurlPay({
         amountSats: amountSats,
         comment: options.comment,
-        data: data,
+        payRequest: data,
         validateSuccessActionUrl: options.validateSuccessUrl
     })
     

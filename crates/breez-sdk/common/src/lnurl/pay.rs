@@ -9,7 +9,7 @@ use crate::{
     input::parse_invoice,
     invoice::{InvoiceError, validate_network},
     lnurl::{
-        LnurlErrorData,
+        LnurlErrorDetails,
         error::{LnurlError, LnurlResult},
     },
     network::BitcoinNetwork,
@@ -28,21 +28,21 @@ pub async fn validate_lnurl_pay<C: RestClient + ?Sized>(
     rest_client: &C,
     user_amount_msat: u64,
     comment: &Option<String>,
-    req_data: &LnurlPayRequestData,
+    pay_request: &LnurlPayRequestDetails,
     network: BitcoinNetwork,
     validate_success_action_url: Option<bool>,
 ) -> LnurlResult<ValidatedCallbackResponse> {
     validate_user_input(
         user_amount_msat,
         comment,
-        req_data.min_sendable,
-        req_data.max_sendable,
-        req_data.comment_allowed,
+        pay_request.min_sendable,
+        pay_request.max_sendable,
+        pay_request.comment_allowed,
     )?;
 
-    let callback_url = build_pay_callback_url(user_amount_msat, comment, req_data)?;
+    let callback_url = build_pay_callback_url(user_amount_msat, comment, pay_request)?;
     let RestResponse { body, .. } = rest_client.get(callback_url, None).await?;
-    if let Ok(err) = serde_json::from_str::<LnurlErrorData>(&body) {
+    if let Ok(err) = serde_json::from_str::<LnurlErrorDetails>(&body) {
         return Ok(ValidatedCallbackResponse::EndpointError { data: err });
     }
 
@@ -54,7 +54,8 @@ pub async fn validate_lnurl_pay<C: RestClient + ?Sized>(
             SuccessAction::Message { data } => data.validate()?,
             SuccessAction::Url { data } => {
                 callback_resp.success_action = Some(SuccessAction::Url {
-                    data: data.validate(req_data, validate_success_action_url.unwrap_or(true))?,
+                    data: data
+                        .validate(pay_request, validate_success_action_url.unwrap_or(true))?,
                 });
             }
         }
@@ -69,10 +70,10 @@ pub async fn validate_lnurl_pay<C: RestClient + ?Sized>(
 pub fn build_pay_callback_url(
     user_amount_msat: u64,
     user_comment: &Option<String>,
-    data: &LnurlPayRequestData,
+    pay_request: &LnurlPayRequestDetails,
 ) -> LnurlResult<String> {
     let amount_msat = user_amount_msat.to_string();
-    let mut url = reqwest::Url::from_str(&data.callback)
+    let mut url = reqwest::Url::from_str(&pay_request.callback)
         .map_err(|_| LnurlError::invalid_uri("invalid callback uri"))?;
 
     url.query_pairs_mut().append_pair("amount", &amount_msat);
@@ -140,7 +141,7 @@ pub fn validate_invoice(
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct LnurlPayRequestData {
+pub struct LnurlPayRequestDetails {
     pub callback: String,
     /// The minimum amount, in millisats, that this LNURL-pay endpoint accepts
     pub min_sendable: u64,
@@ -186,7 +187,7 @@ pub struct LnurlPayRequestData {
 
 pub enum ValidatedCallbackResponse {
     EndpointSuccess { data: CallbackResponse },
-    EndpointError { data: LnurlErrorData },
+    EndpointError { data: LnurlErrorDetails },
 }
 
 #[derive(Deserialize, Debug)]
@@ -372,7 +373,7 @@ pub struct UrlSuccessActionData {
 impl UrlSuccessActionData {
     pub fn validate(
         &self,
-        data: &LnurlPayRequestData,
+        pay_request: &LnurlPayRequestDetails,
         validate_url: bool,
     ) -> LnurlResult<UrlSuccessActionData> {
         let mut validated_data = self.clone();
@@ -383,7 +384,7 @@ impl UrlSuccessActionData {
             )
         );
 
-        let req_url = reqwest::Url::parse(&data.callback)
+        let req_url = reqwest::Url::parse(&pay_request.callback)
             .map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
         let req_domain = req_url
             .domain()
@@ -423,8 +424,8 @@ pub(crate) mod tests {
         min_sendable: u64,
         max_sendable: u64,
         comment_len: u16,
-    ) -> LnurlPayRequestData {
-        LnurlPayRequestData {
+    ) -> LnurlPayRequestDetails {
+        LnurlPayRequestDetails {
             min_sendable,
             max_sendable,
             comment_allowed: comment_len,

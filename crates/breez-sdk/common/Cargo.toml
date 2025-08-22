@@ -37,6 +37,7 @@ strum = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+uniffi = { workspace = true, optional = true }
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
@@ -52,7 +53,6 @@ tonic = { workspace = true, features = [
     "tls-webpki-roots",
     "transport",
 ] }
-uniffi = { workspace = true, optional = true }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
@@ -60,7 +60,6 @@ dns-parser.workspace = true
 maybe-sync.workspace = true
 tonic = { workspace = true, features = ["codegen", "prost"] }
 tonic-web-wasm-client.workspace = true
-uniffi = { workspace = true, optional = true }
 
 # Wasm dev dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]

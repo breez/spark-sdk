@@ -584,7 +584,7 @@ impl BreezSdk {
             self.lnurl_client.as_ref(),
             request.amount_sats * 1_000,
             &None,
-            &request.data,
+            &request.pay_request,
             self.config.network.into(),
             request.validate_success_action_url,
         )
@@ -614,7 +614,7 @@ impl BreezSdk {
         Ok(PrepareLnurlPayResponse {
             amount_sats: request.amount_sats,
             comment: request.comment,
-            data: request.data,
+            pay_request: request.pay_request,
             invoice_details,
             fee_sats: prepare_response.fee_sats,
             success_action: success_data.success_action,
@@ -643,10 +643,10 @@ impl BreezSdk {
             process_success_action(&payment, request.prepare_response.success_action.as_ref())?;
 
         let lnurl_info = LnurlPayInfo {
-            ln_address: request.prepare_response.data.address,
+            ln_address: request.prepare_response.pay_request.address,
             comment: request.prepare_response.comment,
-            domain: Some(request.prepare_response.data.domain),
-            metadata: Some(request.prepare_response.data.metadata_str),
+            domain: Some(request.prepare_response.pay_request.domain),
+            metadata: Some(request.prepare_response.pay_request.metadata_str),
             processed_success_action: success_action.clone(),
             raw_success_action: request.prepare_response.success_action,
         };

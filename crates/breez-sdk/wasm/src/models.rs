@@ -45,13 +45,13 @@ pub enum InputType {
     Bolt12Invoice(Bolt12InvoiceDetails),
     Bolt12Offer(Bolt12OfferDetails),
     LightningAddress(LightningAddressDetails),
-    LnurlPay(LnurlPayRequestData),
+    LnurlPay(LnurlPayRequestDetails),
     SilentPaymentAddress(SilentPaymentAddressDetails),
-    LnurlAuth(LnurlAuthRequestData),
+    LnurlAuth(LnurlAuthRequestDetails),
     Url(String),
     Bip21(Bip21Details),
     Bolt12InvoiceRequest(Bolt12InvoiceRequestDetails),
-    LnurlWithdraw(LnurlWithdrawRequestData),
+    LnurlWithdraw(LnurlWithdrawRequestDetails),
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_common::input::BitcoinAddressDetails)]
@@ -163,11 +163,11 @@ pub enum Amount {
 #[macros::extern_wasm_bindgen(breez_sdk_common::input::LightningAddressDetails)]
 pub struct LightningAddressDetails {
     pub address: String,
-    pub pay_request: LnurlPayRequestData,
+    pub pay_request: LnurlPayRequestDetails,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::LnurlPayRequestData)]
-pub struct LnurlPayRequestData {
+#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::LnurlPayRequestDetails)]
+pub struct LnurlPayRequestDetails {
     pub callback: String,
     pub min_sendable: u64,
     pub max_sendable: u64,
@@ -188,8 +188,8 @@ pub struct SilentPaymentAddressDetails {
     pub source: PaymentRequestSource,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::auth::LnurlAuthRequestData)]
-pub struct LnurlAuthRequestData {
+#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::auth::LnurlAuthRequestDetails)]
+pub struct LnurlAuthRequestDetails {
     pub k1: String,
     pub action: Option<String>,
     pub domain: String,
@@ -218,9 +218,9 @@ pub struct Bolt12InvoiceRequestDetails {
     // TODO: Fill fields
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::LnurlWithdrawRequestData)]
+#[macros::extern_wasm_bindgen(breez_sdk_common::input::LnurlWithdrawRequestDetails)]
 
-pub struct LnurlWithdrawRequestData {
+pub struct LnurlWithdrawRequestDetails {
     pub callback: String,
     pub k1: String,
     pub default_description: String,
@@ -413,7 +413,7 @@ pub struct ReceivePaymentResponse {
 pub struct PrepareLnurlPayRequest {
     pub amount_sats: u64,
     pub comment: Option<String>,
-    pub data: LnurlPayRequestData,
+    pub pay_request: LnurlPayRequestDetails,
     pub validate_success_action_url: Option<bool>,
 }
 
@@ -421,7 +421,7 @@ pub struct PrepareLnurlPayRequest {
 pub struct PrepareLnurlPayResponse {
     pub amount_sats: u64,
     pub comment: Option<String>,
-    pub data: LnurlPayRequestData,
+    pub pay_request: LnurlPayRequestDetails,
     pub fee_sats: u64,
     pub invoice_details: Bolt11InvoiceDetails,
     pub success_action: Option<SuccessAction>,

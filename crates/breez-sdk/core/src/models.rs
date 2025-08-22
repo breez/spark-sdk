@@ -1,6 +1,6 @@
 use breez_sdk_common::{
     input::{self, BitcoinAddressDetails, Bolt11InvoiceDetails},
-    lnurl::pay::{LnurlPayRequestData, SuccessAction, SuccessActionProcessed},
+    lnurl::pay::{LnurlPayRequestDetails, SuccessAction, SuccessActionProcessed},
     network::BitcoinNetwork,
 };
 use core::fmt;
@@ -491,7 +491,7 @@ pub struct ReceivePaymentResponse {
 pub struct PrepareLnurlPayRequest {
     pub amount_sats: u64,
     pub comment: Option<String>,
-    pub data: LnurlPayRequestData,
+    pub pay_request: LnurlPayRequestDetails,
     pub validate_success_action_url: Option<bool>,
 }
 
@@ -500,7 +500,7 @@ pub struct PrepareLnurlPayRequest {
 pub struct PrepareLnurlPayResponse {
     pub amount_sats: u64,
     pub comment: Option<String>,
-    pub data: LnurlPayRequestData,
+    pub pay_request: LnurlPayRequestDetails,
     pub fee_sats: u64,
     pub invoice_details: Bolt11InvoiceDetails,
     pub success_action: Option<SuccessAction>,

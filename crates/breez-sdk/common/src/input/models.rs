@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    lnurl::{auth::LnurlAuthRequestData, pay::LnurlPayRequestData},
+    lnurl::{auth::LnurlAuthRequestDetails, pay::LnurlPayRequestDetails},
     network::BitcoinNetwork,
 };
 
@@ -151,26 +151,26 @@ pub enum InputType {
     Bolt12Invoice(Bolt12InvoiceDetails),
     Bolt12Offer(Bolt12OfferDetails),
     LightningAddress(LightningAddressDetails),
-    LnurlPay(LnurlPayRequestData),
+    LnurlPay(LnurlPayRequestDetails),
     SilentPaymentAddress(SilentPaymentAddressDetails),
-    LnurlAuth(LnurlAuthRequestData),
+    LnurlAuth(LnurlAuthRequestDetails),
     Url(String),
     Bip21(Bip21Details),
     Bolt12InvoiceRequest(Bolt12InvoiceRequestDetails),
-    LnurlWithdraw(LnurlWithdrawRequestData),
+    LnurlWithdraw(LnurlWithdrawRequestDetails),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LightningAddressDetails {
     pub address: String,
-    pub pay_request: LnurlPayRequestData,
+    pub pay_request: LnurlPayRequestDetails,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct LnurlWithdrawRequestData {
+pub struct LnurlWithdrawRequestDetails {
     pub callback: String,
     pub k1: String,
     pub default_description: String,

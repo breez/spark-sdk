@@ -476,7 +476,7 @@ async function prepareLnurlPay() {
         prepareLnurlResponse = await sdk.prepareLnurlPay({
           amountSats: amountSats,
           comment: comment,
-          data: input,
+          payRequest: input,
           validateSuccessActionUrl: true
         })
         
