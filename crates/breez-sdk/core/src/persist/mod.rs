@@ -2,6 +2,8 @@ mod sqlite;
 
 use std::sync::Arc;
 
+use macros::async_trait;
+use maybe_sync::{MaybeSend, MaybeSync};
 use serde::{Deserialize, Serialize};
 pub use sqlite::SqliteStorage;
 use thiserror::Error;
@@ -53,9 +55,10 @@ pub struct PaymentMetadata {
 
 /// Trait for persistent storage
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
-pub trait Storage: Send + Sync {
-    fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError>;
-    fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError>;
+#[async_trait]
+pub trait Storage: MaybeSend + MaybeSync {
+    async fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError>;
+    async fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError>;
     /// Lists payments with pagination
     ///
     /// # Arguments
@@ -66,7 +69,7 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// A vector of payments or a `StorageError`
-    fn list_payments(
+    async fn list_payments(
         &self,
         offset: Option<u32>,
         limit: Option<u32>,
@@ -81,7 +84,7 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// Success or a `StorageError`
-    fn insert_payment(&self, payment: Payment) -> Result<(), StorageError>;
+    async fn insert_payment(&self, payment: Payment) -> Result<(), StorageError>;
 
     /// Inserts payment metadata into storage
     ///
@@ -93,7 +96,7 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// Success or a `StorageError`
-    fn set_payment_metadata(
+    async fn set_payment_metadata(
         &self,
         payment_id: String,
         metadata: PaymentMetadata,
@@ -107,7 +110,7 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// The payment if found or None if not found
-    fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError>;
+    async fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError>;
 
     /// Add a deposit to storage
     /// # Arguments
@@ -119,7 +122,12 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// Success or a `StorageError`
-    fn add_deposit(&self, txid: String, vout: u32, amount_sats: u64) -> Result<(), StorageError>;
+    async fn add_deposit(
+        &self,
+        txid: String,
+        vout: u32,
+        amount_sats: u64,
+    ) -> Result<(), StorageError>;
 
     /// Removes an unclaimed deposit from storage
     /// # Arguments
@@ -130,13 +138,13 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// Success or a `StorageError`
-    fn delete_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError>;
+    async fn delete_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError>;
 
     /// Lists all unclaimed deposits from storage
     /// # Returns
     ///
     /// A vector of `DepositInfo` or a `StorageError`
-    fn list_deposits(&self) -> Result<Vec<DepositInfo>, StorageError>;
+    async fn list_deposits(&self) -> Result<Vec<DepositInfo>, StorageError>;
 
     /// Updates or inserts unclaimed deposit details
     /// # Arguments
@@ -148,7 +156,7 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// Success or a `StorageError`
-    fn update_deposit(
+    async fn update_deposit(
         &self,
         txid: String,
         vout: u32,
@@ -165,46 +173,62 @@ impl ObjectCacheRepository {
         ObjectCacheRepository { storage }
     }
 
-    pub(crate) fn save_account_info(&self, value: &CachedAccountInfo) -> Result<(), StorageError> {
+    pub(crate) async fn save_account_info(
+        &self,
+        value: &CachedAccountInfo,
+    ) -> Result<(), StorageError> {
         self.storage
-            .set_cached_item(ACCOUNT_INFO_KEY.to_string(), serde_json::to_string(value)?)?;
+            .set_cached_item(ACCOUNT_INFO_KEY.to_string(), serde_json::to_string(value)?)
+            .await?;
         Ok(())
     }
 
-    pub(crate) fn fetch_account_info(&self) -> Result<Option<CachedAccountInfo>, StorageError> {
-        let value = self.storage.get_cached_item(ACCOUNT_INFO_KEY.to_string())?;
-        match value {
-            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
-            None => Ok(None),
-        }
-    }
-
-    pub(crate) fn save_sync_info(&self, value: &CachedSyncInfo) -> Result<(), StorageError> {
-        self.storage
-            .set_cached_item(SYNC_OFFSET_KEY.to_string(), serde_json::to_string(value)?)?;
-        Ok(())
-    }
-
-    pub(crate) fn fetch_sync_info(&self) -> Result<Option<CachedSyncInfo>, StorageError> {
-        let value = self.storage.get_cached_item(SYNC_OFFSET_KEY.to_string())?;
-        match value {
-            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
-            None => Ok(None),
-        }
-    }
-
-    pub(crate) fn save_tx(&self, txid: &str, value: &CachedTx) -> Result<(), StorageError> {
-        self.storage.set_cached_item(
-            format!("{TX_CACHE_KEY}-{txid}"),
-            serde_json::to_string(value)?,
-        )?;
-        Ok(())
-    }
-
-    pub(crate) fn fetch_tx(&self, txid: &str) -> Result<Option<CachedTx>, StorageError> {
+    pub(crate) async fn fetch_account_info(
+        &self,
+    ) -> Result<Option<CachedAccountInfo>, StorageError> {
         let value = self
             .storage
-            .get_cached_item(format!("{TX_CACHE_KEY}-{txid}"))?;
+            .get_cached_item(ACCOUNT_INFO_KEY.to_string())
+            .await?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn save_sync_info(&self, value: &CachedSyncInfo) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(SYNC_OFFSET_KEY.to_string(), serde_json::to_string(value)?)
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_sync_info(&self) -> Result<Option<CachedSyncInfo>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(SYNC_OFFSET_KEY.to_string())
+            .await?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn save_tx(&self, txid: &str, value: &CachedTx) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                format!("{TX_CACHE_KEY}-{txid}"),
+                serde_json::to_string(value)?,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_tx(&self, txid: &str) -> Result<Option<CachedTx>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(format!("{TX_CACHE_KEY}-{txid}"))
+            .await?;
         match value {
             Some(value) => Ok(Some(serde_json::from_str(&value)?)),
             None => Ok(None),

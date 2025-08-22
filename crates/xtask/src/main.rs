@@ -132,7 +132,7 @@ fn main() -> Result<()> {
         } => build_cmd(release, target, package),
         Commands::Package { package } => package_cmd(package),
         Commands::Itest {} => itest_cmd(),
-        Commands::JsStorageTest { watch, coverage } => js_storage_test_cmd(watch, coverage),
+        Commands::JsStorageTest { watch, coverage } => js_storages_test_cmd(watch, coverage),
     }
 }
 
@@ -273,11 +273,10 @@ fn wasm_test_cmd(
             bail!("wasm tests failed");
         }
 
-        // If this is the breez-sdk-spark-wasm package and we're in node mode,
-        // also run JavaScript storage tests
-        if pkg.name == "breez-sdk-spark-wasm" && node {
-            println!("Running JavaScript storage tests for Node.js WASM package...");
-            js_storage_test_cmd(false, false)?
+        // If this is the breez-sdk-spark-wasm package, let's run the js storage tests
+        if pkg.name == "breez-sdk-spark-wasm" {
+            println!("Running JavaScript storages tests for WASM package...");
+            js_storages_test_cmd(false, false)?
         }
     }
 
@@ -614,55 +613,57 @@ fn itest_cmd() -> Result<()> {
     Ok(())
 }
 
-fn js_storage_test_cmd(watch: bool, coverage: bool) -> Result<()> {
-    let sh = Shell::new()?;
+fn js_storages_test_cmd(watch: bool, coverage: bool) -> Result<()> {
+    for storage_dir in ["node-storage", "web-storage"] {
+        let storage_dir = Path::new("crates/breez-sdk/wasm/js").join(storage_dir);
 
-    // Path to the Node.js storage implementation
-    let storage_dir = Path::new("crates/breez-sdk/wasm/js/node-storage");
+        let sh = Shell::new()?;
 
-    if !storage_dir.exists() {
-        bail!(
-            "Node.js storage directory not found: {}",
+        if !storage_dir.exists() {
+            bail!(
+                "Node.js storage directory not found: {}",
+                storage_dir.display()
+            );
+        }
+
+        let package_json = storage_dir.join("package.json");
+        if !package_json.exists() {
+            bail!("package.json not found in {}", storage_dir.display());
+        }
+
+        println!(
+            "Running JavaScript storage tests in {}",
             storage_dir.display()
         );
+
+        sh.change_dir(storage_dir);
+
+        println!("Installing Node.js dependencies...");
+        cmd!(sh, "npm install")
+            .run()
+            .with_context(|| "Failed to install Node.js dependencies. Ensure npm is installed.")?;
+
+        println!("Rebuilding native modules for current Node.js version...");
+        cmd!(sh, "npm rebuild").run().with_context(
+            || "Failed to rebuild native modules. This is needed for better-sqlite3 compatibility.",
+        )?;
+
+        // Run the appropriate npm command
+        let npm_cmd = if watch {
+            "test:watch"
+        } else if coverage {
+            "test:coverage"
+        } else {
+            "test"
+        };
+
+        println!("Running: npm run {}", npm_cmd);
+        cmd!(sh, "npm run {npm_cmd}")
+            .run()
+            .with_context(|| format!("JavaScript storage tests failed (npm run {})", npm_cmd))?;
+
+        println!("✅ JavaScript storage tests completed successfully!");
     }
 
-    let package_json = storage_dir.join("package.json");
-    if !package_json.exists() {
-        bail!("package.json not found in {}", storage_dir.display());
-    }
-
-    println!(
-        "Running JavaScript storage tests in {}",
-        storage_dir.display()
-    );
-
-    sh.change_dir(storage_dir);
-
-    println!("Installing Node.js dependencies...");
-    cmd!(sh, "npm install")
-        .run()
-        .with_context(|| "Failed to install Node.js dependencies. Ensure npm is installed.")?;
-
-    println!("Rebuilding native modules for current Node.js version...");
-    cmd!(sh, "npm rebuild").run().with_context(
-        || "Failed to rebuild native modules. This is needed for better-sqlite3 compatibility.",
-    )?;
-
-    // Run the appropriate npm command
-    let npm_cmd = if watch {
-        "test:watch"
-    } else if coverage {
-        "test:coverage"
-    } else {
-        "test"
-    };
-
-    println!("Running: npm run {}", npm_cmd);
-    cmd!(sh, "npm run {npm_cmd}")
-        .run()
-        .with_context(|| format!("JavaScript storage tests failed (npm run {})", npm_cmd))?;
-
-    println!("✅ JavaScript storage tests completed successfully!");
     Ok(())
 }

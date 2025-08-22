@@ -65,32 +65,32 @@ describe("SqliteStorage", () => {
   });
 
   describe("Cache Operations", () => {
-    test("should store and retrieve cached items", () => {
+    test("should store and retrieve cached items", async () => {
       const key = "test_key";
       const value = "test_value";
 
-      storage.setCachedItem(key, value);
-      const retrieved = storage.getCachedItem(key);
+      await storage.setCachedItem(key, value);
+      const retrieved = await storage.getCachedItem(key);
 
       expect(retrieved).toBe(value);
     });
 
-    test("should return null for non-existent keys", () => {
-      const result = storage.getCachedItem("non_existent_key");
+    test("should return null for non-existent keys", async () => {
+      const result = await storage.getCachedItem("non_existent_key");
       expect(result).toBeNull();
     });
 
-    test("should update existing cached items", () => {
+    test("should update existing cached items", async () => {
       const key = "update_test";
 
-      storage.setCachedItem(key, "original_value");
-      storage.setCachedItem(key, "updated_value");
+      await storage.setCachedItem(key, "original_value");
+      await storage.setCachedItem(key, "updated_value");
 
-      const result = storage.getCachedItem(key);
+      const result = await storage.getCachedItem(key);
       expect(result).toBe("updated_value");
     });
 
-    test("should handle complex JSON values", () => {
+    test("should handle complex JSON values", async () => {
       const key = "json_test";
       const complexValue = JSON.stringify({
         nested: { data: "value" },
@@ -98,8 +98,8 @@ describe("SqliteStorage", () => {
         boolean: true,
       });
 
-      storage.setCachedItem(key, complexValue);
-      const retrieved = storage.getCachedItem(key);
+      await storage.setCachedItem(key, complexValue);
+      const retrieved = await storage.getCachedItem(key);
 
       expect(JSON.parse(retrieved)).toEqual(JSON.parse(complexValue));
     });
@@ -120,11 +120,11 @@ describe("SqliteStorage", () => {
       },
     });
 
-    test("should insert and retrieve payments", () => {
+    test("should insert and retrieve payments", async () => {
       const payment = createTestPayment();
 
-      storage.insertPayment(payment);
-      const retrieved = storage.getPaymentById(payment.id);
+      await storage.insertPayment(payment);
+      const retrieved = await storage.getPaymentById(payment.id);
 
       expect(retrieved.id).toBe(payment.id);
       expect(retrieved.paymentType).toBe(payment.paymentType);
@@ -135,28 +135,30 @@ describe("SqliteStorage", () => {
       expect(retrieved.details).toEqual(payment.details);
     });
 
-    test("should list payments with pagination", () => {
+    test("should list payments with pagination", async () => {
       const payments = [
         createTestPayment("payment_1"),
         createTestPayment("payment_2"),
         createTestPayment("payment_3"),
       ];
 
-      payments.forEach((payment) => storage.insertPayment(payment));
+      for (const payment of payments) {
+        await storage.insertPayment(payment);
+      }
 
       // Test default listing (no pagination)
-      const allPayments = storage.listPayments();
+      const allPayments = await storage.listPayments();
       expect(allPayments).toHaveLength(3);
 
       // Test pagination
-      const firstPage = storage.listPayments(0, 2);
+      const firstPage = await storage.listPayments(0, 2);
       expect(firstPage).toHaveLength(2);
 
-      const secondPage = storage.listPayments(2, 2);
+      const secondPage = await storage.listPayments(2, 2);
       expect(secondPage).toHaveLength(1);
     });
 
-    test("should list payments in descending timestamp order", () => {
+    test("should list payments in descending timestamp order", async () => {
       const baseTime = Math.floor(Date.now() / 1000);
       const payments = [
         { ...createTestPayment("payment_1"), timestamp: baseTime },
@@ -164,33 +166,35 @@ describe("SqliteStorage", () => {
         { ...createTestPayment("payment_3"), timestamp: baseTime + 50 },
       ];
 
-      payments.forEach((payment) => storage.insertPayment(payment));
+      for (const payment of payments) {
+        await storage.insertPayment(payment);
+      }
 
-      const retrieved = storage.listPayments();
+      const retrieved = await storage.listPayments();
       expect(retrieved[0].timestamp).toBe(baseTime + 100);
       expect(retrieved[1].timestamp).toBe(baseTime + 50);
       expect(retrieved[2].timestamp).toBe(baseTime);
     });
 
-    test("should update existing payments", () => {
+    test("should update existing payments", async () => {
       const payment = createTestPayment();
-      storage.insertPayment(payment);
+      await storage.insertPayment(payment);
 
       const updatedPayment = { ...payment, status: "Failed", fees: 2000 };
-      storage.insertPayment(updatedPayment);
+      await storage.insertPayment(updatedPayment);
 
-      const retrieved = storage.getPaymentById(payment.id);
+      const retrieved = await storage.getPaymentById(payment.id);
       expect(retrieved.status).toBe("Failed");
       expect(retrieved.fees).toBe(2000);
     });
 
-    test("should throw error for non-existent payment", () => {
-      expect(() => {
-        storage.getPaymentById("non_existent_payment");
-      }).toThrow("Payment with id 'non_existent_payment' not found");
+    test("should throw error for non-existent payment", async () => {
+      await expect(
+        storage.getPaymentById("non_existent_payment")
+      ).rejects.toThrow("Payment with id 'non_existent_payment' not found");
     });
 
-    test("should handle payment metadata", () => {
+    test("should handle payment metadata", async () => {
       // Create a Lightning payment to test lnurl metadata
       const payment = {
         ...createTestPayment(),
@@ -200,7 +204,7 @@ describe("SqliteStorage", () => {
           },
         },
       };
-      storage.insertPayment(payment);
+      await storage.insertPayment(payment);
 
       const metadata = {
         lnurlPayInfo: {
@@ -210,33 +214,33 @@ describe("SqliteStorage", () => {
         },
       };
 
-      storage.setPaymentMetadata(payment.id, metadata);
+      await storage.setPaymentMetadata(payment.id, metadata);
 
       // Test retrieval via getPaymentById
-      const retrievedPayment = storage.getPaymentById(payment.id);
+      const retrievedPayment = await storage.getPaymentById(payment.id);
       expect(retrievedPayment.details.Lightning.lnurlPayInfo).toEqual(
         metadata.lnurlPayInfo
       );
 
       // Test retrieval via listPayments
-      const paymentsList = storage.listPayments();
+      const paymentsList = await storage.listPayments();
       const foundPayment = paymentsList.find((p) => p.id === payment.id);
       expect(foundPayment.details.Lightning.lnurlPayInfo).toEqual(
         metadata.lnurlPayInfo
       );
     });
 
-    test("should handle payment without metadata", () => {
+    test("should handle payment without metadata", async () => {
       const payment = createTestPayment();
-      storage.insertPayment(payment);
+      await storage.insertPayment(payment);
 
       // Retrieve payment without any metadata set
-      const retrievedPayment = storage.getPaymentById(payment.id);
+      const retrievedPayment = await storage.getPaymentById(payment.id);
       expect(retrievedPayment.details).toEqual(payment.details);
       expect(retrievedPayment.details.Lightning?.lnurlPayInfo).toBeUndefined();
     });
 
-    test("should handle non-Lightning payment with metadata", () => {
+    test("should handle non-Lightning payment with metadata", async () => {
       const sparkPayment = {
         ...createTestPayment(),
         details: {
@@ -245,7 +249,7 @@ describe("SqliteStorage", () => {
           },
         },
       };
-      storage.insertPayment(sparkPayment);
+      await storage.insertPayment(sparkPayment);
 
       const metadata = {
         lnurlPayInfo: {
@@ -254,17 +258,17 @@ describe("SqliteStorage", () => {
         },
       };
 
-      storage.setPaymentMetadata(sparkPayment.id, metadata);
+      await storage.setPaymentMetadata(sparkPayment.id, metadata);
 
       // For non-Lightning payments, metadata should not be added to details
-      const retrievedPayment = storage.getPaymentById(sparkPayment.id);
+      const retrievedPayment = await storage.getPaymentById(sparkPayment.id);
       expect(retrievedPayment.details.Spark).toEqual(
         sparkPayment.details.Spark
       );
       expect(retrievedPayment.details.Lightning?.lnurlPayInfo).toBeUndefined();
     });
 
-    test("should update existing payment metadata", () => {
+    test("should update existing payment metadata", async () => {
       const payment = {
         ...createTestPayment(),
         details: {
@@ -273,7 +277,7 @@ describe("SqliteStorage", () => {
           },
         },
       };
-      storage.insertPayment(payment);
+      await storage.insertPayment(payment);
 
       // Set initial metadata
       const initialMetadata = {
@@ -282,7 +286,7 @@ describe("SqliteStorage", () => {
           amount: 500,
         },
       };
-      storage.setPaymentMetadata(payment.id, initialMetadata);
+      await storage.setPaymentMetadata(payment.id, initialMetadata);
 
       // Update metadata
       const updatedMetadata = {
@@ -292,16 +296,16 @@ describe("SqliteStorage", () => {
           description: "Updated LNURL payment",
         },
       };
-      storage.setPaymentMetadata(payment.id, updatedMetadata);
+      await storage.setPaymentMetadata(payment.id, updatedMetadata);
 
       // Verify updated metadata is retrieved
-      const retrievedPayment = storage.getPaymentById(payment.id);
+      const retrievedPayment = await storage.getPaymentById(payment.id);
       expect(retrievedPayment.details.Lightning.lnurlPayInfo).toEqual(
         updatedMetadata.lnurlPayInfo
       );
     });
 
-    test("should handle null lnurlPayInfo in metadata", () => {
+    test("should handle null lnurlPayInfo in metadata", async () => {
       const payment = {
         ...createTestPayment(),
         details: {
@@ -310,24 +314,24 @@ describe("SqliteStorage", () => {
           },
         },
       };
-      storage.insertPayment(payment);
+      await storage.insertPayment(payment);
 
       // Set metadata with null lnurlPayInfo
       const metadata = {
         lnurlPayInfo: null,
       };
-      storage.setPaymentMetadata(payment.id, metadata);
+      await storage.setPaymentMetadata(payment.id, metadata);
 
       // Verify payment is retrieved without lnurlPayInfo
-      const retrievedPayment = storage.getPaymentById(payment.id);
+      const retrievedPayment = await storage.getPaymentById(payment.id);
       expect(retrievedPayment.details.Lightning.lnurlPayInfo).toBeUndefined();
     });
   });
 
   describe("Deposit Operations", () => {
-    test("should add and list deposits", () => {
-      storage.addDeposit("test_tx_1", 0, 50000);
-      const deposits = storage.listDeposits();
+    test("should add and list deposits", async () => {
+      await storage.addDeposit("test_tx_1", 0, 50000);
+      const deposits = await storage.listDeposits();
 
       expect(deposits).toHaveLength(1);
       expect(deposits[0].txid).toBe("test_tx_1");
@@ -338,20 +342,20 @@ describe("SqliteStorage", () => {
       expect(deposits[0].refundTxId).toBeNull();
     });
 
-    test("should delete deposits", () => {
-      storage.addDeposit("test_tx_1", 0, 50000);
-      storage.deleteDeposit("test_tx_1", 0);
+    test("should delete deposits", async () => {
+      await storage.addDeposit("test_tx_1", 0, 50000);
+      await storage.deleteDeposit("test_tx_1", 0);
 
-      const deposits = storage.listDeposits();
+      const deposits = await storage.listDeposits();
       expect(deposits).toHaveLength(0);
     });
 
-    test("should add multiple deposits", () => {
-      storage.addDeposit("tx1", 0, 25000);
-      storage.addDeposit("tx2", 1, 75000);
-      storage.addDeposit("tx3", 2, 100000);
+    test("should add multiple deposits", async () => {
+      await storage.addDeposit("tx1", 0, 25000);
+      await storage.addDeposit("tx2", 1, 75000);
+      await storage.addDeposit("tx3", 2, 100000);
 
-      const deposits = storage.listDeposits();
+      const deposits = await storage.listDeposits();
       expect(deposits).toHaveLength(3);
 
       const txids = deposits.map((d) => d.txid);
@@ -360,8 +364,8 @@ describe("SqliteStorage", () => {
       expect(txids).toContain("tx3");
     });
 
-    test("should update deposit with claim error", () => {
-      storage.addDeposit("test_tx_1", 0, 50000);
+    test("should update deposit with claim error", async () => {
+      await storage.addDeposit("test_tx_1", 0, 50000);
 
       const claimErrorPayload = {
         type: "claimError",
@@ -371,17 +375,17 @@ describe("SqliteStorage", () => {
         },
       };
 
-      storage.updateDeposit("test_tx_1", 0, claimErrorPayload);
+      await storage.updateDeposit("test_tx_1", 0, claimErrorPayload);
 
-      const deposits = storage.listDeposits();
+      const deposits = await storage.listDeposits();
       expect(deposits).toHaveLength(1);
       expect(deposits[0].claimError).toEqual(claimErrorPayload.error);
       expect(deposits[0].refundTx).toBeNull();
       expect(deposits[0].refundTxId).toBeNull();
     });
 
-    test("should update deposit with refund", () => {
-      storage.addDeposit("test_tx_1", 0, 50000);
+    test("should update deposit with refund", async () => {
+      await storage.addDeposit("test_tx_1", 0, 50000);
 
       const refundPayload = {
         type: "refund",
@@ -389,16 +393,16 @@ describe("SqliteStorage", () => {
         refundTx: "0200000001abcd1234...",
       };
 
-      storage.updateDeposit("test_tx_1", 0, refundPayload);
+      await storage.updateDeposit("test_tx_1", 0, refundPayload);
 
-      const deposits = storage.listDeposits();
+      const deposits = await storage.listDeposits();
       expect(deposits).toHaveLength(1);
       expect(deposits[0].refundTxId).toBe("refund_tx_123");
       expect(deposits[0].refundTx).toBe("0200000001abcd1234...");
       expect(deposits[0].claimError).toBeNull();
     });
 
-    test("should handle updating non-existent deposit", () => {
+    test("should handle updating non-existent deposit", async () => {
       const claimErrorPayload = {
         type: "claimError",
         error: {
@@ -408,39 +412,39 @@ describe("SqliteStorage", () => {
       };
 
       // This should not throw, just not update anything
-      storage.updateDeposit("non_existent_tx", 0, claimErrorPayload);
+      await storage.updateDeposit("non_existent_tx", 0, claimErrorPayload);
 
-      const deposits = storage.listDeposits();
+      const deposits = await storage.listDeposits();
       expect(deposits).toHaveLength(0);
     });
 
-    test("should handle unknown payload type", () => {
-      storage.addDeposit("test_tx_1", 0, 50000);
+    test("should handle unknown payload type", async () => {
+      await storage.addDeposit("test_tx_1", 0, 50000);
 
       const invalidPayload = {
         type: "unknown",
         data: "test",
       };
 
-      expect(() => {
-        storage.updateDeposit("test_tx_1", 0, invalidPayload);
-      }).toThrow("Unknown payload type: unknown");
+      await expect(
+        storage.updateDeposit("test_tx_1", 0, invalidPayload)
+      ).rejects.toThrow("Unknown payload type: unknown");
     });
 
-    test("should ignore duplicate deposits with same txid:vout", () => {
-      storage.addDeposit("test_tx_1", 0, 50000);
-      storage.addDeposit("test_tx_1", 0, 75000); // Same txid:vout, different amount
+    test("should ignore duplicate deposits with same txid:vout", async () => {
+      await storage.addDeposit("test_tx_1", 0, 50000);
+      await storage.addDeposit("test_tx_1", 0, 75000); // Same txid:vout, different amount
 
-      const deposits = storage.listDeposits();
+      const deposits = await storage.listDeposits();
       expect(deposits).toHaveLength(1);
       expect(deposits[0].amountSats).toBe(50000); // First amount preserved
     });
   });
 
   describe("Error Handling", () => {
-    test("should handle database corruption gracefully", () => {
+    test("should handle database corruption gracefully", async () => {
       // Close the database and corrupt the file
-      storage.close();
+      await storage.close();
 
       expect(() => {
         new SqliteStorage(
@@ -449,14 +453,9 @@ describe("SqliteStorage", () => {
       }).toThrow();
     });
 
-    test("should throw meaningful errors for invalid operations", () => {
-      expect(() => {
-        storage.insertPayment(null);
-      }).toThrow();
-
-      expect(() => {
-        storage.getPaymentById(null);
-      }).toThrow();
+    test("should throw meaningful errors for invalid operations", async () => {
+      await expect(storage.insertPayment(null)).rejects.toThrow();
+      await expect(storage.getPaymentById(null)).rejects.toThrow();
     });
   });
 

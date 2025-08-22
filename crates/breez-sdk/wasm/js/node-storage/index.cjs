@@ -6,10 +6,6 @@
 // Try to require better-sqlite3 from the calling module's context
 let Database;
 try {
-  // First try to get it from the main module's context
-  const Module = require("module");
-  const originalRequire = Module.prototype.require;
-
   // Get the calling module's directory to resolve dependencies from there
   const mainModule = require.main;
   if (mainModule) {
@@ -86,11 +82,13 @@ class SqliteStorage {
     try {
       const stmt = this.db.prepare("SELECT value FROM settings WHERE key = ?");
       const row = stmt.get(key);
-      return row ? row.value : null;
+      return Promise.resolve(row ? row.value : null);
     } catch (error) {
-      throw new StorageError(
-        `Failed to get cached item '${key}': ${error.message}`,
-        error
+      return Promise.reject(
+        new StorageError(
+          `Failed to get cached item '${key}': ${error.message}`,
+          error
+        )
       );
     }
   }
@@ -101,10 +99,13 @@ class SqliteStorage {
         "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)"
       );
       stmt.run(key, value);
+      return Promise.resolve();
     } catch (error) {
-      throw new StorageError(
-        `Failed to set cached item '${key}': ${error.message}`,
-        error
+      return Promise.reject(
+        new StorageError(
+          `Failed to set cached item '${key}': ${error.message}`,
+          error
+        )
       );
     }
   }
@@ -126,21 +127,29 @@ class SqliteStorage {
             `);
 
       const rows = stmt.all(actualLimit, actualOffset);
-      return rows.map(this._rowToPayment.bind(this));
+      return Promise.resolve(rows.map(this._rowToPayment.bind(this)));
     } catch (error) {
-      throw new StorageError(
-        `Failed to list payments (offset: ${offset}, limit: ${limit}): ${error.message}`,
-        error
+      return Promise.reject(
+        new StorageError(
+          `Failed to list payments (offset: ${offset}, limit: ${limit}): ${error.message}`,
+          error
+        )
       );
     }
   }
 
   insertPayment(payment) {
     try {
+      if (!payment) {
+        return Promise.reject(
+          new StorageError("Payment cannot be null or undefined")
+        );
+      }
+
       const stmt = this.db.prepare(`
-                INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, details, method) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            `);
+                 INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, details, method) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             `);
 
       stmt.run(
         payment.id,
@@ -152,16 +161,25 @@ class SqliteStorage {
         JSON.stringify(payment.details || {}),
         JSON.stringify(payment.method || {})
       );
+      return Promise.resolve();
     } catch (error) {
-      throw new StorageError(
-        `Failed to insert payment '${payment.id}': ${error.message}`,
-        error
+      return Promise.reject(
+        new StorageError(
+          `Failed to insert payment '${payment.id}': ${error.message}`,
+          error
+        )
       );
     }
   }
 
   getPaymentById(id) {
     try {
+      if (!id) {
+        return Promise.reject(
+          new StorageError("Payment ID cannot be null or undefined")
+        );
+      }
+
       const stmt = this.db.prepare(`
                 SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, p.method, pm.lnurl_pay_info
                 FROM payments p
@@ -171,15 +189,20 @@ class SqliteStorage {
 
       const row = stmt.get(id);
       if (!row) {
-        throw new StorageError(`Payment with id '${id}' not found`);
+        return Promise.reject(
+          new StorageError(`Payment with id '${id}' not found`)
+        );
       }
 
-      return this._rowToPayment(row);
+      return Promise.resolve(this._rowToPayment(row));
     } catch (error) {
-      if (error instanceof StorageError) throw error;
-      throw new StorageError(
-        `Failed to get payment by id '${id}': ${error.message}`,
-        error
+      if (error instanceof StorageError) return Promise.reject(error);
+      const paymentId = id || "unknown";
+      return Promise.reject(
+        new StorageError(
+          `Failed to get payment by id '${paymentId}': ${error.message}`,
+          error
+        )
       );
     }
   }
@@ -195,10 +218,13 @@ class SqliteStorage {
         paymentId,
         metadata.lnurlPayInfo ? JSON.stringify(metadata.lnurlPayInfo) : null
       );
+      return Promise.resolve();
     } catch (error) {
-      throw new StorageError(
-        `Failed to set payment metadata for '${paymentId}': ${error.message}`,
-        error
+      return Promise.reject(
+        new StorageError(
+          `Failed to set payment metadata for '${paymentId}': ${error.message}`,
+          error
+        )
       );
     }
   }
@@ -208,15 +234,18 @@ class SqliteStorage {
   addDeposit(txid, vout, amountSats) {
     try {
       const stmt = this.db.prepare(`
-                INSERT OR IGNORE INTO unclaimed_deposits (txid, vout, amount_sats) 
-                VALUES (?, ?, ?)
-            `);
+                 INSERT OR IGNORE INTO unclaimed_deposits (txid, vout, amount_sats) 
+                 VALUES (?, ?, ?)
+             `);
 
       stmt.run(txid, vout, amountSats);
+      return Promise.resolve();
     } catch (error) {
-      throw new StorageError(
-        `Failed to add deposit '${txid}:${vout}': ${error.message}`,
-        error
+      return Promise.reject(
+        new StorageError(
+          `Failed to add deposit '${txid}:${vout}': ${error.message}`,
+          error
+        )
       );
     }
   }
@@ -228,10 +257,13 @@ class SqliteStorage {
             `);
 
       stmt.run(txid, vout);
+      return Promise.resolve();
     } catch (error) {
-      throw new StorageError(
-        `Failed to delete deposit '${txid}:${vout}': ${error.message}`,
-        error
+      return Promise.reject(
+        new StorageError(
+          `Failed to delete deposit '${txid}:${vout}': ${error.message}`,
+          error
+        )
       );
     }
   }
@@ -244,18 +276,19 @@ class SqliteStorage {
             `);
 
       const rows = stmt.all();
-      return rows.map((row) => ({
-        txid: row.txid,
-        vout: row.vout,
-        amountSats: row.amount_sats,
-        claimError: row.claim_error ? JSON.parse(row.claim_error) : null,
-        refundTx: row.refund_tx,
-        refundTxId: row.refund_tx_id,
-      }));
+      return Promise.resolve(
+        rows.map((row) => ({
+          txid: row.txid,
+          vout: row.vout,
+          amountSats: row.amount_sats,
+          claimError: row.claim_error ? JSON.parse(row.claim_error) : null,
+          refundTx: row.refund_tx,
+          refundTxId: row.refund_tx_id,
+        }))
+      );
     } catch (error) {
-      throw new StorageError(
-        `Failed to list deposits: ${error.message}`,
-        error
+      return Promise.reject(
+        new StorageError(`Failed to list deposits: ${error.message}`, error)
       );
     }
   }
@@ -264,28 +297,33 @@ class SqliteStorage {
     try {
       if (payload.type === "claimError") {
         const stmt = this.db.prepare(`
-                    UPDATE unclaimed_deposits 
-                    SET claim_error = ?, refund_tx = NULL, refund_tx_id = NULL 
-                    WHERE txid = ? AND vout = ?
-                `);
+          UPDATE unclaimed_deposits 
+          SET claim_error = ?, refund_tx = NULL, refund_tx_id = NULL 
+          WHERE txid = ? AND vout = ?
+        `);
 
         stmt.run(JSON.stringify(payload.error), txid, vout);
       } else if (payload.type === "refund") {
         const stmt = this.db.prepare(`
-                    UPDATE unclaimed_deposits 
-                    SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL 
-                    WHERE txid = ? AND vout = ?
-                `);
+          UPDATE unclaimed_deposits 
+          SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL 
+          WHERE txid = ? AND vout = ?
+        `);
 
         stmt.run(payload.refundTx, payload.refundTxid, txid, vout);
       } else {
-        throw new StorageError(`Unknown payload type: ${payload.type}`);
+        return Promise.reject(
+          new StorageError(`Unknown payload type: ${payload.type}`)
+        );
       }
+      return Promise.resolve();
     } catch (error) {
-      if (error instanceof StorageError) throw error;
-      throw new StorageError(
-        `Failed to update deposit '${txid}:${vout}': ${error.message}`,
-        error
+      if (error instanceof StorageError) return Promise.reject(error);
+      return Promise.reject(
+        new StorageError(
+          `Failed to update deposit '${txid}:${vout}': ${error.message}`,
+          error
+        )
       );
     }
   }
@@ -342,7 +380,7 @@ class SqliteStorage {
   }
 }
 
-function createSqliteStorage(dataDir, logger = null) {
+function createDefaultStorage(dataDir, logger = null) {
   const path = require("path");
   const dbPath = path.join(dataDir, "storage.sql");
   const storage = new SqliteStorage(dbPath, logger);
@@ -351,4 +389,4 @@ function createSqliteStorage(dataDir, logger = null) {
 }
 
 // CommonJS exports
-module.exports = { SqliteStorage, createSqliteStorage, StorageError };
+module.exports = { SqliteStorage, createDefaultStorage, StorageError };

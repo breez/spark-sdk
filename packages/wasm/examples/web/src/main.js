@@ -1,6 +1,6 @@
 import './style.css'
 import QRCode from 'qrcode'
-import init, { initLogging, defaultConfig, SdkBuilder, parse } from '@breeztech/breez-sdk-spark/web'
+import init, { initLogging, defaultConfig, SdkBuilder, parse, defaultStorage } from '@breeztech/breez-sdk-spark'
 
 // Configuration loaded from environment variables
 const CONFIG = {
@@ -195,7 +195,8 @@ async function initializeSdk() {
     const config = defaultConfig(CONFIG.network)
 
     // Create SDK builder
-    let sdkBuilder = SdkBuilder.new(config, CONFIG.mnemonic, './.data')
+    let storage = defaultStorage('BreezSDK')
+    let sdkBuilder = SdkBuilder.new(config, CONFIG.mnemonic, storage)
 
     // Add chain service if configured
     if (CONFIG.chainServiceUrl && CONFIG.chainServiceUsername && CONFIG.chainServicePassword) {

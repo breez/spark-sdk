@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "qrcode": "^1.5.4",
-    "@breeztech/breez-sdk-spark": "file:../../"
+    "@breeztech/breez-sdk-spark": "file:../../web"
   },
   "devDependencies": {
     "vite": "^7.1.2"
