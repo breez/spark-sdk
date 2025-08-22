@@ -60,6 +60,7 @@ pub struct BreezSdk {
     event_emitter: breez_sdk_common::utils::Arc<EventEmitter>,
     shutdown_sender: watch::Sender<()>,
     shutdown_receiver: watch::Receiver<()>,
+    sync_trigger: tokio::sync::broadcast::Sender<()>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -131,6 +132,7 @@ impl BreezSdk {
             event_emitter: breez_sdk_common::utils::Arc::new(EventEmitter::new()),
             shutdown_sender,
             shutdown_receiver,
+            sync_trigger: tokio::sync::broadcast::channel(100).0,
         };
         Ok(sdk)
     }
@@ -183,6 +185,7 @@ impl BreezSdk {
         let sdk = self.clone();
         let mut shutdown_receiver = sdk.shutdown_receiver.clone();
         let mut subscription = sdk.spark_wallet.subscribe_events();
+        let mut sync_trigger = sdk.sync_trigger.clone().subscribe();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -199,6 +202,12 @@ impl BreezSdk {
                             Err(e) => {
                                 error!("Failed to receive event: {e:?}");
                             }
+                        }
+                    }
+                    _ = sync_trigger.recv() => {
+                        info!("Sync trigger changed");
+                        if let Err(e) = sdk.sync_wallet_internal().await {
+                            error!("Failed to sync wallet: {e:?}");
                         }
                     }
                 }
@@ -850,11 +859,16 @@ impl BreezSdk {
             }
         };
         if let Ok(response) = &res {
-            self.storage.insert_payment(response.payment.clone())?;
+            //TODO: We get incomplete payments here from the ssp so better not to persist for now.
+            // we trigger the sync here anyway to get the fresh payment.
+            //self.storage.insert_payment(response.payment.clone())?;
             if !suppress_payment_event {
                 self.event_emitter.emit(&SdkEvent::PaymentSucceeded {
                     payment: response.payment.clone(),
                 });
+            }
+            if let Err(e) = self.sync_trigger.send(()) {
+                error!("Failed to send sync trigger: {e:?}");
             }
         }
         res

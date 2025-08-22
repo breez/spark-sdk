@@ -198,21 +198,19 @@ impl TryFrom<WalletTransfer> for Payment {
             None => CurrencyAmount::default(),
         };
 
-        let details: PaymentDetails = match transfer.user_request {
-            Some(user_request) => user_request.try_into()?,
-            None => {
-                // TODO: wokarround for missing user_request
-                if [
-                    TransferType::CooperativeExit,
-                    TransferType::PreimageSwap,
-                    TransferType::UtxoSwap,
-                ]
-                .contains(&transfer.transfer_type)
-                {
-                    status = PaymentStatus::Pending;
-                }
-                PaymentDetails::Spark
+        let details: PaymentDetails = if let Some(user_request) = transfer.user_request {
+            user_request.try_into()?
+        } else {
+            if [
+                TransferType::CooperativeExit,
+                TransferType::PreimageSwap,
+                TransferType::UtxoSwap,
+            ]
+            .contains(&transfer.transfer_type)
+            {
+                status = PaymentStatus::Pending;
             }
+            PaymentDetails::Spark
         };
 
         Ok(Payment {
@@ -523,7 +521,7 @@ pub struct SendOnchainSpeedFeeQuote {
 
 impl SendOnchainSpeedFeeQuote {
     pub fn total_fee_sat(&self) -> u64 {
-        self.user_fee_sat + self.l1_broadcast_fee_sat
+        self.user_fee_sat.saturating_add(self.l1_broadcast_fee_sat)
     }
 }
 
