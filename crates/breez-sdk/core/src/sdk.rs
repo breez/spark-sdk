@@ -677,7 +677,7 @@ impl BreezSdk {
             processed_success_action: success_action.clone(),
             raw_success_action: request.prepare_response.success_action,
         };
-        let PaymentDetails::Lightning { lnurl_pay_info, .. } = &mut payment.details else {
+        let Some(PaymentDetails::Lightning { lnurl_pay_info, .. }) = &mut payment.details else {
             return Err(SdkError::Generic(
                 "Expected Lightning payment details".to_string(),
             ));
@@ -1058,7 +1058,7 @@ fn process_success_action(
         }
     };
 
-    let PaymentDetails::Lightning { preimage, .. } = &payment.details else {
+    let Some(PaymentDetails::Lightning { preimage, .. }) = &payment.details else {
         return Err(LnurlError::general(format!(
             "Invalid payment type: expected type `PaymentDetails::Lightning`, got payment details {:?}.",
             payment.details

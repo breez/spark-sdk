@@ -6,7 +6,7 @@ use rusqlite_migration::{M, Migrations};
 use std::path::{Path, PathBuf};
 
 use crate::{
-    DepositInfo, DepositRefund, LnurlPayInfo, PaymentDetails,
+    DepositInfo, DepositRefund, LnurlPayInfo, PaymentDetails, PaymentMethod,
     error::DepositClaimError,
     models::{PaymentStatus, PaymentType},
     persist::PaymentMetadata,
@@ -67,13 +67,14 @@ impl SqliteStorage {
               status TEXT NOT NULL,
               amount INTEGER NOT NULL,
               fees INTEGER NOT NULL,
-              timestamp INTEGER NOT NULL
+              timestamp INTEGER NOT NULL,
+              details TEXT,
+              method TEXT
             );",
             "CREATE TABLE IF NOT EXISTS settings (
               key TEXT PRIMARY KEY,
               value TEXT NOT NULL
             );",
-            "ALTER TABLE payments ADD COLUMN details TEXT;",
             "CREATE TABLE IF NOT EXISTS unclaimed_deposits (
               txid TEXT NOT NULL,
               vout INTEGER NOT NULL,
@@ -116,7 +117,7 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         let query = format!(
-            "SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, pm.lnurl_pay_info
+            "SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, p.method, pm.lnurl_pay_info
              FROM payments p
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              ORDER BY p.timestamp DESC 
@@ -128,9 +129,9 @@ impl Storage for SqliteStorage {
         let mut stmt = connection.prepare(&query)?;
 
         let payment_iter = stmt.query_map(params![], |row| {
-            let mut details = row.get(6)?;
-            if let PaymentDetails::Lightning { lnurl_pay_info, .. } = &mut details {
-                *lnurl_pay_info = row.get(7)?;
+            let mut details: Option<PaymentDetails> = row.get(6)?;
+            if let Some(PaymentDetails::Lightning { lnurl_pay_info, .. }) = &mut details {
+                *lnurl_pay_info = row.get(8)?;
             }
 
             Ok(Payment {
@@ -141,6 +142,7 @@ impl Storage for SqliteStorage {
                 fees: row.get(4)?,
                 timestamp: row.get(5)?,
                 details,
+                method: row.get(7)?,
             })
         })?;
 
@@ -156,8 +158,8 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         connection.execute(
-            "INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, details) 
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, details, method) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 payment.id,
                 payment.payment_type.to_string(),
@@ -166,6 +168,7 @@ impl Storage for SqliteStorage {
                 payment.fees,
                 payment.timestamp,
                 payment.details,
+                payment.method,
             ],
         )?;
 
@@ -219,10 +222,15 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare(
-            "SELECT id, payment_type, status, amount, fees, timestamp, details FROM payments WHERE id = ?",
+            "SELECT id, payment_type, status, amount, fees, timestamp, details, method, pm.lnurl_pay_info FROM payments LEFT JOIN payment_metadata pm ON payments.id = pm.payment_id WHERE payments.id = ?",
         )?;
 
         let result = stmt.query_row(params![id], |row| {
+            let mut details: Option<PaymentDetails> = row.get(6)?;
+            if let Some(PaymentDetails::Lightning { lnurl_pay_info, .. }) = &mut details {
+                *lnurl_pay_info = row.get(8)?;
+            }
+
             Ok(Payment {
                 id: row.get(0)?,
                 payment_type: PaymentType::from(row.get::<_, String>(1)?.as_str()),
@@ -230,7 +238,8 @@ impl Storage for SqliteStorage {
                 amount: row.get(3)?,
                 fees: row.get(4)?,
                 timestamp: row.get(5)?,
-                details: row.get(6)?,
+                details,
+                method: row.get(7)?,
             })
         });
         result.map_err(StorageError::from)
@@ -361,6 +370,28 @@ impl FromSql for PaymentDetails {
     }
 }
 
+impl ToSql for PaymentMethod {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        let json = serde_json::to_string(self)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        Ok(rusqlite::types::ToSqlOutput::from(json))
+    }
+}
+
+impl FromSql for PaymentMethod {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value {
+            ValueRef::Text(i) => {
+                let s = std::str::from_utf8(i).map_err(FromSqlError::other)?;
+                let payment_method: PaymentMethod =
+                    serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
+                Ok(payment_method)
+            }
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
+
 impl ToSql for DepositClaimError {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         let json = serde_json::to_string(self)
@@ -423,7 +454,8 @@ mod tests {
             amount: 100_000,
             fees: 1000,
             timestamp: Utc::now().timestamp().try_into().unwrap(),
-            details: PaymentDetails::Spark,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
         };
 
         // Insert payment
@@ -437,7 +469,7 @@ mod tests {
         assert_eq!(payments[0].status, payment.status);
         assert_eq!(payments[0].amount, payment.amount);
         assert_eq!(payments[0].fees, payment.fees);
-        assert!(matches!(payments[0].details, PaymentDetails::Spark));
+        assert!(matches!(payments[0].details, Some(PaymentDetails::Spark)));
 
         // Get payment by ID
         let retrieved_payment = storage.get_payment_by_id(payment.id.clone()).unwrap();
@@ -446,6 +478,10 @@ mod tests {
         assert_eq!(retrieved_payment.status, payment.status);
         assert_eq!(retrieved_payment.amount, payment.amount);
         assert_eq!(retrieved_payment.fees, payment.fees);
+        assert!(matches!(
+            retrieved_payment.details,
+            Some(PaymentDetails::Spark)
+        ));
     }
 
     #[test]

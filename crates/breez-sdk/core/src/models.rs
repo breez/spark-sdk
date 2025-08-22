@@ -74,6 +74,27 @@ impl From<&str> for PaymentStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PaymentMethod {
+    Lightning,
+    Spark,
+    Deposit,
+    Withdraw,
+    Unknown,
+}
+
+impl From<TransferType> for PaymentMethod {
+    fn from(value: TransferType) -> Self {
+        match value {
+            TransferType::PreimageSwap => PaymentMethod::Lightning,
+            TransferType::CooperativeExit => PaymentMethod::Withdraw,
+            TransferType::Transfer => PaymentMethod::Spark,
+            TransferType::UtxoSwap => PaymentMethod::Deposit,
+            _ => PaymentMethod::Unknown,
+        }
+    }
+}
 /// Represents a payment (sent or received)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -90,8 +111,11 @@ pub struct Payment {
     pub fees: u64,
     /// Timestamp of when the payment was created
     pub timestamp: u64,
+    /// Method of payment. Sometimes the payment details is empty so this field
+    /// is used to determine the payment method.
+    pub method: PaymentMethod,
     /// Details of the payment
-    pub details: PaymentDetails,
+    pub details: Option<PaymentDetails>,
 }
 
 // TODO: fix large enum variant lint - may be done by boxing lnurl_pay_info but that requires
@@ -212,13 +236,13 @@ impl TryFrom<WalletTransfer> for Payment {
                     let fee_sat = r.max_fee.as_sats().unwrap_or(0);
                     (fee_sat, transfer.total_value_sat)
                 }
-                _ => (0, 0),
+                _ => (0, transfer.total_value_sat),
             },
             None => (0, transfer.total_value_sat),
         };
 
-        let details: PaymentDetails = if let Some(user_request) = transfer.user_request {
-            user_request.try_into()?
+        let details: Option<PaymentDetails> = if let Some(user_request) = transfer.user_request {
+            Some(user_request.try_into()?)
         } else {
             if [
                 TransferType::CooperativeExit,
@@ -230,7 +254,7 @@ impl TryFrom<WalletTransfer> for Payment {
                 status = PaymentStatus::Pending;
             }
             amount_sat = transfer.total_value_sat;
-            PaymentDetails::Spark
+            None
         };
 
         Ok(Payment {
@@ -243,6 +267,7 @@ impl TryFrom<WalletTransfer> for Payment {
                 Some(Ok(duration)) => duration.as_secs(),
                 _ => 0,
             },
+            method: transfer.transfer_type.into(),
             details,
         })
     }
@@ -278,7 +303,8 @@ impl Payment {
             amount: amount_sat,
             fees: payment.fee_sat,
             timestamp: payment.created_at.cast_unsigned(),
-            details,
+            method: PaymentMethod::Lightning,
+            details: Some(details),
         })
     }
 }

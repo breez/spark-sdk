@@ -249,7 +249,8 @@ pub struct Payment {
     pub amount: u64,
     pub fees: u64,
     pub timestamp: u64,
-    pub details: PaymentDetails,
+    pub method: PaymentMethod,
+    pub details: Option<PaymentDetails>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentDetails)]
@@ -269,6 +270,15 @@ pub enum PaymentDetails {
     Deposit {
         tx_id: String,
     },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentMethod)]
+pub enum PaymentMethod {
+    Lightning,
+    Spark,
+    Deposit,
+    Withdraw,
+    Unknown,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlPayInfo)]
