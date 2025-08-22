@@ -1,10 +1,15 @@
+mod package;
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
 use anyhow::{Context, Result, bail};
 use cargo_metadata::{Metadata, MetadataCommand, Package};
 use clap::{Parser, Subcommand};
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::{fs, str::FromStr};
 use xshell::{Shell, cmd};
+
+use crate::package::{TargetPackage, package_cmd};
 
 #[derive(Parser, Debug)]
 #[command(name = "xtask")]
@@ -95,61 +100,16 @@ enum Commands {
 
     /// Run integration tests (containers etc.)
     Itest {},
-}
 
-#[derive(Debug, Clone)]
-enum TargetPackage {
-    Wasm(WasmPackages),
-}
-
-impl FromStr for TargetPackage {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.to_lowercase();
-        let split = s.split("::").collect::<Vec<&str>>();
-        if split.is_empty() || split.len() > 2 {
-            bail!(
-                "invalid target package: {} - expected format: <package>[::<subpackage>]",
-                s
-            );
-        }
-        match split[0] {
-            "wasm" => {
-                let wasm_package = if split.len() == 1 {
-                    // No subpackage specified, default to All
-                    WasmPackages::All
-                } else {
-                    // Subpackage specified, parse it
-                    WasmPackages::from_str(split[1])?
-                };
-                Ok(TargetPackage::Wasm(wasm_package))
-            }
-            _ => bail!("invalid target package: {}", s),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-enum WasmPackages {
-    All,
-    Node,
-    Deno,
-    Web,
-    Bundle,
-}
-
-impl FromStr for WasmPackages {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "all" => Ok(WasmPackages::All),
-            "node" => Ok(WasmPackages::Node),
-            "deno" => Ok(WasmPackages::Deno),
-            "web" => Ok(WasmPackages::Web),
-            "bundle" => Ok(WasmPackages::Bundle),
-            _ => bail!("invalid wasm package: {}", s),
-        }
-    }
+    /// Run JavaScript/Node.js storage tests for WASM crate
+    JsStorageTest {
+        /// Run tests in watch mode
+        #[arg(long)]
+        watch: bool,
+        /// Generate coverage report
+        #[arg(long)]
+        coverage: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -172,6 +132,7 @@ fn main() -> Result<()> {
         } => build_cmd(release, target, package),
         Commands::Package { package } => package_cmd(package),
         Commands::Itest {} => itest_cmd(),
+        Commands::JsStorageTest { watch, coverage } => js_storage_test_cmd(watch, coverage),
     }
 }
 
@@ -310,6 +271,13 @@ fn wasm_test_cmd(
             .with_context(|| "failed to start wasm tests via wasm-pack")?;
         if !status.success() {
             bail!("wasm tests failed");
+        }
+
+        // If this is the breez-sdk-spark-wasm package and we're in node mode,
+        // also run JavaScript storage tests
+        if pkg.name == "breez-sdk-spark-wasm" && node {
+            println!("Running JavaScript storage tests for Node.js WASM package...");
+            js_storage_test_cmd(false, false)?
         }
     }
 
@@ -504,6 +472,56 @@ fn build_cmd(release: bool, target: Option<String>, package: Option<String>) -> 
     Ok(())
 }
 
+fn run_wasm_clippy_for_package(
+    sh: &Shell,
+    pkg_name: &str,
+    target: &str,
+    features: Option<&str>,
+    fix: bool,
+    rest: &[String],
+    description: &str,
+) -> Result<()> {
+    let mut c = Command::new("cargo");
+    c.arg("clippy");
+    c.args(["-p", pkg_name]);
+    c.arg("--all-targets");
+    c.arg("--target").arg(target);
+
+    if features.is_some() {
+        c.arg("--no-default-features");
+        if let Some(feature) = features {
+            c.arg("--features").arg(feature);
+        }
+    }
+
+    if fix {
+        c.arg("--fix");
+    }
+    c.arg("--");
+    c.arg("-D").arg("warnings");
+    if !rest.is_empty() {
+        for r in rest {
+            c.arg(r);
+        }
+    }
+    if cfg!(target_os = "macos")
+        && let Some((clang_path, llvm_ar_path)) = detect_brew_llvm_paths(sh)
+    {
+        c.env("CC_wasm32_unknown_unknown", &clang_path);
+        c.env("AR_wasm32_unknown_unknown", &llvm_ar_path);
+    }
+    let status = c.status().with_context(|| {
+        format!(
+            "failed to run cargo clippy for wasm target on {} with {}",
+            pkg_name, description
+        )
+    })?;
+    if !status.success() {
+        bail!("wasm clippy failed for {} with {}", pkg_name, description);
+    }
+    Ok(())
+}
+
 fn wasm_clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
     let sh = Shell::new()?;
     // Ensure wasm target exists
@@ -517,32 +535,36 @@ fn wasm_clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
         bail!("No wasm-capable packages detected in workspace");
     }
     for pkg in wasm_packages.iter() {
-        let mut c = Command::new("cargo");
-        c.arg("clippy");
-        c.args(["-p", &pkg.name]);
-        c.arg("--all-targets");
-        c.arg("--target").arg(&target);
-        if fix {
-            c.arg("--fix");
-        }
-        c.arg("--");
-        c.arg("-D").arg("warnings");
-        if !rest.is_empty() {
-            for r in &rest {
-                c.arg(r);
+        // For breez-sdk-spark-wasm, run clippy with different feature combinations
+        if pkg.name == "breez-sdk-spark-wasm" {
+            let feature_variants = vec![
+                (None, "no features"),
+                (Some("browser"), "browser feature"),
+                (Some("node-js"), "node-js feature"),
+            ];
+
+            for (features, description) in feature_variants {
+                run_wasm_clippy_for_package(
+                    &sh,
+                    &pkg.name,
+                    &target,
+                    features,
+                    fix,
+                    &rest,
+                    description,
+                )?;
             }
-        }
-        if cfg!(target_os = "macos")
-            && let Some((clang_path, llvm_ar_path)) = detect_brew_llvm_paths(&sh)
-        {
-            c.env("CC_wasm32_unknown_unknown", &clang_path);
-            c.env("AR_wasm32_unknown_unknown", &llvm_ar_path);
-        }
-        let status = c.status().with_context(|| {
-            format!("failed to run cargo clippy for wasm target on {}", pkg.name)
-        })?;
-        if !status.success() {
-            bail!("wasm clippy failed for {}", pkg.name);
+        } else {
+            // For other wasm packages, run clippy normally
+            run_wasm_clippy_for_package(
+                &sh,
+                &pkg.name,
+                &target,
+                None,
+                fix,
+                &rest,
+                "default features",
+            )?;
         }
     }
     Ok(())
@@ -592,109 +614,55 @@ fn itest_cmd() -> Result<()> {
     Ok(())
 }
 
-fn package_cmd(package: Option<TargetPackage>) -> Result<()> {
-    match package {
-        Some(TargetPackage::Wasm(wasm_package)) => {
-            package_wasm_cmd(wasm_package)?;
-        }
-        None => {
-            println!("No package specified, packaging all packages");
-            package_wasm_cmd(WasmPackages::All)?;
-        }
-    }
-    Ok(())
-}
-
-fn package_wasm_cmd(wasm_package: WasmPackages) -> Result<()> {
+fn js_storage_test_cmd(watch: bool, coverage: bool) -> Result<()> {
     let sh = Shell::new()?;
 
-    // Ensure wasm-pack exists
-    let _ = cmd!(sh, "cargo install wasm-pack --locked").run();
+    // Path to the Node.js storage implementation
+    let storage_dir = Path::new("crates/breez-sdk/wasm/js/node-storage");
 
-    // Get workspace root and set up paths
-    let workspace_root = std::env::current_dir()?;
-    let wasm_crate_dir = workspace_root.join("crates/breez-sdk/wasm");
-    let pkg_dir = workspace_root.join("packages/wasm");
+    if !storage_dir.exists() {
+        bail!(
+            "Node.js storage directory not found: {}",
+            storage_dir.display()
+        );
+    }
 
-    // On macOS, auto-detect Homebrew LLVM and set CC/AR for wasm cross-compiles
-    let clang_env = if cfg!(target_os = "macos")
-        && let Some((clang_path, llvm_ar_path)) = detect_brew_llvm_paths(&sh)
-    {
-        vec![
-            ("CC_wasm32_unknown_unknown".to_string(), clang_path),
-            ("AR_wasm32_unknown_unknown".to_string(), llvm_ar_path),
-        ]
+    let package_json = storage_dir.join("package.json");
+    if !package_json.exists() {
+        bail!("package.json not found in {}", storage_dir.display());
+    }
+
+    println!(
+        "Running JavaScript storage tests in {}",
+        storage_dir.display()
+    );
+
+    sh.change_dir(storage_dir);
+
+    println!("Installing Node.js dependencies...");
+    cmd!(sh, "npm install")
+        .run()
+        .with_context(|| "Failed to install Node.js dependencies. Ensure npm is installed.")?;
+
+    println!("Rebuilding native modules for current Node.js version...");
+    cmd!(sh, "npm rebuild").run().with_context(
+        || "Failed to rebuild native modules. This is needed for better-sqlite3 compatibility.",
+    )?;
+
+    // Run the appropriate npm command
+    let npm_cmd = if watch {
+        "test:watch"
+    } else if coverage {
+        "test:coverage"
     } else {
-        vec![]
+        "test"
     };
 
-    println!("Packaging WASM target: {wasm_package:?}");
+    println!("Running: npm run {}", npm_cmd);
+    cmd!(sh, "npm run {npm_cmd}")
+        .run()
+        .with_context(|| format!("JavaScript storage tests failed (npm run {})", npm_cmd))?;
 
-    match wasm_package {
-        WasmPackages::All => {
-            println!("Packaging all WASM targets");
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "bundler", &clang_env)?;
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "deno", &clang_env)?;
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "nodejs", &clang_env)?;
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "web", &clang_env)?;
-        }
-        WasmPackages::Bundle => {
-            println!("Packaging Bundle WASM target");
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "bundler", &clang_env)?;
-        }
-        WasmPackages::Deno => {
-            println!("Packaging Deno WASM target");
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "deno", &clang_env)?;
-        }
-        WasmPackages::Node => {
-            println!("Packaging Node.js WASM target");
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "nodejs", &clang_env)?;
-        }
-        WasmPackages::Web => {
-            println!("Packaging Web WASM target");
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "web", &clang_env)?;
-        }
-    }
-    Ok(())
-}
-
-fn package_wasm_target(
-    crate_dir: &PathBuf,
-    pkg_dir: &Path,
-    target: &str,
-    clang_env: &[(String, String)],
-) -> Result<()> {
-    let out_path = pkg_dir.join(target);
-
-    // Remove existing output directory if it exists
-    if out_path.exists() {
-        fs::remove_dir_all(&out_path)?;
-    }
-
-    let mut c = Command::new("wasm-pack");
-    c.current_dir(crate_dir);
-    c.args([
-        "build",
-        "--target",
-        target,
-        "--release",
-        "--out-dir",
-        out_path.to_str().unwrap(),
-    ]);
-
-    // Set clang environment variables if provided
-    for (key, value) in clang_env {
-        c.env(key, value);
-    }
-
-    let status = c
-        .status()
-        .with_context(|| format!("failed to build wasm target {target}"))?;
-
-    if !status.success() {
-        bail!("wasm-pack build failed for target {target}");
-    }
-
-    println!("Successfully built WASM target: {target}");
+    println!("✅ JavaScript storage tests completed successfully!");
     Ok(())
 }

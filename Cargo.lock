@@ -6046,6 +6046,7 @@ dependencies = [
  "cargo_metadata 0.18.1",
  "clap",
  "rayon",
+ "serde_json",
  "xshell",
 ]
 

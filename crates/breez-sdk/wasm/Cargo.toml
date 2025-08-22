@@ -5,6 +5,8 @@ version.workspace = true
 
 [features]
 browser-tests = [] # Enable browser wasm-pack tests
+browser = []
+node-js = []
 
 [lib]
 name = "breez_sdk_spark_wasm"

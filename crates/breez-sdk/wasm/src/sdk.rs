@@ -8,6 +8,7 @@ use crate::{
     event::{EventListener, WasmEventListener},
     logger::{Logger, WasmTracingLayer},
     models::*,
+    persist::Storage,
 };
 
 #[wasm_bindgen]
@@ -34,6 +35,12 @@ pub async fn init_logging(logger: Logger, filter: Option<String>) -> WasmResult<
 #[wasm_bindgen(js_name = "defaultConfig")]
 pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network.into()).into()
+}
+
+#[wasm_bindgen(js_name = "defaultStorage")]
+pub fn default_storage(data_dir: &str) -> WasmResult<Storage> {
+    let storage = crate::platform::default_storage(data_dir)?;
+    Ok(storage)
 }
 
 #[wasm_bindgen(js_name = "parse")]
