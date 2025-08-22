@@ -160,7 +160,7 @@ const lnurlPay = async (options) => {
   const prepareResponse = await sdk.prepareLnurlPay({
     amountSats: amountSats,
     comment: options.comment,
-    data: data,
+    payRequest: data,
     validateSuccessActionUrl: options.validateSuccessUrl
   })
 

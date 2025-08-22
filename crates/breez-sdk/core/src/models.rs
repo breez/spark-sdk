@@ -6,9 +6,9 @@ use breez_sdk_common::{
 use core::fmt;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
-    CoopExitFeeQuote, CoopExitSpeedFeeQuote, CurrencyAmount, ExitSpeed, LightningSendPayment,
-    LightningSendStatus, Network as SparkNetwork, SspUserRequest, TransferDirection,
-    TransferStatus, TransferType, Utxo, WalletTransfer,
+    CoopExitFeeQuote, CoopExitSpeedFeeQuote, ExitSpeed, LightningSendPayment, LightningSendStatus,
+    Network as SparkNetwork, SspUserRequest, TransferDirection, TransferStatus, TransferType, Utxo,
+    WalletTransfer,
 };
 use std::time::UNIX_EPOCH;
 
@@ -189,13 +189,32 @@ impl TryFrom<WalletTransfer> for Payment {
             TransferStatus::Expired | TransferStatus::Returned => PaymentStatus::Failed,
             _ => PaymentStatus::Pending,
         };
-        let fees: CurrencyAmount = match transfer.clone().user_request {
+        let (fees_sat, mut amount_sat): (u64, u64) = match transfer.clone().user_request {
             Some(user_request) => match user_request {
-                SspUserRequest::LightningSendRequest(r) => r.fee,
-                SspUserRequest::CoopExitRequest(r) => r.fee,
-                _ => CurrencyAmount::default(),
+                SspUserRequest::LightningSendRequest(r) => {
+                    // TODO: if we have the preimage it is not pending. This is a work arround
+                    // untill spark will implelent incremental syncing based on updated time.
+                    if r.lightning_send_payment_preimage.is_some() {
+                        status = PaymentStatus::Completed;
+                    }
+                    let fee_sat = r.fee.as_sats().unwrap_or(0);
+                    (fee_sat, transfer.total_value_sat - fee_sat)
+                }
+                SspUserRequest::CoopExitRequest(r) => {
+                    let fee_sat = r
+                        .fee
+                        .as_sats()
+                        .unwrap_or(0)
+                        .saturating_add(r.l1_broadcast_fee.as_sats().unwrap_or(0));
+                    (fee_sat, transfer.total_value_sat - fee_sat)
+                }
+                SspUserRequest::ClaimStaticDeposit(r) => {
+                    let fee_sat = r.max_fee.as_sats().unwrap_or(0);
+                    (fee_sat, transfer.total_value_sat)
+                }
+                _ => (0, 0),
             },
-            None => CurrencyAmount::default(),
+            None => (0, transfer.total_value_sat),
         };
 
         let details: PaymentDetails = if let Some(user_request) = transfer.user_request {
@@ -210,6 +229,7 @@ impl TryFrom<WalletTransfer> for Payment {
             {
                 status = PaymentStatus::Pending;
             }
+            amount_sat = transfer.total_value_sat;
             PaymentDetails::Spark
         };
 
@@ -217,8 +237,8 @@ impl TryFrom<WalletTransfer> for Payment {
             id: transfer.id.to_string(),
             payment_type,
             status,
-            amount: transfer.total_value_sat,
-            fees: fees.as_sats().unwrap_or(0),
+            amount: amount_sat,
+            fees: fees_sat,
             timestamp: match transfer.created_at.map(|t| t.duration_since(UNIX_EPOCH)) {
                 Some(Ok(duration)) => duration.as_secs(),
                 _ => 0,
@@ -483,7 +503,7 @@ pub enum SendPaymentMethod {
 #[derive(Debug, Clone, Serialize)]
 pub struct SendOnchainFeeQuote {
     pub id: String,
-    pub expires_at: i64,
+    pub expires_at: u64,
     pub speed_fast: SendOnchainSpeedFeeQuote,
     pub speed_medium: SendOnchainSpeedFeeQuote,
     pub speed_slow: SendOnchainSpeedFeeQuote,

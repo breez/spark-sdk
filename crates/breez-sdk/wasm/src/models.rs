@@ -378,7 +378,7 @@ pub enum ReceivePaymentMethod {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendOnchainFeeQuote)]
 pub struct SendOnchainFeeQuote {
     pub id: String,
-    pub expires_at: i64,
+    pub expires_at: u64,
     pub speed_fast: SendOnchainSpeedFeeQuote,
     pub speed_medium: SendOnchainSpeedFeeQuote,
     pub speed_slow: SendOnchainSpeedFeeQuote,

@@ -47,6 +47,12 @@ use crate::{
     persist::{CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, PaymentMetadata, Storage},
 };
 
+#[derive(Clone, Debug)]
+enum SyncType {
+    Full,
+    PaymentsOnly,
+}
+
 /// `BreezSDK` is a wrapper around `SparkSDK` that provides a more structured API
 /// with request/response objects and comprehensive error handling.
 #[derive(Clone)]
@@ -60,7 +66,7 @@ pub struct BreezSdk {
     event_emitter: breez_sdk_common::utils::Arc<EventEmitter>,
     shutdown_sender: watch::Sender<()>,
     shutdown_receiver: watch::Receiver<()>,
-    sync_trigger: tokio::sync::broadcast::Sender<()>,
+    sync_trigger: tokio::sync::broadcast::Sender<SyncType>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -141,10 +147,13 @@ impl BreezSdk {
     ///
     /// This method initiates the following backround tasks:
     /// 1. `periodic_sync`: the wallet with the Spark network    
-    ///
+    /// 2. `monitor_deposits`: monitors for new deposits
     pub(crate) fn start(&self) {
         self.periodic_sync();
         self.monitor_deposits();
+        if let Err(e) = self.sync_trigger.send(SyncType::Full) {
+            error!("Failed to execute initial sync: {e:?}");
+        }
     }
 
     fn monitor_deposits(&self) {
@@ -204,10 +213,13 @@ impl BreezSdk {
                             }
                         }
                     }
-                    _ = sync_trigger.recv() => {
-                        info!("Sync trigger changed");
-                        if let Err(e) = sdk.sync_wallet_internal().await {
-                            error!("Failed to sync wallet: {e:?}");
+                    sync_type_res = sync_trigger.recv() => {
+                        if let Ok(sync_type) = sync_type_res   {
+                            info!("Sync trigger changed: {sync_type:?}");
+
+                            if let Err(e) = sdk.sync_wallet_internal(sync_type).await {
+                                error!("Failed to sync wallet: {e:?}");
+                            }
                         }
                     }
                 }
@@ -222,7 +234,7 @@ impl BreezSdk {
             }
             WalletEvent::StreamConnected => {
                 info!("Stream connected");
-                if let Err(e) = self.sync_wallet_internal().await {
+                if let Err(e) = self.sync_trigger.send(SyncType::Full) {
                     error!("Failed to sync wallet: {e:?}");
                 }
             }
@@ -245,11 +257,12 @@ impl BreezSdk {
         }
     }
 
-    async fn sync_wallet_internal(&self) -> Result<(), SdkError> {
+    async fn sync_wallet_internal(&self, sync_type: SyncType) -> Result<(), SdkError> {
         let start_time = Instant::now();
-
-        // Sync with the Spark network
-        self.spark_wallet.sync().await?;
+        if let SyncType::Full = sync_type {
+            // Sync with the Spark network
+            self.spark_wallet.sync().await?;
+        }
         self.sync_payments_to_storage().await?;
         let elapsed = start_time.elapsed();
         info!("Wallet sync completed in {elapsed:?}");
@@ -710,10 +723,10 @@ impl BreezSdk {
                     .spark_wallet
                     .extract_spark_address(&request.payment_request)?;
 
-                let spark_transfer_fee_sats = match spark_address {
-                    Some(_) => Some(0),
-                    // prefer lightning or no spark address found
-                    _ => None,
+                let spark_transfer_fee_sats = if spark_address.is_some() {
+                    Some(0)
+                } else {
+                    None
                 };
 
                 let lightning_fee_sats = self
@@ -777,10 +790,7 @@ impl BreezSdk {
         suppress_payment_event: bool,
     ) -> Result<SendPaymentResponse, SdkError> {
         let res = match request.prepare_response.payment_method {
-            SendPaymentMethod::SparkAddress {
-                address,
-                fee_sats: _,
-            } => {
+            SendPaymentMethod::SparkAddress { address, .. } => {
                 let spark_address = address
                     .parse::<SparkAddress>()
                     .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
@@ -813,7 +823,8 @@ impl BreezSdk {
                 };
                 if use_spark && spark_transfer_fee_sats.is_none() {
                     return Err(SdkError::InvalidInput(
-                        "use_spark is used but invoice doesn't contain a spark address".to_string(),
+                        "Cannot use spark to pay invoice as it doesn't contain a spark address"
+                            .to_string(),
                     ));
                 }
 
@@ -867,7 +878,7 @@ impl BreezSdk {
                     payment: response.payment.clone(),
                 });
             }
-            if let Err(e) = self.sync_trigger.send(()) {
+            if let Err(e) = self.sync_trigger.send(SyncType::PaymentsOnly) {
                 error!("Failed to send sync trigger: {e:?}");
             }
         }
@@ -880,7 +891,7 @@ impl BreezSdk {
         &self,
         request: SyncWalletRequest,
     ) -> Result<SyncWalletResponse, SdkError> {
-        self.sync_wallet_internal().await?;
+        self.sync_wallet_internal(SyncType::Full).await?;
         Ok(SyncWalletResponse {})
     }
 
