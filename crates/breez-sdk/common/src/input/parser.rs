@@ -311,7 +311,9 @@ where
                 InputType::LnurlWithdraw(withdraw_request)
             }
             LnurlRequestDetails::AuthRequest { auth_request } => InputType::LnurlAuth(auth_request),
-            LnurlRequestDetails::Error { error_details: error } => {
+            LnurlRequestDetails::Error {
+                error_details: error,
+            } => {
                 return Err(LnurlError::EndpointError(error.reason));
             }
         })
