@@ -6,8 +6,9 @@ use breez_sdk_common::{
 use core::fmt;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
-    CurrencyAmount, LightningSendPayment, LightningSendStatus, Network as SparkNetwork,
-    SspUserRequest, TransferDirection, TransferStatus, Utxo, WalletTransfer,
+    CoopExitFeeQuote, CoopExitSpeedFeeQuote, CurrencyAmount, ExitSpeed, LightningSendPayment,
+    LightningSendStatus, Network as SparkNetwork, SspUserRequest, TransferDirection,
+    TransferStatus, TransferType, Utxo, WalletTransfer,
 };
 use std::time::UNIX_EPOCH;
 
@@ -136,7 +137,7 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
             },
             SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark,
             SspUserRequest::LightningReceiveRequest(request) => {
-                let detailed_invoice = input::parse_invoice(&request.invoice.encoded_invoice)
+                let invoice_details = input::parse_invoice(&request.invoice.encoded_invoice)
                     .ok_or(SdkError::Generic(
                         "Invalid invoice in SspUserRequest::LightningReceiveRequest".to_string(),
                     ))?;
@@ -145,21 +146,21 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
                     preimage: request.lightning_receive_payment_preimage,
                     invoice: request.invoice.encoded_invoice,
                     payment_hash: request.invoice.payment_hash,
-                    destination_pubkey: detailed_invoice.payee_pubkey,
+                    destination_pubkey: invoice_details.payee_pubkey,
                     lnurl_pay_info: None,
                 }
             }
             SspUserRequest::LightningSendRequest(request) => {
-                let detailed_invoice =
+                let invoice_details =
                     input::parse_invoice(&request.encoded_invoice).ok_or(SdkError::Generic(
                         "Invalid invoice in SspUserRequest::LightningSendRequest".to_string(),
                     ))?;
                 PaymentDetails::Lightning {
-                    description: detailed_invoice.description,
+                    description: invoice_details.description,
                     preimage: request.lightning_send_payment_preimage,
                     invoice: request.encoded_invoice,
-                    payment_hash: detailed_invoice.payment_hash,
-                    destination_pubkey: detailed_invoice.payee_pubkey,
+                    payment_hash: invoice_details.payment_hash,
+                    destination_pubkey: invoice_details.payee_pubkey,
                     lnurl_pay_info: None,
                 }
             }
@@ -178,7 +179,7 @@ impl TryFrom<WalletTransfer> for Payment {
             TransferDirection::Incoming => PaymentType::Receive,
             TransferDirection::Outgoing => PaymentType::Send,
         };
-        let status = match transfer.status {
+        let mut status = match transfer.status {
             TransferStatus::Completed => PaymentStatus::Completed,
             TransferStatus::SenderKeyTweaked
                 if transfer.direction == TransferDirection::Outgoing =>
@@ -199,7 +200,19 @@ impl TryFrom<WalletTransfer> for Payment {
 
         let details: PaymentDetails = match transfer.user_request {
             Some(user_request) => user_request.try_into()?,
-            None => PaymentDetails::Spark,
+            None => {
+                // TODO: wokarround for missing user_request
+                if [
+                    TransferType::CooperativeExit,
+                    TransferType::PreimageSwap,
+                    TransferType::UtxoSwap,
+                ]
+                .contains(&transfer.transfer_type)
+                {
+                    status = PaymentStatus::Pending;
+                }
+                PaymentDetails::Spark
+            }
         };
 
         Ok(Payment {
@@ -228,15 +241,15 @@ impl Payment {
             _ => PaymentStatus::Pending,
         };
 
-        let detailed_invoice = input::parse_invoice(&payment.encoded_invoice).ok_or(
+        let invoice_details = input::parse_invoice(&payment.encoded_invoice).ok_or(
             SdkError::Generic("Invalid invoice in LightnintSendPayment".to_string()),
         )?;
         let details = PaymentDetails::Lightning {
-            description: detailed_invoice.description,
+            description: invoice_details.description,
             preimage: payment.payment_preimage,
             invoice: payment.encoded_invoice,
-            payment_hash: detailed_invoice.payment_hash,
-            destination_pubkey: detailed_invoice.payee_pubkey,
+            payment_hash: invoice_details.payment_hash,
+            destination_pubkey: invoice_details.payee_pubkey,
             lnurl_pay_info: None,
         };
 
@@ -455,13 +468,81 @@ pub enum ReceivePaymentMethod {
 pub enum SendPaymentMethod {
     BitcoinAddress {
         address: BitcoinAddressDetails,
+        fee_quote: SendOnchainFeeQuote,
     },
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
+        spark_transfer_fee_sats: Option<u64>,
+        lightning_fee_sats: u64,
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
+        fee_sats: u64,
     },
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize)]
+pub struct SendOnchainFeeQuote {
+    pub id: String,
+    pub expires_at: i64,
+    pub speed_fast: SendOnchainSpeedFeeQuote,
+    pub speed_medium: SendOnchainSpeedFeeQuote,
+    pub speed_slow: SendOnchainSpeedFeeQuote,
+}
+
+impl From<CoopExitFeeQuote> for SendOnchainFeeQuote {
+    fn from(value: CoopExitFeeQuote) -> Self {
+        Self {
+            id: value.id,
+            expires_at: value.expires_at,
+            speed_fast: value.speed_fast.into(),
+            speed_medium: value.speed_medium.into(),
+            speed_slow: value.speed_slow.into(),
+        }
+    }
+}
+
+impl From<SendOnchainFeeQuote> for CoopExitFeeQuote {
+    fn from(value: SendOnchainFeeQuote) -> Self {
+        Self {
+            id: value.id,
+            expires_at: value.expires_at,
+            speed_fast: value.speed_fast.into(),
+            speed_medium: value.speed_medium.into(),
+            speed_slow: value.speed_slow.into(),
+        }
+    }
+}
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize)]
+pub struct SendOnchainSpeedFeeQuote {
+    pub user_fee_sat: u64,
+    pub l1_broadcast_fee_sat: u64,
+}
+
+impl SendOnchainSpeedFeeQuote {
+    pub fn total_fee_sat(&self) -> u64 {
+        self.user_fee_sat + self.l1_broadcast_fee_sat
+    }
+}
+
+impl From<CoopExitSpeedFeeQuote> for SendOnchainSpeedFeeQuote {
+    fn from(value: CoopExitSpeedFeeQuote) -> Self {
+        Self {
+            user_fee_sat: value.user_fee_sat,
+            l1_broadcast_fee_sat: value.l1_broadcast_fee_sat,
+        }
+    }
+}
+
+impl From<SendOnchainSpeedFeeQuote> for CoopExitSpeedFeeQuote {
+    fn from(value: SendOnchainSpeedFeeQuote) -> Self {
+        Self {
+            user_fee_sat: value.user_fee_sat,
+            l1_broadcast_fee_sat: value.l1_broadcast_fee_sat,
+        }
+    }
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -530,14 +611,38 @@ pub struct LnurlPayInfo {
     pub raw_success_action: Option<SuccessAction>,
 }
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Debug, Clone, Serialize)]
+pub enum OnchainConfirmationSpeed {
+    Fast,
+    Medium,
+    Slow,
+}
+
+impl From<OnchainConfirmationSpeed> for ExitSpeed {
+    fn from(speed: OnchainConfirmationSpeed) -> Self {
+        match speed {
+            OnchainConfirmationSpeed::Fast => ExitSpeed::Fast,
+            OnchainConfirmationSpeed::Medium => ExitSpeed::Medium,
+            OnchainConfirmationSpeed::Slow => ExitSpeed::Slow,
+        }
+    }
+}
+
+impl From<ExitSpeed> for OnchainConfirmationSpeed {
+    fn from(speed: ExitSpeed) -> Self {
+        match speed {
+            ExitSpeed::Fast => OnchainConfirmationSpeed::Fast,
+            ExitSpeed::Medium => OnchainConfirmationSpeed::Medium,
+            ExitSpeed::Slow => OnchainConfirmationSpeed::Slow,
+        }
+    }
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
     pub amount_sats: Option<u64>,
-
-    /// Value indicating whether internal spark payments are preferred over lightning payments.
-    /// Default `true`.
-    pub prefer_spark: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -545,13 +650,22 @@ pub struct PrepareSendPaymentRequest {
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     pub amount_sats: u64,
-    pub fee_sats: u64,
-    pub prefer_spark: bool,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum SendPaymentOptions {
+    BitcoinAddress {
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
+    Bolt11Invoice {
+        use_spark: bool,
+    },
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
+    pub options: Option<SendPaymentOptions>,
 }
 
 #[derive(Debug, Clone, Serialize)]

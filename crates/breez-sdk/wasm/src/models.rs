@@ -375,16 +375,35 @@ pub enum ReceivePaymentMethod {
     },
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SendOnchainFeeQuote)]
+pub struct SendOnchainFeeQuote {
+    pub id: String,
+    pub expires_at: i64,
+    pub speed_fast: SendOnchainSpeedFeeQuote,
+    pub speed_medium: SendOnchainSpeedFeeQuote,
+    pub speed_slow: SendOnchainSpeedFeeQuote,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SendOnchainSpeedFeeQuote)]
+pub struct SendOnchainSpeedFeeQuote {
+    pub user_fee_sat: u64,
+    pub l1_broadcast_fee_sat: u64,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentMethod)]
 pub enum SendPaymentMethod {
     BitcoinAddress {
         address: BitcoinAddressDetails,
+        fee_quote: SendOnchainFeeQuote,
     },
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
+        spark_transfer_fee_sats: Option<u64>,
+        lightning_fee_sats: u64,
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
+        fee_sats: u64,
     },
 }
 
@@ -442,20 +461,35 @@ pub struct LnurlPayResponse {
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
     pub amount_sats: Option<u64>,
-    pub prefer_spark: Option<bool>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     pub amount_sats: u64,
-    pub fee_sats: u64,
-    pub prefer_spark: bool,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OnchainConfirmationSpeed)]
+pub enum OnchainConfirmationSpeed {
+    Fast,
+    Medium,
+    Slow,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentOptions)]
+pub enum SendPaymentOptions {
+    BitcoinAddress {
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
+    Bolt11Invoice {
+        use_spark: bool,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentRequest)]
 pub struct SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
+    pub options: Option<SendPaymentOptions>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentResponse)]

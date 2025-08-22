@@ -1,8 +1,9 @@
 use breez_sdk_spark::{
     BreezSdk, ClaimDepositRequest, Fee, GetInfoRequest, GetPaymentRequest, InputType,
-    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, PrepareLnurlPayRequest,
-    PrepareReceivePaymentRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, RefundDepositRequest, SendPaymentRequest, SyncWalletRequest, parse,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, OnchainConfirmationSpeed,
+    PrepareLnurlPayRequest, PrepareReceivePaymentRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest, SendPaymentMethod,
+    SendPaymentRequest, SyncWalletRequest, parse,
 };
 use clap::Parser;
 use rustyline::{
@@ -110,6 +111,14 @@ pub enum Command {
         sat_per_vbyte: Option<u64>,
     },
     ListUnclaimedDeposits,
+    SendOnchain {
+        /// The destination address
+        destination_address: String,
+
+        /// The amount to send, in satoshi.
+        #[arg(long)]
+        amount_sat: u64,
+    },
 }
 
 #[derive(Helper, Completer, Hinter, Validator)]
@@ -259,7 +268,6 @@ pub(crate) async fn execute_command(
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request,
                     amount_sats: amount,
-                    prefer_spark: None,
                 })
                 .await;
 
@@ -276,7 +284,62 @@ pub(crate) async fn execute_command(
             }
 
             let send_payment_response = sdk
-                .send_payment(SendPaymentRequest { prepare_response })
+                .send_payment(SendPaymentRequest {
+                    prepare_response,
+                    options: None,
+                })
+                .await?;
+
+            print_value(&send_payment_response)?;
+            Ok(true)
+        }
+        Command::SendOnchain {
+            destination_address,
+            amount_sat,
+        } => {
+            let prepared_payment = sdk
+                .prepare_send_payment(PrepareSendPaymentRequest {
+                    payment_request: destination_address,
+                    amount_sats: Some(amount_sat),
+                })
+                .await;
+
+            let Ok(prepare_response) = prepared_payment else {
+                return Err(anyhow::anyhow!(
+                    "Failed to prepare payment: {}",
+                    prepared_payment.err().unwrap()
+                ));
+            };
+
+            let SendPaymentMethod::BitcoinAddress { fee_quote, .. } =
+                prepare_response.payment_method.clone()
+            else {
+                return Err(anyhow::anyhow!(
+                    "wrong response type: {:?}",
+                    prepare_response.payment_method
+                ));
+            };
+
+            println!("Please choose payment fee:");
+            println!("1. Fast: {}", fee_quote.speed_fast.total_fee_sat());
+            println!("2. Medium: {}", fee_quote.speed_medium.total_fee_sat());
+            println!("3. Slow: {}", fee_quote.speed_slow.total_fee_sat());
+
+            let line = rl.readline_with_initial("", ("1", ""))?.to_lowercase();
+            let confirmation_speed = match line.as_str() {
+                "1" => OnchainConfirmationSpeed::Fast,
+                "2" => OnchainConfirmationSpeed::Medium,
+                "3" => OnchainConfirmationSpeed::Slow,
+                _ => return Ok(true),
+            };
+
+            let send_payment_response = sdk
+                .send_payment(SendPaymentRequest {
+                    prepare_response,
+                    options: Some(breez_sdk_spark::SendPaymentOptions::BitcoinAddress {
+                        confirmation_speed,
+                    }),
+                })
                 .await?;
 
             print_value(&send_payment_response)?;

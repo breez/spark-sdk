@@ -51,7 +51,7 @@ const elements = {
   receiveBtn: document.getElementById('receive-btn'),
   sendBtn: document.getElementById('send-btn'),
   lnurlPayBtn: document.getElementById('lnurl-pay-btn'),
-  
+
   // Modals
   receiveModal: document.getElementById('receive-modal'),
   sendModal: document.getElementById('send-modal'),
@@ -84,7 +84,7 @@ const elements = {
   confirmFee: document.getElementById('confirm-fee'),
   confirmSendBtn: document.getElementById('confirm-send-btn'),
   cancelConfirmBtn: document.getElementById('cancel-confirm-btn'),
-  
+
   // LNURL Pay modal
   lnurlInput: document.getElementById('lnurl-input'),
   lnurlComment: document.getElementById('lnurl-comment'),
@@ -100,7 +100,7 @@ const elements = {
   lnurlConfirmComment: document.getElementById('lnurl-confirm-comment'),
   confirmLnurlBtn: document.getElementById('confirm-lnurl-btn'),
   cancelLnurlConfirmBtn: document.getElementById('cancel-lnurl-confirm-btn'),
-  
+
   loadingText: document.getElementById('loading-text'),
 }
 
@@ -381,10 +381,20 @@ async function prepareSend() {
       amountSats: amountSats
     })
 
-    elements.confirmAmount.textContent = `${prepareSendResponse.amountSats.toLocaleString()} sats`
-    elements.confirmFee.textContent = `${prepareSendResponse.feeSats.toLocaleString()} sats`
+    const paymentMethod = prepareResponse.paymentMethod;
+    if (paymentMethod.type == 'bolt11Invoice') {
+      const fees = paymentMethod.sparkTransferFeeSats != null ? paymentMethod.sparkTransferFeeSats : paymentMethod.lightningFeeSats
+      const amount = prepareResponse.amountSats
 
-    elements.sendConfirmation.style.display = 'block'
+      elements.confirmAmount.textContent = `${amount.toLocaleString()} sats`
+      elements.confirmFee.textContent = `${fees.toLocaleString()} sats`
+
+      elements.sendConfirmation.style.display = 'block'
+    } else {
+      alert('Unsupported payment method')
+    }
+
+
     hideLoading()
 
   } catch (error) {
@@ -426,80 +436,80 @@ async function sendPayment() {
 async function prepareLnurlPay() {
   try {
     const lnurlInput = elements.lnurlInput.value.trim()
-    
+
     if (!lnurlInput) {
       alert('LNURL or Lightning Address is required')
       return
     }
-    
+
     showLoading('Parsing LNURL...')
-    
+
     // Parse the LNURL
     const input = await parse(lnurlInput)
-    
+
     if (input.type !== 'lnurlPay') {
       hideLoading()
       alert('Invalid input: expected LNURL pay request or Lightning Address')
       return
     }
-    
+
     // Show amount section with min/max range
     const minSendable = Math.ceil(input.minSendable / 1000)
     const maxSendable = Math.floor(input.maxSendable / 1000)
-    
+
     elements.lnurlAmountRange.textContent = `Min: ${minSendable.toLocaleString()} sats, Max: ${maxSendable.toLocaleString()} sats`
     elements.lnurlAmountSection.style.display = 'block'
     elements.lnurlAmount.min = minSendable
     elements.lnurlAmount.max = maxSendable
-    
+
     hideLoading()
-    
+
     // Focus on amount input
     elements.lnurlAmount.focus()
-    
+
     // Change the prepare button to continue with amount
     elements.prepareLnurlBtn.textContent = 'Continue'
     elements.prepareLnurlBtn.onclick = async () => {
       const amountStr = elements.lnurlAmount.value
       const amountSats = amountStr ? parseInt(amountStr) : undefined
-      
+
       if (!amountSats || amountSats < minSendable || amountSats > maxSendable) {
         alert(`Please enter a valid amount between ${minSendable} and ${maxSendable} satoshis`)
         return
       }
-      
+
       showLoading('Preparing LNURL payment...')
-      
+
       try {
         const comment = elements.lnurlComment.value || null
-        
+
         prepareLnurlResponse = await sdk.prepareLnurlPay({
           amountSats: amountSats,
           comment: comment,
           payRequest: input,
           validateSuccessActionUrl: true
         })
-        
+
         elements.lnurlConfirmAmount.textContent = `${prepareLnurlResponse.amountSats.toLocaleString()} sats`
         elements.lnurlConfirmFee.textContent = `${prepareLnurlResponse.feeSats.toLocaleString()} sats`
-        
+
         if (comment) {
           elements.lnurlConfirmComment.textContent = comment
           elements.lnurlConfirmCommentSection.style.display = 'block'
         } else {
           elements.lnurlConfirmCommentSection.style.display = 'none'
         }
-        
+
         elements.lnurlConfirmation.style.display = 'block'
         hideLoading()
-        
+
       } catch (error) {
         hideLoading()
         console.error('Failed to prepare LNURL payment:', error)
         alert(`Failed to prepare LNURL payment: ${error.message}`)
       }
     }
-    
+
   } catch (error) {
     hideLoading()
     console.error('Failed to parse LNURL:', error)
@@ -510,25 +520,25 @@ async function prepareLnurlPay() {
 async function lnurlPay() {
   try {
     showLoading('Sending LNURL payment...')
-    
+
     const result = await sdk.lnurlPay({ prepareResponse: prepareLnurlResponse })
-    
+
     hideLoading()
     hideModal(elements.lnurlPayModal)
-    
+
     // Show success notification
     showPaymentNotification('LNURL payment sent successfully!', 'success')
-    
+
     // Refresh wallet data immediately and then again after a delay
     await updateWalletInfo()
     await loadPayments()
-    
+
     // Refresh again after a few seconds to catch any delayed updates
     setTimeout(async () => {
       await updateWalletInfo()
       await loadPayments()
     }, 3000)
-    
+
   } catch (error) {
     hideLoading()
     console.error('Failed to send LNURL payment:', error)

@@ -17,8 +17,8 @@ use breez_sdk_common::{
     rest::RestClient,
 };
 use spark_wallet::{
-    DefaultSigner, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress, SparkWallet, Utxo,
-    WalletEvent, WalletTransfer,
+    DefaultSigner, ExitSpeed, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress,
+    SparkWallet, Utxo, WalletEvent, WalletTransfer,
 };
 use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 use tracing::{error, info};
@@ -32,7 +32,8 @@ use crate::{
     Fee, GetPaymentRequest, GetPaymentResponse, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
     Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    RefundDepositRequest, RefundDepositResponse, SqliteStorage, UnclaimedDeposit,
+    RefundDepositRequest, RefundDepositResponse, SendPaymentOptions, SqliteStorage,
+    UnclaimedDeposit,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -600,11 +601,14 @@ impl BreezSdk {
             .prepare_send_payment(PrepareSendPaymentRequest {
                 payment_request: success_data.pr,
                 amount_sats: Some(request.amount_sats),
-                prefer_spark: Some(false),
             })
             .await?;
 
-        let SendPaymentMethod::Bolt11Invoice { invoice_details } = prepare_response.payment_method
+        let SendPaymentMethod::Bolt11Invoice {
+            invoice_details,
+            lightning_fee_sats,
+            ..
+        } = prepare_response.payment_method
         else {
             return Err(SdkError::Generic(
                 "Expected Bolt11Invoice payment method".to_string(),
@@ -616,7 +620,7 @@ impl BreezSdk {
             comment: request.comment,
             pay_request: request.pay_request,
             invoice_details,
-            fee_sats: prepare_response.fee_sats,
+            fee_sats: lightning_fee_sats,
             success_action: success_data.success_action,
         })
     }
@@ -628,11 +632,12 @@ impl BreezSdk {
                     prepare_response: PrepareSendPaymentResponse {
                         payment_method: SendPaymentMethod::Bolt11Invoice {
                             invoice_details: request.prepare_response.invoice_details,
+                            spark_transfer_fee_sats: None,
+                            lightning_fee_sats: request.prepare_response.fee_sats,
                         },
                         amount_sats: request.prepare_response.amount_sats,
-                        fee_sats: request.prepare_response.fee_sats,
-                        prefer_spark: false,
                     },
+                    options: None,
                 },
                 true,
             )
@@ -681,12 +686,11 @@ impl BreezSdk {
             return Ok(PrepareSendPaymentResponse {
                 payment_method: SendPaymentMethod::SparkAddress {
                     address: spark_address.to_string(),
+                    fee_sats: 0,
                 },
-                fee_sats: 0,
                 amount_sats: request
                     .amount_sats
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
-                prefer_spark: request.prefer_spark.unwrap_or(true),
             });
         }
         // Then check for other types of inputs
@@ -696,33 +700,58 @@ impl BreezSdk {
                 let spark_address = self
                     .spark_wallet
                     .extract_spark_address(&request.payment_request)?;
-                let fee_sats = match (request.prefer_spark.unwrap_or(true), spark_address) {
-                    // prefer spark and spark address found
-                    (true, Some(_)) => 0,
+
+                let spark_transfer_fee_sats = match spark_address {
+                    Some(_) => Some(0),
                     // prefer lightning or no spark address found
-                    _ => {
-                        self.spark_wallet
-                            .fetch_lightning_send_fee_estimate(
-                                &request.payment_request,
-                                request.amount_sats,
-                            )
-                            .await?
-                    }
+                    _ => None,
                 };
+
+                let lightning_fee_sats = self
+                    .spark_wallet
+                    .fetch_lightning_send_fee_estimate(
+                        &request.payment_request,
+                        request.amount_sats,
+                    )
+                    .await?;
 
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::Bolt11Invoice {
                         invoice_details: detailed_bolt11_invoice.clone(),
+                        spark_transfer_fee_sats,
+                        lightning_fee_sats,
                     },
-                    fee_sats,
                     amount_sats: request
                         .amount_sats
                         .or(detailed_bolt11_invoice.amount_msat.map(|msat| msat / 1000))
                         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
-                    prefer_spark: request.prefer_spark.unwrap_or(true),
                 })
             }
-            _ => Err(SdkError::Generic("Unsupported input type".to_string())),
+            InputType::BitcoinAddress(withdrawal_address) => {
+                let fee_quote = self
+                    .spark_wallet
+                    .fetch_coop_exit_fee_quote(
+                        &withdrawal_address.address,
+                        Some(
+                            request
+                                .amount_sats
+                                .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                        ),
+                    )
+                    .await?;
+                Ok(PrepareSendPaymentResponse {
+                    payment_method: SendPaymentMethod::BitcoinAddress {
+                        address: withdrawal_address.clone(),
+                        fee_quote: fee_quote.into(),
+                    },
+                    amount_sats: request
+                        .amount_sats
+                        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                })
+            }
+            _ => Err(SdkError::InvalidInput(
+                "Unsupported payment method".to_string(),
+            )),
         }
     }
 
@@ -739,7 +768,10 @@ impl BreezSdk {
         suppress_payment_event: bool,
     ) -> Result<SendPaymentResponse, SdkError> {
         let res = match request.prepare_response.payment_method {
-            SendPaymentMethod::SparkAddress { address } => {
+            SendPaymentMethod::SparkAddress {
+                address,
+                fee_sats: _,
+            } => {
                 let spark_address = address
                     .parse::<SparkAddress>()
                     .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
@@ -751,20 +783,38 @@ impl BreezSdk {
                     payment: transfer.try_into()?,
                 })
             }
-            SendPaymentMethod::Bolt11Invoice { invoice_details } => {
+            SendPaymentMethod::Bolt11Invoice {
+                invoice_details,
+                spark_transfer_fee_sats,
+                lightning_fee_sats,
+            } => {
                 let amount_to_send = match invoice_details.amount_msat {
                     // we are not sending amount in case the invoice contains it.
                     Some(_) => None,
                     // We are sending amount for zero amount invoice
                     None => Some(request.prepare_response.amount_sats),
                 };
+                let use_spark = match request.options {
+                    Some(SendPaymentOptions::Bolt11Invoice { use_spark }) => use_spark,
+                    _ => false,
+                };
+                let fee_sats = match (use_spark, spark_transfer_fee_sats, lightning_fee_sats) {
+                    (true, Some(fee), _) => fee,
+                    _ => lightning_fee_sats,
+                };
+                if use_spark && spark_transfer_fee_sats.is_none() {
+                    return Err(SdkError::InvalidInput(
+                        "use_spark is used but invoice doesn't contain a spark address".to_string(),
+                    ));
+                }
+
                 let payment_response = self
                     .spark_wallet
                     .pay_lightning_invoice(
                         &invoice_details.invoice.bolt11,
                         amount_to_send,
-                        Some(request.prepare_response.fee_sats),
-                        request.prepare_response.prefer_spark,
+                        Some(fee_sats),
+                        use_spark,
                     )
                     .await?;
                 let payment = match payment_response {
@@ -775,7 +825,29 @@ impl BreezSdk {
                 };
                 Ok(SendPaymentResponse { payment })
             }
-            SendPaymentMethod::BitcoinAddress { address: _ } => todo!(),
+            SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
+                let exit_speed: ExitSpeed = match request.options {
+                    Some(SendPaymentOptions::BitcoinAddress { confirmation_speed }) => {
+                        confirmation_speed.into()
+                    }
+                    None => ExitSpeed::Fast,
+                    _ => {
+                        return Err(SdkError::InvalidInput("Invalid options".to_string()));
+                    }
+                };
+                let response = self
+                    .spark_wallet
+                    .withdraw(
+                        &address.address,
+                        Some(request.prepare_response.amount_sats),
+                        exit_speed,
+                        fee_quote.into(),
+                    )
+                    .await?;
+                Ok(SendPaymentResponse {
+                    payment: response.try_into()?,
+                })
+            }
         };
         if let Ok(response) = &res {
             self.storage.insert_payment(response.payment.clone())?;
