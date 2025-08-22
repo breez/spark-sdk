@@ -1,0 +1,219 @@
+name: Publish
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git commit, tag or branch reference'
+        required: true
+        type: string
+      package-version:
+        description: 'Version for the published package(s) (MAJOR.MINOR.BUILD)'
+        required: true
+        type: string
+      packages-to-publish:
+        description: 'Array of packages to publish (remove what you do not want)'
+        required: true
+        type: string
+        default: '["android", "python", "swift", "wasm"]'
+      use-dummy-binaries:
+        description: 'Should use dummies for the SDK binaries. Default = false.'
+        required: false
+        type: boolean
+        default: false
+      publish:
+        description: 'Should publish. Default = false.'
+        required: false
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      repository:
+        description: 'SDK repository, defaults to current repository'
+        required: false
+        type: string
+      ref:
+        description: 'Git commit, tag or branch reference'
+        required: true
+        type: string
+      package-version:
+        description: 'Version for the published package(s) (MAJOR.MINOR.BUILD)'
+        required: true
+        type: string
+      packages-to-publish:
+        description: 'Array of packages to publish (remove what you do not want)'
+        required: true
+        type: string
+        default: '["android", "python", "swift", "wasm"]'
+      use-dummy-binaries:
+        description: 'Should use dummies for the SDK binaries. Default = false.'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  pre-setup:
+    name: Pre-setup
+    runs-on: ubuntu-latest
+    outputs:
+      # These outputs mimic the inputs for the workflow.
+      # Their only purpose is to be able to test this workflow if you make 
+      # changes that you won't want to commit to main yet.
+      # You can set these values manually, to test how the CI behaves with 
+      # certain inputs.
+      repository: ${{ inputs.repository || github.repository }}
+      ref: ${{ inputs.ref || github.sha }}
+      android-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'android') && inputs.package-version) || ''}}
+      python-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'python') && inputs.package-version) || '' }}
+      swift-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'swift') && inputs.package-version) || '' }}
+      wasm-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'wasm') && inputs.package-version) || '' }}
+      use-dummy-binaries: ${{ inputs.use-dummy-binaries }}
+      publish: ${{ inputs.publish }}
+    steps:
+      - run: echo "set pre-setup output variables"
+
+  setup:
+    name: Setup
+    needs: pre-setup
+    runs-on: ubuntu-latest
+    outputs: 
+      # Careful, a boolean input is not a boolean output. A boolean input is
+      # actually a boolean, but these outputs are strings. All the boolean
+      # checks in this file have the format `boolean == 'true'`. So feel free
+      # to set these variables here to `true` or `false` 
+      # (e.g. bindings-windows: true) if you want to test something.
+      repository: ${{ needs.pre-setup.outputs.repository }}
+      bindings-android: ${{ !!needs.pre-setup.outputs.android-package-version }}
+      bindings-darwin: ${{ !!needs.pre-setup.outputs.python-package-version || !!needs.pre-setup.outputs.swift-package-version }}
+      bindings-ios: ${{ !!needs.pre-setup.outputs.swift-package-version }}
+      bindings-linux: ${{ !!needs.pre-setup.outputs.python-package-version }}
+      bindings-wasm: ${{ !!needs.pre-setup.outputs.wasm-package-version }}
+      bindings-windows: ${{ !!needs.pre-setup.outputs.python-package-version }}
+      android: ${{ !!needs.pre-setup.outputs.android-package-version }}
+      python: ${{ !!needs.pre-setup.outputs.python-package-version }}
+      swift: ${{ !!needs.pre-setup.outputs.swift-package-version }}
+      wasm: ${{ !!needs.pre-setup.outputs.wasm-package-version }}
+      ref: ${{ needs.pre-setup.outputs.ref }}
+      android-package-version: ${{ needs.pre-setup.outputs.android-package-version || '0.0.2' }}
+      python-package-version: ${{ needs.pre-setup.outputs.python-package-version || '0.0.2' }}
+      swift-package-version: ${{ needs.pre-setup.outputs.swift-package-version || '0.0.2' }}
+      wasm-package-version: ${{ needs.pre-setup.outputs.wasm-package-version || '0.0.2' }}
+      publish: ${{ needs.pre-setup.outputs.publish }}
+      use-dummy-binaries: ${{ needs.pre-setup.outputs.use-dummy-binaries }}
+    steps:
+      - run: echo "set setup output variables"
+
+  build-bindings-android:
+    needs: setup
+    if: ${{ needs.setup.outputs.bindings-android == 'true' }}
+    uses: ./.github/workflows/build-bindings-android.yml
+    with:
+      repository: ${{ needs.setup.outputs.repository }}
+      ref: ${{ needs.setup.outputs.ref }}
+      use-dummy-binaries: ${{ needs.setup.outputs.use-dummy-binaries == 'true' }}
+
+  build-bindings-darwin:
+    needs: setup
+    if: ${{ needs.setup.outputs.bindings-darwin == 'true' }}
+    uses: ./.github/workflows/build-bindings-darwin.yml
+    with:
+      repository: ${{ needs.setup.outputs.repository }}
+      ref: ${{ needs.setup.outputs.ref }}
+      use-dummy-binaries: ${{ needs.setup.outputs.use-dummy-binaries == 'true' }}
+
+  build-bindings-ios:
+    needs: setup
+    if: ${{ needs.setup.outputs.bindings-ios == 'true' }}
+    uses: ./.github/workflows/build-bindings-ios.yml
+    with:
+      repository: ${{ needs.setup.outputs.repository }}
+      ref: ${{ needs.setup.outputs.ref }}
+      use-dummy-binaries: ${{ needs.setup.outputs.use-dummy-binaries == 'true' }}
+
+  build-bindings-linux:
+    needs: setup
+    if: ${{ needs.setup.outputs.bindings-linux == 'true' }}
+    uses: ./.github/workflows/build-bindings-linux.yml
+    with:
+      repository: ${{ needs.setup.outputs.repository }}
+      ref: ${{ needs.setup.outputs.ref }}
+      use-dummy-binaries: ${{ needs.setup.outputs.use-dummy-binaries == 'true' }}
+
+  build-bindings-wasm:
+    needs: setup
+    if: ${{ needs.setup.outputs.bindings-wasm == 'true' }}
+    uses: ./.github/workflows/build-bindings-wasm.yml
+    with:
+      repository: ${{ needs.setup.outputs.repository }}
+      ref: ${{ needs.setup.outputs.ref }}
+      use-dummy-binaries: ${{ needs.setup.outputs.use-dummy-binaries == 'true' }}
+
+  build-bindings-windows:
+    needs: setup
+    if: ${{ needs.setup.outputs.bindings-windows == 'true' }}
+    uses: ./.github/workflows/build-bindings-windows.yml
+    with:
+      repository: ${{ needs.setup.outputs.repository }}
+      ref: ${{ needs.setup.outputs.ref }}
+      use-dummy-binaries: ${{ needs.setup.outputs.use-dummy-binaries == 'true' }}
+
+  publish-android:
+    needs:
+      - setup
+      - build-bindings-android
+    if: ${{ needs.setup.outputs.android == 'true' }}
+    uses: ./.github/workflows/publish-android.yml
+    with:
+      repository: ${{ needs.setup.outputs.repository }}
+      ref: ${{ needs.setup.outputs.ref }}
+      package-version: ${{ needs.setup.outputs.android-package-version }}
+      publish: ${{ needs.setup.outputs.publish == 'true' }}
+    secrets:
+      BREEZ_MVN_USERNAME: ${{ secrets.BREEZ_MVN_USERNAME }}
+      BREEZ_MVN_PASSWORD: ${{ secrets.BREEZ_MVN_PASSWORD }}
+  
+  publish-python:
+    needs:
+      - setup
+      - build-bindings-darwin
+      - build-bindings-linux
+      - build-bindings-windows
+    if: ${{ needs.setup.outputs.python == 'true' }}
+    uses: ./.github/workflows/publish-python.yml
+    with:
+      repository: ${{ needs.setup.outputs.repository }}
+      ref: ${{ needs.setup.outputs.ref }}
+      package-version: ${{ needs.setup.outputs.python-package-version }}
+      publish: ${{ needs.setup.outputs.publish == 'true' }}
+    secrets:
+      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+
+  publish-swift:
+    needs:
+      - setup
+      - build-bindings-darwin
+      - build-bindings-ios
+    if: ${{ needs.setup.outputs.swift == 'true' }}
+    uses: ./.github/workflows/publish-swift.yml
+    with:
+      repository: ${{ needs.setup.outputs.repository }}
+      ref: ${{ needs.setup.outputs.ref }}
+      package-version: ${{ needs.setup.outputs.swift-package-version }}
+      publish: ${{ needs.setup.outputs.publish == 'true' }}
+    secrets:
+      REPO_SSH_KEY: ${{ secrets.REPO_SSH_KEY }}
+      SWIFT_RELEASE_TOKEN: ${{ secrets.SWIFT_RELEASE_TOKEN }}
+      COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
+
+  publish-wasm:
+    needs:
+      - setup
+      - build-bindings-wasm
+    if: ${{ needs.setup.outputs.wasm == 'true' }}
+    uses: ./.github/workflows/publish-wasm.yml
+    with:
+      repository: ${{ needs.setup.outputs.repository }}
+      ref: ${{ needs.setup.outputs.ref }}
+      package-version: ${{ needs.setup.outputs.wasm-package-version }}
+      publish: ${{ needs.setup.outputs.publish == 'true' }}
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

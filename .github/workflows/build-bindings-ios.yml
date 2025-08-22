@@ -1,0 +1,134 @@
+name: Build bindings for iOS
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git commit, tag or branch reference'
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      repository:
+        description: 'SDK repository, defaults to current repository'
+        required: false
+        type: string
+      ref:
+        description: 'Git commit, tag or branch reference'
+        required: true
+        type: string
+      use-dummy-binaries:
+        description: 'If true, creates dummy binaries rather than real binaries'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    if: ${{ !inputs.use-dummy-binaries }}
+    runs-on: macOS-latest
+    name: Build ${{ matrix.target }}
+    strategy:
+      matrix:
+        target: [
+          aarch64-apple-ios,
+          x86_64-apple-ios,
+          aarch64-apple-ios-sim,
+        ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: 
+          ref: ${{ inputs.ref }}
+          repository: ${{ inputs.repository || github.repository }}
+
+      - uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          rustup target add ${{ matrix.target }}
+
+      - name: Set IPHONEOS_DEPLOYMENT_TARGET 
+        run: echo "IPHONEOS_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV
+
+      - name: Install xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build bindings
+        working-directory: crates/breez-sdk/bindings
+        run: cargo build --release --target ${{ matrix.target }}
+      
+      - name: Archive bindings
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.a
+
+  merge:
+    runs-on: macOS-latest
+    needs: build
+    name: Build ios-universal
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-aarch64-apple-ios
+          path: aarch64-apple-ios
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-x86_64-apple-ios
+          path: x86_64-apple-ios
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-aarch64-apple-ios-sim
+          path: aarch64-apple-ios-sim
+
+      - name: Build ios-universal
+        run: |
+          mkdir -p ios-universal
+          lipo -create -output ios-universal/libbreez_sdk_spark_bindings.a aarch64-apple-ios/libbreez_sdk_spark_bindings.a x86_64-apple-ios/libbreez_sdk_spark_bindings.a
+
+      - name: Build ios-universal-sim
+        run: |
+          mkdir -p ios-universal-sim
+          lipo -create -output ios-universal-sim/libbreez_sdk_spark_bindings.a aarch64-apple-ios-sim/libbreez_sdk_spark_bindings.a x86_64-apple-ios/libbreez_sdk_spark_bindings.a
+
+      - name: Archive ios-universal
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-ios-universal
+          path: ios-universal/libbreez_sdk_spark_bindings.a
+
+      - name: Archive ios-universal-sim
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-ios-universal-sim
+          path: ios-universal-sim/libbreez_sdk_spark_bindings.a
+
+  build-dummies:
+    if: ${{ inputs.use-dummy-binaries }}
+    runs-on: ubuntu-latest
+    name: Build dummies ${{ matrix.target }}
+    strategy:
+      matrix:
+        target: [
+          aarch64-apple-ios,
+          x86_64-apple-ios,
+          aarch64-apple-ios-sim,
+          ios-universal,
+          ios-universal-sim,
+        ]
+    steps:
+      - name: Build dummy ios ${{ matrix.target }}
+        run: |
+          touch libbreez_sdk_spark_bindings.a
+
+      - name: Upload dummy ios ${{ matrix.target }} artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.target }}
+          path: ./*

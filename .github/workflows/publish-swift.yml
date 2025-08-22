@@ -1,0 +1,187 @@
+name: Publish Swift Bindings
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: 'SDK repository, defaults to current repository'
+        required: false
+        type: string
+      ref:
+        description: 'Git commit, tag or branch reference'
+        required: true
+        type: string
+      package-version:
+        description: 'Version for the python package (MAJOR.MINOR.BUILD)'
+        required: true
+        type: string
+      publish:
+        description: 'Should publish to cocoapods.'
+        required: true
+        type: boolean
+        default: false
+    secrets:
+      REPO_SSH_KEY:
+        description: 'SSH key to commit to the breez-sdk-spark-swift repository'
+        required: true
+      SWIFT_RELEASE_TOKEN:
+        description: 'GitHub token to release to the breez-sdk-spark-swift repository'
+        required: true
+      COCOAPODS_TRUNK_TOKEN:
+        description: 'CocoaPods trunk token'
+        required: true
+
+jobs:
+  build-language-bindings:
+    name: Build language bindings
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref || github.sha }}
+  
+      - uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download aarch64-apple-ios
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-aarch64-apple-ios
+          path: aarch64-apple-ios
+      
+      - name: Build Swift bindings
+        working-directory: crates/breez-sdk/bindings
+        run: |
+          cargo run --features=uniffi/cli --bin uniffi-bindgen generate --library ../../../aarch64-apple-ios/libbreez_sdk_spark_bindings.a --no-format --language swift -o ffi/swift
+          # WA pre 0.29.0: Fix redeclaration of protocol UniffiForeignFutureTask https://github.com/mozilla/uniffi-rs/pull/2341
+          find ffi/swift -name "*.swift" -exec sed -i '' 's/protocol UniffiForeignFutureTask/fileprivate protocol UniffiForeignFutureTask/g' {} \;
+
+      - name: Archive Swift language bindings
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-swift
+          path: crates/breez-sdk/bindings/ffi/swift/*
+
+  build-package:
+    name: Build package
+    runs-on: macOS-13
+    needs: build-language-bindings
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref || github.sha }}
+          path: build
+
+      - name: Checkout breez-sdk-spark-swift repo
+        uses: actions/checkout@v4
+        with:
+          repository: breez/breez-sdk-spark-swift
+          ref: main
+          ssh-key: ${{ secrets.REPO_SSH_KEY }}
+          fetch-depth: 0
+          path: dist
+
+      - name: Download swift bindings
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-swift
+          path: swift
+
+      - name: Download aarch64-apple-ios
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-aarch64-apple-ios
+          path: aarch64-apple-ios
+      
+      - name: Download ios-universal-sim
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-ios-universal-sim
+          path: ios-universal-sim
+    
+      - name: Download darwin-universal
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-darwin-universal
+          path: darwin-universal
+
+      - name: Copy swift bindings
+        run: |
+          mkdir -p build/crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark
+          cp swift/*.swift build/crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark/
+          cp swift/breez_sdk_*FFI.h build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/Headers
+          cp swift/breez_sdk_*FFI.h build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/Headers
+          cp swift/breez_sdk_*FFI.h build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Headers
+          cp aarch64-apple-ios/libbreez_sdk_spark_bindings.a build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+          cp ios-universal-sim/libbreez_sdk_spark_bindings.a build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+          cp darwin-universal/libbreez_sdk_spark_bindings.a build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+
+      - name: Set plist versions
+        working-directory: build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework
+        run: |
+          SHORT_VERSION=$(echo "${{ inputs.package-version }}" | grep -Eo '^(\d+\.\d+\.\d+)')
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" ios-arm64/breez_sdk_sparkFFI.framework/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Info.plist
+
+      - name: Compress XCFramework
+        working-directory: build/crates/breez-sdk/bindings/langs/swift
+        run: |
+          zip -9 -r breez_sdk_sparkFFI.xcframework.zip breez_sdk_sparkFFI.xcframework
+          echo "XCF_CHECKSUM=`swift package compute-checksum breez_sdk_sparkFFI.xcframework.zip`" >> $GITHUB_ENV
+
+      - name: Remove dist Sources
+        working-directory: dist
+        run: git rm -r Sources
+
+      - name: Update Swift Package definition
+        working-directory: build/crates/breez-sdk/bindings/langs/swift
+        run: |
+          sed 's#.binaryTarget(name: "breez_sdk_sparkFFI", path: "./breez_sdk_sparkFFI.xcframework"),#.binaryTarget(name: "breez_sdk_sparkFFI", url: "https://github.com/breez/breez-sdk-spark-swift/releases/download/${{ inputs.package-version || '0.0.1' }}/breez_sdk_sparkFFI.xcframework.zip", checksum: "${{ env.XCF_CHECKSUM }}"),#' Package.swift > ../../../../../dist/Package.swift
+          cp -r Sources ../../../../../dist
+
+      - name: Update Cocoapods definitions
+        working-directory: dist
+        run: |
+          sed -i '' 's#^.\{2\}spec.version.*$#  spec.version                = "${{ inputs.package-version || '0.0.1' }}"#' breez_sdk_sparkFFI.podspec
+          sed -i '' 's#^.\{2\}spec.version.*$#  spec.version                = "${{ inputs.package-version || '0.0.1' }}"#' BreezSdkSpark.podspec
+  
+      - name: Tag the Swift bindings
+        if: ${{ inputs.publish }}
+        working-directory: dist
+        run: |
+          git config --global user.name "SDK release tagger"
+          git config --global user.email "no-reply@breez.technology"
+          git add Package.swift
+          git add Sources
+          git add breez_sdk_sparkFFI.podspec
+          git add BreezSdkSpark.podspec
+          git commit -m "Update Swift bindings to version ${{ inputs.package-version || '0.0.1' }}"
+          git push
+          git tag ${{ inputs.package-version || '0.0.1' }} -m "${{ inputs.package-version || '0.0.1' }}"
+          git push --tags
+
+      - name: Release and attach XCFramework binary artifact
+        if: ${{ inputs.publish }}
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: breez/breez-sdk-spark-swift
+          files: |
+            build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework.zip
+          tag_name: ${{ inputs.package-version || '0.0.1' }}
+          generate_release_notes: false
+          token: ${{ secrets.SWIFT_RELEASE_TOKEN }}
+          prerelease: true
+
+      - name: Push update to Cocoapods trunk
+        if: ${{ inputs.publish }}
+        working-directory: dist
+        env:
+          COCOAPODS_TRUNK_TOKEN: ${{secrets.COCOAPODS_TRUNK_TOKEN}}
+        run: |
+          pod trunk push breez_sdk_sparkFFI.podspec --allow-warnings
+          pod trunk push BreezSdkSpark.podspec --allow-warnings --synchronous
