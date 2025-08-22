@@ -4,9 +4,7 @@ use maybe_sync::{MaybeSend, MaybeSync};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    breez_server::BreezServer,
-    error::{ServiceConnectivityError, ServiceConnectivityErrorKind},
-    grpc::RatesRequest,
+    breez_server::BreezServer, error::ServiceConnectivityError, grpc::RatesRequest,
     with_connection_retry,
 };
 
@@ -52,10 +50,9 @@ impl FiatAPI for BreezServer {
         let data = include_str!("../assets/json/currencies.json");
         let fiat_currency_map: HashMap<String, CurrencyInfo> =
             serde_json::from_str(data).map_err(|e| {
-                ServiceConnectivityError::new(
-                    ServiceConnectivityErrorKind::Json,
-                    format!("failed to load embedded fiat currencies: {e:?}"),
-                )
+                ServiceConnectivityError::Json(format!(
+                    "failed to load embedded fiat currencies: {e:?}"
+                ))
             })?;
         let mut fiat_currency_list: Vec<FiatCurrency> = Vec::new();
         for (key, value) in fiat_currency_map {
@@ -74,10 +71,9 @@ impl FiatAPI for BreezServer {
         let response = with_connection_retry!(client.rates(request))
             .await
             .map_err(|e| {
-                ServiceConnectivityError::new(
-                    ServiceConnectivityErrorKind::Other,
-                    format!("(Breez: {e:?}) Failed to fetch fiat rates"),
-                )
+                ServiceConnectivityError::Other(format!(
+                    "(Breez: {e:?}) Failed to fetch fiat rates"
+                ))
             })?;
 
         let mut rates = response.into_inner().rates;

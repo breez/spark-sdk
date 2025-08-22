@@ -301,7 +301,7 @@ fn get_enum_fields(fields: &Fields) -> Vec<TokenStream> {
                 .iter()
                 .enumerate()
                 .map(|(i, field)| {
-                    let ident = syn::Ident::new(&format!("_{}", i), proc_macro2::Span::call_site());
+                    let ident = syn::Ident::new(&format!("_{i}"), proc_macro2::Span::call_site());
                     let ty = &field.ty;
                     match ty {
                         Type::Path(type_path) => {
@@ -339,7 +339,7 @@ fn get_enum_field_names(fields: &Fields) -> Vec<TokenStream> {
             .iter()
             .enumerate()
             .map(|(i, _)| {
-                let ident = syn::Ident::new(&format!("_{}", i), proc_macro2::Span::call_site());
+                let ident = syn::Ident::new(&format!("_{i}"), proc_macro2::Span::call_site());
                 quote! { #ident }
             })
             .collect(),

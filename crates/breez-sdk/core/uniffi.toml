@@ -1,0 +1,13 @@
+# Kotlin https://gobley.dev/docs/bindgen#bindgen-configuration
+package_name = "breez_sdk_spark"
+cdylib_name = "breez_sdk_spark_bindings"
+kotlin_multiplatform = false
+kotlin_targets = ["jvm"]
+kotlin_target_version = "1.9.21"
+disable_java_cleaner = true
+
+# https://mozilla.github.io/uniffi-rs/swift/configuration.html
+[bindings.swift]
+ffi_module_name = "breez_sdk_sparkFFI"
+ffi_module_filename = "breez_sdk_sparkFFI"
+cdylib_name = "breez_sdk_spark_bindings"

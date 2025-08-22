@@ -1,0 +1,23 @@
+[package]
+name = "breez-sdk-bindings"
+edition = "2024"
+version.workspace = true
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[lib]
+name = "breez_sdk_spark_bindings"
+crate-type = ["staticlib", "cdylib", "lib"]
+
+[dependencies]
+breez-sdk-spark = { workspace = true, features = ["uniffi"] }
+uniffi = { workspace = true, features = ["bindgen-tests", "cli", "tokio"] }
+
+[build-dependencies]
+glob.workspace = true
+uniffi = { workspace = true, features = ["build"] }
+
+[lints]
+workspace = true

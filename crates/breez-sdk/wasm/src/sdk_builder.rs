@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use breez_sdk_core::default_storage;
+use breez_sdk_spark::default_storage;
 use wasm_bindgen::prelude::*;
 
 use crate::{
@@ -11,7 +11,7 @@ use crate::{
 
 #[wasm_bindgen]
 pub struct SdkBuilder {
-    builder: breez_sdk_core::SdkBuilder,
+    builder: breez_sdk_spark::SdkBuilder,
 }
 
 #[wasm_bindgen]
@@ -20,7 +20,7 @@ impl SdkBuilder {
     pub fn new(config: Config, mnemonic: String, data_dir: String) -> WasmResult<Self> {
         let storage = default_storage(data_dir)?;
         Ok(Self {
-            builder: breez_sdk_core::SdkBuilder::new(config.into(), mnemonic, storage),
+            builder: breez_sdk_spark::SdkBuilder::new(config.into(), mnemonic, storage),
         })
     }
 

@@ -1,4 +1,4 @@
-use breez_sdk_core::{
+use breez_sdk_spark::{
     BreezSdk, ClaimDepositRequest, Fee, GetInfoRequest, GetPaymentRequest, InputType,
     ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, PrepareLnurlPayRequest,
     PrepareReceivePaymentRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
@@ -133,19 +133,17 @@ pub(crate) async fn execute_command(
     match command {
         Command::Exit => Ok(false),
         Command::GetInfo => {
-            let value = sdk.get_info(GetInfoRequest {}).await?;
+            let value = sdk.get_info(GetInfoRequest {})?;
             print_value(&value)?;
             Ok(true)
         }
         Command::GetPayment { payment_id } => {
-            let value = sdk.get_payment(GetPaymentRequest { payment_id }).await?;
+            let value = sdk.get_payment(GetPaymentRequest { payment_id })?;
             print_value(&value)?;
             Ok(true)
         }
         Command::ListPayments { limit, offset } => {
-            let value = sdk
-                .list_payments(ListPaymentsRequest { limit, offset })
-                .await?;
+            let value = sdk.list_payments(ListPaymentsRequest { limit, offset })?;
             print_value(&value)?;
             Ok(true)
         }
@@ -155,9 +153,7 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::ListUnclaimedDeposits => {
-            let value = sdk
-                .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
-                .await?;
+            let value = sdk.list_unclaimed_deposits(ListUnclaimedDepositsRequest {})?;
             print_value(&value)?;
             Ok(true)
         }
@@ -234,9 +230,8 @@ pub(crate) async fn execute_command(
                 _ => return Err(anyhow::anyhow!("Invalid payment method")),
             };
 
-            let prepare_response = sdk
-                .prepare_receive_payment(PrepareReceivePaymentRequest { payment_method })
-                .await?;
+            let prepare_response =
+                sdk.prepare_receive_payment(PrepareReceivePaymentRequest { payment_method })?;
 
             if prepare_response.fee_sats > 0 {
                 println!(
@@ -294,9 +289,9 @@ pub(crate) async fn execute_command(
         } => {
             let input = parse(&lnurl).await?;
             let res = match input {
-                InputType::LnurlPay(data) => {
-                    let min_sendable = data.min_sendable.div_ceil(1000);
-                    let max_sendable = data.max_sendable / 1000;
+                InputType::LnurlPay(pay_request) => {
+                    let min_sendable = pay_request.min_sendable.div_ceil(1000);
+                    let max_sendable = pay_request.max_sendable / 1000;
                     let prompt =
                         format!("Amount to pay (min {min_sendable} sat, max {max_sendable} sat): ");
                     let amount_sats = rl.readline(&prompt)?.parse::<u64>()?;
@@ -305,7 +300,7 @@ pub(crate) async fn execute_command(
                         .prepare_lnurl_pay(PrepareLnurlPayRequest {
                             amount_sats,
                             comment,
-                            data,
+                            pay_request,
                             validate_success_action_url: validate_success_url,
                         })
                         .await?;

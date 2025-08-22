@@ -5,8 +5,8 @@ use crate::commands::CliHelper;
 use crate::persist::CliPersistence;
 use anyhow::{Result, anyhow};
 use bitcoin::hashes::{Hash, sha256};
-use breez_sdk_core::{EventListener, SdkEvent};
-use breez_sdk_core::{Network, SdkBuilder, default_config, default_storage};
+use breez_sdk_spark::{EventListener, SdkEvent};
+use breez_sdk_spark::{Network, SdkBuilder, default_config, default_storage};
 use clap::Parser;
 use commands::{Command, execute_command};
 use rustyline::Editor;
@@ -72,7 +72,7 @@ impl EventListener for CliEventListener {
 }
 
 async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()> {
-    breez_sdk_core::init_logging(data_dir.to_string_lossy().as_ref(), None, None).await?;
+    breez_sdk_spark::init_logging(Some(data_dir.to_string_lossy().into()), None, None)?;
     let persistence = CliPersistence {
         data_dir: data_dir.clone(),
     };
@@ -106,7 +106,7 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
         .await?;
 
     let listener = Box::new(CliEventListener {});
-    sdk.add_event_listener(listener).await;
+    sdk.add_event_listener(listener);
 
     println!("Breez SDK CLI Interactive Mode");
     println!("Type 'help' for available commands or 'exit' to quit");
@@ -158,7 +158,7 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
         }
     }
 
-    if let Err(e) = sdk.disconnect().await {
+    if let Err(e) = sdk.disconnect() {
         error!("Failed to gracefully stop SDK: {:?}", e);
     }
 

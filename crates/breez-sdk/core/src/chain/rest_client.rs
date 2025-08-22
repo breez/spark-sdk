@@ -1,9 +1,10 @@
 use base64::{Engine as _, engine::general_purpose};
 use bitcoin::{Address, address::NetworkUnchecked};
-use breez_sdk_common::error::ServiceConnectivityError;
 use breez_sdk_common::rest::RestClient as CommonRestClient;
+use breez_sdk_common::{error::ServiceConnectivityError, rest::RestResponse};
 use std::collections::HashMap;
 use std::time::Duration;
+use tokio_with_wasm::alias as tokio;
 use tracing::info;
 
 use crate::{
@@ -67,7 +68,7 @@ impl RestClientChainService {
         let (response, _) = self.get_with_retry(&url, self.client.as_ref()).await?;
 
         let response: T = serde_json::from_str(&response)
-            .map_err(|e| ChainServiceError::GenericError(e.to_string()))?;
+            .map_err(|e| ChainServiceError::Generic(e.to_string()))?;
 
         Ok(response)
     }
@@ -100,19 +101,16 @@ impl RestClientChainService {
                 );
             }
 
-            let (body, status) = client.get(url, headers).await?;
+            let RestResponse { body, status } = client.get(url.to_string(), headers).await?;
             match status {
                 status if attempts < self.max_retries && is_status_retryable(status) => {
                     tokio::time::sleep(delay).await;
-                    attempts += 1;
-                    delay *= 2;
+                    attempts = attempts.saturating_add(1);
+                    delay = delay.saturating_mul(2);
                 }
                 _ => {
                     if !(200..300).contains(&status) {
-                        return Err(ChainServiceError::HttpError {
-                            status,
-                            message: body,
-                        });
+                        return Err(ServiceConnectivityError::Status { status, body }.into());
                     }
                     return Ok((body, status));
                 }
@@ -134,12 +132,12 @@ impl RestClientChainService {
             body.clone().unwrap_or_default(),
             headers
         );
-        let (body, status) = self.client.post(url, Some(headers), body).await?;
+        let RestResponse { body, status } = self
+            .client
+            .post(url.to_string(), Some(headers), body)
+            .await?;
         if !(200..300).contains(&status) {
-            return Err(ChainServiceError::HttpError {
-                status,
-                message: body,
-            });
+            return Err(ServiceConnectivityError::Status { status, body }.into());
         }
 
         Ok(body)
@@ -148,7 +146,7 @@ impl RestClientChainService {
 
 #[macros::async_trait]
 impl BitcoinChainService for RestClientChainService {
-    async fn get_address_utxos(&self, address: &str) -> Result<Vec<Utxo>, ChainServiceError> {
+    async fn get_address_utxos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError> {
         let address = address
             .parse::<Address<NetworkUnchecked>>()?
             .require_network(self.network.try_into()?)?;
@@ -160,29 +158,17 @@ impl BitcoinChainService for RestClientChainService {
         Ok(utxos)
     }
 
-    async fn get_transaction_hex(&self, txid: &str) -> Result<String, ChainServiceError> {
+    async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError> {
         let tx = self
             .get_response_text(format!("/tx/{txid}/hex").as_str())
             .await?;
         Ok(tx)
     }
 
-    async fn broadcast_transaction(&self, tx: &str) -> Result<(), ChainServiceError> {
+    async fn broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError> {
         let url = format!("{}{}", self.base_url, "/tx");
-        self.post(&url, Some(tx.into())).await?;
+        self.post(&url, Some(tx)).await?;
         Ok(())
-    }
-}
-
-impl From<reqwest::Error> for ChainServiceError {
-    fn from(value: reqwest::Error) -> Self {
-        ChainServiceError::GenericError(value.to_string())
-    }
-}
-
-impl From<ServiceConnectivityError> for ChainServiceError {
-    fn from(value: ServiceConnectivityError) -> Self {
-        ChainServiceError::GenericError(value.to_string())
     }
 }
 
@@ -278,7 +264,7 @@ mod tests {
 
         // Call the method under test
         let mut result = service
-            .get_address_utxos("1wiz18xYmhRX6xStj2b9t1rwWX4GKUgpv")
+            .get_address_utxos("1wiz18xYmhRX6xStj2b9t1rwWX4GKUgpv".to_string())
             .await
             .unwrap();
 
@@ -296,7 +282,7 @@ mod tests {
         );
         assert_eq!(result[0].vout, 74);
         assert!(result[0].status.confirmed);
-        assert_eq!(result[0].status.block_height, Some(726892));
+        assert_eq!(result[0].status.block_height, Some(726_892));
 
         assert_eq!(result[1].value, 6127);
         assert_eq!(

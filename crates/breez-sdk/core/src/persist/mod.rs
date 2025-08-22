@@ -8,8 +8,12 @@ use thiserror::Error;
 
 use crate::{DepositInfo, DepositRefund, LnurlPayInfo, models::Payment};
 
+const ACCOUNT_INFO_KEY: &str = "account_info";
+const SYNC_OFFSET_KEY: &str = "sync_offset";
+
 /// Errors that can occur during storage operations
 #[derive(Debug, Error, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum StorageError {
     /// `SQLite` error
     #[error("Underline implementation error: {0}")]
@@ -30,14 +34,16 @@ impl From<serde_json::Error> for StorageError {
 }
 
 /// Metadata associated with a payment that cannot be extracted from the Spark operator.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
 }
 
 /// Trait for persistent storage
+#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait Storage: Send + Sync {
-    fn get_cached_item(&self, key: &str) -> Result<Option<String>, StorageError>;
-    fn set_cached_item(&self, key: &str, value: String) -> Result<(), StorageError>;
+    fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError>;
+    fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError>;
     /// Lists payments with pagination
     ///
     /// # Arguments
@@ -63,7 +69,7 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// Success or a `StorageError`
-    fn insert_payment(&self, payment: &Payment) -> Result<(), StorageError>;
+    fn insert_payment(&self, payment: Payment) -> Result<(), StorageError>;
 
     /// Inserts payment metadata into storage
     ///
@@ -77,8 +83,8 @@ pub trait Storage: Send + Sync {
     /// Success or a `StorageError`
     fn set_payment_metadata(
         &self,
-        payment_id: &str,
-        metadata: &PaymentMetadata,
+        payment_id: String,
+        metadata: PaymentMetadata,
     ) -> Result<(), StorageError>;
 
     /// Gets a payment by its ID
@@ -89,7 +95,7 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// The payment if found or None if not found
-    fn get_payment_by_id(&self, id: &str) -> Result<Payment, StorageError>;
+    fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError>;
 
     /// Adds an unclaimed deposit to storage
     /// # Arguments
@@ -99,7 +105,7 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// Success or a `StorageError`
-    fn add_unclaimed_deposit(&self, deposit_info: &DepositInfo) -> Result<(), StorageError>;
+    fn add_unclaimed_deposit(&self, deposit_info: DepositInfo) -> Result<(), StorageError>;
 
     /// Removes an unclaimed deposit from storage
     /// # Arguments
@@ -110,7 +116,7 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// Success or a `StorageError`
-    fn remove_unclaimed_deposit(&self, txid: &str, vout: u32) -> Result<(), StorageError>;
+    fn remove_unclaimed_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError>;
 
     /// Lists all unclaimed deposits from storage
     /// # Returns
@@ -126,7 +132,7 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// Success or a `StorageError`
-    fn set_unclaimed_deposits(&self, deposits: &[DepositInfo]) -> Result<(), StorageError>;
+    fn set_unclaimed_deposits(&self, deposits: Vec<DepositInfo>) -> Result<(), StorageError>;
 
     /// Updates or inserts refund transaction details for a deposit
     /// # Arguments
@@ -136,14 +142,11 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// Success or a `StorageError`
-    fn update_deposit_refund(
-        &self,
-        deposit_refund: &crate::DepositRefund,
-    ) -> Result<(), StorageError>;
+    fn update_deposit_refund(&self, deposit_refund: DepositRefund) -> Result<(), StorageError>;
 
     fn get_deposit_refund(
         &self,
-        txid: &str,
+        txid: String,
         vout: u32,
     ) -> Result<Option<DepositRefund>, StorageError>;
 }
@@ -157,28 +160,28 @@ impl ObjectCacheRepository {
         ObjectCacheRepository { storage }
     }
 
-    pub(crate) fn save_account_info(&self, value: CachedAccountInfo) -> Result<(), StorageError> {
+    pub(crate) fn save_account_info(&self, value: &CachedAccountInfo) -> Result<(), StorageError> {
         self.storage
-            .set_cached_item("account_info", serde_json::to_string(&value)?)?;
+            .set_cached_item(ACCOUNT_INFO_KEY.to_string(), serde_json::to_string(value)?)?;
         Ok(())
     }
 
     pub(crate) fn fetch_account_info(&self) -> Result<Option<CachedAccountInfo>, StorageError> {
-        let value = self.storage.get_cached_item("account_info")?;
+        let value = self.storage.get_cached_item(ACCOUNT_INFO_KEY.to_string())?;
         match value {
             Some(value) => Ok(Some(serde_json::from_str(&value)?)),
             None => Ok(None),
         }
     }
 
-    pub(crate) fn save_sync_info(&self, value: CachedSyncInfo) -> Result<(), StorageError> {
+    pub(crate) fn save_sync_info(&self, value: &CachedSyncInfo) -> Result<(), StorageError> {
         self.storage
-            .set_cached_item("sync_offset", serde_json::to_string(&value)?)?;
+            .set_cached_item(SYNC_OFFSET_KEY.to_string(), serde_json::to_string(value)?)?;
         Ok(())
     }
 
     pub(crate) fn fetch_sync_info(&self) -> Result<Option<CachedSyncInfo>, StorageError> {
-        let value = self.storage.get_cached_item("sync_offset")?;
+        let value = self.storage.get_cached_item(SYNC_OFFSET_KEY.to_string())?;
         match value {
             Some(value) => Ok(Some(serde_json::from_str(&value)?)),
             None => Ok(None),

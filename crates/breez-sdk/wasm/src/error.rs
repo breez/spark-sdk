@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use breez_sdk_core::{ParseError, SdkError};
+use breez_sdk_spark::{ParseError, SdkError};
 use wasm_bindgen::{JsError, JsValue};
 
 #[derive(Clone, Debug)]

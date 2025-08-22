@@ -24,14 +24,14 @@ pub enum LnurlCallbackStatus {
     #[serde(rename = "ERROR")]
     ErrorStatus {
         #[serde(flatten)]
-        data: LnurlErrorData,
+        error_details: LnurlErrorDetails,
     },
 }
 
 /// Wrapped in a [`LnUrlError`], this represents a LNURL-endpoint error.
 #[derive(Clone, Deserialize, Debug, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct LnurlErrorData {
+pub struct LnurlErrorDetails {
     pub reason: String,
 }
 

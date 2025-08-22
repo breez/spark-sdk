@@ -6,8 +6,8 @@ pub struct WasmEventListener {
     pub listener: EventListener,
 }
 
-impl breez_sdk_core::EventListener for WasmEventListener {
-    fn on_event(&self, event: breez_sdk_core::SdkEvent) {
+impl breez_sdk_spark::EventListener for WasmEventListener {
+    fn on_event(&self, event: breez_sdk_spark::SdkEvent) {
         self.listener.on_event(event.into());
     }
 }

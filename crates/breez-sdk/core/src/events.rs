@@ -10,6 +10,7 @@ use crate::{DepositInfo, Payment};
 /// Events emitted by the SDK
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SdkEvent {
     /// Emitted when the wallet has been synchronized with the network
     Synced,
@@ -43,6 +44,7 @@ impl fmt::Display for SdkEvent {
 }
 
 /// Trait for event listeners
+#[cfg_attr(feature = "uniffi", uniffi::export(callback_interface))]
 pub trait EventListener: MaybeSend + MaybeSync {
     /// Called when an event occurs
     fn on_event(&self, event: SdkEvent);

@@ -4,8 +4,8 @@ use std::{
 };
 
 use crate::{
-    error::{ServiceConnectivityError, ServiceConnectivityErrorKind},
-    rest::RestClient,
+    error::ServiceConnectivityError,
+    rest::{RestClient, RestResponse},
 };
 
 #[derive(Debug)]
@@ -42,40 +42,34 @@ impl MockRestClient {
 impl RestClient for MockRestClient {
     async fn get(
         &self,
-        _url: &str,
+        _url: String,
         _headers: Option<HashMap<String, String>>,
-    ) -> Result<(String, u16), ServiceConnectivityError> {
+    ) -> Result<RestResponse, ServiceConnectivityError> {
         let mut responses = self.responses.lock().unwrap();
         let response = responses.pop_front().ok_or_else(|| {
-            ServiceConnectivityError::new(
-                ServiceConnectivityErrorKind::Other,
-                String::from("No response available for GET request"),
-            )
+            ServiceConnectivityError::Other(String::from("No response available for GET request"))
         })?;
         println!("Pop GET response: {response:?}");
         let status = response.status_code;
-        let raw_body = response.text;
+        let body = response.text;
 
-        Ok((raw_body, status))
+        Ok(RestResponse { status, body })
     }
 
     async fn post(
         &self,
-        _url: &str,
+        _url: String,
         _headers: Option<HashMap<String, String>>,
         _body: Option<String>,
-    ) -> Result<(String, u16), ServiceConnectivityError> {
+    ) -> Result<RestResponse, ServiceConnectivityError> {
         let mut responses = self.responses.lock().unwrap();
         let response = responses.pop_front().ok_or_else(|| {
-            ServiceConnectivityError::new(
-                ServiceConnectivityErrorKind::Other,
-                String::from("No response available for POST request"),
-            )
+            ServiceConnectivityError::Other(String::from("No response available for POST request"))
         })?;
         println!("Pop POST response: {response:?}");
         let status = response.status_code;
-        let raw_body = response.text;
+        let body = response.text;
 
-        Ok((raw_body, status))
+        Ok(RestResponse { status, body })
     }
 }

@@ -1,16 +1,17 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/breez-sdk/bindings",
   "crates/breez-sdk/cli",
   "crates/breez-sdk/common",
-  "crates/breez-sdk/core", 
+  "crates/breez-sdk/core",
   "crates/breez-sdk/wasm",
   "crates/macros",
   "crates/spark",
   "crates/spark-itest",
-  "crates/spark-wallet", 
+  "crates/spark-wallet",
   "crates/xtask",
-  "examples/spark-cli", 
+  "examples/spark-cli",
 ]
 
 [workspace.package]
@@ -37,7 +38,7 @@ bech32 = "0.11.0"
 bip39 = "2.2.0"
 bitcoin = { version = "0.32.6", features = ["serde"] }
 breez-sdk-common = { path = "crates/breez-sdk/common" }
-breez-sdk-core = { path = "crates/breez-sdk/core" }
+breez-sdk-spark = { path = "crates/breez-sdk/core" }
 bytes = "1.10.1"
 cargo_metadata = "0.18"
 cbc = "0.1.2"
@@ -54,6 +55,7 @@ frost-core = { package = "frost-core-unofficial", version = "2.2.0" }
 # frost-secp256k1-tr = "2.1.0"
 frost-secp256k1-tr = { package = "frost-secp256k1-tr-unofficial", version = "2.2.0" }
 futures = { version = "0.3", default-features = false }
+glob = "0.3.1"
 graphql_client = { version = "0.14.0" }
 hex = "0.4.3"
 hickory-resolver = "0.25.2"
@@ -76,8 +78,8 @@ rayon = "1.10"
 reqwest = { version = "0.12.18", features = ["json"] }
 rstest = "0.26.1"
 rusqlite = { git = "https://github.com/Spxg/rusqlite", rev = "8e53118a3e1807dc9a9f59c5969fdff7e0416400", features = [
-    "backup",
-    "bundled",
+  "backup",
+  "bundled",
 ] }
 rusqlite_migration = { git = "https://github.com/breez/rusqlite_migration", branch = "spxg-rusqlite" }
 rustls = { version = "0.23.28", default-features = false, features = ["ring"] }
@@ -101,7 +103,12 @@ thiserror = "2.0.12"
 tokio = { version = "1.45.1", default-features = false }
 tokio-postgres = "0.7.10"
 tokio-test = "0.4.4"
-tokio_with_wasm = { version = "0.8.7", features = ["macros", "rt", "sync", "time"] }
+tokio_with_wasm = { version = "0.8.7", features = [
+  "macros",
+  "rt",
+  "sync",
+  "time",
+] }
 tonic = { version = "0.12.3", default-features = false }
 tonic-build = { version = "0.12.3", features = ["prost"] }
 tonic-web-wasm-client = "0.6"

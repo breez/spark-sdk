@@ -35,6 +35,10 @@ impl SqliteStorage {
             db_dir: path.to_path_buf(),
         };
 
+        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+        std::fs::create_dir_all(path)
+            .map_err(|e| StorageError::InitializationError(e.to_string()))?;
+
         storage.migrate()?;
         Ok(storage)
     }
@@ -148,7 +152,7 @@ impl Storage for SqliteStorage {
         Ok(payments)
     }
 
-    fn insert_payment(&self, payment: &Payment) -> Result<(), StorageError> {
+    fn insert_payment(&self, payment: Payment) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
 
         connection.execute(
@@ -170,8 +174,8 @@ impl Storage for SqliteStorage {
 
     fn set_payment_metadata(
         &self,
-        payment_id: &str,
-        metadata: &PaymentMetadata,
+        payment_id: String,
+        metadata: PaymentMetadata,
     ) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
 
@@ -183,7 +187,7 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    fn set_cached_item(&self, key: &str, value: String) -> Result<(), StorageError> {
+    fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
 
         connection.execute(
@@ -194,7 +198,7 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    fn get_cached_item(&self, key: &str) -> Result<Option<String>, StorageError> {
+    fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError> {
         let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare("SELECT value FROM settings WHERE key = ?")?;
@@ -211,7 +215,7 @@ impl Storage for SqliteStorage {
         }
     }
 
-    fn get_payment_by_id(&self, id: &str) -> Result<Payment, StorageError> {
+    fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError> {
         let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare(
@@ -232,7 +236,7 @@ impl Storage for SqliteStorage {
         result.map_err(StorageError::from)
     }
 
-    fn add_unclaimed_deposit(&self, deposit_info: &crate::DepositInfo) -> Result<(), StorageError> {
+    fn add_unclaimed_deposit(&self, deposit_info: DepositInfo) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
         connection.execute(
             "INSERT OR REPLACE INTO unclaimed_deposits (txid, vout, amount_sats, error) 
@@ -247,7 +251,7 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    fn remove_unclaimed_deposit(&self, txid: &str, vout: u32) -> Result<(), StorageError> {
+    fn remove_unclaimed_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
         connection.execute(
             "DELETE FROM unclaimed_deposits WHERE txid = ? AND vout = ?",
@@ -256,12 +260,12 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    fn list_unclaimed_deposits(&self) -> Result<Vec<crate::DepositInfo>, StorageError> {
+    fn list_unclaimed_deposits(&self) -> Result<Vec<DepositInfo>, StorageError> {
         let connection = self.get_connection()?;
         let mut stmt =
             connection.prepare("SELECT txid, vout, amount_sats, error FROM unclaimed_deposits")?;
         let rows = stmt.query_map(params![], |row| {
-            Ok(crate::DepositInfo {
+            Ok(DepositInfo {
                 txid: row.get(0)?,
                 vout: row.get(1)?,
                 amount_sats: row.get(2)?,
@@ -275,7 +279,7 @@ impl Storage for SqliteStorage {
         Ok(deposits)
     }
 
-    fn set_unclaimed_deposits(&self, deposits: &[DepositInfo]) -> Result<(), StorageError> {
+    fn set_unclaimed_deposits(&self, deposits: Vec<DepositInfo>) -> Result<(), StorageError> {
         let mut connection = self.get_connection()?;
         let transaction = connection.transaction()?;
         transaction.execute("DELETE FROM unclaimed_deposits", params![])?;
@@ -295,10 +299,7 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    fn update_deposit_refund(
-        &self,
-        deposit_refund: &crate::DepositRefund,
-    ) -> Result<(), StorageError> {
+    fn update_deposit_refund(&self, deposit_refund: DepositRefund) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
         connection.execute(
             "INSERT OR REPLACE INTO deposit_refunds (deposit_tx_id, deposit_vout, refund_tx, refund_tx_id) 
@@ -315,7 +316,7 @@ impl Storage for SqliteStorage {
 
     fn get_deposit_refund(
         &self,
-        txid: &str,
+        txid: String,
         vout: u32,
     ) -> Result<Option<DepositRefund>, StorageError> {
         let connection = self.get_connection()?;
@@ -426,7 +427,7 @@ mod tests {
         };
 
         // Insert payment
-        storage.insert_payment(&payment).unwrap();
+        storage.insert_payment(payment.clone()).unwrap();
 
         // List payments
         let payments = storage.list_payments(Some(0), Some(10)).unwrap();
@@ -439,7 +440,7 @@ mod tests {
         assert!(matches!(payments[0].details, PaymentDetails::Spark));
 
         // Get payment by ID
-        let retrieved_payment = storage.get_payment_by_id(&payment.id).unwrap();
+        let retrieved_payment = storage.get_payment_by_id(payment.id.clone()).unwrap();
         assert_eq!(retrieved_payment.id, payment.id);
         assert_eq!(retrieved_payment.payment_type, payment.payment_type);
         assert_eq!(retrieved_payment.status, payment.status);
@@ -453,14 +454,14 @@ mod tests {
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
         // Create test deposit info
-        let deposit1 = crate::DepositInfo {
+        let deposit_1 = crate::DepositInfo {
             txid: "tx123".to_string(),
             vout: 0,
             amount_sats: Some(50000),
             error: None,
         };
 
-        let deposit2 = crate::DepositInfo {
+        let deposit_2 = crate::DepositInfo {
             txid: "tx456".to_string(),
             vout: 1,
             amount_sats: Some(75000),
@@ -474,7 +475,7 @@ mod tests {
         assert_eq!(deposits.len(), 0);
 
         // Add first deposit
-        storage.add_unclaimed_deposit(&deposit1).unwrap();
+        storage.add_unclaimed_deposit(deposit_1).unwrap();
         let deposits = storage.list_unclaimed_deposits().unwrap();
         assert_eq!(deposits.len(), 1);
         assert_eq!(deposits[0].txid, "tx123");
@@ -483,7 +484,7 @@ mod tests {
         assert!(deposits[0].error.is_none());
 
         // Add second deposit
-        storage.add_unclaimed_deposit(&deposit2).unwrap();
+        storage.add_unclaimed_deposit(deposit_2).unwrap();
         let deposits = storage.list_unclaimed_deposits().unwrap();
         assert_eq!(deposits.len(), 2);
 
@@ -494,13 +495,17 @@ mod tests {
         assert!(deposit2_found.error.is_some());
 
         // Remove first deposit
-        storage.remove_unclaimed_deposit("tx123", 0).unwrap();
+        storage
+            .remove_unclaimed_deposit("tx123".to_string(), 0)
+            .unwrap();
         let deposits = storage.list_unclaimed_deposits().unwrap();
         assert_eq!(deposits.len(), 1);
         assert_eq!(deposits[0].txid, "tx456");
 
         // Remove second deposit
-        storage.remove_unclaimed_deposit("tx456", 1).unwrap();
+        storage
+            .remove_unclaimed_deposit("tx456".to_string(), 1)
+            .unwrap();
         let deposits = storage.list_unclaimed_deposits().unwrap();
         assert_eq!(deposits.len(), 0);
     }
@@ -538,7 +543,7 @@ mod tests {
         ];
 
         // Set deposits (should replace any existing ones)
-        storage.set_unclaimed_deposits(&deposits).unwrap();
+        storage.set_unclaimed_deposits(deposits).unwrap();
         let stored_deposits = storage.list_unclaimed_deposits().unwrap();
         assert_eq!(stored_deposits.len(), 3);
 
@@ -559,7 +564,7 @@ mod tests {
         assert!(tx3_deposit.error.is_some());
 
         // Set with empty list (should clear all deposits)
-        storage.set_unclaimed_deposits(&[]).unwrap();
+        storage.set_unclaimed_deposits(Vec::new()).unwrap();
         let stored_deposits = storage.list_unclaimed_deposits().unwrap();
         assert_eq!(stored_deposits.len(), 0);
     }
@@ -570,7 +575,7 @@ mod tests {
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
         // Create initial deposit
-        let deposit1 = crate::DepositInfo {
+        let deposit_1 = crate::DepositInfo {
             txid: "tx123".to_string(),
             vout: 0,
             amount_sats: Some(50000),
@@ -578,7 +583,7 @@ mod tests {
         };
 
         // Add deposit
-        storage.add_unclaimed_deposit(&deposit1).unwrap();
+        storage.add_unclaimed_deposit(deposit_1).unwrap();
         let deposits = storage.list_unclaimed_deposits().unwrap();
         assert_eq!(deposits.len(), 1);
         assert!(deposits[0].error.is_none());
@@ -593,7 +598,7 @@ mod tests {
             }),
         };
 
-        storage.add_unclaimed_deposit(&deposit1_updated).unwrap();
+        storage.add_unclaimed_deposit(deposit1_updated).unwrap();
         let deposits = storage.list_unclaimed_deposits().unwrap();
         assert_eq!(deposits.len(), 1); // Should still be 1 (replaced, not added)
         assert!(deposits[0].error.is_some());
@@ -605,7 +610,9 @@ mod tests {
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
         // Try to remove a deposit that doesn't exist (should not error)
-        storage.remove_unclaimed_deposit("nonexistent", 0).unwrap();
+        storage
+            .remove_unclaimed_deposit("nonexistent".to_string(), 0)
+            .unwrap();
 
         // List should still be empty
         let deposits = storage.list_unclaimed_deposits().unwrap();
@@ -621,17 +628,17 @@ mod tests {
         let deposit = crate::DepositInfo {
             txid: "test_tx_123".to_string(),
             vout: 0,
-            amount_sats: Some(100000),
+            amount_sats: Some(100_000),
             error: None,
         };
 
         // Add the initial deposit
-        storage.add_unclaimed_deposit(&deposit).unwrap();
+        storage.add_unclaimed_deposit(deposit).unwrap();
         let deposits = storage.list_unclaimed_deposits().unwrap();
         assert_eq!(deposits.len(), 1);
         assert_eq!(deposits[0].txid, "test_tx_123");
         assert_eq!(deposits[0].vout, 0);
-        assert_eq!(deposits[0].amount_sats, Some(100000));
+        assert_eq!(deposits[0].amount_sats, Some(100_000));
         assert!(deposits[0].error.is_none());
 
         // Add refund transaction details using the new separate table
@@ -643,14 +650,14 @@ mod tests {
         };
 
         // Update the deposit refund information
-        storage.update_deposit_refund(&deposit_refund).unwrap();
+        storage.update_deposit_refund(deposit_refund).unwrap();
 
         // Verify that the deposit information remains unchanged
         let deposits = storage.list_unclaimed_deposits().unwrap();
         assert_eq!(deposits.len(), 1);
         assert_eq!(deposits[0].txid, "test_tx_123");
         assert_eq!(deposits[0].vout, 0);
-        assert_eq!(deposits[0].amount_sats, Some(100000));
+        assert_eq!(deposits[0].amount_sats, Some(100_000));
         assert!(deposits[0].error.is_none());
 
         // Verify that refund data is stored separately (would need a query method to fully test)
@@ -663,6 +670,6 @@ mod tests {
             refund_tx: "0200000001updated...".to_string(),
             refund_tx_id: "updated_refund_id".to_string(),
         };
-        storage.update_deposit_refund(&updated_refund).unwrap();
+        storage.update_deposit_refund(updated_refund).unwrap();
     }
 }

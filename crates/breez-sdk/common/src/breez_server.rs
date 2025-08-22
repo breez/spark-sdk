@@ -6,7 +6,7 @@ use tonic::service::Interceptor;
 use tonic::{Request, Status};
 use tracing::trace;
 
-use crate::error::{ServiceConnectivityError, ServiceConnectivityErrorKind};
+use crate::error::ServiceConnectivityError;
 use crate::grpc::channel_opener_client::ChannelOpenerClient;
 use crate::grpc::information_client::InformationClient;
 use crate::grpc::payment_notifier_client::PaymentNotifierClient;
@@ -41,10 +41,10 @@ impl BreezServer {
         match &self.api_key {
             Some(key) => Ok(Some(format!("Bearer {key}").parse().map_err(
                 |e: InvalidMetadataValue| {
-                    ServiceConnectivityError::new(
-                        ServiceConnectivityErrorKind::Other,
-                        format!("(Breez: {:?}) Failed parse API key: {e}", self.api_key),
-                    )
+                    ServiceConnectivityError::Other(format!(
+                        "(Breez: {:?}) Failed parse API key: {e}",
+                        self.api_key
+                    ))
                 },
             )?)),
             _ => Ok(None),
@@ -125,10 +125,9 @@ impl BreezServer {
             with_connection_retry!(client.chain_api_servers(ChainApiServersRequest {}))
                 .await
                 .map_err(|e| {
-                    ServiceConnectivityError::new(
-                        ServiceConnectivityErrorKind::Other,
-                        format!("(Breez: {e:?}) Failed to fetch ChainApiServers"),
-                    )
+                    ServiceConnectivityError::Other(format!(
+                        "(Breez: {e:?}) Failed to fetch ChainApiServers"
+                    ))
                 })?
                 .into_inner()
                 .servers;
@@ -151,10 +150,9 @@ impl BreezServer {
             with_connection_retry!(client.chain_api_servers(ChainApiServersRequest {}))
                 .await
                 .map_err(|e| {
-                    ServiceConnectivityError::new(
-                        ServiceConnectivityErrorKind::Other,
-                        format!("(Breez: {e:?}) Failed to fetch ChainApiServers"),
-                    )
+                    ServiceConnectivityError::Other(format!(
+                        "(Breez: {e:?}) Failed to fetch ChainApiServers"
+                    ))
                 })?
                 .into_inner()
                 .servers;

@@ -1,6 +1,6 @@
 use breez_sdk_common::{
-    input::{self, BitcoinAddress, DetailedBolt11Invoice},
-    lnurl::pay::{LnurlPayRequestData, SuccessAction, SuccessActionProcessed},
+    input::{self, BitcoinAddressDetails, Bolt11InvoiceDetails},
+    lnurl::pay::{LnurlPayRequestDetails, SuccessAction, SuccessActionProcessed},
     network::BitcoinNetwork,
 };
 use core::fmt;
@@ -15,6 +15,7 @@ use crate::{SdkError, error::DepositClaimError};
 
 /// The type of payment
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum PaymentType {
     /// Payment sent from this wallet
     Send,
@@ -42,6 +43,7 @@ impl From<&str> for PaymentType {
 
 /// The status of a payment
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum PaymentStatus {
     /// Payment is completed successfully
     Completed,
@@ -73,6 +75,7 @@ impl From<&str> for PaymentStatus {
 
 /// Represents a payment (sent or received)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Payment {
     /// Unique identifier for the payment
     pub id: String,
@@ -94,6 +97,7 @@ pub struct Payment {
 //  some changes to the wasm bindgen macro
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum PaymentDetails {
     Spark,
     Lightning {
@@ -133,7 +137,7 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
             SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark,
             SspUserRequest::LightningReceiveRequest(request) => {
                 let detailed_invoice = input::parse_invoice(&request.invoice.encoded_invoice)
-                    .ok_or(SdkError::GenericError(
+                    .ok_or(SdkError::Generic(
                         "Invalid invoice in SspUserRequest::LightningReceiveRequest".to_string(),
                     ))?;
                 PaymentDetails::Lightning {
@@ -146,11 +150,10 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
                 }
             }
             SspUserRequest::LightningSendRequest(request) => {
-                let detailed_invoice = input::parse_invoice(&request.encoded_invoice).ok_or(
-                    SdkError::GenericError(
+                let detailed_invoice =
+                    input::parse_invoice(&request.encoded_invoice).ok_or(SdkError::Generic(
                         "Invalid invoice in SspUserRequest::LightningSendRequest".to_string(),
-                    ),
-                )?;
+                    ))?;
                 PaymentDetails::Lightning {
                     description: detailed_invoice.description,
                     preimage: request.lightning_send_payment_preimage,
@@ -182,8 +185,7 @@ impl TryFrom<WalletTransfer> for Payment {
             {
                 PaymentStatus::Completed
             }
-            TransferStatus::Expired => PaymentStatus::Failed,
-            TransferStatus::Returned => PaymentStatus::Failed,
+            TransferStatus::Expired | TransferStatus::Returned => PaymentStatus::Failed,
             _ => PaymentStatus::Pending,
         };
         let fees: CurrencyAmount = match transfer.clone().user_request {
@@ -227,7 +229,7 @@ impl Payment {
         };
 
         let detailed_invoice = input::parse_invoice(&payment.encoded_invoice).ok_or(
-            SdkError::GenericError("Invalid invoice in LightnintSendPayment".to_string()),
+            SdkError::Generic("Invalid invoice in LightnintSendPayment".to_string()),
         )?;
         let details = PaymentDetails::Lightning {
             description: detailed_invoice.description,
@@ -244,13 +246,14 @@ impl Payment {
             status,
             amount: amount_sat,
             fees: payment.fee_sat,
-            timestamp: payment.created_at as u64,
+            timestamp: payment.created_at.cast_unsigned(),
             details,
         })
     }
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Network {
     Mainnet,
     Regtest,
@@ -284,6 +287,7 @@ impl From<Network> for BitcoinNetwork {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Config {
     pub network: Network,
     pub deposits_monitoring_interval_secs: u32,
@@ -294,6 +298,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Fee {
     // Fixed fee amount in sats
     Fixed { amount: u64 },
@@ -305,7 +310,7 @@ impl Fee {
     pub fn to_sats(&self, vbytes: u64) -> u64 {
         match self {
             Fee::Fixed { amount } => *amount,
-            Fee::Rate { sat_per_vbyte } => sat_per_vbyte * vbytes,
+            Fee::Rate { sat_per_vbyte } => sat_per_vbyte.saturating_mul(vbytes),
         }
     }
 }
@@ -320,6 +325,7 @@ impl From<Fee> for spark_wallet::Fee {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct DepositInfo {
     pub txid: String,
     pub vout: u32,
@@ -329,6 +335,7 @@ pub struct DepositInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct DepositRefund {
     pub deposit_tx_id: String,
     pub deposit_vout: u32,
@@ -347,6 +354,7 @@ impl From<Utxo> for DepositInfo {
     }
 }
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ClaimDepositRequest {
     pub txid: String,
     pub vout: u32,
@@ -354,11 +362,13 @@ pub struct ClaimDepositRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ClaimDepositResponse {
     pub payment: Payment,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RefundDepositRequest {
     pub txid: String,
     pub vout: u32,
@@ -367,20 +377,24 @@ pub struct RefundDepositRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RefundDepositResponse {
     pub tx_id: String,
     pub tx_hex: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ListUnclaimedDepositsRequest {}
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ListUnclaimedDepositsResponse {
     pub deposits: Vec<UnclaimedDeposit>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct UnclaimedDeposit {
     pub deposit: DepositInfo,
     pub refund_info: Option<DepositRefund>,
@@ -396,6 +410,7 @@ impl std::fmt::Display for Fee {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Credentials {
     pub username: String,
     pub password: String,
@@ -403,10 +418,12 @@ pub struct Credentials {
 
 /// Request to get the balance of the wallet
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct GetInfoRequest {}
 
 /// Response containing the balance of the wallet
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct GetInfoResponse {
     /// The balance in satoshis
     pub balance_sats: u64,
@@ -414,13 +431,16 @@ pub struct GetInfoResponse {
 
 /// Request to sync the wallet with the Spark network
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SyncWalletRequest {}
 
 /// Response from synchronizing the wallet
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SyncWalletResponse {}
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ReceivePaymentMethod {
     SparkAddress,
     BitcoinAddress,
@@ -431,59 +451,68 @@ pub enum ReceivePaymentMethod {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SendPaymentMethod {
     BitcoinAddress {
-        address: BitcoinAddress,
+        address: BitcoinAddressDetails,
     },
     Bolt11Invoice {
-        detailed_invoice: DetailedBolt11Invoice,
+        invoice_details: Bolt11InvoiceDetails,
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
     },
 }
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareReceivePaymentRequest {
     pub payment_method: ReceivePaymentMethod,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareReceivePaymentResponse {
     pub payment_method: ReceivePaymentMethod,
     pub fee_sats: u64,
 }
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ReceivePaymentRequest {
     pub prepare_response: PrepareReceivePaymentResponse,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ReceivePaymentResponse {
     pub payment_request: String,
 }
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayRequest {
     pub amount_sats: u64,
     pub comment: Option<String>,
-    pub data: LnurlPayRequestData,
+    pub pay_request: LnurlPayRequestDetails,
     pub validate_success_action_url: Option<bool>,
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayResponse {
     pub amount_sats: u64,
     pub comment: Option<String>,
-    pub data: LnurlPayRequestData,
+    pub pay_request: LnurlPayRequestDetails,
     pub fee_sats: u64,
-    pub detailed_invoice: DetailedBolt11Invoice,
+    pub invoice_details: Bolt11InvoiceDetails,
     pub success_action: Option<SuccessAction>,
 }
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LnurlPayRequest {
     pub prepare_response: PrepareLnurlPayResponse,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LnurlPayResponse {
     pub payment: Payment,
     pub success_action: Option<SuccessActionProcessed>,
@@ -491,6 +520,7 @@ pub struct LnurlPayResponse {
 
 /// Represents the payment LNURL info
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LnurlPayInfo {
     pub ln_address: Option<String>,
     pub comment: Option<String>,
@@ -500,6 +530,7 @@ pub struct LnurlPayInfo {
     pub raw_success_action: Option<SuccessAction>,
 }
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
     pub amount_sats: Option<u64>,
@@ -510,6 +541,7 @@ pub struct PrepareSendPaymentRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     pub amount_sats: u64,
@@ -517,17 +549,20 @@ pub struct PrepareSendPaymentResponse {
     pub prefer_spark: bool,
 }
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SendPaymentResponse {
     pub payment: Payment,
 }
 
 /// Request to list payments with pagination
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ListPaymentsRequest {
     /// Number of records to skip
     pub offset: Option<u32>,
@@ -537,25 +572,30 @@ pub struct ListPaymentsRequest {
 
 /// Response from listing payments
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ListPaymentsResponse {
     /// The list of payments
     pub payments: Vec<Payment>,
 }
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct GetPaymentRequest {
     pub payment_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct GetPaymentResponse {
     pub payment: Payment,
 }
 
+#[cfg_attr(feature = "uniffi", uniffi::export(callback_interface))]
 pub trait Logger: Send + Sync {
     fn log(&self, l: LogEntry);
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LogEntry {
     pub line: String,
     pub level: String,
