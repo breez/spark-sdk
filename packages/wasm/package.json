@@ -22,7 +22,7 @@
       "./nodejs": "./nodejs/breez_sdk_spark_wasm.js",
       "./web": "./web/breez_sdk_spark_wasm.js",
       ".": {
-        "nodejs": "./nodejs/breez_sdk_spark_wasm.js",
+        "node": "./nodejs/breez_sdk_spark_wasm.js",
         "deno": "./deno/breez_sdk_spark_wasm.js",
         "default": "./web/breez_sdk_spark_wasm.js"
       }
