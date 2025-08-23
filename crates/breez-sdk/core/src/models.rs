@@ -222,7 +222,7 @@ impl TryFrom<WalletTransfer> for Payment {
                         status = PaymentStatus::Completed;
                     }
                     let fee_sat = r.fee.as_sats().unwrap_or(0);
-                    (fee_sat, transfer.total_value_sat - fee_sat)
+                    (fee_sat, transfer.total_value_sat.saturating_sub(fee_sat))
                 }
                 SspUserRequest::CoopExitRequest(r) => {
                     let fee_sat = r
@@ -230,7 +230,7 @@ impl TryFrom<WalletTransfer> for Payment {
                         .as_sats()
                         .unwrap_or(0)
                         .saturating_add(r.l1_broadcast_fee.as_sats().unwrap_or(0));
-                    (fee_sat, transfer.total_value_sat - fee_sat)
+                    (fee_sat, transfer.total_value_sat.saturating_sub(fee_sat))
                 }
                 SspUserRequest::ClaimStaticDeposit(r) => {
                     let fee_sat = r.max_fee.as_sats().unwrap_or(0);
@@ -347,7 +347,7 @@ impl From<Network> for BitcoinNetwork {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Config {
     pub network: Network,
-    pub deposits_monitoring_interval_secs: u32,
+    pub sync_interval_secs: u32,
 
     // The maximum fee that can be paid for a static deposit claim
     // If not set then any fee is allowed

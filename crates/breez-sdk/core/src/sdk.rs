@@ -20,8 +20,9 @@ use spark_wallet::{
     DefaultSigner, ExitSpeed, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress,
     SparkWallet, Utxo, WalletEvent, WalletTransfer,
 };
-use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
+use std::{path::PathBuf, str::FromStr, sync::Arc};
 use tracing::{error, info};
+use web_time::{Duration, SystemTime};
 
 use tokio::sync::watch;
 use tokio_with_wasm::alias as tokio;
@@ -91,7 +92,7 @@ pub fn default_storage(data_dir: String) -> Result<Arc<dyn Storage>, SdkError> {
 pub fn default_config(network: Network) -> Config {
     Config {
         network,
-        deposits_monitoring_interval_secs: 60, // every 1 minute
+        sync_interval_secs: 60, // every 1 minute
         max_deposit_claim_fee: None,
     }
 }
@@ -150,51 +151,19 @@ impl BreezSdk {
     /// 2. `monitor_deposits`: monitors for new deposits
     pub(crate) fn start(&self) {
         self.periodic_sync();
-        self.monitor_deposits();
         if let Err(e) = self.sync_trigger.send(SyncType::Full) {
             error!("Failed to execute initial sync: {e:?}");
         }
-    }
-
-    fn monitor_deposits(&self) {
-        let sdk = self.clone();
-        let mut shutdown_receiver = sdk.shutdown_receiver.clone();
-
-        info!("Monitoring deposits started");
-        // First interval is immediate, after first iteration we change it according to the configuration
-        let mut deposits_monitoring_interval = 10;
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = shutdown_receiver.changed() => {
-                        info!("Deposit tracking loop shutdown signal received");
-                        return;
-                    }
-                    () = tokio::time::sleep(Duration::from_secs(deposits_monitoring_interval.into())) => {
-                        tokio::select! {
-                            _ = shutdown_receiver.changed() => {
-                                info!("Check claim static deposits shutdown signal received");
-                                return;
-                            }
-                            claim_result = sdk.check_and_claim_static_deposits() => {
-                                if let Err(e) = claim_result {
-                                    error!("Monitor deposits failed to claim static deposit: {e:?}");
-                                }
-                            }
-                        }
-
-                        deposits_monitoring_interval = sdk.config.deposits_monitoring_interval_secs;
-                    }
-                }
-            }
-        });
     }
 
     fn periodic_sync(&self) {
         let sdk = self.clone();
         let mut shutdown_receiver = sdk.shutdown_receiver.clone();
         let mut subscription = sdk.spark_wallet.subscribe_events();
-        let mut sync_trigger = sdk.sync_trigger.clone().subscribe();
+        let sync_trigger_sender = sdk.sync_trigger.clone();
+        let mut sync_trigger_receiver = sdk.sync_trigger.clone().subscribe();
+        let mut last_sync_time = SystemTime::now();
+        let sync_interval = u64::from(self.config.sync_interval_secs);
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -206,20 +175,30 @@ impl BreezSdk {
                         match event {
                             Ok(event) => {
                                 info!("Received event: {event:?}");
-                                sdk.handle_wallet_event(event).await;
+                                sdk.handle_wallet_event(event);
                             }
                             Err(e) => {
                                 error!("Failed to receive event: {e:?}");
                             }
                         }
                     }
-                    sync_type_res = sync_trigger.recv() => {
+                    sync_type_res = sync_trigger_receiver.recv() => {
                         if let Ok(sync_type) = sync_type_res   {
-                            info!("Sync trigger changed: {sync_type:?}");
+                            info!("Sync trigger changed: {:?}", &sync_type);
 
-                            if let Err(e) = sdk.sync_wallet_internal(sync_type).await {
+                            if let Err(e) = sdk.sync_wallet_internal(sync_type.clone()).await {
                                 error!("Failed to sync wallet: {e:?}");
+                            } else if matches!(sync_type, SyncType::Full) {
+                              last_sync_time = SystemTime::now();
                             }
+                        }
+                    }
+                    // Ensure we sync at least the configured interval
+                    () = tokio::time::sleep(Duration::from_secs(10)) => {
+                        let now = SystemTime::now();
+                        if let Ok(elapsed) = now.duration_since(last_sync_time) && elapsed.as_secs() >= sync_interval
+                            && let Err(e) = sync_trigger_sender.send(SyncType::Full) {
+                            error!("Failed to trigger periodic sync: {e:?}");
                         }
                     }
                 }
@@ -227,7 +206,7 @@ impl BreezSdk {
         });
     }
 
-    async fn handle_wallet_event(&self, event: WalletEvent) {
+    fn handle_wallet_event(&self, event: WalletEvent) {
         match event {
             WalletEvent::DepositConfirmed(_) => {
                 info!("Deposit confirmed");
@@ -264,6 +243,7 @@ impl BreezSdk {
             self.spark_wallet.sync().await?;
         }
         self.sync_payments_to_storage().await?;
+        self.check_and_claim_static_deposits().await?;
         let elapsed = start_time.elapsed();
         info!("Wallet sync completed in {elapsed:?}");
         self.event_emitter.emit(&SdkEvent::Synced {});
@@ -887,10 +867,7 @@ impl BreezSdk {
 
     /// Synchronizes the wallet with the Spark network
     #[allow(unused_variables)]
-    pub async fn sync_wallet(
-        &self,
-        request: SyncWalletRequest,
-    ) -> Result<SyncWalletResponse, SdkError> {
+    pub fn sync_wallet(&self, request: SyncWalletRequest) -> Result<SyncWalletResponse, SdkError> {
         if let Err(e) = self.sync_trigger.send(SyncType::Full) {
             error!("Failed to send sync trigger: {e:?}");
         }

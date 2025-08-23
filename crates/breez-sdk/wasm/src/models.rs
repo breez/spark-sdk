@@ -345,7 +345,7 @@ pub enum Network {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Config)]
 pub struct Config {
     pub network: Network,
-    pub deposits_monitoring_interval_secs: u32,
+    pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<Fee>,
 }
 
