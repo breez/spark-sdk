@@ -166,7 +166,7 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
                         "Invalid invoice in SspUserRequest::LightningReceiveRequest".to_string(),
                     ))?;
                 PaymentDetails::Lightning {
-                    description: request.invoice.memo,
+                    description: invoice_details.description,
                     preimage: request.lightning_receive_payment_preimage,
                     invoice: request.invoice.encoded_invoice,
                     payment_hash: request.invoice.payment_hash,

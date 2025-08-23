@@ -250,8 +250,8 @@ impl BreezSdk {
                     self.event_emitter
                         .emit(&SdkEvent::PaymentSucceeded { payment });
                 }
-                if let Err(e) = self.sync_payments_to_storage().await {
-                    error!("Failed to sync payments to storage: {e:?}");
+                if let Err(e) = self.sync_trigger.send(SyncType::PaymentsOnly) {
+                    error!("Failed to sync wallet: {e:?}");
                 }
             }
         }
@@ -891,7 +891,9 @@ impl BreezSdk {
         &self,
         request: SyncWalletRequest,
     ) -> Result<SyncWalletResponse, SdkError> {
-        self.sync_wallet_internal(SyncType::Full).await?;
+        if let Err(e) = self.sync_trigger.send(SyncType::Full) {
+            error!("Failed to send sync trigger: {e:?}");
+        }
         Ok(SyncWalletResponse {})
     }
 
