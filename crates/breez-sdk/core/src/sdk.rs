@@ -1,6 +1,5 @@
 use bitcoin::{
-    Transaction, Txid,
-    consensus::{encode::deserialize_hex, serialize},
+    consensus::serialize,
     hashes::{Hash, sha256},
     hex::DisplayHex,
 };
@@ -18,7 +17,7 @@ use breez_sdk_common::{
 };
 use spark_wallet::{
     DefaultSigner, ExitSpeed, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress,
-    SparkWallet, Utxo, WalletEvent, WalletTransfer,
+    SparkWallet, WalletEvent, WalletTransfer,
 };
 use std::{path::PathBuf, str::FromStr, sync::Arc};
 use tracing::{error, info};
@@ -29,12 +28,11 @@ use tokio_with_wasm::alias as tokio;
 use web_time::Instant;
 
 use crate::{
-    BitcoinChainService, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, DepositRefund,
-    Fee, GetPaymentRequest, GetPaymentResponse, ListUnclaimedDepositsRequest,
+    BitcoinChainService, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee,
+    GetPaymentRequest, GetPaymentResponse, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
     Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
     RefundDepositRequest, RefundDepositResponse, SendPaymentOptions, SqliteStorage,
-    UnclaimedDeposit,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -45,7 +43,14 @@ use crate::{
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentMethod, SendPaymentRequest,
         SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
-    persist::{CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, PaymentMetadata, Storage},
+    persist::{
+        CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, PaymentMetadata, Storage,
+        UpdateDepositPayload,
+    },
+    utils::{
+        deposit_chain_syncer::DepositChainSyncer,
+        utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
+    },
 };
 
 #[derive(Clone, Debug)]
@@ -318,95 +323,57 @@ impl BreezSdk {
     }
 
     async fn check_and_claim_static_deposits(&self) -> Result<(), SdkError> {
-        let addresses = self
-            .spark_wallet
-            .list_static_deposit_addresses(None)
-            .await?;
-        for address in addresses {
-            info!("Checking static deposit address: {}", address.to_string());
-            let utxos = self
-                .spark_wallet
-                .get_utxos_for_address(&address.to_string())
-                .await;
-            match utxos {
-                Ok(utxos) => {
-                    info!("Found {} utxos for address {}", utxos.len(), address);
-                    let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
-                    let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
-                    for utxo in utxos {
-                        info!("Processing utxo {}:{}", utxo.txid, utxo.vout);
-                        let detailed_utxo = match self.fetch_detailed_utxo(&utxo).await {
-                            Ok(detailed_utxo) => detailed_utxo,
-                            Err(e) => {
-                                error!("Failed to convert utxo {}:{}: {e}", utxo.txid, utxo.vout);
-                                let mut unclaimed_deposit: DepositInfo = utxo.into();
-                                unclaimed_deposit.error = Some(e.into());
-                                unclaimed_deposits.push(unclaimed_deposit);
-                                continue;
-                            }
-                        };
-                        match self
-                            .claim_utxo(&detailed_utxo, self.config.max_deposit_claim_fee.clone())
-                            .await
-                        {
-                            Ok(_) => {
-                                info!("Claimed utxo {}:{}", utxo.txid, utxo.vout);
-                                claimed_deposits.push(detailed_utxo.into());
-                            }
-                            Err(e) => {
-                                error!("Failed to claim utxo {}:{}: {e}", utxo.txid, utxo.vout);
-                                let mut unclaimed_deposit: DepositInfo = detailed_utxo.into();
-                                unclaimed_deposit.error = Some(e.into());
-                                unclaimed_deposits.push(unclaimed_deposit);
-                            }
-                        }
-                    }
+        let to_claim = DepositChainSyncer::new(
+            self.chain_service.clone(),
+            self.storage.clone(),
+            self.spark_wallet.clone(),
+        )
+        .sync()
+        .await?;
 
-                    info!("background claim completed, unclaimed deposits: {unclaimed_deposits:?}");
+        let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
+        let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
+        for detailed_utxo in to_claim {
+            match self
+                .claim_utxo(&detailed_utxo, self.config.max_deposit_claim_fee.clone())
+                .await
+            {
+                Ok(_) => {
+                    info!("Claimed utxo {}:{}", detailed_utxo.txid, detailed_utxo.vout);
                     self.storage
-                        .set_unclaimed_deposits(unclaimed_deposits.clone())?;
-                    if !unclaimed_deposits.is_empty() {
-                        self.event_emitter
-                            .emit(&SdkEvent::ClaimDepositsFailed { unclaimed_deposits });
-                    }
-                    if !claimed_deposits.is_empty() {
-                        self.event_emitter
-                            .emit(&SdkEvent::ClaimDepositsSucceeded { claimed_deposits });
-                    }
+                        .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)?;
+                    claimed_deposits.push(detailed_utxo.into());
                 }
                 Err(e) => {
-                    error!("Failed to get utxos for address {}: {e}", address);
+                    error!(
+                        "Failed to claim utxo {}:{}: {e}",
+                        detailed_utxo.txid, detailed_utxo.vout
+                    );
+                    self.storage.update_deposit(
+                        detailed_utxo.txid.to_string(),
+                        detailed_utxo.vout,
+                        UpdateDepositPayload::ClaimError {
+                            error: e.clone().into(),
+                        },
+                    )?;
+                    let mut unclaimed_deposit: DepositInfo = detailed_utxo.clone().into();
+                    unclaimed_deposit.claim_error = Some(e.into());
+                    unclaimed_deposits.push(unclaimed_deposit);
                 }
             }
         }
 
-        Ok(())
-    }
+        info!("background claim completed, unclaimed deposits: {unclaimed_deposits:?}");
 
-    async fn fetch_detailed_utxo(&self, utxo: &Utxo) -> Result<DetailedUtxo, SdkError> {
-        let tx: Transaction = if let Some(tx) = utxo.tx.clone() {
-            tx
-        } else {
-            let tx_hex = self
-                .chain_service
-                .get_transaction_hex(utxo.txid.to_string())
-                .await?;
-            deserialize_hex(tx_hex.as_str())?
-        };
-        let txout = tx
-            .output
-            .get(utxo.vout as usize)
-            .ok_or(SdkError::MissingUtxo {
-                tx: utxo.txid.to_string(),
-                vout: utxo.vout,
-            })?;
-        let amount_sats = txout.value.to_sat();
-        Ok(DetailedUtxo {
-            tx,
-            vout: utxo.vout,
-            txid: utxo.txid,
-            value: amount_sats,
-        })
+        if !unclaimed_deposits.is_empty() {
+            self.event_emitter
+                .emit(&SdkEvent::ClaimDepositsFailed { unclaimed_deposits });
+        }
+        if !claimed_deposits.is_empty() {
+            self.event_emitter
+                .emit(&SdkEvent::ClaimDepositsSucceeded { claimed_deposits });
+        }
+        Ok(())
     }
 
     async fn claim_utxo(
@@ -906,17 +873,10 @@ impl BreezSdk {
         &self,
         request: ClaimDepositRequest,
     ) -> Result<ClaimDepositResponse, SdkError> {
-        let detailed_utxo = self
-            .fetch_detailed_utxo(&Utxo {
-                txid: request
-                    .txid
-                    .parse()
-                    .map_err(|_| SdkError::InvalidInput("Invalid txid".to_string()))?,
-                vout: request.vout,
-                tx: None,
-                network: self.config.network.into(),
-            })
-            .await?;
+        let detailed_utxo =
+            CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
+                .fetch_detailed_utxo(&request.txid, request.vout)
+                .await?;
 
         let max_fee = request
             .max_fee
@@ -924,16 +884,23 @@ impl BreezSdk {
         match self.claim_utxo(&detailed_utxo, max_fee).await {
             Ok(transfer) => {
                 self.storage
-                    .remove_unclaimed_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)?;
+                    .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)?;
+                if let Err(e) = self.sync_trigger.send(SyncType::PaymentsOnly) {
+                    error!("Failed to execute sync after deposit claim: {e:?}");
+                }
                 Ok(ClaimDepositResponse {
                     payment: transfer.try_into()?,
                 })
             }
             Err(e) => {
                 error!("Failed to claim deposit: {e:?}");
-                let mut deposit_info = DepositInfo::from(detailed_utxo);
-                deposit_info.error = Some(e.clone().into());
-                self.storage.add_unclaimed_deposit(deposit_info)?;
+                self.storage.update_deposit(
+                    detailed_utxo.txid.to_string(),
+                    detailed_utxo.vout,
+                    UpdateDepositPayload::ClaimError {
+                        error: e.clone().into(),
+                    },
+                )?;
                 Err(e)
             }
         }
@@ -943,17 +910,10 @@ impl BreezSdk {
         &self,
         request: RefundDepositRequest,
     ) -> Result<RefundDepositResponse, SdkError> {
-        let detailed_utxo = self
-            .fetch_detailed_utxo(&Utxo {
-                txid: request
-                    .txid
-                    .parse()
-                    .map_err(|_| SdkError::InvalidInput("Invalid txid".to_string()))?,
-                vout: request.vout,
-                tx: None,
-                network: self.config.network.into(),
-            })
-            .await?;
+        let detailed_utxo =
+            CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
+                .fetch_detailed_utxo(&request.txid, request.vout)
+                .await?;
         let tx = self
             .spark_wallet
             .refund_static_deposit(
@@ -968,12 +928,14 @@ impl BreezSdk {
         let tx_id = tx.compute_txid().to_string();
 
         // Store the refund transaction details separately
-        self.storage.update_deposit_refund(DepositRefund {
-            deposit_tx_id: deposit.txid.clone(),
-            deposit_vout: deposit.vout,
-            refund_tx: tx_hex.clone(),
-            refund_tx_id: tx_id.clone(),
-        })?;
+        self.storage.update_deposit(
+            deposit.txid.clone(),
+            deposit.vout,
+            UpdateDepositPayload::Refund {
+                refund_tx: tx_hex.clone(),
+                refund_txid: tx_id.clone(),
+            },
+        )?;
 
         self.chain_service
             .broadcast_transaction(tx_hex.clone())
@@ -986,37 +948,8 @@ impl BreezSdk {
         &self,
         request: ListUnclaimedDepositsRequest,
     ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
-        let unclaimed_deposits = self.storage.list_unclaimed_deposits()?;
-        let mut response = Vec::new();
-        for deposit in unclaimed_deposits {
-            let deposit_refund = self
-                .storage
-                .get_deposit_refund(deposit.txid.clone(), deposit.vout)?;
-            response.push(UnclaimedDeposit {
-                deposit,
-                refund_info: deposit_refund,
-            });
-        }
-        Ok(ListUnclaimedDepositsResponse { deposits: response })
-    }
-}
-
-#[derive(Debug, Clone)]
-struct DetailedUtxo {
-    tx: Transaction,
-    vout: u32,
-    txid: Txid,
-    value: u64,
-}
-
-impl From<DetailedUtxo> for DepositInfo {
-    fn from(detailed_utxo: DetailedUtxo) -> Self {
-        DepositInfo {
-            txid: detailed_utxo.txid.to_string(),
-            vout: detailed_utxo.vout,
-            amount_sats: Some(detailed_utxo.value),
-            error: None,
-        }
+        let deposits = self.storage.list_deposits()?;
+        Ok(ListUnclaimedDepositsResponse { deposits })
     }
 }
 

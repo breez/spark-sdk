@@ -17,8 +17,10 @@ pub enum SdkEvent {
 pub struct DepositInfo {
     pub txid: String,
     pub vout: u32,
-    pub amount_sats: Option<u64>,
-    pub error: Option<DepositClaimError>,
+    pub amount_sats: u64,
+    pub refund_tx: Option<String>,
+    pub refund_tx_id: Option<String>,
+    pub claim_error: Option<DepositClaimError>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::DepositClaimError)]

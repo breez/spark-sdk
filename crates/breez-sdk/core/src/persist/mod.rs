@@ -6,10 +6,22 @@ use serde::{Deserialize, Serialize};
 pub use sqlite::SqliteStorage;
 use thiserror::Error;
 
-use crate::{DepositInfo, DepositRefund, LnurlPayInfo, models::Payment};
+use crate::{DepositClaimError, DepositInfo, LnurlPayInfo, models::Payment};
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
+const TX_CACHE_KEY: &str = "tx_cache";
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum UpdateDepositPayload {
+    ClaimError {
+        error: DepositClaimError,
+    },
+    Refund {
+        refund_txid: String,
+        refund_tx: String,
+    },
+}
 
 /// Errors that can occur during storage operations
 #[derive(Debug, Error, Clone)]
@@ -97,15 +109,17 @@ pub trait Storage: Send + Sync {
     /// The payment if found or None if not found
     fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError>;
 
-    /// Adds an unclaimed deposit to storage
+    /// Add deposit in storage
     /// # Arguments
     ///
-    /// * `deposit_info` - The deposit information to store
+    /// * `txid` - The transaction ID of the deposit
+    /// * `vout` - The output index of the deposit
+    /// * `amount_sats` - The amount of the deposit in sats
     ///
     /// # Returns
     ///
     /// Success or a `StorageError`
-    fn add_unclaimed_deposit(&self, deposit_info: DepositInfo) -> Result<(), StorageError>;
+    fn add_deposit(&self, txid: String, vout: u32, amount_sats: u64) -> Result<(), StorageError>;
 
     /// Removes an unclaimed deposit from storage
     /// # Arguments
@@ -116,23 +130,13 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// Success or a `StorageError`
-    fn remove_unclaimed_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError>;
+    fn delete_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError>;
 
     /// Lists all unclaimed deposits from storage
     /// # Returns
     ///
     /// A vector of `DepositInfo` or a `StorageError`
-    fn list_unclaimed_deposits(&self) -> Result<Vec<DepositInfo>, StorageError>;
-
-    /// Replaces all unclaimed deposits in storage with the provided list
-    /// # Arguments
-    ///
-    /// * `deposits` - The list of deposits to store
-    ///
-    /// # Returns
-    ///
-    /// Success or a `StorageError`
-    fn set_unclaimed_deposits(&self, deposits: Vec<DepositInfo>) -> Result<(), StorageError>;
+    fn list_deposits(&self) -> Result<Vec<DepositInfo>, StorageError>;
 
     /// Updates or inserts refund transaction details for a deposit
     /// # Arguments
@@ -142,13 +146,12 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// Success or a `StorageError`
-    fn update_deposit_refund(&self, deposit_refund: DepositRefund) -> Result<(), StorageError>;
-
-    fn get_deposit_refund(
+    fn update_deposit(
         &self,
         txid: String,
         vout: u32,
-    ) -> Result<Option<DepositRefund>, StorageError>;
+        deposit_refund: UpdateDepositPayload,
+    ) -> Result<(), StorageError>;
 }
 
 pub(crate) struct ObjectCacheRepository {
@@ -187,6 +190,24 @@ impl ObjectCacheRepository {
             None => Ok(None),
         }
     }
+
+    pub(crate) fn save_tx(&self, txid: &str, value: &CachedTx) -> Result<(), StorageError> {
+        self.storage.set_cached_item(
+            format!("{TX_CACHE_KEY}-{txid}"),
+            serde_json::to_string(value)?,
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn fetch_tx(&self, txid: &str) -> Result<Option<CachedTx>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(format!("{TX_CACHE_KEY}-{txid}"))?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -197,4 +218,9 @@ pub(crate) struct CachedAccountInfo {
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedSyncInfo {
     pub(crate) offset: u64,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub(crate) struct CachedTx {
+    pub(crate) raw_tx: String,
 }
