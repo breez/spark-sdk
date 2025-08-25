@@ -13,8 +13,8 @@ pub use spark::{
     Identifier, Network,
     address::SparkAddress,
     services::{
-        CpfpUtxo, ExitSpeed, Fee, LightningSendPayment, LightningSendStatus, TransferStatus,
-        TransferTokenOutput, TransferType, Utxo,
+        CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee, LightningSendPayment,
+        LightningSendStatus, TransferStatus, TransferTokenOutput, TransferType, Utxo,
     },
     signer::{DefaultSigner, Signer},
     ssp::*,

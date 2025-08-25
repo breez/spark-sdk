@@ -1,6 +1,5 @@
 use bitcoin::{
-    Transaction, Txid,
-    consensus::{encode::deserialize_hex, serialize},
+    consensus::serialize,
     hashes::{Hash, sha256},
     hex::DisplayHex,
 };
@@ -17,22 +16,23 @@ use breez_sdk_common::{
     rest::RestClient,
 };
 use spark_wallet::{
-    DefaultSigner, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress, SparkWallet, Utxo,
-    WalletEvent, WalletTransfer,
+    DefaultSigner, ExitSpeed, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress,
+    SparkWallet, WalletEvent, WalletTransfer,
 };
-use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
+use std::{path::PathBuf, str::FromStr, sync::Arc};
 use tracing::{error, info};
+use web_time::{Duration, SystemTime};
 
 use tokio::sync::watch;
 use tokio_with_wasm::alias as tokio;
 use web_time::Instant;
 
 use crate::{
-    BitcoinChainService, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, DepositRefund,
-    Fee, GetPaymentRequest, GetPaymentResponse, ListUnclaimedDepositsRequest,
+    BitcoinChainService, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee,
+    GetPaymentRequest, GetPaymentResponse, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
     Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    RefundDepositRequest, RefundDepositResponse, SqliteStorage, UnclaimedDeposit,
+    RefundDepositRequest, RefundDepositResponse, SendPaymentOptions, SqliteStorage,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -43,8 +43,21 @@ use crate::{
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentMethod, SendPaymentRequest,
         SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
-    persist::{CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, PaymentMetadata, Storage},
+    persist::{
+        CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, PaymentMetadata, Storage,
+        UpdateDepositPayload,
+    },
+    utils::{
+        deposit_chain_syncer::DepositChainSyncer,
+        utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
+    },
 };
+
+#[derive(Clone, Debug)]
+enum SyncType {
+    Full,
+    PaymentsOnly,
+}
 
 /// `BreezSDK` is a wrapper around `SparkSDK` that provides a more structured API
 /// with request/response objects and comprehensive error handling.
@@ -59,6 +72,7 @@ pub struct BreezSdk {
     event_emitter: breez_sdk_common::utils::Arc<EventEmitter>,
     shutdown_sender: watch::Sender<()>,
     shutdown_receiver: watch::Receiver<()>,
+    sync_trigger: tokio::sync::broadcast::Sender<SyncType>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -83,7 +97,7 @@ pub fn default_storage(data_dir: String) -> Result<Arc<dyn Storage>, SdkError> {
 pub fn default_config(network: Network) -> Config {
     Config {
         network,
-        deposits_monitoring_interval_secs: 60, // every 1 minute
+        sync_interval_secs: 60, // every 1 minute
         max_deposit_claim_fee: None,
     }
 }
@@ -130,6 +144,7 @@ impl BreezSdk {
             event_emitter: breez_sdk_common::utils::Arc::new(EventEmitter::new()),
             shutdown_sender,
             shutdown_receiver,
+            sync_trigger: tokio::sync::broadcast::channel(10).0,
         };
         Ok(sdk)
     }
@@ -138,50 +153,22 @@ impl BreezSdk {
     ///
     /// This method initiates the following backround tasks:
     /// 1. `periodic_sync`: the wallet with the Spark network    
-    ///
+    /// 2. `monitor_deposits`: monitors for new deposits
     pub(crate) fn start(&self) {
         self.periodic_sync();
-        self.monitor_deposits();
-    }
-
-    fn monitor_deposits(&self) {
-        let sdk = self.clone();
-        let mut shutdown_receiver = sdk.shutdown_receiver.clone();
-
-        info!("Monitoring deposits started");
-        // First interval is immediate, after first iteration we change it according to the configuration
-        let mut deposits_monitoring_interval = 10;
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = shutdown_receiver.changed() => {
-                        info!("Deposit tracking loop shutdown signal received");
-                        return;
-                    }
-                    () = tokio::time::sleep(Duration::from_secs(deposits_monitoring_interval.into())) => {
-                        tokio::select! {
-                            _ = shutdown_receiver.changed() => {
-                                info!("Check claim static deposits shutdown signal received");
-                                return;
-                            }
-                            claim_result = sdk.check_and_claim_static_deposits() => {
-                                if let Err(e) = claim_result {
-                                    error!("Monitor deposits failed to claim static deposit: {e:?}");
-                                }
-                            }
-                        }
-
-                        deposits_monitoring_interval = sdk.config.deposits_monitoring_interval_secs;
-                    }
-                }
-            }
-        });
+        if let Err(e) = self.sync_trigger.send(SyncType::Full) {
+            error!("Failed to execute initial sync: {e:?}");
+        }
     }
 
     fn periodic_sync(&self) {
         let sdk = self.clone();
         let mut shutdown_receiver = sdk.shutdown_receiver.clone();
         let mut subscription = sdk.spark_wallet.subscribe_events();
+        let sync_trigger_sender = sdk.sync_trigger.clone();
+        let mut sync_trigger_receiver = sdk.sync_trigger.clone().subscribe();
+        let mut last_sync_time = SystemTime::now();
+        let sync_interval = u64::from(self.config.sync_interval_secs);
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -193,11 +180,31 @@ impl BreezSdk {
                         match event {
                             Ok(event) => {
                                 info!("Received event: {event:?}");
-                                sdk.handle_wallet_event(event).await;
+                                sdk.handle_wallet_event(event);
                             }
                             Err(e) => {
                                 error!("Failed to receive event: {e:?}");
                             }
+                        }
+                    }
+                    () = async {
+                      let sync_type_res = sync_trigger_receiver.recv().await;
+                      if let Ok(sync_type) = sync_type_res   {
+                          info!("Sync trigger changed: {:?}", &sync_type);
+
+                          if let Err(e) = sdk.sync_wallet_internal(sync_type.clone()).await {
+                              error!("Failed to sync wallet: {e:?}");
+                          } else if matches!(sync_type, SyncType::Full) {
+                            last_sync_time = SystemTime::now();
+                          }
+                      }
+                  } => {}
+                    // Ensure we sync at least the configured interval
+                    () = tokio::time::sleep(Duration::from_secs(10)) => {
+                        let now = SystemTime::now();
+                        if let Ok(elapsed) = now.duration_since(last_sync_time) && elapsed.as_secs() >= sync_interval
+                            && let Err(e) = sync_trigger_sender.send(SyncType::Full) {
+                            error!("Failed to trigger periodic sync: {e:?}");
                         }
                     }
                 }
@@ -205,14 +212,14 @@ impl BreezSdk {
         });
     }
 
-    async fn handle_wallet_event(&self, event: WalletEvent) {
+    fn handle_wallet_event(&self, event: WalletEvent) {
         match event {
             WalletEvent::DepositConfirmed(_) => {
                 info!("Deposit confirmed");
             }
             WalletEvent::StreamConnected => {
                 info!("Stream connected");
-                if let Err(e) = self.sync_wallet_internal().await {
+                if let Err(e) = self.sync_trigger.send(SyncType::Full) {
                     error!("Failed to sync wallet: {e:?}");
                 }
             }
@@ -228,19 +235,21 @@ impl BreezSdk {
                     self.event_emitter
                         .emit(&SdkEvent::PaymentSucceeded { payment });
                 }
-                if let Err(e) = self.sync_payments_to_storage().await {
-                    error!("Failed to sync payments to storage: {e:?}");
+                if let Err(e) = self.sync_trigger.send(SyncType::PaymentsOnly) {
+                    error!("Failed to sync wallet: {e:?}");
                 }
             }
         }
     }
 
-    async fn sync_wallet_internal(&self) -> Result<(), SdkError> {
+    async fn sync_wallet_internal(&self, sync_type: SyncType) -> Result<(), SdkError> {
         let start_time = Instant::now();
-
-        // Sync with the Spark network
-        self.spark_wallet.sync().await?;
+        if let SyncType::Full = sync_type {
+            // Sync with the Spark network
+            self.spark_wallet.sync().await?;
+        }
         self.sync_payments_to_storage().await?;
+        self.check_and_claim_static_deposits().await?;
         let elapsed = start_time.elapsed();
         info!("Wallet sync completed in {elapsed:?}");
         self.event_emitter.emit(&SdkEvent::Synced {});
@@ -314,95 +323,58 @@ impl BreezSdk {
     }
 
     async fn check_and_claim_static_deposits(&self) -> Result<(), SdkError> {
-        let addresses = self
-            .spark_wallet
-            .list_static_deposit_addresses(None)
-            .await?;
-        for address in addresses {
-            info!("Checking static deposit address: {}", address.to_string());
-            let utxos = self
-                .spark_wallet
-                .get_utxos_for_address(&address.to_string())
-                .await;
-            match utxos {
-                Ok(utxos) => {
-                    info!("Found {} utxos for address {}", utxos.len(), address);
-                    let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
-                    let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
-                    for utxo in utxos {
-                        info!("Processing utxo {}:{}", utxo.txid, utxo.vout);
-                        let detailed_utxo = match self.fetch_detailed_utxo(&utxo).await {
-                            Ok(detailed_utxo) => detailed_utxo,
-                            Err(e) => {
-                                error!("Failed to convert utxo {}:{}: {e}", utxo.txid, utxo.vout);
-                                let mut unclaimed_deposit: DepositInfo = utxo.into();
-                                unclaimed_deposit.error = Some(e.into());
-                                unclaimed_deposits.push(unclaimed_deposit);
-                                continue;
-                            }
-                        };
-                        match self
-                            .claim_utxo(&detailed_utxo, self.config.max_deposit_claim_fee.clone())
-                            .await
-                        {
-                            Ok(_) => {
-                                info!("Claimed utxo {}:{}", utxo.txid, utxo.vout);
-                                claimed_deposits.push(detailed_utxo.into());
-                            }
-                            Err(e) => {
-                                error!("Failed to claim utxo {}:{}: {e}", utxo.txid, utxo.vout);
-                                let mut unclaimed_deposit: DepositInfo = detailed_utxo.into();
-                                unclaimed_deposit.error = Some(e.into());
-                                unclaimed_deposits.push(unclaimed_deposit);
-                            }
-                        }
-                    }
+        let to_claim = DepositChainSyncer::new(
+            self.chain_service.clone(),
+            self.storage.clone(),
+            self.spark_wallet.clone(),
+            self.config.network,
+        )
+        .sync()
+        .await?;
 
-                    info!("background claim completed, unclaimed deposits: {unclaimed_deposits:?}");
+        let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
+        let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
+        for detailed_utxo in to_claim {
+            match self
+                .claim_utxo(&detailed_utxo, self.config.max_deposit_claim_fee.clone())
+                .await
+            {
+                Ok(_) => {
+                    info!("Claimed utxo {}:{}", detailed_utxo.txid, detailed_utxo.vout);
                     self.storage
-                        .set_unclaimed_deposits(unclaimed_deposits.clone())?;
-                    if !unclaimed_deposits.is_empty() {
-                        self.event_emitter
-                            .emit(&SdkEvent::ClaimDepositsFailed { unclaimed_deposits });
-                    }
-                    if !claimed_deposits.is_empty() {
-                        self.event_emitter
-                            .emit(&SdkEvent::ClaimDepositsSucceeded { claimed_deposits });
-                    }
+                        .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)?;
+                    claimed_deposits.push(detailed_utxo.into());
                 }
                 Err(e) => {
-                    error!("Failed to get utxos for address {}: {e}", address);
+                    error!(
+                        "Failed to claim utxo {}:{}: {e}",
+                        detailed_utxo.txid, detailed_utxo.vout
+                    );
+                    self.storage.update_deposit(
+                        detailed_utxo.txid.to_string(),
+                        detailed_utxo.vout,
+                        UpdateDepositPayload::ClaimError {
+                            error: e.clone().into(),
+                        },
+                    )?;
+                    let mut unclaimed_deposit: DepositInfo = detailed_utxo.clone().into();
+                    unclaimed_deposit.claim_error = Some(e.into());
+                    unclaimed_deposits.push(unclaimed_deposit);
                 }
             }
         }
 
-        Ok(())
-    }
+        info!("background claim completed, unclaimed deposits: {unclaimed_deposits:?}");
 
-    async fn fetch_detailed_utxo(&self, utxo: &Utxo) -> Result<DetailedUtxo, SdkError> {
-        let tx: Transaction = if let Some(tx) = utxo.tx.clone() {
-            tx
-        } else {
-            let tx_hex = self
-                .chain_service
-                .get_transaction_hex(utxo.txid.to_string())
-                .await?;
-            deserialize_hex(tx_hex.as_str())?
-        };
-        let txout = tx
-            .output
-            .get(utxo.vout as usize)
-            .ok_or(SdkError::MissingUtxo {
-                tx: utxo.txid.to_string(),
-                vout: utxo.vout,
-            })?;
-        let amount_sats = txout.value.to_sat();
-        Ok(DetailedUtxo {
-            tx,
-            vout: utxo.vout,
-            txid: utxo.txid,
-            value: amount_sats,
-        })
+        if !unclaimed_deposits.is_empty() {
+            self.event_emitter
+                .emit(&SdkEvent::ClaimDepositsFailed { unclaimed_deposits });
+        }
+        if !claimed_deposits.is_empty() {
+            self.event_emitter
+                .emit(&SdkEvent::ClaimDepositsSucceeded { claimed_deposits });
+        }
+        Ok(())
     }
 
     async fn claim_utxo(
@@ -600,11 +572,14 @@ impl BreezSdk {
             .prepare_send_payment(PrepareSendPaymentRequest {
                 payment_request: success_data.pr,
                 amount_sats: Some(request.amount_sats),
-                prefer_spark: Some(false),
             })
             .await?;
 
-        let SendPaymentMethod::Bolt11Invoice { invoice_details } = prepare_response.payment_method
+        let SendPaymentMethod::Bolt11Invoice {
+            invoice_details,
+            lightning_fee_sats,
+            ..
+        } = prepare_response.payment_method
         else {
             return Err(SdkError::Generic(
                 "Expected Bolt11Invoice payment method".to_string(),
@@ -616,7 +591,7 @@ impl BreezSdk {
             comment: request.comment,
             pay_request: request.pay_request,
             invoice_details,
-            fee_sats: prepare_response.fee_sats,
+            fee_sats: lightning_fee_sats,
             success_action: success_data.success_action,
         })
     }
@@ -628,11 +603,12 @@ impl BreezSdk {
                     prepare_response: PrepareSendPaymentResponse {
                         payment_method: SendPaymentMethod::Bolt11Invoice {
                             invoice_details: request.prepare_response.invoice_details,
+                            spark_transfer_fee_sats: None,
+                            lightning_fee_sats: request.prepare_response.fee_sats,
                         },
                         amount_sats: request.prepare_response.amount_sats,
-                        fee_sats: request.prepare_response.fee_sats,
-                        prefer_spark: false,
                     },
+                    options: None,
                 },
                 true,
             )
@@ -650,7 +626,7 @@ impl BreezSdk {
             processed_success_action: success_action.clone(),
             raw_success_action: request.prepare_response.success_action,
         };
-        let PaymentDetails::Lightning { lnurl_pay_info, .. } = &mut payment.details else {
+        let Some(PaymentDetails::Lightning { lnurl_pay_info, .. }) = &mut payment.details else {
             return Err(SdkError::Generic(
                 "Expected Lightning payment details".to_string(),
             ));
@@ -681,12 +657,11 @@ impl BreezSdk {
             return Ok(PrepareSendPaymentResponse {
                 payment_method: SendPaymentMethod::SparkAddress {
                     address: spark_address.to_string(),
+                    fee_sats: 0,
                 },
-                fee_sats: 0,
                 amount_sats: request
                     .amount_sats
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
-                prefer_spark: request.prefer_spark.unwrap_or(true),
             });
         }
         // Then check for other types of inputs
@@ -696,33 +671,58 @@ impl BreezSdk {
                 let spark_address = self
                     .spark_wallet
                     .extract_spark_address(&request.payment_request)?;
-                let fee_sats = match (request.prefer_spark.unwrap_or(true), spark_address) {
-                    // prefer spark and spark address found
-                    (true, Some(_)) => 0,
-                    // prefer lightning or no spark address found
-                    _ => {
-                        self.spark_wallet
-                            .fetch_lightning_send_fee_estimate(
-                                &request.payment_request,
-                                request.amount_sats,
-                            )
-                            .await?
-                    }
+
+                let spark_transfer_fee_sats = if spark_address.is_some() {
+                    Some(0)
+                } else {
+                    None
                 };
+
+                let lightning_fee_sats = self
+                    .spark_wallet
+                    .fetch_lightning_send_fee_estimate(
+                        &request.payment_request,
+                        request.amount_sats,
+                    )
+                    .await?;
 
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::Bolt11Invoice {
                         invoice_details: detailed_bolt11_invoice.clone(),
+                        spark_transfer_fee_sats,
+                        lightning_fee_sats,
                     },
-                    fee_sats,
                     amount_sats: request
                         .amount_sats
                         .or(detailed_bolt11_invoice.amount_msat.map(|msat| msat / 1000))
                         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
-                    prefer_spark: request.prefer_spark.unwrap_or(true),
                 })
             }
-            _ => Err(SdkError::Generic("Unsupported input type".to_string())),
+            InputType::BitcoinAddress(withdrawal_address) => {
+                let fee_quote = self
+                    .spark_wallet
+                    .fetch_coop_exit_fee_quote(
+                        &withdrawal_address.address,
+                        Some(
+                            request
+                                .amount_sats
+                                .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                        ),
+                    )
+                    .await?;
+                Ok(PrepareSendPaymentResponse {
+                    payment_method: SendPaymentMethod::BitcoinAddress {
+                        address: withdrawal_address.clone(),
+                        fee_quote: fee_quote.into(),
+                    },
+                    amount_sats: request
+                        .amount_sats
+                        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                })
+            }
+            _ => Err(SdkError::InvalidInput(
+                "Unsupported payment method".to_string(),
+            )),
         }
     }
 
@@ -739,7 +739,7 @@ impl BreezSdk {
         suppress_payment_event: bool,
     ) -> Result<SendPaymentResponse, SdkError> {
         let res = match request.prepare_response.payment_method {
-            SendPaymentMethod::SparkAddress { address } => {
+            SendPaymentMethod::SparkAddress { address, .. } => {
                 let spark_address = address
                     .parse::<SparkAddress>()
                     .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
@@ -751,20 +751,39 @@ impl BreezSdk {
                     payment: transfer.try_into()?,
                 })
             }
-            SendPaymentMethod::Bolt11Invoice { invoice_details } => {
+            SendPaymentMethod::Bolt11Invoice {
+                invoice_details,
+                spark_transfer_fee_sats,
+                lightning_fee_sats,
+            } => {
                 let amount_to_send = match invoice_details.amount_msat {
                     // we are not sending amount in case the invoice contains it.
                     Some(_) => None,
                     // We are sending amount for zero amount invoice
                     None => Some(request.prepare_response.amount_sats),
                 };
+                let use_spark = match request.options {
+                    Some(SendPaymentOptions::Bolt11Invoice { use_spark }) => use_spark,
+                    _ => false,
+                };
+                let fee_sats = match (use_spark, spark_transfer_fee_sats, lightning_fee_sats) {
+                    (true, Some(fee), _) => fee,
+                    _ => lightning_fee_sats,
+                };
+                if use_spark && spark_transfer_fee_sats.is_none() {
+                    return Err(SdkError::InvalidInput(
+                        "Cannot use spark to pay invoice as it doesn't contain a spark address"
+                            .to_string(),
+                    ));
+                }
+
                 let payment_response = self
                     .spark_wallet
                     .pay_lightning_invoice(
                         &invoice_details.invoice.bolt11,
                         amount_to_send,
-                        Some(request.prepare_response.fee_sats),
-                        request.prepare_response.prefer_spark,
+                        Some(fee_sats),
+                        use_spark,
                     )
                     .await?;
                 let payment = match payment_response {
@@ -775,14 +794,41 @@ impl BreezSdk {
                 };
                 Ok(SendPaymentResponse { payment })
             }
-            SendPaymentMethod::BitcoinAddress { address: _ } => todo!(),
+            SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
+                let exit_speed: ExitSpeed = match request.options {
+                    Some(SendPaymentOptions::BitcoinAddress { confirmation_speed }) => {
+                        confirmation_speed.into()
+                    }
+                    None => ExitSpeed::Fast,
+                    _ => {
+                        return Err(SdkError::InvalidInput("Invalid options".to_string()));
+                    }
+                };
+                let response = self
+                    .spark_wallet
+                    .withdraw(
+                        &address.address,
+                        Some(request.prepare_response.amount_sats),
+                        exit_speed,
+                        fee_quote.into(),
+                    )
+                    .await?;
+                Ok(SendPaymentResponse {
+                    payment: response.try_into()?,
+                })
+            }
         };
         if let Ok(response) = &res {
-            self.storage.insert_payment(response.payment.clone())?;
+            //TODO: We get incomplete payments here from the ssp so better not to persist for now.
+            // we trigger the sync here anyway to get the fresh payment.
+            //self.storage.insert_payment(response.payment.clone())?;
             if !suppress_payment_event {
                 self.event_emitter.emit(&SdkEvent::PaymentSucceeded {
                     payment: response.payment.clone(),
                 });
+            }
+            if let Err(e) = self.sync_trigger.send(SyncType::PaymentsOnly) {
+                error!("Failed to send sync trigger: {e:?}");
             }
         }
         res
@@ -790,11 +836,10 @@ impl BreezSdk {
 
     /// Synchronizes the wallet with the Spark network
     #[allow(unused_variables)]
-    pub async fn sync_wallet(
-        &self,
-        request: SyncWalletRequest,
-    ) -> Result<SyncWalletResponse, SdkError> {
-        self.sync_wallet_internal().await?;
+    pub fn sync_wallet(&self, request: SyncWalletRequest) -> Result<SyncWalletResponse, SdkError> {
+        if let Err(e) = self.sync_trigger.send(SyncType::Full) {
+            error!("Failed to send sync trigger: {e:?}");
+        }
         Ok(SyncWalletResponse {})
     }
 
@@ -829,17 +874,10 @@ impl BreezSdk {
         &self,
         request: ClaimDepositRequest,
     ) -> Result<ClaimDepositResponse, SdkError> {
-        let detailed_utxo = self
-            .fetch_detailed_utxo(&Utxo {
-                txid: request
-                    .txid
-                    .parse()
-                    .map_err(|_| SdkError::InvalidInput("Invalid txid".to_string()))?,
-                vout: request.vout,
-                tx: None,
-                network: self.config.network.into(),
-            })
-            .await?;
+        let detailed_utxo =
+            CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
+                .fetch_detailed_utxo(&request.txid, request.vout)
+                .await?;
 
         let max_fee = request
             .max_fee
@@ -847,16 +885,23 @@ impl BreezSdk {
         match self.claim_utxo(&detailed_utxo, max_fee).await {
             Ok(transfer) => {
                 self.storage
-                    .remove_unclaimed_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)?;
+                    .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)?;
+                if let Err(e) = self.sync_trigger.send(SyncType::PaymentsOnly) {
+                    error!("Failed to execute sync after deposit claim: {e:?}");
+                }
                 Ok(ClaimDepositResponse {
                     payment: transfer.try_into()?,
                 })
             }
             Err(e) => {
                 error!("Failed to claim deposit: {e:?}");
-                let mut deposit_info = DepositInfo::from(detailed_utxo);
-                deposit_info.error = Some(e.clone().into());
-                self.storage.add_unclaimed_deposit(deposit_info)?;
+                self.storage.update_deposit(
+                    detailed_utxo.txid.to_string(),
+                    detailed_utxo.vout,
+                    UpdateDepositPayload::ClaimError {
+                        error: e.clone().into(),
+                    },
+                )?;
                 Err(e)
             }
         }
@@ -866,17 +911,10 @@ impl BreezSdk {
         &self,
         request: RefundDepositRequest,
     ) -> Result<RefundDepositResponse, SdkError> {
-        let detailed_utxo = self
-            .fetch_detailed_utxo(&Utxo {
-                txid: request
-                    .txid
-                    .parse()
-                    .map_err(|_| SdkError::InvalidInput("Invalid txid".to_string()))?,
-                vout: request.vout,
-                tx: None,
-                network: self.config.network.into(),
-            })
-            .await?;
+        let detailed_utxo =
+            CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
+                .fetch_detailed_utxo(&request.txid, request.vout)
+                .await?;
         let tx = self
             .spark_wallet
             .refund_static_deposit(
@@ -891,12 +929,14 @@ impl BreezSdk {
         let tx_id = tx.compute_txid().to_string();
 
         // Store the refund transaction details separately
-        self.storage.update_deposit_refund(DepositRefund {
-            deposit_tx_id: deposit.txid.clone(),
-            deposit_vout: deposit.vout,
-            refund_tx: tx_hex.clone(),
-            refund_tx_id: tx_id.clone(),
-        })?;
+        self.storage.update_deposit(
+            deposit.txid.clone(),
+            deposit.vout,
+            UpdateDepositPayload::Refund {
+                refund_tx: tx_hex.clone(),
+                refund_txid: tx_id.clone(),
+            },
+        )?;
 
         self.chain_service
             .broadcast_transaction(tx_hex.clone())
@@ -909,37 +949,8 @@ impl BreezSdk {
         &self,
         request: ListUnclaimedDepositsRequest,
     ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
-        let unclaimed_deposits = self.storage.list_unclaimed_deposits()?;
-        let mut response = Vec::new();
-        for deposit in unclaimed_deposits {
-            let deposit_refund = self
-                .storage
-                .get_deposit_refund(deposit.txid.clone(), deposit.vout)?;
-            response.push(UnclaimedDeposit {
-                deposit,
-                refund_info: deposit_refund,
-            });
-        }
-        Ok(ListUnclaimedDepositsResponse { deposits: response })
-    }
-}
-
-#[derive(Debug, Clone)]
-struct DetailedUtxo {
-    tx: Transaction,
-    vout: u32,
-    txid: Txid,
-    value: u64,
-}
-
-impl From<DetailedUtxo> for DepositInfo {
-    fn from(detailed_utxo: DetailedUtxo) -> Self {
-        DepositInfo {
-            txid: detailed_utxo.txid.to_string(),
-            vout: detailed_utxo.vout,
-            amount_sats: Some(detailed_utxo.value),
-            error: None,
-        }
+        let deposits = self.storage.list_deposits()?;
+        Ok(ListUnclaimedDepositsResponse { deposits })
     }
 }
 
@@ -961,7 +972,7 @@ fn process_success_action(
         }
     };
 
-    let PaymentDetails::Lightning { preimage, .. } = &payment.details else {
+    let Some(PaymentDetails::Lightning { preimage, .. }) = &payment.details else {
         return Err(LnurlError::general(format!(
             "Invalid payment type: expected type `PaymentDetails::Lightning`, got payment details {:?}.",
             payment.details

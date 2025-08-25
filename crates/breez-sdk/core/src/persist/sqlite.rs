@@ -6,10 +6,10 @@ use rusqlite_migration::{M, Migrations};
 use std::path::{Path, PathBuf};
 
 use crate::{
-    DepositInfo, DepositRefund, LnurlPayInfo, PaymentDetails,
+    DepositInfo, LnurlPayInfo, PaymentDetails, PaymentMethod,
     error::DepositClaimError,
     models::{PaymentStatus, PaymentType},
-    persist::PaymentMetadata,
+    persist::{PaymentMetadata, UpdateDepositPayload},
 };
 
 use super::{Payment, Storage, StorageError};
@@ -67,18 +67,21 @@ impl SqliteStorage {
               status TEXT NOT NULL,
               amount INTEGER NOT NULL,
               fees INTEGER NOT NULL,
-              timestamp INTEGER NOT NULL
+              timestamp INTEGER NOT NULL,
+              details TEXT,
+              method TEXT
             );",
             "CREATE TABLE IF NOT EXISTS settings (
               key TEXT PRIMARY KEY,
               value TEXT NOT NULL
             );",
-            "ALTER TABLE payments ADD COLUMN details TEXT;",
             "CREATE TABLE IF NOT EXISTS unclaimed_deposits (
               txid TEXT NOT NULL,
               vout INTEGER NOT NULL,
               amount_sats INTEGER,
-              error TEXT,
+              claim_error TEXT,
+              refund_tx TEXT,
+              refund_tx_id TEXT,
               PRIMARY KEY (txid, vout)
             );",
             "CREATE TABLE IF NOT EXISTS payment_metadata (
@@ -116,7 +119,7 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         let query = format!(
-            "SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, pm.lnurl_pay_info
+            "SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, p.method, pm.lnurl_pay_info
              FROM payments p
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              ORDER BY p.timestamp DESC 
@@ -128,9 +131,9 @@ impl Storage for SqliteStorage {
         let mut stmt = connection.prepare(&query)?;
 
         let payment_iter = stmt.query_map(params![], |row| {
-            let mut details = row.get(6)?;
-            if let PaymentDetails::Lightning { lnurl_pay_info, .. } = &mut details {
-                *lnurl_pay_info = row.get(7)?;
+            let mut details: Option<PaymentDetails> = row.get(6)?;
+            if let Some(PaymentDetails::Lightning { lnurl_pay_info, .. }) = &mut details {
+                *lnurl_pay_info = row.get(8)?;
             }
 
             Ok(Payment {
@@ -141,6 +144,7 @@ impl Storage for SqliteStorage {
                 fees: row.get(4)?,
                 timestamp: row.get(5)?,
                 details,
+                method: row.get(7)?,
             })
         })?;
 
@@ -156,8 +160,8 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         connection.execute(
-            "INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, details) 
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, details, method) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 payment.id,
                 payment.payment_type.to_string(),
@@ -166,6 +170,7 @@ impl Storage for SqliteStorage {
                 payment.fees,
                 payment.timestamp,
                 payment.details,
+                payment.method,
             ],
         )?;
 
@@ -219,10 +224,15 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare(
-            "SELECT id, payment_type, status, amount, fees, timestamp, details FROM payments WHERE id = ?",
+            "SELECT id, payment_type, status, amount, fees, timestamp, details, method, pm.lnurl_pay_info FROM payments LEFT JOIN payment_metadata pm ON payments.id = pm.payment_id WHERE payments.id = ?",
         )?;
 
         let result = stmt.query_row(params![id], |row| {
+            let mut details: Option<PaymentDetails> = row.get(6)?;
+            if let Some(PaymentDetails::Lightning { lnurl_pay_info, .. }) = &mut details {
+                *lnurl_pay_info = row.get(8)?;
+            }
+
             Ok(Payment {
                 id: row.get(0)?,
                 payment_type: PaymentType::from(row.get::<_, String>(1)?.as_str()),
@@ -230,28 +240,24 @@ impl Storage for SqliteStorage {
                 amount: row.get(3)?,
                 fees: row.get(4)?,
                 timestamp: row.get(5)?,
-                details: row.get(6)?,
+                details,
+                method: row.get(7)?,
             })
         });
         result.map_err(StorageError::from)
     }
 
-    fn add_unclaimed_deposit(&self, deposit_info: DepositInfo) -> Result<(), StorageError> {
+    fn add_deposit(&self, txid: String, vout: u32, amount_sats: u64) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
         connection.execute(
-            "INSERT OR REPLACE INTO unclaimed_deposits (txid, vout, amount_sats, error) 
-             VALUES (?, ?, ?, ?)",
-            params![
-                deposit_info.txid,
-                deposit_info.vout,
-                deposit_info.amount_sats,
-                deposit_info.error,
-            ],
+            "INSERT OR IGNORE INTO unclaimed_deposits (txid, vout, amount_sats) 
+             VALUES (?, ?, ?)",
+            params![txid, vout, amount_sats,],
         )?;
         Ok(())
     }
 
-    fn remove_unclaimed_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError> {
+    fn delete_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
         connection.execute(
             "DELETE FROM unclaimed_deposits WHERE txid = ? AND vout = ?",
@@ -260,16 +266,18 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    fn list_unclaimed_deposits(&self) -> Result<Vec<DepositInfo>, StorageError> {
+    fn list_deposits(&self) -> Result<Vec<DepositInfo>, StorageError> {
         let connection = self.get_connection()?;
         let mut stmt =
-            connection.prepare("SELECT txid, vout, amount_sats, error FROM unclaimed_deposits")?;
+            connection.prepare("SELECT txid, vout, amount_sats, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits")?;
         let rows = stmt.query_map(params![], |row| {
             Ok(DepositInfo {
                 txid: row.get(0)?,
                 vout: row.get(1)?,
                 amount_sats: row.get(2)?,
-                error: row.get(3)?,
+                claim_error: row.get(3)?,
+                refund_tx: row.get(4)?,
+                refund_tx_id: row.get(5)?,
             })
         })?;
         let mut deposits = Vec::new();
@@ -279,63 +287,31 @@ impl Storage for SqliteStorage {
         Ok(deposits)
     }
 
-    fn set_unclaimed_deposits(&self, deposits: Vec<DepositInfo>) -> Result<(), StorageError> {
-        let mut connection = self.get_connection()?;
-        let transaction = connection.transaction()?;
-        transaction.execute("DELETE FROM unclaimed_deposits", params![])?;
-        for deposit in deposits {
-            transaction.execute(
-                "INSERT OR REPLACE INTO unclaimed_deposits (txid, vout, amount_sats, error) 
-                 VALUES (?, ?, ?, ?)",
-                params![
-                    deposit.txid,
-                    deposit.vout,
-                    deposit.amount_sats,
-                    deposit.error,
-                ],
-            )?;
-        }
-        transaction.commit()?;
-        Ok(())
-    }
-
-    fn update_deposit_refund(&self, deposit_refund: DepositRefund) -> Result<(), StorageError> {
-        let connection = self.get_connection()?;
-        connection.execute(
-            "INSERT OR REPLACE INTO deposit_refunds (deposit_tx_id, deposit_vout, refund_tx, refund_tx_id) 
-             VALUES (?, ?, ?, ?)",
-            params![
-                deposit_refund.deposit_tx_id,
-                deposit_refund.deposit_vout,
-                deposit_refund.refund_tx,
-                deposit_refund.refund_tx_id,
-            ],
-        )?;
-        Ok(())
-    }
-
-    fn get_deposit_refund(
+    fn update_deposit(
         &self,
         txid: String,
         vout: u32,
-    ) -> Result<Option<DepositRefund>, StorageError> {
+        payload: UpdateDepositPayload,
+    ) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
-        let mut stmt = connection.prepare(
-            "SELECT deposit_tx_id, deposit_vout, refund_tx, refund_tx_id FROM deposit_refunds WHERE deposit_tx_id = ? AND deposit_vout = ?",
-        )?;
-        let result = stmt.query_row(params![txid, vout], |row| {
-            Ok(DepositRefund {
-                deposit_tx_id: row.get(0)?,
-                deposit_vout: row.get(1)?,
-                refund_tx: row.get(2)?,
-                refund_tx_id: row.get(3)?,
-            })
-        });
-        match result {
-            Ok(deposit_refund) => Ok(Some(deposit_refund)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
+        match payload {
+            UpdateDepositPayload::ClaimError { error } => {
+                connection.execute(
+                    "UPDATE unclaimed_deposits SET claim_error = ? WHERE txid = ? AND vout = ?",
+                    params![error, txid, vout],
+                )?;
+            }
+            UpdateDepositPayload::Refund {
+                refund_txid,
+                refund_tx,
+            } => {
+                connection.execute(
+                    "UPDATE unclaimed_deposits SET refund_tx = ?, refund_tx_id = ? WHERE txid = ? AND vout = ?",
+                    params![refund_tx, refund_txid, txid, vout],
+                )?;
+            }
         }
+        Ok(())
     }
 }
 
@@ -355,6 +331,28 @@ impl FromSql for PaymentDetails {
                 let payment_details: PaymentDetails =
                     serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
                 Ok(payment_details)
+            }
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
+
+impl ToSql for PaymentMethod {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        let json = serde_json::to_string(self)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        Ok(rusqlite::types::ToSqlOutput::from(json))
+    }
+}
+
+impl FromSql for PaymentMethod {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value {
+            ValueRef::Text(i) => {
+                let s = std::str::from_utf8(i).map_err(FromSqlError::other)?;
+                let payment_method: PaymentMethod =
+                    serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
+                Ok(payment_method)
             }
             _ => Err(FromSqlError::InvalidType),
         }
@@ -423,7 +421,8 @@ mod tests {
             amount: 100_000,
             fees: 1000,
             timestamp: Utc::now().timestamp().try_into().unwrap(),
-            details: PaymentDetails::Spark,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
         };
 
         // Insert payment
@@ -437,7 +436,7 @@ mod tests {
         assert_eq!(payments[0].status, payment.status);
         assert_eq!(payments[0].amount, payment.amount);
         assert_eq!(payments[0].fees, payment.fees);
-        assert!(matches!(payments[0].details, PaymentDetails::Spark));
+        assert!(matches!(payments[0].details, Some(PaymentDetails::Spark)));
 
         // Get payment by ID
         let retrieved_payment = storage.get_payment_by_id(payment.id.clone()).unwrap();
@@ -446,6 +445,10 @@ mod tests {
         assert_eq!(retrieved_payment.status, payment.status);
         assert_eq!(retrieved_payment.amount, payment.amount);
         assert_eq!(retrieved_payment.fees, payment.fees);
+        assert!(matches!(
+            retrieved_payment.details,
+            Some(PaymentDetails::Spark)
+        ));
     }
 
     #[test]
@@ -453,223 +456,95 @@ mod tests {
         let temp_dir = tempdir::TempDir::new("sqlite_storage_deposits").unwrap();
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
-        // Create test deposit info
-        let deposit_1 = crate::DepositInfo {
-            txid: "tx123".to_string(),
-            vout: 0,
-            amount_sats: Some(50000),
-            error: None,
-        };
-
-        let deposit_2 = crate::DepositInfo {
-            txid: "tx456".to_string(),
-            vout: 1,
-            amount_sats: Some(75000),
-            error: Some(DepositClaimError::Generic {
-                message: "Test error".to_string(),
-            }),
-        };
-
         // Initially, list should be empty
-        let deposits = storage.list_unclaimed_deposits().unwrap();
+        let deposits = storage.list_deposits().unwrap();
         assert_eq!(deposits.len(), 0);
 
         // Add first deposit
-        storage.add_unclaimed_deposit(deposit_1).unwrap();
-        let deposits = storage.list_unclaimed_deposits().unwrap();
+        storage.add_deposit("tx123".to_string(), 0, 50000).unwrap();
+        let deposits = storage.list_deposits().unwrap();
         assert_eq!(deposits.len(), 1);
         assert_eq!(deposits[0].txid, "tx123");
         assert_eq!(deposits[0].vout, 0);
-        assert_eq!(deposits[0].amount_sats, Some(50000));
-        assert!(deposits[0].error.is_none());
+        assert_eq!(deposits[0].amount_sats, 50000);
+        assert!(deposits[0].claim_error.is_none());
 
         // Add second deposit
-        storage.add_unclaimed_deposit(deposit_2).unwrap();
-        let deposits = storage.list_unclaimed_deposits().unwrap();
+        storage.add_deposit("tx456".to_string(), 1, 75000).unwrap();
+        storage
+            .update_deposit(
+                "tx456".to_string(),
+                1,
+                UpdateDepositPayload::ClaimError {
+                    error: DepositClaimError::Generic {
+                        message: "Test error".to_string(),
+                    },
+                },
+            )
+            .unwrap();
+        let deposits = storage.list_deposits().unwrap();
         assert_eq!(deposits.len(), 2);
 
         // Find deposit2 in the list
         let deposit2_found = deposits.iter().find(|d| d.txid == "tx456").unwrap();
         assert_eq!(deposit2_found.vout, 1);
-        assert_eq!(deposit2_found.amount_sats, Some(75000));
-        assert!(deposit2_found.error.is_some());
+        assert_eq!(deposit2_found.amount_sats, 75000);
+        assert!(deposit2_found.claim_error.is_some());
 
         // Remove first deposit
-        storage
-            .remove_unclaimed_deposit("tx123".to_string(), 0)
-            .unwrap();
-        let deposits = storage.list_unclaimed_deposits().unwrap();
+        storage.delete_deposit("tx123".to_string(), 0).unwrap();
+        let deposits = storage.list_deposits().unwrap();
         assert_eq!(deposits.len(), 1);
         assert_eq!(deposits[0].txid, "tx456");
 
         // Remove second deposit
-        storage
-            .remove_unclaimed_deposit("tx456".to_string(), 1)
-            .unwrap();
-        let deposits = storage.list_unclaimed_deposits().unwrap();
+        storage.delete_deposit("tx456".to_string(), 1).unwrap();
+        let deposits = storage.list_deposits().unwrap();
         assert_eq!(deposits.len(), 0);
     }
 
     #[test]
-    fn test_set_unclaimed_deposits() {
-        let temp_dir = tempdir::TempDir::new("sqlite_storage_set_deposits").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
-
-        // Create test deposits
-        let deposits = vec![
-            crate::DepositInfo {
-                txid: "tx1".to_string(),
-                vout: 0,
-                amount_sats: Some(10000),
-                error: None,
-            },
-            crate::DepositInfo {
-                txid: "tx2".to_string(),
-                vout: 1,
-                amount_sats: Some(20000),
-                error: Some(DepositClaimError::Generic {
-                    message: "Error 1".to_string(),
-                }),
-            },
-            crate::DepositInfo {
-                txid: "tx3".to_string(),
-                vout: 0,
-                amount_sats: None,
-                error: Some(DepositClaimError::MissingUtxo {
-                    tx: "tx3".to_string(),
-                    vout: 0,
-                }),
-            },
-        ];
-
-        // Set deposits (should replace any existing ones)
-        storage.set_unclaimed_deposits(deposits).unwrap();
-        let stored_deposits = storage.list_unclaimed_deposits().unwrap();
-        assert_eq!(stored_deposits.len(), 3);
-
-        // Verify all deposits are stored correctly
-        let tx1_deposit = stored_deposits.iter().find(|d| d.txid == "tx1").unwrap();
-        assert_eq!(tx1_deposit.vout, 0);
-        assert_eq!(tx1_deposit.amount_sats, Some(10000));
-        assert!(tx1_deposit.error.is_none());
-
-        let tx2_deposit = stored_deposits.iter().find(|d| d.txid == "tx2").unwrap();
-        assert_eq!(tx2_deposit.vout, 1);
-        assert_eq!(tx2_deposit.amount_sats, Some(20000));
-        assert!(tx2_deposit.error.is_some());
-
-        let tx3_deposit = stored_deposits.iter().find(|d| d.txid == "tx3").unwrap();
-        assert_eq!(tx3_deposit.vout, 0);
-        assert_eq!(tx3_deposit.amount_sats, None);
-        assert!(tx3_deposit.error.is_some());
-
-        // Set with empty list (should clear all deposits)
-        storage.set_unclaimed_deposits(Vec::new()).unwrap();
-        let stored_deposits = storage.list_unclaimed_deposits().unwrap();
-        assert_eq!(stored_deposits.len(), 0);
-    }
-
-    #[test]
-    fn test_add_unclaimed_deposit_replace() {
-        let temp_dir = tempdir::TempDir::new("sqlite_storage_replace").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
-
-        // Create initial deposit
-        let deposit_1 = crate::DepositInfo {
-            txid: "tx123".to_string(),
-            vout: 0,
-            amount_sats: Some(50000),
-            error: None,
-        };
-
-        // Add deposit
-        storage.add_unclaimed_deposit(deposit_1).unwrap();
-        let deposits = storage.list_unclaimed_deposits().unwrap();
-        assert_eq!(deposits.len(), 1);
-        assert!(deposits[0].error.is_none());
-
-        // Update same deposit with error (should replace)
-        let deposit1_updated = crate::DepositInfo {
-            txid: "tx123".to_string(),
-            vout: 0,
-            amount_sats: Some(50000),
-            error: Some(DepositClaimError::Generic {
-                message: "Updated error".to_string(),
-            }),
-        };
-
-        storage.add_unclaimed_deposit(deposit1_updated).unwrap();
-        let deposits = storage.list_unclaimed_deposits().unwrap();
-        assert_eq!(deposits.len(), 1); // Should still be 1 (replaced, not added)
-        assert!(deposits[0].error.is_some());
-    }
-
-    #[test]
-    fn test_remove_nonexistent_deposit() {
-        let temp_dir = tempdir::TempDir::new("sqlite_storage_remove").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
-
-        // Try to remove a deposit that doesn't exist (should not error)
-        storage
-            .remove_unclaimed_deposit("nonexistent".to_string(), 0)
-            .unwrap();
-
-        // List should still be empty
-        let deposits = storage.list_unclaimed_deposits().unwrap();
-        assert_eq!(deposits.len(), 0);
-    }
-
-    #[test]
-    fn test_deposit_refunds_table() {
+    fn test_deposit_refunds() {
         let temp_dir = tempdir::TempDir::new("sqlite_storage_refund_tx").unwrap();
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
-        // Create initial deposit without refund transaction
-        let deposit = crate::DepositInfo {
-            txid: "test_tx_123".to_string(),
-            vout: 0,
-            amount_sats: Some(100_000),
-            error: None,
-        };
-
         // Add the initial deposit
-        storage.add_unclaimed_deposit(deposit).unwrap();
-        let deposits = storage.list_unclaimed_deposits().unwrap();
+        storage
+            .add_deposit("test_tx_123".to_string(), 0, 100_000)
+            .unwrap();
+        let deposits = storage.list_deposits().unwrap();
         assert_eq!(deposits.len(), 1);
         assert_eq!(deposits[0].txid, "test_tx_123");
         assert_eq!(deposits[0].vout, 0);
-        assert_eq!(deposits[0].amount_sats, Some(100_000));
-        assert!(deposits[0].error.is_none());
-
-        // Add refund transaction details using the new separate table
-        let deposit_refund = crate::DepositRefund {
-            deposit_tx_id: "test_tx_123".to_string(),
-            deposit_vout: 0,
-            refund_tx: "0200000001abcd1234...".to_string(),
-            refund_tx_id: "refund_tx_id_456".to_string(),
-        };
+        assert_eq!(deposits[0].amount_sats, 100_000);
+        assert!(deposits[0].claim_error.is_none());
 
         // Update the deposit refund information
-        storage.update_deposit_refund(deposit_refund).unwrap();
+        storage
+            .update_deposit(
+                "test_tx_123".to_string(),
+                0,
+                UpdateDepositPayload::Refund {
+                    refund_txid: "refund_tx_id_456".to_string(),
+                    refund_tx: "0200000001abcd1234...".to_string(),
+                },
+            )
+            .unwrap();
 
         // Verify that the deposit information remains unchanged
-        let deposits = storage.list_unclaimed_deposits().unwrap();
+        let deposits = storage.list_deposits().unwrap();
         assert_eq!(deposits.len(), 1);
         assert_eq!(deposits[0].txid, "test_tx_123");
         assert_eq!(deposits[0].vout, 0);
-        assert_eq!(deposits[0].amount_sats, Some(100_000));
-        assert!(deposits[0].error.is_none());
-
-        // Verify that refund data is stored separately (would need a query method to fully test)
-        // For now, we verify that the update_deposit_refund method doesn't error
-
-        // Test updating the same refund (should replace)
-        let updated_refund = crate::DepositRefund {
-            deposit_tx_id: "test_tx_123".to_string(),
-            deposit_vout: 0,
-            refund_tx: "0200000001updated...".to_string(),
-            refund_tx_id: "updated_refund_id".to_string(),
-        };
-        storage.update_deposit_refund(updated_refund).unwrap();
+        assert_eq!(deposits[0].amount_sats, 100_000);
+        assert!(deposits[0].claim_error.is_none());
+        assert_eq!(
+            deposits[0].refund_tx_id,
+            Some("refund_tx_id_456".to_string())
+        );
+        assert_eq!(
+            deposits[0].refund_tx,
+            Some("0200000001abcd1234...".to_string())
+        );
     }
 }

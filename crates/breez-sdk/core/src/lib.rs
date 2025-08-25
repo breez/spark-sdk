@@ -8,6 +8,7 @@ mod models;
 mod persist;
 mod sdk;
 mod sdk_builder;
+mod utils;
 
 #[cfg(feature = "uniffi")]
 pub use bindings::*;

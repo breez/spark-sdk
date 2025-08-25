@@ -17,8 +17,10 @@ pub enum SdkEvent {
 pub struct DepositInfo {
     pub txid: String,
     pub vout: u32,
-    pub amount_sats: Option<u64>,
-    pub error: Option<DepositClaimError>,
+    pub amount_sats: u64,
+    pub refund_tx: Option<String>,
+    pub refund_tx_id: Option<String>,
+    pub claim_error: Option<DepositClaimError>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::DepositClaimError)]
@@ -249,7 +251,8 @@ pub struct Payment {
     pub amount: u64,
     pub fees: u64,
     pub timestamp: u64,
-    pub details: PaymentDetails,
+    pub method: PaymentMethod,
+    pub details: Option<PaymentDetails>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentDetails)]
@@ -269,6 +272,15 @@ pub enum PaymentDetails {
     Deposit {
         tx_id: String,
     },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentMethod)]
+pub enum PaymentMethod {
+    Lightning,
+    Spark,
+    Deposit,
+    Withdraw,
+    Unknown,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlPayInfo)]
@@ -335,7 +347,7 @@ pub enum Network {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Config)]
 pub struct Config {
     pub network: Network,
-    pub deposits_monitoring_interval_secs: u32,
+    pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<Fee>,
 }
 
@@ -375,16 +387,35 @@ pub enum ReceivePaymentMethod {
     },
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SendOnchainFeeQuote)]
+pub struct SendOnchainFeeQuote {
+    pub id: String,
+    pub expires_at: u64,
+    pub speed_fast: SendOnchainSpeedFeeQuote,
+    pub speed_medium: SendOnchainSpeedFeeQuote,
+    pub speed_slow: SendOnchainSpeedFeeQuote,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SendOnchainSpeedFeeQuote)]
+pub struct SendOnchainSpeedFeeQuote {
+    pub user_fee_sat: u64,
+    pub l1_broadcast_fee_sat: u64,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentMethod)]
 pub enum SendPaymentMethod {
     BitcoinAddress {
         address: BitcoinAddressDetails,
+        fee_quote: SendOnchainFeeQuote,
     },
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
+        spark_transfer_fee_sats: Option<u64>,
+        lightning_fee_sats: u64,
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
+        fee_sats: u64,
     },
 }
 
@@ -442,20 +473,35 @@ pub struct LnurlPayResponse {
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
     pub amount_sats: Option<u64>,
-    pub prefer_spark: Option<bool>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     pub amount_sats: u64,
-    pub fee_sats: u64,
-    pub prefer_spark: bool,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OnchainConfirmationSpeed)]
+pub enum OnchainConfirmationSpeed {
+    Fast,
+    Medium,
+    Slow,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentOptions)]
+pub enum SendPaymentOptions {
+    BitcoinAddress {
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
+    Bolt11Invoice {
+        use_spark: bool,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentRequest)]
 pub struct SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
+    pub options: Option<SendPaymentOptions>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentResponse)]

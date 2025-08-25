@@ -46,7 +46,7 @@ struct CoopExitRefundSignatures {
 #[derive(Debug, Clone, Serialize)]
 pub struct CoopExitFeeQuote {
     pub id: String,
-    pub expires_at: i64,
+    pub expires_at: u64,
     pub speed_fast: CoopExitSpeedFeeQuote,
     pub speed_medium: CoopExitSpeedFeeQuote,
     pub speed_slow: CoopExitSpeedFeeQuote,
@@ -70,7 +70,11 @@ impl TryFrom<crate::ssp::CoopExitFeeQuote> for CoopExitFeeQuote {
     fn try_from(quote: crate::ssp::CoopExitFeeQuote) -> Result<Self, Self::Error> {
         Ok(Self {
             id: quote.id,
-            expires_at: quote.expires_at.timestamp(),
+            expires_at: quote
+                .expires_at
+                .timestamp()
+                .try_into()
+                .map_err(|_| ServiceError::Generic("Failed to parse expires_at".to_string()))?,
             speed_fast: CoopExitSpeedFeeQuote {
                 user_fee_sat: quote.user_fee_fast.as_sats()?,
                 l1_broadcast_fee_sat: quote.l1_broadcast_fee_fast.as_sats()?,
