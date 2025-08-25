@@ -1,0 +1,64 @@
+name: Build bindings for Wasm
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git commit, tag or branch reference'
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      repository:
+        description: 'SDK repository, defaults to current repository'
+        required: false
+        type: string
+      ref:
+        description: 'Git commit, tag or branch reference'
+        required: true
+        type: string
+      use-dummy-binaries:
+        description: 'If true, creates dummy binaries rather than real binaries'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build wasm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: 
+          ref: ${{ inputs.ref }}
+          repository: ${{ inputs.repository || github.repository }}
+
+      - uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo install wasm-pack
+
+      - name: Setup emsdk
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Build Wasm packages
+        working-directory: crates/breez-sdk/wasm
+        run: make build
+
+      - name: Remove gitignore files
+        working-directory: packages/wasm
+        run: rm -f **/.gitignore
+
+      - name: Archive bindings
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-wasm
+          path: |
+            packages/wasm/bundle
+            packages/wasm/deno
+            packages/wasm/nodejs
+            packages/wasm/web

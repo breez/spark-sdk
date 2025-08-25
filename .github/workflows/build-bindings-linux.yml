@@ -1,0 +1,95 @@
+name: Build bindings for Linux
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git commit, tag or branch reference'
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      repository:
+        description: 'SDK repository, defaults to current repository'
+        required: false
+        type: string
+      ref:
+        description: 'Git commit, tag or branch reference'
+        required: true
+        type: string
+      use-dummy-binaries:
+        description: 'If true, creates dummy binaries rather than real binaries'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    if: ${{ !inputs.use-dummy-binaries }}
+    runs-on: ubuntu-22.04
+    name: Build ${{ matrix.target }}
+    strategy:
+      matrix:
+        target: [
+          aarch64-unknown-linux-gnu,
+          x86_64-unknown-linux-gnu,
+        ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: 
+          ref: ${{ inputs.ref }}
+          repository: ${{ inputs.repository || github.repository }}
+
+      - uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          rustup target add ${{ matrix.target }}
+          
+      - name: Install gcc-aarch64-linux-gnu
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu 
+
+      - name: Install gcc-x86-64-linux-gnu
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y gcc-x86-64-linux-gnu g++-x86-64-linux-gnu 
+
+      - name: Build bindings
+        working-directory: crates/breez-sdk/bindings
+        env:
+            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: /usr/bin/aarch64-linux-gnu-gcc
+            CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: /usr/bin/x86_64-linux-gnu-gcc
+        run: cargo build --release --target ${{ matrix.target }}
+      
+      - name: Archive bindings
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.so
+
+  build-dummies:
+    if: ${{ inputs.use-dummy-binaries }}
+    runs-on: ubuntu-latest
+    name: Build dummies ${{ matrix.target }}
+    strategy:
+      matrix:
+        target: [
+          aarch64-unknown-linux-gnu,
+          x86_64-unknown-linux-gnu,
+        ]
+    steps:
+      - name: Build dummy linux ${{ matrix.target }}
+        run: |
+          touch libbreez_sdk_spark_bindings.so
+
+      - name: Upload dummy linux ${{ matrix.target }} artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.target }}
+          path: ./*
