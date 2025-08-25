@@ -42,7 +42,7 @@ impl DepositChainSyncer {
             .list_static_deposit_addresses(None)
             .await?;
 
-        // First add all existing deopsits to the storage
+        // First add all existing deposits to the storage
         let mut all_utxos = HashMap::new();
         for address in addresses {
             info!("Checking static deposit address: {}", address.to_string());
