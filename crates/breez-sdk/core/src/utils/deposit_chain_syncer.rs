@@ -55,7 +55,7 @@ impl DepositChainSyncer {
                     .iter()
                     .map(|utxo| (utxo.txid.to_string(), utxo.vout))
                     .collect::<Vec<(String, u32)>>(),
-                _ => self
+                Network::Regtest => self
                     .spark_wallet
                     .get_utxos_for_address(&address.to_string())
                     .await?
