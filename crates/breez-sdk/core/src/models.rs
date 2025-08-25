@@ -216,8 +216,8 @@ impl TryFrom<WalletTransfer> for Payment {
         let (fees_sat, mut amount_sat): (u64, u64) = match transfer.clone().user_request {
             Some(user_request) => match user_request {
                 SspUserRequest::LightningSendRequest(r) => {
-                    // TODO: if we have the preimage it is not pending. This is a work arround
-                    // untill spark will implelent incremental syncing based on updated time.
+                    // TODO: if we have the preimage it is not pending. This is a workaround
+                    // until spark will implement incremental syncing based on updated time.
                     if r.lightning_send_payment_preimage.is_some() {
                         status = PaymentStatus::Completed;
                     }

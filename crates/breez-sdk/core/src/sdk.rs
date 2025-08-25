@@ -139,7 +139,7 @@ impl BreezSdk {
             event_emitter: breez_sdk_common::utils::Arc::new(EventEmitter::new()),
             shutdown_sender,
             shutdown_receiver,
-            sync_trigger: tokio::sync::broadcast::channel(100).0,
+            sync_trigger: tokio::sync::broadcast::channel(10).0,
         };
         Ok(sdk)
     }
@@ -182,17 +182,18 @@ impl BreezSdk {
                             }
                         }
                     }
-                    sync_type_res = sync_trigger_receiver.recv() => {
-                        if let Ok(sync_type) = sync_type_res   {
-                            info!("Sync trigger changed: {:?}", &sync_type);
+                    () = async {
+                      let sync_type_res = sync_trigger_receiver.recv().await;
+                      if let Ok(sync_type) = sync_type_res   {
+                          info!("Sync trigger changed: {:?}", &sync_type);
 
-                            if let Err(e) = sdk.sync_wallet_internal(sync_type.clone()).await {
-                                error!("Failed to sync wallet: {e:?}");
-                            } else if matches!(sync_type, SyncType::Full) {
-                              last_sync_time = SystemTime::now();
-                            }
-                        }
-                    }
+                          if let Err(e) = sdk.sync_wallet_internal(sync_type.clone()).await {
+                              error!("Failed to sync wallet: {e:?}");
+                          } else if matches!(sync_type, SyncType::Full) {
+                            last_sync_time = SystemTime::now();
+                          }
+                      }
+                  } => {}
                     // Ensure we sync at least the configured interval
                     () = tokio::time::sleep(Duration::from_secs(10)) => {
                         let now = SystemTime::now();
