@@ -35,7 +35,8 @@ jobs:
           repository: ${{ inputs.repository || github.repository }}
           ref: ${{ inputs.ref || github.sha }}
   
-      - uses: ./.github/actions/setup-build
+      - name: Setup build
+        uses: ./.github/actions/setup-build
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 

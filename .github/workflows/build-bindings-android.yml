@@ -42,7 +42,8 @@ jobs:
           ref: ${{ inputs.ref }}
           repository: ${{ inputs.repository || github.repository }}
         
-      - uses: ./.github/actions/setup-build
+      - name: Setup build
+        uses: ./.github/actions/setup-build
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -53,15 +54,27 @@ jobs:
 
       - name: Build bindings
         working-directory: crates/breez-sdk/bindings
-        run: cargo ndk -t ${{ matrix.target }} build --release --link-libcxx-shared
+        run: cargo ndk -t ${{ matrix.target }} build --release
+
+      - name: Copy build output
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.so dist
+
+      - name: Copy libc++_shared
+        if: ${{ matrix.target == 'armv7-linux-androideabi'}}
+        run: cp $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm-linux-androideabi/libc++_shared.so dist
+
+      - name: Copy libc++_shared
+        if: ${{ matrix.target != 'armv7-linux-androideabi'}}
+        run: cp $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${{ matrix.target }}/libc++_shared.so dist
 
       - name: Archive bindings
         uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.target }}
-          path: |
-            target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.so
-  
+          path: dist/*
+
   jnilibs:
     needs: build
     runs-on: ubuntu-latest
