@@ -291,10 +291,10 @@ impl Storage for SqliteStorage {
         &self,
         txid: String,
         vout: u32,
-        deposit_refund: UpdateDepositPayload,
+        payload: UpdateDepositPayload,
     ) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
-        match deposit_refund {
+        match payload {
             UpdateDepositPayload::ClaimError { error } => {
                 connection.execute(
                     "UPDATE unclaimed_deposits SET claim_error = ? WHERE txid = ? AND vout = ?",

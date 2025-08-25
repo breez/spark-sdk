@@ -109,7 +109,7 @@ pub trait Storage: Send + Sync {
     /// The payment if found or None if not found
     fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError>;
 
-    /// Add deposit in storage
+    /// Add a deposit to storage
     /// # Arguments
     ///
     /// * `txid` - The transaction ID of the deposit
@@ -138,10 +138,12 @@ pub trait Storage: Send + Sync {
     /// A vector of `DepositInfo` or a `StorageError`
     fn list_deposits(&self) -> Result<Vec<DepositInfo>, StorageError>;
 
-    /// Updates or inserts refund transaction details for a deposit
+    /// Updates or inserts unclaimed deposit details
     /// # Arguments
     ///
-    /// * `deposit_refund` - The refund information to store
+    /// * `txid` - The transaction ID of the deposit
+    /// * `vout` - The output index of the deposit
+    /// * `payload` - The payload for the update
     ///
     /// # Returns
     ///
@@ -150,7 +152,7 @@ pub trait Storage: Send + Sync {
         &self,
         txid: String,
         vout: u32,
-        deposit_refund: UpdateDepositPayload,
+        payload: UpdateDepositPayload,
     ) -> Result<(), StorageError>;
 }
 
