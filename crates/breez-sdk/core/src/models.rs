@@ -7,7 +7,7 @@ use core::fmt;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
     CoopExitFeeQuote, CoopExitSpeedFeeQuote, ExitSpeed, LightningSendPayment, LightningSendStatus,
-    Network as SparkNetwork, SspUserRequest, TransferDirection, TransferStatus, TransferType, Utxo,
+    Network as SparkNetwork, SspUserRequest, TransferDirection, TransferStatus, TransferType,
     WalletTransfer,
 };
 use std::time::UNIX_EPOCH;
@@ -386,29 +386,10 @@ impl From<Fee> for spark_wallet::Fee {
 pub struct DepositInfo {
     pub txid: String,
     pub vout: u32,
-    // The amount of the deposit in sats. Can be None if we couldn't find the utxo.
-    pub amount_sats: Option<u64>,
-    pub error: Option<DepositClaimError>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct DepositRefund {
-    pub deposit_tx_id: String,
-    pub deposit_vout: u32,
-    pub refund_tx: String,
-    pub refund_tx_id: String,
-}
-
-impl From<Utxo> for DepositInfo {
-    fn from(utxo: Utxo) -> Self {
-        DepositInfo {
-            txid: utxo.txid.to_string(),
-            vout: utxo.vout,
-            amount_sats: None,
-            error: None,
-        }
-    }
+    pub amount_sats: u64,
+    pub refund_tx: Option<String>,
+    pub refund_tx_id: Option<String>,
+    pub claim_error: Option<DepositClaimError>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -447,14 +428,7 @@ pub struct ListUnclaimedDepositsRequest {}
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ListUnclaimedDepositsResponse {
-    pub deposits: Vec<UnclaimedDeposit>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct UnclaimedDeposit {
-    pub deposit: DepositInfo,
-    pub refund_info: Option<DepositRefund>,
+    pub deposits: Vec<DepositInfo>,
 }
 
 impl std::fmt::Display for Fee {
