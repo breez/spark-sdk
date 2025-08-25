@@ -41,7 +41,8 @@ jobs:
           repository: ${{ inputs.repository || github.repository }}
           ref: ${{ inputs.ref || github.sha }}
   
-      - uses: ./.github/actions/setup-build
+      - name: Setup build
+        uses: ./.github/actions/setup-build
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -136,13 +137,13 @@ jobs:
 
       - name: Remove dist Sources
         working-directory: dist
-        run: git rm -r Sources
+        run: git rm -r Sources || true
 
       - name: Update Swift Package definition
         working-directory: build/crates/breez-sdk/bindings/langs/swift
         run: |
-          sed 's#.binaryTarget(name: "breez_sdk_sparkFFI", path: "./breez_sdk_sparkFFI.xcframework"),#.binaryTarget(name: "breez_sdk_sparkFFI", url: "https://github.com/breez/breez-sdk-spark-swift/releases/download/${{ inputs.package-version || '0.0.1' }}/breez_sdk_sparkFFI.xcframework.zip", checksum: "${{ env.XCF_CHECKSUM }}"),#' Package.swift > ../../../../../dist/Package.swift
-          cp -r Sources ../../../../../dist
+          sed 's#.binaryTarget(name: "breez_sdk_sparkFFI", path: "./breez_sdk_sparkFFI.xcframework"),#.binaryTarget(name: "breez_sdk_sparkFFI", url: "https://github.com/breez/breez-sdk-spark-swift/releases/download/${{ inputs.package-version || '0.0.1' }}/breez_sdk_sparkFFI.xcframework.zip", checksum: "${{ env.XCF_CHECKSUM }}"),#' Package.swift > ../../../../../../dist/Package.swift
+          cp -r Sources ../../../../../../dist
 
       - name: Update Cocoapods definitions
         working-directory: dist

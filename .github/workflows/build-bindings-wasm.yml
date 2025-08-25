@@ -33,7 +33,8 @@ jobs:
           ref: ${{ inputs.ref }}
           repository: ${{ inputs.repository || github.repository }}
 
-      - uses: ./.github/actions/setup-build
+      - name: Setup build
+        uses: ./.github/actions/setup-build
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -58,7 +59,7 @@ jobs:
         with:
           name: bindings-wasm
           path: |
-            packages/wasm/bundle
+            packages/wasm/bundler
             packages/wasm/deno
             packages/wasm/nodejs
             packages/wasm/web

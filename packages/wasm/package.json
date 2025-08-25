@@ -10,14 +10,14 @@
       "url": "https://github.com/breez/spark-sdk/issues"
     },
     "files": [
-      "bundle",
+      "bundler",
       "deno",
       "nodejs",
       "web",
       "!examples"
     ],
     "exports": {
-      "./bundle": "./bundle/breez_sdk_spark_wasm.js",
+      "./bundler": "./bundler/breez_sdk_spark_wasm.js",
       "./deno": "./deno/breez_sdk_spark_wasm.js",
       "./nodejs": "./nodejs/breez_sdk_spark_wasm.js",
       "./web": "./web/breez_sdk_spark_wasm.js",
