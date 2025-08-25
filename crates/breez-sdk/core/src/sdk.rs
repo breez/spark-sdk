@@ -327,6 +327,7 @@ impl BreezSdk {
             self.chain_service.clone(),
             self.storage.clone(),
             self.spark_wallet.clone(),
+            self.config.network,
         )
         .sync()
         .await?;
