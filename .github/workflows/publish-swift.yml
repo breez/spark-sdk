@@ -150,6 +150,20 @@ jobs:
           sed -i '' 's#^.\{2\}spec.version.*$#  spec.version                = "${{ inputs.package-version || '0.0.1' }}"#' breez_sdk_sparkFFI.podspec
           sed -i '' 's#^.\{2\}spec.version.*$#  spec.version                = "${{ inputs.package-version || '0.0.1' }}"#' BreezSdkSpark.podspec
   
+      - name: Archive XCFramework
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-xcframework-${{ inputs.package-version || '0.0.2' }}
+          path: build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework.zip
+  
+      - name: Archive package
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-${{ inputs.package-version || '0.0.2' }}
+          path: dist/*
+
       - name: Tag the Swift bindings
         if: ${{ inputs.publish }}
         working-directory: dist

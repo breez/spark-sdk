@@ -60,7 +60,8 @@ jobs:
         working-directory: packages/wasm
         run: yarn pack --filename breez-sdk-spark.tgz
 
-      - name: Archive the package
+      - name: Archive package
+        if: ${{ !inputs.publish }}
         uses: actions/upload-artifact@v4
         with:
           name: wasm-${{ inputs.package-version || '0.0.2' }}
