@@ -11,23 +11,6 @@ class MigrationManager {
     this.migrations = this._getMigrations();
   }
 
-  async migrate() {
-    const currentVersion = this.db.version;
-    const targetVersion = this.migrations.length;
-
-    if (currentVersion >= targetVersion) {
-      this._log("info", `Database is up to date (version ${currentVersion})`);
-      return;
-    }
-
-    this._log(
-      "info",
-      `Database schema is at version ${currentVersion}, target is ${targetVersion}`
-    );
-    // For IndexedDB, migrations are handled during database opening via onupgradeneeded
-    // This method is mainly for logging and validation
-  }
-
   /**
    * Handle IndexedDB upgrade event - called during database opening
    */
@@ -68,10 +51,8 @@ class MigrationManager {
         level: level,
       });
     } else if (level === "error") {
-      // Fallback to console.error for errors only
       console.error(`[MigrationManager] ${message}`);
     }
-    // For info/debug/warn levels, only log if logger is provided
   }
 
   /**
@@ -120,49 +101,6 @@ class MigrationManager {
         },
       },
     ];
-  }
-
-  /**
-   * Get information about migration status
-   */
-  getMigrationInfo() {
-    const currentVersion = this.db.version;
-    const totalMigrations = this.migrations.length;
-
-    return {
-      currentVersion,
-      totalMigrations,
-      isUpToDate: currentVersion >= totalMigrations,
-      pendingMigrations: Math.max(0, totalMigrations - currentVersion),
-    };
-  }
-
-  /**
-   * Validate database schema (for testing/debugging)
-   */
-  async validateSchema() {
-    const expectedStores = [
-      "settings",
-      "payments",
-      "payment_metadata",
-      "unclaimed_deposits",
-    ];
-
-    const actualStores = Array.from(this.db.objectStoreNames);
-    const missingStores = expectedStores.filter(
-      (store) => !actualStores.includes(store)
-    );
-
-    if (missingStores.length > 0) {
-      throw new this.StorageError(
-        `Missing object stores: ${missingStores.join(", ")}`
-      );
-    }
-
-    return {
-      stores: actualStores,
-      isValid: missingStores.length === 0,
-    };
   }
 }
 

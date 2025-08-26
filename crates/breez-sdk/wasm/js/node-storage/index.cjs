@@ -1,6 +1,5 @@
 /**
- * CommonJS wrapper for Node.js SQLite Storage Implementation
- * This provides a CommonJS interface to the ES module storage implementation
+ * CommonJS implementation for Node.js SQLite Storage
  */
 
 // Try to require better-sqlite3 from the calling module's context
@@ -37,7 +36,7 @@ class SqliteStorage {
   }
 
   /**
-   * Synchronous initialization for WASM compatibility
+   * Initialize the database
    */
   initialize() {
     try {

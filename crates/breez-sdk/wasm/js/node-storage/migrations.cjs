@@ -1,6 +1,5 @@
 /**
  * Database Migration Manager for Breez SDK Node.js Storage
- * CommonJS version - handles database schema evolution
  */
 
 // We'll receive StorageError as a parameter to avoid circular dependencies
@@ -147,59 +146,6 @@ class MigrationManager {
         ],
       },
     ];
-  }
-
-  /**
-   * Get information about migration status
-   */
-  getMigrationInfo() {
-    const currentVersion = this._getCurrentVersion();
-    const totalMigrations = this.migrations.length;
-
-    return {
-      currentVersion,
-      totalMigrations,
-      isUpToDate: currentVersion >= totalMigrations,
-      pendingMigrations: Math.max(0, totalMigrations - currentVersion),
-    };
-  }
-
-  /**
-   * Validate database schema (for testing/debugging)
-   */
-  validateSchema() {
-    const tables = this.db
-      .prepare(
-        `
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name NOT LIKE 'sqlite_%'
-            ORDER BY name
-        `
-      )
-      .all();
-
-    const expectedTables = [
-      "payments",
-      "settings",
-      "unclaimed_deposits",
-      "payment_metadata",
-    ];
-
-    const actualTables = tables.map((t) => t.name);
-    const missingTables = expectedTables.filter(
-      (t) => !actualTables.includes(t)
-    );
-
-    if (missingTables.length > 0) {
-      throw new this.StorageError(
-        `Missing tables: ${missingTables.join(", ")}`
-      );
-    }
-
-    return {
-      tables: actualTables,
-      isValid: missingTables.length === 0,
-    };
   }
 }
 
