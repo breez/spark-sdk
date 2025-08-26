@@ -151,8 +151,8 @@ class SqliteStorage {
         payment.amount,
         payment.fees,
         payment.timestamp,
-        JSON.stringify(payment.details || {}),
-        JSON.stringify(payment.method || {})
+        payment.details ? JSON.stringify(payment.details) : null,
+        payment.method ? JSON.stringify(payment.method) : null
       );
       return Promise.resolve();
     } catch (error) {
@@ -324,7 +324,7 @@ class SqliteStorage {
   // ===== Private Helper Methods =====
 
   _rowToPayment(row) {
-    let details = {};
+    let details = null;
     if (row.details) {
       try {
         details = JSON.parse(row.details);
@@ -336,7 +336,7 @@ class SqliteStorage {
       }
     }
 
-    let method = {};
+    let method = null;
     if (row.method) {
       try {
         method = JSON.parse(row.method);
@@ -349,7 +349,7 @@ class SqliteStorage {
     }
 
     // If this is a Lightning payment and we have lnurl_pay_info, add it to details
-    if (row.lnurl_pay_info && details.Lightning) {
+    if (row.lnurl_pay_info && details && details.Lightning) {
       try {
         details.Lightning.lnurlPayInfo = JSON.parse(row.lnurl_pay_info);
       } catch (e) {

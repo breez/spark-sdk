@@ -403,8 +403,8 @@ class IndexedDBStorage {
       // Ensure details and method are serialized properly
       const paymentToStore = {
         ...payment,
-        details: payment.details ? JSON.stringify(payment.details) : "{}",
-        method: payment.method ? JSON.stringify(payment.method) : "{}",
+        details: payment.details ? JSON.stringify(payment.details) : null,
+        method: payment.method ? JSON.stringify(payment.method) : null,
       };
 
       const request = store.put(paymentToStore);
@@ -672,7 +672,7 @@ class IndexedDBStorage {
   // ===== Private Helper Methods =====
 
   _mergePaymentMetadata(payment, metadata) {
-    let details = {};
+    let details = null;
     if (payment.details) {
       try {
         details = JSON.parse(payment.details);
@@ -684,7 +684,7 @@ class IndexedDBStorage {
       }
     }
 
-    let method = {};
+    let method = null;
     if (payment.method) {
       try {
         method = JSON.parse(payment.method);
@@ -697,7 +697,7 @@ class IndexedDBStorage {
     }
 
     // If this is a Lightning payment and we have lnurl_pay_info, add it to details
-    if (metadata && metadata.lnurlPayInfo && details.Lightning) {
+    if (metadata && metadata.lnurlPayInfo && details && details.Lightning) {
       try {
         details.Lightning.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
       } catch (e) {
