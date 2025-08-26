@@ -410,14 +410,12 @@ impl FromSql for LnurlPayInfo {
     }
 }
 
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Utc;
-    use macros::async_test_not_wasm;
 
-    #[async_test_not_wasm]
+    #[tokio::test]
     async fn test_sqlite_storage() {
         let temp_dir = tempdir::TempDir::new("sqlite_storage").unwrap();
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
@@ -460,7 +458,7 @@ mod tests {
         ));
     }
 
-    #[async_test_not_wasm]
+    #[tokio::test]
     async fn test_unclaimed_deposits_crud() {
         let temp_dir = tempdir::TempDir::new("sqlite_storage_deposits").unwrap();
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
@@ -525,7 +523,7 @@ mod tests {
         assert_eq!(deposits.len(), 0);
     }
 
-    #[async_test_not_wasm]
+    #[tokio::test]
     async fn test_deposit_refunds() {
         let temp_dir = tempdir::TempDir::new("sqlite_storage_refund_tx").unwrap();
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();

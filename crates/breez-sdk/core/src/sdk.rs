@@ -19,7 +19,7 @@ use spark_wallet::{
     DefaultSigner, ExitSpeed, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress,
     SparkWallet, WalletEvent, WalletTransfer,
 };
-use std::{path::PathBuf, str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc};
 use tracing::{error, info};
 use web_time::{Duration, SystemTime};
 
@@ -32,7 +32,7 @@ use crate::{
     GetPaymentRequest, GetPaymentResponse, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
     Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    RefundDepositRequest, RefundDepositResponse, SendPaymentOptions, SqliteStorage,
+    RefundDepositRequest, RefundDepositResponse, SendPaymentOptions,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -84,12 +84,13 @@ pub fn init_logging(
     logger::init_logging(log_dir, app_logger, log_filter)
 }
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn default_storage(data_dir: String) -> Result<Arc<dyn Storage>, SdkError> {
-    let db_path = PathBuf::from_str(&data_dir)?;
+    let db_path = std::path::PathBuf::from_str(&data_dir)?;
 
-    let storage = SqliteStorage::new(&db_path)?;
+    let storage = crate::SqliteStorage::new(&db_path)?;
     Ok(Arc::new(storage))
 }
 

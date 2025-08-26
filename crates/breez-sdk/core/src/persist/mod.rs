@@ -1,11 +1,11 @@
-mod sqlite;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub(crate) mod sqlite;
 
 use std::sync::Arc;
 
 use macros::async_trait;
 use maybe_sync::{MaybeSend, MaybeSync};
 use serde::{Deserialize, Serialize};
-pub use sqlite::SqliteStorage;
 use thiserror::Error;
 
 use crate::{DepositClaimError, DepositInfo, LnurlPayInfo, models::Payment};

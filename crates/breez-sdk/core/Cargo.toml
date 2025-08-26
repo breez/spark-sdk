@@ -32,8 +32,6 @@ hex.workspace = true
 macros.workspace = true
 qrcode-rs.workspace = true
 reqwest.workspace = true
-rusqlite.workspace = true
-rusqlite_migration.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 shellwords.workspace = true
@@ -51,6 +49,8 @@ web-time.workspace = true
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 maybe-sync = { workspace = true, features = ["sync"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+rusqlite.workspace = true
+rusqlite_migration.workspace = true
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]

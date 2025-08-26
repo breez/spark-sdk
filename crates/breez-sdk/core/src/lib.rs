@@ -17,10 +17,13 @@ pub use chain::{BitcoinChainService, ChainServiceError, rest_client::RestClientC
 pub use error::{DepositClaimError, SdkError};
 pub use events::{EventEmitter, EventListener, SdkEvent};
 pub use models::*;
-pub use persist::{PaymentMetadata, SqliteStorage, Storage, StorageError, UpdateDepositPayload};
-pub use sdk::{BreezSdk, default_config, default_storage, init_logging, parse_input};
+pub use persist::{PaymentMetadata, Storage, StorageError, UpdateDepositPayload};
+pub use sdk::{BreezSdk, default_config, init_logging, parse_input};
 #[cfg(not(feature = "uniffi"))]
 pub use sdk_builder::SdkBuilder;
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub use {persist::sqlite::SqliteStorage, sdk::default_storage};
 
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();
