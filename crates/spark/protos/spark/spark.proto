@@ -10,6 +10,10 @@ import "spark/common.proto";
 
 service SparkService {
     rpc generate_deposit_address(GenerateDepositAddressRequest) returns (GenerateDepositAddressResponse) {}
+
+    // Generates a new static deposit address of the user or returns the existing one for the specified network.
+    rpc generate_static_deposit_address(GenerateStaticDepositAddressRequest) returns (GenerateStaticDepositAddressResponse) {}
+
     rpc start_deposit_tree_creation(StartDepositTreeCreationRequest) returns (StartDepositTreeCreationResponse) {}
     // This is deprecated, please use start_deposit_tree_creation instead.
     rpc start_tree_creation(StartTreeCreationRequest) returns (StartTreeCreationResponse) {
@@ -102,6 +106,8 @@ service SparkService {
     rpc refresh_timelock_v2(RefreshTimelockRequest) returns (RefreshTimelockResponse) {}
 
     rpc get_utxos_for_address(GetUtxosForAddressRequest) returns (GetUtxosForAddressResponse) {}
+
+    rpc query_spark_invoices(QuerySparkInvoicesRequest) returns (QuerySparkInvoicesResponse) {}
 }
 
 message SubscribeToEventsRequest {
@@ -191,6 +197,25 @@ message Address {
  * GenerateDepositAddressResponse is the response to the request to generate a deposit address.
  */
 message GenerateDepositAddressResponse {
+    Address deposit_address = 1;
+}
+
+/**
+ * GenerateStaticDepositAddressRequest is the request to generate a static deposit address.
+ */
+message GenerateStaticDepositAddressRequest {
+    // The signing public key of the user.
+    bytes signing_public_key = 1 [(validate.rules).bytes.len = 33];
+    // The identity public key of the user.
+    bytes identity_public_key = 2 [(validate.rules).bytes.len = 33];
+    // The network of the bitcoin network.
+    Network network = 3 [(validate.rules).enum = {not_in: [0]}];
+}
+
+/**
+ * GenerateStaticDepositAddressResponse is the response to the request to generate a static deposit address.
+ */
+message GenerateStaticDepositAddressResponse {
     Address deposit_address = 1;
 }
 
@@ -825,6 +850,7 @@ message TransferLeaf {
     bytes intermediate_refund_tx = 4;
     bytes intermediate_direct_refund_tx = 5;
     bytes intermediate_direct_from_cpfp_refund_tx = 6;
+    bytes pending_key_tweak_public_key = 7;
 }
 
 
@@ -1088,6 +1114,8 @@ message QueryUserSignedRefundsRequest {
 
 message QueryUserSignedRefundsResponse {
     repeated UserSignedRefund user_signed_refunds = 1;
+    reserved 2;
+    Transfer transfer = 3;
 }
 
 message ProvidePreimageRequest {
@@ -1160,6 +1188,7 @@ message DepositAddressQueryResult {
     bytes user_signing_public_key = 2;
     bytes verifying_public_key = 3;
     optional string leaf_id = 4 [(validate.rules).string.uuid = true];
+    optional DepositAddressProof proof_of_possession = 5;
 }
 
 message QueryUnusedDepositAddressesResponse {
@@ -1326,9 +1355,34 @@ message GetUtxosForAddressRequest {
     uint64 offset = 2;
     uint64 limit = 3;
     Network network = 4;
+    bool exclude_claimed = 5;
 }
 
 message GetUtxosForAddressResponse {
     repeated UTXO utxos = 1;
     uint64 offset = 2;
+}
+
+message QuerySparkInvoicesRequest {
+    int64 limit = 1;
+    int64 offset = 2;
+    // returns the status for the provided list of spark invoices.
+    repeated string invoice = 3;
+}
+
+message QuerySparkInvoicesResponse {
+    int64 offset = 1;
+    repeated InvoiceResponse invoice_statuses = 2;
+}
+
+message InvoiceResponse {
+    string invoice = 1;
+    InvoiceStatus status = 2;
+}
+
+enum InvoiceStatus {
+    NOT_FOUND = 0;
+    PENDING = 1;
+    FINALIZED = 2;
+    EXPIRED = 3;
 }
