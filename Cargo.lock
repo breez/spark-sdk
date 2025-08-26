@@ -597,6 +597,7 @@ dependencies = [
  "bip39",
  "bitcoin",
  "breez-sdk-common",
+ "breez-sdk-spark",
  "chrono",
  "clap",
  "dotenvy",

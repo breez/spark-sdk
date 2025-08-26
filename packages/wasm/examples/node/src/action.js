@@ -47,7 +47,7 @@ const initSdk = async () => {
     }
 
     // Create storage with the current logger context
-    const storage = defaultStorage(dataDir)
+    const storage = await defaultStorage(dataDir)
 
     let sdkBuilder = SdkBuilder.new(config, mnemonic, storage)
     sdkBuilder = sdkBuilder.withRestChainService('https://regtest-mempool.loadtest.dev.sparkinfra.net/api', {

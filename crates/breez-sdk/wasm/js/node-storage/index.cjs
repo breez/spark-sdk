@@ -37,16 +37,9 @@ class SqliteStorage {
   }
 
   /**
-   * Initialize the storage - must be called before using other methods
-   */
-  async initialize() {
-    return this.initializeSync();
-  }
-
-  /**
    * Synchronous initialization for WASM compatibility
    */
-  initializeSync() {
+  initialize() {
     try {
       this.db = new Database(this.dbPath);
 
@@ -380,11 +373,11 @@ class SqliteStorage {
   }
 }
 
-function createDefaultStorage(dataDir, logger = null) {
+async function createDefaultStorage(dataDir, logger = null) {
   const path = require("path");
   const dbPath = path.join(dataDir, "storage.sql");
   const storage = new SqliteStorage(dbPath, logger);
-  storage.initializeSync();
+  storage.initialize();
   return storage;
 }
 

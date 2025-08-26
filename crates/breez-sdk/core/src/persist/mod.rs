@@ -250,3 +250,155 @@ pub(crate) struct CachedSyncInfo {
 pub(crate) struct CachedTx {
     pub(crate) raw_tx: String,
 }
+
+#[cfg(feature = "test-utils")]
+pub mod tests {
+    use crate::{
+        DepositClaimError, Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType,
+        Storage, UpdateDepositPayload,
+    };
+    use chrono::Utc;
+
+    pub async fn test_sqlite_storage(storage: Box<dyn Storage>) {
+        // Create test payment
+        let payment = Payment {
+            id: "pmt123".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 100_000,
+            fees: 1000,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
+        };
+
+        // Insert payment
+        storage.insert_payment(payment.clone()).await.unwrap();
+
+        // List payments
+        let payments = storage.list_payments(Some(0), Some(10)).await.unwrap();
+        assert_eq!(payments.len(), 1);
+        assert_eq!(payments[0].id, payment.id);
+        assert_eq!(payments[0].payment_type, payment.payment_type);
+        assert_eq!(payments[0].status, payment.status);
+        assert_eq!(payments[0].amount, payment.amount);
+        assert_eq!(payments[0].fees, payment.fees);
+        assert!(matches!(payments[0].details, Some(PaymentDetails::Spark)));
+
+        // Get payment by ID
+        let retrieved_payment = storage.get_payment_by_id(payment.id.clone()).await.unwrap();
+        assert_eq!(retrieved_payment.id, payment.id);
+        assert_eq!(retrieved_payment.payment_type, payment.payment_type);
+        assert_eq!(retrieved_payment.status, payment.status);
+        assert_eq!(retrieved_payment.amount, payment.amount);
+        assert_eq!(retrieved_payment.fees, payment.fees);
+        assert!(matches!(
+            retrieved_payment.details,
+            Some(PaymentDetails::Spark)
+        ));
+    }
+
+    pub async fn test_unclaimed_deposits_crud(storage: Box<dyn Storage>) {
+        // Initially, list should be empty
+        let deposits = storage.list_deposits().await.unwrap();
+        assert_eq!(deposits.len(), 0);
+
+        // Add first deposit
+        storage
+            .add_deposit("tx123".to_string(), 0, 50000)
+            .await
+            .unwrap();
+        let deposits = storage.list_deposits().await.unwrap();
+        assert_eq!(deposits.len(), 1);
+        assert_eq!(deposits[0].txid, "tx123");
+        assert_eq!(deposits[0].vout, 0);
+        assert_eq!(deposits[0].amount_sats, 50000);
+        assert!(deposits[0].claim_error.is_none());
+
+        // Add second deposit
+        storage
+            .add_deposit("tx456".to_string(), 1, 75000)
+            .await
+            .unwrap();
+        storage
+            .update_deposit(
+                "tx456".to_string(),
+                1,
+                UpdateDepositPayload::ClaimError {
+                    error: DepositClaimError::Generic {
+                        message: "Test error".to_string(),
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        let deposits = storage.list_deposits().await.unwrap();
+        assert_eq!(deposits.len(), 2);
+
+        // Find deposit2 in the list
+        let deposit2_found = deposits.iter().find(|d| d.txid == "tx456").unwrap();
+        assert_eq!(deposit2_found.vout, 1);
+        assert_eq!(deposit2_found.amount_sats, 75000);
+        assert!(deposit2_found.claim_error.is_some());
+
+        // Remove first deposit
+        storage
+            .delete_deposit("tx123".to_string(), 0)
+            .await
+            .unwrap();
+        let deposits = storage.list_deposits().await.unwrap();
+        assert_eq!(deposits.len(), 1);
+        assert_eq!(deposits[0].txid, "tx456");
+
+        // Remove second deposit
+        storage
+            .delete_deposit("tx456".to_string(), 1)
+            .await
+            .unwrap();
+        let deposits = storage.list_deposits().await.unwrap();
+        assert_eq!(deposits.len(), 0);
+    }
+
+    pub async fn test_deposit_refunds(storage: Box<dyn Storage>) {
+        // Add the initial deposit
+        storage
+            .add_deposit("test_tx_123".to_string(), 0, 100_000)
+            .await
+            .unwrap();
+        let deposits = storage.list_deposits().await.unwrap();
+        assert_eq!(deposits.len(), 1);
+        assert_eq!(deposits[0].txid, "test_tx_123");
+        assert_eq!(deposits[0].vout, 0);
+        assert_eq!(deposits[0].amount_sats, 100_000);
+        assert!(deposits[0].claim_error.is_none());
+
+        // Update the deposit refund information
+        storage
+            .update_deposit(
+                "test_tx_123".to_string(),
+                0,
+                UpdateDepositPayload::Refund {
+                    refund_txid: "refund_tx_id_456".to_string(),
+                    refund_tx: "0200000001abcd1234...".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+
+        // Verify that the deposit information remains unchanged
+        let deposits = storage.list_deposits().await.unwrap();
+        assert_eq!(deposits.len(), 1);
+        assert_eq!(deposits[0].txid, "test_tx_123");
+        assert_eq!(deposits[0].vout, 0);
+        assert_eq!(deposits[0].amount_sats, 100_000);
+        assert!(deposits[0].claim_error.is_none());
+        assert_eq!(
+            deposits[0].refund_tx_id,
+            Some("refund_tx_id_456".to_string())
+        );
+        assert_eq!(
+            deposits[0].refund_tx,
+            Some("0200000001abcd1234...".to_string())
+        );
+    }
+}

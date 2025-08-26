@@ -100,16 +100,6 @@ enum Commands {
 
     /// Run integration tests (containers etc.)
     Itest {},
-
-    /// Run JavaScript/Node.js storage tests for WASM crate
-    JsStorageTest {
-        /// Run tests in watch mode
-        #[arg(long)]
-        watch: bool,
-        /// Generate coverage report
-        #[arg(long)]
-        coverage: bool,
-    },
 }
 
 fn main() -> Result<()> {
@@ -132,7 +122,6 @@ fn main() -> Result<()> {
         } => build_cmd(release, target, package),
         Commands::Package { package } => package_cmd(package),
         Commands::Itest {} => itest_cmd(),
-        Commands::JsStorageTest { watch, coverage } => js_storages_test_cmd(watch, coverage),
     }
 }
 
@@ -232,6 +221,34 @@ fn wasm_test_cmd(
     }
 
     for pkg in packages {
+        // If this is the breez-sdk-spark-wasm package, let's install nodejs dependencies and rebuild native modules
+        if pkg.name == "breez-sdk-spark-wasm" && node {
+            let storage_path = Path::new("crates/breez-sdk/wasm/js/node-storage");
+
+            if !storage_path.exists() {
+                bail!(
+                    "Native storage directory not found: {}",
+                    storage_path.display()
+                );
+            }
+
+            println!(
+                "Installing npm dependencies in {}...",
+                storage_path.display()
+            );
+            let current_dir = std::env::current_dir()?;
+            sh.change_dir(storage_path);
+            cmd!(sh, "npm install")
+                .run()
+                .with_context(|| "Failed to install npm dependencies. Ensure npm is installed.")?;
+
+            println!("Rebuilding native modules for current Node.js version...");
+            cmd!(sh, "npm rebuild")
+                .run()
+                .with_context(|| "Failed to rebuild native modules.")?;
+            sh.change_dir(&current_dir);
+        }
+
         let package_dir = pkg
             .manifest_path
             .parent()
@@ -271,12 +288,6 @@ fn wasm_test_cmd(
             .with_context(|| "failed to start wasm tests via wasm-pack")?;
         if !status.success() {
             bail!("wasm tests failed");
-        }
-
-        // If this is the breez-sdk-spark-wasm package, let's run the js storage tests
-        if pkg.name == "breez-sdk-spark-wasm" {
-            println!("Running JavaScript storages tests for WASM package...");
-            js_storages_test_cmd(false, false)?
         }
     }
 
@@ -610,60 +621,5 @@ fn itest_cmd() -> Result<()> {
 
     // Run the integration tests
     cmd!(sh, "cargo test -p spark-itest").run()?;
-    Ok(())
-}
-
-fn js_storages_test_cmd(watch: bool, coverage: bool) -> Result<()> {
-    for storage_dir in ["node-storage", "web-storage"] {
-        let storage_dir = Path::new("crates/breez-sdk/wasm/js").join(storage_dir);
-
-        let sh = Shell::new()?;
-
-        if !storage_dir.exists() {
-            bail!(
-                "Node.js storage directory not found: {}",
-                storage_dir.display()
-            );
-        }
-
-        let package_json = storage_dir.join("package.json");
-        if !package_json.exists() {
-            bail!("package.json not found in {}", storage_dir.display());
-        }
-
-        println!(
-            "Running JavaScript storage tests in {}",
-            storage_dir.display()
-        );
-
-        sh.change_dir(storage_dir);
-
-        println!("Installing Node.js dependencies...");
-        cmd!(sh, "npm install")
-            .run()
-            .with_context(|| "Failed to install Node.js dependencies. Ensure npm is installed.")?;
-
-        println!("Rebuilding native modules for current Node.js version...");
-        cmd!(sh, "npm rebuild").run().with_context(
-            || "Failed to rebuild native modules. This is needed for better-sqlite3 compatibility.",
-        )?;
-
-        // Run the appropriate npm command
-        let npm_cmd = if watch {
-            "test:watch"
-        } else if coverage {
-            "test:coverage"
-        } else {
-            "test"
-        };
-
-        println!("Running: npm run {}", npm_cmd);
-        cmd!(sh, "npm run {npm_cmd}")
-            .run()
-            .with_context(|| format!("JavaScript storage tests failed (npm run {})", npm_cmd))?;
-
-        println!("✅ JavaScript storage tests completed successfully!");
-    }
-
     Ok(())
 }

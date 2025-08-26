@@ -25,5 +25,8 @@ pub use sdk_builder::SdkBuilder;
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use {persist::sqlite::SqliteStorage, sdk::default_storage};
 
+#[cfg(feature = "test-utils")]
+pub use persist::tests as storage_tests;
+
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();

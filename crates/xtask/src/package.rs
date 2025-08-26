@@ -375,7 +375,7 @@ fn copy_web_storage_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
     std::fs::create_dir_all(&storage_dest)?;
 
     // Copy the ES6 storage implementation files
-    let files_to_copy = ["index.js", "errors.js", "migrations.js"];
+    let files_to_copy = ["index.js"];
 
     for file_name in files_to_copy {
         let src_file = js_storage_src.join(file_name);
@@ -408,8 +408,6 @@ fn copy_web_storage_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
         "exports": {
             ".": "./index.js",
             "./storage": "./index.js",
-            "./migrations": "./migrations.js",
-            "./errors": "./errors.js"
         },
         "dependencies": {}
     });

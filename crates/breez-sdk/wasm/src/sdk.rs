@@ -38,14 +38,25 @@ pub fn default_config(network: Network) -> Config {
 }
 
 #[wasm_bindgen(js_name = "defaultStorage")]
-pub fn default_storage(data_dir: &str) -> WasmResult<Storage> {
-    Ok(WASM_LOGGER.with_borrow(|logger| create_default_storage(data_dir, logger.as_ref()))?)
+pub async fn default_storage(data_dir: &str) -> WasmResult<Storage> {
+    // SAFETY: In WASM, thread-local storage is stable and the logger reference
+    // will remain valid for the duration of this async function call.
+    // The WASM environment is single-threaded, so there's no risk of the
+    // logger being moved or deallocated during the async operation.
+    let logger_ref = unsafe {
+        WASM_LOGGER.with_borrow(|logger| {
+            logger
+                .as_ref()
+                .map(|l| std::mem::transmute::<&Logger, &'static Logger>(l))
+        })
+    };
+    Ok(create_default_storage(data_dir, logger_ref).await?)
 }
 
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_name = "createDefaultStorage", catch)]
-    fn create_default_storage(
+    async fn create_default_storage(
         data_dir: &str,
         logger: Option<&Logger>,
     ) -> Result<crate::persist::Storage, JsValue>;

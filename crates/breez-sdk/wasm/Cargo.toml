@@ -27,3 +27,4 @@ wasm-bindgen-futures.workspace = true
 
 [dev-dependencies]
 wasm-bindgen-test.workspace = true
+breez-sdk-spark = { workspace = true, features = ["test-utils"] }

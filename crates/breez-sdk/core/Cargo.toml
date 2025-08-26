@@ -10,6 +10,7 @@ uniffi = [
     "reqwest/native-tls-vendored",
     "dep:uniffi",
 ]
+test-utils = []
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
@@ -59,6 +60,7 @@ tokio = { workspace = true, features = ["macros"] }
 
 [dev-dependencies]
 breez-sdk-common = { workspace = true, features = ["test-utils"] }
+breez-sdk-spark = { workspace = true, features = ["test-utils"] }
 
 # WASM dev dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
