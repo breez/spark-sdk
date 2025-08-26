@@ -1,5 +1,4 @@
 use crate::error::ServiceConnectivityError;
-use maybe_sync::{MaybeSend, MaybeSync};
 use reqwest::Client;
 use std::{collections::HashMap, time::Duration};
 use tracing::{debug, trace};
@@ -14,7 +13,7 @@ pub struct RestResponse {
 
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
-pub trait RestClient: MaybeSend + MaybeSync {
+pub trait RestClient: Send + Sync {
     /// Makes a GET request and logs on DEBUG.
     /// ### Arguments
     /// - `url`: the URL on which GET will be called

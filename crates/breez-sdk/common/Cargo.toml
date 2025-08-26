@@ -42,7 +42,6 @@ uniffi = { workspace = true, optional = true }
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 hickory-resolver = { workspace = true, features = ["dnssec-ring"] }
-maybe-sync = { workspace = true, features = ["sync"] }
 prost.workspace = true
 tonic = { workspace = true, features = [
     "channel",
@@ -57,7 +56,6 @@ tonic = { workspace = true, features = [
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 dns-parser.workspace = true
-maybe-sync.workspace = true
 tonic = { workspace = true, features = ["codegen", "prost"] }
 tonic-web-wasm-client.workspace = true
 

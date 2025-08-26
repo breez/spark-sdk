@@ -4,7 +4,6 @@ pub(crate) mod sqlite;
 use std::sync::Arc;
 
 use macros::async_trait;
-use maybe_sync::{MaybeSend, MaybeSync};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -56,7 +55,7 @@ pub struct PaymentMetadata {
 /// Trait for persistent storage
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[async_trait]
-pub trait Storage: MaybeSend + MaybeSync {
+pub trait Storage: Send + Sync {
     async fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError>;
     async fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError>;
     /// Lists payments with pagination

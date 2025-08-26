@@ -1,7 +1,6 @@
 use core::fmt;
 use std::{collections::HashMap, sync::RwLock};
 
-use maybe_sync::{MaybeSend, MaybeSync};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -45,7 +44,7 @@ impl fmt::Display for SdkEvent {
 
 /// Trait for event listeners
 #[cfg_attr(feature = "uniffi", uniffi::export(callback_interface))]
-pub trait EventListener: MaybeSend + MaybeSync {
+pub trait EventListener: Send + Sync {
     /// Called when an event occurs
     fn on_event(&self, event: SdkEvent);
 }

@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use maybe_sync::{MaybeSend, MaybeSync};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -26,7 +25,7 @@ pub struct CurrencyInfo {
 
 /// Trait covering fiat-related functionality
 #[macros::async_trait]
-pub trait FiatAPI: MaybeSend + MaybeSync {
+pub trait FiatAPI: Send + Sync {
     /// List all supported fiat currencies for which there is a known exchange rate.
     async fn fetch_fiat_currencies(&self) -> Result<Vec<FiatCurrency>, ServiceConnectivityError>;
 

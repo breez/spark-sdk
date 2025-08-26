@@ -48,14 +48,12 @@ web-time.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
-maybe-sync = { workspace = true, features = ["sync"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
-maybe-sync.workspace = true
 tokio = { workspace = true, features = ["macros"] }
 
 [dev-dependencies]

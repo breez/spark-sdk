@@ -1,4 +1,3 @@
-use maybe_sync::{MaybeSend, MaybeSync};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -30,7 +29,7 @@ impl From<bitcoin::address::ParseError> for ChainServiceError {
 
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
-pub trait BitcoinChainService: MaybeSend + MaybeSync {
+pub trait BitcoinChainService: Send + Sync {
     async fn get_address_utxos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError>;
     async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError>;
     async fn broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError>;
