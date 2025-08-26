@@ -486,23 +486,14 @@ fn run_wasm_clippy_for_package(
     sh: &Shell,
     pkg_name: &str,
     target: &str,
-    features: Option<&str>,
     fix: bool,
     rest: &[String],
-    description: &str,
 ) -> Result<()> {
     let mut c = Command::new("cargo");
     c.arg("clippy");
     c.args(["-p", pkg_name]);
     c.arg("--all-targets");
     c.arg("--target").arg(target);
-
-    if features.is_some() {
-        c.arg("--no-default-features");
-        if let Some(feature) = features {
-            c.arg("--features").arg(feature);
-        }
-    }
 
     if fix {
         c.arg("--fix");
@@ -520,14 +511,11 @@ fn run_wasm_clippy_for_package(
         c.env("CC_wasm32_unknown_unknown", &clang_path);
         c.env("AR_wasm32_unknown_unknown", &llvm_ar_path);
     }
-    let status = c.status().with_context(|| {
-        format!(
-            "failed to run cargo clippy for wasm target on {} with {}",
-            pkg_name, description
-        )
-    })?;
+    let status = c
+        .status()
+        .with_context(|| format!("failed to run cargo clippy for wasm target on {pkg_name}"))?;
     if !status.success() {
-        bail!("wasm clippy failed for {} with {}", pkg_name, description);
+        bail!("wasm clippy failed for {pkg_name}");
     }
     Ok(())
 }
@@ -545,37 +533,8 @@ fn wasm_clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
         bail!("No wasm-capable packages detected in workspace");
     }
     for pkg in wasm_packages.iter() {
-        // For breez-sdk-spark-wasm, run clippy with different feature combinations
-        if pkg.name == "breez-sdk-spark-wasm" {
-            let feature_variants = vec![
-                (None, "no features"),
-                (Some("browser"), "browser feature"),
-                (Some("node-js"), "node-js feature"),
-            ];
-
-            for (features, description) in feature_variants {
-                run_wasm_clippy_for_package(
-                    &sh,
-                    &pkg.name,
-                    &target,
-                    features,
-                    fix,
-                    &rest,
-                    description,
-                )?;
-            }
-        } else {
-            // For other wasm packages, run clippy normally
-            run_wasm_clippy_for_package(
-                &sh,
-                &pkg.name,
-                &target,
-                None,
-                fix,
-                &rest,
-                "default features",
-            )?;
-        }
+        // For other wasm packages, run clippy normally
+        run_wasm_clippy_for_package(&sh, &pkg.name, &target, fix, &rest)?;
     }
     Ok(())
 }
