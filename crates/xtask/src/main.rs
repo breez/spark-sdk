@@ -533,7 +533,6 @@ fn wasm_clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
         bail!("No wasm-capable packages detected in workspace");
     }
     for pkg in wasm_packages.iter() {
-        // For other wasm packages, run clippy normally
         run_wasm_clippy_for_package(&sh, &pkg.name, &target, fix, &rest)?;
     }
     Ok(())

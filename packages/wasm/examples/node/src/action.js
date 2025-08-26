@@ -46,7 +46,6 @@ const initSdk = async () => {
         fs.mkdirSync(dataDir, { recursive: true })
     }
 
-    // Create storage with the current logger context
     const storage = await defaultStorage(dataDir)
 
     let sdkBuilder = SdkBuilder.new(config, mnemonic, storage)

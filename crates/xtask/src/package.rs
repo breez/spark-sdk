@@ -106,26 +106,26 @@ fn package_wasm_cmd(wasm_package: WasmPackages) -> Result<()> {
     match wasm_package {
         WasmPackages::All => {
             println!("Packaging all WASM targets");
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "bundler", "browser", &clang_env)?;
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "deno", "", &clang_env)?;
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "nodejs", "node-js", &clang_env)?;
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "web", "browser", &clang_env)?;
+            package_wasm_target(&wasm_crate_dir, &pkg_dir, "bundler", &clang_env)?;
+            package_wasm_target(&wasm_crate_dir, &pkg_dir, "deno", &clang_env)?;
+            package_wasm_target(&wasm_crate_dir, &pkg_dir, "nodejs", &clang_env)?;
+            package_wasm_target(&wasm_crate_dir, &pkg_dir, "web", &clang_env)?;
         }
         WasmPackages::Bundle => {
             println!("Packaging Bundle WASM target");
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "bundler", "browser", &clang_env)?;
+            package_wasm_target(&wasm_crate_dir, &pkg_dir, "bundler", &clang_env)?;
         }
         WasmPackages::Deno => {
             println!("Packaging Deno WASM target");
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "deno", "", &clang_env)?;
+            package_wasm_target(&wasm_crate_dir, &pkg_dir, "deno", &clang_env)?;
         }
         WasmPackages::Node => {
             println!("Packaging Node.js WASM target");
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "nodejs", "node-js", &clang_env)?;
+            package_wasm_target(&wasm_crate_dir, &pkg_dir, "nodejs", &clang_env)?;
         }
         WasmPackages::Web => {
             println!("Packaging Web WASM target");
-            package_wasm_target(&wasm_crate_dir, &pkg_dir, "web", "browser", &clang_env)?;
+            package_wasm_target(&wasm_crate_dir, &pkg_dir, "web", &clang_env)?;
         }
     }
     Ok(())
@@ -135,7 +135,6 @@ fn package_wasm_target(
     crate_dir: &PathBuf,
     pkg_dir: &Path,
     target: &str,
-    features: &str,
     clang_env: &[(String, String)],
 ) -> Result<()> {
     let out_path = pkg_dir.join(target);
@@ -148,7 +147,7 @@ fn package_wasm_target(
     let mut c = Command::new("wasm-pack");
     c.current_dir(crate_dir);
 
-    let mut args = vec![
+    let args = vec![
         "build",
         "--target",
         target,
@@ -156,11 +155,6 @@ fn package_wasm_target(
         "--out-dir",
         out_path.to_str().unwrap(),
     ];
-
-    if !features.is_empty() {
-        args.push("--features");
-        args.push(features);
-    }
 
     c.args(args);
 
