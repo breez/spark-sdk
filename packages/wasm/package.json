@@ -19,12 +19,12 @@
     "exports": {
       "./bundler": "./bundler/breez_sdk_spark_wasm.js",
       "./deno": "./deno/breez_sdk_spark_wasm.js",
-      "./nodejs": "./nodejs/breez_sdk_spark_wasm.js",
-      "./web": "./web/breez_sdk_spark_wasm.js",
+      "./nodejs": "./nodejs/index.js",
+      "./web": "./web/index.js",
       ".": {
-        "node": "./nodejs/breez_sdk_spark_wasm.js",
+        "node": "./nodejs/index.js",
         "deno": "./deno/breez_sdk_spark_wasm.js",
-        "default": "./web/breez_sdk_spark_wasm.js"
+        "default": "./web/index.js"
       }
     },
     "publishConfig": {

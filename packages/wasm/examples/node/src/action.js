@@ -1,4 +1,4 @@
-const { initLogging, defaultConfig, SdkBuilder, parse, defaultStorage } = require('@breeztech/breez-sdk-spark')
+const { initLogging, defaultConfig, SdkBuilder, parse, defaultStorage } = require('@breeztech/breez-sdk-spark/nodejs')
 const fs = require('fs')
 const qrcode = require('qrcode')
 const { question, confirm } = require('./prompt.js')
