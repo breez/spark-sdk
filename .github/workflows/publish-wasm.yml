@@ -72,4 +72,4 @@ jobs:
         working-directory: packages/wasm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: yarn publish
+        run: yarn publish --access public
