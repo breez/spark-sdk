@@ -659,7 +659,7 @@ class IndexedDBStorage {
   }
 }
 
-export async function createDefaultStorage(dbName = "BreezSDK", logger = null) {
+export async function createDefaultStorage(dbName = "BreezSdkSpark", logger = null) {
   const storage = new IndexedDBStorage(dbName, logger);
   await storage.initialize();
   return storage;
