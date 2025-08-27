@@ -19,7 +19,7 @@ use spark_wallet::{
     DefaultSigner, ExitSpeed, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress,
     SparkWallet, WalletEvent, WalletTransfer,
 };
-use std::{path::PathBuf, str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc};
 use tracing::{error, info};
 use web_time::{Duration, SystemTime};
 
@@ -32,7 +32,7 @@ use crate::{
     GetPaymentRequest, GetPaymentResponse, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
     Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    RefundDepositRequest, RefundDepositResponse, SendPaymentOptions, SqliteStorage,
+    RefundDepositRequest, RefundDepositResponse, SendPaymentOptions,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -69,7 +69,7 @@ pub struct BreezSdk {
     storage: Arc<dyn Storage>,
     chain_service: Arc<dyn BitcoinChainService>,
     lnurl_client: Arc<dyn RestClient>,
-    event_emitter: breez_sdk_common::utils::Arc<EventEmitter>,
+    event_emitter: Arc<EventEmitter>,
     shutdown_sender: watch::Sender<()>,
     shutdown_receiver: watch::Receiver<()>,
     sync_trigger: tokio::sync::broadcast::Sender<SyncType>,
@@ -84,12 +84,13 @@ pub fn init_logging(
     logger::init_logging(log_dir, app_logger, log_filter)
 }
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn default_storage(data_dir: String) -> Result<Arc<dyn Storage>, SdkError> {
-    let db_path = PathBuf::from_str(&data_dir)?;
+    let db_path = std::path::PathBuf::from_str(&data_dir)?;
 
-    let storage = SqliteStorage::new(&db_path)?;
+    let storage = crate::SqliteStorage::new(&db_path)?;
     Ok(Arc::new(storage))
 }
 
@@ -141,7 +142,7 @@ impl BreezSdk {
             storage,
             chain_service,
             lnurl_client,
-            event_emitter: breez_sdk_common::utils::Arc::new(EventEmitter::new()),
+            event_emitter: Arc::new(EventEmitter::new()),
             shutdown_sender,
             shutdown_receiver,
             sync_trigger: tokio::sync::broadcast::channel(10).0,
@@ -263,12 +264,17 @@ impl BreezSdk {
         // Sync balance
         let balance = self.spark_wallet.get_balance().await?;
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
-        object_repository.save_account_info(&CachedAccountInfo {
-            balance_sats: balance,
-        })?;
+        object_repository
+            .save_account_info(&CachedAccountInfo {
+                balance_sats: balance,
+            })
+            .await?;
 
         // Get the last offset we processed from storage
-        let cached_sync_info = object_repository.fetch_sync_info()?.unwrap_or_default();
+        let cached_sync_info = object_repository
+            .fetch_sync_info()
+            .await?
+            .unwrap_or_default();
         let current_offset = cached_sync_info.offset;
 
         // We'll keep querying in batches until we have all transfers
@@ -296,7 +302,7 @@ impl BreezSdk {
                 // Create a payment record
                 let payment: Payment = transfer.clone().try_into()?;
                 // Insert payment into storage
-                if let Err(err) = self.storage.insert_payment(payment.clone()) {
+                if let Err(err) = self.storage.insert_payment(payment.clone()).await {
                     error!("Failed to insert payment: {err:?}");
                 }
                 if payment.status == PaymentStatus::Pending {
@@ -309,9 +315,11 @@ impl BreezSdk {
             next_offset = next_offset.saturating_add(u64::try_from(transfers_response.len())?);
             // Update our last processed offset in the storage. We should remove pending payments
             // from the offset as they might be removed from the list later.
-            let save_res = object_repository.save_sync_info(&CachedSyncInfo {
-                offset: next_offset.saturating_sub(pending_payments),
-            });
+            let save_res = object_repository
+                .save_sync_info(&CachedSyncInfo {
+                    offset: next_offset.saturating_sub(pending_payments),
+                })
+                .await;
 
             if let Err(err) = save_res {
                 error!("Failed to update last sync offset: {err:?}");
@@ -341,7 +349,8 @@ impl BreezSdk {
                 Ok(_) => {
                     info!("Claimed utxo {}:{}", detailed_utxo.txid, detailed_utxo.vout);
                     self.storage
-                        .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)?;
+                        .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
+                        .await?;
                     claimed_deposits.push(detailed_utxo.into());
                 }
                 Err(e) => {
@@ -349,13 +358,15 @@ impl BreezSdk {
                         "Failed to claim utxo {}:{}: {e}",
                         detailed_utxo.txid, detailed_utxo.vout
                     );
-                    self.storage.update_deposit(
-                        detailed_utxo.txid.to_string(),
-                        detailed_utxo.vout,
-                        UpdateDepositPayload::ClaimError {
-                            error: e.clone().into(),
-                        },
-                    )?;
+                    self.storage
+                        .update_deposit(
+                            detailed_utxo.txid.to_string(),
+                            detailed_utxo.vout,
+                            UpdateDepositPayload::ClaimError {
+                                error: e.clone().into(),
+                            },
+                        )
+                        .await?;
                     let mut unclaimed_deposit: DepositInfo = detailed_utxo.clone().into();
                     unclaimed_deposit.claim_error = Some(e.into());
                     unclaimed_deposits.push(unclaimed_deposit);
@@ -486,9 +497,12 @@ impl BreezSdk {
 
     /// Returns the balance of the wallet in satoshis
     #[allow(unused_variables)]
-    pub fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
+    pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
-        let account_info = object_repository.fetch_account_info()?.unwrap_or_default();
+        let account_info = object_repository
+            .fetch_account_info()
+            .await?
+            .unwrap_or_default();
         Ok(GetInfoResponse {
             balance_sats: account_info.balance_sats,
         })
@@ -632,12 +646,14 @@ impl BreezSdk {
         };
         *lnurl_pay_info = Some(lnurl_info.clone());
 
-        self.storage.set_payment_metadata(
-            payment.id.clone(),
-            PaymentMetadata {
-                lnurl_pay_info: Some(lnurl_info),
-            },
-        )?;
+        self.storage
+            .set_payment_metadata(
+                payment.id.clone(),
+                PaymentMetadata {
+                    lnurl_pay_info: Some(lnurl_info),
+                },
+            )
+            .await?;
         self.event_emitter.emit(&SdkEvent::PaymentSucceeded {
             payment: payment.clone(),
         });
@@ -820,7 +836,7 @@ impl BreezSdk {
         if let Ok(response) = &res {
             //TODO: We get incomplete payments here from the ssp so better not to persist for now.
             // we trigger the sync here anyway to get the fresh payment.
-            //self.storage.insert_payment(response.payment.clone())?;
+            //self.storage.insert_payment(response.payment.clone()).await?;
             if !suppress_payment_event {
                 self.event_emitter.emit(&SdkEvent::PaymentSucceeded {
                     payment: response.payment.clone(),
@@ -856,16 +872,22 @@ impl BreezSdk {
     /// * `Ok(ListPaymentsResponse)` - Contains the list of payments if successful
     /// * `Err(SdkError)` - If there was an error accessing the storage
     ///
-    pub fn list_payments(
+    pub async fn list_payments(
         &self,
         request: ListPaymentsRequest,
     ) -> Result<ListPaymentsResponse, SdkError> {
-        let payments = self.storage.list_payments(request.offset, request.limit)?;
+        let payments = self
+            .storage
+            .list_payments(request.offset, request.limit)
+            .await?;
         Ok(ListPaymentsResponse { payments })
     }
 
-    pub fn get_payment(&self, request: GetPaymentRequest) -> Result<GetPaymentResponse, SdkError> {
-        let payment = self.storage.get_payment_by_id(request.payment_id)?;
+    pub async fn get_payment(
+        &self,
+        request: GetPaymentRequest,
+    ) -> Result<GetPaymentResponse, SdkError> {
+        let payment = self.storage.get_payment_by_id(request.payment_id).await?;
         Ok(GetPaymentResponse { payment })
     }
 
@@ -884,7 +906,8 @@ impl BreezSdk {
         match self.claim_utxo(&detailed_utxo, max_fee).await {
             Ok(transfer) => {
                 self.storage
-                    .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)?;
+                    .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
+                    .await?;
                 if let Err(e) = self.sync_trigger.send(SyncType::PaymentsOnly) {
                     error!("Failed to execute sync after deposit claim: {e:?}");
                 }
@@ -894,13 +917,15 @@ impl BreezSdk {
             }
             Err(e) => {
                 error!("Failed to claim deposit: {e:?}");
-                self.storage.update_deposit(
-                    detailed_utxo.txid.to_string(),
-                    detailed_utxo.vout,
-                    UpdateDepositPayload::ClaimError {
-                        error: e.clone().into(),
-                    },
-                )?;
+                self.storage
+                    .update_deposit(
+                        detailed_utxo.txid.to_string(),
+                        detailed_utxo.vout,
+                        UpdateDepositPayload::ClaimError {
+                            error: e.clone().into(),
+                        },
+                    )
+                    .await?;
                 Err(e)
             }
         }
@@ -928,14 +953,16 @@ impl BreezSdk {
         let tx_id = tx.compute_txid().to_string();
 
         // Store the refund transaction details separately
-        self.storage.update_deposit(
-            deposit.txid.clone(),
-            deposit.vout,
-            UpdateDepositPayload::Refund {
-                refund_tx: tx_hex.clone(),
-                refund_txid: tx_id.clone(),
-            },
-        )?;
+        self.storage
+            .update_deposit(
+                deposit.txid.clone(),
+                deposit.vout,
+                UpdateDepositPayload::Refund {
+                    refund_tx: tx_hex.clone(),
+                    refund_txid: tx_id.clone(),
+                },
+            )
+            .await?;
 
         self.chain_service
             .broadcast_transaction(tx_hex.clone())
@@ -944,11 +971,11 @@ impl BreezSdk {
     }
 
     #[allow(unused_variables)]
-    pub fn list_unclaimed_deposits(
+    pub async fn list_unclaimed_deposits(
         &self,
         request: ListUnclaimedDepositsRequest,
     ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
-        let deposits = self.storage.list_deposits()?;
+        let deposits = self.storage.list_deposits().await?;
         Ok(ListUnclaimedDepositsResponse { deposits })
     }
 }

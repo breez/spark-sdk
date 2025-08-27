@@ -10,6 +10,7 @@ uniffi = [
     "reqwest/native-tls-vendored",
     "dep:uniffi",
 ]
+test-utils = []
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
@@ -32,8 +33,6 @@ hex.workspace = true
 macros.workspace = true
 qrcode-rs.workspace = true
 reqwest.workspace = true
-rusqlite.workspace = true
-rusqlite_migration.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 shellwords.workspace = true
@@ -49,16 +48,17 @@ web-time.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
-maybe-sync = { workspace = true, features = ["sync"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+rusqlite.workspace = true
+rusqlite_migration.workspace = true
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
-maybe-sync.workspace = true
 tokio = { workspace = true, features = ["macros"] }
 
 [dev-dependencies]
 breez-sdk-common = { workspace = true, features = ["test-utils"] }
+breez-sdk-spark = { workspace = true, features = ["test-utils"] }
 
 # WASM dev dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]

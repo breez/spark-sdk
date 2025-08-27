@@ -6,6 +6,10 @@ pub struct WasmEventListener {
     pub listener: EventListener,
 }
 
+// This assumes that we'll always be running in a single thread (true for Wasm environments)
+unsafe impl Send for WasmEventListener {}
+unsafe impl Sync for WasmEventListener {}
+
 impl breez_sdk_spark::EventListener for WasmEventListener {
     fn on_event(&self, event: breez_sdk_spark::SdkEvent) {
         self.listener.on_event(event.into());

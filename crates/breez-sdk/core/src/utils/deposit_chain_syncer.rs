@@ -59,11 +59,13 @@ impl DepositChainSyncer {
                             continue;
                         }
                     };
-                self.storage.add_deposit(
-                    detailed_utxo.txid.to_string(),
-                    detailed_utxo.vout,
-                    detailed_utxo.value,
-                )?;
+                self.storage
+                    .add_deposit(
+                        detailed_utxo.txid.to_string(),
+                        detailed_utxo.vout,
+                        detailed_utxo.value,
+                    )
+                    .await?;
                 all_utxos.insert(
                     format!("{}:{}", detailed_utxo.txid, detailed_utxo.vout),
                     detailed_utxo,
@@ -72,7 +74,7 @@ impl DepositChainSyncer {
         }
 
         // Now remove all deposits that are no longer claimable and not refunded
-        let deposits = self.storage.list_deposits()?;
+        let deposits = self.storage.list_deposits().await?;
         let mut refunded = HashSet::new();
         for deposit in deposits {
             let key = format!("{}:{}", deposit.txid, deposit.vout);
@@ -82,7 +84,9 @@ impl DepositChainSyncer {
                 }
                 None => {
                     if !all_utxos.contains_key(&key) {
-                        self.storage.delete_deposit(deposit.txid, deposit.vout)?;
+                        self.storage
+                            .delete_deposit(deposit.txid, deposit.vout)
+                            .await?;
                     }
                 }
             }

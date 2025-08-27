@@ -1,0 +1,59 @@
+{
+  "name": "@breez-sdk/node-storage",
+  "version": "1.0.0",
+  "description": "Node.js SQLite storage implementation for Breez SDK WASM (CommonJS)",
+  "main": "index.cjs",
+  "exports": {
+    ".": "./index.cjs",
+    "./storage": "./index.cjs",
+    "./migrations": "./migrations.cjs",
+    "./errors": "./errors.cjs"
+  },
+  "scripts": {
+    "lint": "eslint *.cjs",
+    "lint:fix": "eslint *.cjs --fix"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.2.2"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0"
+  },
+  "eslintConfig": {
+    "env": {
+      "node": true,
+      "es2022": true,
+      "jest": true
+    },
+    "extends": [
+      "eslint:recommended"
+    ],
+    "parserOptions": {
+      "ecmaVersion": 2022,
+      "sourceType": "script"
+    },
+    "rules": {
+      "no-console": "warn",
+      "no-unused-vars": "error",
+      "prefer-const": "error",
+      "no-var": "error"
+    }
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/breez/spark-sdk"
+  },
+  "keywords": [
+    "breez",
+    "lightning",
+    "sqlite",
+    "storage",
+    "wasm",
+    "nodejs"
+  ],
+  "author": "Breez Technology Ltd.",
+  "license": "MIT"
+}

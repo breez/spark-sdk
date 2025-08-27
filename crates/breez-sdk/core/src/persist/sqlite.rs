@@ -1,3 +1,4 @@
+use macros::async_trait;
 use rusqlite::{
     Connection, ToSql, params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
@@ -110,8 +111,9 @@ impl From<rusqlite_migration::Error> for StorageError {
     }
 }
 
+#[async_trait]
 impl Storage for SqliteStorage {
-    fn list_payments(
+    async fn list_payments(
         &self,
         offset: Option<u32>,
         limit: Option<u32>,
@@ -156,7 +158,7 @@ impl Storage for SqliteStorage {
         Ok(payments)
     }
 
-    fn insert_payment(&self, payment: Payment) -> Result<(), StorageError> {
+    async fn insert_payment(&self, payment: Payment) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
 
         connection.execute(
@@ -177,7 +179,7 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    fn set_payment_metadata(
+    async fn set_payment_metadata(
         &self,
         payment_id: String,
         metadata: PaymentMetadata,
@@ -192,7 +194,7 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError> {
+    async fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
 
         connection.execute(
@@ -203,7 +205,7 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError> {
+    async fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError> {
         let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare("SELECT value FROM settings WHERE key = ?")?;
@@ -220,7 +222,7 @@ impl Storage for SqliteStorage {
         }
     }
 
-    fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError> {
+    async fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError> {
         let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare(
@@ -247,7 +249,12 @@ impl Storage for SqliteStorage {
         result.map_err(StorageError::from)
     }
 
-    fn add_deposit(&self, txid: String, vout: u32, amount_sats: u64) -> Result<(), StorageError> {
+    async fn add_deposit(
+        &self,
+        txid: String,
+        vout: u32,
+        amount_sats: u64,
+    ) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
         connection.execute(
             "INSERT OR IGNORE INTO unclaimed_deposits (txid, vout, amount_sats) 
@@ -257,7 +264,7 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    fn delete_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError> {
+    async fn delete_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
         connection.execute(
             "DELETE FROM unclaimed_deposits WHERE txid = ? AND vout = ?",
@@ -266,7 +273,7 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    fn list_deposits(&self) -> Result<Vec<DepositInfo>, StorageError> {
+    async fn list_deposits(&self) -> Result<Vec<DepositInfo>, StorageError> {
         let connection = self.get_connection()?;
         let mut stmt =
             connection.prepare("SELECT txid, vout, amount_sats, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits")?;
@@ -287,7 +294,7 @@ impl Storage for SqliteStorage {
         Ok(deposits)
     }
 
-    fn update_deposit(
+    async fn update_deposit(
         &self,
         txid: String,
         vout: u32,
@@ -405,146 +412,29 @@ impl FromSql for LnurlPayInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use chrono::Utc;
+    use crate::SqliteStorage;
 
-    #[test]
-    fn test_sqlite_storage() {
+    #[tokio::test]
+    async fn test_sqlite_storage() {
         let temp_dir = tempdir::TempDir::new("sqlite_storage").unwrap();
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
-        // Create test payment
-        let payment = Payment {
-            id: "pmt123".to_string(),
-            payment_type: PaymentType::Send,
-            status: PaymentStatus::Completed,
-            amount: 100_000,
-            fees: 1000,
-            timestamp: Utc::now().timestamp().try_into().unwrap(),
-            method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark),
-        };
-
-        // Insert payment
-        storage.insert_payment(payment.clone()).unwrap();
-
-        // List payments
-        let payments = storage.list_payments(Some(0), Some(10)).unwrap();
-        assert_eq!(payments.len(), 1);
-        assert_eq!(payments[0].id, payment.id);
-        assert_eq!(payments[0].payment_type, payment.payment_type);
-        assert_eq!(payments[0].status, payment.status);
-        assert_eq!(payments[0].amount, payment.amount);
-        assert_eq!(payments[0].fees, payment.fees);
-        assert!(matches!(payments[0].details, Some(PaymentDetails::Spark)));
-
-        // Get payment by ID
-        let retrieved_payment = storage.get_payment_by_id(payment.id.clone()).unwrap();
-        assert_eq!(retrieved_payment.id, payment.id);
-        assert_eq!(retrieved_payment.payment_type, payment.payment_type);
-        assert_eq!(retrieved_payment.status, payment.status);
-        assert_eq!(retrieved_payment.amount, payment.amount);
-        assert_eq!(retrieved_payment.fees, payment.fees);
-        assert!(matches!(
-            retrieved_payment.details,
-            Some(PaymentDetails::Spark)
-        ));
+        crate::persist::tests::test_sqlite_storage(Box::new(storage)).await;
     }
 
-    #[test]
-    fn test_unclaimed_deposits_crud() {
+    #[tokio::test]
+    async fn test_unclaimed_deposits_crud() {
         let temp_dir = tempdir::TempDir::new("sqlite_storage_deposits").unwrap();
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
-        // Initially, list should be empty
-        let deposits = storage.list_deposits().unwrap();
-        assert_eq!(deposits.len(), 0);
-
-        // Add first deposit
-        storage.add_deposit("tx123".to_string(), 0, 50000).unwrap();
-        let deposits = storage.list_deposits().unwrap();
-        assert_eq!(deposits.len(), 1);
-        assert_eq!(deposits[0].txid, "tx123");
-        assert_eq!(deposits[0].vout, 0);
-        assert_eq!(deposits[0].amount_sats, 50000);
-        assert!(deposits[0].claim_error.is_none());
-
-        // Add second deposit
-        storage.add_deposit("tx456".to_string(), 1, 75000).unwrap();
-        storage
-            .update_deposit(
-                "tx456".to_string(),
-                1,
-                UpdateDepositPayload::ClaimError {
-                    error: DepositClaimError::Generic {
-                        message: "Test error".to_string(),
-                    },
-                },
-            )
-            .unwrap();
-        let deposits = storage.list_deposits().unwrap();
-        assert_eq!(deposits.len(), 2);
-
-        // Find deposit2 in the list
-        let deposit2_found = deposits.iter().find(|d| d.txid == "tx456").unwrap();
-        assert_eq!(deposit2_found.vout, 1);
-        assert_eq!(deposit2_found.amount_sats, 75000);
-        assert!(deposit2_found.claim_error.is_some());
-
-        // Remove first deposit
-        storage.delete_deposit("tx123".to_string(), 0).unwrap();
-        let deposits = storage.list_deposits().unwrap();
-        assert_eq!(deposits.len(), 1);
-        assert_eq!(deposits[0].txid, "tx456");
-
-        // Remove second deposit
-        storage.delete_deposit("tx456".to_string(), 1).unwrap();
-        let deposits = storage.list_deposits().unwrap();
-        assert_eq!(deposits.len(), 0);
+        crate::persist::tests::test_unclaimed_deposits_crud(Box::new(storage)).await;
     }
 
-    #[test]
-    fn test_deposit_refunds() {
+    #[tokio::test]
+    async fn test_deposit_refunds() {
         let temp_dir = tempdir::TempDir::new("sqlite_storage_refund_tx").unwrap();
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
-        // Add the initial deposit
-        storage
-            .add_deposit("test_tx_123".to_string(), 0, 100_000)
-            .unwrap();
-        let deposits = storage.list_deposits().unwrap();
-        assert_eq!(deposits.len(), 1);
-        assert_eq!(deposits[0].txid, "test_tx_123");
-        assert_eq!(deposits[0].vout, 0);
-        assert_eq!(deposits[0].amount_sats, 100_000);
-        assert!(deposits[0].claim_error.is_none());
-
-        // Update the deposit refund information
-        storage
-            .update_deposit(
-                "test_tx_123".to_string(),
-                0,
-                UpdateDepositPayload::Refund {
-                    refund_txid: "refund_tx_id_456".to_string(),
-                    refund_tx: "0200000001abcd1234...".to_string(),
-                },
-            )
-            .unwrap();
-
-        // Verify that the deposit information remains unchanged
-        let deposits = storage.list_deposits().unwrap();
-        assert_eq!(deposits.len(), 1);
-        assert_eq!(deposits[0].txid, "test_tx_123");
-        assert_eq!(deposits[0].vout, 0);
-        assert_eq!(deposits[0].amount_sats, 100_000);
-        assert!(deposits[0].claim_error.is_none());
-        assert_eq!(
-            deposits[0].refund_tx_id,
-            Some("refund_tx_id_456".to_string())
-        );
-        assert_eq!(
-            deposits[0].refund_tx,
-            Some("0200000001abcd1234...".to_string())
-        );
+        crate::persist::tests::test_deposit_refunds(Box::new(storage)).await;
     }
 }

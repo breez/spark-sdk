@@ -1,0 +1,59 @@
+{
+  "name": "@breez-sdk/web-storage",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Web IndexedDB storage implementation for Breez SDK WASM (ES Modules)",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./storage": "./index.js"
+  },
+  "scripts": {
+    "lint": "eslint *.js",
+    "lint:fix": "eslint *.js --fix"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "eslint": "^8.56.0"
+  },
+  "eslintConfig": {
+    "env": {
+      "browser": true,
+      "es2022": true
+    },
+    "globals": {
+      "indexedDB": "readonly"
+    },
+    "extends": [
+      "eslint:recommended"
+    ],
+    "parserOptions": {
+      "ecmaVersion": 2022,
+      "sourceType": "module"
+    },
+    "rules": {
+      "no-console": "warn",
+      "no-unused-vars": "error",
+      "prefer-const": "error",
+      "no-var": "error"
+    }
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/breez/spark-sdk"
+  },
+  "keywords": [
+    "breez",
+    "lightning",
+    "indexeddb",
+    "storage",
+    "wasm",
+    "web",
+    "browser"
+  ],
+  "author": "Breez Technology Ltd.",
+  "license": "MIT"
+}

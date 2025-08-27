@@ -47,19 +47,21 @@ impl CachedUtxoFetcher {
         vout: u32,
     ) -> Result<DetailedUtxo, SdkError> {
         let object_cache_repository = ObjectCacheRepository::new(self.storage.clone());
-        let tx_hex = if let Some(tx) = object_cache_repository.fetch_tx(txid)? {
+        let tx_hex = if let Some(tx) = object_cache_repository.fetch_tx(txid).await? {
             tx.raw_tx
         } else {
             let tx_hex = self
                 .chain_service
                 .get_transaction_hex(txid.to_string())
                 .await?;
-            object_cache_repository.save_tx(
-                txid,
-                &CachedTx {
-                    raw_tx: tx_hex.clone(),
-                },
-            )?;
+            object_cache_repository
+                .save_tx(
+                    txid,
+                    &CachedTx {
+                        raw_tx: tx_hex.clone(),
+                    },
+                )
+                .await?;
             tx_hex
         };
 

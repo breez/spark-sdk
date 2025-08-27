@@ -1,6 +1,5 @@
 use bitcoin::{Address, Denomination, address::NetworkUnchecked};
 use lightning::bolt11_invoice::Bolt11InvoiceDescriptionRef;
-use maybe_sync::{MaybeSend, MaybeSync};
 use percent_encoding_rfc3986::percent_decode_str;
 use serde::Deserialize;
 use tracing::{debug, error};
@@ -48,8 +47,8 @@ pub struct InputParser<C, D> {
 
 impl<C, D> InputParser<C, D>
 where
-    C: RestClient + MaybeSend + MaybeSync,
-    D: DnsResolver + MaybeSend + MaybeSync,
+    C: RestClient + Send + Sync,
+    D: DnsResolver + Send + Sync,
 {
     pub fn new(dns_resolver: D, rest_client: C) -> Self {
         InputParser {

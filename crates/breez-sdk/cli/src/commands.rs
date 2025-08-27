@@ -134,17 +134,19 @@ pub(crate) async fn execute_command(
     match command {
         Command::Exit => Ok(false),
         Command::GetInfo => {
-            let value = sdk.get_info(GetInfoRequest {})?;
+            let value = sdk.get_info(GetInfoRequest {}).await?;
             print_value(&value)?;
             Ok(true)
         }
         Command::GetPayment { payment_id } => {
-            let value = sdk.get_payment(GetPaymentRequest { payment_id })?;
+            let value = sdk.get_payment(GetPaymentRequest { payment_id }).await?;
             print_value(&value)?;
             Ok(true)
         }
         Command::ListPayments { limit, offset } => {
-            let value = sdk.list_payments(ListPaymentsRequest { limit, offset })?;
+            let value = sdk
+                .list_payments(ListPaymentsRequest { limit, offset })
+                .await?;
             print_value(&value)?;
             Ok(true)
         }
@@ -154,7 +156,9 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::ListUnclaimedDeposits => {
-            let value = sdk.list_unclaimed_deposits(ListUnclaimedDepositsRequest {})?;
+            let value = sdk
+                .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+                .await?;
             print_value(&value)?;
             Ok(true)
         }

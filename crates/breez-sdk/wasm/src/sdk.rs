@@ -6,8 +6,9 @@ use wasm_bindgen::prelude::*;
 use crate::{
     error::WasmResult,
     event::{EventListener, WasmEventListener},
-    logger::{Logger, WasmTracingLayer},
+    logger::{Logger, WASM_LOGGER, WasmTracingLayer},
     models::*,
+    persist::Storage,
 };
 
 #[wasm_bindgen]
@@ -36,6 +37,31 @@ pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network.into()).into()
 }
 
+#[wasm_bindgen(js_name = "defaultStorage")]
+pub async fn default_storage(data_dir: &str) -> WasmResult<Storage> {
+    // SAFETY: In WASM, thread-local storage is stable and the logger reference
+    // will remain valid for the duration of this async function call.
+    // The WASM environment is single-threaded, so there's no risk of the
+    // logger being moved or deallocated during the async operation.
+    let logger_ref = unsafe {
+        WASM_LOGGER.with_borrow(|logger| {
+            logger
+                .as_ref()
+                .map(|l| std::mem::transmute::<&Logger, &'static Logger>(l))
+        })
+    };
+    Ok(create_default_storage(data_dir, logger_ref).await?)
+}
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_name = "createDefaultStorage", catch)]
+    async fn create_default_storage(
+        data_dir: &str,
+        logger: Option<&Logger>,
+    ) -> Result<crate::persist::Storage, JsValue>;
+}
+
 #[wasm_bindgen(js_name = "parse")]
 pub async fn parse(input: &str) -> WasmResult<InputType> {
     Ok(breez_sdk_spark::parse(input).await?.into())
@@ -60,8 +86,8 @@ impl BreezSdk {
     }
 
     #[wasm_bindgen(js_name = "getInfo")]
-    pub fn get_info(&self, request: GetInfoRequest) -> WasmResult<GetInfoResponse> {
-        Ok(self.sdk.get_info(request.into())?.into())
+    pub async fn get_info(&self, request: GetInfoRequest) -> WasmResult<GetInfoResponse> {
+        Ok(self.sdk.get_info(request.into()).await?.into())
     }
 
     #[wasm_bindgen(js_name = "prepareReceivePayment")]
@@ -115,12 +141,15 @@ impl BreezSdk {
     }
 
     #[wasm_bindgen(js_name = "listPayments")]
-    pub fn list_payments(&self, request: ListPaymentsRequest) -> WasmResult<ListPaymentsResponse> {
-        Ok(self.sdk.list_payments(request.into())?.into())
+    pub async fn list_payments(
+        &self,
+        request: ListPaymentsRequest,
+    ) -> WasmResult<ListPaymentsResponse> {
+        Ok(self.sdk.list_payments(request.into()).await?.into())
     }
 
     #[wasm_bindgen(js_name = "getPayment")]
-    pub fn get_payment(&self, request: GetPaymentRequest) -> WasmResult<GetPaymentResponse> {
-        Ok(self.sdk.get_payment(request.into())?.into())
+    pub async fn get_payment(&self, request: GetPaymentRequest) -> WasmResult<GetPaymentResponse> {
+        Ok(self.sdk.get_payment(request.into()).await?.into())
     }
 }
