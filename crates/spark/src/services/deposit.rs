@@ -162,6 +162,7 @@ impl<S: Signer> DepositService<S> {
                 offset: 0,
                 limit: 100,
                 network: self.network.to_proto_network() as i32,
+                exclude_claimed: true,
             })
             .await?;
         res.utxos
