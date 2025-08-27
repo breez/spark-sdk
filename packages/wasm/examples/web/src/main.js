@@ -15,6 +15,7 @@ const CONFIG = {
   chainServiceUrl: "https://regtest-mempool.loadtest.dev.sparkinfra.net/api",
   chainServiceUsername: import.meta.env.VITE_CHAIN_SERVICE_USERNAME || "",
   chainServicePassword: import.meta.env.VITE_CHAIN_SERVICE_PASSWORD || "",
+  apiKey: import.meta.env.VITE_BREEZ_API_KEY || "",
 };
 
 class WebLogger {
