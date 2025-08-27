@@ -200,8 +200,13 @@ async function initializeSdk() {
       throw new Error("Mnemonic is required");
     }
 
+    if (!CONFIG.apiKey) {
+      throw new Error('API key is required')
+    }
+
     // Get default config
-    const config = defaultConfig(CONFIG.network);
+    const config = defaultConfig(CONFIG.network)
+    config.apiKey = CONFIG.apiKey
 
     // Create SDK builder
     let storage = await defaultStorage("BreezSDK");
@@ -295,12 +300,11 @@ function displayPayments(payments) {
         <div><strong>${direction}: ${amount.toLocaleString()} sats</strong></div>
         <div style="font-size: 0.9em; color: #888;">${description}</div>
         <div style="font-size: 0.8em; color: #666;">${new Date(
-          payment.timestamp * 1000
-        ).toLocaleString()}</div>
+      payment.timestamp * 1000
+    ).toLocaleString()}</div>
     </div>
-      <div class="payment-status ${payment.status.toLowerCase()}">${
-      payment.status
-    }</div>
+      <div class="payment-status ${payment.status.toLowerCase()}">${payment.status
+      }</div>
     `;
 
     elements.paymentsList.appendChild(paymentDiv);
