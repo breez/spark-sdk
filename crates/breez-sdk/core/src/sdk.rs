@@ -1,3 +1,4 @@
+use base64::Engine;
 use bitcoin::{
     consensus::serialize,
     hashes::{Hash, sha256},
@@ -26,6 +27,7 @@ use web_time::{Duration, SystemTime};
 use tokio::sync::watch;
 use tokio_with_wasm::alias as tokio;
 use web_time::Instant;
+use x509_parser::parse_x509_certificate;
 
 use crate::{
     BitcoinChainService, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee,
@@ -97,6 +99,7 @@ pub fn default_storage(data_dir: String) -> Result<Arc<dyn Storage>, SdkError> {
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn default_config(network: Network) -> Config {
     Config {
+        api_key: None,
         network,
         sync_interval_secs: 60, // every 1 minute
         max_deposit_claim_fee: None,
@@ -136,6 +139,10 @@ impl BreezSdk {
             spark_wallet::SparkWalletConfig::default_config(config.clone().network.into());
         let spark_wallet = SparkWallet::connect(spark_wallet_config, signer).await?;
 
+        match &config.api_key {
+            Some(api_key) => validate_breez_api_key(api_key)?,
+            None => return Err(SdkError::Generic("Missing Breez API key".to_string())),
+        }
         let sdk = Self {
             config,
             spark_wallet: Arc::new(spark_wallet),
@@ -1020,4 +1027,41 @@ fn process_success_action(
     };
 
     Ok(Some(SuccessActionProcessed::Aes { result }))
+}
+
+fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
+    let api_key_decoded = base64::engine::general_purpose::STANDARD
+        .decode(api_key.as_bytes())
+        .map_err(|err| {
+            SdkError::Generic(format!(
+                "Could not base64 decode the Breez API key: {err:?}"
+            ))
+        })?;
+    let (_rem, cert) = parse_x509_certificate(&api_key_decoded).map_err(|err| {
+        SdkError::Generic(format!("Invaid certificate for Breez API key: {err:?}"))
+    })?;
+
+    let issuer = cert
+        .issuer()
+        .iter_common_name()
+        .next()
+        .and_then(|cn| cn.as_str().ok());
+    match issuer {
+        Some(common_name) => {
+            if !common_name.starts_with("Breez") {
+                return Err(SdkError::Generic(
+                    "Invalid certificate found for Breez API key: issuer mismatch. Please confirm that the certificate's origin is trusted"
+                        .to_string()
+                ));
+            }
+        }
+        _ => {
+            return Err(SdkError::Generic(
+                "Could not parse Breez API key certificate: issuer is invalid or not found."
+                    .to_string(),
+            ));
+        }
+    }
+
+    Ok(())
 }

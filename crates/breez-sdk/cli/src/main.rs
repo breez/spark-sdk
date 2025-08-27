@@ -99,7 +99,10 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
         .join(path_suffix);
     fs::create_dir_all(&wallet_data_dir)?;
 
-    let config = default_config(network);
+    let breez_api_key = std::env::var_os("BREEZ_API_KEY")
+        .map(|var| var.into_string().expect("Expected valid API key string"));
+    let mut config = default_config(network);
+    config.api_key = breez_api_key;
     let storage = default_storage(wallet_data_dir.to_string_lossy().to_string())?;
     let sdk = SdkBuilder::new(config, mnemonic.to_string(), storage)
         .build()
