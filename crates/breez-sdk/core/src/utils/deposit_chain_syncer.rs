@@ -7,17 +7,15 @@ use spark_wallet::{DefaultSigner, SparkWallet};
 use tracing::{error, info};
 
 use crate::{
-    BitcoinChainService, Network, SdkError,
+    BitcoinChainService, SdkError,
     persist::Storage,
     utils::utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
 };
 
 pub struct DepositChainSyncer {
-    chain_service: Arc<dyn BitcoinChainService>,
     storage: Arc<dyn Storage>,
     spark_wallet: Arc<SparkWallet<DefaultSigner>>,
     utxo_fetcher: CachedUtxoFetcher,
-    network: Network,
 }
 
 impl DepositChainSyncer {
@@ -25,14 +23,11 @@ impl DepositChainSyncer {
         chain_service: Arc<dyn BitcoinChainService>,
         storage: Arc<dyn Storage>,
         spark_wallet: Arc<SparkWallet<DefaultSigner>>,
-        network: Network,
     ) -> Self {
         Self {
-            chain_service: chain_service.clone(),
             storage: storage.clone(),
             spark_wallet,
             utxo_fetcher: CachedUtxoFetcher::new(chain_service, storage),
-            network,
         }
     }
 
@@ -47,22 +42,13 @@ impl DepositChainSyncer {
         for address in addresses {
             info!("Checking static deposit address: {}", address.to_string());
 
-            let utxos = match self.network {
-                Network::Mainnet => self
-                    .chain_service
-                    .get_address_utxos(address.to_string())
-                    .await?
-                    .iter()
-                    .map(|utxo| (utxo.txid.to_string(), utxo.vout))
-                    .collect::<Vec<(String, u32)>>(),
-                Network::Regtest => self
-                    .spark_wallet
-                    .get_utxos_for_address(&address.to_string())
-                    .await?
-                    .iter()
-                    .map(|utxo| (utxo.txid.to_string(), utxo.vout))
-                    .collect::<Vec<(String, u32)>>(),
-            };
+            let utxos = self
+                .spark_wallet
+                .get_utxos_for_address(&address.to_string())
+                .await?
+                .iter()
+                .map(|utxo| (utxo.txid.to_string(), utxo.vout))
+                .collect::<Vec<(String, u32)>>();
 
             for utxo in utxos {
                 let detailed_utxo =
