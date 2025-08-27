@@ -43,9 +43,6 @@ jobs:
           rustup target add wasm32-unknown-unknown
           cargo install wasm-pack
 
-      - name: Setup emsdk
-        uses: mymindstorm/setup-emsdk@v14
-
       - name: Build Wasm packages
         working-directory: crates/breez-sdk/wasm
         run: make build

@@ -98,9 +98,6 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup emsdk
-        uses: mymindstorm/setup-emsdk@v14
-
       - name: Run Clippy
         run: make wasm-clippy-check
 
@@ -114,9 +111,6 @@ jobs:
         uses: ./.github/actions/setup-build
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup emsdk
-        uses: mymindstorm/setup-emsdk@v14
 
       - name: Run Tests
         run: make wasm-test
