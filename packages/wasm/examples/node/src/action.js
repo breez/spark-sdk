@@ -39,6 +39,7 @@ const initSdk = async () => {
 
     // Connect using the config
     let config = defaultConfig('regtest')
+    config.apiKey = process.env.BREEZ_API_KEY
 
     // Ensure ./.data directory exists
     const dataDir = './.data'

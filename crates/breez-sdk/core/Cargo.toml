@@ -45,6 +45,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid.workspace = true
 uniffi = { workspace = true, optional = true }
 web-time.workspace = true
+x509-parser = { version = "0.16.0" }
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]

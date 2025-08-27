@@ -346,6 +346,7 @@ impl From<Network> for BitcoinNetwork {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Config {
+    pub api_key: Option<String>,
     pub network: Network,
     pub sync_interval_secs: u32,
 
