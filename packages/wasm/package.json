@@ -17,7 +17,7 @@
       "!examples"
     ],
     "exports": {
-      "./bundler": "./bundler/breez_sdk_spark_wasm.js",
+      "./bundler": "./bundler/index.js",
       "./deno": "./deno/breez_sdk_spark_wasm.js",
       "./nodejs": "./nodejs/index.js",
       "./web": "./web/index.js",
