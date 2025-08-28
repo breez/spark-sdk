@@ -1,57 +1,55 @@
 import BreezSdkSpark
 
-func prepareReceiveLightning(sdk: BreezSdk) throws -> PrepareReceiveResponse {
-    // ANCHOR: prepare-receive-payment-lightning
+func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
+    // ANCHOR: receive-payment-lightning-bolt11
     let description = "<invoice description>"
     // Optionally set the invoice amount you wish the payer to send
     let optionalAmountSats = 5_000
-    let prepareResponse = try sdk
-        .prepareReceivePayment(request: PrepareReceivePaymentRequest(
-            paymentMethod: ReceivePaymentMethod.bolt11Invoice(description, optionalAmountSats)
+    let response = try await sdk
+        .receivePayment(request: ReceivePaymentRequest(
+            paymentMethod: ReceivePaymentMethod.bolt11Invoice(
+                description: description,
+                amountSats: optionalAmountSats
+            )
         ));
 
-    let receiveFeeSats = prepareResponse.feeSats;
+    let paymentRequest = response.paymentRequest;
+    print("Payment Request: {}", paymentRequest);
+    let receiveFeeSats = response.feeSats;
     print("Fees: {} sats", receiveFeeSats);
-    // ANCHOR_END: prepare-receive-payment-lightning
+    // ANCHOR_END: receive-payment-lightning-bolt11
 
-    return prepareResponse
+    return response
 }
 
-func prepareReceiveOnchain(sdk: BreezSdk) throws -> PrepareReceiveResponse {
-    // ANCHOR: prepare-receive-payment-onchain
-    let prepareResponse = try sdk
-        .prepareReceivePayment(request: PrepareReceivePaymentRequest(
+func receiveOnchain(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
+    // ANCHOR: receive-payment-onchain
+    let response = try await sdk
+        .receivePayment(request: ReceivePaymentRequest(
             paymentMethod: ReceivePaymentMethod.bitcoinAddress
         ));
 
-    let receiveFeeSats = prepareResponse.feeSats;
-    print("Fees: {} sats", receiveFeeSats);    // ANCHOR_END: prepare-receive-payment-onchain
+    let paymentRequest = response.paymentRequest;
+    print("Payment Request: {}", paymentRequest);
+    let receiveFeeSats = response.feeSats;
+    print("Fees: {} sats", receiveFeeSats);
+    // ANCHOR_END: receive-payment-onchain
 
-    return prepareResponse
+    return response
 }
 
-func prepareReceiveSpark(sdk: BreezSdk) throws -> PrepareReceiveResponse {
-    // ANCHOR: prepare-receive-payment-spark
-    let prepareResponse = try sdk
-        .prepareReceivePayment(request: PrepareReceivePaymentRequest(
+func receiveSpark(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
+    // ANCHOR: receive-payment-spark
+    let response = try await sdk
+        .receivePayment(request: ReceivePaymentRequest(
             paymentMethod: ReceivePaymentMethod.sparkAddress
         ));
 
-    let receiveFeeSats = prepareResponse.feeSats;
-    print("Fees: {} sats", receiveFeeSats);
-    // ANCHOR_END: prepare-receive-payment-spark
-
-    return prepareResponse
-}
-
-func receivePayment(sdk: BreezSdk, prepareResponse: PrepareReceivePaymentResponse) async throws -> ReceivePaymentResponse {
-    // ANCHOR: receive-payment
-    let response = try await sdk.receivePayment(request: ReceivePaymentRequest(
-        prepareResponse: prepareResponse,
-    ))
-
-    let paymentRequest: String = response.paymentRequest;
+    let paymentRequest = response.paymentRequest;
     print("Payment Request: {}", paymentRequest);
-    // ANCHOR_END: receive-payment
+    let receiveFeeSats = response.feeSats;
+    print("Fees: {} sats", receiveFeeSats);
+    // ANCHOR_END: receive-payment-spark
+
     return response
 }
