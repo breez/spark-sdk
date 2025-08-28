@@ -109,16 +109,14 @@ const receivePayment = async (options) => {
         paymentMethod = { type: options.paymentMethod }
     }
 
-    const prepareResponse = await sdk.prepareReceivePayment({ paymentMethod: paymentMethod })
-    const fees = prepareResponse.feeSats
 
-    const message = `Fees: ${fees} sat. Are the fees acceptable?`
-    if (await confirm(message)) {
-        const res = await sdk.receivePayment({ prepareResponse })
-        console.log(JSON.stringify(res, null, 2))
-        qrcode.toString(res.paymentRequest, { type: 'terminal', small: true }, (_err, url) => {
-            console.log(url)
-        })
+    const res = await sdk.receivePayment({ paymentMethod })
+    console.log(JSON.stringify(res, null, 2))
+    qrcode.toString(res.paymentRequest, { type: 'terminal', small: true }, (_err, url) => {
+        console.log(url)
+    })
+    if (res.feeSats > 0) {
+        console.log(`Fees: ${res.feeSats} sat`)
     }
 }
 

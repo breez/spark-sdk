@@ -420,25 +420,15 @@ pub enum SendPaymentMethod {
     },
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareReceivePaymentRequest)]
-pub struct PrepareReceivePaymentRequest {
-    pub payment_method: ReceivePaymentMethod,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareReceivePaymentResponse)]
-pub struct PrepareReceivePaymentResponse {
-    pub payment_method: ReceivePaymentMethod,
-    pub fee_sats: u64,
-}
-
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ReceivePaymentRequest)]
 pub struct ReceivePaymentRequest {
-    pub prepare_response: PrepareReceivePaymentResponse,
+    pub payment_method: ReceivePaymentMethod,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ReceivePaymentResponse)]
 pub struct ReceivePaymentResponse {
     pub payment_request: String,
+    pub fee_sats: u64,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareLnurlPayRequest)]

@@ -40,8 +40,7 @@ use crate::{
     logger,
     models::{
         Config, GetInfoRequest, GetInfoResponse, ListPaymentsRequest, ListPaymentsResponse,
-        Payment, PrepareReceivePaymentRequest, PrepareReceivePaymentResponse,
-        PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentMethod,
+        Payment, PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentMethod,
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentMethod, SendPaymentRequest,
         SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
@@ -515,33 +514,34 @@ impl BreezSdk {
         })
     }
 
-    pub fn prepare_receive_payment(
-        &self,
-        request: PrepareReceivePaymentRequest,
-    ) -> Result<PrepareReceivePaymentResponse, SdkError> {
-        match &request.payment_method {
-            ReceivePaymentMethod::Bolt11Invoice { .. } | ReceivePaymentMethod::SparkAddress => {
-                Ok(PrepareReceivePaymentResponse {
-                    payment_method: request.payment_method,
-                    fee_sats: 0,
-                })
-            }
-            #[allow(clippy::match_same_arms)]
-            ReceivePaymentMethod::BitcoinAddress => {
-                Ok(PrepareReceivePaymentResponse {
-                    payment_method: request.payment_method,
-                    fee_sats: 0, // TODO: calculate fee
-                })
-            }
-        }
-    }
+    // pub fn prepare_receive_payment(
+    //     &self,
+    //     request: PrepareReceivePaymentRequest,
+    // ) -> Result<PrepareReceivePaymentResponse, SdkError> {
+    //     match &request.payment_method {
+    //         ReceivePaymentMethod::Bolt11Invoice { .. } | ReceivePaymentMethod::SparkAddress => {
+    //             Ok(PrepareReceivePaymentResponse {
+    //                 payment_method: request.payment_method,
+    //                 fee_sats: 0,
+    //             })
+    //         }
+    //         #[allow(clippy::match_same_arms)]
+    //         ReceivePaymentMethod::BitcoinAddress => {
+    //             Ok(PrepareReceivePaymentResponse {
+    //                 payment_method: request.payment_method,
+    //                 fee_sats: 0, // TODO: calculate fee
+    //             })
+    //         }
+    //     }
+    // }
 
     pub async fn receive_payment(
         &self,
         request: ReceivePaymentRequest,
     ) -> Result<ReceivePaymentResponse, SdkError> {
-        match &request.prepare_response.payment_method {
+        match &request.payment_method {
             ReceivePaymentMethod::SparkAddress => Ok(ReceivePaymentResponse {
+                fee_sats: 0,
                 payment_request: self.spark_wallet.get_spark_address().await?.to_string(),
             }),
             ReceivePaymentMethod::BitcoinAddress => Ok(ReceivePaymentResponse {
@@ -551,6 +551,7 @@ impl BreezSdk {
                     .generate_deposit_address(true)
                     .await?
                     .to_string(),
+                fee_sats: 0,
             }),
             ReceivePaymentMethod::Bolt11Invoice {
                 description,
@@ -564,6 +565,7 @@ impl BreezSdk {
                     )
                     .await?
                     .invoice,
+                fee_sats: 0,
             }),
         }
     }
