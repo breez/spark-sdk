@@ -565,26 +565,15 @@ impl From<SendOnchainSpeedFeeQuote> for CoopExitSpeedFeeQuote {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct PrepareReceivePaymentRequest {
-    pub payment_method: ReceivePaymentMethod,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct PrepareReceivePaymentResponse {
-    pub payment_method: ReceivePaymentMethod,
-    pub fee_sats: u64,
-}
-
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ReceivePaymentRequest {
-    pub prepare_response: PrepareReceivePaymentResponse,
+    pub payment_method: ReceivePaymentMethod,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ReceivePaymentResponse {
     pub payment_request: String,
+    pub fee_sats: u64,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

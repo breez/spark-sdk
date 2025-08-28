@@ -40,7 +40,6 @@ class WebEventListener {
 }
 
 let sdk = null;
-let prepareReceiveResponse = null;
 let prepareSendResponse = null;
 let prepareLnurlResponse = null;
 let autoRefreshInterval = null;
@@ -329,7 +328,7 @@ async function syncWallet() {
   }
 }
 
-async function prepareReceive() {
+async function receive() {
   try {
     const paymentMethodType = elements.paymentMethod.value;
     const description = elements.description.value;
@@ -352,22 +351,16 @@ async function prepareReceive() {
       paymentMethod = { type: paymentMethodType };
     }
 
-    showLoading("Preparing receive payment...");
-
-    prepareReceiveResponse = await sdk.prepareReceivePayment({ paymentMethod });
-
-    const fees = prepareReceiveResponse.feeSats;
-
-    if (!confirm(`Fees: ${fees} sat. Are the fees acceptable?`)) {
-      hideLoading();
-      return;
-    }
-
     showLoading("Generating payment request...");
 
-    const result = await sdk.receivePayment({
-      prepareResponse: prepareReceiveResponse,
-    });
+    const result = await sdk.receivePayment({ paymentMethod });
+    const fees = result.feeSats;
+    if (fees > 0) {
+      if (!confirm(`Fees: ${fees} sat. Are the fees acceptable?`)) {
+        hideLoading();
+        return;
+      }
+    }
 
     elements.paymentRequest.value = result.paymentRequest;
 
@@ -635,7 +628,7 @@ elements.paymentMethod.addEventListener("change", () => {
     elements.paymentMethod.value === "bolt11Invoice" ? "block" : "none";
 });
 
-elements.prepareReceiveBtn.addEventListener("click", prepareReceive);
+elements.prepareReceiveBtn.addEventListener("click", receive);
 elements.cancelReceiveBtn.addEventListener("click", () =>
   hideModal(elements.receiveModal)
 );

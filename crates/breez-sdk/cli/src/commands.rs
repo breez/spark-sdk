@@ -1,9 +1,9 @@
 use breez_sdk_spark::{
     BreezSdk, ClaimDepositRequest, Fee, GetInfoRequest, GetPaymentRequest, InputType,
     ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, OnchainConfirmationSpeed,
-    PrepareLnurlPayRequest, PrepareReceivePaymentRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest, SendPaymentMethod,
-    SendPaymentOptions, SendPaymentRequest, SyncWalletRequest, parse,
+    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
+    RefundDepositRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
+    SyncWalletRequest, parse,
 };
 use clap::Parser;
 use rustyline::{
@@ -235,23 +235,16 @@ pub(crate) async fn execute_command(
                 _ => return Err(anyhow::anyhow!("Invalid payment method")),
             };
 
-            let prepare_response =
-                sdk.prepare_receive_payment(PrepareReceivePaymentRequest { payment_method })?;
-
-            if prepare_response.fee_sats > 0 {
-                println!(
-                    "Prepared payment requires fee of {} sats\n Do you want to continue? (y/n)",
-                    prepare_response.fee_sats
-                );
-                let line = rl.readline_with_initial("", ("y", ""))?.to_lowercase();
-                if line != "y" {
-                    return Ok(true);
-                }
-            }
-
             let receive_result = sdk
-                .receive_payment(ReceivePaymentRequest { prepare_response })
+                .receive_payment(ReceivePaymentRequest { payment_method })
                 .await?;
+
+            if receive_result.fee_sats > 0 {
+                println!(
+                    "Prepared payment requires fee of {} sats\n ",
+                    receive_result.fee_sats
+                );
+            }
 
             print_value(&receive_result)?;
             Ok(true)

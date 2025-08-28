@@ -90,14 +90,6 @@ impl BreezSdk {
         Ok(self.sdk.get_info(request.into()).await?.into())
     }
 
-    #[wasm_bindgen(js_name = "prepareReceivePayment")]
-    pub fn prepare_receive_payment(
-        &self,
-        request: PrepareReceivePaymentRequest,
-    ) -> WasmResult<PrepareReceivePaymentResponse> {
-        Ok(self.sdk.prepare_receive_payment(request.into())?.into())
-    }
-
     #[wasm_bindgen(js_name = "receivePayment")]
     pub async fn receive_payment(
         &self,
