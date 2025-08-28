@@ -1,0 +1,5 @@
+book
+.DS_Store
+.idea
+*.nupkg
+*.sln

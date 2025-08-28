@@ -1,0 +1,36 @@
+{
+    "name": "snippets",
+    "version": "0.0.1",
+    "description": "Wasm Snippets",
+    "main": "index.ts",
+    "license": "MIT",
+    "scripts": {
+        "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
+        "format": "eslint . --ext .js,.jsx,.ts,.tsx --fix",
+        "compile": "tsc"
+    },
+    "dependencies": {
+        "@breeztech/breez-sdk-spark": "file:./packages/breez-sdk-spark.tgz"
+    },
+    "devDependencies": {
+        "@typescript-eslint/eslint-plugin": "^6.4.0",
+        "@typescript-eslint/parser": "^6.10.0",
+        "@types/node": "^22.13.14",
+        "eslint": "^8.0.1",
+        "eslint-config-standard-with-typescript": "^39.1.1",
+        "eslint-plugin-import": "^2.25.2",
+        "eslint-plugin-n": "^15.0.0 || ^16.0.0 ",
+        "eslint-plugin-promise": "^6.0.0",
+        "eslint-plugin-react": "^7.33.2",
+        "tsx": "^3.12.7",
+        "typescript": "*"
+    },
+    "prettier": {
+        "endOfLine": "lf",
+        "printWidth": 100,
+        "semi": false,
+        "singleQuote": true,
+        "tabWidth": 2,
+        "trailingComma": "none"
+    }
+}

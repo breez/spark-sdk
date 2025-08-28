@@ -1,0 +1,12 @@
+[package]
+name = "breez_sdk_spark_snippets"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+breez-sdk-spark = { path = "../../../../crates/breez-sdk/core" }
+log = "0.4"
+tokio = "1.42.0"

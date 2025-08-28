@@ -1,0 +1,46 @@
+# About Breez SDK - Nodeless *(Spark Implementation)*
+
+## **What Is the Breez SDK?**
+
+The Breez SDK provides developers with an end-to-end solution for integrating self-custodial Lightning payments into their apps and services. It eliminates the need for third parties, simplifies the complexities of Bitcoin and Lightning, and enables seamless onboarding for billions of users to the future of peer-to-peer payments.
+
+To provide the best experience for their end-users, developers can choose between the following implementations:
+
+- [Breez SDK - Nodeless *(Spark Implementation)*](https://sdk-doc-spark.breez.technology/)
+- [Breez SDK - Nodeless *(Liquid Implementation)*](https://sdk-doc-liquid.breez.technology/)
+- [Breez SDK - Native *(Greenlight Implementation)*](https://sdk-doc.breez.technology/)
+
+
+## **What Is the Breez SDK - Nodeless *(Spark Implementation)*?**
+
+It’s a nodeless integration that offers a self-custodial, end-to-end solution for integrating Lightning payments, utilizing Spark with on-chain interoperability and third-party fiat on-ramps. Using the SDK you will able to:
+- **Send payments** via various protocols such as: Bolt11, LNURL-Pay, Lightning address, BTC address, Spark address
+- **Receive payments** via various protocols such as: Bolt11, BTC address, Spark address
+  
+**Key Features**
+
+- [x] Send and receive Lightning payments 
+- [x] On-chain interoperability
+- [x] Send LNURL-pay payments
+- [x] Send and receive Spark payments 
+- [x] Keys are only held by users
+- [x] Free open-source solution
+
+## Pricing
+
+The Breez SDK is **free** for developers. 
+
+## Support
+
+Have a question for the team? Join us on [Telegram](https://t.me/breezsdk) or email us at <contact@breez.technology>.
+
+
+## Repository
+
+Head over to the <a href="https://github.com/breez/spark-sdk" target="_blank">Breez SDK - Nodeless *(Spark Implementation)*</a> repo.
+
+
+## Ready to Light Up Your App? 
+**→ [Get Started](getting_started.md)** 
+
+

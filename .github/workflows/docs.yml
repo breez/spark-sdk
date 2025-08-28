@@ -1,0 +1,57 @@
+name: Publish docs
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, release ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build mdbook
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup build
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          cargo install mdbook --vers "^0.4" --locked
+          cargo install --path ./snippets-processor
+          cargo install mdbook-variables --vers "^0.2" --locked
+
+      - name: Build mdbook
+        working-directory: docs/breez-sdk
+        run: mdbook build
+
+      - name: Archive book
+        uses: actions/upload-artifact@v4
+        with:
+          name: breez-sdk-book
+          path: docs/breez-sdk/book
+
+      - name: Push book to main-docs-generated branch
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: |
+          git config --global user.name "Generator"
+          git config --global user.email "no-reply@breez.technology"
+          git add -f docs/breez-sdk/book
+          git commit -m "Generate documentation"
+          git push origin --force main:main-docs-generated
+
+      - name: Push book to release-docs-generated branch
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/release' }}
+        run: |
+          git config --global user.name "Generator"
+          git config --global user.email "no-reply@breez.technology"
+          git add -f docs/breez-sdk/book
+          git commit -m "Generate documentation"
+          git push origin --force release:release-docs-generated

@@ -1,0 +1,18 @@
+# Summary
+
+# API Overview
+
+- [About Breez SDK - Nodeless](guide/about_breez_sdk_spark.md)
+- [Getting started](guide/getting_started.md)
+  - [Installing the SDK](guide/install.md)
+  - [Initializing the SDK](guide/initializing.md)
+  - [Fetching the balance](guide/get_info.md)
+  - [Listening to events](guide/events.md)
+  - [Adding logging](guide/logging.md)
+- [Payment fundamentals](guide/payments.md)
+  - [Parsing inputs](guide/parse.md)
+  - [Receiving payments](guide/receive_payment.md)
+  - [Sending payments](guide/send_payment.md)
+  - [Listing payments](guide/list_payments.md)
+- [Using LNURL and Lightning addresses](guide/lnurl.md)
+  - [Sending payments using LNURL-Pay/Lightning address](guide/lnurl_pay.md)
