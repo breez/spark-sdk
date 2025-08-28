@@ -514,27 +514,6 @@ impl BreezSdk {
         })
     }
 
-    // pub fn prepare_receive_payment(
-    //     &self,
-    //     request: PrepareReceivePaymentRequest,
-    // ) -> Result<PrepareReceivePaymentResponse, SdkError> {
-    //     match &request.payment_method {
-    //         ReceivePaymentMethod::Bolt11Invoice { .. } | ReceivePaymentMethod::SparkAddress => {
-    //             Ok(PrepareReceivePaymentResponse {
-    //                 payment_method: request.payment_method,
-    //                 fee_sats: 0,
-    //             })
-    //         }
-    //         #[allow(clippy::match_same_arms)]
-    //         ReceivePaymentMethod::BitcoinAddress => {
-    //             Ok(PrepareReceivePaymentResponse {
-    //                 payment_method: request.payment_method,
-    //                 fee_sats: 0, // TODO: calculate fee
-    //             })
-    //         }
-    //     }
-    // }
-
     pub async fn receive_payment(
         &self,
         request: ReceivePaymentRequest,
