@@ -23,6 +23,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
+        working-directory: docs/breez-sdk
         run: |
           cargo install mdbook --vers "^0.4" --locked
           cargo install --path ./snippets-processor
