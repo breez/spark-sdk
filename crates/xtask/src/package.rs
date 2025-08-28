@@ -277,11 +277,21 @@ try {
 module.exports = wasmModule;
 "#;
 
+    let dts_content = r#"export * from "./breez_sdk_spark_wasm.js";"#;
+
     let entry_file = out_path.join("index.js");
     std::fs::write(&entry_file, entry_content).with_context(|| {
         format!(
             "Failed to create Node.js entry point at {}",
             entry_file.display()
+        )
+    })?;
+
+    let dts_file = out_path.join("index.d.ts");
+    std::fs::write(&dts_file, dts_content).with_context(|| {
+        format!(
+            "Failed to create Node.js .d.ts entry point at {}",
+            dts_file.display()
         )
     })?;
 
@@ -463,11 +473,21 @@ export default initBreezSDK;
 export * from './breez_sdk_spark_wasm.js';
 "#;
 
+    let dts_content = r#"export * from "./breez_sdk_spark_wasm.js";"#;
+
     let entry_file = out_path.join("index.js");
     std::fs::write(&entry_file, entry_content).with_context(|| {
         format!(
             "Failed to create Web entry point at {}",
             entry_file.display()
+        )
+    })?;
+
+    let dts_file = out_path.join("index.d.ts");
+    std::fs::write(&dts_file, dts_content).with_context(|| {
+        format!(
+            "Failed to create Web .d.ts entry point at {}",
+            dts_file.display()
         )
     })?;
 
