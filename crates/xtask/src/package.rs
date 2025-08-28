@@ -317,6 +317,8 @@ fn update_nodejs_package_json(out_path: &Path) -> Result<()> {
     // Update the main entry point
     package_json["main"] = serde_json::Value::String("index.js".to_string());
 
+    package_json["types"] = serde_json::Value::String("index.d.ts".to_string());
+
     // Add storage files to the files array
     if let Some(files) = package_json.get_mut("files") {
         if let Some(files_array) = files.as_array_mut() {
@@ -463,9 +465,9 @@ const setupWebStorage = async () => {
 };
 
 // Initialize WASM and storage
-const initBreezSDK = async (wasmPath) => {
+const initBreezSDK = async () => {
     await setupWebStorage();
-    return await wasmInit(wasmPath);
+    return await wasmInit();
 };
 
 // Export the initialization function and all WASM functions
@@ -473,7 +475,9 @@ export default initBreezSDK;
 export * from './breez_sdk_spark_wasm.js';
 "#;
 
-    let dts_content = r#"export * from "./breez_sdk_spark_wasm.js";"#;
+    let dts_content = r#"export * from "./breez_sdk_spark_wasm.js";
+export default function initBreezSDK(): Promise<void>;
+    "#;
 
     let entry_file = out_path.join("index.js");
     std::fs::write(&entry_file, entry_content).with_context(|| {
@@ -525,6 +529,8 @@ fn update_web_package_json(out_path: &Path) -> Result<()> {
             "default": "./storage/index.js"
         }
     });
+
+    package_json["types"] = serde_json::Value::String("index.d.ts".to_string());
 
     // Add storage files to the files array
     if let Some(files) = package_json.get_mut("files") {
