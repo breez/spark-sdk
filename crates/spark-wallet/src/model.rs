@@ -1,4 +1,7 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    fmt::Display,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use bitcoin::{Transaction, secp256k1::PublicKey};
 use serde::{Deserialize, Serialize};
@@ -21,6 +24,16 @@ pub enum WalletEvent {
     StreamDisconnected,
     Synced,
     TransferClaimed(WalletTransfer),
+}
+
+impl Display for WalletEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let WalletEvent::TransferClaimed(transfer) = self {
+            write!(f, "TransferClaimed({})", transfer.id)
+        } else {
+            write!(f, "{:?}", self)
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

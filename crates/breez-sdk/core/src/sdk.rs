@@ -21,7 +21,7 @@ use spark_wallet::{
     SparkWallet, WalletEvent, WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
-use tracing::{error, info};
+use tracing::{error, info, trace};
 use web_time::{Duration, SystemTime};
 
 use tokio::sync::watch;
@@ -186,7 +186,8 @@ impl BreezSdk {
                     event = subscription.recv() => {
                         match event {
                             Ok(event) => {
-                                info!("Received event: {event:?}");
+                                info!("Received event: {event}");
+                                trace!("Received event: {:?}", event);
                                 sdk.handle_wallet_event(event);
                             }
                             Err(e) => {

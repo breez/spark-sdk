@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use bitcoin::secp256k1::PublicKey;
 use tokio::time::sleep;
 use tokio_with_wasm::alias as tokio;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     events::{EventPublisher, models::SparkEvent},
@@ -87,11 +87,12 @@ pub async fn subscribe_server_events<S>(
 
             let spark_event = match event {
                 Event::Transfer(transfer_event) => {
-                    debug!("Received transfer event: {:?}", transfer_event);
                     let Some(transfer) = transfer_event.transfer else {
                         warn!("Received empty transfer event, skipping");
                         continue;
                     };
+                    debug!("Received transfer event with transfer id {}", transfer.id);
+                    trace!("Received transfer event with transfer: {:?}", transfer);
                     let transfer: Transfer = match transfer.try_into() {
                         Ok(transfer) => transfer,
                         Err(e) => {
@@ -102,11 +103,12 @@ pub async fn subscribe_server_events<S>(
                     SparkEvent::Transfer(Box::new(transfer))
                 }
                 Event::Deposit(deposit_event) => {
-                    debug!("Received deposit event: {:?}", deposit_event);
                     let Some(deposit) = deposit_event.deposit else {
                         warn!("Received empty deposit event, skipping");
                         continue;
                     };
+                    debug!("Received deposit event with tree node id {}", deposit.id);
+                    trace!("Received deposit event with tree node: {:?}", deposit);
                     let deposit: TreeNode = match deposit.try_into() {
                         Ok(deposit) => deposit,
                         Err(e) => {
@@ -122,7 +124,8 @@ pub async fn subscribe_server_events<S>(
                 }
             };
 
-            debug!("Emitting spark event: {:?}", spark_event);
+            debug!("Emitting spark event: {spark_event}");
+            trace!("Emitting spark event: {spark_event:?}");
             if publisher.send(spark_event).is_err() {
                 error!(
                     "Failed to send spark event, all receivers dropped. Quitting event subscription."
