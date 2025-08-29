@@ -1,0 +1,74 @@
+use std::fs;
+use std::path::PathBuf;
+
+use anyhow::Result;
+use breez_sdk_spark::*;
+use log::info;
+
+pub(crate) async fn init_sdk() -> Result<BreezSdk> {
+    // ANCHOR: init-sdk
+    let mnemonic = "<mnemonic words>".to_string();
+    // Create the default config
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some("<breez api key>".to_string());
+
+    // Create the default storage
+    let storage = default_storage("./.data".to_string())?;
+
+    // Build the SDK using the config, mnemonic and storage
+    let builder = SdkBuilder::new(config, mnemonic, storage);
+    let sdk = builder.build().await?;
+
+    // ANCHOR_END: init-sdk
+    Ok(sdk)
+}
+
+pub(crate) async fn getting_started_node_info(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: fetch-balance
+    let info = sdk.get_info(GetInfoRequest {}).await?;
+    let balance_sats = info.balance_sats;
+    // ANCHOR_END: fetch-balance
+    info!("Balance: {balance_sats} sats");
+    Ok(())
+}
+
+pub(crate) fn getting_started_logging(data_dir: String) -> Result<()> {
+    // ANCHOR: logging
+    let data_dir_path = PathBuf::from(&data_dir);
+    fs::create_dir_all(data_dir_path)?;
+
+    init_logging(Some(data_dir), None, None)?;
+    // ANCHOR_END: logging
+    Ok(())
+}
+
+// ANCHOR: add-event-listener
+pub(crate) struct SdkEventListener {}
+impl EventListener for SdkEventListener {
+    fn on_event(&self, e: SdkEvent) {
+        info!("Received event: {e:?}");
+    }
+}
+
+pub(crate) fn add_event_listener(
+    sdk: &BreezSdk,
+    listener: Box<SdkEventListener>,
+) -> Result<String> {
+    let listener_id = sdk.add_event_listener(listener);
+    Ok(listener_id)
+}
+// ANCHOR_END: add-event-listener
+
+// ANCHOR: remove-event-listener
+pub(crate) fn remove_event_listener(sdk: &BreezSdk, listener_id: &str) -> Result<()> {
+    sdk.remove_event_listener(listener_id);
+    Ok(())
+}
+// ANCHOR_END: remove-event-listener
+
+// ANCHOR: disconnect
+pub(crate) fn disconnect(sdk: &BreezSdk) -> Result<()> {
+    sdk.disconnect()?;
+    Ok(())
+}
+// ANCHOR_END: disconnect

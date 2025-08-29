@@ -11,28 +11,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup build
-        uses: ./.github/actions/setup-build
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build
-        run: make build-target-${{ matrix.target }}
-
-      - name: Check git status
-        uses: ./.github/actions/check-git-status
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -117,3 +95,21 @@ jobs:
 
       - name: Check git status
         uses: ./.github/actions/check-git-status
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Clippy
+        working-directory: docs/breez-sdk/snippets/rust
+        run: |
+          # Explicitly allow clippy::dead_code lint because the functions aren't called in the docs snippets
+          # Explicitly allow clippy::unused_variables because snippets might have to demonstrate how to get certain variables without using them afterward
+          cargo clippy -- --allow dead_code --allow unused_variables --deny warnings
