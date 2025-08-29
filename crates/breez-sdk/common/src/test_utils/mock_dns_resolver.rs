@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::{collections::VecDeque, sync::Mutex};
+use tracing::debug;
 
 use crate::dns::DnsResolver;
 
@@ -14,7 +15,7 @@ impl MockDnsResolver {
     }
 
     pub fn add_response(&self, response: Vec<String>) -> &Self {
-        println!("Push response: {response:?}");
+        debug!("Push response: {response:?}");
         let mut responses = self.responses.lock().unwrap();
         responses.push_back(response);
         self
@@ -28,7 +29,7 @@ impl DnsResolver for MockDnsResolver {
         let response = responses
             .pop_front()
             .ok_or_else(|| anyhow::anyhow!("No response available for DNS lookup"))?;
-        println!("Pop TXT response for {dns_name}: {response:?}");
+        debug!("Pop TXT response for {dns_name}: {response:?}");
 
         Ok(response)
     }

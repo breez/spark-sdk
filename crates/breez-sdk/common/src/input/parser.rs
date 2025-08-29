@@ -383,7 +383,7 @@ fn parse_bip_21(
         return Ok(None);
     }
 
-    println!("{input}");
+    debug!("{input}");
     let uri = input.to_string();
     let input = &input[BIP_21_PREFIX.len()..];
     let mut bip_21 = Bip21Details {
@@ -396,7 +396,7 @@ fn parse_bip_21(
         None => (input, None),
     };
 
-    println!("{input} - {address}, {params:?}");
+    debug!("{input} - {address}, {params:?}");
 
     if !address.is_empty() {
         let address: Address<NetworkUnchecked> =

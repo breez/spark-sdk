@@ -3,6 +3,8 @@ use std::{
     sync::Mutex,
 };
 
+use tracing::debug;
+
 use crate::{
     error::ServiceConnectivityError,
     rest::{RestClient, RestResponse},
@@ -31,7 +33,7 @@ impl MockRestClient {
     }
 
     pub fn add_response(&self, response: MockResponse) -> &Self {
-        println!("Push response: {response:?}");
+        debug!("Push response: {response:?}");
         let mut responses = self.responses.lock().unwrap();
         responses.push_back(response);
         self
@@ -49,7 +51,7 @@ impl RestClient for MockRestClient {
         let response = responses.pop_front().ok_or_else(|| {
             ServiceConnectivityError::Other(String::from("No response available for GET request"))
         })?;
-        println!("Pop GET response: {response:?}");
+        debug!("Pop GET response: {response:?}");
         let status = response.status_code;
         let body = response.text;
 
@@ -66,7 +68,7 @@ impl RestClient for MockRestClient {
         let response = responses.pop_front().ok_or_else(|| {
             ServiceConnectivityError::Other(String::from("No response available for POST request"))
         })?;
-        println!("Pop POST response: {response:?}");
+        debug!("Pop POST response: {response:?}");
         let status = response.status_code;
         let body = response.text;
 
