@@ -55,7 +55,7 @@ build-android: install-uniffi-bindgen-gobley build-ndk-release-target-aarch64-li
 		--crate-configs breez_sdk_spark_bindings=./uniffi.toml \
 		--crate-configs breez_sdk_spark=../core/uniffi.toml \
 		--crate-configs breez_sdk_common=../common/uniffi.toml \
-		$(TARGET_DIR)/aarch64-linux-android/release/$(BIN_NAME).so
+		$(TARGET_DIR)aarch64-linux-android/release/$(BIN_NAME).so
 
 package-android: build-android
 	rm $(FFI_DIR)kotlin/jniLibs/**/*common.so  $(FFI_DIR)kotlin/jniLibs/**/*spark.so
@@ -67,19 +67,19 @@ package-android: build-android
 
 ## Apple
 build-ios-universal: build-release-target-aarch64-apple-ios build-release-target-x86_64-apple-ios build-release-target-aarch64-apple-ios-sim
-	mkdir -p $(TARGET_DIR)/ios-universal/release
-	mkdir -p $(TARGET_DIR)/ios-universal-sim/release
+	mkdir -p $(TARGET_DIR)ios-universal/release
+	mkdir -p $(TARGET_DIR)ios-universal-sim/release
 	# build universal lib for arm device and x86 sim
-	lipo -create -output $(TARGET_DIR)/ios-universal/release/$(BIN_NAME).a $(TARGET_DIR)/aarch64-apple-ios/release/$(BIN_NAME).a $(TARGET_DIR)/x86_64-apple-ios/release/$(BIN_NAME).a
+	lipo -create -output $(TARGET_DIR)ios-universal/release/$(BIN_NAME).a $(TARGET_DIR)aarch64-apple-ios/release/$(BIN_NAME).a $(TARGET_DIR)x86_64-apple-ios/release/$(BIN_NAME).a
 	# build universal lib for arm sim and x86 sim
-	lipo -create -output $(TARGET_DIR)/ios-universal-sim/release/$(BIN_NAME).a $(TARGET_DIR)/aarch64-apple-ios-sim/release/$(BIN_NAME).a $(TARGET_DIR)/x86_64-apple-ios/release/$(BIN_NAME).a
+	lipo -create -output $(TARGET_DIR)ios-universal-sim/release/$(BIN_NAME).a $(TARGET_DIR)aarch64-apple-ios-sim/release/$(BIN_NAME).a $(TARGET_DIR)x86_64-apple-ios/release/$(BIN_NAME).a
 
 build-darwin-universal: install-target-aarch64-apple-darwin install-target-x86_64-apple-darwin
-	mkdir -p $(TARGET_DIR)/darwin-universal/release
+	mkdir -p $(TARGET_DIR)darwin-universal/release
 	cargo lipo --release --targets aarch64-apple-darwin
 	cargo lipo --release --targets x86_64-apple-darwin
-	lipo -create -output $(TARGET_DIR)/darwin-universal/release/$(BIN_NAME).dylib $(TARGET_DIR)/aarch64-apple-darwin/release/$(BIN_NAME).dylib $(TARGET_DIR)/x86_64-apple-darwin/release/$(BIN_NAME).dylib
-	lipo -create -output $(TARGET_DIR)/darwin-universal/release/$(BIN_NAME).a $(TARGET_DIR)/aarch64-apple-darwin/release/$(BIN_NAME).a $(TARGET_DIR)/x86_64-apple-darwin/release/$(BIN_NAME).a
+	lipo -create -output $(TARGET_DIR)darwin-universal/release/$(BIN_NAME).dylib $(TARGET_DIR)aarch64-apple-darwin/release/$(BIN_NAME).dylib $(TARGET_DIR)x86_64-apple-darwin/release/$(BIN_NAME).dylib
+	lipo -create -output $(TARGET_DIR)darwin-universal/release/$(BIN_NAME).a $(TARGET_DIR)aarch64-apple-darwin/release/$(BIN_NAME).a $(TARGET_DIR)x86_64-apple-darwin/release/$(BIN_NAME).a
 
 package-xcframework: build-ios-universal build-darwin-universal
 	cargo run --features=uniffi/cli --bin uniffi-bindgen generate --library $(BIN_PATH) --no-format --language swift -o $(FFI_DIR)swift
@@ -90,7 +90,28 @@ package-xcframework: build-ios-universal build-darwin-universal
 	cp $(FFI_DIR)swift/breez_sdk_*FFI.h langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/Headers
 	cp $(FFI_DIR)swift/breez_sdk_*FFI.h langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/Headers
 	cp $(FFI_DIR)swift/breez_sdk_*FFI.h langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Headers
-	cp $(TARGET_DIR)/aarch64-apple-ios/release/$(BIN_NAME).a langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
-	cp $(TARGET_DIR)/ios-universal-sim/release/$(BIN_NAME).a langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
-	cp $(TARGET_DIR)/darwin-universal/release/$(BIN_NAME).a langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+	cp $(TARGET_DIR)aarch64-apple-ios/release/$(BIN_NAME).a langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+	cp $(TARGET_DIR)ios-universal-sim/release/$(BIN_NAME).a langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+	cp $(TARGET_DIR)darwin-universal/release/$(BIN_NAME).a langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
 	cd langs/swift && swift build
+
+## Kotlin Multiplatform
+KMP_BASE := langs/kotlin-multiplatform/breez-sdk-spark-kmp/src
+KOTLIN_PACKAGE := kotlin/breez_sdk_spark
+
+build-kotlin-multiplatform: install-uniffi-bindgen-gobley build-ios-universal build-ndk-release-target-aarch64-linux-android build-ndk-release-target-armv7-linux-androideabi build-ndk-release-target-i686-linux-android build-ndk-release-target-x86_64-linux-android
+	gobley-uniffi-bindgen --library -o $(FFI_DIR)kmp \
+		--crate-configs breez_sdk_spark_bindings=./uniffi.kotlin-multiplatform.toml \
+		--crate-configs breez_sdk_spark=../core/uniffi.kotlin-multiplatform.toml \
+		--crate-configs breez_sdk_common=../common/uniffi.kotlin-multiplatform.toml \
+		$(TARGET_DIR)aarch64-linux-android/release/$(BIN_NAME).so
+
+package-kotlin-multiplatform: build-kotlin-multiplatform
+	mkdir -p $(KMP_BASE)/lib/ios-arm64 $(KMP_BASE)/lib/ios-simulator-arm64 $(KMP_BASE)/lib/ios-simulator-x64
+	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
+	rm -f $(FFI_DIR)kotlin/jniLibs/**/*common.so $(FFI_DIR)kotlin/jniLibs/**/*spark.so
+	cp -r $(FFI_DIR)kotlin/jniLibs/ $(KMP_BASE)/androidMain/jniLibs/
+	cp $(TARGET_DIR)aarch64-apple-ios/release/$(BIN_NAME).a $(KMP_BASE)/lib/ios-arm64/
+	cp $(TARGET_DIR)aarch64-apple-ios-sim/release/$(BIN_NAME).a $(KMP_BASE)/lib/ios-simulator-arm64/
+	cp $(TARGET_DIR)x86_64-apple-ios/release/$(BIN_NAME).a $(KMP_BASE)/lib/ios-simulator-x64/
+	cd langs/kotlin-multiplatform && ./gradlew :breez-sdk-spark-kmp:assemble

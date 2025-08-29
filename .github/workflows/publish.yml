@@ -14,7 +14,7 @@ on:
         description: 'Array of packages to publish (remove what you do not want)'
         required: true
         type: string
-        default: '["android", "python", "swift", "wasm"]'
+        default: '["android", "kotlin-multiplatform", "python", "swift", "wasm"]'
       use-dummy-binaries:
         description: 'Should use dummies for the SDK binaries. Default = false.'
         required: false
@@ -43,7 +43,7 @@ on:
         description: 'Array of packages to publish (remove what you do not want)'
         required: true
         type: string
-        default: '["android", "python", "swift", "wasm"]'
+        default: '["android", "kotlin-multiplatform", "python", "swift", "wasm"]'
       use-dummy-binaries:
         description: 'Should use dummies for the SDK binaries. Default = false.'
         required: false
@@ -63,6 +63,7 @@ jobs:
       repository: ${{ inputs.repository || github.repository }}
       ref: ${{ inputs.ref || github.sha }}
       android-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'android') && inputs.package-version) || ''}}
+      kotlin-multiplatform-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'kotlin-multiplatform') && inputs.package-version) || '' }}
       python-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'python') && inputs.package-version) || '' }}
       swift-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'swift') && inputs.package-version) || '' }}
       wasm-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'wasm') && inputs.package-version) || '' }}
@@ -82,18 +83,20 @@ jobs:
       # to set these variables here to `true` or `false` 
       # (e.g. bindings-windows: true) if you want to test something.
       repository: ${{ needs.pre-setup.outputs.repository }}
-      bindings-android: ${{ !!needs.pre-setup.outputs.android-package-version }}
+      bindings-android: ${{ !!needs.pre-setup.outputs.kotlin-multiplatform-package-version || !!needs.pre-setup.outputs.android-package-version }}
       bindings-darwin: ${{ !!needs.pre-setup.outputs.python-package-version || !!needs.pre-setup.outputs.swift-package-version }}
-      bindings-ios: ${{ !!needs.pre-setup.outputs.swift-package-version }}
+      bindings-ios: ${{ !!needs.pre-setup.outputs.kotlin-multiplatform-package-version || !!needs.pre-setup.outputs.swift-package-version }}
       bindings-linux: ${{ !!needs.pre-setup.outputs.python-package-version }}
       bindings-wasm: ${{ !!needs.pre-setup.outputs.wasm-package-version }}
       bindings-windows: ${{ !!needs.pre-setup.outputs.python-package-version }}
       android: ${{ !!needs.pre-setup.outputs.android-package-version }}
+      kotlin-multiplatform: ${{ !!needs.pre-setup.outputs.kotlin-multiplatform-package-version }}
       python: ${{ !!needs.pre-setup.outputs.python-package-version }}
       swift: ${{ !!needs.pre-setup.outputs.swift-package-version }}
       wasm: ${{ !!needs.pre-setup.outputs.wasm-package-version }}
       ref: ${{ needs.pre-setup.outputs.ref }}
       android-package-version: ${{ needs.pre-setup.outputs.android-package-version || '0.0.2' }}
+      kotlin-multiplatform-package-version: ${{ needs.pre-setup.outputs.kotlin-multiplatform-package-version || '0.0.2' }}
       python-package-version: ${{ needs.pre-setup.outputs.python-package-version || '0.0.2' }}
       swift-package-version: ${{ needs.pre-setup.outputs.swift-package-version || '0.0.2' }}
       wasm-package-version: ${{ needs.pre-setup.outputs.wasm-package-version || '0.0.2' }}
@@ -166,6 +169,22 @@ jobs:
       repository: ${{ needs.setup.outputs.repository }}
       ref: ${{ needs.setup.outputs.ref }}
       package-version: ${{ needs.setup.outputs.android-package-version }}
+      publish: ${{ needs.setup.outputs.publish == 'true' }}
+    secrets:
+      BREEZ_MVN_USERNAME: ${{ secrets.BREEZ_MVN_USERNAME }}
+      BREEZ_MVN_PASSWORD: ${{ secrets.BREEZ_MVN_PASSWORD }}
+ 
+  publish-kotlin-multiplatform:
+    needs:
+      - setup
+      - build-bindings-android
+      - build-bindings-ios
+    if: ${{ needs.setup.outputs.kotlin-multiplatform == 'true' }}
+    uses: ./.github/workflows/publish-kotlin-multiplatform.yml
+    with:
+      repository: ${{ needs.setup.outputs.repository }}
+      ref: ${{ needs.setup.outputs.ref }}
+      package-version: ${{ needs.setup.outputs.kotlin-multiplatform-package-version }}
       publish: ${{ needs.setup.outputs.publish == 'true' }}
     secrets:
       BREEZ_MVN_USERNAME: ${{ secrets.BREEZ_MVN_USERNAME }}
