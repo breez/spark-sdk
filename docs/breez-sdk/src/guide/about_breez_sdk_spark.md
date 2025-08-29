@@ -41,6 +41,6 @@ Head over to the <a href="https://github.com/breez/spark-sdk" target="_blank">Br
 
 
 ## Ready to Light Up Your App? 
-**→ [Get Started](getting_started.md)** 
+**→ [Get Started](/guide/getting_started.md)** 
 
 
