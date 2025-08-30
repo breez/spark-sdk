@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bitcoin::{
     Address, Transaction,
@@ -20,8 +16,8 @@ use spark::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
         LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment, LightningService,
         QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager, TokenService,
-        TokenTransaction, Transfer, TransferId, TransferService, TransferTokenOutput,
-        UnilateralExitService, Utxo,
+        TokenTransaction, Transfer, TransferService, TransferTokenOutput, UnilateralExitService,
+        Utxo,
     },
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer},
@@ -763,14 +759,31 @@ async fn claim_pending_transfers<S: Signer>(
     tree_service: &Arc<TreeService<S>>,
     ssp_client: &Arc<ServiceProvider<S>>,
 ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
-    trace!("Claiming all pending transfers");
+    debug!("Claiming all pending transfers");
     let transfers = transfer_service
         .query_pending_receiver_transfers(None)
         .await?;
-    trace!("There are {} pending transfers", transfers.len());
-    for transfer in &transfers {
-        claim_transfer(transfer, transfer_service, tree_service).await?;
+
+    if transfers.is_empty() {
+        debug!("No pending transfers found");
+        return Ok(vec![]);
     }
+
+    debug!(
+        "Retrieved {} pending transfers, starting claims",
+        transfers.len()
+    );
+
+    for (i, transfer) in transfers.iter().enumerate() {
+        debug!("Claiming transfer: {}/{}", i + 1, transfers.len());
+        claim_transfer(transfer, transfer_service, tree_service).await?;
+        debug!(
+            "Successfully claimed transfer: {}/{}",
+            i + 1,
+            transfers.len()
+        );
+    }
+    debug!("Claimed all transfers, creating wallet transfers");
     create_transfers(transfers, ssp_client, our_pubkey).await
 }
 
@@ -876,55 +889,23 @@ impl<S: Signer> BackgroundProcessor<S> {
             error!("Error refreshing leaves on startup: {:?}", e);
         }
 
-        let ignore_transfers = match claim_pending_transfers(
-            self.identity_public_key,
-            &self.transfer_service,
-            &self.tree_service,
-            &self.ssp_client,
-        )
-        .await
-        {
-            Ok(transfers) => {
-                debug!("Claimed {} pending transfers on startup", transfers.len());
-                for transfer in &transfers {
-                    self.event_manager
-                        .notify_listeners(WalletEvent::TransferClaimed(transfer.clone()));
-                }
-                transfers.into_iter().map(|t| t.id).collect()
-            }
-            Err(e) => {
-                debug!("Error claiming pending transfers on startup: {:?}", e);
-                HashSet::new()
-            }
-        };
-
-        self.event_manager.notify_listeners(WalletEvent::Synced);
-        self.process_events(event_stream, ignore_transfers).await;
+        self.process_events(event_stream).await;
     }
 
-    async fn process_events(
-        &self,
-        mut event_stream: broadcast::Receiver<SparkEvent>,
-        ignore_transfers: HashSet<TransferId>,
-    ) {
+    async fn process_events(&self, mut event_stream: broadcast::Receiver<SparkEvent>) {
         while let Ok(event) = event_stream.recv().await {
-            debug!("Received event: {:?}", event);
-            let result = match event {
-                SparkEvent::Transfer(transfer) => {
-                    if ignore_transfers.contains(&transfer.id) {
-                        debug!("Ignoring transfer event: {:?}", transfer);
-                        continue;
-                    }
-
-                    self.process_transfer_event(*transfer).await
-                }
+            debug!("Received event: {event}");
+            trace!("Received event: {event:?}");
+            let result = match event.clone() {
+                SparkEvent::Transfer(transfer) => self.process_transfer_event(*transfer).await,
                 SparkEvent::Deposit(deposit) => self.process_deposit_event(*deposit).await,
                 SparkEvent::Connected => self.process_connected_event().await,
                 SparkEvent::Disconnected => self.process_disconnected_event().await,
             };
+            debug!("Processed event: {event}");
 
             if let Err(e) = result {
-                error!("Error processing event: {:?}", e);
+                error!("Error processing event: {e:?}");
             }
         }
 
@@ -962,6 +943,33 @@ impl<S: Signer> BackgroundProcessor<S> {
     async fn process_connected_event(&self) -> Result<(), SparkWalletError> {
         self.event_manager
             .notify_listeners(WalletEvent::StreamConnected);
+
+        match claim_pending_transfers(
+            self.identity_public_key,
+            &self.transfer_service,
+            &self.tree_service,
+            &self.ssp_client,
+        )
+        .await
+        {
+            Ok(transfers) => {
+                debug!(
+                    "Claimed {} pending transfers on stream reconnection",
+                    transfers.len()
+                );
+                for transfer in &transfers {
+                    self.event_manager
+                        .notify_listeners(WalletEvent::TransferClaimed(transfer.clone()));
+                }
+            }
+            Err(e) => {
+                debug!(
+                    "Error claiming pending transfers on stream reconnection: {:?}",
+                    e
+                );
+            }
+        };
+        self.event_manager.notify_listeners(WalletEvent::Synced);
         Ok(())
     }
 

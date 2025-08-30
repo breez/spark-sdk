@@ -75,7 +75,7 @@ impl<S: Signer> GraphQLClient<S> {
 
         let status_code = response.status();
         let text = response.text().await?;
-        tracing::debug!("Response: {text:?}");
+        tracing::trace!("Response: {text:?}");
         if status_code.is_client_error() {
             return Err(GraphQLError::Network {
                 reason: text,
@@ -169,7 +169,7 @@ impl<S: Signer> GraphQLClient<S> {
             .decode(&challenge_response.get_challenge.protected_challenge)
             .map_err(|e| GraphQLError::serialization(e.to_string()))?;
 
-        tracing::debug!("Decoded challenge bytes: {}", challenge_bytes.len());
+        tracing::debug!("Decoded challenge bytes length: {}", challenge_bytes.len());
         // Sign the challenge with the identity key
         let signature = self
             .signer
