@@ -250,12 +250,15 @@ impl TryFrom<WalletTransfer> for Payment {
         let details: Option<PaymentDetails> = if let Some(user_request) = transfer.user_request {
             Some(user_request.try_into()?)
         } else {
-            if [
-                TransferType::CooperativeExit,
-                TransferType::PreimageSwap,
-                TransferType::UtxoSwap,
-            ]
-            .contains(&transfer.transfer_type)
+            // in case we have a completed status without user object we want
+            // to keep syncing this payment
+            if status == PaymentStatus::Completed
+                && [
+                    TransferType::CooperativeExit,
+                    TransferType::PreimageSwap,
+                    TransferType::UtxoSwap,
+                ]
+                .contains(&transfer.transfer_type)
             {
                 status = PaymentStatus::Pending;
             }
