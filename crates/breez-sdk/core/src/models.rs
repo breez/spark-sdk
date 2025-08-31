@@ -14,6 +14,12 @@ use std::time::UNIX_EPOCH;
 
 use crate::{SdkError, error::DepositClaimError};
 
+pub struct ConnectRequest {
+    pub config: Config,
+    pub mnemonic: String,
+    pub storage_dir: String,
+}
+
 /// The type of payment
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]

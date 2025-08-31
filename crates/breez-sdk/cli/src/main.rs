@@ -4,9 +4,8 @@ mod persist;
 use crate::commands::CliHelper;
 use crate::persist::CliPersistence;
 use anyhow::{Result, anyhow};
-use bitcoin::hashes::{Hash, sha256};
-use breez_sdk_spark::{EventListener, SdkEvent};
-use breez_sdk_spark::{Network, SdkBuilder, default_config, default_storage};
+use breez_sdk_spark::{BreezSdk, ConnectRequest, EventListener, SdkEvent};
+use breez_sdk_spark::{Network, default_config};
 use clap::Parser;
 use commands::{Command, execute_command};
 use rustyline::Editor;
@@ -88,25 +87,18 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
     }
 
     let mnemonic = persistence.get_or_create_mnemonic()?;
-
-    let path_suffix: String = sha256::Hash::hash(mnemonic.to_string().as_bytes())
-        .to_string()
-        .chars()
-        .take(8)
-        .collect();
-    let wallet_data_dir = data_dir
-        .join(network.to_string().to_lowercase())
-        .join(path_suffix);
-    fs::create_dir_all(&wallet_data_dir)?;
+    fs::create_dir_all(&data_dir)?;
 
     let breez_api_key = std::env::var_os("BREEZ_API_KEY")
         .map(|var| var.into_string().expect("Expected valid API key string"));
     let mut config = default_config(network);
     config.api_key = breez_api_key;
-    let storage = default_storage(wallet_data_dir.to_string_lossy().to_string())?;
-    let sdk = SdkBuilder::new(config, mnemonic.to_string(), storage)
-        .build()
-        .await?;
+    let sdk = BreezSdk::connect(ConnectRequest {
+        config,
+        mnemonic: mnemonic.to_string(),
+        storage_dir: data_dir.to_string_lossy().to_string(),
+    })
+    .await?;
 
     let listener = Box::new(CliEventListener {});
     sdk.add_event_listener(listener);
