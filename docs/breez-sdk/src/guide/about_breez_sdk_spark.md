@@ -19,10 +19,10 @@ It’s a nodeless integration that offers a self-custodial, end-to-end solution 
   
 **Key Features**
 
-- [x] Send and receive Lightning payments 
+- [x] Send and receive Lightning payments
+- [x] Send and receive Spark payments  
 - [x] On-chain interoperability
 - [x] Send LNURL-pay payments
-- [x] Send and receive Spark payments 
 - [x] Keys are only held by users
 - [x] Free open-source solution
 
