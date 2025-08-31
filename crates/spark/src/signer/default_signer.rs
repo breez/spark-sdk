@@ -3,12 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
-use bitcoin::secp256k1::{self, Message, SecretKey, schnorr};
+use bitcoin::secp256k1::{self, All, Keypair, Message, PublicKey, SecretKey, schnorr};
 use bitcoin::{
     hashes::{Hash, sha256},
     key::Secp256k1,
-    secp256k1::All,
-    secp256k1::PublicKey,
 };
 use frost_core::round1::Nonce;
 use frost_secp256k1_tr::keys::{
@@ -121,7 +119,7 @@ fn frost_signing_package(
 
 #[derive(Clone)]
 pub struct DefaultSigner {
-    identity_key: SecretKey,
+    identity_key_pair: Keypair,
     secp: Secp256k1<All>,
     signing_master_key: Xpriv,
     static_deposit_master_key: Xpriv,
@@ -156,12 +154,13 @@ impl DefaultSigner {
         let identity_key = master_key
             .derive_priv(&secp, &identity_derivation_path(network))?
             .private_key;
+        let identity_key_pair = identity_key.keypair(&secp);
         let signing_master_key =
             master_key.derive_priv(&secp, &signing_derivation_path(network))?;
         let static_deposit_master_key =
             master_key.derive_priv(&secp, &static_deposit_derivation_path(network))?;
         Ok(DefaultSigner {
-            identity_key,
+            identity_key_pair,
             secp,
             signing_master_key,
             static_deposit_master_key,
@@ -197,7 +196,7 @@ impl DefaultSigner {
     }
 
     fn decrypt_message_ecies(&self, ciphertext: &[u8]) -> Result<Vec<u8>, SignerError> {
-        ecies::decrypt(&self.identity_key.secret_bytes(), ciphertext)
+        ecies::decrypt(&self.identity_key_pair.secret_bytes(), ciphertext)
             .map_err(|e| SignerError::Generic(format!("failed to decrypt: {e}")))
     }
 
@@ -247,7 +246,7 @@ impl Signer for DefaultSigner {
         let digest = sha256::Hash::hash(message.as_ref());
         let sig = self.secp.sign_ecdsa(
             &Message::from_digest(digest.to_byte_array()),
-            &self.identity_key,
+            &self.identity_key_pair.secret_key(),
         );
         Ok(sig)
     }
@@ -264,10 +263,9 @@ impl Signer for DefaultSigner {
         }
         let mut hash_array = [0u8; 32];
         hash_array.copy_from_slice(hash_bytes);
-        let sig = self.secp.sign_schnorr_no_aux_rand(
-            &Message::from_digest(hash_array),
-            &self.identity_key.keypair(&self.secp),
-        );
+        let sig = self
+            .secp
+            .sign_schnorr_no_aux_rand(&Message::from_digest(hash_array), &self.identity_key_pair);
         Ok(sig)
     }
 
@@ -308,7 +306,7 @@ impl Signer for DefaultSigner {
     }
 
     fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
-        Ok(self.identity_key.public_key(&self.secp))
+        Ok(self.identity_key_pair.public_key())
     }
 
     fn get_static_deposit_private_key_source(
