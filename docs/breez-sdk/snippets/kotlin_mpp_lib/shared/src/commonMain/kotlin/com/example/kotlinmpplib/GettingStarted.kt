@@ -11,15 +11,40 @@ class GettingStarted {
         config.apiKey = "<breez api key>"
 
         try {
-            // Create the default storage
-            val storage = defaultStorage("./.data")
-
-            val builder = SdkBuilder(config, mnemonic, storage)
-            val sdk = builder.build()
+            // Connect to the SDK using the simplified connect method
+            val sdk = BreezSdk.connect(ConnectRequest(
+                config = config,
+                mnemonic = mnemonic,
+                storageDir = "./.data"
+            ))
         } catch (e: Exception) {
             // handle error
         }
         // ANCHOR_END: init-sdk
+    }
+
+    suspend fun initSdkAdvanced() {
+        // ANCHOR: init-sdk-advanced
+
+        val mnemonic = "<mnemonic words>"
+        // Create the default config
+        val config = defaultConfig(Network.MAINNET)
+        config.apiKey = "<breez api key>"
+
+        try {
+            // Create the default storage
+            val storage = defaultStorage("./.data")
+
+            val builder = SdkBuilder(config, mnemonic, storage)
+            
+            // You can also pass your custom implementations:
+            // builder.withChainService(<your chain service implementation>)
+            // builder.withRestClient(<your rest client implementation>)
+            val sdk = builder.build()
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: init-sdk-advanced
     }
 
     suspend fun fetchBalance(sdk: BreezSdk) {

@@ -12,14 +12,36 @@ pub(crate) async fn init_sdk() -> Result<BreezSdk> {
     let mut config = default_config(Network::Mainnet);
     config.api_key = Some("<breez api key>".to_string());
 
+    // Connect to the SDK using the simplified connect method
+    let sdk = BreezSdk::connect(ConnectRequest {
+        config,
+        mnemonic,
+        storage_dir: "./.data".to_string(),
+    }).await?;
+
+    // ANCHOR_END: init-sdk
+    Ok(sdk)
+}
+
+pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
+    // ANCHOR: init-sdk-advanced
+    let mnemonic = "<mnemonic words>".to_string();
+    // Create the default config
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some("<breez api key>".to_string());
+
     // Create the default storage
     let storage = default_storage("./.data".to_string())?;
 
     // Build the SDK using the config, mnemonic and storage
     let builder = SdkBuilder::new(config, mnemonic, storage);
+
+    // You can also pass your custom implementations:
+    // let builder = builder.with_chain_service(<your chain service implementation>)
+    // let builder = builder.with_rest_client(<your rest client implementation>)
     let sdk = builder.build().await?;
 
-    // ANCHOR_END: init-sdk
+    // ANCHOR_END: init-sdk-advanced
     Ok(sdk)
 }
 

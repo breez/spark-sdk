@@ -1,5 +1,5 @@
 import {
-  type BreezSdk,
+  BreezSdk,
   defaultConfig,
   defaultStorage,
   initLogging,
@@ -9,14 +9,34 @@ import {
 } from '@breeztech/breez-sdk-spark'
 
 // Init stub
-const init = async () => {}
+const init = async () => { }
 
 const exampleGettingStarted = async () => {
   // ANCHOR: init-sdk
   // Call init when using the SDK in a web environment before calling any other SDK
   // methods. This is not needed when using the SDK in a Node.js/Deno environment.
   //
-  // import init, { defaultConfig, connect } from '@breeztech/breez-sdk-spark'
+  // import init, { BreezSdk, defaultConfig } from '@breeztech/breez-sdk-spark'
+  await init()
+
+  const mnemonic = '<mnemonic words>'
+  // Create the default config
+  let config = defaultConfig('mainnet')
+  config.apiKey = '<breez api key>'
+
+  // Connect to the SDK using the simplified connect method
+  const sdk = await BreezSdk.connect({
+    config,
+    mnemonic,
+    storageDir: './.data'
+  })
+  // ANCHOR_END: init-sdk
+}
+
+const exampleGettingStartedAdvanced = async () => {
+  // ANCHOR: init-sdk-advanced
+  // Call init when using the SDK in a web environment before calling any other SDK
+  // methods. This is not needed when using the SDK in a Node.js/Deno environment.
   await init()
 
   const mnemonic = '<mnemonic words>'
@@ -29,8 +49,12 @@ const exampleGettingStarted = async () => {
 
   // Build the SDK using the config, mnemonic and storage
   const builder = SdkBuilder.new(config, mnemonic, storage)
+
+  // You can also pass your custom implementations:
+  // builder = builder.withChainService(<your chain service implementation>)
+  // builder = builder.withRestClient(<your rest client implementation>)
   const sdk = await builder.build()
-  // ANCHOR_END: init-sdk
+  // ANCHOR_END: init-sdk-advanced
 }
 
 const exampleFetchNodeInfo = async (sdk: BreezSdk) => {

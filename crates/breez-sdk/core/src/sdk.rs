@@ -156,6 +156,15 @@ impl BreezSdk {
         Ok(sdk)
     }
 
+    /// Connects to the Spark network using the provided configuration and mnemonic.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The connection request object
+    ///
+    /// # Returns
+    ///
+    /// Result containing either the initialized `BreezSdk` or an `SdkError`
     #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     pub async fn connect(request: crate::ConnectRequest) -> Result<Self, SdkError> {
         let db_path = std::path::PathBuf::from_str(&request.storage_dir)?;
