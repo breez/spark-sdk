@@ -3,20 +3,20 @@
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.connect">API docs</a>
 </h1>
 
-## Connect
+## Basic Initialization
 
-The simplest way to initialize the SDK is using the `BreezSdk::connect` method. This method requires:
-- The network, mnemonic and Breez API key being used
-- A storage directory path where the SDK will manage its data
+The easiest way to initialize the SDK is with the `connect` method. This method requires:
+- The network, mnemonic, and Breez API key you intend to use  
+- A storage directory path where the SDK can manage its data  
 
 <div class="warning">
 <h4>Developer note</h4>
-For Wasm Web, SDK storage is managed using IndexedDB.
+For WASM Web, SDK storage is managed using IndexedDB.
 </div>
 
-The SDK uses the storage to store the state of the SDK instance. When handling multiple instances of the SDK, each instance needs to have a different storage directory defined.
+The storage is used to persist the SDK’s state. If you run multiple SDK instances, each must have its own unique storage directory.
 
-Now you are ready to interact with the SDK.
+Once connected, you’re ready to start interacting with the SDK.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
@@ -67,16 +67,16 @@ Now you are ready to interact with the SDK.
 <div class="warning">
 <h4>Developer note</h4>
 
-Some platforms may require that you use an application specific directory that is writable within the application sandbox. For example applications running on Android or iOS.
+On some platforms (e.g., Android, iOS), you must use an application-specific writable directory within the app’s sandbox for SDK storage.
 
 </div>
 
-## Advanced Connect
+## Advanced Initialization
 
-For more advanced use cases where you need fine-grained control over the SDK configuration, you can use the SDK Builder. When using the SDK Builder you can configure:
-- How the SDK storage is managed (bring-your-own storage implementation)
-- The chain service to use (bring-your-own or use the SDK's default)
-- The REST client to use with LNURL requests (bring-your-own or use the SDK's default)
+For advanced use cases where you need more control, you can configure the SDK using the Builder pattern. With the SDK Builder you can define:
+- Custom storage management (bring your own implementation)
+- Which chain service to use (custom or the SDK’s default)
+- Which REST client to use for LNURL requests (custom or the SDK’s default)
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
@@ -129,9 +129,9 @@ For more advanced use cases where you need fine-grained control over the SDK con
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.disconnect">API docs</a>
 </h2>
 
-Once you are done using the SDK, you can call the `disconnect` method to free up the resources which are currently in use.
+When you’re done using the SDK, call the disconnect method to release any resources in use.
 
-This is especially useful in cases where the SDK has to be re-instantiated, for example when you need to change the mnemonic and/or configuration.
+This is particularly useful if you need to re-instantiate the SDK, such as when changing the mnemonic or updating configuration.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
