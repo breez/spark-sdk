@@ -58,6 +58,7 @@ When receiving via Lightning, we can generate a BOLT11 invoice to be paid. Setti
 ### Bitcoin
 
 For onchain payments you can use the static Bitcoin address to receive payments.
+The SDK monitors the specified address for new UTXOs and automatically initiates the claim process when funds are detected.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
