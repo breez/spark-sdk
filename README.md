@@ -88,29 +88,23 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 
 - [x]  Send/Receive Lightning payments
 - [x]  Send/Receive Spark payments
+- [ ]  Send/Receive via on-chain address
 - [x]  CLI Interface
-- [x]  Foreign languages bindings
-- [x]  Pay BTC on-chain
-- [x]  Receive via on-chain address
-- [x]  Send LNURL-Pay
+- [x]  JS, Swift, Kotlin & Python languages bindings
+- [x]  Send via LNURL-Pay
 - [x]  Send to a Lightning address
-- [x]  WebAssembly
+- [x]  WebAssembly support
+- [ ]  Flutter bindings 
 - [ ]  Support Spark tokens
-- [ ]  Fiat on-ramp
-- [ ]  Webhook for receiving payments
-- [ ]  Export/Import SDK data
-- [ ]  Offline receive via notifications
+- [ ]  Receive via LNURL-Pay w/ offline & Lightning address support
 - [ ]  Real-time sync
 - [ ]  External input parsers
-- [ ]  BIP353 pay codes
-- [ ]  Receive LNURL-Pay
 - [ ]  LNURL-Withdraw
-- [ ]  LNURL-Auth
-- [ ]  Receive via Lightning address
+- [ ]  LNURL-Auth 
 - [ ]  Bolt12 
 - [ ]  WebLN
 - [ ]  NWC
-- [ ]  Add fees via a dedicated portal
+- [ ]  Add additional fees via a dedicated portal
 
 
 
