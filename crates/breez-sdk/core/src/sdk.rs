@@ -20,11 +20,11 @@ use spark_wallet::{
     DefaultSigner, ExitSpeed, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress,
     SparkWallet, WalletEvent, WalletTransfer,
 };
-use std::{str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc, thread::sleep};
 use tracing::{error, info, trace};
 use web_time::{Duration, SystemTime};
 
-use tokio::sync::watch;
+use tokio::{select, sync::watch};
 use tokio_with_wasm::alias as tokio;
 use web_time::Instant;
 use x509_parser::parse_x509_certificate;
@@ -189,9 +189,6 @@ impl BreezSdk {
     /// 2. `monitor_deposits`: monitors for new deposits
     pub(crate) fn start(&self) {
         self.periodic_sync();
-        if let Err(e) = self.sync_trigger.send(SyncType::Full) {
-            error!("Failed to execute initial sync: {e:?}");
-        }
     }
 
     fn periodic_sync(&self) {
@@ -253,15 +250,15 @@ impl BreezSdk {
             }
             WalletEvent::StreamConnected => {
                 info!("Stream connected");
-                if let Err(e) = self.sync_trigger.send(SyncType::Full) {
-                    error!("Failed to sync wallet: {e:?}");
-                }
             }
             WalletEvent::StreamDisconnected => {
                 info!("Stream disconnected");
             }
             WalletEvent::Synced => {
                 info!("Synced");
+                if let Err(e) = self.sync_trigger.send(SyncType::Full) {
+                    error!("Failed to sync wallet: {e:?}");
+                }
             }
             WalletEvent::TransferClaimed(transfer) => {
                 info!("Transfer claimed");
@@ -280,12 +277,16 @@ impl BreezSdk {
         let start_time = Instant::now();
         if let SyncType::Full = sync_type {
             // Sync with the Spark network
+            info!("sync_wallet_internal: Syncing with Spark network");
             self.spark_wallet.sync().await?;
+            info!("sync_wallet_internal: Synced with Spark network completed");
         }
         self.sync_payments_to_storage().await?;
+        info!("sync_wallet_internal: Synced payments to storage completed");
         self.check_and_claim_static_deposits().await?;
+        info!("sync_wallet_internal: Checked and claimed static deposits completed");
         let elapsed = start_time.elapsed();
-        info!("Wallet sync completed in {elapsed:?}");
+        info!("sync_wallet_internal: Wallet sync completed in {elapsed:?}");
         self.event_emitter.emit(&SdkEvent::Synced {});
         Ok(())
     }
@@ -818,6 +819,7 @@ impl BreezSdk {
                     .await?;
                 let payment = match payment_response {
                     PayLightningInvoiceResult::LightningPayment(payment) => {
+                        self.poll_lightning_send_payment(&payment.id);
                         Payment::from_lightning(payment, request.prepare_response.amount_sats)?
                     }
                     PayLightningInvoiceResult::Transfer(payment) => payment.try_into()?,
@@ -862,6 +864,39 @@ impl BreezSdk {
             }
         }
         res
+    }
+
+    // Pools the lightning send payment untill it is in completed state.
+    fn poll_lightning_send_payment(&self, payment_id: &str) {
+        const MAX_POLL_ATTEMPTS: u32 = 10;
+
+        let spark_wallet = self.spark_wallet.clone();
+        let sync_trigger = self.sync_trigger.clone();
+        let payment_id = payment_id.to_string();
+        let mut shutdown = self.shutdown_receiver.clone();
+
+        tokio::spawn(async move {
+            for _ in 0..MAX_POLL_ATTEMPTS {
+                select! {
+                  _ = shutdown.changed() => {
+                    info!("Shutdown signal received");
+                    return;
+                  },
+                    p = spark_wallet.fetch_lightning_send_payment(&payment_id) => {
+                      if let Ok(Some(p)) = p {
+                        if p.payment_preimage.is_some() {
+                            info!("Pollling payment preimage found");
+                            if let Err(e) = sync_trigger.send(SyncType::PaymentsOnly) {
+                                error!("Failed to send sync trigger: {e:?}");
+                            }
+                            return;
+                        }
+                    }
+                    sleep(Duration::from_secs(1));
+                  }
+                }
+            }
+        });
     }
 
     /// Synchronizes the wallet with the Spark network
