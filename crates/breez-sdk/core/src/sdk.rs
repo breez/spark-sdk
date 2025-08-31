@@ -876,7 +876,7 @@ impl BreezSdk {
         let mut shutdown = self.shutdown_receiver.clone();
 
         tokio::spawn(async move {
-            for _ in 0..MAX_POLL_ATTEMPTS {
+            for i in 0..MAX_POLL_ATTEMPTS {
                 select! {
                   _ = shutdown.changed() => {
                     info!("Shutdown signal received");
@@ -892,7 +892,12 @@ impl BreezSdk {
                             return;
                         }
                     }
-                    sleep(Duration::from_secs(1));
+                    let sleep_time = if i < 5 {
+                        Duration::from_secs(1)
+                    } else {
+                        Duration::from_secs(i.into())
+                    };
+                    sleep(sleep_time);
                   }
                 }
             }
