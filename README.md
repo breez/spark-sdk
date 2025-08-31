@@ -25,8 +25,8 @@ It’s a nodeless integration that offers a self-custodial, end-to-end solution 
 
 - [x] Send/Receive Lightning payments
 - [x] Send/Receive Spark payments
-- [x] On-chain interoperability
-- [x] Send LNURL-pay payments
+- [x] Send/Receive via on-chain addresses
+- [x] Send LNURL-pay & Lightning address payments
 - [x] Keys are only held by users
 - [x] Free open-source solution
 
@@ -88,7 +88,7 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 
 - [x]  Send/Receive Lightning payments
 - [x]  Send/Receive Spark payments
-- [ ]  Send/Receive via on-chain address
+- [x]  Send/Receive via on-chain addresses
 - [x]  CLI Interface
 - [x]  JS, Swift, Kotlin & Python languages bindings
 - [x]  Send via LNURL-Pay
