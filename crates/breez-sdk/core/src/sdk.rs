@@ -883,14 +883,12 @@ impl BreezSdk {
                     return;
                   },
                     p = spark_wallet.fetch_lightning_send_payment(&payment_id) => {
-                      if let Ok(Some(p)) = p {
-                        if p.payment_preimage.is_some() {
-                            info!("Pollling payment preimage found");
-                            if let Err(e) = sync_trigger.send(SyncType::PaymentsOnly) {
-                                error!("Failed to send sync trigger: {e:?}");
-                            }
-                            return;
-                        }
+                      if let Ok(Some(p)) = p  && p.payment_preimage.is_some(){
+                          info!("Pollling payment preimage found");
+                          if let Err(e) = sync_trigger.send(SyncType::PaymentsOnly) {
+                              error!("Failed to send sync trigger: {e:?}");
+                          }
+                          return;
                     }
                     let sleep_time = if i < 5 {
                         Duration::from_secs(1)
