@@ -156,6 +156,32 @@ impl BreezSdk {
         Ok(sdk)
     }
 
+    /// Connects to the Spark network using the provided configuration and mnemonic.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The connection request object
+    ///
+    /// # Returns
+    ///
+    /// Result containing either the initialized `BreezSdk` or an `SdkError`
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    pub async fn connect(request: crate::ConnectRequest) -> Result<Self, SdkError> {
+        let db_path = std::path::PathBuf::from_str(&request.storage_dir)?;
+        let path_suffix: String = sha256::Hash::hash(request.mnemonic.as_bytes())
+            .to_string()
+            .chars()
+            .take(8)
+            .collect();
+        let storage_dir = db_path
+            .join(request.config.network.to_string().to_lowercase())
+            .join(path_suffix);
+
+        let storage = default_storage(storage_dir.to_string_lossy().to_string())?;
+        let builder = crate::SdkBuilder::new(request.config, request.mnemonic, storage);
+        builder.build().await
+    }
+
     /// Starts the SDK's background tasks
     ///
     /// This method initiates the following backround tasks:

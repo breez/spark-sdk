@@ -1,8 +1,28 @@
 import logging
-from breez_sdk_spark import BreezSdk, default_config, default_storage, EventListener, GetInfoRequest, init_logging, LogEntry, Logger, Network, SdkBuilder, SdkEvent
+from breez_sdk_spark import BreezSdk, ConnectRequest, default_config, default_storage, EventListener, GetInfoRequest, init_logging, LogEntry, Logger, Network, SdkBuilder, SdkEvent
 
 async def init_sdk():
     # ANCHOR: init-sdk
+    mnemonic = "<mnemonic words>"
+    # Create the default config
+    config = default_config(network=Network.MAINNET)
+    config.api_key = "<breez api key>"
+
+    try:
+        # Connect to the SDK using the simplified connect method
+        sdk = await BreezSdk.connect(request=ConnectRequest(
+            config=config,
+            mnemonic=mnemonic,
+            storage_dir="./.data"
+        ))
+        return sdk
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: init-sdk
+
+async def init_sdk_advanced():
+    # ANCHOR: init-sdk-advanced
     mnemonic = "<mnemonic words>"
     # Create the default config
     config = default_config(network=Network.MAINNET)
@@ -14,12 +34,16 @@ async def init_sdk():
 
         # Build the SDK using the config, mnemonic and storage
         builder = SdkBuilder(config=config, mnemonic=mnemonic, storage=storage)
+        
+        # You can also pass your custom implementations:
+        # builder.with_chain_service(<your chain service implementation>)
+        # builder.with_rest_client(<your rest client implementation>)
         sdk = await builder.build()
         return sdk
     except Exception as error:
         logging.error(error)
         raise
-    # ANCHOR_END: init-sdk
+    # ANCHOR_END: init-sdk-advanced
 
 async def fetch_balance(sdk: BreezSdk):
     # ANCHOR: fetch-balance

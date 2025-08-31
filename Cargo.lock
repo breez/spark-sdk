@@ -668,6 +668,7 @@ name = "breez-sdk-spark-wasm"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bitcoin",
  "breez-sdk-common",
  "breez-sdk-spark",
  "macros",

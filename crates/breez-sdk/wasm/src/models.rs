@@ -13,6 +13,13 @@ pub enum SdkEvent {
     },
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConnectRequest)]
+pub struct ConnectRequest {
+    pub config: Config,
+    pub mnemonic: String,
+    pub storage_dir: String,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::DepositInfo)]
 pub struct DepositInfo {
     pub txid: String,
@@ -342,6 +349,15 @@ pub struct AesSuccessActionData {
 pub enum Network {
     Mainnet,
     Regtest,
+}
+
+impl std::fmt::Display for Network {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Network::Mainnet => write!(f, "Mainnet"),
+            Network::Regtest => write!(f, "Regtest"),
+        }
+    }
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Config)]

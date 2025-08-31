@@ -7,13 +7,35 @@ func initSdk() async throws -> BreezSdk {
     var config = defaultConfig(network: Network.mainnet)
     config.apiKey = "<breez api key>"
 
+    // Connect to the SDK using the simplified connect method
+    let sdk = try await BreezSdk.connect(request: ConnectRequest(
+        config: config,
+        mnemonic: mnemonic,
+        storageDir: "./.data"
+    ))
+    // ANCHOR_END: init-sdk
+
+    return sdk
+}
+
+func initSdkAdvanced() async throws -> BreezSdk {
+    // ANCHOR: init-sdk-advanced
+    let mnemonic = "<mnemonic words>"
+    // Create the default config
+    var config = defaultConfig(network: Network.mainnet)
+    config.apiKey = "<breez api key>"
+
     // Create the default storage
     let storage = try defaultStorage(dataDir: "./.data")
 
     // Build the SDK using the config, mnemonic and storage
     let builder = SdkBuilder(config: config, mnemonic: mnemonic, storage: storage)
+    
+    // You can also pass your custom implementations:
+    // builder = builder.withChainService(<your chain service implementation>)
+    // builder = builder.withRestClient(<your rest client implementation>)
     let sdk = try await builder.build()
-    // ANCHOR_END: init-sdk
+    // ANCHOR_END: init-sdk-advanced
 
     return sdk
 }
