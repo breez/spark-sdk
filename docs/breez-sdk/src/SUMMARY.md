@@ -14,5 +14,6 @@
   - [Receiving payments](guide/receive_payment.md)
   - [Sending payments](guide/send_payment.md)
   - [Listing payments](guide/list_payments.md)
+  - [Refunding payments](guide/refunding_payments.md)
 - [Using LNURL and Lightning addresses](guide/lnurl.md)
   - [Sending payments using LNURL-Pay/Lightning address](guide/lnurl_pay.md)
