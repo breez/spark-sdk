@@ -98,9 +98,10 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [ ]  Support Spark tokens
 - [ ]  Receive via LNURL-Pay w/ offline & Lightning address support
 - [ ]  Real-time sync
-- [ ]  External input parsers
+- [ ]  React Native, Go & C# bindings
 - [ ]  LNURL-Withdraw
-- [ ]  LNURL-Auth 
+- [ ]  LNURL-Auth
+- [ ]  External input parsers
 - [ ]  Bolt12 
 - [ ]  WebLN
 - [ ]  NWC
