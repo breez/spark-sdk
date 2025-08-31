@@ -403,13 +403,13 @@ async function prepareSend() {
       amountSats: amountSats,
     });
 
-    const paymentMethod = prepareResponse.paymentMethod;
+    const paymentMethod = prepareSendResponse.paymentMethod;
     if (paymentMethod.type == "bolt11Invoice") {
       const fees =
         paymentMethod.sparkTransferFeeSats != null
           ? paymentMethod.sparkTransferFeeSats
           : paymentMethod.lightningFeeSats;
-      const amount = prepareResponse.amountSats;
+      const amount = prepareSendResponse.amountSats;
 
       elements.confirmAmount.textContent = `${amount.toLocaleString()} sats`;
       elements.confirmFee.textContent = `${fees.toLocaleString()} sats`;

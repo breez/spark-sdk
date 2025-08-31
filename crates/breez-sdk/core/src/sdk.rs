@@ -20,7 +20,7 @@ use spark_wallet::{
     DefaultSigner, ExitSpeed, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress,
     SparkWallet, WalletEvent, WalletTransfer,
 };
-use std::{str::FromStr, sync::Arc, thread::sleep};
+use std::{str::FromStr, sync::Arc};
 use tracing::{error, info, trace};
 use web_time::{Duration, SystemTime};
 
@@ -869,6 +869,7 @@ impl BreezSdk {
     // Pools the lightning send payment untill it is in completed state.
     fn poll_lightning_send_payment(&self, payment_id: &str) {
         const MAX_POLL_ATTEMPTS: u32 = 10;
+        info!("Polling lightning send payment {}", payment_id);
 
         let spark_wallet = self.spark_wallet.clone();
         let sync_trigger = self.sync_trigger.clone();
@@ -877,6 +878,10 @@ impl BreezSdk {
 
         tokio::spawn(async move {
             for i in 0..MAX_POLL_ATTEMPTS {
+                info!(
+                    "Polling lightning send payment {} attempt {}",
+                    payment_id, i
+                );
                 select! {
                   _ = shutdown.changed() => {
                     info!("Shutdown signal received");
@@ -895,7 +900,7 @@ impl BreezSdk {
                     } else {
                         Duration::from_secs(i.into())
                     };
-                    sleep(sleep_time);
+                    tokio::time::sleep(sleep_time).await;
                   }
                 }
             }
