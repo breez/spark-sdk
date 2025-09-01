@@ -12,6 +12,7 @@ use crate::{DepositClaimError, DepositInfo, LnurlPayInfo, models::Payment};
 const ACCOUNT_INFO_KEY: &str = "account_info";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
 const TX_CACHE_KEY: &str = "tx_cache";
+const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UpdateDepositPayload {
@@ -233,6 +234,32 @@ impl ObjectCacheRepository {
             None => Ok(None),
         }
     }
+
+    pub(crate) async fn save_static_deposit_address(
+        &self,
+        value: &StaticDepositAddress,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                STATIC_DEPOSIT_ADDRESS_CACHE_KEY.to_string(),
+                serde_json::to_string(value)?,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_static_deposit_address(
+        &self,
+    ) -> Result<Option<StaticDepositAddress>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(STATIC_DEPOSIT_ADDRESS_CACHE_KEY.to_string())
+            .await?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -248,6 +275,11 @@ pub(crate) struct CachedSyncInfo {
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedTx {
     pub(crate) raw_tx: String,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub(crate) struct StaticDepositAddress {
+    pub(crate) address: String,
 }
 
 #[cfg(feature = "test-utils")]
