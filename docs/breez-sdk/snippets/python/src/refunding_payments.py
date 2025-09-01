@@ -30,7 +30,7 @@ async def claim_deposit(sdk: BreezSdk):
         vout = 0
         
         # Set a higher max fee to retry claiming
-        max_fee = Fee(fee_type=FeeType.ABSOLUTE(fee_sat=5000))  # 5000 sats
+        max_fee = Fee.FIXED(amount=5_000)
         
         request = ClaimDepositRequest(
             txid=txid,
@@ -53,7 +53,7 @@ async def refund_deposit(sdk: BreezSdk):
         destination_address = "bc1qexample..."  # Your Bitcoin address
         
         # Set the fee for the refund transaction
-        fee = Fee(fee_type=FeeType.ABSOLUTE, fee_sat=500)  # 500 sats
+        fee = Fee.FIXED(amount=500)
         
         request = RefundDepositRequest(
             txid=txid,

@@ -39,8 +39,8 @@ const claimDeposit = async (sdk: BreezSdk) => {
   
   // Set a higher max fee to retry claiming
   const maxFee: Fee = {
-    type: 'absolute',
-    feeSat: 5000 // 5000 sats
+    type: 'fixed',
+    amount: 5_000
   }
   
   const request: ClaimDepositRequest = {
@@ -61,7 +61,7 @@ const refundDeposit = async (sdk: BreezSdk) => {
   const destinationAddress = 'bc1qexample...' // Your Bitcoin address
   
   // Set the fee for the refund transaction
-  const fee: Fee = { type: "absolute", feeSat: 500 }; // 500 sats
+  const fee: Fee = { type: 'fixed', amount: 500 }
   
   const request: RefundDepositRequest = {
     txid,

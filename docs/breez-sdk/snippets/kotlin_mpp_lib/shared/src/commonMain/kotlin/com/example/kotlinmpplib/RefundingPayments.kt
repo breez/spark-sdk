@@ -6,7 +6,7 @@ class RefundingPayments {
     suspend fun listUnclaimedDeposits(sdk: BreezSdk) {
         // ANCHOR: list-unclaimed-deposits
         try {
-            val request = ListUnclaimedDepositsRequest()
+            val request = ListUnclaimedDepositsRequest
             val response = sdk.listUnclaimedDeposits(request)
             
             for (deposit in response.deposits) {
@@ -40,7 +40,7 @@ class RefundingPayments {
             val vout = 0u
             
             // Set a higher max fee to retry claiming
-            val maxFee = Fee.Absolute(feeSat = 5000u) // 5000 sats
+            val maxFee = Fee.Fixed(5000u)
             
             val request = ClaimDepositRequest(
                 txid = txid,
@@ -64,7 +64,7 @@ class RefundingPayments {
             val destinationAddress = "bc1qexample..." // Your Bitcoin address
             
             // Set the fee for the refund transaction
-            val fee = Fee.Absolute(feeSat = 500u) // 500 sats
+            val fee = Fee.Fixed(500u)
             
             val request = RefundDepositRequest(
                 txid = txid,

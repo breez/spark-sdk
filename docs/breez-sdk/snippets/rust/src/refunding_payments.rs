@@ -35,9 +35,7 @@ async fn claim_deposit(sdk: &BreezSdk) -> Result<()> {
     let vout = 0;
     
     // Set a higher max fee to retry claiming
-    let max_fee = Some(Fee {
-        fee_type: FeeType::Absolute { fee_sat: 500 }, // 500 sats
-    });
+    let max_fee = Some(Fee::Fixed { amount: 500 });
     
     let request = ClaimDepositRequest {
         txid,
@@ -58,9 +56,7 @@ async fn refund_deposit(sdk: &BreezSdk) -> Result<()> {
     let destination_address = "bc1qexample...".to_string(); // Your Bitcoin address
     
     // Set the fee for the refund transaction
-    let fee = Fee {
-        fee_type: FeeType::Absolute { fee_sat: 500 }, // 500 sats
-    };
+    let fee = Fee::Fixed { amount: 500 };
     
     let request = RefundDepositRequest {
         txid,

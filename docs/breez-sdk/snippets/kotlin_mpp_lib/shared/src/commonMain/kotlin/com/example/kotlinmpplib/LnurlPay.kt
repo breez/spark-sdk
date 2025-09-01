@@ -1,15 +1,17 @@
 package com.example.kotlinmpplib
 
 import breez_sdk_spark.*
+import breez_sdk_spark.common.InputType
+
 class LnurlPay {
-    fun prepareLnurlPay(sdk: BreezSdk) {
+    suspend fun prepareLnurlPay(sdk: BreezSdk) {
         // ANCHOR: prepare-lnurl-pay
         // Endpoint can also be of the form:
         // lnurlp://domain.com/lnurl-pay?key=val
         // lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf
         val lnurlPayUrl = "lightning@address.com"
         try {
-            val inputType = sdk.parse(lnurlPayUrl)
+            val inputType = parse(lnurlPayUrl)
             if (inputType is InputType.LightningAddress) {
                 val amountSats = 5_000.toULong()
                 val optionalComment = "<comment>"
@@ -34,8 +36,7 @@ class LnurlPay {
         // ANCHOR_END: prepare-lnurl-pay
     }
 
-    
-    fun lnurlPay(sdk: BreezSdk, prepareResponse: PrepareLnurlPayResponse) {
+    suspend fun lnurlPay(sdk: BreezSdk, prepareResponse: PrepareLnurlPayResponse) {
         // ANCHOR: lnurl-pay
         try {
             val response = sdk.lnurlPay(LnurlPayRequest(prepareResponse))

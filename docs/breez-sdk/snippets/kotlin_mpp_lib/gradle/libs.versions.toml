@@ -1,6 +1,6 @@
 [versions]
 agp = "8.1.2"
-breez = "0.1.0"
+breez = "0.1.1"
 kotlin = "1.9.20"
 coroutines = "1.7.3"
 compose = "1.5.4"
