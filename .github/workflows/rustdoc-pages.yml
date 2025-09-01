@@ -3,7 +3,7 @@ name: Publish rustdocs
 on:
   workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches: [ "release" ]
 
 env:
   CARGO_TERM_COLOR: always
