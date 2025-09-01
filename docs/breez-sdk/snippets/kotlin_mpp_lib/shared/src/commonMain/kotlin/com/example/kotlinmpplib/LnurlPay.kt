@@ -20,8 +20,8 @@ class LnurlPay {
 
                 val req = PrepareLnurlPayRequest(
                     amountSats,
-                    optionalComment,
                     payRequest,
+                    optionalComment,
                     optionalValidateSuccessActionUrl
                 )
                 val prepareResponse = sdk.prepareLnurlPay(req)

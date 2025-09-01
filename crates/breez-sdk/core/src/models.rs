@@ -407,6 +407,7 @@ pub struct DepositInfo {
 pub struct ClaimDepositRequest {
     pub txid: String,
     pub vout: u32,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub max_fee: Option<Fee>,
 }
 
@@ -589,8 +590,10 @@ pub struct ReceivePaymentResponse {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayRequest {
     pub amount_sats: u64,
-    pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub comment: Option<String>,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub validate_success_action_url: Option<bool>,
 }
 
@@ -660,6 +663,7 @@ impl From<ExitSpeed> for OnchainConfirmationSpeed {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub amount_sats: Option<u64>,
 }
 
@@ -683,6 +687,7 @@ pub enum SendPaymentOptions {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub options: Option<SendPaymentOptions>,
 }
 
@@ -697,8 +702,10 @@ pub struct SendPaymentResponse {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ListPaymentsRequest {
     /// Number of records to skip
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub offset: Option<u32>,
     /// Maximum number of records to return
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub limit: Option<u32>,
 }
 

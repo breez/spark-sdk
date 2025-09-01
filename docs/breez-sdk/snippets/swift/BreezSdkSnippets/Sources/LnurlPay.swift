@@ -17,8 +17,8 @@ func preparePay(sdk: BreezSdk) async throws {
 
         let request = PrepareLnurlPayRequest(
             amountSats: amountSats,
-            comment: optionalComment,
             payRequest: payRequest,
+            comment: optionalComment,
             validateSuccessActionUrl: optionalValidateSuccessActionUrl
         )
         let response = try await sdk.prepareLnurlPay(request: request)
