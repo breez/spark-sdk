@@ -615,6 +615,8 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "spark",
+ "spark-wallet",
  "strum",
  "thiserror 2.0.14",
  "tokio",
@@ -624,6 +626,7 @@ dependencies = [
  "tracing",
  "uniffi",
  "wasm-bindgen-test",
+ "web-time",
 ]
 
 [[package]]
