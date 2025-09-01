@@ -1,5 +1,6 @@
 import {
   BreezSdk,
+  connect,
   defaultConfig,
   defaultStorage,
   initLogging,
@@ -25,7 +26,7 @@ const exampleGettingStarted = async () => {
   config.apiKey = '<breez api key>'
 
   // Connect to the SDK using the simplified connect method
-  const sdk = await BreezSdk.connect({
+  const sdk = await connect({
     config,
     mnemonic,
     storageDir: './.data'

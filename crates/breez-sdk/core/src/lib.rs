@@ -23,7 +23,10 @@ pub use sdk::{BreezSdk, default_config, init_logging, parse_input};
 pub use sdk_builder::SdkBuilder;
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-pub use {persist::sqlite::SqliteStorage, sdk::default_storage};
+pub use {
+    persist::sqlite::SqliteStorage,
+    sdk::{connect, default_storage},
+};
 
 #[cfg(feature = "test-utils")]
 pub use persist::tests as storage_tests;

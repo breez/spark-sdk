@@ -14,6 +14,7 @@ use std::time::UNIX_EPOCH;
 
 use crate::{SdkError, error::DepositClaimError};
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConnectRequest {
     pub config: Config,
     pub mnemonic: String,
