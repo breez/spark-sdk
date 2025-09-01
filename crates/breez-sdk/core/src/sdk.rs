@@ -552,6 +552,8 @@ impl BreezSdk {
                 payment_request: self.spark_wallet.get_spark_address().await?.to_string(),
             }),
             ReceivePaymentMethod::BitcoinAddress => {
+                // TODO: allow passing amount
+
                 let object_repository = ObjectCacheRepository::new(self.storage.clone());
 
                 // First lookup in storage cache
@@ -559,7 +561,6 @@ impl BreezSdk {
                     object_repository.fetch_static_deposit_address().await?;
                 if let Some(static_deposit_address) = static_deposit_address {
                     return Ok(ReceivePaymentResponse {
-                        // TODO: allow passing amount
                         payment_request: static_deposit_address.address.to_string(),
                         fee_sats: 0,
                     });
@@ -588,7 +589,6 @@ impl BreezSdk {
                     .await?;
 
                 Ok(ReceivePaymentResponse {
-                    // TODO: allow passing amount
                     payment_request: address,
                     fee_sats: 0,
                 })
