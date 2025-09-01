@@ -91,18 +91,18 @@ pub struct SparkInvoiceFields {
 
 #[macros::extern_wasm_bindgen(breez_sdk_common::input::SparkAddressPaymentType)]
 pub enum SparkAddressPaymentType {
-    TokensPayment(TokensPayment),
-    SatsPayment(SatsPayment),
+    TokensPayment(TokensPaymentDetails),
+    SatsPayment(SatsPaymentDetails),
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::TokensPayment)]
-pub struct TokensPayment {
+#[macros::extern_wasm_bindgen(breez_sdk_common::input::TokensPaymentDetails)]
+pub struct TokensPaymentDetails {
     pub token_identifier: Option<String>,
     pub amount: Option<u64>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::SatsPayment)]
-pub struct SatsPayment {
+#[macros::extern_wasm_bindgen(breez_sdk_common::input::SatsPaymentDetails)]
+pub struct SatsPaymentDetails {
     pub amount: Option<u64>,
 }
 

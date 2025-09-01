@@ -215,30 +215,30 @@ impl From<spark::address::SparkAddressPaymentType> for SparkAddressPaymentType {
     fn from(payment_type: spark::address::SparkAddressPaymentType) -> Self {
         match payment_type {
             spark::address::SparkAddressPaymentType::TokensPayment(tp) => {
-                SparkAddressPaymentType::TokensPayment(TokensPayment {
+                SparkAddressPaymentType::TokensPayment(TokensPaymentDetails {
                     token_identifier: tp.token_identifier.map(|id| id.to_string()),
                     amount: tp.amount,
                 })
             }
             spark::address::SparkAddressPaymentType::SatsPayment(sp) => {
-                SparkAddressPaymentType::SatsPayment(SatsPayment { amount: sp.amount })
+                SparkAddressPaymentType::SatsPayment(SatsPaymentDetails { amount: sp.amount })
             }
         }
     }
 }
 
-impl From<spark::address::TokensPayment> for TokensPayment {
+impl From<spark::address::TokensPayment> for TokensPaymentDetails {
     fn from(tp: spark::address::TokensPayment) -> Self {
-        TokensPayment {
+        TokensPaymentDetails {
             token_identifier: tp.token_identifier.map(|id| id.to_string()),
             amount: tp.amount,
         }
     }
 }
 
-impl From<spark::address::SatsPayment> for SatsPayment {
+impl From<spark::address::SatsPayment> for SatsPaymentDetails {
     fn from(sp: spark::address::SatsPayment) -> Self {
-        SatsPayment { amount: sp.amount }
+        SatsPaymentDetails { amount: sp.amount }
     }
 }
 
@@ -256,20 +256,20 @@ pub struct SparkInvoiceFields {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SparkAddressPaymentType {
-    TokensPayment(TokensPayment),
-    SatsPayment(SatsPayment),
+    TokensPayment(TokensPaymentDetails),
+    SatsPayment(SatsPaymentDetails),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct TokensPayment {
+pub struct TokensPaymentDetails {
     pub token_identifier: Option<String>,
     pub amount: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct SatsPayment {
+pub struct SatsPaymentDetails {
     pub amount: Option<u64>,
 }
 
