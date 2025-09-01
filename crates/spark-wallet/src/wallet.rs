@@ -241,14 +241,18 @@ impl<S: Signer> SparkWallet<S> {
         ))
     }
 
+    /// Creates a Lightning invoice for the specified amount and description.
+    /// If a public key is provided, the invoice will be associated with that key.
+    /// Otherwise, the wallet's identity public key will be used.
     pub async fn create_lightning_invoice(
         &self,
         amount_sat: u64,
         description: Option<String>,
+        public_key: Option<PublicKey>,
     ) -> Result<LightningReceivePayment, SparkWalletError> {
         Ok(self
             .lightning_service
-            .create_lightning_invoice(amount_sat, description, None, None)
+            .create_lightning_invoice(amount_sat, description, None, None, public_key)
             .await?)
     }
 

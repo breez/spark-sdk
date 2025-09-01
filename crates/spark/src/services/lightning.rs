@@ -224,7 +224,12 @@ impl<S: Signer> LightningService<S> {
         memo: Option<String>,
         preimage: Option<Vec<u8>>,
         expiry_secs: Option<u32>,
+        identity_pubkey: Option<PublicKey>,
     ) -> Result<LightningReceivePayment, ServiceError> {
+        let identity_pubkey = match identity_pubkey {
+            Some(pk) => pk,
+            None => self.signer.get_identity_public_key()?,
+        };
         let preimage = preimage.unwrap_or_else(|| {
             bitcoin::secp256k1::SecretKey::new(&mut OsRng)
                 .secret_bytes()
@@ -235,13 +240,7 @@ impl<S: Signer> LightningService<S> {
         let invoice = self
             .ssp_client
             .request_lightning_receive(RequestLightningReceiveInput {
-                receiver_identity_pubkey: Some(
-                    self.signer
-                        .get_identity_public_key()?
-                        .serialize()
-                        .to_vec()
-                        .encode_hex(),
-                ),
+                receiver_identity_pubkey: Some(identity_pubkey.serialize().to_vec().encode_hex()),
                 amount_sats,
                 network: self.network.into(),
                 payment_hash: payment_hash.encode_hex(),
@@ -260,7 +259,6 @@ impl<S: Signer> LightningService<S> {
             ));
         };
 
-        let identity_pubkey = self.signer.get_identity_public_key()?;
         if spark_address.identity_public_key != identity_pubkey {
             return Err(ServiceError::SSPswapError(
                 "Invalid invoice. Spark address mismatch".to_string(),
@@ -290,7 +288,7 @@ impl<S: Signer> LightningService<S> {
                                     .collect(),
                             }),
                             threshold: share.secret_share.threshold as u32,
-                            invoice_string: invoice.clone().invoice.encoded_invoice,
+                            invoice_string: invoice.invoice.encoded_invoice.clone(),
                             user_identity_public_key: identity_pubkey.serialize().to_vec(),
                         })
                 });
