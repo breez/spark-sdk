@@ -13,7 +13,7 @@ pub(crate) async fn init_sdk() -> Result<BreezSdk> {
     config.api_key = Some("<breez api key>".to_string());
 
     // Connect to the SDK using the simplified connect method
-    let sdk = BreezSdk::connect(ConnectRequest {
+    let sdk = connect(ConnectRequest {
         config,
         mnemonic,
         storage_dir: "./.data".to_string(),

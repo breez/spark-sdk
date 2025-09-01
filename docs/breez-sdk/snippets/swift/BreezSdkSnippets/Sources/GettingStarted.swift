@@ -8,7 +8,7 @@ func initSdk() async throws -> BreezSdk {
     config.apiKey = "<breez api key>"
 
     // Connect to the SDK using the simplified connect method
-    let sdk = try await BreezSdk.connect(request: ConnectRequest(
+    let sdk = try await connect(request: ConnectRequest(
         config: config,
         mnemonic: mnemonic,
         storageDir: "./.data"

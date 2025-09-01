@@ -1,5 +1,5 @@
 import logging
-from breez_sdk_spark import BreezSdk, ConnectRequest, default_config, default_storage, EventListener, GetInfoRequest, init_logging, LogEntry, Logger, Network, SdkBuilder, SdkEvent
+from breez_sdk_spark import BreezSdk, connect, ConnectRequest, default_config, default_storage, EventListener, GetInfoRequest, init_logging, LogEntry, Logger, Network, SdkBuilder, SdkEvent
 
 async def init_sdk():
     # ANCHOR: init-sdk
@@ -10,7 +10,7 @@ async def init_sdk():
 
     try:
         # Connect to the SDK using the simplified connect method
-        sdk = await BreezSdk.connect(request=ConnectRequest(
+        sdk = await connect(request=ConnectRequest(
             config=config,
             mnemonic=mnemonic,
             storage_dir="./.data"

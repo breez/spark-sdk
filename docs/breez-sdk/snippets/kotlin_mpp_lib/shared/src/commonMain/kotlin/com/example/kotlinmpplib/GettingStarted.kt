@@ -12,7 +12,7 @@ class GettingStarted {
 
         try {
             // Connect to the SDK using the simplified connect method
-            val sdk = BreezSdk.connect(ConnectRequest(
+            val sdk = connect(ConnectRequest(
                 config = config,
                 mnemonic = mnemonic,
                 storageDir = "./.data"

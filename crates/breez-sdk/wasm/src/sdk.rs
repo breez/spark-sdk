@@ -34,6 +34,24 @@ pub async fn init_logging(logger: Logger, filter: Option<String>) -> WasmResult<
     Ok(())
 }
 
+#[wasm_bindgen(js_name = "connect")]
+pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
+    let db_path = std::path::PathBuf::from_str(&request.storage_dir).map_err(WasmError::new)?;
+    let path_suffix: String = sha256::Hash::hash(request.mnemonic.as_bytes())
+        .to_string()
+        .chars()
+        .take(8)
+        .collect();
+    let storage_dir = db_path
+        .join(request.config.network.to_string().to_lowercase())
+        .join(path_suffix);
+
+    let storage = default_storage(storage_dir.to_string_lossy().as_ref()).await?;
+    let builder = SdkBuilder::new(request.config, request.mnemonic, storage)?;
+    let sdk = builder.build().await?;
+    Ok(sdk)
+}
+
 #[wasm_bindgen(js_name = "defaultConfig")]
 pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network.into()).into()
@@ -71,24 +89,6 @@ pub async fn parse(input: &str) -> WasmResult<InputType> {
 
 #[wasm_bindgen]
 impl BreezSdk {
-    #[wasm_bindgen(js_name = "connect")]
-    pub async fn connect(request: ConnectRequest) -> WasmResult<Self> {
-        let db_path = std::path::PathBuf::from_str(&request.storage_dir).map_err(WasmError::new)?;
-        let path_suffix: String = sha256::Hash::hash(request.mnemonic.as_bytes())
-            .to_string()
-            .chars()
-            .take(8)
-            .collect();
-        let storage_dir = db_path
-            .join(request.config.network.to_string().to_lowercase())
-            .join(path_suffix);
-
-        let storage = default_storage(storage_dir.to_string_lossy().as_ref()).await?;
-        let builder = SdkBuilder::new(request.config, request.mnemonic, storage)?;
-        let sdk = builder.build().await?;
-        Ok(sdk)
-    }
-
     #[wasm_bindgen(js_name = "addEventListener")]
     pub fn add_event_listener(&self, listener: EventListener) -> String {
         self.sdk
