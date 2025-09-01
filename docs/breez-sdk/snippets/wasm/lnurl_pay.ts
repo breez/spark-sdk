@@ -16,8 +16,8 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
 
     const prepareResponse = await sdk.prepareLnurlPay({
       amountSats,
-      comment: optionalComment,
       payRequest,
+      comment: optionalComment,
       validateSuccessActionUrl: optionalValidateSuccessActionUrl
     })
 

@@ -19,8 +19,8 @@ async def prepare_pay(sdk: BreezSdk):
 
             request = PrepareLnurlPayRequest(
                 amount_sats=amount_sats,
-                comment=optional_comment,
                 pay_request=pay_request,
+                comment=optional_comment,
                 validate_success_action_url=optional_validate_success_action_url
             )
             prepare_response = await sdk.prepare_lnurl_pay(request=request)
