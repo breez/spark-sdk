@@ -1,0 +1,2 @@
+install:
+  - ./crates/breez-sdk/bindings/langs/android/buildForJitpack.sh
