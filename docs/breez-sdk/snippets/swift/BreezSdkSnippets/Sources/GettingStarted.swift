@@ -42,7 +42,7 @@ func initSdkAdvanced() async throws -> BreezSdk {
 
 func gettingStartedNodeInfo(sdk: BreezSdk) async throws {
     // ANCHOR: fetch-balance
-    let info = try await sdk.getInfo(GetInfoRequest())
+    let info = try await sdk.getInfo(request: GetInfoRequest())
     let balanceSats = info.balanceSats
     // ANCHOR_END: fetch-balance
     print(balanceSats)
@@ -56,26 +56,26 @@ class SdkLogger: Logger {
 }
 
 func logging() throws {
-    try initLogging(logger: SdkLogger())
+    try initLogging(logDir: nil, appLogger: SdkLogger(), logFilter: nil)
 }
 // ANCHOR_END: logging
 
 // ANCHOR: add-event-listener
 class SdkEventListener: EventListener {
-    func onEvent(e: SdkEvent) {
-        print("Received event: ", e)
+    func onEvent(event: SdkEvent) {
+        print("Received event: ", event)
     }
 }
 
-func addEventListener(sdk: BreezSdk, listener: SdkEventListener) throws -> String {
-    let listenerId = try sdk.addEventListener(listener: listener)
+func addEventListener(sdk: BreezSdk, listener: SdkEventListener) -> String {
+    let listenerId = sdk.addEventListener(listener: listener)
     return listenerId
 }
 // ANCHOR_END: add-event-listener
 
 // ANCHOR: remove-event-listener
-func removeEventListener(sdk: BreezSdk, listenerId: String) throws {
-    try sdk.removeEventListener(id: listenerId)
+func removeEventListener(sdk: BreezSdk, listenerId: String) {
+    sdk.removeEventListener(id: listenerId)
 }
 // ANCHOR_END: remove-event-listener
 

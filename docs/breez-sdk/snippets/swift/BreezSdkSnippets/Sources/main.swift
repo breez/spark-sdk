@@ -3,7 +3,7 @@
 
 Task {
     do {
-        let sdk = try initSdk()
+        let _ = try await initSdk()
     } catch {
         print(error.localizedDescription)
     }

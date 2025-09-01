@@ -50,7 +50,7 @@ class GettingStarted {
     suspend fun fetchBalance(sdk: BreezSdk) {
         // ANCHOR: fetch-balance
         try {
-            val info = sdk.getInfo(GetInfoRequest())
+            val info = sdk.getInfo(GetInfoRequest)
             val balanceSats = info.balanceSats
         } catch (e: Exception) {
             // handle error

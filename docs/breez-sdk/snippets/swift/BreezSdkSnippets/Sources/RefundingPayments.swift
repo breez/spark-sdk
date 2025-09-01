@@ -29,7 +29,7 @@ func claimDeposit(sdk: BreezSdk) async throws {
     let vout: UInt32 = 0
     
     // Set a higher max fee to retry claiming
-    let maxFee = Fee.absolute(feeSat: 5000) // 5000 sats
+    let maxFee = Fee.fixed(amount: 5000) // 5000 sats
     
     let request = ClaimDepositRequest(
         txid: txid,
@@ -48,7 +48,7 @@ func refundDeposit(sdk: BreezSdk) async throws {
     let vout: UInt32 = 0
     let destinationAddress = "bc1qexample..." // Your Bitcoin address
     // Set the fee for the refund transaction
-    let fee = Fee.absolute(feeSat: 500) // 500 sats
+    let fee = Fee.fixed(amount: 500) // 500 sats
     
     let request = RefundDepositRequest(
         txid: txid,

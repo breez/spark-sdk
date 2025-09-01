@@ -17,7 +17,7 @@ class ListPayments {
     suspend fun listPayments(sdk: BreezSdk) {
         // ANCHOR: list-payments
         try {
-            val response = sdk.listPayments(ListPaymentsRequest())
+            val response = sdk.listPayments(ListPaymentsRequest(null, null))
             val payments = response.payments
         } catch (e: Exception) {
             // handle error

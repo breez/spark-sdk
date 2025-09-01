@@ -1,6 +1,7 @@
 package com.example.kotlinmpplib
 
 import breez_sdk_spark.*
+import breez_sdk_spark.common.InputType
 
 class ParsingInputs {
     suspend fun parseInput() {

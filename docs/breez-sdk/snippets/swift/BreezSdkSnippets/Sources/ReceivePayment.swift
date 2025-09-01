@@ -4,7 +4,7 @@ func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
     // ANCHOR: receive-payment-lightning-bolt11
     let description = "<invoice description>"
     // Optionally set the invoice amount you wish the payer to send
-    let optionalAmountSats = 5_000
+    let optionalAmountSats: UInt64 = 5_000
     let response = try await sdk
         .receivePayment(request: ReceivePaymentRequest(
             paymentMethod: ReceivePaymentMethod.bolt11Invoice(

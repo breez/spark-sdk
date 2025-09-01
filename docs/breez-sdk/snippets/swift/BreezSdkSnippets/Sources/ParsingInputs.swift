@@ -8,18 +8,18 @@ func parseInput() async throws {
     do {
         let inputType = try await parse(input: input)
         switch inputType {
-        case .bitcoinAddress(let v1: details):
+        case .bitcoinAddress(v1: let details):
             print("Input is Bitcoin address \(details.address)")
 
-        case .bolt11Invoice(let v1: details):
+        case .bolt11Invoice(v1: let details):
             let amount = details.amountMsat.map { String($0) } ?? "unknown"
             print("Input is BOLT11 invoice for \(amount) msats")
 
-        case .lnurlPay(let v1: details):
+        case .lnurlPay(v1: let details):
             print(
-                "Input is LNURL-Pay/Lightning address accepting min/max \(details.minSendable)/\(details.maxSendable) msats - BIP353 was used: \(bip353Address != nil)"
+                "Input is LNURL-Pay/Lightning address accepting min/max \(details.minSendable)/\(details.maxSendable) msats)"
             )
-        case .lnurlWithdraw(let v1: details):
+        case .lnurlWithdraw(v1: let details):
             print(
                 "Input is LNURL-Withdraw for min/max \(details.minWithdrawable)/\(details.maxWithdrawable) msats"
             )

@@ -7,9 +7,8 @@ let package = Package(
     name: "BreezSdkSnippets",
     platforms: [.macOS("15.0")],
     dependencies: [
-        .package(url: "https://github.com/kishikawakatsumi/KeychainAccess.git", from: "4.2.2"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.2.3"),
-        .package(url: "https://github.com/breez/breez-sdk-spark-swift", exact: "0.1.0")
+        .package(url: "https://github.com/breez/breez-sdk-spark-swift", exact: "0.1.1")
         // To use a local version of breez-sdk-spark, comment-out the above and un-comment:
         // .package(name: "bindings-swift", path: "/local-path/breez-sdk-spark/crate/breez-sdk/bindings/langs/swift")
     ],
@@ -19,7 +18,6 @@ let package = Package(
         .executableTarget(
             name: "BreezSdkSnippets",
             dependencies: [
-                .product(name: "KeychainAccess", package: "KeychainAccess"),
                 .product(name: "BreezSdkSpark", package: "breez-sdk-spark-swift"),
                 // To use a local version of breez-sdk-spark, comment-out the above and un-comment:
                 // .product(name: "BreezSdkSpark", package: "bindings-swift"),
