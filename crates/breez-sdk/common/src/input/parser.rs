@@ -545,7 +545,7 @@ fn parse_bip21_key(
 fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option<InputType> {
     if let Ok(spark_address) = input.parse::<SparkAddress>() {
         return Some(InputType::SparkAddress(SparkAddressDetails {
-            encoded_address: input.to_string(),
+            address: input.to_string(),
             decoded_address: spark_address.into(),
             source: source.clone(),
         }));

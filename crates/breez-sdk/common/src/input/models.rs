@@ -164,7 +164,7 @@ pub enum InputType {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SparkAddressDetails {
-    pub encoded_address: String,
+    pub address: String,
     pub decoded_address: SparkAddress,
     pub source: PaymentRequestSource,
 }

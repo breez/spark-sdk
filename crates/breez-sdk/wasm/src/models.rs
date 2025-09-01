@@ -66,7 +66,7 @@ pub enum InputType {
 
 #[macros::extern_wasm_bindgen(breez_sdk_common::input::SparkAddressDetails)]
 pub struct SparkAddressDetails {
-    pub encoded_address: String,
+    pub address: String,
     pub decoded_address: SparkAddress,
     pub source: PaymentRequestSource,
 }
