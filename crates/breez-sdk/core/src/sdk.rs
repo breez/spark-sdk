@@ -45,8 +45,8 @@ use crate::{
         SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
     persist::{
-        CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, PaymentMetadata, Storage,
-        UpdateDepositPayload,
+        CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, PaymentMetadata,
+        StaticDepositAddress, Storage, UpdateDepositPayload,
     },
     utils::{
         deposit_chain_syncer::DepositChainSyncer,
@@ -551,15 +551,48 @@ impl BreezSdk {
                 fee_sats: 0,
                 payment_request: self.spark_wallet.get_spark_address().await?.to_string(),
             }),
-            ReceivePaymentMethod::BitcoinAddress => Ok(ReceivePaymentResponse {
+            ReceivePaymentMethod::BitcoinAddress => {
                 // TODO: allow passing amount
-                payment_request: self
+
+                let object_repository = ObjectCacheRepository::new(self.storage.clone());
+
+                // First lookup in storage cache
+                let static_deposit_address =
+                    object_repository.fetch_static_deposit_address().await?;
+                if let Some(static_deposit_address) = static_deposit_address {
+                    return Ok(ReceivePaymentResponse {
+                        payment_request: static_deposit_address.address.to_string(),
+                        fee_sats: 0,
+                    });
+                }
+
+                // Then query existing addresses
+                let deposit_addresses = self
                     .spark_wallet
-                    .generate_deposit_address(true)
-                    .await?
-                    .to_string(),
-                fee_sats: 0,
-            }),
+                    .list_static_deposit_addresses(None)
+                    .await?;
+
+                // In case there are no addresses, generate a new one and cache it
+                let address = match deposit_addresses.last() {
+                    Some(address) => address.to_string(),
+                    None => self
+                        .spark_wallet
+                        .generate_deposit_address(true)
+                        .await?
+                        .to_string(),
+                };
+
+                object_repository
+                    .save_static_deposit_address(&StaticDepositAddress {
+                        address: address.clone(),
+                    })
+                    .await?;
+
+                Ok(ReceivePaymentResponse {
+                    payment_request: address,
+                    fee_sats: 0,
+                })
+            }
             ReceivePaymentMethod::Bolt11Invoice {
                 description,
                 amount_sats,
