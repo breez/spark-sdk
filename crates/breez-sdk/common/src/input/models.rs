@@ -158,6 +158,119 @@ pub enum InputType {
     Bip21(Bip21Details),
     Bolt12InvoiceRequest(Bolt12InvoiceRequestDetails),
     LnurlWithdraw(LnurlWithdrawRequestDetails),
+    SparkAddress(SparkAddressDetails),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkAddressDetails {
+    pub encoded_address: String,
+    pub decoded_address: SparkAddress,
+    pub source: PaymentRequestSource,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkAddress {
+    pub identity_public_key: String,
+    pub network: BitcoinNetwork,
+    pub spark_invoice_fields: Option<SparkInvoiceFields>,
+    pub signature: Option<String>,
+}
+
+impl From<spark_wallet::SparkAddress> for SparkAddress {
+    fn from(spark_address: spark_wallet::SparkAddress) -> Self {
+        SparkAddress {
+            identity_public_key: spark_address.identity_public_key.to_string(),
+            network: match spark_address.network {
+                spark_wallet::Network::Mainnet => BitcoinNetwork::Bitcoin,
+                spark_wallet::Network::Testnet => BitcoinNetwork::Testnet3,
+                spark_wallet::Network::Regtest => BitcoinNetwork::Regtest,
+                spark_wallet::Network::Signet => BitcoinNetwork::Signet,
+            },
+            spark_invoice_fields: spark_address.spark_invoice_fields.map(Into::into),
+            signature: spark_address.signature.map(|sig| sig.to_string()),
+        }
+    }
+}
+
+impl From<spark::address::SparkInvoiceFields> for SparkInvoiceFields {
+    fn from(fields: spark::address::SparkInvoiceFields) -> Self {
+        SparkInvoiceFields {
+            id: fields.id.to_string(),
+            version: fields.version,
+            memo: fields.memo,
+            sender_public_key: fields.sender_public_key.map(|pk| pk.to_string()),
+            expiry_time: fields.expiry_time.map(|time| {
+                time.duration_since(web_time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            }),
+            payment_type: fields.payment_type.map(Into::into),
+        }
+    }
+}
+
+impl From<spark::address::SparkAddressPaymentType> for SparkAddressPaymentType {
+    fn from(payment_type: spark::address::SparkAddressPaymentType) -> Self {
+        match payment_type {
+            spark::address::SparkAddressPaymentType::TokensPayment(tp) => {
+                SparkAddressPaymentType::TokensPayment(TokensPayment {
+                    token_identifier: tp.token_identifier.map(|id| id.to_string()),
+                    amount: tp.amount,
+                })
+            }
+            spark::address::SparkAddressPaymentType::SatsPayment(sp) => {
+                SparkAddressPaymentType::SatsPayment(SatsPayment { amount: sp.amount })
+            }
+        }
+    }
+}
+
+impl From<spark::address::TokensPayment> for TokensPayment {
+    fn from(tp: spark::address::TokensPayment) -> Self {
+        TokensPayment {
+            token_identifier: tp.token_identifier.map(|id| id.to_string()),
+            amount: tp.amount,
+        }
+    }
+}
+
+impl From<spark::address::SatsPayment> for SatsPayment {
+    fn from(sp: spark::address::SatsPayment) -> Self {
+        SatsPayment { amount: sp.amount }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkInvoiceFields {
+    pub id: String,
+    pub version: u32,
+    pub memo: Option<String>,
+    pub sender_public_key: Option<String>,
+    pub expiry_time: Option<u64>,
+    pub payment_type: Option<SparkAddressPaymentType>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum SparkAddressPaymentType {
+    TokensPayment(TokensPayment),
+    SatsPayment(SatsPayment),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct TokensPayment {
+    pub token_identifier: Option<String>,
+    pub amount: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SatsPayment {
+    pub amount: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -2,12 +2,13 @@ use bitcoin::{Address, Denomination, address::NetworkUnchecked};
 use lightning::bolt11_invoice::Bolt11InvoiceDescriptionRef;
 use percent_encoding_rfc3986::percent_decode_str;
 use serde::Deserialize;
+use spark_wallet::SparkAddress;
 use tracing::{debug, error};
 
 use crate::{
     dns::{self, DnsResolver},
     error::ServiceConnectivityError,
-    input::{Bip21Extra, ParseError, PaymentRequestSource},
+    input::{Bip21Extra, ParseError, PaymentRequestSource, SparkAddressDetails},
     lnurl::{
         LnurlErrorDetails,
         auth::{self, LnurlAuthRequestDetails},
@@ -85,6 +86,10 @@ where
 
         let source = PaymentRequestSource::default();
         if let Some(input_type) = self.parse_lightning(input, &source).await? {
+            return Ok(input_type);
+        }
+
+        if let Some(input_type) = parse_spark_address(input, &source) {
             return Ok(input_type);
         }
 
@@ -535,6 +540,17 @@ fn parse_bip21_key(
         }
     }
     Ok(())
+}
+
+fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option<InputType> {
+    if let Ok(spark_address) = input.parse::<SparkAddress>() {
+        return Some(InputType::SparkAddress(SparkAddressDetails {
+            encoded_address: input.to_string(),
+            decoded_address: spark_address.into(),
+            source: source.clone(),
+        }));
+    }
+    None
 }
 
 fn parse_bitcoin(input: &str, source: &PaymentRequestSource) -> Option<InputType> {

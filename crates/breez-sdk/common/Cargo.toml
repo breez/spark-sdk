@@ -37,6 +37,9 @@ strum = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+spark.workspace = true
+web-time.workspace = true
+spark-wallet.workspace = true
 uniffi = { workspace = true, optional = true }
 
 # Non-Wasm dependencies
