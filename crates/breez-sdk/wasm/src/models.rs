@@ -30,6 +30,40 @@ pub struct DepositInfo {
     pub claim_error: Option<DepositClaimError>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositRequest)]
+pub struct ClaimDepositRequest {
+    pub txid: String,
+    pub vout: u32,
+    pub max_fee: Option<Fee>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositResponse)]
+pub struct ClaimDepositResponse {
+    pub payment: Payment,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RefundDepositRequest)]
+pub struct RefundDepositRequest {
+    pub txid: String,
+    pub vout: u32,
+    pub destination_address: String,
+    pub fee: Fee,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RefundDepositResponse)]
+pub struct RefundDepositResponse {
+    pub tx_id: String,
+    pub tx_hex: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ListUnclaimedDepositsRequest)]
+pub struct ListUnclaimedDepositsRequest {}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ListUnclaimedDepositsResponse)]
+pub struct ListUnclaimedDepositsResponse {
+    pub deposits: Vec<DepositInfo>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::DepositClaimError)]
 pub enum DepositClaimError {
     DepositClaimFeeExceeded {
