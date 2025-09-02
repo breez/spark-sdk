@@ -51,7 +51,7 @@ where
             description,
         } => {
             let payment = wallet
-                .create_lightning_invoice(amount_sat, description)
+                .create_lightning_invoice(amount_sat, description, None)
                 .await?;
             let qr = QrCode::with_error_correction_level(&payment.invoice, EcLevel::L)
                 .unwrap()

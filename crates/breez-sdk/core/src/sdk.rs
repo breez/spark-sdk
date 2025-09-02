@@ -603,6 +603,7 @@ impl BreezSdk {
                     .create_lightning_invoice(
                         amount_sats.unwrap_or_default(),
                         Some(description.clone()),
+                        None,
                     )
                     .await?
                     .invoice,
