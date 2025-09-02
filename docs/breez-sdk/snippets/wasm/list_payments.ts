@@ -1,6 +1,6 @@
 import { Payment, type BreezSdk } from '@breeztech/breez-sdk-spark'
 
-const exampleGetPayment = async (sdk: BreezSdk): Payment => {
+const exampleGetPayment = async (sdk: BreezSdk): Promise<Payment> => {
   // ANCHOR: get-payment
   const paymentId = '<payment id>'
   const response = await sdk.getPayment({
@@ -11,7 +11,7 @@ const exampleGetPayment = async (sdk: BreezSdk): Payment => {
   return payment
 }
 
-const exampleListPayments = async (sdk: BreezSdk): Payment[] => {
+const exampleListPayments = async (sdk: BreezSdk): Promise<Payment[]> => {
   // ANCHOR: list-payments
   const response = await sdk.listPayments({})
   const payments = response.payments
@@ -19,7 +19,7 @@ const exampleListPayments = async (sdk: BreezSdk): Payment[] => {
   return payments
 }
 
-const exampleListPaymentsFiltered = async (sdk: BreezSdk): Payment[] => {
+const exampleListPaymentsFiltered = async (sdk: BreezSdk): Promise<Payment[]> => {
   // ANCHOR: list-payments-filtered
   const response = await sdk.listPayments({
     offset: 0,

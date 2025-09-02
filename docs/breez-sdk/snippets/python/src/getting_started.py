@@ -1,5 +1,20 @@
 import logging
-from breez_sdk_spark import BreezSdk, connect, ConnectRequest, default_config, default_storage, EventListener, GetInfoRequest, init_logging, LogEntry, Logger, Network, SdkBuilder, SdkEvent
+from breez_sdk_spark import (
+    BreezSdk,
+    connect,
+    ConnectRequest,
+    default_config,
+    default_storage,
+    EventListener,
+    GetInfoRequest,
+    init_logging,
+    LogEntry,
+    Logger,
+    Network,
+    SdkBuilder,
+    SdkEvent,
+)
+
 
 async def init_sdk():
     # ANCHOR: init-sdk
@@ -10,16 +25,17 @@ async def init_sdk():
 
     try:
         # Connect to the SDK using the simplified connect method
-        sdk = await connect(request=ConnectRequest(
-            config=config,
-            mnemonic=mnemonic,
-            storage_dir="./.data"
-        ))
+        sdk = await connect(
+            request=ConnectRequest(
+                config=config, mnemonic=mnemonic, storage_dir="./.data"
+            )
+        )
         return sdk
     except Exception as error:
         logging.error(error)
         raise
     # ANCHOR_END: init-sdk
+
 
 async def init_sdk_advanced():
     # ANCHOR: init-sdk-advanced
@@ -34,7 +50,7 @@ async def init_sdk_advanced():
 
         # Build the SDK using the config, mnemonic and storage
         builder = SdkBuilder(config=config, mnemonic=mnemonic, storage=storage)
-        
+
         # You can also pass your custom implementations:
         # builder.with_chain_service(<your chain service implementation>)
         # builder.with_rest_client(<your rest client implementation>)
@@ -44,6 +60,7 @@ async def init_sdk_advanced():
         logging.error(error)
         raise
     # ANCHOR_END: init-sdk-advanced
+
 
 async def fetch_balance(sdk: BreezSdk):
     # ANCHOR: fetch-balance
@@ -55,10 +72,12 @@ async def fetch_balance(sdk: BreezSdk):
         raise
     # ANCHOR_END: fetch-balance
 
+
 # ANCHOR: logging
 class SdkLogger(Logger):
-    def log(self, log_entry: LogEntry):
-        logging.debug(f"Received log [{log_entry.level}]: {log_entry.line}")
+    def log(self, l: LogEntry):
+        logging.debug(f"Received log [{l.level}]: {l.line}")
+
 
 def set_logger(logger: SdkLogger):
     try:
@@ -66,12 +85,16 @@ def set_logger(logger: SdkLogger):
     except Exception as error:
         logging.error(error)
         raise
+
+
 # ANCHOR_END: logging
+
 
 # ANCHOR: add-event-listener
 class SdkListener(EventListener):
-    def on_event(self, sdk_event: SdkEvent):
-        logging.debug(f"Received event {sdk_event}")
+    def on_event(self, event: SdkEvent):
+        logging.debug(f"Received event {event}")
+
 
 def add_event_listener(sdk: BreezSdk, listener: SdkListener):
     try:
@@ -80,7 +103,10 @@ def add_event_listener(sdk: BreezSdk, listener: SdkListener):
     except Exception as error:
         logging.error(error)
         raise
+
+
 # ANCHOR_END: add-event-listener
+
 
 # ANCHOR: remove-event-listener
 def remove_event_listener(sdk: BreezSdk, listener_id: str):
@@ -89,7 +115,10 @@ def remove_event_listener(sdk: BreezSdk, listener_id: str):
     except Exception as error:
         logging.error(error)
         raise
+
+
 # ANCHOR_END: remove-event-listener
+
 
 # ANCHOR: disconnect
 def disconnect(sdk: BreezSdk):
@@ -98,4 +127,6 @@ def disconnect(sdk: BreezSdk):
     except Exception as error:
         logging.error(error)
         raise
+
+
 # ANCHOR_END: disconnect

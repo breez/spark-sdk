@@ -6,18 +6,12 @@
 3. Unzip the artifact in the `snippets/python/packages` folder
 4. Run `pip install packages/{NAME_OF_.WHL_FILE}`
 
-To check the syntax:
+### To lint
+1. Install pylint `pip install pylint`
+2. Run pylint:
 
 ```bash
 cd snippets/python
-python3 -m compileall src
+pylint -d W0612,W1203,R0903,C0114,C0115,C0116 src
 ```
 
-To check the snippet against formatting and linter rules:
-
-```bash
-cd snippets/python/src
-ruff check --ignore F841 --ignore F401 --add-noqa .
-```
-
-and fix all occurrences of the `# noqa` directive.
