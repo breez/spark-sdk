@@ -14,10 +14,10 @@ use spark::{
     operator::{OperatorPool, rpc::ConnectionManager},
     services::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
-        LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment, LightningService,
-        QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager, TokenService,
-        TokenTransaction, Transfer, TransferService, TransferTokenOutput, UnilateralExitService,
-        Utxo,
+        InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment,
+        LightningService, QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager,
+        TokenService, TokenTransaction, Transfer, TransferService, TransferTokenOutput,
+        UnilateralExitService, Utxo,
     },
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer},
@@ -243,7 +243,7 @@ impl<S: Signer> SparkWallet<S> {
     pub async fn create_lightning_invoice(
         &self,
         amount_sat: u64,
-        description: Option<String>,
+        description: Option<InvoiceDescription>,
         public_key: Option<PublicKey>,
     ) -> Result<LightningReceivePayment, SparkWalletError> {
         Ok(self

@@ -17,8 +17,8 @@ use breez_sdk_common::{
     rest::RestClient,
 };
 use spark_wallet::{
-    DefaultSigner, ExitSpeed, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress,
-    SparkWallet, WalletEvent, WalletTransfer,
+    DefaultSigner, ExitSpeed, InvoiceDescription, Order, PagingFilter, PayLightningInvoiceResult,
+    SparkAddress, SparkWallet, WalletEvent, WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
 use tracing::{error, info, trace};
@@ -602,7 +602,7 @@ impl BreezSdk {
                     .spark_wallet
                     .create_lightning_invoice(
                         amount_sats.unwrap_or_default(),
-                        Some(description.clone()),
+                        Some(InvoiceDescription::Memo(description.clone())),
                         None,
                     )
                     .await?
