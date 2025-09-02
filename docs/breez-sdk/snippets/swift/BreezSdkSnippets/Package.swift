@@ -8,7 +8,7 @@ let package = Package(
     platforms: [.macOS("15.0")],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.2.3"),
-        .package(url: "https://github.com/breez/breez-sdk-spark-swift", exact: "0.1.1")
+        .package(url: "https://github.com/breez/breez-sdk-spark-swift", exact: "0.1.3")
         // To use a local version of breez-sdk-spark, comment-out the above and un-comment:
         // .package(name: "bindings-swift", path: "/local-path/breez-sdk-spark/crate/breez-sdk/bindings/langs/swift")
     ],
