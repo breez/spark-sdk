@@ -164,4 +164,32 @@ impl BreezSdk {
     pub async fn get_payment(&self, request: GetPaymentRequest) -> WasmResult<GetPaymentResponse> {
         Ok(self.sdk.get_payment(request.into()).await?.into())
     }
+
+    #[wasm_bindgen(js_name = "claimDeposit")]
+    pub async fn claim_deposit(
+        &self,
+        request: ClaimDepositRequest,
+    ) -> WasmResult<ClaimDepositResponse> {
+        Ok(self.sdk.claim_deposit(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "refundDeposit")]
+    pub async fn refund_deposit(
+        &self,
+        request: RefundDepositRequest,
+    ) -> WasmResult<RefundDepositResponse> {
+        Ok(self.sdk.refund_deposit(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "listUnclaimedDeposits")]
+    pub async fn list_unclaimed_deposits(
+        &self,
+        request: ListUnclaimedDepositsRequest,
+    ) -> WasmResult<ListUnclaimedDepositsResponse> {
+        Ok(self
+            .sdk
+            .list_unclaimed_deposits(request.into())
+            .await?
+            .into())
+    }
 }
