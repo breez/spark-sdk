@@ -1,0 +1,12 @@
+cargo:
+  debug:
+    toolchain: stable
+  release:
+    toolchain: stable
+
+precompiled_binaries:
+  # Uri prefix used when downloading precompiled binaries.
+  url_prefix: https://github.com/breez/breez-sdk-spark-flutter/releases/download/precompiled_
+
+  # Public key for verifying downloaded precompiled binaries.
+  public_key: 9f1d5288ad8d6581a7f14c852f71db594991569bc4f173ef6ef0d33f1e359975
