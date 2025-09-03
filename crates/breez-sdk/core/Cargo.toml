@@ -28,6 +28,7 @@ breez-sdk-common.workspace = true
 chrono.workspace = true
 clap = { workspace = true, features = ["derive"] }
 dotenvy.workspace = true
+flutter_rust_bridge = { version = "=2.9.0", features = ["chrono"]}
 figment = { workspace = true, features = ["env", "yaml"] }
 hex.workspace = true
 macros.workspace = true

@@ -1,0 +1,14 @@
+rust_input: crate,breez-sdk-common::error,breez-sdk-common::fiat,breez-sdk-common::rest,breez-sdk-common::input,breez-sdk-spark
+rust_root: rust/
+rust_preamble: |
+  use std::path::Path;
+  use std::pin::Pin;
+dart_output: lib/generated
+dart_entrypoint_class_name: BreezSpark
+c_output: ios/Classes/frb_generated.h
+duplicated_c_output: [macos/Classes/frb_generated.h]
+web: false
+full_dep: true
+add_mod_to_lib: false
+dart_format_line_length: 110
+enable_lifetime: true

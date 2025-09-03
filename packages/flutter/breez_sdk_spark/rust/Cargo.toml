@@ -1,0 +1,23 @@
+[package]
+name = "breez_sdk_spark"
+version.workspace = true
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib", "cdylib", "lib"]
+
+[dependencies]
+async-trait.workspace = true
+breez-sdk-common.workspace = true
+breez-sdk-spark.workspace = true
+extend = "1.2.0"
+flutter_rust_bridge = { version = "=2.9.0", features = ["chrono"], optional = true }
+
+[build-dependencies]
+flutter_rust_bridge_codegen = "=2.9.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+[features]
+flutter_rust_bridge = ["dep:flutter_rust_bridge"]

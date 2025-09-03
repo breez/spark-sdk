@@ -12,6 +12,7 @@ members = [
   "crates/spark-wallet",
   "crates/xtask",
   "examples/spark-cli",
+  "packages/flutter/breez_sdk_spark/rust/",
 ]
 
 [workspace.package]
