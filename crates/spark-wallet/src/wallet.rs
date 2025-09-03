@@ -935,10 +935,24 @@ impl<S: Signer> BackgroundProcessor<S> {
         }
 
         claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
+
+        // get the ssp transfer details, if it fails just use None
+        // Internal transfers will not have an SSP entry so just skip it
+        let ssp_transfer = if transfer.transfer_type == spark::services::TransferType::Transfer {
+            None
+        } else {
+            self.ssp_client
+                .get_transfers(vec![transfer.id.to_string()])
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .next()
+        };
+
         self.event_manager
             .notify_listeners(WalletEvent::TransferClaimed(WalletTransfer::from_transfer(
                 transfer,
-                None,
+                ssp_transfer,
                 self.identity_public_key,
             )));
         Ok(())
