@@ -251,9 +251,13 @@ fn get_struct_fields(fields: &Fields) -> Vec<TokenStream> {
                     let segment = &type_path.path.segments[0];
                     if segment.ident == "Vec" {
                         quote! { #ident: val.#ident.into_iter().map(|i| i.into()).collect() }
+                    } else if segment.ident == "HashMap" {
+                        quote! { #ident: val.#ident.into_iter().map(|(k, v)| (k, v.into())).collect() }
                     } else if segment.ident == "Option" {
                         if get_path(&segment.arguments).is_some_and(|tp| tp.path.segments[0].ident == "Vec") {
                             quote! { #ident: val.#ident.map(|i| i.into_iter().map(|a| a.into()).collect()) }
+                        } else if get_path(&segment.arguments).is_some_and(|tp| tp.path.segments[0].ident == "HashMap") {
+                            quote! { #ident: val.#ident.map(|i| i.into_iter().map(|(k, v)| (k, v.into())).collect()) }
                         } else {
                             quote! { #ident: val.#ident.map(|i| i.into()) }
                         }
@@ -280,9 +284,13 @@ fn get_enum_fields(fields: &Fields) -> Vec<TokenStream> {
                             let segment = &type_path.path.segments[0];
                             if segment.ident == "Vec" {
                                 quote! { #ident: #ident.into_iter().map(|i| i.into()).collect() }
+                            } else if segment.ident == "HashMap" {
+                                quote! { #ident: #ident.into_iter().map(|(k, v)| (k, v.into())).collect() }
                             } else if segment.ident == "Option" {
                                 if get_path(&segment.arguments).is_some_and(|tp| tp.path.segments[0].ident == "Vec") {
                                     quote! { #ident: #ident.map(|i| i.into_iter().map(|a| a.into()).collect()) }
+                                } else if get_path(&segment.arguments).is_some_and(|tp| tp.path.segments[0].ident == "HashMap") {
+                                    quote! { #ident: #ident.map(|i| i.into_iter().map(|(k, v)| (k, v.into())).collect()) }
                                 } else {
                                     quote! { #ident: #ident.map(|i| i.into()) }
                                 }
@@ -308,9 +316,13 @@ fn get_enum_fields(fields: &Fields) -> Vec<TokenStream> {
                             let segment = &type_path.path.segments[0];
                             if segment.ident == "Vec" {
                                 quote! { #ident.into_iter().map(|i| i.into()).collect() }
+                            } else if segment.ident == "HashMap" {
+                                quote! { #ident.into_iter().map(|(k, v)| (k, v.into())).collect() }
                             } else if segment.ident == "Option" {
                                 if get_path(&segment.arguments).is_some_and(|tp| tp.path.segments[0].ident == "Vec") {
                                     quote! { #ident.map(|i| i.into_iter().map(|a| a.into()).collect()) }
+                                } else if get_path(&segment.arguments).is_some_and(|tp| tp.path.segments[0].ident == "HashMap") {
+                                    quote! { #ident.map(|i| i.into_iter().map(|(k, v)| (k, v.into())).collect()) }
                                 } else {
                                     quote! { #ident.map(|i| i.into()) }
                                 }

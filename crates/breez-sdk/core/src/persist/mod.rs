@@ -1,13 +1,16 @@
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub(crate) mod sqlite;
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use macros::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{DepositClaimError, DepositInfo, LightningAddressInfo, LnurlPayInfo, models::Payment};
+use crate::{
+    DepositClaimError, DepositInfo, LightningAddressInfo, LnurlPayInfo, TokenBalance,
+    models::Payment,
+};
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
 const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
@@ -301,11 +304,15 @@ impl ObjectCacheRepository {
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedAccountInfo {
     pub(crate) balance_sats: u64,
+    #[serde(default)]
+    pub(crate) token_balances: HashMap<String, TokenBalance>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedSyncInfo {
     pub(crate) offset: u64,
+    #[serde(default)]
+    pub(crate) token_offset: u64,
 }
 
 #[derive(Serialize, Deserialize, Default)]

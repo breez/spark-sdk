@@ -19,8 +19,8 @@ use spark::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
         InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment,
         LightningService, QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager,
-        TokenService, TokenTransaction, Transfer, TransferService, TransferTokenOutput,
-        UnilateralExitService, Utxo,
+        TokenMetadata, TokenService, TokenTransaction, Transfer, TransferService,
+        TransferTokenOutput, UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
@@ -214,6 +214,10 @@ impl SparkWallet {
 }
 
 impl SparkWallet {
+    pub fn get_identity_public_key(&self) -> PublicKey {
+        self.identity_public_key
+    }
+
     pub async fn list_leaves(&self) -> Result<WalletLeaves, SparkWalletError> {
         let leaves = self.tree_service.list_leaves().await?;
         Ok(leaves.into())
@@ -797,6 +801,16 @@ impl SparkWallet {
             bitcoin::Network::from(self.config.network),
         )
         .to_string())
+    }
+
+    pub async fn get_tokens_metadata(
+        &self,
+        token_identifiers: &[&str],
+    ) -> Result<Vec<TokenMetadata>, SparkWalletError> {
+        self.token_service
+            .get_tokens_metadata(token_identifiers)
+            .await
+            .map_err(Into::into)
     }
 }
 
