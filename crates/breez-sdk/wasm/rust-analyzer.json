@@ -1,0 +1,10 @@
+{
+    "cargo": {
+        "target": "wasm32-unknown-unknown",
+        "features": []
+    },
+    "check": {
+        "command": "clippy",
+        "targets": ["wasm32-unknown-unknown"]
+    }
+}
