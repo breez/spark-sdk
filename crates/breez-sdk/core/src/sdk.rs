@@ -17,10 +17,11 @@ use breez_sdk_common::{
     rest::RestClient,
 };
 use spark_wallet::{
-    DefaultSigner, ExitSpeed, InvoiceDescription, Order, PagingFilter, PayLightningInvoiceResult,
-    SparkAddress, SparkWallet, WalletEvent, WalletTransfer,
+    DefaultSigner, ExitSpeed, InvoiceDescription, ListTokenTransactionsRequest, Order,
+    PagingFilter, PayLightningInvoiceResult, SparkAddress, SparkWallet, TransferTokenOutput,
+    WalletEvent, WalletTransfer,
 };
-use std::{str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc, time::UNIX_EPOCH};
 use tracing::{error, info, trace};
 use web_time::{Duration, SystemTime};
 
@@ -33,8 +34,8 @@ use crate::{
     BitcoinChainService, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee,
     GetPaymentRequest, GetPaymentResponse, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
-    Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    RefundDepositRequest, RefundDepositResponse, SendPaymentOptions,
+    Network, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
+    PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse, SendPaymentOptions,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -53,6 +54,8 @@ use crate::{
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
+
+const BATCH_SIZE: u64 = 50;
 
 #[derive(Clone, Debug)]
 enum SyncType {
@@ -282,8 +285,8 @@ impl BreezSdk {
             self.spark_wallet.sync().await?;
             info!("sync_wallet_internal: Synced with Spark network completed");
         }
-        self.sync_payments_to_storage().await?;
-        info!("sync_wallet_internal: Synced payments to storage completed");
+        self.sync_state_to_storage().await?;
+        info!("sync_wallet_internal: Synced wallet state to storage completed");
         self.check_and_claim_static_deposits().await?;
         info!("sync_wallet_internal: Checked and claimed static deposits completed");
         let elapsed = start_time.elapsed();
@@ -293,18 +296,43 @@ impl BreezSdk {
     }
 
     /// Synchronizes payments from transfers to persistent storage
-    async fn sync_payments_to_storage(&self) -> Result<(), SdkError> {
-        const BATCH_SIZE: u64 = 50;
-
-        // Sync balance
-        let balance = self.spark_wallet.get_balance().await?;
+    async fn sync_state_to_storage(&self) -> Result<(), SdkError> {
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
-        object_repository
-            .save_account_info(&CachedAccountInfo {
-                balance_sats: balance,
-            })
+
+        self.sync_balances_to_storage(&object_repository).await?;
+        self.sync_bitcoin_payments_to_storage(&object_repository)
+            .await?;
+        self.sync_token_payments_to_storage(&object_repository)
             .await?;
 
+        Ok(())
+    }
+
+    async fn sync_balances_to_storage(
+        &self,
+        object_repository: &ObjectCacheRepository,
+    ) -> Result<(), SdkError> {
+        let balance_sats = self.spark_wallet.get_balance().await?;
+        let token_balances = self
+            .spark_wallet
+            .get_token_balances()
+            .await?
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect();
+        object_repository
+            .save_account_info(&CachedAccountInfo {
+                balance_sats,
+                token_balances,
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn sync_bitcoin_payments_to_storage(
+        &self,
+        object_repository: &ObjectCacheRepository,
+    ) -> Result<(), SdkError> {
         // Get the last offset we processed from storage
         let cached_sync_info = object_repository
             .fetch_sync_info()
@@ -329,7 +357,7 @@ impl BreezSdk {
                 .await?;
 
             info!(
-                "Syncing payments to storage, offset = {next_offset}, transfers = {}",
+                "Syncing bitcoin payments to storage, offset = {next_offset}, transfers = {}",
                 transfers_response.len()
             );
             // Process transfers in this batch
@@ -338,12 +366,12 @@ impl BreezSdk {
                 let payment: Payment = transfer.clone().try_into()?;
                 // Insert payment into storage
                 if let Err(err) = self.storage.insert_payment(payment.clone()).await {
-                    error!("Failed to insert payment: {err:?}");
+                    error!("Failed to insert bitcoin payment: {err:?}");
                 }
                 if payment.status == PaymentStatus::Pending {
                     pending_payments = pending_payments.saturating_add(1);
                 }
-                info!("Inserted payment: {payment:?}");
+                info!("Inserted bitcoin payment: {payment:?}");
             }
 
             // Check if we have more transfers to fetch
@@ -353,16 +381,149 @@ impl BreezSdk {
             let save_res = object_repository
                 .save_sync_info(&CachedSyncInfo {
                     offset: next_offset.saturating_sub(pending_payments),
+                    token_offset: cached_sync_info.token_offset,
                 })
                 .await;
 
             if let Err(err) = save_res {
-                error!("Failed to update last sync offset: {err:?}");
+                error!("Failed to update last sync bitcoin offset: {err:?}");
             }
             has_more = transfers_response.len() as u64 == BATCH_SIZE;
         }
 
         Ok(())
+    }
+
+    async fn sync_token_payments_to_storage(
+        &self,
+        object_repository: &ObjectCacheRepository,
+    ) -> Result<(), SdkError> {
+        // Get the last offsets we processed from storage
+        let cached_sync_info = object_repository
+            .fetch_sync_info()
+            .await?
+            .unwrap_or_default();
+        let current_token_offset = cached_sync_info.token_offset;
+
+        // We'll keep querying in batches until we have all transfers
+        let mut next_offset = current_token_offset;
+        let mut has_more = true;
+        info!("Syncing token payments to storage, offset = {next_offset}");
+        while has_more {
+            // Get batch of token transactions starting from current offset
+            let token_transactions = self
+                .spark_wallet
+                .list_token_transactions(ListTokenTransactionsRequest {
+                    paging: Some(PagingFilter::new(
+                        Some(next_offset),
+                        Some(BATCH_SIZE),
+                        Some(Order::Ascending),
+                    )),
+                    ..Default::default()
+                })
+                .await?;
+
+            let _parent_transactions = self
+                .spark_wallet
+                .list_token_transactions(ListTokenTransactionsRequest {
+                    paging: Some(PagingFilter::new(None, Some(BATCH_SIZE), None)),
+                    owner_public_keys: Some(Vec::new()),
+                    token_transaction_hashes: vec![], // TODO: get hashes of token_transactions inputs
+                    ..Default::default()
+                })
+                .await?;
+
+            // TODO: group each token_transaction with its parent transactions
+            // Given the goal is to determine if the tx was sent by us or not, and given that
+            // all inputs of a tx must share the same owner, we might simplify and just check the first input of each tx
+
+            info!(
+                "Syncing token payments to storage, offset = {next_offset}, transactions = {}",
+                token_transactions.len()
+            );
+            // Process transfers in this batch
+            for transaction in &token_transactions {
+                let tx_inputs_are_ours = false; // TODO: determine if the tx was sent by us
+
+                // Create a payment record
+                let payments = self
+                    .token_transaction_to_payments(transaction, tx_inputs_are_ours)
+                    .await?;
+
+                for payment in payments {
+                    // Insert payment into storage
+                    if let Err(err) = self.storage.insert_payment(payment.clone()).await {
+                        error!("Failed to insert token payment: {err:?}");
+                    }
+                    info!("Inserted token payment: {payment:?}");
+                }
+            }
+
+            // Check if we have more transfers to fetch
+            next_offset = next_offset.saturating_add(u64::try_from(token_transactions.len())?);
+            // Update our last processed offset in the storage. We should remove pending payments
+            // from the offset as they might be removed from the list later.
+            let save_res = object_repository
+                .save_sync_info(&CachedSyncInfo {
+                    offset: cached_sync_info.offset,
+                    token_offset: next_offset,
+                })
+                .await;
+
+            if let Err(err) = save_res {
+                error!("Failed to update last sync token offset: {err:?}");
+            }
+            has_more = token_transactions.len() as u64 == BATCH_SIZE;
+        }
+
+        Ok(())
+    }
+
+    async fn token_transaction_to_payments(
+        &self,
+        transaction: &spark_wallet::TokenTransaction,
+        tx_inputs_are_ours: bool,
+    ) -> Result<Vec<Payment>, SdkError> {
+        let payment_type = if tx_inputs_are_ours {
+            PaymentType::Send
+        } else {
+            PaymentType::Receive
+        };
+
+        // TODO: group outputs by owner public key
+
+        // TODO: if inputs are ours, add an outgoing payment for each output group that is not ours, ignore potential change output
+
+        // TODO: if inputs are not ours, add an incoming payment for our output group, ignore other outputs
+
+        // Example for a single output
+        let output = transaction.outputs.first().unwrap();
+
+        let payment = Payment {
+            id: output.id.clone(),
+            payment_type,
+            status: transaction.status.clone().into(),
+            amount: output.token_amount.try_into().unwrap_or_default(), // TODO: amount will be changed to u128 or similar
+            fees: 0,
+            timestamp: transaction
+                .created_timestamp
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            method: PaymentMethod::SparkTokenTransaction,
+            details: Some(PaymentDetails::SparkTokenTransaction {
+                token_metadata: self
+                    .spark_wallet
+                    .get_tokens_metadata(vec![output.token_identifier.clone()])
+                    .await?
+                    .first()
+                    .unwrap()
+                    .clone()
+                    .into(),
+            }),
+        };
+
+        Ok(vec![payment])
     }
 
     async fn check_and_claim_static_deposits(&self) -> Result<(), SdkError> {
@@ -540,6 +701,7 @@ impl BreezSdk {
             .unwrap_or_default();
         Ok(GetInfoResponse {
             balance_sats: account_info.balance_sats,
+            token_balances: account_info.token_balances,
         })
     }
 
@@ -635,7 +797,8 @@ impl BreezSdk {
         let prepare_response = self
             .prepare_send_payment(PrepareSendPaymentRequest {
                 payment_request: success_data.pr,
-                amount_sats: Some(request.amount_sats),
+                amount: Some(request.amount_sats),
+                token_identifier: None,
             })
             .await?;
 
@@ -670,7 +833,8 @@ impl BreezSdk {
                             spark_transfer_fee_sats: None,
                             lightning_fee_sats: request.prepare_response.fee_sats,
                         },
-                        amount_sats: request.prepare_response.amount_sats,
+                        amount: request.prepare_response.amount_sats,
+                        token_identifier: None,
                     },
                     options: None,
                 },
@@ -720,16 +884,42 @@ impl BreezSdk {
     ) -> Result<PrepareSendPaymentResponse, SdkError> {
         // First check for spark address
         if let Ok(spark_address) = request.payment_request.parse::<SparkAddress>() {
+            if let Some(invoice_fields) = &spark_address.spark_invoice_fields
+                && let Some(payment_type) = &invoice_fields.payment_type
+            {
+                match payment_type {
+                    spark_wallet::SparkAddressPaymentType::SatsPayment(_sats_payment_details) => {
+                        // TODO: Use sat payment and fail if request is for tokens
+                    }
+                    spark_wallet::SparkAddressPaymentType::TokensPayment(
+                        _tokens_payment_details,
+                    ) => {
+                        // TODO: Use tokens payment and fail if request is for sats
+                    }
+                }
+            }
+
             return Ok(PrepareSendPaymentResponse {
                 payment_method: SendPaymentMethod::SparkAddress {
                     address: spark_address.to_string(),
-                    fee_sats: 0,
+                    fee: 0,
+                    token_identifier: request.token_identifier.clone(),
                 },
-                amount_sats: request
-                    .amount_sats
+                amount: request
+                    .amount
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                token_identifier: request.token_identifier,
             });
         }
+
+        if request.token_identifier.is_some() {
+            return Err(SdkError::InvalidInput(
+                "Token identifier can't be provided for this payment request".to_string(),
+            ));
+        }
+
+        let amount_sats = request.amount;
+
         // Then check for other types of inputs
         let parsed_input = parse(&request.payment_request).await?;
         match &parsed_input {
@@ -746,10 +936,7 @@ impl BreezSdk {
 
                 let lightning_fee_sats = self
                     .spark_wallet
-                    .fetch_lightning_send_fee_estimate(
-                        &request.payment_request,
-                        request.amount_sats,
-                    )
+                    .fetch_lightning_send_fee_estimate(&request.payment_request, amount_sats)
                     .await?;
 
                 Ok(PrepareSendPaymentResponse {
@@ -758,10 +945,10 @@ impl BreezSdk {
                         spark_transfer_fee_sats,
                         lightning_fee_sats,
                     },
-                    amount_sats: request
-                        .amount_sats
+                    amount: amount_sats
                         .or(detailed_bolt11_invoice.amount_msat.map(|msat| msat / 1000))
                         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                    token_identifier: None,
                 })
             }
             InputType::BitcoinAddress(withdrawal_address) => {
@@ -770,8 +957,7 @@ impl BreezSdk {
                     .fetch_coop_exit_fee_quote(
                         &withdrawal_address.address,
                         Some(
-                            request
-                                .amount_sats
+                            amount_sats
                                 .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
                         ),
                     )
@@ -781,9 +967,9 @@ impl BreezSdk {
                         address: withdrawal_address.clone(),
                         fee_quote: fee_quote.into(),
                     },
-                    amount_sats: request
-                        .amount_sats
+                    amount: amount_sats
                         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                    token_identifier: None,
                 })
             }
             _ => Err(SdkError::InvalidInput(
@@ -799,23 +985,45 @@ impl BreezSdk {
         self.send_payment_internal(request, false).await
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn send_payment_internal(
         &self,
         request: SendPaymentRequest,
         suppress_payment_event: bool,
     ) -> Result<SendPaymentResponse, SdkError> {
         let res = match request.prepare_response.payment_method {
-            SendPaymentMethod::SparkAddress { address, .. } => {
+            SendPaymentMethod::SparkAddress {
+                address,
+                token_identifier,
+                ..
+            } => {
                 let spark_address = address
                     .parse::<SparkAddress>()
                     .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
-                let transfer = self
-                    .spark_wallet
-                    .transfer(request.prepare_response.amount_sats, &spark_address)
-                    .await?;
-                Ok(SendPaymentResponse {
-                    payment: transfer.try_into()?,
-                })
+
+                let payment = if let Some(identifier) = token_identifier {
+                    let transaction = self
+                        .spark_wallet
+                        .transfer_tokens(vec![TransferTokenOutput {
+                            token_id: identifier,
+                            amount: u128::from(request.prepare_response.amount),
+                            receiver_address: spark_address,
+                        }])
+                        .await?;
+                    self.token_transaction_to_payments(&transaction, true)
+                        .await?
+                        .first()
+                        .unwrap()
+                        .clone()
+                } else {
+                    let transfer = self
+                        .spark_wallet
+                        .transfer(request.prepare_response.amount, &spark_address)
+                        .await?;
+                    transfer.try_into()?
+                };
+
+                Ok(SendPaymentResponse { payment })
             }
             SendPaymentMethod::Bolt11Invoice {
                 invoice_details,
@@ -826,7 +1034,7 @@ impl BreezSdk {
                     // we are not sending amount in case the invoice contains it.
                     Some(_) => None,
                     // We are sending amount for zero amount invoice
-                    None => Some(request.prepare_response.amount_sats),
+                    None => Some(request.prepare_response.amount),
                 };
                 let use_spark = match request.options {
                     Some(SendPaymentOptions::Bolt11Invoice { use_spark }) => use_spark,
@@ -855,7 +1063,7 @@ impl BreezSdk {
                 let payment = match payment_response {
                     PayLightningInvoiceResult::LightningPayment(payment) => {
                         self.poll_lightning_send_payment(&payment.id);
-                        Payment::from_lightning(payment, request.prepare_response.amount_sats)?
+                        Payment::from_lightning(payment, request.prepare_response.amount)?
                     }
                     PayLightningInvoiceResult::Transfer(payment) => payment.try_into()?,
                 };
@@ -875,7 +1083,7 @@ impl BreezSdk {
                     .spark_wallet
                     .withdraw(
                         &address.address,
-                        Some(request.prepare_response.amount_sats),
+                        Some(request.prepare_response.amount),
                         exit_speed,
                         fee_quote.into(),
                     )

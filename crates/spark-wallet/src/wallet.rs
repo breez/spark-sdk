@@ -16,8 +16,8 @@ use spark::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
         InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment,
         LightningService, QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager,
-        TokenService, TokenTransaction, Transfer, TransferService, TransferTokenOutput,
-        UnilateralExitService, Utxo,
+        TokenMetadata, TokenService, TokenTransaction, Transfer, TransferService,
+        TransferTokenOutput, UnilateralExitService, Utxo,
     },
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer},
@@ -721,9 +721,25 @@ impl<S: Signer> SparkWallet<S> {
     pub async fn transfer_tokens(
         &self,
         outputs: Vec<TransferTokenOutput>,
-    ) -> Result<String, SparkWalletError> {
+    ) -> Result<TokenTransaction, SparkWalletError> {
         let tx_hash = self.token_service.transfer_tokens(outputs).await?;
-        Ok(tx_hash)
+        let tx = self
+            .token_service
+            .query_token_transactions(
+                QueryTokenTransactionsFilter {
+                    owner_public_keys: None,
+                    issuer_public_keys: vec![],
+                    token_transaction_hashes: vec![tx_hash],
+                    token_ids: vec![],
+                    output_ids: vec![],
+                },
+                None,
+            )
+            .await?
+            .first()
+            .cloned()
+            .unwrap(); // TODO: handle error
+        Ok(tx)
     }
 
     pub async fn list_token_transactions(
@@ -754,6 +770,16 @@ impl<S: Signer> SparkWallet<S> {
             bitcoin::Network::from(self.config.network),
         )
         .to_string())
+    }
+
+    pub async fn get_tokens_metadata(
+        &self,
+        token_identifiers: Vec<String>,
+    ) -> Result<Vec<TokenMetadata>, SparkWalletError> {
+        self.token_service
+            .get_tokens_metadata(token_identifiers)
+            .await
+            .map_err(Into::into)
     }
 }
 

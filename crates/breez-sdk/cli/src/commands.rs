@@ -61,6 +61,10 @@ pub enum Command {
         /// Optional amount to pay in satoshis
         #[arg(short = 'a', long)]
         amount: Option<u64>,
+
+        /// Optional token identifier
+        #[arg(short = 't', long)]
+        token_identifier: Option<String>,
     },
 
     /// Pay using LNURL
@@ -252,11 +256,13 @@ pub(crate) async fn execute_command(
         Command::Pay {
             payment_request,
             amount,
+            token_identifier,
         } => {
             let prepared_payment = sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request,
-                    amount_sats: amount,
+                    amount,
+                    token_identifier,
                 })
                 .await;
 

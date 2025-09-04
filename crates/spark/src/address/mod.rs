@@ -115,6 +115,7 @@ impl TryFrom<ProtoPaymentType> for SparkAddressPaymentType {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AssetIdentifier(Vec<u8>);
+
 impl std::fmt::Display for AssetIdentifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", hex::encode(&self.0))

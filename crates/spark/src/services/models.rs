@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::str::FromStr;
+use std::time::SystemTime;
 
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::{Transaction, TxOut, Txid};
@@ -804,6 +805,7 @@ pub struct TokenTransaction {
     pub inputs: TokenInputs,
     pub outputs: Vec<TokenOutput>,
     pub status: TokenTransactionStatus,
+    pub created_timestamp: SystemTime,
 }
 
 impl
@@ -840,10 +842,20 @@ impl
                 .map_err(|_| ServiceError::Generic("Invalid token transaction status".to_string()))?
                 .into();
 
+        let created_timestamp = token_transaction
+            .client_created_timestamp
+            .map(|ts| {
+                std::time::UNIX_EPOCH
+                    + std::time::Duration::from_secs(ts.seconds as u64)
+                    + std::time::Duration::from_nanos(ts.nanos as u64)
+            })
+            .unwrap_or(std::time::UNIX_EPOCH); // TODO: handle error + can we count on this value to generally be filled by the server?
+
         Ok(TokenTransaction {
             inputs,
             outputs,
             status,
+            created_timestamp,
         })
     }
 }
@@ -1024,7 +1036,8 @@ impl From<operator_rpc::spark_token::TokenTransactionStatus> for TokenTransactio
 
 #[derive(Debug, Clone)]
 pub struct QueryTokenTransactionsFilter {
-    pub owner_public_keys: Vec<PublicKey>,
+    /// If not provided, will use our own public key
+    pub owner_public_keys: Option<Vec<PublicKey>>,
     pub issuer_public_keys: Vec<PublicKey>,
     pub token_transaction_hashes: Vec<String>,
     pub token_ids: Vec<String>,
