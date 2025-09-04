@@ -12,7 +12,6 @@ members = [
   "crates/spark-wallet",
   "crates/xtask",
   "examples/spark-cli",
-  "packages/flutter/rust",
 ]
 
 [workspace.package]

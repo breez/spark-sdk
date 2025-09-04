@@ -28,6 +28,7 @@ migrate_working_dir/
 /pubspec.lock
 **/doc/api/
 .dart_tool/
+.data/
 .flutter-plugins
 .flutter-plugins-dependencies
 build/
