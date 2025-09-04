@@ -50,9 +50,11 @@ impl SdkBuilder {
     /// Arguments:
     /// - `chain_service`: The chain service to be used.
     #[must_use]
-    pub fn with_chain_service(mut self, chain_service: Arc<dyn BitcoinChainService>) -> Self {
-        self.chain_service = Some(chain_service);
-        self
+    pub fn with_chain_service(self, chain_service: Arc<dyn BitcoinChainService>) -> Self {
+        Self {
+            chain_service: Some(chain_service),
+            ..self
+        }
     }
 
     /// Sets the REST chain service to be used by the SDK.
@@ -60,25 +62,25 @@ impl SdkBuilder {
     /// - `url`: The base URL of the REST API.
     /// - `credentials`: Optional credentials for basic authentication.
     #[must_use]
-    pub fn with_rest_chain_service(
-        mut self,
-        url: String,
-        credentials: Option<Credentials>,
-    ) -> Self {
-        self.chain_service = Some(Arc::new(RestClientChainService::new(
-            url,
-            self.config.network,
-            5,
-            Box::new(CommonRequestRestClient::new().unwrap()),
-            credentials.map(|c| BasicAuth::new(c.username, c.password)),
-        )));
-        self
+    pub fn with_rest_chain_service(self, url: String, credentials: Option<Credentials>) -> Self {
+        Self {
+            chain_service: Some(Arc::new(RestClientChainService::new(
+                url,
+                self.config.network,
+                5,
+                Box::new(CommonRequestRestClient::new().unwrap()),
+                credentials.map(|c| BasicAuth::new(c.username, c.password)),
+            ))),
+            ..self
+        }
     }
 
     #[must_use]
-    pub fn with_lnurl_client(mut self, lnurl_client: Arc<dyn RestClient>) -> Self {
-        self.lnurl_client = Some(lnurl_client);
-        self
+    pub fn with_lnurl_client(self, lnurl_client: Arc<dyn RestClient>) -> Self {
+        Self {
+            lnurl_client: Some(lnurl_client),
+            ..self
+        }
     }
 
     /// Builds the `BreezSdk` instance with the configured components.
