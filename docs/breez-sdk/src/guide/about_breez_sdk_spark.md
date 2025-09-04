@@ -2,14 +2,7 @@
 
 ## **What Is the Breez SDK?**
 
-The Breez SDK provides developers with an end-to-end solution for integrating self-custodial Lightning payments into their apps and services. It eliminates the need for third parties, simplifies the complexities of Bitcoin and Lightning, and enables seamless onboarding for billions of users to the future of peer-to-peer payments.
-
-To provide the best experience for their end-users, developers can choose between the following implementations:
-
-- [Breez SDK - Nodeless *(Spark Implementation)*](https://sdk-doc-spark.breez.technology/)
-- [Breez SDK - Nodeless *(Liquid Implementation)*](https://sdk-doc-liquid.breez.technology/)
-- [Breez SDK - Native *(Greenlight Implementation)*](https://sdk-doc.breez.technology/)
-
+The Breez SDK provides developers with an end-to-end solution for integrating self-custodial Lightning into their apps and services. It eliminates the need for third parties, simplifies the complexities of Bitcoin and Lightning, and enables seamless onboarding for billions of users to the future of value transfer.
 
 ## **What Is the Breez SDK - Nodeless *(Spark Implementation)*?**
 
