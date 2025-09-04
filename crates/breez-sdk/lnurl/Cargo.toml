@@ -1,0 +1,26 @@
+[package]
+name = "lnurl"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum = { version = "0.8.4", features = ["macros"] }
+clap = { workspace = true, features = ["derive"] }
+diesel = { version = "2.2.12", features = ["sqlite", "r2d2"] }
+diesel_migrations = { version = "2.2.0", features = ["sqlite"] }
+figment = { workspace = true, features = ["env", "toml"] }
+hex.workspace = true
+secp256k1 = "0.31.1"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+breez-sdk-spark.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
+tower-http = { version = "0.6.6", features = ["cors"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+serde_with.workspace = true
+async-trait.workspace = true
+
+[lints]
+workspace = true
