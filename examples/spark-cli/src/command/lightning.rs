@@ -1,6 +1,6 @@
 use clap::Subcommand;
 use qrcode_rs::{EcLevel, QrCode, render::unicode};
-use spark_wallet::SparkWallet;
+use spark_wallet::{InvoiceDescription, SparkWallet};
 
 use crate::config::Config;
 
@@ -50,8 +50,9 @@ where
             amount_sat,
             description,
         } => {
+            let desc = description.map(InvoiceDescription::Memo);
             let payment = wallet
-                .create_lightning_invoice(amount_sat, description, None)
+                .create_lightning_invoice(amount_sat, desc, None)
                 .await?;
             let qr = QrCode::with_error_correction_level(&payment.invoice, EcLevel::L)
                 .unwrap()

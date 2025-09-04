@@ -13,7 +13,8 @@ pub use coop_exit::*;
 pub use deposit::*;
 pub use error::*;
 pub use lightning::{
-    LightningReceivePayment, LightningSendPayment, LightningSendStatus, LightningService,
+    InvoiceDescription, LightningReceivePayment, LightningSendPayment, LightningSendStatus,
+    LightningService,
 };
 pub use models::*;
 pub use swap::*;

@@ -34,6 +34,21 @@ use super::models::{LightningSendRequestStatus, map_signing_nonce_commitments};
 const DEFAULT_EXPIRY_SECS: u32 = 60 * 60 * 24 * 30;
 const RECEIVER_IDENTITY_PUBLIC_KEY_SHORT_CHANNEL_ID: u64 = 17592187092992000001;
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum InvoiceDescription {
+    Memo(String),
+    DescriptionHash([u8; 32]),
+}
+
+impl InvoiceDescription {
+    fn into_memo_and_description_hash(self) -> (Option<String>, Option<[u8; 32]>) {
+        match self {
+            InvoiceDescription::Memo(memo) => (Some(memo), None),
+            InvoiceDescription::DescriptionHash(hash) => (None, Some(hash)),
+        }
+    }
+}
+
 pub struct LightningSwap {
     pub transfer: Transfer,
     pub leaves: Vec<LeafKeyTweak>,
@@ -221,7 +236,7 @@ impl<S: Signer> LightningService<S> {
     pub async fn create_lightning_invoice(
         &self,
         amount_sats: u64,
-        memo: Option<String>,
+        description: Option<InvoiceDescription>,
         preimage: Option<Vec<u8>>,
         expiry_secs: Option<u32>,
         identity_pubkey: Option<PublicKey>,
@@ -237,6 +252,12 @@ impl<S: Signer> LightningService<S> {
         });
         let expiry = expiry_secs.unwrap_or(DEFAULT_EXPIRY_SECS);
         let payment_hash = sha256::Hash::hash(&preimage);
+
+        let (memo, description_hash) = match description {
+            Some(desc) => desc.into_memo_and_description_hash(),
+            None => (None, None),
+        };
+
         let invoice = self
             .ssp_client
             .request_lightning_receive(RequestLightningReceiveInput {
@@ -244,7 +265,7 @@ impl<S: Signer> LightningService<S> {
                 amount_sats,
                 network: self.network.into(),
                 payment_hash: payment_hash.encode_hex(),
-                description_hash: None,
+                description_hash: description_hash.map(|h| h.encode_hex()),
                 expiry_secs: Some(expiry.into()),
                 memo,
                 include_spark_address: true,
