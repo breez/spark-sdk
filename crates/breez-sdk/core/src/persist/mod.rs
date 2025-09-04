@@ -1,13 +1,16 @@
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub(crate) mod sqlite;
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use macros::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{DepositClaimError, DepositInfo, LightningAddressInfo, LnurlPayInfo, models::Payment};
+use crate::{
+    DepositClaimError, DepositInfo, LightningAddressInfo, LnurlPayInfo, TokenBalance,
+    models::Payment,
+};
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
 const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
@@ -313,11 +316,15 @@ impl ObjectCacheRepository {
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedAccountInfo {
     pub(crate) balance_sats: u64,
+    #[serde(default)]
+    pub(crate) token_balances: HashMap<String, TokenBalance>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedSyncInfo {
     pub(crate) offset: u64,
+    #[serde(default)]
+    pub(crate) token_offset: u64,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -333,15 +340,18 @@ pub(crate) struct StaticDepositAddress {
 #[cfg(feature = "test-utils")]
 pub mod tests {
     use crate::{
-        DepositClaimError, Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType,
-        Storage, UpdateDepositPayload,
+        DepositClaimError, Payment, PaymentDetails, PaymentMetadata, PaymentMethod, PaymentStatus,
+        PaymentType, Storage, UpdateDepositPayload,
     };
     use chrono::Utc;
 
+    #[allow(clippy::too_many_lines)]
     pub async fn test_sqlite_storage(storage: Box<dyn Storage>) {
-        // Create test payment
-        let payment = Payment {
-            id: "pmt123".to_string(),
+        use crate::models::{LnurlPayInfo, TokenMetadata};
+
+        // Test 1: Spark payment
+        let spark_payment = Payment {
+            id: "spark_pmt123".to_string(),
             payment_type: PaymentType::Send,
             status: PaymentStatus::Completed,
             amount: 100_000,
@@ -351,30 +361,285 @@ pub mod tests {
             details: Some(PaymentDetails::Spark),
         };
 
-        // Insert payment
-        storage.insert_payment(payment.clone()).await.unwrap();
+        // Test 2: Token payment
+        let token_metadata = TokenMetadata {
+            identifier: "token123".to_string(),
+            issuer_public_key:
+                "02abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab".to_string(),
+            name: "Test Token".to_string(),
+            ticker: "TTK".to_string(),
+            decimals: 8,
+            max_supply: 21_000_000,
+            is_freezable: false,
+            creation_entity_public_key: Some(
+                "03fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321fe".to_string(),
+            ),
+        };
+        let token_payment = Payment {
+            id: "token_pmt456".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Pending,
+            amount: 50_000,
+            fees: 500,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Token,
+            details: Some(PaymentDetails::Token {
+                metadata: token_metadata.clone(),
+            }),
+        };
 
-        // List payments
+        // Test 3: Lightning payment with full details
+        let metadata = PaymentMetadata {
+            lnurl_pay_info: Some(LnurlPayInfo {
+                ln_address: Some("test@example.com".to_string()),
+                comment: Some("Test comment".to_string()),
+                domain: Some("example.com".to_string()),
+                metadata: Some("[[\"text/plain\", \"Test metadata\"]]".to_string()),
+                processed_success_action: None,
+                raw_success_action: None,
+            }),
+            lnurl_description: None,
+        };
+        let lightning_payment = Payment {
+            id: "lightning_pmt789".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 25_000,
+            fees: 250,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Lightning,
+            details: Some(PaymentDetails::Lightning {
+                description: Some("Test lightning payment".to_string()),
+                preimage: Some("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab".to_string()),
+                invoice: "lnbc250n1pjqxyz9pp5abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567890abcdefghijklmnopqrstuvwxyz".to_string(),
+                payment_hash: "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321".to_string(),
+                destination_pubkey: "03123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01".to_string(),
+                lnurl_pay_info: metadata.lnurl_pay_info.clone(),
+            }),
+        };
+
+        // Test 4: Lightning payment with minimal details
+        let lightning_minimal_payment = Payment {
+            id: "lightning_minimal_pmt012".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Failed,
+            amount: 10_000,
+            fees: 100,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Lightning,
+            details: Some(PaymentDetails::Lightning {
+                description: None,
+                preimage: None,
+                invoice: "lnbc100n1pjqxyz9pp5def456ghi789jkl012mno345pqr678stu901vwx234yz567890abcdefghijklmnopqrstuvwxyz".to_string(),
+                payment_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+                destination_pubkey: "02987654321fedcba0987654321fedcba0987654321fedcba0987654321fedcba09".to_string(),
+                lnurl_pay_info: None,
+            }),
+        };
+
+        // Test 5: Withdraw payment
+        let withdraw_payment = Payment {
+            id: "withdraw_pmt345".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 200_000,
+            fees: 2000,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Withdraw,
+            details: Some(PaymentDetails::Withdraw {
+                tx_id: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
+                    .to_string(),
+            }),
+        };
+
+        // Test 6: Deposit payment
+        let deposit_payment = Payment {
+            id: "deposit_pmt678".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 150_000,
+            fees: 1500,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Deposit,
+            details: Some(PaymentDetails::Deposit {
+                tx_id: "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321fe"
+                    .to_string(),
+            }),
+        };
+
+        // Test 7: Payment with no details
+        let no_details_payment = Payment {
+            id: "no_details_pmt901".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Pending,
+            amount: 75_000,
+            fees: 750,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Unknown,
+            details: None,
+        };
+
+        let test_payments = vec![
+            spark_payment.clone(),
+            token_payment.clone(),
+            lightning_payment.clone(),
+            lightning_minimal_payment.clone(),
+            withdraw_payment.clone(),
+            deposit_payment.clone(),
+            no_details_payment.clone(),
+        ];
+
+        // Insert all payments
+        for payment in &test_payments {
+            storage.insert_payment(payment.clone()).await.unwrap();
+        }
+        storage
+            .set_payment_metadata(lightning_payment.id.clone(), metadata)
+            .await
+            .unwrap();
+
+        // List all payments
         let payments = storage.list_payments(Some(0), Some(10)).await.unwrap();
-        assert_eq!(payments.len(), 1);
-        assert_eq!(payments[0].id, payment.id);
-        assert_eq!(payments[0].payment_type, payment.payment_type);
-        assert_eq!(payments[0].status, payment.status);
-        assert_eq!(payments[0].amount, payment.amount);
-        assert_eq!(payments[0].fees, payment.fees);
-        assert!(matches!(payments[0].details, Some(PaymentDetails::Spark)));
+        assert_eq!(payments.len(), 7);
 
-        // Get payment by ID
-        let retrieved_payment = storage.get_payment_by_id(payment.id.clone()).await.unwrap();
-        assert_eq!(retrieved_payment.id, payment.id);
-        assert_eq!(retrieved_payment.payment_type, payment.payment_type);
-        assert_eq!(retrieved_payment.status, payment.status);
-        assert_eq!(retrieved_payment.amount, payment.amount);
-        assert_eq!(retrieved_payment.fees, payment.fees);
-        assert!(matches!(
-            retrieved_payment.details,
-            Some(PaymentDetails::Spark)
-        ));
+        // Test each payment type individually
+        for (i, expected_payment) in test_payments.iter().enumerate() {
+            let retrieved_payment = storage
+                .get_payment_by_id(expected_payment.id.clone())
+                .await
+                .unwrap();
+
+            // Basic fields
+            assert_eq!(retrieved_payment.id, expected_payment.id);
+            assert_eq!(
+                retrieved_payment.payment_type,
+                expected_payment.payment_type
+            );
+            assert_eq!(retrieved_payment.status, expected_payment.status);
+            assert_eq!(retrieved_payment.amount, expected_payment.amount);
+            assert_eq!(retrieved_payment.fees, expected_payment.fees);
+            assert_eq!(retrieved_payment.method, expected_payment.method);
+
+            // Test payment details persistence
+            match (&retrieved_payment.details, &expected_payment.details) {
+                (Some(PaymentDetails::Spark), Some(PaymentDetails::Spark)) | (None, None) => {}
+                (
+                    Some(PaymentDetails::Token {
+                        metadata: retrieved_metadata,
+                    }),
+                    Some(PaymentDetails::Token {
+                        metadata: expected_metadata,
+                    }),
+                ) => {
+                    assert_eq!(retrieved_metadata.identifier, expected_metadata.identifier);
+                    assert_eq!(
+                        retrieved_metadata.issuer_public_key,
+                        expected_metadata.issuer_public_key
+                    );
+                    assert_eq!(retrieved_metadata.name, expected_metadata.name);
+                    assert_eq!(retrieved_metadata.ticker, expected_metadata.ticker);
+                    assert_eq!(retrieved_metadata.decimals, expected_metadata.decimals);
+                    assert_eq!(retrieved_metadata.max_supply, expected_metadata.max_supply);
+                    assert_eq!(
+                        retrieved_metadata.is_freezable,
+                        expected_metadata.is_freezable
+                    );
+                    assert_eq!(
+                        retrieved_metadata.creation_entity_public_key,
+                        expected_metadata.creation_entity_public_key
+                    );
+                }
+                (
+                    Some(PaymentDetails::Lightning {
+                        description: r_description,
+                        preimage: r_preimage,
+                        invoice: r_invoice,
+                        payment_hash: r_hash,
+                        destination_pubkey: r_dest_pubkey,
+                        lnurl_pay_info: r_lnurl,
+                    }),
+                    Some(PaymentDetails::Lightning {
+                        description: e_description,
+                        preimage: e_preimage,
+                        invoice: e_invoice,
+                        payment_hash: e_hash,
+                        destination_pubkey: e_dest_pubkey,
+                        lnurl_pay_info: e_lnurl,
+                    }),
+                ) => {
+                    assert_eq!(r_description, e_description);
+                    assert_eq!(r_preimage, e_preimage);
+                    assert_eq!(r_invoice, e_invoice);
+                    assert_eq!(r_hash, e_hash);
+                    assert_eq!(r_dest_pubkey, e_dest_pubkey);
+
+                    // Test LNURL pay info if present
+                    match (r_lnurl, e_lnurl) {
+                        (Some(r_info), Some(e_info)) => {
+                            assert_eq!(r_info.ln_address, e_info.ln_address);
+                            assert_eq!(r_info.comment, e_info.comment);
+                            assert_eq!(r_info.domain, e_info.domain);
+                            assert_eq!(r_info.metadata, e_info.metadata);
+                        }
+                        (None, None) => {}
+                        _ => panic!(
+                            "LNURL pay info mismatch for payment {}",
+                            expected_payment.id
+                        ),
+                    }
+                }
+                (
+                    Some(PaymentDetails::Withdraw { tx_id: r_tx_id }),
+                    Some(PaymentDetails::Withdraw { tx_id: e_tx_id }),
+                )
+                | (
+                    Some(PaymentDetails::Deposit { tx_id: r_tx_id }),
+                    Some(PaymentDetails::Deposit { tx_id: e_tx_id }),
+                ) => {
+                    assert_eq!(r_tx_id, e_tx_id);
+                }
+                _ => panic!(
+                    "Payment details mismatch for payment {} (index {})",
+                    expected_payment.id, i
+                ),
+            }
+        }
+
+        // Test filtering by payment type
+        let send_payments = payments
+            .iter()
+            .filter(|p| p.payment_type == PaymentType::Send)
+            .count();
+        let receive_payments = payments
+            .iter()
+            .filter(|p| p.payment_type == PaymentType::Receive)
+            .count();
+        assert_eq!(send_payments, 4); // spark, lightning, withdraw, no_details
+        assert_eq!(receive_payments, 3); // token, lightning_minimal, deposit
+
+        // Test filtering by status
+        let completed_payments = payments
+            .iter()
+            .filter(|p| p.status == PaymentStatus::Completed)
+            .count();
+        let pending_payments = payments
+            .iter()
+            .filter(|p| p.status == PaymentStatus::Pending)
+            .count();
+        let failed_payments = payments
+            .iter()
+            .filter(|p| p.status == PaymentStatus::Failed)
+            .count();
+        assert_eq!(completed_payments, 4); // spark, lightning, withdraw, deposit
+        assert_eq!(pending_payments, 2); // token, no_details
+        assert_eq!(failed_payments, 1); // lightning_minimal
+
+        // Test filtering by method
+        let lightning_count = payments
+            .iter()
+            .filter(|p| p.method == PaymentMethod::Lightning)
+            .count();
+        assert_eq!(lightning_count, 2); // lightning and lightning_minimal
     }
 
     pub async fn test_unclaimed_deposits_crud(storage: Box<dyn Storage>) {

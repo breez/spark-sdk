@@ -136,6 +136,7 @@ class SqliteStorage {
             ,       p.withdraw_tx_id
             ,       p.deposit_tx_id
             ,       p.spark
+            ,       p.token_metadata
             ,       l.invoice AS lightning_invoice
             ,       l.payment_hash AS lightning_payment_hash
             ,       l.destination_pubkey AS lightning_destination_pubkey
@@ -170,8 +171,8 @@ class SqliteStorage {
       }
 
       const paymentInsert = this.db.prepare(
-        `INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark) 
-         VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @depositTxId, @spark)`
+        `INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark, token_metadata) 
+         VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @depositTxId, @spark, @tokenMetadata)`
       );
       const lightningInsert = this.db.prepare(
         `INSERT OR REPLACE INTO payment_details_lightning 
@@ -187,12 +188,18 @@ class SqliteStorage {
           fees: payment.fees,
           timestamp: payment.timestamp,
           method: payment.method ? JSON.stringify(payment.method) : null,
-          withdrawTxId: payment.details?.type === 'withdraw' ? payment.details.txId : null,
-          depositTxId: payment.details?.type === 'deposit' ? payment.details.txId : null,
-          spark: payment.details?.type === 'spark' ? 1 : null,
+          withdrawTxId:
+            payment.details?.type === "withdraw" ? payment.details.txId : null,
+          depositTxId:
+            payment.details?.type === "deposit" ? payment.details.txId : null,
+          spark: payment.details?.type === "spark" ? 1 : null,
+          tokenMetadata:
+            payment.details?.type === "token"
+              ? JSON.stringify(payment.details.metadata)
+              : null,
         });
 
-        if (payment.details?.type === 'lightning') {
+        if (payment.details?.type === "lightning") {
           lightningInsert.run({
             id: payment.id,
             invoice: payment.details.invoice,
@@ -203,7 +210,7 @@ class SqliteStorage {
           });
         }
       });
-      
+
       transaction();
       return Promise.resolve();
     } catch (error) {
@@ -235,6 +242,7 @@ class SqliteStorage {
             ,       p.withdraw_tx_id
             ,       p.deposit_tx_id
             ,       p.spark
+            ,       p.token_metadata
             ,       l.invoice AS lightning_invoice
             ,       l.payment_hash AS lightning_payment_hash
             ,       l.destination_pubkey AS lightning_destination_pubkey
@@ -286,6 +294,7 @@ class SqliteStorage {
             ,       p.withdraw_tx_id
             ,       p.deposit_tx_id
             ,       p.spark
+            ,       p.token_metadata
             ,       l.invoice AS lightning_invoice
             ,       l.payment_hash AS lightning_payment_hash
             ,       l.destination_pubkey AS lightning_destination_pubkey
@@ -444,7 +453,7 @@ class SqliteStorage {
     let details = null;
     if (row.lightning_invoice) {
       details = {
-        type: 'lightning',
+        type: "lightning",
         invoice: row.lightning_invoice,
         paymentHash: row.lightning_payment_hash,
         destinationPubkey: row.lightning_destination_pubkey,
@@ -464,18 +473,23 @@ class SqliteStorage {
       }
     } else if (row.withdraw_tx_id) {
       details = {
-        type: 'withdraw',
+        type: "withdraw",
         txId: row.withdraw_tx_id,
       };
     } else if (row.deposit_tx_id) {
       details = {
-        type: 'deposit',
+        type: "deposit",
         txId: row.deposit_tx_id,
       };
     } else if (row.spark) {
       details = {
-        type: 'spark',
+        type: "spark",
         amount: row.spark,
+      };
+    } else if (row.token_metadata) {
+      details = {
+        type: "token",
+        metadata: JSON.parse(row.token_metadata),
       };
     }
 

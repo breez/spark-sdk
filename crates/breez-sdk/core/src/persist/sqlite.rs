@@ -162,6 +162,7 @@ impl SqliteStorage {
 
             CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice);
             ",
+            "ALTER TABLE payments ADD COLUMN token_metadata TEXT;",
         ]
     }
 }
@@ -198,6 +199,7 @@ impl Storage for SqliteStorage {
             ,       p.withdraw_tx_id
             ,       p.deposit_tx_id
             ,       p.spark
+            ,       p.token_metadata
             ,       l.invoice AS lightning_invoice
             ,       l.payment_hash AS lightning_payment_hash
             ,       l.destination_pubkey AS lightning_destination_pubkey
@@ -254,6 +256,12 @@ impl Storage for SqliteStorage {
                 tx.execute(
                     "UPDATE payments SET spark = 1 WHERE id = ?",
                     params![payment.id],
+                )?;
+            }
+            Some(PaymentDetails::Token { metadata }) => {
+                tx.execute(
+                    "UPDATE payments SET token_metadata = ? WHERE id = ?",
+                    params![serde_json::to_string(&metadata)?, payment.id],
                 )?;
             }
             Some(PaymentDetails::Lightning {
@@ -349,6 +357,7 @@ impl Storage for SqliteStorage {
             ,       p.withdraw_tx_id
             ,       p.deposit_tx_id
             ,       p.spark
+            ,       p.token_metadata
             ,       l.invoice AS lightning_invoice
             ,       l.payment_hash AS lightning_payment_hash
             ,       l.destination_pubkey AS lightning_destination_pubkey
@@ -382,6 +391,7 @@ impl Storage for SqliteStorage {
             ,       p.withdraw_tx_id
             ,       p.deposit_tx_id
             ,       p.spark
+            ,       p.token_metadata
             ,       l.invoice AS lightning_invoice
             ,       l.payment_hash AS lightning_payment_hash
             ,       l.destination_pubkey AS lightning_destination_pubkey
@@ -479,14 +489,21 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
     let withdraw_tx_id: Option<String> = row.get(7)?;
     let deposit_tx_id: Option<String> = row.get(8)?;
     let spark: Option<i32> = row.get(9)?;
-    let lightning_invoice: Option<String> = row.get(10)?;
-    let details = match (lightning_invoice, withdraw_tx_id, deposit_tx_id, spark) {
-        (Some(invoice), _, _, _) => {
-            let payment_hash: String = row.get(11)?;
-            let destination_pubkey: String = row.get(12)?;
-            let description: Option<String> = row.get(13)?;
-            let preimage: Option<String> = row.get(14)?;
-            let lnurl_pay_info: Option<LnurlPayInfo> = row.get(15)?;
+    let token_metadata: Option<String> = row.get(10)?;
+    let lightning_invoice: Option<String> = row.get(11)?;
+    let details = match (
+        lightning_invoice,
+        withdraw_tx_id,
+        deposit_tx_id,
+        spark,
+        token_metadata,
+    ) {
+        (Some(invoice), _, _, _, _) => {
+            let payment_hash: String = row.get(12)?;
+            let destination_pubkey: String = row.get(13)?;
+            let description: Option<String> = row.get(14)?;
+            let preimage: Option<String> = row.get(15)?;
+            let lnurl_pay_info: Option<LnurlPayInfo> = row.get(16)?;
 
             Some(PaymentDetails::Lightning {
                 invoice,
@@ -497,9 +514,14 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 lnurl_pay_info,
             })
         }
-        (_, Some(tx_id), _, _) => Some(PaymentDetails::Withdraw { tx_id }),
-        (_, _, Some(tx_id), _) => Some(PaymentDetails::Deposit { tx_id }),
-        (_, _, _, Some(_)) => Some(PaymentDetails::Spark),
+        (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
+        (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
+        (_, _, _, Some(_), _) => Some(PaymentDetails::Spark),
+        (_, _, _, _, Some(metadata)) => Some(PaymentDetails::Token {
+            metadata: serde_json::from_str(&metadata).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, e.into())
+            })?,
+        }),
         _ => None,
     };
     Ok(Payment {

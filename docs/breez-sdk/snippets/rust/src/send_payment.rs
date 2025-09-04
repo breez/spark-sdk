@@ -10,7 +10,8 @@ async fn prepare_send_payment_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            amount_sats: optional_amount_sats,
+            amount: optional_amount_sats,
+            token_identifier: None,
         })
         .await?;
 
@@ -38,7 +39,8 @@ async fn prepare_send_payment_lightning_onchain(sdk: &BreezSdk) -> Result<()> {
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            amount_sats,
+            amount: amount_sats,
+            token_identifier: None,
         })
         .await?;
 
@@ -63,13 +65,14 @@ async fn prepare_send_payment_spark(sdk: &BreezSdk) -> Result<()> {
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            amount_sats,
+            amount: amount_sats,
+            token_identifier: None,
         })
         .await?;
 
     // If the fees are acceptable, continue to create the Send Payment
-    if let SendPaymentMethod::SparkAddress { fee_sats, .. } = prepare_response.payment_method {
-        info!("Fees: {} sats", fee_sats);
+    if let SendPaymentMethod::SparkAddress { fee, .. } = prepare_response.payment_method {
+        info!("Fees: {} sats", fee);
     }
     // ANCHOR_END: prepare-send-payment-spark
     Ok(())
