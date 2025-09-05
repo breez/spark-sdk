@@ -9,12 +9,15 @@ use crate::{
 pub fn prepare_leaf_key_tweaks_to_send<S: Signer>(
     signer: &Arc<S>,
     leaves: Vec<TreeNode>,
+    signing_key_source: Option<PrivateKeySource>,
 ) -> Result<Vec<LeafKeyTweak>, SignerError> {
     // Build leaf key tweaks with new signing keys that we will sent to the receiver
     leaves
         .iter()
         .map(|leaf| {
-            let our_key = PrivateKeySource::Derived(leaf.id.clone());
+            let our_key = signing_key_source
+                .clone()
+                .unwrap_or(PrivateKeySource::Derived(leaf.id.clone()));
             let ephemeral_key = signer.generate_random_key()?;
 
             Ok(LeafKeyTweak {

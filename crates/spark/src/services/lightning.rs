@@ -333,7 +333,7 @@ impl<S: Signer> LightningService<S> {
         let payment_hash = decoded_invoice.payment_hash();
 
         // prepare leaf tweaks
-        let leaf_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec())?;
+        let leaf_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec(), None)?;
 
         let swap_response = self
             .swap_nodes_for_preimage(SwapNodesForPreimageRequest {

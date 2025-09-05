@@ -101,14 +101,41 @@ impl<S: Signer> TransferService<S> {
         &self,
         leaves: Vec<TreeNode>,
         receiver_id: &PublicKey,
+        signing_key_source: Option<PrivateKeySource>,
     ) -> Result<Transfer, ServiceError> {
         // build leaf key tweaks with new signing keys that we will send to the receiver
-        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves)?;
+        let leaf_key_tweaks =
+            prepare_leaf_key_tweaks_to_send(&self.signer, leaves, signing_key_source)?;
         let transfer = self
             .send_transfer_with_key_tweaks(&leaf_key_tweaks, receiver_id)
             .await?;
 
         Ok(transfer)
+    }
+
+    pub async fn transfer_leaves_to_self(
+        &self,
+        leaves: Vec<TreeNode>,
+        signing_key_source: Option<PrivateKeySource>,
+    ) -> Result<Vec<TreeNode>, ServiceError> {
+        let transfer = self
+            .transfer_leaves_to(
+                leaves,
+                &self.signer.get_identity_public_key()?,
+                signing_key_source,
+            )
+            .await?;
+
+        let pending_transfer =
+            self.query_transfer(&transfer.id)
+                .await?
+                .ok_or(ServiceError::Generic(
+                    "Pending transfer not found".to_string(),
+                ))?;
+
+        let resulting_nodes = self.claim_transfer(&pending_transfer, None).await?;
+
+        Ok(resulting_nodes)
     }
 
     pub async fn send_transfer_with_key_tweaks(
