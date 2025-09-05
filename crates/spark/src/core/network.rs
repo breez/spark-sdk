@@ -1,4 +1,4 @@
-use std::fmt::{Display, Formatter};
+use std::{fmt::{Display, Formatter}, str::FromStr};
 
 use bitcoin::params::Params;
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,20 @@ impl Display for Network {
             Network::Regtest => write!(f, "regtest"),
             Network::Testnet => write!(f, "testnet"),
             Network::Signet => write!(f, "signet"),
+        }
+    }
+}
+
+impl FromStr for Network {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "mainnet" => Ok(Network::Mainnet),
+            "regtest" => Ok(Network::Regtest),
+            "testnet" => Ok(Network::Testnet),
+            "signet" => Ok(Network::Signet),
+            _ => Err("Invalid network".to_string()),
         }
     }
 }

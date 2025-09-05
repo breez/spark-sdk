@@ -11,10 +11,9 @@ diesel = { version = "2.2.12", features = ["sqlite", "r2d2"] }
 diesel_migrations = { version = "2.2.0", features = ["sqlite"] }
 figment = { workspace = true, features = ["env", "toml"] }
 hex.workspace = true
-secp256k1 = "0.31.1"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-breez-sdk-spark.workspace = true
+spark-wallet.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
 tower-http = { version = "0.6.6", features = ["cors"] }
 tracing.workspace = true
@@ -23,6 +22,7 @@ serde_with.workspace = true
 async-trait.workspace = true
 regex = "1.11.2"
 lnurl-rs = "0.9.0"
+bitcoin.workspace = true
 
 [lints]
 workspace = true
