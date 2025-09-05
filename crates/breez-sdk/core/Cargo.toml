@@ -7,9 +7,10 @@ version.workspace = true
 browser-tests = [] # Enable browser wasm-pack tests
 uniffi = [
     "breez-sdk-common/uniffi",
-    "reqwest/native-tls-vendored",
     "dep:uniffi",
+    "openssl-vendored",
 ]
+openssl-vendored = ["reqwest/native-tls-vendored"]
 test-utils = []
 
 [lib]

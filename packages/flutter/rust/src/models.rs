@@ -1,0 +1,523 @@
+pub use breez_sdk_common::input::*;
+pub use breez_sdk_common::lnurl::auth::*;
+pub use breez_sdk_common::lnurl::pay::*;
+pub use breez_sdk_common::network::BitcoinNetwork;
+pub use breez_sdk_spark::*;
+use flutter_rust_bridge::frb;
+
+#[frb(mirror(BitcoinAddressDetails))]
+pub struct _BitcoinAddressDetails {
+    pub address: String,
+    pub network: BitcoinNetwork,
+    pub source: PaymentRequestSource,
+}
+
+#[frb(mirror(BitcoinNetwork))]
+pub enum _BitcoinNetwork {
+    Bitcoin,
+    Testnet3,
+    Testnet4,
+    Signet,
+    Regtest,
+}
+
+#[frb(mirror(Config))]
+pub struct _Config {
+    pub api_key: Option<String>,
+    pub network: Network,
+    pub sync_interval_secs: u32,
+    pub max_deposit_claim_fee: Option<Fee>,
+}
+
+#[frb(mirror(ConnectRequest))]
+pub struct _ConnectRequest {
+    pub config: Config,
+    pub mnemonic: String,
+    pub storage_dir: String,
+}
+
+#[frb(mirror(ClaimDepositRequest))]
+pub struct _ClaimDepositRequest {
+    pub txid: String,
+    pub vout: u32,
+    pub max_fee: Option<Fee>,
+}
+
+#[frb(mirror(ClaimDepositResponse))]
+pub struct _ClaimDepositResponse {
+    pub payment: Payment,
+}
+
+#[frb(mirror(Credentials))]
+pub struct _Credentials {
+    pub username: String,
+    pub password: String,
+}
+
+#[frb(mirror(DepositInfo))]
+pub struct _DepositInfo {
+    pub txid: String,
+    pub vout: u32,
+    pub amount_sats: u64,
+    pub refund_tx: Option<String>,
+    pub refund_tx_id: Option<String>,
+    pub claim_error: Option<DepositClaimError>,
+}
+
+#[frb(mirror(Fee))]
+pub enum _Fee {
+    Fixed { amount: u64 },
+    Rate { sat_per_vbyte: u64 },
+}
+
+#[frb(mirror(GetInfoRequest))]
+pub struct _GetInfoRequest {}
+
+#[frb(mirror(GetInfoResponse))]
+pub struct _GetInfoResponse {
+    pub balance_sats: u64,
+}
+
+#[frb(mirror(GetPaymentRequest))]
+pub struct _GetPaymentRequest {
+    pub payment_id: String,
+}
+
+#[frb(mirror(GetPaymentResponse))]
+pub struct _GetPaymentResponse {
+    pub payment: Payment,
+}
+
+#[frb(mirror(InputType))]
+pub enum _InputType {
+    BitcoinAddress(BitcoinAddressDetails),
+    Bolt11Invoice(Bolt11InvoiceDetails),
+    Bolt12Invoice(Bolt12InvoiceDetails),
+    Bolt12Offer(Bolt12OfferDetails),
+    LightningAddress(LightningAddressDetails),
+    LnurlPay(LnurlPayRequestDetails),
+    SilentPaymentAddress(SilentPaymentAddressDetails),
+    LnurlAuth(LnurlAuthRequestDetails),
+    Url(String),
+    Bip21(Bip21Details),
+    Bolt12InvoiceRequest(Bolt12InvoiceRequestDetails),
+    LnurlWithdraw(LnurlWithdrawRequestDetails),
+    SparkAddress(SparkAddressDetails),
+}
+
+#[frb(mirror(ListPaymentsRequest))]
+pub struct _ListPaymentsRequest {
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+#[frb(mirror(ListPaymentsResponse))]
+pub struct _ListPaymentsResponse {
+    pub payments: Vec<Payment>,
+}
+
+#[frb(mirror(ListUnclaimedDepositsRequest))]
+pub struct _ListUnclaimedDepositsRequest {}
+
+#[frb(mirror(ListUnclaimedDepositsResponse))]
+pub struct _ListUnclaimedDepositsResponse {
+    pub deposits: Vec<DepositInfo>,
+}
+
+#[frb(mirror(LnurlPayInfo))]
+pub struct _LnurlPayInfo {
+    pub ln_address: Option<String>,
+    pub comment: Option<String>,
+    pub domain: Option<String>,
+    pub metadata: Option<String>,
+    pub processed_success_action: Option<SuccessActionProcessed>,
+    pub raw_success_action: Option<SuccessAction>,
+}
+
+#[frb(mirror(LnurlPayRequest))]
+pub struct _LnurlPayRequest {
+    pub prepare_response: PrepareLnurlPayResponse,
+}
+
+#[frb(mirror(LnurlPayResponse))]
+pub struct _LnurlPayResponse {
+    pub payment: Payment,
+    pub success_action: Option<SuccessActionProcessed>,
+}
+
+#[frb(mirror(PrepareLnurlPayRequest))]
+pub struct _PrepareLnurlPayRequest {
+    pub amount_sats: u64,
+    pub pay_request: LnurlPayRequestDetails,
+    pub comment: Option<String>,
+    pub validate_success_action_url: Option<bool>,
+}
+
+#[frb(mirror(PrepareLnurlPayResponse))]
+pub struct _PrepareLnurlPayResponse {
+    pub amount_sats: u64,
+    pub comment: Option<String>,
+    pub pay_request: LnurlPayRequestDetails,
+    pub fee_sats: u64,
+    pub invoice_details: Bolt11InvoiceDetails,
+    pub success_action: Option<SuccessAction>,
+}
+
+#[frb(mirror(ReceivePaymentMethod))]
+pub enum _ReceivePaymentMethod {
+    SparkAddress,
+    BitcoinAddress,
+    Bolt11Invoice {
+        description: String,
+        amount_sats: Option<u64>,
+    },
+}
+
+#[frb(mirror(ReceivePaymentRequest))]
+pub struct _ReceivePaymentRequest {
+    pub payment_method: ReceivePaymentMethod,
+}
+
+#[frb(mirror(ReceivePaymentResponse))]
+pub struct _ReceivePaymentResponse {
+    pub payment_request: String,
+    pub fee_sats: u64,
+}
+
+#[frb(mirror(RefundDepositRequest))]
+pub struct _RefundDepositRequest {
+    pub txid: String,
+    pub vout: u32,
+    pub destination_address: String,
+    pub fee: Fee,
+}
+
+#[frb(mirror(RefundDepositResponse))]
+pub struct _RefundDepositResponse {
+    pub tx_id: String,
+    pub tx_hex: String,
+}
+
+#[frb(mirror(SuccessAction))]
+pub enum _SuccessAction {
+    Aes { data: AesSuccessActionData },
+    Message { data: MessageSuccessActionData },
+    Url { data: UrlSuccessActionData },
+}
+
+#[frb(mirror(SuccessActionProcessed))]
+pub enum _SuccessActionProcessed {
+    Aes { result: AesSuccessActionDataResult },
+    Message { data: MessageSuccessActionData },
+    Url { data: UrlSuccessActionData },
+}
+
+#[frb(mirror(SyncWalletRequest))]
+pub struct _SyncWalletRequest {}
+
+#[frb(mirror(SyncWalletResponse))]
+pub struct _SyncWalletResponse {}
+
+#[frb(mirror(AesSuccessActionData))]
+pub struct _AesSuccessActionData {
+    pub description: String,
+    pub ciphertext: String,
+    pub iv: String,
+}
+
+#[frb(mirror(AesSuccessActionDataResult))]
+pub enum _AesSuccessActionDataResult {
+    Decrypted { data: AesSuccessActionDataDecrypted },
+    ErrorStatus { reason: String },
+}
+
+#[frb(mirror(AesSuccessActionDataDecrypted))]
+pub struct _AesSuccessActionDataDecrypted {
+    pub description: String,
+    pub plaintext: String,
+}
+
+#[frb(mirror(MessageSuccessActionData))]
+pub struct _MessageSuccessActionData {
+    pub message: String,
+}
+
+#[frb(mirror(UrlSuccessActionData))]
+pub struct _UrlSuccessActionData {
+    pub description: String,
+    pub url: String,
+    pub matches_callback_domain: bool,
+}
+
+#[frb(mirror(Network))]
+pub enum _Network {
+    Mainnet,
+    Regtest,
+}
+
+#[frb(mirror(Payment))]
+pub struct _Payment {
+    pub id: String,
+    pub payment_type: PaymentType,
+    pub status: PaymentStatus,
+    pub amount: u64,
+    pub fees: u64,
+    pub timestamp: u64,
+    pub method: PaymentMethod,
+    pub details: Option<PaymentDetails>,
+}
+
+#[frb(mirror(PaymentDetails))]
+pub enum _PaymentDetails {
+    Spark,
+    Lightning {
+        description: Option<String>,
+        preimage: Option<String>,
+        invoice: String,
+        payment_hash: String,
+        destination_pubkey: String,
+        lnurl_pay_info: Option<LnurlPayInfo>,
+    },
+    Withdraw {
+        tx_id: String,
+    },
+    Deposit {
+        tx_id: String,
+    },
+}
+
+#[frb(mirror(PaymentMetadata))]
+pub struct _PaymentMetadata {
+    pub lnurl_pay_info: Option<LnurlPayInfo>,
+}
+
+#[frb(mirror(PaymentMethod))]
+pub enum _PaymentMethod {
+    Lightning,
+    Spark,
+    Deposit,
+    Withdraw,
+    Unknown,
+}
+
+#[frb(mirror(PaymentRequestSource))]
+pub struct _PaymentRequestSource {
+    pub bip_21_uri: Option<String>,
+    pub bip_353_address: Option<String>,
+}
+
+#[frb(mirror(PaymentStatus))]
+pub enum _PaymentStatus {
+    Completed,
+    Pending,
+    Failed,
+}
+
+#[frb(mirror(PaymentType))]
+pub enum _PaymentType {
+    Send,
+    Receive,
+}
+
+#[frb(mirror(UpdateDepositPayload))]
+pub enum _UpdateDepositPayload {
+    ClaimError {
+        error: DepositClaimError,
+    },
+    Refund {
+        refund_txid: String,
+        refund_tx: String,
+    },
+}
+
+#[frb(mirror(Amount))]
+pub enum _Amount {
+    Bitcoin {
+        amount_msat: u64,
+    },
+    Currency {
+        iso4217_code: String,
+        fractional_amount: u64,
+    },
+}
+
+#[frb(mirror(Bip21Details))]
+pub struct _Bip21Details {
+    pub amount_sat: Option<u64>,
+    pub asset_id: Option<String>,
+    pub uri: String,
+    pub extras: Vec<Bip21Extra>,
+    pub label: Option<String>,
+    pub message: Option<String>,
+    pub payment_methods: Vec<InputType>,
+}
+
+#[frb(mirror(Bip21Extra))]
+pub struct _Bip21Extra {
+    pub key: String,
+    pub value: String,
+}
+
+#[frb(mirror(Bolt11Invoice))]
+pub struct _Bolt11Invoice {
+    pub bolt11: String,
+    pub source: PaymentRequestSource,
+}
+
+#[frb(mirror(Bolt11RouteHint))]
+pub struct _Bolt11RouteHint {
+    pub hops: Vec<Bolt11RouteHintHop>,
+}
+
+#[frb(mirror(Bolt11RouteHintHop))]
+pub struct _Bolt11RouteHintHop {
+    pub src_node_id: String,
+    pub short_channel_id: String,
+    pub fees_base_msat: u32,
+    pub fees_proportional_millionths: u32,
+    pub cltv_expiry_delta: u16,
+    pub htlc_minimum_msat: Option<u64>,
+    pub htlc_maximum_msat: Option<u64>,
+}
+
+#[frb(mirror(Bolt12Invoice))]
+pub struct _Bolt12Invoice {
+    pub invoice: String,
+    pub source: PaymentRequestSource,
+}
+
+#[frb(mirror(Bolt12InvoiceRequestDetails))]
+pub struct _Bolt12InvoiceRequestDetails {
+    // TODO: Fill fields
+}
+
+#[frb(mirror(Bolt12OfferBlindedPath))]
+pub struct _Bolt12OfferBlindedPath {
+    pub blinded_hops: Vec<String>,
+}
+
+#[frb(mirror(Bolt11InvoiceDetails))]
+pub struct _Bolt11InvoiceDetails {
+    pub amount_msat: Option<u64>,
+    pub description: Option<String>,
+    pub description_hash: Option<String>,
+    pub expiry: u64,
+    pub invoice: Bolt11Invoice,
+    pub min_final_cltv_expiry_delta: u64,
+    pub network: BitcoinNetwork,
+    pub payee_pubkey: String,
+    pub payment_hash: String,
+    pub payment_secret: String,
+    pub routing_hints: Vec<Bolt11RouteHint>,
+    pub timestamp: u64,
+}
+
+#[frb(mirror(Bolt12InvoiceDetails))]
+pub struct _Bolt12InvoiceDetails {
+    pub amount_msat: u64,
+    pub invoice: Bolt12Invoice,
+}
+
+#[frb(mirror(Bolt12Offer))]
+pub struct _Bolt12Offer {
+    pub offer: String,
+    pub source: PaymentRequestSource,
+}
+
+#[frb(mirror(Bolt12OfferDetails))]
+pub struct _Bolt12OfferDetails {
+    pub absolute_expiry: Option<u64>,
+    pub chains: Vec<String>,
+    pub description: Option<String>,
+    pub issuer: Option<String>,
+    pub min_amount: Option<Amount>,
+    pub offer: Bolt12Offer,
+    pub paths: Vec<Bolt12OfferBlindedPath>,
+    pub signing_pubkey: Option<String>,
+}
+
+#[frb(mirror(SparkAddressDetails))]
+pub struct _SparkAddressDetails {
+    pub address: String,
+    pub decoded_address: SparkAddress,
+    pub source: PaymentRequestSource,
+}
+
+#[frb(mirror(SparkAddress))]
+pub struct _SparkAddress {
+    pub identity_public_key: String,
+    pub network: BitcoinNetwork,
+    pub spark_invoice_fields: Option<SparkInvoiceFields>,
+    pub signature: Option<String>,
+}
+
+#[frb(mirror(SparkInvoiceFields))]
+pub struct _SparkInvoiceFields {
+    pub id: String,
+    pub version: u32,
+    pub memo: Option<String>,
+    pub sender_public_key: Option<String>,
+    pub expiry_time: Option<u64>,
+    pub payment_type: Option<SparkAddressPaymentType>,
+}
+
+#[frb(mirror(SparkAddressPaymentType))]
+pub enum _SparkAddressPaymentType {
+    TokensPayment(TokensPaymentDetails),
+    SatsPayment(SatsPaymentDetails),
+}
+
+#[frb(mirror(TokensPaymentDetails))]
+pub struct _TokensPaymentDetails {
+    pub token_identifier: Option<String>,
+    pub amount: Option<u64>,
+}
+
+#[frb(mirror(SatsPaymentDetails))]
+pub struct _SatsPaymentDetails {
+    pub amount: Option<u64>,
+}
+
+#[frb(mirror(LightningAddressDetails))]
+pub struct _LightningAddressDetails {
+    pub address: String,
+    pub pay_request: LnurlPayRequestDetails,
+}
+
+#[frb(mirror(LnurlAuthRequestDetails))]
+pub struct _LnurlAuthRequestDetails {
+    pub k1: String,
+    pub action: Option<String>,
+    pub domain: String,
+    pub url: String,
+}
+
+#[frb(mirror(LnurlPayRequestDetails))]
+pub struct _LnurlPayRequestDetails {
+    pub callback: String,
+    pub min_sendable: u64,
+    pub max_sendable: u64,
+    pub metadata_str: String,
+    pub comment_allowed: u16,
+    pub domain: String,
+    pub url: String,
+    pub address: Option<String>,
+    pub allows_nostr: bool,
+    pub nostr_pubkey: Option<String>,
+}
+
+#[frb(mirror(LnurlWithdrawRequestDetails))]
+pub struct _LnurlWithdrawRequestDetails {
+    pub callback: String,
+    pub k1: String,
+    pub default_description: String,
+    pub min_withdrawable: u64,
+    pub max_withdrawable: u64,
+}
+
+#[frb(mirror(SilentPaymentAddressDetails))]
+pub struct _SilentPaymentAddressDetails {
+    pub address: String,
+    pub network: BitcoinNetwork,
+    pub source: PaymentRequestSource,
+}

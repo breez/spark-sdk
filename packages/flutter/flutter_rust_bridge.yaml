@@ -1,0 +1,5 @@
+rust_input: crate
+rust_root: rust/
+dart_output: lib/src/rust
+web: false
+dart_format_line_length: 110
