@@ -5,15 +5,20 @@ use axum::{
     extract::{Path, Query},
     http::StatusCode,
 };
+use bitcoin::secp256k1::{PublicKey, schnorr::Signature};
+use bitcoin::{
+    hashes::{Hash, sha256},
+    key::Secp256k1,
+    secp256k1::Message,
+};
 use diesel::{
     ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SqliteConnection,
     r2d2::{ConnectionManager, Pool},
 };
 use lnurl::{Tag, pay::PayResponse};
 use regex::Regex;
-use secp256k1::{PublicKey, schnorr::Signature};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{Value, json};
 use tracing::{debug, error};
 
 use crate::{
@@ -196,7 +201,6 @@ impl LnurlServer<SqlitePool> {
 
     pub async fn handle_lnurl_pay(
         Path(identifier): Path<String>,
-        Query(params): Query<LnurlPayParams>,
         Extension(state): Extension<State<SqlitePool>>,
     ) -> Result<Json<PayResponse>, (StatusCode, Json<Value>)> {
         if identifier.is_empty() {
@@ -232,14 +236,66 @@ impl LnurlServer<SqlitePool> {
     }
 
     pub async fn handle_invoice(
-        Path(name): Path<String>,
+        Path(identifier): Path<String>,
         Query(params): Query<LnurlPayCallbackParams>,
         Extension(state): Extension<State<SqlitePool>>,
     ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-        let _name = name;
-        let _params = params;
-        let _state = state;
-        todo!()
+        if identifier.is_empty() {
+            return Err((StatusCode::NOT_FOUND, Json(Value::String("".into()))));
+        }
+
+        let mut conn = state.db.get().map_err(|e| {
+            error!("failed to get database connection: {}", e);
+            lnurl_error("internal server error")
+        })?;
+        let user = users::table
+            .filter(users::name.eq(identifier))
+            .first::<User>(&mut conn)
+            .optional()
+            .map_err(|e| {
+                error!("failed to execute query: {}", e);
+                lnurl_error("internal server error")
+            })?;
+        let Some(user) = user else {
+            return Err((StatusCode::NOT_FOUND, Json(Value::String("".into()))));
+        };
+
+        let Some(amount_msat) = params.amount else {
+            debug!("missing amount");
+            return Err(lnurl_error("missing amount"));
+        };
+
+        if amount_msat % 1000 != 0 {
+            debug!("invalid amount");
+            return Err(lnurl_error("amount must be a whole sat amount"));
+        }
+
+        let metadata = get_metadata(&state.domain, &user);
+        let desc_hash = sha256::Hash::hash(metadata.as_bytes());
+        let pubkey = parse_pubkey(&user.pubkey)?;
+        let invoice = state
+            .wallet
+            .create_lightning_invoice(
+                amount_msat / 1000,
+                Some(spark_wallet::InvoiceDescription::DescriptionHash(
+                    desc_hash.to_byte_array(),
+                )),
+                Some(pubkey),
+            )
+            .await
+            .map_err(|e| {
+                error!("failed to create lightning invoice: {}", e);
+                lnurl_error("failed to create invoice")
+            })?;
+
+        // TODO: Save things like the invoice/preimage/transfer id?
+        // TODO: Validate invoice?
+
+        // TODO: Add lnurl-verify
+        Ok(Json(json!({
+            "pr": invoice.invoice,
+            "routes": Vec::<String>::new(),
+        })))
     }
 }
 
@@ -270,6 +326,42 @@ fn validate(
         ));
     }
 
+    let pubkey = parse_pubkey(pubkey)?;
+    let (x_only_pubkey, _) = pubkey.x_only_public_key();
+
+    let signature = hex::decode(signature).map_err(|e| {
+        debug!("failed to decode signature: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid signature".into())),
+        )
+    })?;
+    let signature = Signature::from_slice(&signature).map_err(|e| {
+        debug!("failed to parse signature: {:?}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid signature".into())),
+        )
+    })?;
+
+    let secp = Secp256k1::verification_only();
+    secp.verify_schnorr(
+        &signature,
+        &Message::from_digest(sha256::Hash::hash(username.as_bytes()).to_byte_array()),
+        &x_only_pubkey,
+    )
+    .map_err(|e| {
+        debug!("failed to verify signature: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid signature".into())),
+        )
+    })?;
+
+    Ok(pubkey)
+}
+
+fn parse_pubkey(pubkey: &str) -> Result<PublicKey, (StatusCode, Json<Value>)> {
     let pubkey = hex::decode(pubkey).map_err(|e| {
         debug!("failed to decode pubkey: {}", e);
         (
@@ -284,34 +376,6 @@ fn validate(
             Json(Value::String("invalid pubkey".into())),
         )
     })?;
-    let (x_only_pubkey, _) = pubkey.x_only_public_key();
-
-    let signature = hex::decode(signature).map_err(|e| {
-        debug!("failed to decode signature: {}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            Json(Value::String("invalid signature".into())),
-        )
-    })?;
-    let signature = signature.try_into().map_err(|e| {
-        debug!("failed to convert signature: {:?}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            Json(Value::String("invalid signature".into())),
-        )
-    })?;
-    let signature = Signature::from_byte_array(signature);
-
-    let secp = secp256k1::Secp256k1::verification_only();
-    secp.verify_schnorr(&signature, username.as_bytes(), &x_only_pubkey)
-        .map_err(|e| {
-            debug!("failed to verify signature: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("invalid signature".into())),
-            )
-        })?;
-
     Ok(pubkey)
 }
 
@@ -331,7 +395,7 @@ fn get_metadata(domain: &str, user: &User) -> String {
 
 fn lnurl_error(message: &str) -> (StatusCode, Json<Value>) {
     (
-        StatusCode::INTERNAL_SERVER_ERROR,
+        StatusCode::OK,
         Json(Value::Object(
             vec![
                 ("status".into(), Value::String("ERROR".to_string())),

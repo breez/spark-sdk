@@ -7,7 +7,6 @@ use axum::{
     http::{self, Method},
     routing::{delete, get, post},
 };
-use breez_sdk_spark::Network;
 use clap::Parser;
 use diesel::{
     SqliteConnection,
@@ -19,6 +18,7 @@ use figment::{
 };
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
+use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -27,7 +27,6 @@ use crate::state::State;
 
 mod models;
 mod routes;
-mod sdk;
 mod sqlite;
 mod state;
 
@@ -59,11 +58,6 @@ struct Args {
     #[serde_as(as = "DisplayFromStr")]
     pub network: Network,
 
-    #[arg(
-        long,
-        default_value = "all all all all all all all all all all all all"
-    )]
-    pub mnemonic: String,
     pub domain: String,
     pub min_sendable: u64,
     pub max_sendable: u64,
@@ -119,8 +113,16 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     }
 
+    let wallet = Arc::new(
+        spark_wallet::SparkWallet::connect(
+            SparkWalletConfig::default_config(args.network),
+            DefaultSigner::new(&[0; 32], args.network)?,
+        )
+        .await?,
+    );
     let state = State {
         db: Arc::new(pool),
+        wallet,
         domain: args.domain,
         min_sendable: args.min_sendable,
         max_sendable: args.max_sendable,

@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
+use spark_wallet::DefaultSigner;
+
 pub struct State<DB> {
     pub db: Arc<DB>,
+    pub wallet: Arc<spark_wallet::SparkWallet<DefaultSigner>>,
     pub domain: String,
     pub min_sendable: u64,
     pub max_sendable: u64,
@@ -11,6 +14,7 @@ impl<DB> Clone for State<DB> {
     fn clone(&self) -> Self {
         Self {
             db: Arc::clone(&self.db),
+            wallet: Arc::clone(&self.wallet),
             domain: self.domain.clone(),
             min_sendable: self.min_sendable,
             max_sendable: self.max_sendable,
