@@ -6,7 +6,7 @@ use axum::{
     http::StatusCode,
 };
 use diesel::{
-    ExpressionMethods, RunQueryDsl, SqliteConnection,
+    ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SqliteConnection,
     r2d2::{ConnectionManager, Pool},
 };
 use secp256k1::{PublicKey, schnorr::Signature};
@@ -29,7 +29,14 @@ pub struct LnurlPayCallbackParams {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecoverLnurlPayRequest {
-    pub signature: Vec<u8>,
+    pub signature: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RecoverLnurlPayResponse {
+    pub lnurl: String,
+    pub lightning_address: String,
+    pub username: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -141,11 +148,38 @@ impl LnurlServer<SqlitePool> {
         Path(pubkey): Path<String>,
         Extension(state): Extension<State<SqlitePool>>,
         Json(payload): Json<RecoverLnurlPayRequest>,
-    ) -> Result<Json<RegisterLnurlPayResponse>, (StatusCode, Json<Value>)> {
-        let _pubkey = pubkey;
-        let _payload = payload;
-        let _state = state;
-        todo!()
+    ) -> Result<Json<RecoverLnurlPayResponse>, (StatusCode, Json<Value>)> {
+        let pubkey = validate(&pubkey, &payload.signature, &pubkey)?;
+        let mut conn = state.db.get().map_err(|e| {
+            error!("failed to get database connection: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(Value::String("internal server error".into())),
+            )
+        })?;
+        let user = users::table
+            .filter(users::pubkey.eq(pubkey.to_string()))
+            .first::<User>(&mut conn)
+            .optional()
+            .map_err(|e| {
+                error!("failed to execute query: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(Value::String("internal server error".into())),
+                )
+            })?;
+
+        match user {
+            Some(user) => Ok(Json(RecoverLnurlPayResponse {
+                lnurl: format!("https://{}/lnurlp/{}", state.domain, user.name),
+                lightning_address: format!("{}@{}", user.name, state.domain),
+                username: user.name,
+            })),
+            None => Err((
+                StatusCode::NOT_FOUND,
+                Json(Value::String("user not found".into())),
+            )),
+        }
     }
 
     pub async fn handle_lnurl_pay(
