@@ -9,13 +9,15 @@ use diesel::{
     ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SqliteConnection,
     r2d2::{ConnectionManager, Pool},
 };
+use lnurl::{Tag, pay::PayResponse};
+use regex::Regex;
 use secp256k1::{PublicKey, schnorr::Signature};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use tracing::{debug, error};
 
 use crate::{
-    models::{User, users},
+    models::{USERNAME_VALIDATION_REGEX, User, users},
     state::State,
 };
 
@@ -37,12 +39,14 @@ pub struct RecoverLnurlPayResponse {
     pub lnurl: String,
     pub lightning_address: String,
     pub username: String,
+    pub description: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RegisterLnurlPayRequest {
     pub username: String,
     pub signature: String,
+    pub description: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -69,9 +73,16 @@ impl LnurlServer<SqlitePool> {
         Json(payload): Json<RegisterLnurlPayRequest>,
     ) -> Result<Json<RegisterLnurlPayResponse>, (StatusCode, Json<Value>)> {
         let pubkey = validate(&pubkey, &payload.signature, &payload.username)?;
+        if payload.description.chars().take(256).count() > 255 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("description too long".into())),
+            ));
+        }
         let user = User {
             pubkey: pubkey.to_string(),
-            name: payload.username.clone(),
+            name: payload.username,
+            description: payload.description,
         };
 
         let mut conn = state.db.get().map_err(|e| {
@@ -174,6 +185,7 @@ impl LnurlServer<SqlitePool> {
                 lnurl: format!("https://{}/lnurlp/{}", state.domain, user.name),
                 lightning_address: format!("{}@{}", user.name, state.domain),
                 username: user.name,
+                description: user.description,
             })),
             None => Err((
                 StatusCode::NOT_FOUND,
@@ -186,11 +198,37 @@ impl LnurlServer<SqlitePool> {
         Path(identifier): Path<String>,
         Query(params): Query<LnurlPayParams>,
         Extension(state): Extension<State<SqlitePool>>,
-    ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-        let _identifier = identifier;
-        let _params = params;
-        let _state = state;
-        todo!()
+    ) -> Result<Json<PayResponse>, (StatusCode, Json<Value>)> {
+        if identifier.is_empty() {
+            return Err((StatusCode::NOT_FOUND, Json(Value::String("".into()))));
+        }
+
+        let mut conn = state.db.get().map_err(|e| {
+            error!("failed to get database connection: {}", e);
+            lnurl_error("internal server error")
+        })?;
+        let user = users::table
+            .filter(users::name.eq(identifier))
+            .first::<User>(&mut conn)
+            .optional()
+            .map_err(|e| {
+                error!("failed to execute query: {}", e);
+                lnurl_error("internal server error")
+            })?;
+        let Some(user) = user else {
+            return Err((StatusCode::NOT_FOUND, Json(Value::String("".into()))));
+        };
+
+        Ok(Json(PayResponse {
+            callback: format!("https://{}/lnurlp/{}/invoice", state.domain, user.name),
+            max_sendable: state.max_sendable,
+            min_sendable: state.min_sendable,
+            tag: Tag::PayRequest,
+            metadata: get_metadata(&state.domain, &user),
+            comment_allowed: None,
+            allows_nostr: None,
+            nostr_pubkey: None,
+        }))
     }
 
     pub async fn handle_invoice(
@@ -210,6 +248,28 @@ fn validate(
     signature: &str,
     username: &str,
 ) -> Result<PublicKey, (StatusCode, Json<Value>)> {
+    if username.chars().take(65).count() > 64 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("username too long".into())),
+        ));
+    }
+
+    let regex = Regex::new(USERNAME_VALIDATION_REGEX).map_err(|e| {
+        error!("failed to compile regex: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(Value::String("internal server error".into())),
+        )
+    })?;
+
+    if !regex.is_match(username) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid username".into())),
+        ));
+    }
+
     let pubkey = hex::decode(pubkey).map_err(|e| {
         debug!("failed to decode pubkey: {}", e);
         (
@@ -253,4 +313,32 @@ fn validate(
         })?;
 
     Ok(pubkey)
+}
+
+fn get_metadata(domain: &str, user: &User) -> String {
+    Value::Array(vec![
+        Value::Array(vec![
+            Value::String("text/plain".to_string()),
+            Value::String(user.description.clone()),
+        ]),
+        Value::Array(vec![
+            Value::String("text/identifier".to_string()),
+            Value::String(format!("{}@{}", user.name, domain)),
+        ]),
+    ])
+    .to_string()
+}
+
+fn lnurl_error(message: &str) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(Value::Object(
+            vec![
+                ("status".into(), Value::String("ERROR".to_string())),
+                ("reason".into(), Value::String(message.to_string())),
+            ]
+            .into_iter()
+            .collect(),
+        )),
+    )
 }
