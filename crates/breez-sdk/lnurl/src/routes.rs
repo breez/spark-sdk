@@ -5,12 +5,8 @@ use axum::{
     extract::{Path, Query},
     http::StatusCode,
 };
-use bitcoin::secp256k1::{PublicKey, schnorr::Signature};
-use bitcoin::{
-    hashes::{Hash, sha256},
-    key::Secp256k1,
-    secp256k1::Message,
-};
+use bitcoin::hashes::{Hash, sha256};
+use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use diesel::{
     ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SqliteConnection,
     r2d2::{ConnectionManager, Pool},
@@ -77,7 +73,7 @@ impl LnurlServer<SqlitePool> {
         Extension(state): Extension<State<SqlitePool>>,
         Json(payload): Json<RegisterLnurlPayRequest>,
     ) -> Result<Json<RegisterLnurlPayResponse>, (StatusCode, Json<Value>)> {
-        let pubkey = validate(&pubkey, &payload.signature, &payload.username)?;
+        let pubkey = validate(&pubkey, &payload.signature, &payload.username, &state).await?;
         if payload.description.chars().take(256).count() > 255 {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -129,7 +125,7 @@ impl LnurlServer<SqlitePool> {
         }
 
         Ok(Json(RegisterLnurlPayResponse {
-            lnurl: format!("https://{}/lnurlp/{}", state.domain, user.name),
+            lnurl: format!("{}://{}/lnurlp/{}", state.scheme, state.domain, user.name),
             lightning_address: format!("{}@{}", user.name, state.domain),
         }))
     }
@@ -139,7 +135,7 @@ impl LnurlServer<SqlitePool> {
         Extension(state): Extension<State<SqlitePool>>,
         Json(payload): Json<RegisterLnurlPayRequest>,
     ) -> Result<(), (StatusCode, Json<Value>)> {
-        let pubkey = validate(&pubkey, &payload.signature, &payload.username)?;
+        let pubkey = validate(&pubkey, &payload.signature, &payload.username, &state).await?;
         let mut conn = state.db.get().map_err(|e| {
             error!("failed to get database connection: {}", e);
             (
@@ -165,7 +161,7 @@ impl LnurlServer<SqlitePool> {
         Extension(state): Extension<State<SqlitePool>>,
         Json(payload): Json<RecoverLnurlPayRequest>,
     ) -> Result<Json<RecoverLnurlPayResponse>, (StatusCode, Json<Value>)> {
-        let pubkey = validate(&pubkey, &payload.signature, &pubkey)?;
+        let pubkey = validate(&pubkey, &payload.signature, &pubkey, &state).await?;
         let mut conn = state.db.get().map_err(|e| {
             error!("failed to get database connection: {}", e);
             (
@@ -187,7 +183,7 @@ impl LnurlServer<SqlitePool> {
 
         match user {
             Some(user) => Ok(Json(RecoverLnurlPayResponse {
-                lnurl: format!("https://{}/lnurlp/{}", state.domain, user.name),
+                lnurl: format!("{}://{}/lnurlp/{}", state.scheme, state.domain, user.name),
                 lightning_address: format!("{}@{}", user.name, state.domain),
                 username: user.name,
                 description: user.description,
@@ -199,12 +195,13 @@ impl LnurlServer<SqlitePool> {
         }
     }
 
+    #[allow(clippy::unused_async)]
     pub async fn handle_lnurl_pay(
         Path(identifier): Path<String>,
         Extension(state): Extension<State<SqlitePool>>,
     ) -> Result<Json<PayResponse>, (StatusCode, Json<Value>)> {
         if identifier.is_empty() {
-            return Err((StatusCode::NOT_FOUND, Json(Value::String("".into()))));
+            return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         }
 
         let mut conn = state.db.get().map_err(|e| {
@@ -220,11 +217,14 @@ impl LnurlServer<SqlitePool> {
                 lnurl_error("internal server error")
             })?;
         let Some(user) = user else {
-            return Err((StatusCode::NOT_FOUND, Json(Value::String("".into()))));
+            return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         };
 
         Ok(Json(PayResponse {
-            callback: format!("https://{}/lnurlp/{}/invoice", state.domain, user.name),
+            callback: format!(
+                "{}://{}/lnurlp/{}/invoice",
+                state.scheme, state.domain, user.name
+            ),
             max_sendable: state.max_sendable,
             min_sendable: state.min_sendable,
             tag: Tag::PayRequest,
@@ -241,7 +241,7 @@ impl LnurlServer<SqlitePool> {
         Extension(state): Extension<State<SqlitePool>>,
     ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
         if identifier.is_empty() {
-            return Err((StatusCode::NOT_FOUND, Json(Value::String("".into()))));
+            return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         }
 
         let mut conn = state.db.get().map_err(|e| {
@@ -257,7 +257,7 @@ impl LnurlServer<SqlitePool> {
                 lnurl_error("internal server error")
             })?;
         let Some(user) = user else {
-            return Err((StatusCode::NOT_FOUND, Json(Value::String("".into()))));
+            return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         };
 
         let Some(amount_msat) = params.amount else {
@@ -288,10 +288,12 @@ impl LnurlServer<SqlitePool> {
                 lnurl_error("failed to create invoice")
             })?;
 
+        debug!("Created lightning invoice: {:?}", invoice);
+
         // TODO: Save things like the invoice/preimage/transfer id?
         // TODO: Validate invoice?
-
         // TODO: Add lnurl-verify
+
         Ok(Json(json!({
             "pr": invoice.invoice,
             "routes": Vec::<String>::new(),
@@ -299,10 +301,11 @@ impl LnurlServer<SqlitePool> {
     }
 }
 
-fn validate(
+async fn validate(
     pubkey: &str,
     signature: &str,
     username: &str,
+    state: &State<SqlitePool>,
 ) -> Result<PublicKey, (StatusCode, Json<Value>)> {
     if username.chars().take(65).count() > 64 {
         return Err((
@@ -327,8 +330,6 @@ fn validate(
     }
 
     let pubkey = parse_pubkey(pubkey)?;
-    let (x_only_pubkey, _) = pubkey.x_only_public_key();
-
     let signature = hex::decode(signature).map_err(|e| {
         debug!("failed to decode signature: {}", e);
         (
@@ -336,7 +337,7 @@ fn validate(
             Json(Value::String("invalid signature".into())),
         )
     })?;
-    let signature = Signature::from_slice(&signature).map_err(|e| {
+    let signature = Signature::from_der(&signature).map_err(|e| {
         debug!("failed to parse signature: {:?}", e);
         (
             StatusCode::BAD_REQUEST,
@@ -344,19 +345,17 @@ fn validate(
         )
     })?;
 
-    let secp = Secp256k1::verification_only();
-    secp.verify_schnorr(
-        &signature,
-        &Message::from_digest(sha256::Hash::hash(username.as_bytes()).to_byte_array()),
-        &x_only_pubkey,
-    )
-    .map_err(|e| {
-        debug!("failed to verify signature: {}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            Json(Value::String("invalid signature".into())),
-        )
-    })?;
+    state
+        .wallet
+        .verify_message(username, &signature, &pubkey)
+        .await
+        .map_err(|e| {
+            debug!("failed to verify signature: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("invalid signature".into())),
+            )
+        })?;
 
     Ok(pubkey)
 }

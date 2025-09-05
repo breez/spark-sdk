@@ -1,4 +1,7 @@
-use std::{fmt::{Display, Formatter}, str::FromStr};
+use std::{
+    fmt::{Display, Formatter},
+    str::FromStr,
+};
 
 use bitcoin::params::Params;
 use serde::{Deserialize, Serialize};
