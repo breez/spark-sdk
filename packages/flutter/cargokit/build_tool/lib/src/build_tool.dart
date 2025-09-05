@@ -135,6 +135,12 @@ class PrecompileBinariesCommand extends Command {
         abbr: "v",
         defaultsTo: false,
         help: "Enable verbose logging",
+      )
+      ..addFlag(
+        "skip-release",
+        abbr: "s",
+        defaultsTo: false,
+        help: "Skip releasing the precompiled binaries",
       );
   }
 
@@ -198,6 +204,7 @@ class PrecompileBinariesCommand extends Command {
       androidNdkVersion: argResults!['android-ndk-version'] as String?,
       androidMinSdkVersion: androidMinSdkVersion,
       tempDir: argResults!['temp-dir'] as String?,
+      skipRelease: argResults!['skip-release'] as bool,
     );
 
     await precompileBinaries.run();
