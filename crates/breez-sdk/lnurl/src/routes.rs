@@ -6,7 +6,7 @@ use axum::{
     http::StatusCode,
 };
 use diesel::{
-    RunQueryDsl, SqliteConnection,
+    ExpressionMethods, RunQueryDsl, SqliteConnection,
     r2d2::{ConnectionManager, Pool},
 };
 use secp256k1::{PublicKey, schnorr::Signature};
@@ -61,48 +61,7 @@ impl LnurlServer<SqlitePool> {
         Extension(state): Extension<State<SqlitePool>>,
         Json(payload): Json<RegisterLnurlPayRequest>,
     ) -> Result<Json<RegisterLnurlPayResponse>, (StatusCode, Json<Value>)> {
-        let pubkey = hex::decode(&pubkey).map_err(|e| {
-            debug!("failed to decode pubkey: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("invalid pubkey".into())),
-            )
-        })?;
-        let pubkey = PublicKey::from_slice(&pubkey).map_err(|e| {
-            debug!("failed to create public key: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("invalid pubkey".into())),
-            )
-        })?;
-        let (x_only_pubkey, _) = pubkey.x_only_public_key();
-
-        let signature = hex::decode(&payload.signature).map_err(|e| {
-            debug!("failed to decode signature: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("invalid signature".into())),
-            )
-        })?;
-        let signature = signature.try_into().map_err(|e| {
-            debug!("failed to convert signature: {:?}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("invalid signature".into())),
-            )
-        })?;
-        let signature = Signature::from_byte_array(signature);
-
-        let secp = secp256k1::Secp256k1::verification_only();
-        secp.verify_schnorr(&signature, payload.username.as_bytes(), &x_only_pubkey)
-            .map_err(|e| {
-                debug!("failed to verify signature: {}", e);
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(Value::String("invalid signature".into())),
-                )
-            })?;
-
+        let pubkey = validate(&pubkey, &payload.signature, &payload.username)?;
         let user = User {
             pubkey: pubkey.to_string(),
             name: payload.username.clone(),
@@ -123,11 +82,7 @@ impl LnurlServer<SqlitePool> {
             .set(&user)
             .execute(&mut *conn)
         {
-            let diesel::result::Error::DatabaseError(
-                database_error_kind,
-                database_error_information,
-            ) = &e
-            else {
+            let diesel::result::Error::DatabaseError(database_error_kind, _) = &e else {
                 error!("failed to execute query: {}", e);
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -161,10 +116,25 @@ impl LnurlServer<SqlitePool> {
         Extension(state): Extension<State<SqlitePool>>,
         Json(payload): Json<RegisterLnurlPayRequest>,
     ) -> Result<(), (StatusCode, Json<Value>)> {
-        let _pubkey = pubkey;
-        let _payload = payload;
-        let _state = state;
-        todo!()
+        let pubkey = validate(&pubkey, &payload.signature, &payload.username)?;
+        let mut conn = state.db.get().map_err(|e| {
+            error!("failed to get database connection: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(Value::String("internal server error".into())),
+            )
+        })?;
+        diesel::delete(users::table)
+            .filter(users::pubkey.eq(pubkey.to_string()))
+            .execute(&mut *conn)
+            .map_err(|e| {
+                error!("failed to execute query: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(Value::String("internal server error".into())),
+                )
+            })?;
+        Ok(())
     }
 
     pub async fn recover(
@@ -199,4 +169,54 @@ impl LnurlServer<SqlitePool> {
         let _state = state;
         todo!()
     }
+}
+
+fn validate(
+    pubkey: &str,
+    signature: &str,
+    username: &str,
+) -> Result<PublicKey, (StatusCode, Json<Value>)> {
+    let pubkey = hex::decode(pubkey).map_err(|e| {
+        debug!("failed to decode pubkey: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid pubkey".into())),
+        )
+    })?;
+    let pubkey = PublicKey::from_slice(&pubkey).map_err(|e| {
+        debug!("failed to parse public key: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid pubkey".into())),
+        )
+    })?;
+    let (x_only_pubkey, _) = pubkey.x_only_public_key();
+
+    let signature = hex::decode(signature).map_err(|e| {
+        debug!("failed to decode signature: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid signature".into())),
+        )
+    })?;
+    let signature = signature.try_into().map_err(|e| {
+        debug!("failed to convert signature: {:?}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid signature".into())),
+        )
+    })?;
+    let signature = Signature::from_byte_array(signature);
+
+    let secp = secp256k1::Secp256k1::verification_only();
+    secp.verify_schnorr(&signature, username.as_bytes(), &x_only_pubkey)
+        .map_err(|e| {
+            debug!("failed to verify signature: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("invalid signature".into())),
+            )
+        })?;
+
+    Ok(pubkey)
 }
