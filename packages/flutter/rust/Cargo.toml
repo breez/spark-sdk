@@ -1,12 +1,11 @@
 [package]
-name = "breez-sdk-spark-flutter"
+name = "breez_sdk_spark_flutter"
 version = "0.1.3"
 edition = "2024"
 
 [workspace]
 
 [lib]
-name = "breez_sdk_spark_flutter"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
