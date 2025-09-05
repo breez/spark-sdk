@@ -1,3 +1,3 @@
-pub mod rest_client;
+mod rest_client;
 
 pub use rest_client::*;

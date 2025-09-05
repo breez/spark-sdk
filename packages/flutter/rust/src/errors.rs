@@ -1,6 +1,5 @@
 use breez_sdk_spark::Fee;
-pub use breez_sdk_spark::persist::StorageError;
-pub use breez_sdk_spark::{DepositClaimError, SdkError};
+pub use breez_sdk_spark::{DepositClaimError, SdkError, StorageError};
 use flutter_rust_bridge::frb;
 
 #[frb(mirror(DepositClaimError))]

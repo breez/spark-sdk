@@ -1,11 +1,11 @@
 #[cfg(feature = "uniffi")]
 mod bindings;
-pub mod chain;
+mod chain;
 mod error;
 mod events;
 mod logger;
-pub mod models;
-pub mod persist;
+mod models;
+mod persist;
 mod sdk;
 mod sdk_builder;
 mod utils;

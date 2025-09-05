@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+pub use breez_sdk_spark::Storage;
 use breez_sdk_spark::{Config, Credentials, SdkError};
 use flutter_rust_bridge::frb;
-pub use breez_sdk_spark::persist::Storage;
 
 use crate::sdk::BreezSdk;
 

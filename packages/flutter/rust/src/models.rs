@@ -2,9 +2,7 @@ pub use breez_sdk_common::input::*;
 pub use breez_sdk_common::lnurl::auth::*;
 pub use breez_sdk_common::lnurl::pay::*;
 pub use breez_sdk_common::network::BitcoinNetwork;
-pub use breez_sdk_spark::DepositClaimError;
-pub use breez_sdk_spark::models::*;
-pub use breez_sdk_spark::persist::{Storage, UpdateDepositPayload};
+pub use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
 
 #[frb(mirror(BitcoinAddressDetails))]

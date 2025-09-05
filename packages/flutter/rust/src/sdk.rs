@@ -1,14 +1,13 @@
 use std::sync::Arc;
 
 use breez_sdk_common::input::InputType;
-use breez_sdk_spark::persist::Storage;
 use breez_sdk_spark::{
     ClaimDepositRequest, ClaimDepositResponse, Config, ConnectRequest, GetInfoRequest,
     GetInfoResponse, GetPaymentRequest, GetPaymentResponse, ListPaymentsRequest,
     ListPaymentsResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
     LnurlPayRequest, LnurlPayResponse, LogEntry, Logger, Network, PrepareLnurlPayRequest,
     PrepareLnurlPayResponse, ReceivePaymentRequest, ReceivePaymentResponse, RefundDepositRequest,
-    RefundDepositResponse, SdkError, SdkEvent, SyncWalletRequest, SyncWalletResponse,
+    RefundDepositResponse, SdkError, SdkEvent, Storage, SyncWalletRequest, SyncWalletResponse,
 };
 use flutter_rust_bridge::frb;
 
