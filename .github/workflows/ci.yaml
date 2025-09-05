@@ -113,9 +113,9 @@ jobs:
           channel: stable
           flutter-version: 3.29.0
 
-      - name: Clippy
-        working-directory: packages/flutter/rust
-        run: cargo clippy
+      - name: Generate bindings
+        working-directory: packages/flutter
+        run: make generate-bindings-build-release
 
   docs:
     name: Docs
