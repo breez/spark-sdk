@@ -530,6 +530,7 @@ dependencies = [
  "figment",
  "hex",
  "macros",
+ "openssl",
  "qrcode-rs",
  "reqwest",
  "rusqlite",
@@ -550,7 +551,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "breez-sdk-spark-flutter"
+name = "breez_sdk_spark_flutter"
 version = "0.1.3"
 dependencies = [
  "async-trait",

@@ -23,6 +23,7 @@ generate-bindings: install-flutter-rust-bridge-codegen
 generate-bindings-build-release: generate-bindings build-release
 
 install-flutter-rust-bridge-codegen:
+	$(INSTALL_PREFIX) cargo install cargo-expand --locked
 	$(INSTALL_PREFIX) cargo install flutter_rust_bridge_codegen --version 2.9.0 --locked
 
 test: generate-bindings-build-release

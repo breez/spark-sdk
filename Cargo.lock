@@ -645,6 +645,7 @@ dependencies = [
  "figment",
  "hex",
  "macros",
+ "openssl",
  "qrcode-rs",
  "reqwest",
  "rusqlite",

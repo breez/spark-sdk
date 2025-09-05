@@ -10,7 +10,7 @@ uniffi = [
     "dep:uniffi",
     "openssl-vendored",
 ]
-openssl-vendored = ["reqwest/native-tls-vendored"]
+openssl-vendored = ["openssl"]
 test-utils = []
 
 [lib]
@@ -32,6 +32,7 @@ dotenvy.workspace = true
 figment = { workspace = true, features = ["env", "yaml"] }
 hex.workspace = true
 macros.workspace = true
+openssl = { workspace = true, optional = true }
 qrcode-rs.workspace = true
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }

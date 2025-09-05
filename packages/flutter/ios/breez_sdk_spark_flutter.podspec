@@ -1,9 +1,9 @@
 #
 # To learn more about a Podspec see http://guides.cocoapods.org/syntax/podspec.html.
-# Run `pod lib lint breez_sdk_spark.podspec` to validate before publishing.
+# Run `pod lib lint breez_sdk_spark_flutter.podspec` to validate before publishing.
 #
 Pod::Spec.new do |spec|
-  spec.name                   = "breez_sdk_spark"
+  spec.name                   = "breez_sdk_spark_flutter"
   spec.version                = "0.1.3"
   spec.license                = { :file => '../LICENSE' }
   spec.summary                = "Swift bindings to the Breez Spark SDK"
@@ -17,9 +17,9 @@ Pod::Spec.new do |spec|
   # `../src/*` so that the C sources can be shared among all target platforms.
   spec.source              = { :path => '.' }
   spec.source_files        = 'Classes/**/*'
-  spec.dependency 'FlutterMacOS'
+  spec.dependency 'Flutter'
 
-  spec.platform            = :osx, '10.11'
+  spec.platform            = :ios, '11.0'
   spec.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   spec.swift_version       = '5.0'
 
