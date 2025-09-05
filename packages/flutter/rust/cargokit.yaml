@@ -9,4 +9,4 @@ precompiled_binaries:
   url_prefix: https://github.com/breez/breez-sdk-spark-flutter/releases/download/precompiled_
 
   # Public key for verifying downloaded precompiled binaries.
-  public_key: 9f1d5288ad8d6581a7f14c852f71db594991569bc4f173ef6ef0d33f1e359975
+  public_key: c5ce2e1c09735581703632603c4a207fa88fc03fd9723869e3e6af402caa8861

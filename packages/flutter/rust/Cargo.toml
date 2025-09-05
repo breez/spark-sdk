@@ -6,13 +6,14 @@ edition = "2024"
 [workspace]
 
 [lib]
+name = "breez_sdk_spark_flutter"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 async-trait = "0.1.88"
 # Replaced with release commit during publishing
 breez-sdk-common = { path = "../../../crates/breez-sdk/common" }
-breez-sdk-spark = { path = "../../../crates/breez-sdk/core" }
+breez-sdk-spark = { path = "../../../crates/breez-sdk/core", features = ["openssl-vendored"] }
 extend = "1.2.0"
 flutter_rust_bridge = "=2.11.1"
 
