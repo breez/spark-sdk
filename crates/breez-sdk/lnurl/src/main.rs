@@ -7,9 +7,12 @@ use axum::{
     http::{self, Method},
     routing::{delete, get, post},
 };
-use breez_sdk_spark::{connect, default_config, BreezSdk, ConnectRequest, Network, SdkBuilder, Storage};
+use breez_sdk_spark::Network;
 use clap::Parser;
-use diesel::{SqliteConnection, r2d2::{ConnectionManager, Pool}};
+use diesel::{
+    SqliteConnection,
+    r2d2::{ConnectionManager, Pool},
+};
 use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
@@ -20,7 +23,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::{sdk::NopStorage, state::State};
+use crate::state::State;
 
 mod models;
 mod routes;
@@ -56,7 +59,10 @@ struct Args {
     #[serde_as(as = "DisplayFromStr")]
     pub network: Network,
 
-    #[arg(long, default_value = "all all all all all all all all all all all all")]
+    #[arg(
+        long,
+        default_value = "all all all all all all all all all all all all"
+    )]
     pub mnemonic: String,
     pub domain: String,
     pub min_sendable: u64,
@@ -64,7 +70,6 @@ struct Args {
 }
 
 type LnurlServer = routes::LnurlServer<Pool<ConnectionManager<SqliteConnection>>>;
-
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -89,17 +94,18 @@ async fn main() -> Result<(), anyhow::Error> {
         ),
         None => info!("starting lnurl server without config file"),
     }
-    
+
     // Create a connection manager for SQLite
     let manager = ConnectionManager::<SqliteConnection>::new(&args.db_url);
-    
+
     // Create a connection pool
     let pool = Pool::builder()
         .build(manager)
         .map_err(|e| anyhow!("failed to create connection pool: {:?}", e))?;
 
     // Get a connection to run migrations
-    let mut db_connection = pool.get()
+    let mut db_connection = pool
+        .get()
         .map_err(|e| anyhow!("failed to get connection from pool: {:?}", e))?;
 
     match args.auto_migrate {
@@ -113,11 +119,8 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     }
 
-
-    let sdk = Arc::new(SdkBuilder::new(default_config(args.network), args.mnemonic, Arc::new(NopStorage)).build().await?);
     let state = State {
         db: Arc::new(pool),
-        sdk,
         domain: args.domain,
         min_sendable: args.min_sendable,
         max_sendable: args.max_sendable,
