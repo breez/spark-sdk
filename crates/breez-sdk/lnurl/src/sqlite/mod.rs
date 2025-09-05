@@ -1,9 +1,10 @@
 use diesel::sqlite::Sqlite;
-use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("../../migrations/sqlite");
 
-
-pub fn has_migrations(connection: &mut impl MigrationHarness<Sqlite>) -> Result<bool, anyhow::Error> {
+pub fn has_migrations(
+    connection: &mut impl MigrationHarness<Sqlite>,
+) -> Result<bool, anyhow::Error> {
     Ok(connection.has_pending_migration(MIGRATIONS)?)
 }
 

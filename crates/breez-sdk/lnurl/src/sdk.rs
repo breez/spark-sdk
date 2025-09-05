@@ -1,4 +1,6 @@
-use breez_sdk_spark::{DepositInfo, Payment, PaymentMetadata, Storage, StorageError, UpdateDepositPayload};
+use breez_sdk_spark::{
+    DepositInfo, Payment, PaymentMetadata, Storage, StorageError, UpdateDepositPayload,
+};
 
 pub struct NopStorage;
 
