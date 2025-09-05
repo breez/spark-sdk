@@ -96,6 +96,27 @@ jobs:
       - name: Check git status
         uses: ./.github/actions/check-git-status
 
+  flutter:
+    name: Flutter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.29.0
+
+      - name: Generate Bindings
+        working-directory: packages/flutter
+        run: make generate-bindings-build-release 
+
   docs:
     name: Docs
     runs-on: ubuntu-latest
