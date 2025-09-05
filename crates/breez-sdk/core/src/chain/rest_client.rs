@@ -1,6 +1,6 @@
 use base64::{Engine as _, engine::general_purpose};
 use bitcoin::{Address, address::NetworkUnchecked};
-use breez_sdk_common::rest::RestClient;
+use breez_sdk_common::rest::RestClient as CommonRestClient;
 use breez_sdk_common::{error::ServiceConnectivityError, rest::RestResponse};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -37,7 +37,7 @@ impl BasicAuth {
 pub struct RestClientChainService {
     base_url: String,
     network: Network,
-    client: Box<dyn RestClient>,
+    client: Box<dyn breez_sdk_common::rest::RestClient>,
     max_retries: usize,
     basic_auth: Option<BasicAuth>,
 }
@@ -47,7 +47,7 @@ impl RestClientChainService {
         base_url: String,
         network: Network,
         max_retries: usize,
-        rest_client: Box<dyn RestClient>,
+        rest_client: Box<dyn CommonRestClient>,
         basic_auth: Option<BasicAuth>,
     ) -> Self {
         Self {
@@ -83,7 +83,7 @@ impl RestClientChainService {
     async fn get_with_retry(
         &self,
         url: &str,
-        client: &dyn RestClient,
+        client: &dyn CommonRestClient,
     ) -> Result<(String, u16), ChainServiceError> {
         let mut delay = BASE_BACKOFF_MILLIS;
         let mut attempts = 0;

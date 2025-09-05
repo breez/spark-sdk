@@ -284,7 +284,7 @@ impl TryFrom<WalletTransfer> for Payment {
 }
 
 impl Payment {
-    pub(crate) fn from_lightning(
+    pub fn from_lightning(
         payment: LightningSendPayment,
         amount_sat: u64,
     ) -> Result<Self, SdkError> {
