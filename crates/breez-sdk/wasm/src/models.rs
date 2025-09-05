@@ -346,8 +346,8 @@ pub struct Payment {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentDetails)]
 pub enum PaymentDetails {
     Spark,
-    SparkTokenTransaction {
-        token_metadata: TokenMetadata,
+    Token {
+        metadata: TokenMetadata,
     },
     Lightning {
         description: Option<String>,
@@ -369,7 +369,7 @@ pub enum PaymentDetails {
 pub enum PaymentMethod {
     Lightning,
     Spark,
-    SparkTokenTransaction,
+    Token,
     Deposit,
     Withdraw,
     Unknown,

@@ -510,9 +510,9 @@ impl BreezSdk {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
-            method: PaymentMethod::SparkTokenTransaction,
-            details: Some(PaymentDetails::SparkTokenTransaction {
-                token_metadata: self
+            method: PaymentMethod::Token,
+            details: Some(PaymentDetails::Token {
+                metadata: self
                     .spark_wallet
                     .get_tokens_metadata(vec![output.token_identifier.clone()])
                     .await?

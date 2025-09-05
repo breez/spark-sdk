@@ -86,7 +86,7 @@ impl From<&str> for PaymentStatus {
 pub enum PaymentMethod {
     Lightning,
     Spark,
-    SparkTokenTransaction,
+    Token,
     Deposit,
     Withdraw,
     Unknown,
@@ -133,8 +133,8 @@ pub struct Payment {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum PaymentDetails {
     Spark,
-    SparkTokenTransaction {
-        token_metadata: TokenMetadata,
+    Token {
+        metadata: TokenMetadata,
     },
     Lightning {
         /// Represents the invoice description
