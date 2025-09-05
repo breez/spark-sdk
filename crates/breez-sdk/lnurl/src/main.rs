@@ -17,7 +17,6 @@ use figment::{
     providers::{Env, Format, Serialized, Toml},
 };
 use serde::{Deserialize, Serialize};
-use serde_with::{DisplayFromStr, serde_as};
 use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info};
@@ -30,7 +29,6 @@ mod routes;
 mod sqlite;
 mod state;
 
-#[serde_as]
 #[derive(Clone, Parser, Debug, Serialize, Deserialize)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -54,12 +52,23 @@ struct Args {
     #[arg(long, default_value = "info")]
     pub log_level: String,
 
+    /// Spark network.
     #[arg(long, default_value = "mainnet")]
-    #[serde_as(as = "DisplayFromStr")]
     pub network: Network,
 
+    /// Scheme prefix for lnurl urls.
+    #[arg(long, default_value = "https")]
+    pub scheme: String,
+
+    /// Domain for lnurl urls.
+    #[arg(long, default_value = "127.0.0.1:8080")]
     pub domain: String,
+
+    /// Minimum amount that can be sent in a lnurl payment.
+    #[arg(long, default_value = "1000")]
     pub min_sendable: u64,
+
+    #[arg(long, default_value = "4000000")]
     pub max_sendable: u64,
 }
 
@@ -81,12 +90,13 @@ async fn main() -> Result<(), anyhow::Error> {
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
         .init();
 
-    match &config_file {
-        Some(config_file) => info!(
+    if let Some(config_file) = &config_file {
+        info!(
             "starting lnurl server with config file: {}",
             config_file.display()
-        ),
-        None => info!("starting lnurl server without config file"),
+        );
+    } else {
+        info!("starting lnurl server without config file");
     }
 
     // Create a connection manager for SQLite
@@ -102,15 +112,12 @@ async fn main() -> Result<(), anyhow::Error> {
         .get()
         .map_err(|e| anyhow!("failed to get connection from pool: {:?}", e))?;
 
-    match args.auto_migrate {
-        true => sqlite::run_migrations(&mut db_connection)?,
-        false => {
-            if sqlite::has_migrations(&mut db_connection)? {
-                return Err(anyhow::anyhow!(
-                    "database has pending migrations, run with --auto-migrate to apply them, or apply them manually"
-                ));
-            }
-        }
+    if args.auto_migrate {
+        sqlite::run_migrations(&mut db_connection)?;
+    } else if sqlite::has_migrations(&mut db_connection)? {
+        return Err(anyhow::anyhow!(
+            "database has pending migrations, run with --auto-migrate to apply them, or apply them manually"
+        ));
     }
 
     let wallet = Arc::new(
@@ -123,22 +130,23 @@ async fn main() -> Result<(), anyhow::Error> {
     let state = State {
         db: Arc::new(pool),
         wallet,
+        scheme: args.scheme,
         domain: args.domain,
         min_sendable: args.min_sendable,
         max_sendable: args.max_sendable,
     };
 
     let server_router = Router::new()
-        .route("/lnurlpay/:pubkey", post(LnurlServer::register))
-        .route("/lnurlpay/:pubkey", delete(LnurlServer::unregister))
-        .route("/lnurlpay/:pubkey/recover", delete(LnurlServer::recover))
+        .route("/lnurlpay/{pubkey}", post(LnurlServer::register))
+        .route("/lnurlpay/{pubkey}", delete(LnurlServer::unregister))
+        .route("/lnurlpay/{pubkey}/recover", delete(LnurlServer::recover))
         .route(
-            "/.well-known/lnurlp/:identifier",
+            "/.well-known/lnurlp/{identifier}",
             get(LnurlServer::handle_lnurl_pay),
         )
-        .route("/lnurlp/:identifier", get(LnurlServer::handle_lnurl_pay))
+        .route("/lnurlp/{identifier}", get(LnurlServer::handle_lnurl_pay))
         .route(
-            "/lnurlp/:identifier/invoice",
+            "/lnurlp/{identifier}/invoice",
             get(LnurlServer::handle_invoice),
         )
         .layer(Extension(state))
