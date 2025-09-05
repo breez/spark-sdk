@@ -6,5 +6,7 @@ diesel::table! {
         pubkey -> VarChar,
         #[max_length = 64]
         name -> VarChar,
+        #[max_length = 255]
+        description -> VarChar,
     }
 }
