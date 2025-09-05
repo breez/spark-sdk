@@ -178,5 +178,6 @@ async fn main() -> Result<(), anyhow::Error> {
         error!("shutdown error: {e}");
     }
 
-    todo!();
+    info!("lnurl server stopped");
+    Ok(())
 }
