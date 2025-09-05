@@ -10,7 +10,7 @@ use spark_wallet::{
     Network as SparkNetwork, SspUserRequest, TransferDirection, TransferStatus, TransferType,
     WalletTransfer,
 };
-use std::time::UNIX_EPOCH;
+use std::{str::FromStr, time::UNIX_EPOCH};
 
 use crate::{SdkError, error::DepositClaimError};
 
@@ -349,6 +349,18 @@ impl From<Network> for BitcoinNetwork {
         match network {
             Network::Mainnet => BitcoinNetwork::Bitcoin,
             Network::Regtest => BitcoinNetwork::Regtest,
+        }
+    }
+}
+
+impl FromStr for Network {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "mainnet" => Ok(Network::Mainnet),
+            "regtest" => Ok(Network::Regtest),
+            _ => Err("Invalid network".to_string()),
         }
     }
 }
