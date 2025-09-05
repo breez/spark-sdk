@@ -17,12 +17,13 @@ build-release:
 	cd rust && cargo build --release
 
 generate-bindings: install-flutter-rust-bridge-codegen
+	mkdir -p lib/src/rust
 	flutter_rust_bridge_codegen generate
 
 generate-bindings-build-release: generate-bindings build-release
 
 install-flutter-rust-bridge-codegen:
-	$(INSTALL_PREFIX) cargo install flutter_rust_bridge_codegen --version 2.11.1
+	$(INSTALL_PREFIX) cargo install flutter_rust_bridge_codegen --version 2.9.0 --locked
 
 test: generate-bindings-build-release
 	flutter test

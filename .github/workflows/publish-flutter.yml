@@ -68,8 +68,8 @@ jobs:
           rm Cargo.toml.bak
 
       - name: Generate bindings
-        working-directory: packages/flutter/rust
-        run: cargo build --release
+        working-directory: packages/flutter
+        run: make generate-bindings-build-release
   
       - name: Copy package files
         working-directory: dist
