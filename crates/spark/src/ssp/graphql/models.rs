@@ -82,9 +82,9 @@ use enum_to_enum::FromEnum;
 use serde::{Deserialize, Serialize};
 
 pub use crate::ssp::graphql::queries::claim_static_deposit::ClaimStaticDepositInput;
-pub use crate::ssp::graphql::queries::complete_leaves_swap::CompleteLeavesSwapInput;
+pub use crate::ssp::graphql::queries::complete_leaves_swap::CompleteLeavesSwapInputDeprecated;
 pub use crate::ssp::graphql::queries::request_coop_exit::RequestCoopExitInput;
-pub use crate::ssp::graphql::queries::request_leaves_swap::RequestLeavesSwapInput;
+pub use crate::ssp::graphql::queries::request_leaves_swap::RequestLeavesSwapInputDeprecated;
 pub use crate::ssp::graphql::queries::request_leaves_swap::UserLeafInput;
 pub use crate::ssp::graphql::queries::request_lightning_receive::RequestLightningReceiveInput;
 pub use crate::ssp::graphql::queries::request_lightning_send::RequestLightningSendInput;
