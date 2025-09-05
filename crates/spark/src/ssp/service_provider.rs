@@ -5,10 +5,10 @@ use bitcoin::secp256k1::PublicKey;
 use crate::{
     signer::Signer,
     ssp::{
-        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CompleteLeavesSwapInput,
-        CoopExitFeeQuote, CurrencyAmount, LeavesSwapRequest, RequestCoopExitInput,
-        RequestLeavesSwapInput, RequestLightningReceiveInput, RequestLightningSendInput,
-        ServiceProviderConfig, SspTransfer, StaticDepositQuote,
+        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput,
+        CompleteLeavesSwapInputDeprecated, CoopExitFeeQuote, CurrencyAmount, LeavesSwapRequest,
+        RequestCoopExitInput, RequestLeavesSwapInputDeprecated, RequestLightningReceiveInput,
+        RequestLightningSendInput, ServiceProviderConfig, SspTransfer, StaticDepositQuote,
         error::ServiceProviderResult,
         graphql::{CoopExitRequest, GraphQLClient, LightningReceiveRequest, LightningSendRequest},
     },
@@ -103,7 +103,7 @@ impl<S: Signer> ServiceProvider<S> {
     /// Request leaves swap
     pub async fn request_leaves_swap(
         &self,
-        input: RequestLeavesSwapInput,
+        input: RequestLeavesSwapInputDeprecated,
     ) -> ServiceProviderResult<LeavesSwapRequest> {
         Ok(self.gql_client.request_leaves_swap(input).await?)
     }
@@ -111,7 +111,7 @@ impl<S: Signer> ServiceProvider<S> {
     /// Complete a leaves swap
     pub async fn complete_leaves_swap(
         &self,
-        input: CompleteLeavesSwapInput,
+        input: CompleteLeavesSwapInputDeprecated,
     ) -> ServiceProviderResult<LeavesSwapRequest> {
         Ok(self.gql_client.complete_leaves_swap(input).await?)
     }
