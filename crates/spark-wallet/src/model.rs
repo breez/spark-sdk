@@ -177,7 +177,8 @@ pub struct TokenBalance {
 #[derive(Default)]
 pub struct ListTokenTransactionsRequest {
     pub paging: Option<PagingFilter>,
-    pub owner_public_keys: Vec<PublicKey>,
+    /// If not provided, will use our own public key
+    pub owner_public_keys: Option<Vec<PublicKey>>,
     pub issuer_public_keys: Vec<PublicKey>,
     pub token_transaction_hashes: Vec<String>,
     pub token_ids: Vec<String>,

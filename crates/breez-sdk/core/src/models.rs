@@ -10,7 +10,7 @@ use spark_wallet::{
     Network as SparkNetwork, SspUserRequest, TransferDirection, TransferStatus, TransferType,
     WalletTransfer,
 };
-use std::time::UNIX_EPOCH;
+use std::{collections::HashMap, time::UNIX_EPOCH};
 
 use crate::{SdkError, error::DepositClaimError};
 
@@ -86,6 +86,7 @@ impl From<&str> for PaymentStatus {
 pub enum PaymentMethod {
     Lightning,
     Spark,
+    Token,
     Deposit,
     Withdraw,
     Unknown,
@@ -132,6 +133,9 @@ pub struct Payment {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum PaymentDetails {
     Spark,
+    Token {
+        metadata: TokenMetadata,
+    },
     Lightning {
         /// Represents the invoice description
         description: Option<String>,
@@ -280,6 +284,20 @@ impl TryFrom<WalletTransfer> for Payment {
             method: transfer.transfer_type.into(),
             details,
         })
+    }
+}
+
+impl From<spark_wallet::TokenTransactionStatus> for PaymentStatus {
+    fn from(value: spark_wallet::TokenTransactionStatus) -> Self {
+        match value {
+            spark_wallet::TokenTransactionStatus::Started
+            | spark_wallet::TokenTransactionStatus::Signed
+            | spark_wallet::TokenTransactionStatus::Revealed // TODO: is this pending or completed?
+            | spark_wallet::TokenTransactionStatus::Unknown => PaymentStatus::Pending,
+            spark_wallet::TokenTransactionStatus::Finalized => PaymentStatus::Completed,
+            spark_wallet::TokenTransactionStatus::StartedCancelled
+            | spark_wallet::TokenTransactionStatus::SignedCancelled => PaymentStatus::Failed,
+        }
     }
 }
 
@@ -470,6 +488,56 @@ pub struct GetInfoRequest {}
 pub struct GetInfoResponse {
     /// The balance in satoshis
     pub balance_sats: u64,
+    /// The balances of the tokens in the wallet keyed by the token identifier
+    pub token_balances: HashMap<String, TokenBalance>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct TokenBalance {
+    pub balance: u64,
+    pub token_metadata: TokenMetadata,
+}
+
+impl From<spark_wallet::TokenBalance> for TokenBalance {
+    fn from(value: spark_wallet::TokenBalance) -> Self {
+        Self {
+            balance: value.balance.try_into().unwrap_or_default(), // balance will be changed to u128 or similar
+            token_metadata: value.token_metadata.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct TokenMetadata {
+    pub identifier: String,
+    /// Hex representation of the issuer public key
+    pub issuer_public_key: String,
+    pub name: String,
+    pub ticker: String,
+    /// Number of decimals the token uses
+    pub decimals: u32,
+    pub max_supply: u64,
+    pub is_freezable: bool,
+    pub creation_entity_public_key: Option<String>,
+}
+
+impl From<spark_wallet::TokenMetadata> for TokenMetadata {
+    fn from(value: spark_wallet::TokenMetadata) -> Self {
+        Self {
+            identifier: value.identifier,
+            issuer_public_key: hex::encode(value.issuer_public_key.serialize()),
+            name: value.name,
+            ticker: value.ticker,
+            decimals: value.decimals,
+            max_supply: value.max_supply.try_into().unwrap_or_default(), // max_supply will be changed to u128 or similar
+            is_freezable: value.is_freezable,
+            creation_entity_public_key: value
+                .creation_entity_public_key
+                .map(|pk| hex::encode(pk.serialize())),
+        }
+    }
 }
 
 /// Request to sync the wallet with the Spark network
@@ -507,7 +575,12 @@ pub enum SendPaymentMethod {
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
-        fee_sats: u64,
+        /// Fee to pay for the transaction
+        /// Denominated in sats if token identifier is empty, otherwise in the token base units
+        fee: u64,
+        /// The presence of this field indicates that the payment is for a token
+        /// If empty, it is a Bitcoin payment
+        token_identifier: Option<String>,
     },
 }
 
@@ -663,15 +736,26 @@ impl From<ExitSpeed> for OnchainConfirmationSpeed {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
+    /// Amount to send. By default is denominated in sats.
+    /// If a token identifier is provided, the amount will be denominated in the token base units.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub amount_sats: Option<u64>,
+    pub amount: Option<u64>,
+    /// If provided, the payment will be for a token
+    /// May only be provided if the payment request is a spark address
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub token_identifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    pub amount_sats: u64,
+    /// Amount to send. By default is denominated in sats.
+    /// If a token identifier is provided, the amount will be denominated in the token base units.
+    pub amount: u64,
+    /// The presence of this field indicates that the payment is for a token
+    /// If empty, it is a Bitcoin payment
+    pub token_identifier: Option<String>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
