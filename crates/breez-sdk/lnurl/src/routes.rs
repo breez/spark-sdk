@@ -15,7 +15,7 @@ use lnurl::{Tag, pay::PayResponse};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tracing::{debug, error};
+use tracing::{debug, error, trace};
 
 use crate::{
     models::{USERNAME_VALIDATION_REGEX, User, users},
@@ -117,13 +117,14 @@ impl LnurlServer<SqlitePool> {
                 ));
             };
 
-            debug!("name already exists: {}", user.name);
+            trace!("name already exists: {}", user.name);
             return Err((
                 StatusCode::CONFLICT,
                 Json(Value::String("name already taken".into())),
             ));
         }
 
+        debug!("registered user '{}' for pubkey {}", user.name, pubkey);
         Ok(Json(RegisterLnurlPayResponse {
             lnurl: format!("{}://{}/lnurlp/{}", state.scheme, state.domain, user.name),
             lightning_address: format!("{}@{}", user.name, state.domain),
@@ -153,6 +154,8 @@ impl LnurlServer<SqlitePool> {
                     Json(Value::String("internal server error".into())),
                 )
             })?;
+
+        debug!("unregistered user for pubkey {}", pubkey);
         Ok(())
     }
 
@@ -213,7 +216,7 @@ impl LnurlServer<SqlitePool> {
             .first::<User>(&mut conn)
             .optional()
             .map_err(|e| {
-                error!("failed to execute query: {}", e);
+                error!("handle_lnurl_pay: failed to execute query: {}", e);
                 lnurl_error("internal server error")
             })?;
         let Some(user) = user else {
@@ -253,7 +256,7 @@ impl LnurlServer<SqlitePool> {
             .first::<User>(&mut conn)
             .optional()
             .map_err(|e| {
-                error!("failed to execute query: {}", e);
+                error!("handle_invoice: failed to execute query: {}", e);
                 lnurl_error("internal server error")
             })?;
         let Some(user) = user else {
@@ -261,12 +264,12 @@ impl LnurlServer<SqlitePool> {
         };
 
         let Some(amount_msat) = params.amount else {
-            debug!("missing amount");
+            trace!("missing amount");
             return Err(lnurl_error("missing amount"));
         };
 
         if amount_msat % 1000 != 0 {
-            debug!("invalid amount");
+            trace!("not a full sat amount");
             return Err(lnurl_error("amount must be a whole sat amount"));
         }
 
@@ -323,6 +326,7 @@ async fn validate(
     })?;
 
     if !regex.is_match(username) {
+        trace!("invalid username doesn't match regex");
         return Err((
             StatusCode::BAD_REQUEST,
             Json(Value::String("invalid username".into())),
@@ -331,14 +335,14 @@ async fn validate(
 
     let pubkey = parse_pubkey(pubkey)?;
     let signature = hex::decode(signature).map_err(|e| {
-        debug!("failed to decode signature: {}", e);
+        trace!("invalid signature, could not decode: {}", e);
         (
             StatusCode::BAD_REQUEST,
             Json(Value::String("invalid signature".into())),
         )
     })?;
     let signature = Signature::from_der(&signature).map_err(|e| {
-        debug!("failed to parse signature: {:?}", e);
+        trace!("invalid signature, could not parse: {:?}", e);
         (
             StatusCode::BAD_REQUEST,
             Json(Value::String("invalid signature".into())),
@@ -350,7 +354,7 @@ async fn validate(
         .verify_message(username, &signature, &pubkey)
         .await
         .map_err(|e| {
-            debug!("failed to verify signature: {}", e);
+            trace!("invalid signature, could not verify: {}", e);
             (
                 StatusCode::BAD_REQUEST,
                 Json(Value::String("invalid signature".into())),
@@ -362,14 +366,14 @@ async fn validate(
 
 fn parse_pubkey(pubkey: &str) -> Result<PublicKey, (StatusCode, Json<Value>)> {
     let pubkey = hex::decode(pubkey).map_err(|e| {
-        debug!("failed to decode pubkey: {}", e);
+        trace!("invalid pubkey, could not decode: {}", e);
         (
             StatusCode::BAD_REQUEST,
             Json(Value::String("invalid pubkey".into())),
         )
     })?;
     let pubkey = PublicKey::from_slice(&pubkey).map_err(|e| {
-        debug!("failed to parse public key: {}", e);
+        trace!("invalid pubkey, could not parse: {}", e);
         (
             StatusCode::BAD_REQUEST,
             Json(Value::String("invalid pubkey".into())),
@@ -379,15 +383,9 @@ fn parse_pubkey(pubkey: &str) -> Result<PublicKey, (StatusCode, Json<Value>)> {
 }
 
 fn get_metadata(domain: &str, user: &User) -> String {
-    Value::Array(vec![
-        Value::Array(vec![
-            Value::String("text/plain".to_string()),
-            Value::String(user.description.clone()),
-        ]),
-        Value::Array(vec![
-            Value::String("text/identifier".to_string()),
-            Value::String(format!("{}@{}", user.name, domain)),
-        ]),
+    json!(vec![
+        vec!["text/plain", &user.description],
+        vec!["text/identifier", &format!("{}@{}", user.name, domain)],
     ])
     .to_string()
 }
