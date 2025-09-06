@@ -692,6 +692,15 @@ impl<S: Signer> TransferService<S> {
                             },
                         )
                         .await
+                        .map_err(|e| {
+                            if let OperatorRpcError::Connection(status) = &e
+                                && status.code() == Code::AlreadyExists
+                            {
+                                return ServiceError::TransferAlreadyClaimed;
+                            }
+
+                            e.into()
+                        })
                 };
                 tasks.push(task);
             }

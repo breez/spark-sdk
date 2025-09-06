@@ -205,7 +205,7 @@ impl<S: Signer> DepositService<S> {
                 vout,
             )
             .await?;
-        Ok(nodes)
+        self.collect_leaves(nodes).await
     }
 
     pub async fn collect_leaves(

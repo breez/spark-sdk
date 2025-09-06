@@ -311,15 +311,6 @@ impl<S: Signer> TreeService<S> {
         leaves.len() > optimal_leaves_length * 5
     }
 
-    pub async fn reserve_new_leaves(
-        &self,
-        leaves: Vec<TreeNode>,
-    ) -> Result<LeavesReservation, TreeServiceError> {
-        let mut state = self.state.lock().await;
-        let reservation_id = state.reserve_leaves(&leaves, true)?;
-        Ok(LeavesReservation::new(leaves, reservation_id))
-    }
-
     pub async fn reserve_leaves(
         &self,
         target_amounts: Option<&TargetAmounts>,

@@ -345,21 +345,11 @@ impl<S: Signer> SparkWallet<S> {
         vout: u32,
     ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
         let deposit_nodes = self.deposit_service.claim_deposit(tx, vout).await?;
-        debug!("Claimed deposit root node: {:?}", deposit_nodes);
-        let reservation = self
-            .tree_service
-            .reserve_new_leaves(deposit_nodes.clone())
+        self.tree_service
+            .insert_leaves(deposit_nodes.clone(), false)
             .await?;
-        let collected_leaves = self
-            .tree_service
-            .with_reserved_leaves(
-                self.deposit_service.collect_leaves(deposit_nodes),
-                &reservation,
-            )
-            .await?;
-
-        debug!("Collected deposit leaves: {:?}", collected_leaves);
-        Ok(collected_leaves.into_iter().map(WalletLeaf::from).collect())
+        info!("Claimed deposit root node: {:?}", deposit_nodes);
+        Ok(deposit_nodes.into_iter().map(WalletLeaf::from).collect())
     }
 
     pub async fn claim_static_deposit(
@@ -940,19 +930,12 @@ impl<S: Signer> BackgroundProcessor<S> {
 
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
         let id = deposit.id.clone();
-        let reservation = self
-            .tree_service
-            .reserve_new_leaves(vec![deposit.clone()])
-            .await?;
-        let leaves = self
-            .tree_service
-            .with_reserved_leaves(
-                self.deposit_service.collect_leaves(vec![deposit]),
-                &reservation,
-            )
+        let collected_leaves = self.deposit_service.collect_leaves(vec![deposit]).await?;
+        self.tree_service
+            .insert_leaves(collected_leaves.clone(), false)
             .await?;
 
-        debug!("Collected deposit leaves: {:?}", leaves);
+        debug!("Collected deposit leaves: {:?}", collected_leaves);
         self.event_manager
             .notify_listeners(WalletEvent::DepositConfirmed(id));
         Ok(())
@@ -967,8 +950,9 @@ impl<S: Signer> BackgroundProcessor<S> {
             return Ok(());
         }
 
+        println!("Claiming transfer from event");
         claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
-
+        println!("Claimed transfer from event");
         // get the ssp transfer details, if it fails just use None
         // Internal transfers will not have an SSP entry so just skip it
         let ssp_transfer = if transfer.transfer_type == spark::services::TransferType::Transfer {
