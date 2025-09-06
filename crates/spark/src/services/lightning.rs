@@ -7,7 +7,7 @@ use crate::operator::rpc::spark::{
     InvoiceAmount, InvoiceAmountProof, SecretShare, StartUserSignedTransferRequest,
     StorePreimageShareRequest,
 };
-use crate::services::{ServiceError, Transfer, TransferId};
+use crate::services::{ServiceError, Transfer, TransferId, TransferService};
 use crate::signer::SecretToSplit;
 use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
@@ -49,10 +49,9 @@ impl InvoiceDescription {
     }
 }
 
-pub struct LightningSwap {
+struct LightningSwap {
     pub transfer: Transfer,
     pub leaves: Vec<LeafKeyTweak>,
-    pub receiver_identity_public_key: PublicKey,
     pub bolt11_invoice: String,
     pub user_amount_sat: Option<u64>,
 }
@@ -213,6 +212,7 @@ pub struct LightningService<S> {
     ssp_client: Arc<ServiceProvider<S>>,
     network: Network,
     signer: Arc<S>,
+    transfer_service: Arc<TransferService<S>>,
     split_secret_threshold: u32,
 }
 
@@ -222,6 +222,7 @@ impl<S: Signer> LightningService<S> {
         ssp_client: Arc<ServiceProvider<S>>,
         network: Network,
         signer: Arc<S>,
+        transfer_service: Arc<TransferService<S>>,
         split_secret_threshold: u32,
     ) -> Self {
         LightningService {
@@ -229,6 +230,7 @@ impl<S: Signer> LightningService<S> {
             ssp_client,
             network,
             signer,
+            transfer_service,
             split_secret_threshold,
         }
     }
@@ -321,7 +323,23 @@ impl<S: Signer> LightningService<S> {
         invoice.try_into()
     }
 
-    pub async fn start_lightning_swap(
+    pub async fn pay_lightning_invoice(
+        &self,
+        invoice: &str,
+        amount_to_send: Option<u64>,
+        leaves: &[TreeNode],
+    ) -> Result<LightningSendPayment, ServiceError> {
+        let swap = self
+            .start_lightning_swap(invoice, amount_to_send, leaves)
+            .await?;
+        let _ = self
+            .transfer_service
+            .deliver_transfer_package(&swap.transfer, &swap.leaves, Default::default())
+            .await?;
+        self.finalize_lightning_swap(&swap).await
+    }
+
+    async fn start_lightning_swap(
         &self,
         invoice: &str,
         amount_to_send: Option<u64>,
@@ -333,7 +351,7 @@ impl<S: Signer> LightningService<S> {
         let payment_hash = decoded_invoice.payment_hash();
 
         // prepare leaf tweaks
-        let leaf_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec())?;
+        let leaf_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec(), None)?;
 
         let swap_response = self
             .swap_nodes_for_preimage(SwapNodesForPreimageRequest {
@@ -354,13 +372,12 @@ impl<S: Signer> LightningService<S> {
         Ok(LightningSwap {
             transfer: transfer.try_into()?,
             leaves: leaf_tweaks,
-            receiver_identity_public_key: self.ssp_client.identity_public_key(),
             bolt11_invoice: invoice.to_string(),
             user_amount_sat: amount_to_send,
         })
     }
 
-    pub async fn finalize_lightning_swap(
+    async fn finalize_lightning_swap(
         &self,
         swap: &LightningSwap,
     ) -> Result<LightningSendPayment, ServiceError> {

@@ -18,8 +18,7 @@ use crate::{
         },
     },
     services::{
-        ExtendLeafSigningResult, LeafKeyTweak, ServiceError, SigningJob, SigningJobTxType,
-        TransferService,
+        ExtendLeafSigningResult, ServiceError, SigningJob, SigningJobTxType, TransferService,
     },
     signer::{PrivateKeySource, Signer},
     tree::{TreeNode, TreeNodeId},
@@ -405,7 +404,13 @@ impl<S: Signer> TimelockManager<S> {
         for node in nodes_to_extend {
             extend_tasks.push(async move {
                 let extended_nodes = self.extend_time_lock(&node).await?;
-                let our_extended_nodes = self.transfer_leaves_to_self(extended_nodes).await?;
+                let our_extended_nodes = self
+                    .transfer_service
+                    .transfer_leaves_to_self(
+                        extended_nodes,
+                        Some(PrivateKeySource::Derived(node.id.clone())),
+                    )
+                    .await?;
                 Ok::<Vec<TreeNode>, ServiceError>(our_extended_nodes)
             });
         }
@@ -466,10 +471,7 @@ impl<S: Signer> TimelockManager<S> {
     ///
     /// * `Ok(Vec<TreeNode>)` - The newly created tree nodes with fresh timelocks
     /// * `Err(ServiceError)` - If any part of the extension process fails
-    pub(crate) async fn extend_time_lock(
-        &self,
-        node: &TreeNode,
-    ) -> Result<Vec<TreeNode>, ServiceError> {
+    pub async fn extend_time_lock(&self, node: &TreeNode) -> Result<Vec<TreeNode>, ServiceError> {
         trace!("Extending timelock node: {:?}", node.id);
         let signing_key = PrivateKeySource::Derived(node.id.clone());
         let signing_public_key = self
@@ -782,50 +784,5 @@ impl<S: Signer> TimelockManager<S> {
             .into_iter()
             .map(|n| n.try_into())
             .collect::<Result<Vec<TreeNode>, _>>()
-    }
-
-    pub(crate) async fn transfer_leaves_to_self(
-        &self,
-        leaves: Vec<TreeNode>,
-    ) -> Result<Vec<TreeNode>, ServiceError> {
-        let leaf_key_tweaks = leaves
-            .iter()
-            .map(|leaf| {
-                let current_signing_key =
-                    PrivateKeySource::Derived(leaf.parent_node_id.clone().ok_or(
-                        ServiceError::Generic("Leaf has no parent node id".to_string()),
-                    )?);
-                let ephemeral_key = self.signer.generate_random_key()?;
-
-                Ok(LeafKeyTweak {
-                    node: leaf.clone(),
-                    signing_key: current_signing_key,
-                    new_signing_key: ephemeral_key,
-                })
-            })
-            .collect::<Result<Vec<_>, ServiceError>>()?;
-
-        let transfer = self
-            .transfer_service
-            .send_transfer_with_key_tweaks(
-                &leaf_key_tweaks,
-                &self.signer.get_identity_public_key()?,
-            )
-            .await?;
-
-        let pending_transfer = self
-            .transfer_service
-            .query_transfer(&transfer.id)
-            .await?
-            .ok_or(ServiceError::Generic(
-                "Pending transfer not found".to_string(),
-            ))?;
-
-        let resulting_nodes = self
-            .transfer_service
-            .claim_transfer(&pending_transfer, None)
-            .await?;
-
-        Ok(resulting_nodes)
     }
 }
