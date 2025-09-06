@@ -76,19 +76,21 @@ impl<S: Signer> SparkWallet<S> {
             )
             .await?,
         );
-        let lightning_service = Arc::new(LightningService::new(
-            operator_pool.clone(),
-            service_provider.clone(),
-            config.network,
-            Arc::clone(&signer),
-            config.split_secret_threshold,
-        ));
 
         let transfer_service = Arc::new(TransferService::new(
             signer.clone(),
             config.network,
             config.split_secret_threshold,
             operator_pool.clone(),
+        ));
+
+        let lightning_service = Arc::new(LightningService::new(
+            operator_pool.clone(),
+            service_provider.clone(),
+            config.network,
+            Arc::clone(&signer),
+            transfer_service.clone(),
+            config.split_secret_threshold,
         ));
 
         let timelock_manager = Arc::new(TimelockManager::new(
@@ -202,6 +204,7 @@ impl<S: Signer> SparkWallet<S> {
             .validate_payment(invoice, max_fee_sat, amount_to_send, prefer_spark)
             .await?;
 
+        // In case the invoice is for a spark address, we can just transfer the amount to the receiver.
         if let Some(receiver_spark_address) = receiver_spark_address {
             return Ok(PayLightningInvoiceResult::Transfer(
                 self.transfer(total_amount_sat, &receiver_spark_address)
@@ -215,10 +218,10 @@ impl<S: Signer> SparkWallet<S> {
             .select_leaves(Some(&target_amounts))
             .await?;
         // start the lightning swap with the operator
-        let swap = self
+        let lightning_payment = self
             .tree_service
             .with_reserved_leaves(
-                self.lightning_service.start_lightning_swap(
+                self.lightning_service.pay_lightning_invoice(
                     invoice,
                     amount_to_send,
                     &leaves_reservation.leaves,
@@ -227,17 +230,9 @@ impl<S: Signer> SparkWallet<S> {
             )
             .await?;
 
-        // send the leaves to the operator
-        let _ = self
-            .transfer_service
-            .deliver_transfer_package(&swap.transfer, &swap.leaves, Default::default())
-            .await?;
-
         // finalize the lightning swap with the ssp - send the actual lightning payment
         Ok(PayLightningInvoiceResult::LightningPayment(
-            self.lightning_service
-                .finalize_lightning_swap(&swap)
-                .await?,
+            lightning_payment,
         ))
     }
 
