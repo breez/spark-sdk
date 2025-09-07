@@ -64,11 +64,12 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1:8080")]
     pub domain: String,
 
-    /// Minimum amount that can be sent in a lnurl payment.
+    /// Minimum amount (in millisatoshi) that can be sent in a lnurl payment.
     #[arg(long, default_value = "1000")]
     pub min_sendable: u64,
 
-    #[arg(long, default_value = "4000000")]
+    /// Maximum amount (in millisatoshi) that can be sent in a lnurl payment.
+    #[arg(long, default_value = "4000000000")]
     pub max_sendable: u64,
 }
 
