@@ -17,6 +17,7 @@ It’s a nodeless integration that offers a self-custodial, end-to-end solution 
 - [x] On-chain interoperability
 - [x] Send LNURL-pay payments
 - [x] Keys are only held by users
+- [x] WebAssembly support
 - [x] Free open-source solution
 
 ## Pricing
