@@ -12,10 +12,7 @@ use crate::{
     },
     services::{LeafKeyTweak, ServiceError, Transfer, TransferId, TransferService},
     signer::{PrivateKeySource, Signer, from_bytes_to_scalar},
-    ssp::{
-        CompleteLeavesSwapInputDeprecated, RequestLeavesSwapInputDeprecated, ServiceProvider,
-        UserLeafInput,
-    },
+    ssp::{CompleteLeavesSwapInput, RequestLeavesSwapInput, ServiceProvider, UserLeafInput},
     tree::TreeNode,
     utils::{
         refund::{
@@ -253,7 +250,7 @@ impl<S: Signer> Swap<S> {
         }
         let swap_response = self
             .ssp_client
-            .request_leaves_swap(RequestLeavesSwapInputDeprecated {
+            .request_leaves_swap(RequestLeavesSwapInput {
                 adaptor_pubkey: hex::encode(cpfp_adaptor_private_key.public_key().to_sec1_bytes()),
                 direct_adaptor_pubkey: maybe_direct_adaptor
                     .as_ref()
@@ -278,7 +275,7 @@ impl<S: Signer> Swap<S> {
             .await?;
         let complete_response = self
             .ssp_client
-            .complete_leaves_swap(CompleteLeavesSwapInputDeprecated {
+            .complete_leaves_swap(CompleteLeavesSwapInput {
                 adaptor_secret_key: hex::encode(cpfp_adaptor_private_key.to_bytes()),
                 direct_adaptor_secret_key: maybe_direct_adaptor
                     .as_ref()

@@ -195,7 +195,7 @@ mutation CompleteCoopExit($input: CompleteCoopExitInput!) {
   }
 }
 
-mutation CompleteLeavesSwap($input: CompleteLeavesSwapInputDeprecated!) {
+mutation CompleteLeavesSwap($input: CompleteLeavesSwapInput!) {
   complete_leaves_swap(input: $input) {
     request {
       ...LeavesSwapRequestFragment
@@ -217,7 +217,7 @@ mutation RequestCoopExit($input: RequestCoopExitInput!) {
   }
 }
 
-mutation RequestLeavesSwap($input: RequestLeavesSwapInputDeprecated!) {
+mutation RequestLeavesSwap($input: RequestLeavesSwapInput!) {
   request_leaves_swap(input: $input) {
     request {
       ...LeavesSwapRequestFragment
