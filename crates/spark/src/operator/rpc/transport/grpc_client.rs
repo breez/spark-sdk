@@ -25,7 +25,7 @@ impl GrpcClient {
     fn create_endpoint(server_url: &str) -> Result<tonic::transport::Endpoint, OperatorRpcError> {
         Ok(
             tonic::transport::Endpoint::from_shared(server_url.to_string())?
-                .tls_config(ClientTlsConfig::new().with_enabled_roots())?
+                .tls_config(ClientTlsConfig::new().with_webpki_roots())?
                 .http2_keep_alive_interval(Duration::new(5, 0))
                 .tcp_keepalive(Some(Duration::from_secs(5)))
                 .keep_alive_timeout(Duration::from_secs(5))
