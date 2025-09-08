@@ -146,9 +146,9 @@ pub struct Payment {
     /// Status of the payment
     pub status: PaymentStatus,
     /// Amount in satoshis
-    pub amount: u64,
+    pub amount: u128,
     /// Fee paid in satoshis
-    pub fees: u64,
+    pub fees: u128,
     /// Timestamp of when the payment was created
     pub timestamp: u64,
     /// Method of payment. Sometimes the payment details is empty so this field
@@ -156,6 +156,26 @@ pub struct Payment {
     pub method: PaymentMethod,
     /// Details of the payment
     pub details: Option<PaymentDetails>,
+}
+
+#[cfg(feature = "uniffi")]
+uniffi::custom_type!(u128, String);
+
+#[cfg(feature = "uniffi")]
+impl crate::UniffiCustomTypeConverter for u128 {
+    type Builtin = String;
+
+    fn into_custom(val: Self::Builtin) -> ::uniffi::Result<Self>
+    where
+        Self: ::std::marker::Sized,
+    {
+        val.parse::<u128>()
+            .map_err(uniffi::deps::anyhow::Error::msg)
+    }
+
+    fn from_custom(obj: Self) -> Self::Builtin {
+        obj.to_string()
+    }
 }
 
 // TODO: fix large enum variant lint - may be done by boxing lnurl_pay_info but that requires
@@ -358,7 +378,7 @@ pub struct GetInfoResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct TokenBalance {
-    pub balance: u64,
+    pub balance: u128,
     pub token_metadata: TokenMetadata,
 }
 
@@ -372,7 +392,7 @@ pub struct TokenMetadata {
     pub ticker: String,
     /// Number of decimals the token uses
     pub decimals: u32,
-    pub max_supply: u64,
+    pub max_supply: u128,
     pub is_freezable: bool,
 }
 
@@ -539,7 +559,7 @@ pub struct PrepareSendPaymentRequest {
     /// Amount to send. By default is denominated in sats.
     /// If a token identifier is provided, the amount will be denominated in the token base units.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub amount: Option<u64>,
+    pub amount: Option<u128>,
     /// If provided, the payment will be for a token
     /// May only be provided if the payment request is a spark address
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
@@ -552,7 +572,7 @@ pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     /// Amount to send. By default is denominated in sats.
     /// If a token identifier is provided, the amount will be denominated in the token base units.
-    pub amount: u64,
+    pub amount: u128,
     /// The presence of this field indicates that the payment is for a token
     /// If empty, it is a Bitcoin payment
     pub token_identifier: Option<String>,

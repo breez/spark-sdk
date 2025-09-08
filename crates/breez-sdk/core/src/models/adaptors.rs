@@ -86,7 +86,7 @@ impl TryFrom<WalletTransfer> for Payment {
             TransferStatus::Expired | TransferStatus::Returned => PaymentStatus::Failed,
             _ => PaymentStatus::Pending,
         };
-        let (fees_sat, mut amount_sat): (u64, u64) = match transfer.clone().user_request {
+        let (fees_sat, mut amount_sat) = match transfer.clone().user_request {
             Some(user_request) => match user_request {
                 SspUserRequest::LightningSendRequest(r) => {
                     // TODO: if we have the preimage it is not pending. This is a workaround
@@ -137,8 +137,8 @@ impl TryFrom<WalletTransfer> for Payment {
             id: transfer.id.to_string(),
             payment_type,
             status,
-            amount: amount_sat,
-            fees: fees_sat,
+            amount: amount_sat.into(),
+            fees: fees_sat.into(),
             timestamp: match transfer.created_at.map(|t| t.duration_since(UNIX_EPOCH)) {
                 Some(Ok(duration)) => duration.as_secs(),
                 _ => 0,
@@ -152,7 +152,7 @@ impl TryFrom<WalletTransfer> for Payment {
 impl Payment {
     pub fn from_lightning(
         payment: LightningSendPayment,
-        amount_sat: u64,
+        amount_sat: u128,
         transfer_id: String,
     ) -> Result<Self, SdkError> {
         let mut status = match payment.status {
@@ -185,7 +185,7 @@ impl Payment {
             payment_type: PaymentType::Send,
             status,
             amount: amount_sat,
-            fees: payment.fee_sat,
+            fees: payment.fee_sat.into(),
             timestamp: payment.created_at.cast_unsigned(),
             method: PaymentMethod::Lightning,
             details: Some(details),
@@ -214,7 +214,7 @@ impl From<Fee> for spark_wallet::Fee {
 impl From<spark_wallet::TokenBalance> for TokenBalance {
     fn from(value: spark_wallet::TokenBalance) -> Self {
         Self {
-            balance: value.balance.try_into().unwrap_or_default(), // balance will be changed to u128 or similar
+            balance: value.balance,
             token_metadata: value.token_metadata.into(),
         }
     }
@@ -228,7 +228,7 @@ impl From<spark_wallet::TokenMetadata> for TokenMetadata {
             name: value.name,
             ticker: value.ticker,
             decimals: value.decimals,
-            max_supply: value.max_supply.try_into().unwrap_or_default(), // max_supply will be changed to u128 or similar
+            max_supply: value.max_supply,
             is_freezable: value.is_freezable,
         }
     }

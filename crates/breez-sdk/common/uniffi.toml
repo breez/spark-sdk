@@ -11,3 +11,9 @@ disable_java_cleaner = true
 ffi_module_name = "breez_sdk_sparkFFI"
 ffi_module_filename = "breez_sdk_commonFFI"
 cdylib_name = "breez_sdk_spark_bindings"
+
+[bindings.swift.custom_types.common_u128]
+type_name = "BigUInt"
+imports = [ "BigInt" ]
+into_custom = "BigUInt(stringLiteral: {})"
+from_custom = "{}.description"

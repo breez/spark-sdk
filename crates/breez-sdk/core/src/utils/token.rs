@@ -86,7 +86,7 @@ pub async fn token_transaction_to_payments(
                 transaction.status,
                 is_transfer_transaction,
             ),
-            amount: output.token_amount.try_into().unwrap_or_default(),
+            amount: output.token_amount,
             fees: 0, // TODO: calculate actual fees when they start being charged
             timestamp,
             method: PaymentMethod::Token,
