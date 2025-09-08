@@ -454,36 +454,6 @@ impl<S: Signer> SynchronousTreeService<S> {
         Ok(Some(LeavesReservation::new(new_leaves, reservation.id)))
     }
 
-    /// Selects leaves from the tree that sum up to exactly the target amount.
-    /// If such a combination of leaves does not exist, it returns `None`.
-    fn select_leaves_by_amount(
-        &self,
-        leaves: &[TreeNode],
-        target_amount_sat: u64,
-    ) -> Result<Option<Vec<TreeNode>>, TreeServiceError> {
-        if target_amount_sat == 0 {
-            return Err(TreeServiceError::InvalidAmount);
-        }
-
-        if leaves.iter().map(|leaf| leaf.value).sum::<u64>() < target_amount_sat {
-            return Err(TreeServiceError::InsufficientFunds);
-        }
-
-        // Try to find a single leaf that matches the exact amount
-        if let Some(leaf) = select_helper::find_exact_single_match(leaves, target_amount_sat) {
-            return Ok(Some(vec![leaf]));
-        }
-
-        // Try to find a set of leaves that sum exactly to the target amount
-        if let Some(selected_leaves) =
-            select_helper::find_exact_multiple_match(leaves, target_amount_sat)
-        {
-            return Ok(Some(selected_leaves));
-        }
-
-        Ok(None)
-    }
-
     pub async fn with_reserved_leaves<F, R, E>(
         &self,
         f: F,
