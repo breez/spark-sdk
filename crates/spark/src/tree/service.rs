@@ -17,8 +17,8 @@ use crate::{
     services::{ServiceError, Swap, TimelockManager},
     signer::Signer,
     tree::{
-        LeavesReservation, LeavesReservationId, TargetAmounts, TargetLeaves, TreeNodeId,
-        TreeNodeStatus, TreeService, TreeStore, select_helper,
+        LeavesReservation, LeavesReservationId, TargetAmounts, TreeNodeId, TreeNodeStatus,
+        TreeService, TreeStore, select_helper,
     },
     utils::paging::{PagingFilter, PagingResult, pager},
 };
@@ -123,9 +123,7 @@ impl<S: Signer> TreeService for SynchronousTreeService<S> {
         //   can be selected from the reserved leaves
         let total_amount_sats = target_amounts.map(|ta| ta.total_sats()).unwrap_or(0);
         if (total_amount_sats == 0 || reservation.sum() == total_amount_sats)
-            && self
-                .select_leaves_by_amounts(&reservation.leaves, target_amounts)
-                .is_ok()
+            && select_helper::select_leaves_by_amounts(&reservation.leaves, target_amounts).is_ok()
         {
             trace!("Selected leaves match requirements, no swap needed");
             return Ok(reservation);
@@ -321,47 +319,6 @@ impl<S: Signer> SynchronousTreeService<S> {
             swap_service,
             leaf_optimization_lock: Mutex::new(()),
         }
-    }
-
-    /// Selects leaves from the tree that match the target amounts.
-    /// If no target amounts are specified, it returns all leaves.
-    /// If the target amounts cannot be matched exactly, it returns an error.
-    pub fn select_leaves_by_amounts(
-        &self,
-        leaves: &[TreeNode],
-        target_amounts: Option<&TargetAmounts>,
-    ) -> Result<TargetLeaves, TreeServiceError> {
-        let mut remaining_leaves = leaves.to_vec();
-
-        // If no target amounts are specified, return all remaining leaves
-        let Some(target_amounts) = target_amounts else {
-            trace!("No target amounts specified, returning all remaining leaves");
-            return Ok(TargetLeaves::new(remaining_leaves, None));
-        };
-
-        // Select leaves that match the target amount_sats
-        let amount_leaves = self
-            .select_leaves_by_amount(&remaining_leaves, target_amounts.amount_sats)?
-            .ok_or(TreeServiceError::UnselectableAmount)?;
-
-        let fee_leaves = match target_amounts.fee_sats {
-            Some(fee_sats) => {
-                // Remove the amount_leaves from remaining_leaves to avoid double spending
-                remaining_leaves.retain(|leaf| {
-                    !amount_leaves
-                        .iter()
-                        .any(|amount_leaf| amount_leaf.id == leaf.id)
-                });
-                // Select leaves that match the fee_sats from the remaining leaves
-                Some(
-                    self.select_leaves_by_amount(&remaining_leaves, fee_sats)?
-                        .ok_or(TreeServiceError::UnselectableAmount)?,
-                )
-            }
-            None => None,
-        };
-
-        Ok(TargetLeaves::new(amount_leaves, fee_leaves))
     }
 
     async fn query_nodes_inner(

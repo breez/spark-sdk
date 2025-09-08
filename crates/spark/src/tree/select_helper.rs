@@ -42,7 +42,7 @@ pub fn select_leaves_by_amounts(
 
 /// Selects leaves from the tree that sum up to exactly the target amount.
 /// If such a combination of leaves does not exist, it returns `None`.
-pub(crate) fn select_leaves_by_amount(
+pub fn select_leaves_by_amount(
     leaves: &[TreeNode],
     target_amount_sat: u64,
 ) -> Result<Option<Vec<TreeNode>>, TreeServiceError> {
