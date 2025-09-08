@@ -33,6 +33,11 @@ The project is organized into several Rust crates:
 
 The packages directory contains non-Rust components of the project:
 
+- **flutter**: Flutter package built using [flutter_rust_bridge](https://github.com/fzyzcjy/flutter_rust_bridge) and [cargokit](https://github.com/irondash/cargokit)
+  - `cargokit`: Cargokit package used to build/verify binaries
+  - `lib`: Generated dart bindings
+  - `rust`: Rust crate used for generating `flutter_rust_bridge` bindings
+
 - **wasm**: JavaScript/TypeScript packages derived from the Rust WASM bindings
   - `nodejs`: Node.js-specific package
   - `web`: Browser-specific package
