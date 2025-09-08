@@ -6,7 +6,7 @@ Flutter bindings for the Breez Spark SDK
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 Future<void> main() async {
-  await RustLib.init();
+  await BreezSdkSparkLib.init();
 
   ...
 }

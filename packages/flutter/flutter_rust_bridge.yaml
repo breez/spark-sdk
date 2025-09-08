@@ -2,4 +2,7 @@ rust_input: crate
 rust_root: rust/
 dart_output: lib/src/rust
 web: false
+c_output: ios/Classes/breez_sdk_spark_flutter.h
+duplicated_c_output: [macos/Classes/breez_sdk_spark_flutter.h]
 dart_format_line_length: 110
+dart_entrypoint_class_name: BreezSdkSparkLib

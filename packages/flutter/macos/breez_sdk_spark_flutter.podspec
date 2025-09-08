@@ -23,6 +23,9 @@ Pod::Spec.new do |spec|
   spec.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   spec.swift_version       = '5.0'
 
+  # Required frameworks for system-configuration crate
+  spec.osx.frameworks      = 'SystemConfiguration', 'CoreFoundation'
+
   spec.script_phase = {
     :name => 'Build Rust library',
     # First argument is relative path to the `rust` folder, second is name of rust library
