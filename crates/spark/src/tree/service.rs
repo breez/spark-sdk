@@ -52,7 +52,7 @@ impl<S: Signer> TreeService for SynchronousTreeService<S> {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeService, TreeServiceError};
+    /// use spark::tree::{TreeService, SynchronousTreeService, TreeServiceError};
     /// use spark::signer::Signer;
     ///
     /// # async fn example(tree_service: &SynchronousTreeService<impl Signer>) -> Result<(), TreeServiceError> {
@@ -171,10 +171,10 @@ impl<S: Signer> TreeService for SynchronousTreeService<S> {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeService, TreeServiceError};
+    /// use spark::tree::{TreeService, SynchronousTreeService, TreeServiceError};
     /// use spark::signer::Signer;
     ///
-    /// # async fn example(tree_service: &TreeService<impl Signer>) -> Result<(), TreeServiceError> {
+    /// # async fn example(tree_service: &SynchronousTreeService<impl Signer>) -> Result<(), TreeServiceError> {
     /// // Refresh the local cache with the latest leaves from the server
     /// tree_service.refresh_leaves().await?;
     ///
@@ -277,10 +277,10 @@ impl<S: Signer> TreeService for SynchronousTreeService<S> {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeService, TreeServiceError};
+    /// use spark::tree::{TreeService, SynchronousTreeService, TreeServiceError};
     /// use spark::signer::Signer;
     ///
-    /// # async fn example(tree_service: &TreeService<impl Signer>) -> Result<(), TreeServiceError> {
+    /// # async fn example(tree_service: &SynchronousTreeService<impl Signer>) -> Result<(), TreeServiceError> {
     /// // Ensure the cache is up to date
     /// tree_service.refresh_leaves().await?;
     ///
