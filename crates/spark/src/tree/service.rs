@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
 use tokio::sync::Mutex;
-use tracing::{debug, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 use crate::{
     Network,
@@ -18,7 +18,7 @@ use crate::{
     signer::Signer,
     tree::{
         LeavesReservation, LeavesReservationId, TargetAmounts, TreeNodeId, TreeNodeStatus,
-        TreeService, TreeStore, select_helper,
+        TreeService, TreeStore, select_helper, with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult, pager},
 };
@@ -39,15 +39,15 @@ pub struct SynchronousTreeService<S> {
 #[macros::async_trait]
 impl<S: Signer> TreeService for SynchronousTreeService<S> {
     async fn list_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
-        Ok(self.state.get_leaves().await)
+        self.state.get_leaves().await
     }
 
-    async fn cancel_reservation(&self, id: LeavesReservationId) {
-        self.state.cancel_reservation(&id).await;
+    async fn cancel_reservation(&self, id: LeavesReservationId) -> Result<(), TreeServiceError> {
+        self.state.cancel_reservation(&id).await
     }
 
-    async fn finalize_reservation(&self, id: LeavesReservationId) {
-        self.state.finalize_reservation(&id).await;
+    async fn finalize_reservation(&self, id: LeavesReservationId) -> Result<(), TreeServiceError> {
+        self.state.finalize_reservation(&id).await
     }
 
     async fn insert_leaves(
@@ -59,13 +59,15 @@ impl<S: Signer> TreeService for SynchronousTreeService<S> {
             .check_timelock_nodes(leaves, async |e| {
                 // If this is a partial check timelock error, the extend node timelock failed
                 // but we can still update the leaves that were refreshed
-                if let ServiceError::PartialCheckTimelockError(ref nodes) = e {
-                    self.state.add_leaves(nodes).await;
+                if let ServiceError::PartialCheckTimelockError(ref nodes) = e
+                    && let Err(e) = self.state.add_leaves(nodes).await
+                {
+                    error!("Failed to add leaves: {e:?}");
                 }
             })
             .await?;
 
-        self.state.add_leaves(&result_nodes).await;
+        self.state.add_leaves(&result_nodes).await?;
         if optimize {
             Box::pin(self.optimize_leaves()).await?;
         }
@@ -104,7 +106,8 @@ impl<S: Signer> TreeService for SynchronousTreeService<S> {
         }
 
         // Swap the leaves to match the target amount.
-        self.with_reserved_leaves(
+        with_reserved_leaves(
+            self,
             self.swap_leaves_internal(&reservation.leaves, target_amounts),
             &reservation,
         )
@@ -190,13 +193,15 @@ impl<S: Signer> TreeService for SynchronousTreeService<S> {
             .check_timelock_nodes(new_leaves, async |e| {
                 // If this is a partial check timelock error, the extend node timelock failed
                 // but we can still update the leaves that were refreshed
-                if let ServiceError::PartialCheckTimelockError(ref nodes) = e {
-                    self.state.set_leaves(nodes).await;
+                if let ServiceError::PartialCheckTimelockError(ref nodes) = e
+                    && let Err(e) = self.state.set_leaves(nodes).await
+                {
+                    error!("Failed to set leaves: {e:?}");
                 }
             })
             .await?;
 
-        self.state.set_leaves(&refreshed_leaves).await;
+        self.state.set_leaves(&refreshed_leaves).await?;
 
         self.optimize_leaves().await?;
 
@@ -313,12 +318,12 @@ impl<S: Signer> SynchronousTreeService<S> {
             }
             if let Some(reservation) = self.reserve_fresh_leaves(None, false).await? {
                 debug!("Optimizing {} leaves", reservation.leaves.len());
-                let optimized_leaves = self
-                    .with_reserved_leaves(
-                        self.swap_leaves_internal(&reservation.leaves, None),
-                        &reservation,
-                    )
-                    .await?;
+                let optimized_leaves = with_reserved_leaves(
+                    self,
+                    self.swap_leaves_internal(&reservation.leaves, None),
+                    &reservation,
+                )
+                .await?;
                 trace!("Optimized leaves: {optimized_leaves:?}");
             }
         } else {
@@ -328,7 +333,7 @@ impl<S: Signer> SynchronousTreeService<S> {
     }
 
     async fn leaves_need_optimization(&self) -> bool {
-        let leaves = self.state.get_leaves().await;
+        let leaves = self.state.get_leaves().await.unwrap();
 
         if leaves.len() <= 1 {
             return false;
@@ -357,36 +362,21 @@ impl<S: Signer> SynchronousTreeService<S> {
         let new_leaves = self
             .check_timelock_nodes(reservation.leaves, async |e| {
                 // Cancel the reservation if the timelock check fails
-                self.state.cancel_reservation(&reservation.id).await;
+                if let Err(e) = self.state.cancel_reservation(&reservation.id).await {
+                    error!("Failed to cancel reservation: {e:?}");
+                    return;
+                }
                 // If this is a partial check timelock error, the extend node timelock failed
                 // but we can still update the leaves that were refreshed
-                if let ServiceError::PartialCheckTimelockError(ref nodes) = e {
-                    self.state.add_leaves(nodes).await;
+                if let ServiceError::PartialCheckTimelockError(ref nodes) = e
+                    && let Err(e) = self.state.add_leaves(nodes).await
+                {
+                    error!("Failed to add leaves: {e:?}");
                 }
             })
             .await?;
 
         Ok(Some(LeavesReservation::new(new_leaves, reservation.id)))
-    }
-
-    pub async fn with_reserved_leaves<F, R, E>(
-        &self,
-        f: F,
-        leaves: &LeavesReservation,
-    ) -> Result<R, E>
-    where
-        F: Future<Output = Result<R, E>>,
-    {
-        match f.await {
-            Ok(r) => {
-                self.finalize_reservation(leaves.id.clone()).await;
-                Ok(r)
-            }
-            Err(e) => {
-                self.cancel_reservation(leaves.id.clone()).await;
-                Err(e)
-            }
-        }
     }
 
     async fn swap_leaves_internal(

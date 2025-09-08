@@ -228,18 +228,244 @@ impl TargetLeaves {
     }
 }
 
+/// A low-level storage interface for managing tree nodes and leaf reservations.
+///
+/// `TreeStore` provides the fundamental storage operations for tree nodes, including
+/// adding, retrieving, and updating leaves, as well as managing leaf reservations.
+/// This trait abstracts the underlying storage mechanism, allowing for different
+/// implementations such as in-memory storage, database storage, or distributed storage.
+///
+/// # Reservation System
+///
+/// The trait includes a reservation system that allows leaves to be temporarily
+/// reserved for transactions, preventing double-spending while maintaining
+/// transactional consistency.
 #[macros::async_trait]
 pub trait TreeStore: Send + Sync {
-    async fn add_leaves(&self, leaves: &[TreeNode]);
-    async fn get_leaves(&self) -> Vec<TreeNode>;
-    async fn set_leaves(&self, leaves: &[TreeNode]);
+    /// Adds new leaves to the store without replacing existing ones.
+    ///
+    /// This method appends the provided leaves to the existing set of leaves
+    /// in the store. If a leaf with the same ID already exists, the behavior
+    /// is implementation-specific but typically the existing leaf is preserved.
+    ///
+    /// # Parameters
+    ///
+    /// * `leaves` - A slice of `TreeNode` objects to add to the store
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), TreeServiceError>` - Ok if the operation succeeds, or an error
+    ///   if the leaves cannot be added
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TreeServiceError` if:
+    /// * The leaves contain invalid data
+    /// * Storage operation fails
+    /// * Duplicate leaf IDs conflict with existing leaves
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use spark::tree::{TreeStore, TreeNode, TreeServiceError};
+    ///
+    /// # async fn example(store: &dyn TreeStore, new_leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
+    /// // Add new leaves to the store
+    /// store.add_leaves(new_leaves).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn add_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError>;
+
+    /// Retrieves all leaves currently stored in the store.
+    ///
+    /// This method returns a complete snapshot of all tree nodes stored
+    /// in the store, including both available and reserved leaves.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<Vec<TreeNode>, TreeServiceError>` - A vector containing all stored
+    ///   tree nodes if successful, or an error if the operation fails
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TreeServiceError` if:
+    /// * Storage access fails
+    /// * Data corruption is detected
+    /// * Deserialization of stored data fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use spark::tree::{TreeStore, TreeNodeStatus, TreeServiceError};
+    ///
+    /// # async fn example(store: &dyn TreeStore) -> Result<(), TreeServiceError> {
+    /// let all_leaves = store.get_leaves().await?;
+    /// let available_count = all_leaves.iter()
+    ///     .filter(|leaf| leaf.status == TreeNodeStatus::Available)
+    ///     .count();
+    /// println!("Found {} available leaves out of {}", available_count, all_leaves.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn get_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError>;
+
+    /// Replaces all leaves in the store with the provided set.
+    ///
+    /// This method performs a complete replacement of the stored leaves,
+    /// removing any existing leaves that are not in the provided set and
+    /// adding or updating leaves as necessary. Reserved leaves may be
+    /// updated with new data while maintaining their reservation status.
+    ///
+    /// # Parameters
+    ///
+    /// * `leaves` - A slice of `TreeNode` objects that will replace all existing leaves
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), TreeServiceError>` - Ok if the operation succeeds, or an error
+    ///   if the leaves cannot be set
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TreeServiceError` if:
+    /// * The leaves contain invalid data
+    /// * Storage operation fails
+    /// * Active reservations prevent the operation
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use spark::tree::{TreeStore, TreeNode, TreeServiceError};
+    ///
+    /// # async fn example(store: &dyn TreeStore, updated_leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
+    /// // Replace all leaves with a new set
+    /// store.set_leaves(updated_leaves).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn set_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError>;
+
+    /// Reserves leaves that match the specified target amounts.
+    ///
+    /// This method selects and reserves leaves from the available pool that
+    /// can satisfy the target amounts. Reserved leaves are temporarily removed
+    /// from the available pool to prevent double-spending until the reservation
+    /// is either finalized or cancelled.
+    ///
+    /// # Parameters
+    ///
+    /// * `target_amounts` - Optional target amounts for selection. If `None`,
+    ///   behavior is implementation-specific
+    /// * `exact_only` - If `true`, only exact matches are allowed. If `false`,
+    ///   approximate matches may be acceptable
+    ///
+    /// # Returns
+    ///
+    /// * `Result<LeavesReservation, TreeServiceError>` - A reservation containing
+    ///   the selected leaves and a unique reservation ID, or an error if no
+    ///   suitable leaves can be found
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TreeServiceError` if:
+    /// * No leaves can satisfy the target amounts
+    /// * Insufficient funds are available
+    /// * The target amounts are invalid
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError};
+    ///
+    /// # async fn example(store: &dyn TreeStore) -> Result<(), TreeServiceError> {
+    /// let target = TargetAmounts::new(50_000, Some(1_000));
+    /// let reservation = store.reserve_leaves(Some(&target), false).await?;
+    /// println!("Reserved {} leaves with ID: {}", reservation.leaves.len(), reservation.id);
+    /// # Ok(())
+    /// # }
+    /// ```
     async fn reserve_leaves(
         &self,
         target_amounts: Option<&TargetAmounts>,
         exact_only: bool,
     ) -> Result<LeavesReservation, TreeServiceError>;
-    async fn cancel_reservation(&self, id: &LeavesReservationId);
-    async fn finalize_reservation(&self, id: &LeavesReservationId);
+
+    /// Cancels a leaf reservation and returns the leaves to the available pool.
+    ///
+    /// This method releases a previously created reservation, making the reserved
+    /// leaves available again for future reservations. This is typically used
+    /// when a transaction fails or is cancelled.
+    ///
+    /// # Parameters
+    ///
+    /// * `id` - The unique reservation ID to cancel
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), TreeServiceError>` - Ok if the reservation was successfully
+    ///   cancelled, or an error if the operation fails
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TreeServiceError` if:
+    /// * The reservation ID does not exist
+    /// * The reservation has already been finalized
+    /// * Storage operation fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError};
+    ///
+    /// # async fn example(store: &dyn TreeStore) -> Result<(), TreeServiceError> {
+    /// let target = TargetAmounts::new(25_000, None);
+    /// let reservation = store.reserve_leaves(Some(&target), false).await?;
+    ///
+    /// // Later, if the transaction is cancelled
+    /// store.cancel_reservation(&reservation.id).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn cancel_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError>;
+
+    /// Finalizes a leaf reservation, marking the leaves as consumed.
+    ///
+    /// This method permanently removes the reserved leaves from the store,
+    /// indicating they have been successfully used in a transaction. Unlike
+    /// cancellation, finalized leaves are not returned to the available pool.
+    ///
+    /// # Parameters
+    ///
+    /// * `id` - The unique reservation ID to finalize
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), TreeServiceError>` - Ok if the reservation was successfully
+    ///   finalized, or an error if the operation fails
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TreeServiceError` if:
+    /// * The reservation ID does not exist
+    /// * The reservation has already been cancelled or finalized
+    /// * Storage operation fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError};
+    ///
+    /// # async fn example(store: &dyn TreeStore) -> Result<(), TreeServiceError> {
+    /// let target = TargetAmounts::new(100_000, Some(2_000));
+    /// let reservation = store.reserve_leaves(Some(&target), false).await?;
+    ///
+    /// // After successfully using the leaves in a transaction
+    /// store.finalize_reservation(&reservation.id).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn finalize_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError>;
 }
 
 #[macros::async_trait]
@@ -432,6 +658,13 @@ pub trait TreeService: Send + Sync {
     ///
     /// * `id` - The unique reservation ID returned from [`select_leaves`]
     ///
+    /// # Errors
+    ///
+    /// Returns a `TreeServiceError` if:
+    /// * The reservation ID does not exist
+    /// * The reservation has already been finalized
+    /// * Storage operation fails
+    ///
     /// # Examples
     ///
     /// ```
@@ -448,7 +681,7 @@ pub trait TreeService: Send + Sync {
     /// # Ok(())
     /// # }
     /// ```
-    async fn cancel_reservation(&self, id: LeavesReservationId);
+    async fn cancel_reservation(&self, id: LeavesReservationId) -> Result<(), TreeServiceError>;
 
     /// Finalizes a leaf reservation, marking the reserved leaves as consumed.
     ///
@@ -460,6 +693,13 @@ pub trait TreeService: Send + Sync {
     /// # Parameters
     ///
     /// * `id` - The unique reservation ID returned from [`select_leaves`]
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TreeServiceError` if:
+    /// * The reservation ID does not exist
+    /// * The reservation has already been finalized
+    /// * Storage operation fails
     ///
     /// # Examples
     ///
@@ -477,5 +717,5 @@ pub trait TreeService: Send + Sync {
     /// # Ok(())
     /// # }
     /// ```
-    async fn finalize_reservation(&self, id: LeavesReservationId);
+    async fn finalize_reservation(&self, id: LeavesReservationId) -> Result<(), TreeServiceError>;
 }

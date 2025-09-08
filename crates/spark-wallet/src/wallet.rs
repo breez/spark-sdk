@@ -279,7 +279,7 @@ impl<S: Signer> SparkWallet<S> {
             .coop_exit_service
             .fetch_coop_exit_fee_quote(reservation.leaves, withdrawal_address)
             .await;
-        self.tree_service.cancel_reservation(reservation.id).await;
+        self.tree_service.cancel_reservation(reservation.id).await?;
 
         Ok(fee_quote_res?)
     }

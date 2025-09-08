@@ -28,19 +28,20 @@ impl Default for InMemoryTreeStore {
 
 #[macros::async_trait]
 impl TreeStore for InMemoryTreeStore {
-    async fn add_leaves(&self, leaves: &[TreeNode]) {
+    async fn add_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
         self.leaves
             .lock()
             .await
             .leaves
             .extend(leaves.iter().map(|l| (l.id.clone(), l.clone())));
+        Ok(())
     }
 
-    async fn get_leaves(&self) -> Vec<TreeNode> {
-        self.leaves.lock().await.leaves.values().cloned().collect()
+    async fn get_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+        Ok(self.leaves.lock().await.leaves.values().cloned().collect())
     }
 
-    async fn set_leaves(&self, leaves: &[TreeNode]) {
+    async fn set_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
         let mut leaves_state = self.leaves.lock().await;
         leaves_state.leaves = leaves.iter().map(|l| (l.id.clone(), l.clone())).collect();
 
@@ -67,6 +68,7 @@ impl TreeStore for InMemoryTreeStore {
             }
         }
         trace!("Updated {:?} leaves in the local state", leaves.len());
+        Ok(())
     }
 
     async fn reserve_leaves(
@@ -79,7 +81,7 @@ impl TreeStore for InMemoryTreeStore {
             // Filter available leaves from the state
             let leaves: Vec<TreeNode> = self
                 .get_leaves()
-                .await
+                .await?
                 .into_iter()
                 .filter(|leaf| leaf.status == TreeNodeStatus::Available)
                 .collect();
@@ -120,7 +122,7 @@ impl TreeStore for InMemoryTreeStore {
     }
 
     // move leaves back from the reserved pool to the main pool
-    async fn cancel_reservation(&self, id: &LeavesReservationId) {
+    async fn cancel_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError> {
         let mut leaves_state = self.leaves.lock().await;
         if let Some(leaves) = leaves_state.leaves_reservations.remove(id) {
             for leaf in leaves {
@@ -128,16 +130,18 @@ impl TreeStore for InMemoryTreeStore {
             }
         }
         trace!("Canceled leaves reservation: {}", id);
+        Ok(())
     }
 
     // remove the leaves from the reserved pool, they are now considered used and
     // not available anymore.
-    async fn finalize_reservation(&self, id: &LeavesReservationId) {
+    async fn finalize_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError> {
         let mut leaves_state = self.leaves.lock().await;
         if leaves_state.leaves_reservations.remove(id).is_none() {
             warn!("Tried to finalize a non existing reservation");
         }
         trace!("Finalized leaves reservation: {}", id);
+        Ok(())
     }
 }
 
@@ -245,9 +249,9 @@ mod tests {
             create_test_tree_node("node2", 200),
         ];
 
-        state.add_leaves(&leaves).await;
+        state.add_leaves(&leaves).await.unwrap();
 
-        let stored_leaves = state.get_leaves().await;
+        let stored_leaves = state.get_leaves().await.unwrap();
         assert_eq!(stored_leaves.len(), 2);
         assert!(
             stored_leaves
@@ -267,10 +271,10 @@ mod tests {
         let leaf1 = create_test_tree_node("node1", 100);
         let leaf2 = create_test_tree_node("node1", 200); // Same ID, different value
 
-        state.add_leaves(&[leaf1]).await;
-        state.add_leaves(&[leaf2]).await;
+        state.add_leaves(&[leaf1]).await.unwrap();
+        state.add_leaves(&[leaf2]).await.unwrap();
 
-        let stored_leaves = state.get_leaves().await;
+        let stored_leaves = state.get_leaves().await.unwrap();
         assert_eq!(stored_leaves.len(), 1);
         // Should have the second value (200) as it overwrites the first
         assert_eq!(stored_leaves[0].value, 200);
@@ -280,15 +284,15 @@ mod tests {
     async fn test_set_leaves() {
         let state = InMemoryTreeStore::new();
         let initial_leaves = vec![create_test_tree_node("node1", 100)];
-        state.add_leaves(&initial_leaves).await;
+        state.add_leaves(&initial_leaves).await.unwrap();
 
         let new_leaves = vec![
             create_test_tree_node("node2", 200),
             create_test_tree_node("node3", 300),
         ];
-        state.set_leaves(&new_leaves).await;
+        state.set_leaves(&new_leaves).await.unwrap();
 
-        let stored_leaves = state.get_leaves().await;
+        let stored_leaves = state.get_leaves().await.unwrap();
         assert_eq!(stored_leaves.len(), 2);
         assert!(stored_leaves.iter().any(|l| l.id.to_string() == "node2"));
         assert!(stored_leaves.iter().any(|l| l.id.to_string() == "node3"));
@@ -303,7 +307,7 @@ mod tests {
             create_test_tree_node("node2", 200),
             create_test_tree_node("node3", 300),
         ];
-        state.add_leaves(&leaves).await;
+        state.add_leaves(&leaves).await.unwrap();
 
         // Reserve some leaves
         let reservation = state
@@ -319,7 +323,7 @@ mod tests {
             create_test_tree_node("node2", 250), // Updated value
             create_test_tree_node("node4", 400), // New leaf, node3 removed
         ];
-        state.set_leaves(&new_leaves).await;
+        state.set_leaves(&new_leaves).await.unwrap();
 
         // Check that reserved leaves were updated with new data
         let reservation = state.get_reservation(&reservation.id).await.unwrap();
@@ -332,7 +336,7 @@ mod tests {
         assert_eq!(reservation[1].value, 250);
 
         // Check main pool
-        let main_leaves = state.get_leaves().await;
+        let main_leaves = state.get_leaves().await.unwrap();
         assert_eq!(main_leaves.len(), 1); // Only node4 should be in main pool
         assert!(main_leaves.iter().any(|l| l.id.to_string() == "node4"));
     }
@@ -344,7 +348,7 @@ mod tests {
             create_test_tree_node("node1", 100),
             create_test_tree_node("node2", 200),
         ];
-        state.add_leaves(&leaves).await;
+        state.add_leaves(&leaves).await.unwrap();
 
         // Reserve leaves
         let reservation = state
@@ -354,7 +358,7 @@ mod tests {
 
         // Set new leaves that don't include the reserved ones
         let new_leaves = vec![create_test_tree_node("node3", 300)];
-        state.set_leaves(&new_leaves).await;
+        state.set_leaves(&new_leaves).await.unwrap();
 
         // Reserved leaves should be removed since they don't exist in main pool
         let leaves_state = state.leaves.lock().await;
@@ -369,7 +373,7 @@ mod tests {
             create_test_tree_node("node1", 100),
             create_test_tree_node("node2", 200),
         ];
-        state.add_leaves(&leaves).await;
+        state.add_leaves(&leaves).await.unwrap();
 
         let reservation = state
             .reserve_leaves(Some(&TargetAmounts::new(100, None)), true)
@@ -381,7 +385,7 @@ mod tests {
         assert_eq!(reserved.len(), 1);
         assert_eq!(reserved[0].id, leaves[0].id);
         // Check that leaf was removed from main pool
-        let main_leaves = state.get_leaves().await;
+        let main_leaves = state.get_leaves().await.unwrap();
         assert_eq!(main_leaves.len(), 1);
         assert_eq!(main_leaves[0].id, leaves[1].id);
     }
@@ -393,7 +397,7 @@ mod tests {
             create_test_tree_node("node1", 100),
             create_test_tree_node("node2", 200),
         ];
-        state.add_leaves(&leaves).await;
+        state.add_leaves(&leaves).await.unwrap();
 
         let reservation = state
             .reserve_leaves(Some(&TargetAmounts::new(100, None)), true)
@@ -401,13 +405,13 @@ mod tests {
             .unwrap();
 
         // Cancel the reservation
-        state.cancel_reservation(&reservation.id).await;
+        state.cancel_reservation(&reservation.id).await.unwrap();
 
         // Check that reservation was removed
         assert!(state.get_reservation(&reservation.id).await.is_none());
 
         // Check that leaf was returned to main pool
-        let main_leaves = state.get_leaves().await;
+        let main_leaves = state.get_leaves().await.unwrap();
         assert_eq!(main_leaves.len(), 2);
         assert!(main_leaves.iter().any(|l| l.id == leaves[0].id));
         assert!(main_leaves.iter().any(|l| l.id == leaves[1].id));
@@ -419,7 +423,7 @@ mod tests {
         let fake_id = "fake-reservation-id".to_string();
 
         // Should not panic or cause issues
-        state.cancel_reservation(&fake_id).await;
+        state.cancel_reservation(&fake_id).await.unwrap();
 
         let leaves_state = state.leaves.lock().await;
         assert!(leaves_state.leaves_reservations.is_empty());
@@ -433,7 +437,7 @@ mod tests {
             create_test_tree_node("node1", 100),
             create_test_tree_node("node2", 200),
         ];
-        state.add_leaves(&leaves).await;
+        state.add_leaves(&leaves).await.unwrap();
 
         let reservation = state
             .reserve_leaves(Some(&TargetAmounts::new(100, None)), true)
@@ -441,13 +445,13 @@ mod tests {
             .unwrap();
 
         // Finalize the reservation
-        state.finalize_reservation(&reservation.id).await;
+        state.finalize_reservation(&reservation.id).await.unwrap();
 
         // Check that reservation was removed
         assert!(state.get_reservation(&reservation.id).await.is_none());
 
         // Check that leaf was NOT returned to main pool (it's considered used)
-        let main_leaves = state.get_leaves().await;
+        let main_leaves = state.get_leaves().await.unwrap();
         assert_eq!(main_leaves.len(), 1);
         assert_eq!(main_leaves[0].id, leaves[1].id);
     }
@@ -458,13 +462,13 @@ mod tests {
         let fake_id = "fake-reservation-id".to_string();
 
         // Should not panic or cause issues
-        state.finalize_reservation(&fake_id).await;
+        state.finalize_reservation(&fake_id).await.unwrap();
 
         let leaves_state = state.leaves.lock().await;
         assert!(leaves_state.leaves_reservations.is_empty());
         drop(leaves_state);
 
-        let main_leaves = state.get_leaves().await;
+        let main_leaves = state.get_leaves().await.unwrap();
         assert!(main_leaves.is_empty());
     }
 
@@ -476,7 +480,7 @@ mod tests {
             create_test_tree_node("node2", 200),
             create_test_tree_node("node3", 300),
         ];
-        state.add_leaves(&leaves).await;
+        state.add_leaves(&leaves).await.unwrap();
 
         // Create multiple reservations
         let reservation1 = state
@@ -501,32 +505,32 @@ mod tests {
         );
 
         // Check main pool has only one leaf left
-        let main_leaves = state.get_leaves().await;
+        let main_leaves = state.get_leaves().await.unwrap();
         assert_eq!(main_leaves.len(), 1);
         assert_eq!(main_leaves[0].id, leaves[2].id);
 
         // Cancel one reservation
-        state.cancel_reservation(&reservation1.id).await;
+        state.cancel_reservation(&reservation1.id).await.unwrap();
         assert!(state.get_reservation(&reservation1.id).await.is_none());
-        assert_eq!(state.get_leaves().await.len(), 2);
+        assert_eq!(state.get_leaves().await.unwrap().len(), 2);
 
         // Finalize the other
-        state.finalize_reservation(&reservation2.id).await;
+        state.finalize_reservation(&reservation2.id).await.unwrap();
         assert!(state.get_reservation(&reservation2.id).await.is_none());
-        assert_eq!(state.get_leaves().await.len(), 2); // node1 returned, node3 was always there
+        assert_eq!(state.get_leaves().await.unwrap().len(), 2); // node1 returned, node3 was always there
     }
 
     #[async_test_all]
     async fn test_reservation_ids_are_unique() {
         let state = InMemoryTreeStore::new();
         let leaf = create_test_tree_node("node1", 100);
-        state.add_leaves(std::slice::from_ref(&leaf)).await;
+        state.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
 
         let r1 = state
             .reserve_leaves(Some(&TargetAmounts::new(100, None)), true)
             .await
             .unwrap();
-        state.cancel_reservation(&r1.id).await;
+        state.cancel_reservation(&r1.id).await.unwrap();
         let r2 = state
             .reserve_leaves(Some(&TargetAmounts::new(100, None)), true)
             .await
@@ -539,9 +543,9 @@ mod tests {
     async fn test_non_reservable_leaves() {
         let state = InMemoryTreeStore::new();
         let leaf = create_test_tree_node("node1", 100);
-        state.add_leaves(std::slice::from_ref(&leaf)).await;
+        state.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
 
-        let _ = state
+        state
             .reserve_leaves(Some(&TargetAmounts::new(100, None)), true)
             .await
             .unwrap();

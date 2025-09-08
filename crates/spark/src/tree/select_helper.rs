@@ -1,4 +1,4 @@
-use tracing::trace;
+use tracing::{error, trace};
 
 use crate::tree::{
     LeavesReservation, TargetAmounts, TargetLeaves, TreeNode, TreeService, TreeServiceError,
@@ -183,11 +183,15 @@ where
 {
     match f.await {
         Ok(r) => {
-            tree_service.finalize_reservation(leaves.id.clone()).await;
+            if let Err(e) = tree_service.finalize_reservation(leaves.id.clone()).await {
+                error!("Failed to finalize reservation: {e:?}");
+            }
             Ok(r)
         }
         Err(e) => {
-            tree_service.cancel_reservation(leaves.id.clone()).await;
+            if let Err(e) = tree_service.cancel_reservation(leaves.id.clone()).await {
+                error!("Failed to cancel reservation: {e:?}");
+            }
             Err(e)
         }
     }
