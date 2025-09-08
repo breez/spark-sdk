@@ -155,7 +155,7 @@ where
 
         // Build leaf key tweaks for all leaves with new signing keys
         let all_leaves = [leaves, fee_leaves.unwrap_or_default()].concat();
-        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, all_leaves)?;
+        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, all_leaves, None)?;
 
         // Request cooperative exit from the SSP
         trace!("Requesting cooperative exit");

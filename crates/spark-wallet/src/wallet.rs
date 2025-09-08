@@ -41,7 +41,7 @@ pub struct SparkWallet<S> {
     #[allow(dead_code)]
     cancel: watch::Sender<()>,
     config: SparkWalletConfig,
-    deposit_service: DepositService<S>,
+    deposit_service: Arc<DepositService<S>>,
     event_manager: Arc<EventManager>,
     identity_public_key: PublicKey,
     signer: Arc<S>,
@@ -76,21 +76,6 @@ impl<S: Signer> SparkWallet<S> {
             )
             .await?,
         );
-        let lightning_service = Arc::new(LightningService::new(
-            operator_pool.clone(),
-            service_provider.clone(),
-            config.network,
-            Arc::clone(&signer),
-            config.split_secret_threshold,
-        ));
-        let deposit_service = DepositService::new(
-            bitcoin_service,
-            identity_public_key,
-            config.network,
-            operator_pool.clone(),
-            service_provider.clone(),
-            Arc::clone(&signer),
-        );
 
         let transfer_service = Arc::new(TransferService::new(
             signer.clone(),
@@ -99,11 +84,31 @@ impl<S: Signer> SparkWallet<S> {
             operator_pool.clone(),
         ));
 
+        let lightning_service = Arc::new(LightningService::new(
+            operator_pool.clone(),
+            service_provider.clone(),
+            config.network,
+            Arc::clone(&signer),
+            transfer_service.clone(),
+            config.split_secret_threshold,
+        ));
+
         let timelock_manager = Arc::new(TimelockManager::new(
             signer.clone(),
             config.network,
             operator_pool.clone(),
             Arc::clone(&transfer_service),
+        ));
+
+        let deposit_service = Arc::new(DepositService::new(
+            bitcoin_service,
+            identity_public_key,
+            config.network,
+            operator_pool.clone(),
+            service_provider.clone(),
+            Arc::clone(&signer),
+            timelock_manager.clone(),
+            transfer_service.clone(),
         ));
 
         let tree_state = TreeState::new();
@@ -154,9 +159,10 @@ impl<S: Signer> SparkWallet<S> {
             Arc::clone(&event_manager),
             identity_public_key,
             reconnect_interval,
-            Arc::clone(&transfer_service),
             Arc::clone(&tree_service),
             Arc::clone(&service_provider),
+            Arc::clone(&transfer_service),
+            Arc::clone(&deposit_service),
         ));
         background_processor
             .run_background_tasks(cancellation_token.clone())
@@ -198,6 +204,7 @@ impl<S: Signer> SparkWallet<S> {
             .validate_payment(invoice, max_fee_sat, amount_to_send, prefer_spark)
             .await?;
 
+        // In case the invoice is for a spark address, we can just transfer the amount to the receiver.
         if let Some(receiver_spark_address) = receiver_spark_address {
             return Ok(PayLightningInvoiceResult::Transfer(
                 self.transfer(total_amount_sat, &receiver_spark_address)
@@ -211,10 +218,10 @@ impl<S: Signer> SparkWallet<S> {
             .select_leaves(Some(&target_amounts))
             .await?;
         // start the lightning swap with the operator
-        let swap = self
+        let lightning_payment = self
             .tree_service
             .with_reserved_leaves(
-                self.lightning_service.start_lightning_swap(
+                self.lightning_service.pay_lightning_invoice(
                     invoice,
                     amount_to_send,
                     &leaves_reservation.leaves,
@@ -223,17 +230,9 @@ impl<S: Signer> SparkWallet<S> {
             )
             .await?;
 
-        // send the leaves to the operator
-        let _ = self
-            .transfer_service
-            .deliver_transfer_package(&swap.transfer, &swap.leaves, Default::default())
-            .await?;
-
         // finalize the lightning swap with the ssp - send the actual lightning payment
         Ok(PayLightningInvoiceResult::LightningPayment(
-            self.lightning_service
-                .finalize_lightning_swap(&swap)
-                .await?,
+            lightning_payment,
         ))
     }
 
@@ -341,10 +340,11 @@ impl<S: Signer> SparkWallet<S> {
         vout: u32,
     ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
         let deposit_nodes = self.deposit_service.claim_deposit(tx, vout).await?;
-        debug!("Claimed deposit root node: {:?}", deposit_nodes);
-        let collected_leaves = self.tree_service.collect_leaves(deposit_nodes).await?;
-        debug!("Collected deposit leaves: {:?}", collected_leaves);
-        Ok(collected_leaves.into_iter().map(WalletLeaf::from).collect())
+        self.tree_service
+            .insert_leaves(deposit_nodes.clone(), false)
+            .await?;
+        info!("Claimed deposit root node: {:?}", deposit_nodes);
+        Ok(deposit_nodes.into_iter().map(WalletLeaf::from).collect())
     }
 
     pub async fn claim_static_deposit(
@@ -467,8 +467,11 @@ impl<S: Signer> SparkWallet<S> {
         let transfer = self
             .tree_service
             .with_reserved_leaves(
-                self.transfer_service
-                    .transfer_leaves_to(leaves_reservation.leaves.clone(), &receiver_pubkey),
+                self.transfer_service.transfer_leaves_to(
+                    leaves_reservation.leaves.clone(),
+                    &receiver_pubkey,
+                    None,
+                ),
                 &leaves_reservation,
             )
             .await?;
@@ -835,29 +838,33 @@ struct BackgroundProcessor<S: Signer> {
     event_manager: Arc<EventManager>,
     identity_public_key: PublicKey,
     reconnect_interval: Duration,
-    transfer_service: Arc<TransferService<S>>,
     tree_service: Arc<TreeService<S>>,
     ssp_client: Arc<ServiceProvider<S>>,
+    transfer_service: Arc<TransferService<S>>,
+    deposit_service: Arc<DepositService<S>>,
 }
 
 impl<S: Signer> BackgroundProcessor<S> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         operator_pool: Arc<OperatorPool<S>>,
         event_manager: Arc<EventManager>,
         identity_public_key: PublicKey,
         reconnect_interval: Duration,
-        transfer_service: Arc<TransferService<S>>,
         tree_service: Arc<TreeService<S>>,
         ssp_client: Arc<ServiceProvider<S>>,
+        transfer_service: Arc<TransferService<S>>,
+        deposit_service: Arc<DepositService<S>>,
     ) -> Self {
         Self {
             operator_pool,
             event_manager,
             identity_public_key,
             reconnect_interval,
-            transfer_service,
             tree_service,
             ssp_client,
+            transfer_service,
+            deposit_service,
         }
     }
 
@@ -918,8 +925,12 @@ impl<S: Signer> BackgroundProcessor<S> {
 
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
         let id = deposit.id.clone();
-        let leaves = self.tree_service.collect_leaves(vec![deposit]).await?;
-        debug!("Collected deposit leaves: {:?}", leaves);
+        let collected_leaves = self.deposit_service.collect_leaves(vec![deposit]).await?;
+        self.tree_service
+            .insert_leaves(collected_leaves.clone(), false)
+            .await?;
+
+        debug!("Collected deposit leaves: {:?}", collected_leaves);
         self.event_manager
             .notify_listeners(WalletEvent::DepositConfirmed(id));
         Ok(())
@@ -934,8 +945,9 @@ impl<S: Signer> BackgroundProcessor<S> {
             return Ok(());
         }
 
+        println!("Claiming transfer from event");
         claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
-
+        println!("Claimed transfer from event");
         // get the ssp transfer details, if it fails just use None
         // Internal transfers will not have an SSP entry so just skip it
         let ssp_transfer = if transfer.transfer_type == spark::services::TransferType::Transfer {
