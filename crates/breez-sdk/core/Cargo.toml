@@ -7,9 +7,10 @@ version.workspace = true
 browser-tests = [] # Enable browser wasm-pack tests
 uniffi = [
     "breez-sdk-common/uniffi",
-    "reqwest/native-tls-vendored",
     "dep:uniffi",
+    "openssl-vendored",
 ]
+openssl-vendored = ["openssl"]
 test-utils = []
 
 [lib]
@@ -31,6 +32,7 @@ dotenvy.workspace = true
 figment = { workspace = true, features = ["env", "yaml"] }
 hex.workspace = true
 macros.workspace = true
+openssl = { workspace = true, optional = true }
 qrcode-rs.workspace = true
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }

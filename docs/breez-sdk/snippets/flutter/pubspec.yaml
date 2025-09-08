@@ -1,0 +1,22 @@
+name: flutter
+description: Breez SDK Flutter snippets
+version: 1.0.0
+publish_to: "none"
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_secure_storage: ^6.0.0
+  app_group_directory: ^2.0.0
+  path_provider: ^2.0.0
+  breez_sdk_spark_flutter:
+    path: ../../../../packages/flutter
+  rxdart: ^0.28.0
+
+dev_dependencies:
+  lints: ^3.0.0
+  test: ^1.24.9

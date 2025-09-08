@@ -38,6 +38,14 @@ The SDK implements detailed logging via a streaming interface you can manage wit
 ```
 </section>
 
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/getting_started.dart:logging}}
+```
+</section>
+
 <div slot="title">Python</div>
 <section>
 

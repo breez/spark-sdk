@@ -48,6 +48,14 @@ The minimum and maximum sendable amount returned from calling parse is denominat
 ```
 </section>
 
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/lnurl_pay.dart:prepare-lnurl-pay}}
+```
+</section>
+
 <div slot="title">Python</div>
 <section>
 
@@ -95,6 +103,14 @@ LNURL pay method.
 
 ```typescript
 {{#include ../../snippets/wasm/lnurl_pay.ts:lnurl-pay}}
+```
+</section>
+
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/lnurl_pay.dart:lnurl-pay}}
 ```
 </section>
 

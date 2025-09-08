@@ -1,0 +1,20 @@
+[package]
+name = "breez_sdk_spark_flutter"
+version = "0.1.3"
+edition = "2024"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+async-trait = "0.1.88"
+# Replaced with release commit during publishing
+breez-sdk-common = { path = "../../../crates/breez-sdk/common" }
+breez-sdk-spark = { path = "../../../crates/breez-sdk/core", features = ["openssl-vendored"] }
+extend = "1.2.0"
+flutter_rust_bridge = "=2.9.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
