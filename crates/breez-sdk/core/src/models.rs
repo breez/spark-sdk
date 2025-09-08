@@ -10,7 +10,7 @@ use spark_wallet::{
     Network as SparkNetwork, SspUserRequest, TransferDirection, TransferStatus, TransferType,
     WalletTransfer,
 };
-use std::time::UNIX_EPOCH;
+use std::{fmt::Display, str::FromStr, time::UNIX_EPOCH};
 
 use crate::{SdkError, error::DepositClaimError};
 
@@ -89,6 +89,33 @@ pub enum PaymentMethod {
     Deposit,
     Withdraw,
     Unknown,
+}
+
+impl Display for PaymentMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PaymentMethod::Lightning => write!(f, "lightning"),
+            PaymentMethod::Spark => write!(f, "spark"),
+            PaymentMethod::Deposit => write!(f, "deposit"),
+            PaymentMethod::Withdraw => write!(f, "withdraw"),
+            PaymentMethod::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+impl FromStr for PaymentMethod {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "lightning" => Ok(PaymentMethod::Lightning),
+            "spark" => Ok(PaymentMethod::Spark),
+            "deposit" => Ok(PaymentMethod::Deposit),
+            "withdraw" => Ok(PaymentMethod::Withdraw),
+            "unknown" => Ok(PaymentMethod::Unknown),
+            _ => Err(()),
+        }
+    }
 }
 
 impl From<TransferType> for PaymentMethod {

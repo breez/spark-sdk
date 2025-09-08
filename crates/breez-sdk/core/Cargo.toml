@@ -57,8 +57,7 @@ x509-parser = { version = "0.16.0" }
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-rusqlite.workspace = true
-rusqlite_migration.workspace = true
+sqlx = { workspace = true, features = ["sqlite", "runtime-tokio"] }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
