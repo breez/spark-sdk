@@ -38,32 +38,6 @@ pub struct SynchronousTreeService<S> {
 
 #[macros::async_trait]
 impl<S: Signer> TreeService for SynchronousTreeService<S> {
-    /// Lists all leaves from the local cache.
-    ///
-    /// This method retrieves the current set of tree nodes stored in the local state
-    /// without making any network calls. To update the cache with the latest data
-    /// from the server, call [`refresh_leaves`] first.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<Vec<TreeNode>, TreeServiceError>` - A vector of tree nodes representing
-    ///   the leaves in the local cache, or an error if the operation fails.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use spark::tree::{TreeService, SynchronousTreeService, TreeServiceError};
-    /// use spark::signer::Signer;
-    ///
-    /// # async fn example(tree_service: &SynchronousTreeService<impl Signer>) -> Result<(), TreeServiceError> {
-    /// // First refresh to get the latest data
-    /// tree_service.refresh_leaves().await?;
-    ///
-    /// // Then list the leaves
-    /// let leaves = tree_service.list_leaves().await?;
-    /// # Ok(())
-    /// # }
-    /// ```
     async fn list_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
         Ok(self.state.get_leaves().await)
     }
@@ -149,38 +123,6 @@ impl<S: Signer> TreeService for SynchronousTreeService<S> {
         Ok(reservation)
     }
 
-    /// Refreshes the tree state by fetching the latest leaves from the server.
-    ///
-    /// This method clears the current local cache of leaves and fetches all available
-    /// leaves from the coordinator, storing them in the local state. It handles pagination
-    /// internally and will continue fetching until all leaves have been retrieved.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<(), TreeServiceError>` - Ok if the refresh was successful, or an error
-    ///   if any part of the operation fails.
-    ///
-    /// # Errors
-    ///
-    /// Returns a `TreeServiceError` if:
-    /// * Communication with the server fails
-    /// * Deserialization of leaf data fails
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use spark::tree::{TreeService, SynchronousTreeService, TreeServiceError};
-    /// use spark::signer::Signer;
-    ///
-    /// # async fn example(tree_service: &SynchronousTreeService<impl Signer>) -> Result<(), TreeServiceError> {
-    /// // Refresh the local cache with the latest leaves from the server
-    /// tree_service.refresh_leaves().await?;
-    ///
-    /// // Now you can work with the updated leaves
-    /// let leaves = tree_service.list_leaves().await?;
-    /// # Ok(())
-    /// # }
-    /// ```
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
         let coordinator_leaves = self
             .query_nodes(&self.operator_pool.get_coordinator().client, false, None)
@@ -261,33 +203,6 @@ impl<S: Signer> TreeService for SynchronousTreeService<S> {
         Ok(())
     }
 
-    /// Returns the total balance of all available leaves in the tree.
-    ///
-    /// This method calculates the sum of all leaf values that have a status of
-    /// `TreeNodeStatus::Available`. It first retrieves all leaves from the local cache
-    /// and filters out any that are not available before calculating the total.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<u64, TreeServiceError>` - The total balance in satoshis if successful,
-    ///   or an error if the operation fails.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use spark::tree::{TreeService, SynchronousTreeService, TreeServiceError};
-    /// use spark::signer::Signer;
-    ///
-    /// # async fn example(tree_service: &SynchronousTreeService<impl Signer>) -> Result<(), TreeServiceError> {
-    /// // Ensure the cache is up to date
-    /// tree_service.refresh_leaves().await?;
-    ///
-    /// // Get the available balance
-    /// let balance = tree_service.get_available_balance().await?;
-    /// println!("Available balance: {} sats", balance);
-    /// # Ok(())
-    /// # }
-    /// ```
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
         Ok(self
             .list_leaves()
