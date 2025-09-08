@@ -1,22 +1,12 @@
-use diesel::sqlite::Sqlite;
-use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
-use tracing::error;
-pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations/sqlite");
+use sqlx::SqlitePool;
 
-pub fn has_migrations(
-    connection: &mut impl MigrationHarness<Sqlite>,
-) -> Result<bool, anyhow::Error> {
-    connection.has_pending_migration(MIGRATIONS).map_err(|e| {
-        error!("failed to check for migrations: {}", e);
-        anyhow::anyhow!("failed to check for migrations: {}", e)
-    })
+use crate::repository::LnurlRepositoryError;
+
+mod error;
+mod repository;
+
+pub async fn run_migrations(pool: &SqlitePool) -> Result<(), LnurlRepositoryError> {
+    Ok(sqlx::migrate!("migrations/sqlite").run(pool).await?)
 }
 
-pub fn run_migrations(connection: &mut impl MigrationHarness<Sqlite>) -> Result<(), anyhow::Error> {
-    connection.run_pending_migrations(MIGRATIONS).map_err(|e| {
-        error!("failed to run migrations: {}", e);
-        anyhow::anyhow!("failed to run migrations: {}", e)
-    })?;
-
-    Ok(())
-}
+pub use repository::LnurlRepository;

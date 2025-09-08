@@ -8,27 +8,24 @@ use axum::{
     routing::{delete, get, post},
 };
 use clap::Parser;
-use diesel::{
-    SqliteConnection,
-    r2d2::{ConnectionManager, Pool},
-};
 use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
 };
 use serde::{Deserialize, Serialize};
 use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
+use sqlx::SqlitePool;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::state::State;
 
-mod models;
+mod repository;
 mod routes;
 mod sqlite;
 mod state;
-
+mod user;
 #[derive(Clone, Parser, Debug, Serialize, Deserialize)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -73,7 +70,7 @@ struct Args {
     pub max_sendable: u64,
 }
 
-type LnurlServer = routes::LnurlServer<Pool<ConnectionManager<SqliteConnection>>>;
+type LnurlServer = routes::LnurlServer<sqlite::LnurlRepository>;
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -100,27 +97,16 @@ async fn main() -> Result<(), anyhow::Error> {
         info!("starting lnurl server without config file");
     }
 
-    // Create a connection manager for SQLite
-    let manager = ConnectionManager::<SqliteConnection>::new(&args.db_url);
-
     // Create a connection pool
-    let pool = Pool::builder()
-        .build(manager)
+    let pool = SqlitePool::connect(&args.db_url)
+        .await
         .map_err(|e| anyhow!("failed to create connection pool: {:?}", e))?;
 
-    // Get a connection to run migrations
-    let mut db_connection = pool
-        .get()
-        .map_err(|e| anyhow!("failed to get connection from pool: {:?}", e))?;
-
     if args.auto_migrate {
-        sqlite::run_migrations(&mut db_connection)?;
-    } else if sqlite::has_migrations(&mut db_connection)? {
-        return Err(anyhow::anyhow!(
-            "database has pending migrations, run with --auto-migrate to apply them, or apply them manually"
-        ));
+        sqlite::run_migrations(&pool).await?;
     }
 
+    let repository = sqlite::LnurlRepository::new(pool);
     let wallet = Arc::new(
         spark_wallet::SparkWallet::connect(
             SparkWalletConfig::default_config(args.network),
@@ -129,7 +115,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .await?,
     );
     let state = State {
-        db: Arc::new(pool),
+        db: repository,
         wallet,
         scheme: args.scheme,
         domain: args.domain,

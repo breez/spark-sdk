@@ -7,10 +7,6 @@ use axum::{
 };
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
-use diesel::{
-    ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SqliteConnection,
-    r2d2::{ConnectionManager, Pool},
-};
 use lnurl::{Tag, pay::PayResponse};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -18,8 +14,9 @@ use serde_json::{Value, json};
 use tracing::{debug, error, trace};
 
 use crate::{
-    models::{USERNAME_VALIDATION_REGEX, User, users},
+    repository::{LnurlRepository, LnurlRepositoryError},
     state::State,
+    user::{USERNAME_VALIDATION_REGEX, User},
 };
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -60,17 +57,13 @@ pub struct LnurlServer<DB> {
     db: PhantomData<DB>,
 }
 
-// Currently using SQLite, but designed to be extensible for other backends like PostgreSQL
-// For Postgres support, you would:
-// 1. Add the 'pg' feature to Diesel in Cargo.toml
-// 2. Create a similar impl for PgPool
-// 3. Or create a generic implementation using traits to support both backends
-type SqlitePool = Pool<ConnectionManager<SqliteConnection>>;
-
-impl LnurlServer<SqlitePool> {
+impl<DB> LnurlServer<DB>
+where
+    DB: LnurlRepository,
+{
     pub async fn register(
         Path(pubkey): Path<String>,
-        Extension(state): Extension<State<SqlitePool>>,
+        Extension(state): Extension<State<DB>>,
         Json(payload): Json<RegisterLnurlPayRequest>,
     ) -> Result<Json<RegisterLnurlPayResponse>, (StatusCode, Json<Value>)> {
         let pubkey = validate(&pubkey, &payload.signature, &payload.username, &state).await?;
@@ -86,41 +79,19 @@ impl LnurlServer<SqlitePool> {
             description: payload.description,
         };
 
-        let mut conn = state.db.get().map_err(|e| {
-            error!("failed to get database connection: {}", e);
-            (
+        if let Err(e) = state.db.upsert_user(&user).await {
+            if let LnurlRepositoryError::NameTaken = e {
+                trace!("name already taken: {}", user.name);
+                return Err((
+                    StatusCode::CONFLICT,
+                    Json(Value::String("name already taken".into())),
+                ));
+            }
+
+            error!("failed to execute query: {}", e);
+            return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(Value::String("internal server error".into())),
-            )
-        })?;
-
-        if let Err(e) = diesel::insert_into(users::table)
-            .values(&user)
-            .on_conflict(users::pubkey)
-            .do_update()
-            .set(&user)
-            .execute(&mut *conn)
-        {
-            let diesel::result::Error::DatabaseError(database_error_kind, _) = &e else {
-                error!("failed to execute query: {}", e);
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(Value::String("internal server error".into())),
-                ));
-            };
-
-            let diesel::result::DatabaseErrorKind::UniqueViolation = database_error_kind else {
-                error!("failed to execute query: {}", e);
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(Value::String("internal server error".into())),
-                ));
-            };
-
-            trace!("name already exists: {}", user.name);
-            return Err((
-                StatusCode::CONFLICT,
-                Json(Value::String("name already taken".into())),
             ));
         }
 
@@ -133,20 +104,15 @@ impl LnurlServer<SqlitePool> {
 
     pub async fn unregister(
         Path(pubkey): Path<String>,
-        Extension(state): Extension<State<SqlitePool>>,
+        Extension(state): Extension<State<DB>>,
         Json(payload): Json<RegisterLnurlPayRequest>,
     ) -> Result<(), (StatusCode, Json<Value>)> {
         let pubkey = validate(&pubkey, &payload.signature, &payload.username, &state).await?;
-        let mut conn = state.db.get().map_err(|e| {
-            error!("failed to get database connection: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(Value::String("internal server error".into())),
-            )
-        })?;
-        diesel::delete(users::table)
-            .filter(users::pubkey.eq(pubkey.to_string()))
-            .execute(&mut *conn)
+
+        state
+            .db
+            .delete_user(&pubkey.to_string())
+            .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
                 (
@@ -154,28 +120,21 @@ impl LnurlServer<SqlitePool> {
                     Json(Value::String("internal server error".into())),
                 )
             })?;
-
         debug!("unregistered user for pubkey {}", pubkey);
         Ok(())
     }
 
     pub async fn recover(
         Path(pubkey): Path<String>,
-        Extension(state): Extension<State<SqlitePool>>,
+        Extension(state): Extension<State<DB>>,
         Json(payload): Json<RecoverLnurlPayRequest>,
     ) -> Result<Json<RecoverLnurlPayResponse>, (StatusCode, Json<Value>)> {
         let pubkey = validate(&pubkey, &payload.signature, &pubkey, &state).await?;
-        let mut conn = state.db.get().map_err(|e| {
-            error!("failed to get database connection: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(Value::String("internal server error".into())),
-            )
-        })?;
-        let user = users::table
-            .filter(users::pubkey.eq(pubkey.to_string()))
-            .first::<User>(&mut conn)
-            .optional()
+
+        let user = state
+            .db
+            .get_user_by_pubkey(&pubkey.to_string())
+            .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
                 (
@@ -198,27 +157,19 @@ impl LnurlServer<SqlitePool> {
         }
     }
 
-    #[allow(clippy::unused_async)]
     pub async fn handle_lnurl_pay(
         Path(identifier): Path<String>,
-        Extension(state): Extension<State<SqlitePool>>,
+        Extension(state): Extension<State<DB>>,
     ) -> Result<Json<PayResponse>, (StatusCode, Json<Value>)> {
         if identifier.is_empty() {
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         }
 
-        let mut conn = state.db.get().map_err(|e| {
-            error!("failed to get database connection: {}", e);
+        let user = state.db.get_user_by_name(&identifier).await.map_err(|e| {
+            error!("failed to execute query: {}", e);
             lnurl_error("internal server error")
         })?;
-        let user = users::table
-            .filter(users::name.eq(identifier))
-            .first::<User>(&mut conn)
-            .optional()
-            .map_err(|e| {
-                error!("handle_lnurl_pay: failed to execute query: {}", e);
-                lnurl_error("internal server error")
-            })?;
+
         let Some(user) = user else {
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         };
@@ -241,24 +192,16 @@ impl LnurlServer<SqlitePool> {
     pub async fn handle_invoice(
         Path(identifier): Path<String>,
         Query(params): Query<LnurlPayCallbackParams>,
-        Extension(state): Extension<State<SqlitePool>>,
+        Extension(state): Extension<State<DB>>,
     ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
         if identifier.is_empty() {
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         }
 
-        let mut conn = state.db.get().map_err(|e| {
-            error!("failed to get database connection: {}", e);
+        let user = state.db.get_user_by_name(&identifier).await.map_err(|e| {
+            error!("failed to execute query: {}", e);
             lnurl_error("internal server error")
         })?;
-        let user = users::table
-            .filter(users::name.eq(identifier))
-            .first::<User>(&mut conn)
-            .optional()
-            .map_err(|e| {
-                error!("handle_invoice: failed to execute query: {}", e);
-                lnurl_error("internal server error")
-            })?;
         let Some(user) = user else {
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         };
@@ -304,11 +247,11 @@ impl LnurlServer<SqlitePool> {
     }
 }
 
-async fn validate(
+async fn validate<DB>(
     pubkey: &str,
     signature: &str,
     username: &str,
-    state: &State<SqlitePool>,
+    state: &State<DB>,
 ) -> Result<PublicKey, (StatusCode, Json<Value>)> {
     if username.chars().take(65).count() > 64 {
         return Err((
