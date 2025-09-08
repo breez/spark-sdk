@@ -123,7 +123,7 @@ type CompleteCoopExitOutput {
   request: CoopExitRequest!
 }
 
-input CompleteLeavesSwapInputDeprecated {
+input CompleteLeavesSwapInput {
   adaptor_secret_key: String!
   user_outbound_transfer_external_id: UUID!
   leaves_swap_request_id: ID!
@@ -584,7 +584,7 @@ type Mutation {
   complete_coop_exit(input: CompleteCoopExitInput!): CompleteCoopExitOutput!
 
   """For spark users to complete a leaves swap."""
-  complete_leaves_swap(input: CompleteLeavesSwapInputDeprecated!): CompleteLeavesSwapOutput!
+  complete_leaves_swap(input: CompleteLeavesSwapInput!): CompleteLeavesSwapOutput!
 
   """Complete the process to request releasing seed."""
   complete_seed_release(input: CompleteSeedReleaseInput!): CompleteSeedReleaseOutput!
@@ -605,7 +605,7 @@ type Mutation {
   request_lightning_receive(input: RequestLightningReceiveInput!): RequestLightningReceiveOutput!
 
   """For spark users to initiate a leaves swap."""
-  request_leaves_swap(input: RequestLeavesSwapInputDeprecated!): RequestLeavesSwapOutput!
+  request_leaves_swap(input: RequestLeavesSwapInput!): RequestLeavesSwapOutput!
 
   """
   This function sends regtest funds to a specified address. It is only available in test mode.
@@ -707,7 +707,7 @@ type RequestCoopExitOutput {
   request: CoopExitRequest!
 }
 
-input RequestLeavesSwapInputDeprecated {
+input RequestLeavesSwapInput {
   adaptor_pubkey: PublicKey!
   total_amount_sats: Long!
   target_amount_sats: Long!
