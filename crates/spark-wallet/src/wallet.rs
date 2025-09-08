@@ -23,7 +23,7 @@ use spark::{
     ssp::{ServiceProvider, SspTransfer},
     tree::{
         InMemoryTreeStore, LeavesReservation, SynchronousTreeService, TargetAmounts, TreeNode,
-        TreeNodeId, TreeService, TreeStore, select_leaves_by_amounts, with_reserved_leaves,
+        TreeNodeId, TreeService, select_leaves_by_amounts, with_reserved_leaves,
     },
     utils::paging::PagingFilter,
 };
@@ -114,8 +114,6 @@ impl<S: Signer> SparkWallet<S> {
             transfer_service.clone(),
         ));
 
-        let tree_state: Box<dyn TreeStore> = Box::new(InMemoryTreeStore::new());
-
         let coop_exit_service = Arc::new(CoopExitService::new(
             operator_pool.clone(),
             service_provider.clone(),
@@ -140,7 +138,7 @@ impl<S: Signer> SparkWallet<S> {
             identity_public_key,
             config.network,
             operator_pool.clone(),
-            tree_state,
+            Box::new(InMemoryTreeStore::new()),
             Arc::clone(&timelock_manager),
             Arc::clone(&signer),
             swap_service,
