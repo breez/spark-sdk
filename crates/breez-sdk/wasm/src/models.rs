@@ -161,7 +161,7 @@ pub enum SparkAddressPaymentType {
 #[macros::extern_wasm_bindgen(breez_sdk_common::input::TokensPaymentDetails)]
 pub struct TokensPaymentDetails {
     pub token_identifier: Option<String>,
-    pub amount: Option<u64>,
+    pub amount: Option<u128>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_common::input::SatsPaymentDetails)]
@@ -361,8 +361,8 @@ pub struct Payment {
     pub id: String,
     pub payment_type: PaymentType,
     pub status: PaymentStatus,
-    pub amount: u64,
-    pub fees: u64,
+    pub amount: u128,
+    pub fees: u128,
     pub timestamp: u64,
     pub method: PaymentMethod,
     pub details: Option<PaymentDetails>,
@@ -505,21 +505,18 @@ pub struct GetInfoResponse {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenBalance)]
 pub struct TokenBalance {
-    pub balance: u64,
+    pub balance: u128,
     pub token_metadata: TokenMetadata,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenMetadata)]
 pub struct TokenMetadata {
     pub identifier: String,
-    /// Hex representation of the issuer public key
     pub issuer_public_key: String,
     pub name: String,
     pub ticker: String,
-    /// Number of decimals the token uses
     pub decimals: u32,
-    /// Decimal representation of the token max supply (unsigned 128-bit integer)
-    pub max_supply: u64,
+    pub max_supply: u128,
     pub is_freezable: bool,
 }
 
@@ -615,14 +612,14 @@ pub struct LnurlPayResponse {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentRequest)]
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
-    pub amount: Option<u64>,
+    pub amount: Option<u128>,
     pub token_identifier: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    pub amount: u64,
+    pub amount: u128,
     pub token_identifier: Option<String>,
 }
 

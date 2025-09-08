@@ -81,7 +81,7 @@ struct PaymentCommonContext {
 struct PaymentMethodInfo {
     method: PaymentMethod,
     details: Option<PaymentDetails>,
-    fees: u64,
+    fees: u128,
 }
 
 /// Converts a Sparkscan address transaction into Payment objects
@@ -177,7 +177,7 @@ fn create_lightning_payment_info(
                 destination_pubkey: invoice_details.payee_pubkey.clone(),
                 lnurl_pay_info: None,
             }),
-            fees,
+            fees: fees.into(),
         })
     } else {
         warn!(
@@ -204,7 +204,7 @@ fn create_deposit_payment_info(
             details: Some(PaymentDetails::Deposit {
                 tx_id: request.transaction_id.clone(),
             }),
-            fees,
+            fees: fees.into(),
         }
     } else {
         warn!(
@@ -231,7 +231,7 @@ fn create_withdraw_payment_info(
             details: Some(PaymentDetails::Withdraw {
                 tx_id: request.coop_exit_txid.clone(),
             }),
-            fees,
+            fees: fees.into(),
         }
     } else {
         warn!(
@@ -388,8 +388,8 @@ fn determine_single_payment_type(
 fn calculate_payment_amount(
     transaction: &AddressTransaction,
     method_info: &PaymentMethodInfo,
-) -> Result<u64, SdkError> {
-    let transaction_amount: u64 = transaction
+) -> Result<u128, SdkError> {
+    let transaction_amount = transaction
         .amount_sats
         .or(transaction.token_amount)
         .ok_or(SdkError::Generic(
