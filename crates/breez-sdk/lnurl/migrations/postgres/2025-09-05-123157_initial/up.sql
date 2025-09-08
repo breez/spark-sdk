@@ -1,0 +1,6 @@
+CREATE TABLE users (
+	pubkey VARCHAR(66) NOT NULL PRIMARY KEY,
+	name VARCHAR(64) NOT NULL,
+	description VARCHAR(255) NOT NULL
+);
+

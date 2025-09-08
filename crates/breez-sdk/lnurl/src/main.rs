@@ -14,18 +14,21 @@ use figment::{
 };
 use serde::{Deserialize, Serialize};
 use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
-use sqlx::SqlitePool;
+use sqlx::{PgPool, SqlitePool};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::state::State;
 
+mod error;
+mod postgresql;
 mod repository;
 mod routes;
 mod sqlite;
 mod state;
 mod user;
+
 #[derive(Clone, Parser, Debug, Serialize, Deserialize)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -97,16 +100,35 @@ async fn main() -> Result<(), anyhow::Error> {
         info!("starting lnurl server without config file");
     }
 
-    // Create a connection pool
-    let pool = SqlitePool::connect(&args.db_url)
-        .await
-        .map_err(|e| anyhow!("failed to create connection pool: {:?}", e))?;
+    if args.db_url.trim().to_lowercase().starts_with("postgres") {
+        let pool = PgPool::connect(&args.db_url)
+            .await
+            .map_err(|e| anyhow!("failed to create connection pool: {:?}", e))?;
 
-    if args.auto_migrate {
-        sqlite::run_migrations(&pool).await?;
+        if args.auto_migrate {
+            postgresql::run_migrations(&pool).await?;
+        }
+        let repository = postgresql::LnurlRepository::new(pool);
+        main_part_2(args, repository).await?;
+    } else {
+        let pool = SqlitePool::connect(&args.db_url)
+            .await
+            .map_err(|e| anyhow!("failed to create connection pool: {:?}", e))?;
+
+        if args.auto_migrate {
+            sqlite::run_migrations(&pool).await?;
+        }
+        let repository = sqlite::LnurlRepository::new(pool);
+        main_part_2(args, repository).await?;
     }
 
-    let repository = sqlite::LnurlRepository::new(pool);
+    Ok(())
+}
+
+async fn main_part_2<DB>(args: Args, repository: DB) -> Result<(), anyhow::Error>
+where
+    DB: Clone + Send + Sync + 'static,
+{
     let wallet = Arc::new(
         spark_wallet::SparkWallet::connect(
             SparkWalletConfig::default_config(args.network),

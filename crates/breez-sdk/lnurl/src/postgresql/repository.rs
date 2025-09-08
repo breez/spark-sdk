@@ -1,14 +1,14 @@
-use sqlx::{Row, SqlitePool};
+use sqlx::{PgPool, Row};
 
 use crate::{repository::LnurlRepositoryError, user::User};
 
 #[derive(Clone)]
 pub struct LnurlRepository {
-    pool: SqlitePool,
+    pool: PgPool,
 }
 
 impl LnurlRepository {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         LnurlRepository { pool }
     }
 }
@@ -51,7 +51,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
     }
 
     async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError> {
-        sqlx::query("REPLACE INTO users (pubkey, name, description) VALUES ($1, $2, $3)")
+        sqlx::query("INSERT INTO users (pubkey, name, description) VALUES ($1, $2, $3) ON CONFLICT(pubkey) DO UPDATE SET name = excluded.name, description = excluded.description")
             .bind(&user.pubkey)
             .bind(&user.name)
             .bind(&user.description)

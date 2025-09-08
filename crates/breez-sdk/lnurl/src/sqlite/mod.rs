@@ -2,7 +2,6 @@ use sqlx::SqlitePool;
 
 use crate::repository::LnurlRepositoryError;
 
-mod error;
 mod repository;
 
 pub async fn run_migrations(pool: &SqlitePool) -> Result<(), LnurlRepositoryError> {
