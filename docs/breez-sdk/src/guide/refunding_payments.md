@@ -57,6 +57,14 @@ Use the `list_unclaimed_deposits` method to retrieve all deposits that have fail
 ```
 </section>
 
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/refunding_payments.dart:list-unclaimed-deposits}}
+```
+</section>
+
 <div slot="title">Python</div>
 <section>
 
@@ -103,6 +111,14 @@ If a deposit claim failed due to insufficient fees, you can retry the claim oper
 ```
 </section>
 
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/refunding_payments.dart:claim-deposit}}
+```
+</section>
+
 <div slot="title">Python</div>
 <section>
 
@@ -146,6 +162,14 @@ When a deposit cannot be successfully claimed, you can refund the funds to an ex
 
 ```typescript
 {{#include ../../snippets/wasm/refunding_payments.ts:refund-deposit}}
+```
+</section>
+
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/refunding_payments.dart:refund-deposit}}
 ```
 </section>
 

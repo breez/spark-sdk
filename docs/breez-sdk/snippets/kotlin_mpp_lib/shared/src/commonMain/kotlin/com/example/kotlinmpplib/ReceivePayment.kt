@@ -6,7 +6,7 @@ class ReceivePayment {
         // ANCHOR: receive-payment-lightning-bolt11
         try {
             val description = "<invoice description>"
-            // Set the invoice amount you wish the payer to send, which should be within the above limits
+            // Optionally set the invoice amount you wish the payer to send
             val optionalAmountSats = 5_000.toULong()
 
             val request = ReceivePaymentRequest(

@@ -44,6 +44,14 @@ The SDK emits several events to provide the application with an up-to-date state
 
 </section>
 
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/getting_started.dart:add-event-listener}}
+```
+</section>
+
 <div slot="title">Python</div>
 <section>
 
@@ -96,6 +104,14 @@ When you no longer need to listen to events, you can remove the listener.
 {{#include ../../snippets/wasm/getting_started.ts:remove-event-listener}}
 ```
 
+</section>
+
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/getting_started.dart:remove-event-listener}}
+```
 </section>
 
 <div slot="title">Python</div>

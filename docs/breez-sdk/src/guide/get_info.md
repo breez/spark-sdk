@@ -38,6 +38,14 @@ Once connected, the balance can be retrieved at any time.
 ```
 </section>
 
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/getting_started.dart:fetch-balance}}
+```
+</section>
+
 <div slot="title">Python</div>
 <section>
 

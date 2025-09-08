@@ -38,6 +38,14 @@ To view your payment history, you can list all the payments that have been sent 
 ```
 </section>
 
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/list_payments.dart:list-payments}}
+```
+</section>
+
 <div slot="title">Python</div>
 <section>
 
@@ -84,6 +92,13 @@ When listing payment you can also page the list results:
 ```
 </section>
 
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/list_payments.dart:list-payments-filtered}}
+```
+</section>
 <div slot="title">Python</div>
 <section>
 
@@ -130,6 +145,14 @@ You can also retrieve a single payment using the payment id:
 
 ```typescript
 {{#include ../../snippets/wasm/list_payments.ts:get-payment}}
+```
+</section>
+
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/list_payments.dart:get-payment}}
 ```
 </section>
 

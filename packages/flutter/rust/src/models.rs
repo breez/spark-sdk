@@ -145,6 +145,13 @@ pub struct _LnurlPayResponse {
     pub success_action: Option<SuccessActionProcessed>,
 }
 
+#[frb(mirror(OnchainConfirmationSpeed))]
+pub enum _OnchainConfirmationSpeed {
+    Fast,
+    Medium,
+    Slow,
+}
+
 #[frb(mirror(PrepareLnurlPayRequest))]
 pub struct _PrepareLnurlPayRequest {
     pub amount_sats: u64,
@@ -161,6 +168,18 @@ pub struct _PrepareLnurlPayResponse {
     pub fee_sats: u64,
     pub invoice_details: Bolt11InvoiceDetails,
     pub success_action: Option<SuccessAction>,
+}
+
+#[frb(mirror(PrepareSendPaymentRequest))]
+pub struct _PrepareSendPaymentRequest {
+    pub payment_request: String,
+    pub amount_sats: Option<u64>,
+}
+
+#[frb(mirror(PrepareSendPaymentResponse))]
+pub struct _PrepareSendPaymentResponse {
+    pub payment_method: SendPaymentMethod,
+    pub amount_sats: u64,
 }
 
 #[frb(mirror(ReceivePaymentMethod))]
@@ -196,6 +215,59 @@ pub struct _RefundDepositRequest {
 pub struct _RefundDepositResponse {
     pub tx_id: String,
     pub tx_hex: String,
+}
+
+#[frb(mirror(SendOnchainFeeQuote))]
+pub struct _SendOnchainFeeQuote {
+    pub id: String,
+    pub expires_at: u64,
+    pub speed_fast: SendOnchainSpeedFeeQuote,
+    pub speed_medium: SendOnchainSpeedFeeQuote,
+    pub speed_slow: SendOnchainSpeedFeeQuote,
+}
+
+#[frb(mirror(SendOnchainSpeedFeeQuote))]
+pub struct _SendOnchainSpeedFeeQuote {
+    pub user_fee_sat: u64,
+    pub l1_broadcast_fee_sat: u64,
+}
+
+#[frb(mirror(SendPaymentMethod))]
+pub enum _SendPaymentMethod {
+    BitcoinAddress {
+        address: BitcoinAddressDetails,
+        fee_quote: SendOnchainFeeQuote,
+    },
+    Bolt11Invoice {
+        invoice_details: Bolt11InvoiceDetails,
+        spark_transfer_fee_sats: Option<u64>,
+        lightning_fee_sats: u64,
+    },
+    SparkAddress {
+        address: String,
+        fee_sats: u64,
+    },
+}
+
+#[frb(mirror(SendPaymentOptions))]
+pub enum _SendPaymentOptions {
+    BitcoinAddress {
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
+    Bolt11Invoice {
+        use_spark: bool,
+    },
+}
+
+#[frb(mirror(SendPaymentRequest))]
+pub struct _SendPaymentRequest {
+    pub prepare_response: PrepareSendPaymentResponse,
+    pub options: Option<SendPaymentOptions>,
+}
+
+#[frb(mirror(SendPaymentResponse))]
+pub struct _SendPaymentResponse {
+    pub payment: Payment,
 }
 
 #[frb(mirror(SuccessAction))]

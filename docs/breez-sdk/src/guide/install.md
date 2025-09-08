@@ -80,6 +80,17 @@ Check [breez/spark-sdk](https://github.com/breez/spark-sdk/releases) for the lat
 breez-sdk-spark = { git = "https://github.com/breez/spark-sdk", tag = "0.1.0" }
 ```
 
+## Flutter
+
+We recommend to add our official flutter package as a git dependency. 
+
+```yaml
+dependencies:
+  breez_sdk_spark_flutter:
+    git:
+      url: https://github.com/breez/breez-sdk-spark-flutter
+```
+
 ## Python
 
 We recommend using our official Python package: [breez-sdk-spark](https://pypi.org/project/breez-sdk-spark).

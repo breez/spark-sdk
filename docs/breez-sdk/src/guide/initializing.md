@@ -55,6 +55,14 @@ Once connected, you’re ready to start interacting with the SDK.
 
 </section>
 
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/getting_started.dart:init-sdk}}
+```
+</section>
+
 <div slot="title">Python</div>
 <section>
 
@@ -115,6 +123,14 @@ For advanced use cases where you need more control, you can configure the SDK us
 
 </section>
 
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/getting_started.dart:init-sdk-advanced}}
+```
+</section>
+
 <div slot="title">Python</div>
 <section>
 
@@ -168,6 +184,14 @@ This is particularly useful if you need to re-instantiate the SDK, such as when 
 {{#include ../../snippets/wasm/getting_started.ts:disconnect}}
 ```
 
+</section>
+
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/getting_started.dart:disconnect}}
+```
 </section>
 
 <div slot="title">Python</div>

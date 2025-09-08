@@ -6,8 +6,10 @@ use breez_sdk_spark::{
     GetInfoResponse, GetPaymentRequest, GetPaymentResponse, ListPaymentsRequest,
     ListPaymentsResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
     LnurlPayRequest, LnurlPayResponse, LogEntry, Logger, Network, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, ReceivePaymentRequest, ReceivePaymentResponse, RefundDepositRequest,
-    RefundDepositResponse, SdkError, SdkEvent, Storage, SyncWalletRequest, SyncWalletResponse,
+    PrepareLnurlPayResponse, PrepareSendPaymentRequest, PrepareSendPaymentResponse,
+    ReceivePaymentRequest, ReceivePaymentResponse, RefundDepositRequest, RefundDepositResponse,
+    SdkError, SdkEvent, SendPaymentRequest, SendPaymentResponse, Storage, SyncWalletRequest,
+    SyncWalletResponse,
 };
 use flutter_rust_bridge::frb;
 
@@ -87,6 +89,20 @@ impl BreezSdk {
 
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
         self.inner.lnurl_pay(request).await
+    }
+
+    pub async fn prepare_send_payment(
+        &self,
+        request: PrepareSendPaymentRequest,
+    ) -> Result<PrepareSendPaymentResponse, SdkError> {
+        self.inner.prepare_send_payment(request).await
+    }
+
+    pub async fn send_payment(
+        &self,
+        request: SendPaymentRequest,
+    ) -> Result<SendPaymentResponse, SdkError> {
+        self.inner.send_payment(request).await
     }
 
     #[frb(sync)]

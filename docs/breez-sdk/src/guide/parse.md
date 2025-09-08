@@ -42,6 +42,14 @@ The amounts returned from calling parse on Lightning based inputs (BOLT11, LNURL
 ```
 </section>
 
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/parsing_inputs.dart:parse-inputs}}
+```
+</section>
+
 <div slot="title">Python</div>
 <section>
 
