@@ -1,11 +1,13 @@
 mod error;
+mod select_helper;
 mod service;
-mod state;
+mod store;
 
 pub use error::TreeServiceError;
+pub use select_helper::{select_leaves_by_amounts, with_reserved_leaves};
 use serde::{Deserialize, Serialize};
-pub use service::TreeService;
-pub use state::TreeState;
+pub use service::SynchronousTreeService;
+pub use store::InMemoryTreeStore;
 use tracing::{error, trace};
 
 use std::str::FromStr;
@@ -169,6 +171,7 @@ pub struct SigningKeyshare {
 
 type LeavesReservationId = String;
 
+#[derive(Debug)]
 pub struct LeavesReservation {
     pub id: LeavesReservationId,
     pub leaves: Vec<TreeNode>,
@@ -223,4 +226,36 @@ impl TargetLeaves {
             fee_leaves,
         }
     }
+}
+
+#[macros::async_trait]
+pub trait TreeStore: Send + Sync {
+    async fn add_leaves(&self, leaves: &[TreeNode]);
+    async fn get_leaves(&self) -> Vec<TreeNode>;
+    async fn set_leaves(&self, leaves: &[TreeNode]);
+    async fn reserve_leaves(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+        exact_only: bool,
+    ) -> Result<LeavesReservation, TreeServiceError>;
+    async fn cancel_reservation(&self, id: &LeavesReservationId);
+    async fn finalize_reservation(&self, id: &LeavesReservationId);
+}
+
+#[macros::async_trait]
+pub trait TreeService: Send + Sync {
+    async fn get_available_balance(&self) -> Result<u64, TreeServiceError>;
+    async fn list_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError>;
+    async fn refresh_leaves(&self) -> Result<(), TreeServiceError>;
+    async fn insert_leaves(
+        &self,
+        leaves: Vec<TreeNode>,
+        optimize: bool,
+    ) -> Result<Vec<TreeNode>, TreeServiceError>;
+    async fn select_leaves(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeavesReservation, TreeServiceError>;
+    async fn cancel_reservation(&self, id: LeavesReservationId);
+    async fn finalize_reservation(&self, id: LeavesReservationId);
 }
