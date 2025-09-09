@@ -75,7 +75,7 @@ qrcode-rs = { version = "0.1", default-features = false }
 quote = "1.0.40"
 rand = "0.8"
 rayon = "1.10"
-reqwest = { version = "0.12.18", features = ["json"] }
+reqwest = { version = "0.12.18", default-features = false, features = ["json"] }
 rstest = "0.26.1"
 rusqlite = { version = "0.37.0", features = ["backup", "bundled"] }
 rusqlite_migration = { version = "2.3.0" }
