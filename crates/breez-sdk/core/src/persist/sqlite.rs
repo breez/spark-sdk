@@ -95,6 +95,22 @@ impl SqliteStorage {
               refund_tx_id TEXT NOT NULL,
               PRIMARY KEY (deposit_tx_id, deposit_vout)              
             );",
+            // Migration to change payments amount and fees from INTEGER to TEXT
+            "CREATE TABLE payments_new (
+              id TEXT PRIMARY KEY,
+              payment_type TEXT NOT NULL,
+              status TEXT NOT NULL,
+              amount TEXT NOT NULL,
+              fees TEXT NOT NULL,
+              timestamp INTEGER NOT NULL,
+              details TEXT,
+              method TEXT
+            );",
+            "INSERT INTO payments_new (id, payment_type, status, amount, fees, timestamp, details, method)
+             SELECT id, payment_type, status, CAST(amount AS TEXT), CAST(fees AS TEXT), timestamp, details, method
+             FROM payments;",
+            "DROP TABLE payments;",
+            "ALTER TABLE payments_new RENAME TO payments;",
         ]
     }
 }
@@ -142,8 +158,8 @@ impl Storage for SqliteStorage {
                 id: row.get(0)?,
                 payment_type: PaymentType::from(row.get::<_, String>(1)?.as_str()),
                 status: PaymentStatus::from(row.get::<_, String>(2)?.as_str()),
-                amount: row.get(3)?,
-                fees: row.get(4)?,
+                amount: row.get::<_, U128SqlWrapper>(3)?.0,
+                fees: row.get::<_, U128SqlWrapper>(4)?.0,
                 timestamp: row.get(5)?,
                 details,
                 method: row.get(7)?,
@@ -168,8 +184,8 @@ impl Storage for SqliteStorage {
                 payment.id,
                 payment.payment_type.to_string(),
                 payment.status.to_string(),
-                payment.amount,
-                payment.fees,
+                U128SqlWrapper(payment.amount),
+                U128SqlWrapper(payment.fees),
                 payment.timestamp,
                 payment.details,
                 payment.method,
@@ -239,8 +255,8 @@ impl Storage for SqliteStorage {
                 id: row.get(0)?,
                 payment_type: PaymentType::from(row.get::<_, String>(1)?.as_str()),
                 status: PaymentStatus::from(row.get::<_, String>(2)?.as_str()),
-                amount: row.get(3)?,
-                fees: row.get(4)?,
+                amount: row.get::<_, U128SqlWrapper>(3)?.0,
+                fees: row.get::<_, U128SqlWrapper>(4)?.0,
                 timestamp: row.get(5)?,
                 details,
                 method: row.get(7)?,
@@ -404,6 +420,28 @@ impl FromSql for LnurlPayInfo {
                 let lnurl_pay_info: LnurlPayInfo =
                     serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
                 Ok(lnurl_pay_info)
+            }
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
+
+struct U128SqlWrapper(u128);
+
+impl ToSql for U128SqlWrapper {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        let string = self.0.to_string();
+        Ok(rusqlite::types::ToSqlOutput::from(string))
+    }
+}
+
+impl FromSql for U128SqlWrapper {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value {
+            ValueRef::Text(i) => {
+                let s = std::str::from_utf8(i).map_err(FromSqlError::other)?;
+                let integer = s.parse::<u128>().map_err(|_| FromSqlError::InvalidType)?;
+                Ok(U128SqlWrapper(integer))
             }
             _ => Err(FromSqlError::InvalidType),
         }

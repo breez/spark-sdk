@@ -145,6 +145,34 @@ class MigrationManager {
           `CREATE INDEX IF NOT EXISTS idx_payment_metadata_payment_id ON payment_metadata(payment_id)`,
         ],
       },
+      {
+        name: "Change payments amount and fees from INTEGER to TEXT",
+        sql: [
+          `
+          CREATE TABLE IF NOT EXISTS deposit_refunds (
+                        deposit_tx_id TEXT NOT NULL,
+                        deposit_vout INTEGER NOT NULL,
+                        refund_tx TEXT NOT NULL,
+                        refund_tx_id TEXT NOT NULL,
+                        PRIMARY KEY (deposit_tx_id, deposit_vout)
+                    )`,
+          `CREATE TABLE payments_new (
+                        id TEXT PRIMARY KEY,
+                        payment_type TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        amount TEXT NOT NULL,
+                        fees TEXT NOT NULL,
+                        timestamp INTEGER NOT NULL,
+                        details TEXT,
+                        method TEXT
+                    )`,
+          `INSERT INTO payments_new (id, payment_type, status, amount, fees, timestamp, details, method)
+           SELECT id, payment_type, status, CAST(amount AS TEXT), CAST(fees AS TEXT), timestamp, details, method
+           FROM payments`,
+          `DROP TABLE payments`,
+          `ALTER TABLE payments_new RENAME TO payments`,
+        ],
+      },
     ];
   }
 }

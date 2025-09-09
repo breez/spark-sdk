@@ -114,9 +114,9 @@ pub struct Payment {
     /// Status of the payment
     pub status: PaymentStatus,
     /// Amount in satoshis
-    pub amount: u64,
+    pub amount: u128,
     /// Fee paid in satoshis
-    pub fees: u64,
+    pub fees: u128,
     /// Timestamp of when the payment was created
     pub timestamp: u64,
     /// Method of payment. Sometimes the payment details is empty so this field
@@ -124,6 +124,26 @@ pub struct Payment {
     pub method: PaymentMethod,
     /// Details of the payment
     pub details: Option<PaymentDetails>,
+}
+
+#[cfg(feature = "uniffi")]
+uniffi::custom_type!(u128, String);
+
+#[cfg(feature = "uniffi")]
+impl crate::UniffiCustomTypeConverter for u128 {
+    type Builtin = String;
+
+    fn into_custom(val: Self::Builtin) -> ::uniffi::Result<Self>
+    where
+        Self: ::std::marker::Sized,
+    {
+        val.parse::<u128>()
+            .map_err(uniffi::deps::anyhow::Error::msg)
+    }
+
+    fn from_custom(obj: Self) -> Self::Builtin {
+        obj.to_string()
+    }
 }
 
 // TODO: fix large enum variant lint - may be done by boxing lnurl_pay_info but that requires
@@ -275,8 +295,8 @@ impl TryFrom<WalletTransfer> for Payment {
             id: transfer.id.to_string(),
             payment_type,
             status,
-            amount: amount_sat,
-            fees: fees_sat,
+            amount: amount_sat.into(),
+            fees: fees_sat.into(),
             timestamp: match transfer.created_at.map(|t| t.duration_since(UNIX_EPOCH)) {
                 Some(Ok(duration)) => duration.as_secs(),
                 _ => 0,
@@ -334,8 +354,8 @@ impl Payment {
             id: payment.id,
             payment_type: PaymentType::Send,
             status,
-            amount: amount_sat,
-            fees: payment.fee_sat,
+            amount: amount_sat.into(),
+            fees: payment.fee_sat.into(),
             timestamp: payment.created_at.cast_unsigned(),
             method: PaymentMethod::Lightning,
             details: Some(details),
@@ -501,14 +521,14 @@ pub struct GetInfoResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct TokenBalance {
-    pub balance: u64,
+    pub balance: u128,
     pub token_metadata: TokenMetadata,
 }
 
 impl From<spark_wallet::TokenBalance> for TokenBalance {
     fn from(value: spark_wallet::TokenBalance) -> Self {
         Self {
-            balance: value.balance.try_into().unwrap_or_default(), // balance will be changed to u128 or similar
+            balance: value.balance,
             token_metadata: value.token_metadata.into(),
         }
     }
@@ -524,7 +544,7 @@ pub struct TokenMetadata {
     pub ticker: String,
     /// Number of decimals the token uses
     pub decimals: u32,
-    pub max_supply: u64,
+    pub max_supply: u128,
     pub is_freezable: bool,
     pub creation_entity_public_key: Option<String>,
 }
@@ -537,7 +557,7 @@ impl From<spark_wallet::TokenMetadata> for TokenMetadata {
             name: value.name,
             ticker: value.ticker,
             decimals: value.decimals,
-            max_supply: value.max_supply.try_into().unwrap_or_default(), // max_supply will be changed to u128 or similar
+            max_supply: value.max_supply,
             is_freezable: value.is_freezable,
             creation_entity_public_key: value
                 .creation_entity_public_key
@@ -583,7 +603,7 @@ pub enum SendPaymentMethod {
         address: String,
         /// Fee to pay for the transaction
         /// Denominated in sats if token identifier is empty, otherwise in the token base units
-        fee: u64,
+        fee: u128,
         /// The presence of this field indicates that the payment is for a token
         /// If empty, it is a Bitcoin payment
         token_identifier: Option<String>,
@@ -745,7 +765,7 @@ pub struct PrepareSendPaymentRequest {
     /// Amount to send. By default is denominated in sats.
     /// If a token identifier is provided, the amount will be denominated in the token base units.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub amount: Option<u64>,
+    pub amount: Option<u128>,
     /// If provided, the payment will be for a token
     /// May only be provided if the payment request is a spark address
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
@@ -758,7 +778,7 @@ pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     /// Amount to send. By default is denominated in sats.
     /// If a token identifier is provided, the amount will be denominated in the token base units.
-    pub amount: u64,
+    pub amount: u128,
     /// The presence of this field indicates that the payment is for a token
     /// If empty, it is a Bitcoin payment
     pub token_identifier: Option<String>,

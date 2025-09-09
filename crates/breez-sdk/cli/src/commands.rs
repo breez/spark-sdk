@@ -61,7 +61,7 @@ pub enum Command {
         /// Optional amount to pay. By default is denominated in sats.
         /// If a token identifier is provided, the amount will be denominated in the token base units.
         #[arg(short = 'a', long)]
-        amount: Option<u64>,
+        amount: Option<u128>,
 
         /// Optional token identifier. May only be provided if the payment request is a spark address.
         #[arg(short = 't', long)]
@@ -277,12 +277,11 @@ pub(crate) async fn execute_command(
             let payment_options =
                 read_payment_options(prepare_response.payment_method.clone(), rl)?;
 
-            let send_payment_response = sdk
-                .send_payment(SendPaymentRequest {
-                    prepare_response,
-                    options: payment_options,
-                })
-                .await?;
+            let send_payment_response = Box::pin(sdk.send_payment(SendPaymentRequest {
+                prepare_response,
+                options: payment_options,
+            }))
+            .await?;
 
             print_value(&send_payment_response)?;
             Ok(true)

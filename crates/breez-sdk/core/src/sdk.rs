@@ -603,13 +603,7 @@ impl BreezSdk {
             for (owner_pubkey, outputs) in outputs_by_owner {
                 if owner_pubkey != self.spark_wallet.get_identity_public_key() {
                     // This is an outgoing payment to another user
-                    let total_amount = outputs
-                        .iter()
-                        .map(|output| {
-                            let amount: u64 = output.token_amount.try_into().unwrap_or_default();
-                            amount
-                        })
-                        .sum();
+                    let total_amount = outputs.iter().map(|output| output.token_amount).sum();
 
                     let id = outputs
                         .first()
@@ -642,13 +636,7 @@ impl BreezSdk {
             if let Some(our_outputs) =
                 outputs_by_owner.get(&self.spark_wallet.get_identity_public_key())
             {
-                let total_amount: u64 = our_outputs
-                    .iter()
-                    .map(|output| {
-                        let amount: u64 = output.token_amount.try_into().unwrap_or_default();
-                        amount
-                    })
-                    .sum();
+                let total_amount = our_outputs.iter().map(|output| output.token_amount).sum();
 
                 let id = our_outputs
                     .first()
@@ -951,7 +939,7 @@ impl BreezSdk {
         let prepare_response = self
             .prepare_send_payment(PrepareSendPaymentRequest {
                 payment_request: success_data.pr,
-                amount: Some(request.amount_sats),
+                amount: Some(request.amount_sats.into()),
                 token_identifier: None,
             })
             .await?;
@@ -987,7 +975,7 @@ impl BreezSdk {
                             spark_transfer_fee_sats: None,
                             lightning_fee_sats: request.prepare_response.fee_sats,
                         },
-                        amount: request.prepare_response.amount_sats,
+                        amount: request.prepare_response.amount_sats.into(),
                         token_identifier: None,
                     },
                     options: None,
@@ -1055,7 +1043,7 @@ impl BreezSdk {
                                 "Amount can't be provided for this payment request: spark invoice defines amount".to_string(),
                             ));
                         }
-                        sats_payment_details.amount
+                        sats_payment_details.amount.map(Into::into)
                     }
                     spark_wallet::SparkAddressPaymentType::TokensPayment(
                         tokens_payment_details,
@@ -1115,7 +1103,12 @@ impl BreezSdk {
 
                 let lightning_fee_sats = self
                     .spark_wallet
-                    .fetch_lightning_send_fee_estimate(&request.payment_request, amount_sats)
+                    .fetch_lightning_send_fee_estimate(
+                        &request.payment_request,
+                        amount_sats
+                            .map(|a| Ok::<u64, SdkError>(a.try_into()?))
+                            .transpose()?,
+                    )
                     .await?;
 
                 Ok(PrepareSendPaymentResponse {
@@ -1125,7 +1118,9 @@ impl BreezSdk {
                         lightning_fee_sats,
                     },
                     amount: amount_sats
-                        .or(detailed_bolt11_invoice.amount_msat.map(|msat| msat / 1000))
+                        .or(detailed_bolt11_invoice
+                            .amount_msat
+                            .map(|msat| u128::from(msat) / 1000))
                         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
                     token_identifier: None,
                 })
@@ -1137,7 +1132,8 @@ impl BreezSdk {
                         &withdrawal_address.address,
                         Some(
                             amount_sats
-                                .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                                .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?
+                                .try_into()?,
                         ),
                     )
                     .await?;
@@ -1183,14 +1179,14 @@ impl BreezSdk {
                 let payment = if let Some(identifier) = token_identifier {
                     self.send_spark_token_payment(
                         identifier,
-                        request.prepare_response.amount.into(),
+                        request.prepare_response.amount,
                         spark_address,
                     )
                     .await?
                 } else {
                     let transfer = self
                         .spark_wallet
-                        .transfer(request.prepare_response.amount, &spark_address)
+                        .transfer(request.prepare_response.amount.try_into()?, &spark_address)
                         .await?;
                     transfer.try_into()?
                 };
@@ -1227,7 +1223,9 @@ impl BreezSdk {
                     .spark_wallet
                     .pay_lightning_invoice(
                         &invoice_details.invoice.bolt11,
-                        amount_to_send,
+                        amount_to_send
+                            .map(|a| Ok::<u64, SdkError>(a.try_into()?))
+                            .transpose()?,
                         Some(fee_sats),
                         use_spark,
                     )
@@ -1235,7 +1233,10 @@ impl BreezSdk {
                 let payment = match payment_response {
                     PayLightningInvoiceResult::LightningPayment(payment) => {
                         self.poll_lightning_send_payment(&payment.id);
-                        Payment::from_lightning(payment, request.prepare_response.amount)?
+                        Payment::from_lightning(
+                            payment,
+                            request.prepare_response.amount.try_into()?,
+                        )?
                     }
                     PayLightningInvoiceResult::Transfer(payment) => payment.try_into()?,
                 };
@@ -1255,7 +1256,7 @@ impl BreezSdk {
                     .spark_wallet
                     .withdraw(
                         &address.address,
-                        Some(request.prepare_response.amount),
+                        Some(request.prepare_response.amount.try_into()?),
                         exit_speed,
                         fee_quote.into(),
                     )

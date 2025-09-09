@@ -82,7 +82,7 @@ pub struct _GetInfoResponse {
 
 #[frb(mirror(TokenBalance))]
 pub struct _TokenBalance {
-    pub balance: u64,
+    pub balance: u128,
     pub token_metadata: TokenMetadata,
 }
 
@@ -93,7 +93,7 @@ pub struct _TokenMetadata {
     pub name: String,
     pub ticker: String,
     pub decimals: u32,
-    pub max_supply: u64,
+    pub max_supply: u128,
     pub is_freezable: bool,
     pub creation_entity_public_key: Option<String>,
 }
@@ -193,14 +193,14 @@ pub struct _PrepareLnurlPayResponse {
 #[frb(mirror(PrepareSendPaymentRequest))]
 pub struct _PrepareSendPaymentRequest {
     pub payment_request: String,
-    pub amount: Option<u64>,
+    pub amount: Option<u128>,
     pub token_identifier: Option<String>,
 }
 
 #[frb(mirror(PrepareSendPaymentResponse))]
 pub struct _PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    pub amount: u64,
+    pub amount: u128,
     pub token_identifier: Option<String>,
 }
 
@@ -267,7 +267,7 @@ pub enum _SendPaymentMethod {
     },
     SparkAddress {
         address: String,
-        fee: u64,
+        fee: u128,
         token_identifier: Option<String>,
     },
 }
@@ -355,8 +355,8 @@ pub struct _Payment {
     pub id: String,
     pub payment_type: PaymentType,
     pub status: PaymentStatus,
-    pub amount: u64,
-    pub fees: u64,
+    pub amount: u128,
+    pub fees: u128,
     pub timestamp: u64,
     pub method: PaymentMethod,
     pub details: Option<PaymentDetails>,
@@ -569,7 +569,7 @@ pub enum _SparkAddressPaymentType {
 #[frb(mirror(TokensPaymentDetails))]
 pub struct _TokensPaymentDetails {
     pub token_identifier: Option<String>,
-    pub amount: Option<u64>,
+    pub amount: Option<u128>,
 }
 
 #[frb(mirror(SatsPaymentDetails))]

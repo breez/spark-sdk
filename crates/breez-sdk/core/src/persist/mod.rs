@@ -300,7 +300,7 @@ pub mod tests {
             id: "pmt123".to_string(),
             payment_type: PaymentType::Send,
             status: PaymentStatus::Completed,
-            amount: 100_000,
+            amount: u128::from(u64::MAX).checked_add(100_000).unwrap(),
             fees: 1000,
             timestamp: Utc::now().timestamp().try_into().unwrap(),
             method: PaymentMethod::Spark,
