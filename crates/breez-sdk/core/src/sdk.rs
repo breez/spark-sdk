@@ -1154,6 +1154,11 @@ impl BreezSdk {
                                 "Token identifier can't be provided for this payment request: spark sats payment".to_string(),
                             ));
                         }
+                        if sats_payment_details.amount.is_some() && request.amount.is_some() {
+                            return Err(SdkError::InvalidInput(
+                                "Amount can't be provided for this payment request: spark invoice defines amount".to_string(),
+                            ));
+                        }
                         sats_payment_details.amount
                     }
                     spark_wallet::SparkAddressPaymentType::TokensPayment(
@@ -1162,6 +1167,11 @@ impl BreezSdk {
                         if request.token_identifier.is_none() {
                             return Err(SdkError::InvalidInput(
                                 "Token identifier is required for this payment request: spark tokens payment".to_string(),
+                            ));
+                        }
+                        if tokens_payment_details.amount.is_some() && request.amount.is_some() {
+                            return Err(SdkError::InvalidInput(
+                                "Amount can't be provided for this payment request: spark invoice defines amount".to_string(),
                             ));
                         }
                         tokens_payment_details.amount
