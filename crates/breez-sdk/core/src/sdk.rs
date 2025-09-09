@@ -1050,6 +1050,11 @@ impl BreezSdk {
                                 "Token identifier can't be provided for this payment request: spark sats payment".to_string(),
                             ));
                         }
+                        if sats_payment_details.amount.is_some() && request.amount.is_some() {
+                            return Err(SdkError::InvalidInput(
+                                "Amount can't be provided for this payment request: spark invoice defines amount".to_string(),
+                            ));
+                        }
                         sats_payment_details.amount
                     }
                     spark_wallet::SparkAddressPaymentType::TokensPayment(
@@ -1058,6 +1063,11 @@ impl BreezSdk {
                         if request.token_identifier.is_none() {
                             return Err(SdkError::InvalidInput(
                                 "Token identifier is required for this payment request: spark tokens payment".to_string(),
+                            ));
+                        }
+                        if tokens_payment_details.amount.is_some() && request.amount.is_some() {
+                            return Err(SdkError::InvalidInput(
+                                "Amount can't be provided for this payment request: spark invoice defines amount".to_string(),
                             ));
                         }
                         tokens_payment_details.amount
@@ -1171,34 +1181,12 @@ impl BreezSdk {
                     .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
 
                 let payment = if let Some(identifier) = token_identifier {
-                    let tx_hash = self
-                        .spark_wallet
-                        .transfer_tokens(vec![TransferTokenOutput {
-                            token_id: identifier,
-                            amount: u128::from(request.prepare_response.amount),
-                            receiver_address: spark_address,
-                        }])
-                        .await?;
-                    let tx = self
-                        .spark_wallet
-                        .list_token_transactions(ListTokenTransactionsRequest {
-                            token_transaction_hashes: vec![tx_hash],
-                            paging: None,
-                            ..Default::default()
-                        })
-                        .await?
-                        .first()
-                        .ok_or(SdkError::Generic(
-                            "Token transaction not found after being started".to_string(),
-                        ))?
-                        .clone();
-                    self.token_transaction_to_payments(&tx, true)
-                        .await?
-                        .first()
-                        .ok_or(SdkError::Generic(
-                            "No payment found in started token transaction".to_string(),
-                        ))?
-                        .clone()
+                    self.send_spark_token_payment(
+                        identifier,
+                        request.prepare_response.amount.into(),
+                        spark_address,
+                    )
+                    .await?
                 } else {
                     let transfer = self
                         .spark_wallet
@@ -1462,6 +1450,45 @@ impl BreezSdk {
     ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
         let deposits = self.storage.list_deposits().await?;
         Ok(ListUnclaimedDepositsResponse { deposits })
+    }
+}
+
+impl BreezSdk {
+    async fn send_spark_token_payment(
+        &self,
+        token_identifier: String,
+        amount: u128,
+        receiver_address: SparkAddress,
+    ) -> Result<Payment, SdkError> {
+        let tx_hash = self
+            .spark_wallet
+            .transfer_tokens(vec![TransferTokenOutput {
+                token_id: token_identifier,
+                amount,
+                receiver_address,
+            }])
+            .await?;
+        let tx = self
+            .spark_wallet
+            .list_token_transactions(ListTokenTransactionsRequest {
+                token_transaction_hashes: vec![tx_hash],
+                paging: None,
+                ..Default::default()
+            })
+            .await?
+            .first()
+            .ok_or(SdkError::Generic(
+                "Token transaction not found after being started".to_string(),
+            ))?
+            .clone();
+        Ok(self
+            .token_transaction_to_payments(&tx, true)
+            .await?
+            .first()
+            .ok_or(SdkError::Generic(
+                "No payment found in started token transaction".to_string(),
+            ))?
+            .clone())
     }
 }
 
