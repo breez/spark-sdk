@@ -1,7 +1,7 @@
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub(crate) mod sqlite;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::SystemTime};
 
 use macros::async_trait;
 use serde::{Deserialize, Serialize};
@@ -273,7 +273,7 @@ pub(crate) struct CachedAccountInfo {
 pub(crate) struct CachedSyncInfo {
     pub(crate) offset: u64,
     #[serde(default)]
-    pub(crate) token_offset: u64,
+    pub(crate) last_synced_token_timestamp: Option<SystemTime>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
