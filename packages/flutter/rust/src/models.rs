@@ -4,6 +4,7 @@ pub use breez_sdk_common::lnurl::pay::*;
 pub use breez_sdk_common::network::BitcoinNetwork;
 pub use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
+use std::collections::HashMap;
 
 #[frb(mirror(BitcoinAddressDetails))]
 pub struct _BitcoinAddressDetails {
@@ -76,6 +77,25 @@ pub struct _GetInfoRequest {}
 #[frb(mirror(GetInfoResponse))]
 pub struct _GetInfoResponse {
     pub balance_sats: u64,
+    pub token_balances: HashMap<String, TokenBalance>,
+}
+
+#[frb(mirror(TokenBalance))]
+pub struct _TokenBalance {
+    pub balance: u64,
+    pub token_metadata: TokenMetadata,
+}
+
+#[frb(mirror(TokenMetadata))]
+pub struct _TokenMetadata {
+    pub identifier: String,
+    pub issuer_public_key: String,
+    pub name: String,
+    pub ticker: String,
+    pub decimals: u32,
+    pub max_supply: u64,
+    pub is_freezable: bool,
+    pub creation_entity_public_key: Option<String>,
 }
 
 #[frb(mirror(GetPaymentRequest))]
@@ -173,13 +193,15 @@ pub struct _PrepareLnurlPayResponse {
 #[frb(mirror(PrepareSendPaymentRequest))]
 pub struct _PrepareSendPaymentRequest {
     pub payment_request: String,
-    pub amount_sats: Option<u64>,
+    pub amount: Option<u64>,
+    pub token_identifier: Option<String>,
 }
 
 #[frb(mirror(PrepareSendPaymentResponse))]
 pub struct _PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    pub amount_sats: u64,
+    pub amount: u64,
+    pub token_identifier: Option<String>,
 }
 
 #[frb(mirror(ReceivePaymentMethod))]
@@ -245,7 +267,8 @@ pub enum _SendPaymentMethod {
     },
     SparkAddress {
         address: String,
-        fee_sats: u64,
+        fee: u64,
+        token_identifier: Option<String>,
     },
 }
 
@@ -342,6 +365,9 @@ pub struct _Payment {
 #[frb(mirror(PaymentDetails))]
 pub enum _PaymentDetails {
     Spark,
+    Token {
+        metadata: TokenMetadata,
+    },
     Lightning {
         description: Option<String>,
         preimage: Option<String>,
@@ -367,6 +393,7 @@ pub struct _PaymentMetadata {
 pub enum _PaymentMethod {
     Lightning,
     Spark,
+    Token,
     Deposit,
     Withdraw,
     Unknown,
