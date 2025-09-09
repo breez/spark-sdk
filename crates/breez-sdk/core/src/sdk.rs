@@ -454,7 +454,7 @@ impl BreezSdk {
             let save_res = object_repository
                 .save_sync_info(&CachedSyncInfo {
                     offset: cache_offset.saturating_sub(pending_payments),
-                    token_offset: cached_sync_info.token_offset,
+                    last_synced_token_timestamp: cached_sync_info.last_synced_token_timestamp,
                 })
                 .await;
 
@@ -478,14 +478,18 @@ impl BreezSdk {
             .fetch_sync_info()
             .await?
             .unwrap_or_default();
-        let current_token_offset = cached_sync_info.token_offset;
+        let last_synced_token_timestamp = cached_sync_info.last_synced_token_timestamp;
 
         let our_public_key = self.spark_wallet.get_identity_public_key();
 
+        let mut latest_token_transaction_timestamp = None;
+
         // We'll keep querying in batches until we have all transfers
-        let mut next_offset = current_token_offset;
+        let mut next_offset = 0;
         let mut has_more = true;
-        info!("Syncing token payments to storage, offset = {next_offset}");
+        info!(
+            "Syncing token payments to storage, last synced token timestamp = {last_synced_token_timestamp:?}"
+        );
         while has_more {
             // Get batch of token transactions starting from current offset
             let token_transactions = self
@@ -494,12 +498,24 @@ impl BreezSdk {
                     paging: Some(PagingFilter::new(
                         Some(next_offset),
                         Some(PAYMENT_SYNC_BATCH_SIZE),
-                        Some(Order::Ascending),
+                        None,
                     )),
                     ..Default::default()
                 })
                 .await?
                 .items;
+
+            // On first iteration, set the latest token transaction timestamp to the first transaction timestamp
+            if next_offset == 0 {
+                latest_token_transaction_timestamp =
+                    token_transactions.first().map(|tx| tx.created_timestamp);
+            }
+
+            // On first iteration, set the latest token transaction timestamp to the first transaction timestamp
+            if next_offset == 0 {
+                latest_token_transaction_timestamp =
+                    token_transactions.first().map(|tx| tx.created_timestamp);
+            }
 
             // Get prev out hashes of first input of each token transaction
             // Assumes all inputs of a tx share the same owner public key
@@ -535,6 +551,13 @@ impl BreezSdk {
             );
             // Process transfers in this batch
             for transaction in &token_transactions {
+                // Stop syncing if we have reached the last synced token transaction timestamp
+                if let Some(last_synced_token_timestamp) = last_synced_token_timestamp
+                    && transaction.created_timestamp <= last_synced_token_timestamp
+                {
+                    break;
+                }
+
                 let tx_inputs_are_ours = match &transaction.inputs {
                     spark_wallet::TokenInputs::Transfer(token_transfer_input) => {
                         let Some(first_input) = token_transfer_input.outputs_to_spend.first()
@@ -580,18 +603,21 @@ impl BreezSdk {
 
             // Check if we have more transfers to fetch
             next_offset = next_offset.saturating_add(u64::try_from(token_transactions.len())?);
-            // Update our last processed offset in the storage
+            has_more = token_transactions.len() as u64 == PAYMENT_SYNC_BATCH_SIZE;
+        }
+
+        // Update our last processed transaction timestamp in the storage
+        if let Some(latest_token_transaction_timestamp) = latest_token_transaction_timestamp {
             let save_res = object_repository
                 .save_sync_info(&CachedSyncInfo {
                     offset: cached_sync_info.offset,
-                    token_offset: next_offset,
+                    last_synced_token_timestamp: Some(latest_token_transaction_timestamp),
                 })
                 .await;
 
             if let Err(err) = save_res {
-                error!("Failed to update last sync token offset: {err:?}");
+                error!("Failed to update last sync token timestamp: {err:?}");
             }
-            has_more = token_transactions.len() as u64 == PAYMENT_SYNC_BATCH_SIZE;
         }
 
         Ok(())
