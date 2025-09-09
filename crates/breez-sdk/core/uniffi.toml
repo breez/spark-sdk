@@ -24,3 +24,8 @@ type_name = "BigUInt"
 imports = [ "BigInt" ]
 into_custom = "BigUInt(stringLiteral: {})"
 from_custom = "{}.description"
+
+[bindings.python.custom_types.U128]
+type_name = "int"
+into_custom = "int({})"
+from_custom = "str({})"
