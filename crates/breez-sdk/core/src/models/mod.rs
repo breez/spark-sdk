@@ -433,7 +433,7 @@ pub enum SendPaymentMethod {
         address: String,
         /// Fee to pay for the transaction
         /// Denominated in sats if token identifier is empty, otherwise in the token base units
-        fee: u64,
+        fee: u128,
         /// The presence of this field indicates that the payment is for a token
         /// If empty, it is a Bitcoin payment
         token_identifier: Option<String>,

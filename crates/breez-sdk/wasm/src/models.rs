@@ -589,7 +589,7 @@ pub enum SendPaymentMethod {
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
-        fee: u64,
+        fee: u128,
         token_identifier: Option<String>,
     },
 }
