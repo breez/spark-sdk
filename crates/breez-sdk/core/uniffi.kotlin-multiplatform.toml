@@ -5,3 +5,9 @@ kotlin_multiplatform = true
 kotlin_targets = ["jvm", "android", "native"]
 kotlin_target_version = "1.9.21"
 disable_java_cleaner = true
+
+[custom_types.u128]
+type_name = "BigInteger"
+imports = [ "com.ionspin.kotlin.bignum.integer.BigInteger" ]
+into_custom = "BigInteger.parseString({}, 10)"
+from_custom = "{}.toString(10)"

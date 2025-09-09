@@ -6,6 +6,13 @@ kotlin_targets = ["jvm"]
 kotlin_target_version = "1.9.21"
 disable_java_cleaner = true
 
+# Kotlin custom types
+[custom_types.u128]
+type_name = "BigInteger"
+imports = [ "java.math.BigInteger" ]
+into_custom = "BigInteger({})"
+from_custom = "{}.toString()"
+
 # https://mozilla.github.io/uniffi-rs/swift/configuration.html
 [bindings.swift]
 ffi_module_name = "breez_sdk_sparkFFI"
