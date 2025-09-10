@@ -4,10 +4,15 @@ edition = "2024"
 version.workspace = true
 
 [features]
+default = ["default-tls"]
 browser-tests = [] # Enable browser wasm-pack tests
 # flutter = ["dep:flutter_rust_bridge"]
 test-utils = []
 uniffi = ["dep:uniffi"]
+# TLS features
+default-tls = ["reqwest/default-tls"]
+rustls-tls = ["reqwest/rustls-tls"]
+native-tls = ["reqwest/native-tls"]
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
