@@ -25,5 +25,5 @@ access_modifier = "public"
 
 # https://github.com/NordSecurity/uniffi-bindgen-go/blob/main/docs/CONFIGURATION.md
 [bindings.go]
-package_name = "breez_sdk_spark"
+go_mod = "github.com/breez/breez-sdk-spark-go"
 cdylib_name = "breez_sdk_spark_bindings"

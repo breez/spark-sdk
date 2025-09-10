@@ -22,6 +22,9 @@ bindings-kotlin: build-release install-uniffi-bindgen-gobley
 		--crate-configs breez_sdk_common=../common/uniffi.toml \
 		$(BIN_PATH)
 
+bindings-golang: build-release install-uniffi-bindgen-golang
+	uniffi-bindgen-go --library $(BIN_PATH) -o $(FFI_DIR)golang -c ./uniffi.toml
+
 bindings-python: build-release
 	cargo run --features=uniffi/cli --bin uniffi-bindgen generate --library $(BIN_PATH) --no-format --language python -o $(FFI_DIR)python
 
@@ -36,6 +39,9 @@ build-release-target-%: install-target-%
 
 install-uniffi-bindgen-gobley:
 	$(INSTALL_PREFIX) cargo install gobley-uniffi-bindgen --git https://github.com/breez/gobley --rev f920c275e4f60e22080a6cd280d9562d64eb6ac9
+
+install-uniffi-bindgen-golang:
+	$(INSTALL_PREFIX) cargo install uniffi-bindgen-go --git https://github.com/breez/uniffi-bindgen-go --rev 8b8c58f78b2dc16a252f325da91ce409f409fe3c
 
 install-target-%:
 	$(CLANG_PREFIX) rustup target add $*
