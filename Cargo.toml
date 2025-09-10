@@ -37,7 +37,7 @@ base64 = "0.22.1"
 bech32 = "0.11.0"
 bip39 = "2.2.0"
 bitcoin = { version = "0.32.6", features = ["serde"] }
-breez-sdk-common = { path = "crates/breez-sdk/common" }
+breez-sdk-common = { path = "crates/breez-sdk/common", default-features = false }
 breez-sdk-spark = { path = "crates/breez-sdk/core" }
 bytes = "1.10.1"
 cargo_metadata = "0.18"
@@ -75,7 +75,7 @@ qrcode-rs = { version = "0.1", default-features = false }
 quote = "1.0.40"
 rand = "0.8"
 rayon = "1.10"
-reqwest = { version = "0.12.18", default-features = false, features = ["json"] }
+reqwest = { version = "0.12.23", default-features = false, features = ["json", "http2", "charset", "system-proxy"] }
 rstest = "0.26.1"
 rusqlite = { version = "0.37.0", features = ["backup", "bundled"] }
 rusqlite_migration = { version = "2.3.0" }
