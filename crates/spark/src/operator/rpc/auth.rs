@@ -2,36 +2,21 @@ use std::sync::Arc;
 
 use super::OperatorRpcError;
 use super::error::Result;
-use super::spark::spark_service_client::SparkServiceClient;
 use super::spark_authn::{
     GetChallengeRequest, VerifyChallengeRequest,
     spark_authn_service_client::SparkAuthnServiceClient,
 };
-use crate::operator::rpc::spark_token::spark_token_service_client::SparkTokenServiceClient;
+use crate::operator::OperatorSession;
 use crate::operator::rpc::transport::grpc_client::Transport;
 use crate::signer::Signer;
 use prost::Message;
-use tokio::sync::Mutex;
-use tokio_with_wasm::alias as tokio;
 use tonic::Request;
-use tonic::Status;
-use tonic::metadata::Ascii;
-use tonic::metadata::MetadataValue;
-use tonic::service::Interceptor;
-use tonic::service::interceptor::InterceptedService;
 use web_time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug)]
 pub struct OperatorAuth<S> {
     transport: Transport,
     signer: Arc<S>,
-    session: Arc<Mutex<Option<OperationSession>>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct OperationSession {
-    token: MetadataValue<Ascii>,
-    expiration: u64,
 }
 
 impl<S> OperatorAuth<S>
@@ -39,54 +24,31 @@ where
     S: Signer,
 {
     pub fn new(transport: Transport, signer: Arc<S>) -> Self {
-        Self {
-            transport,
-            signer,
-            session: Arc::new(Mutex::new(None)),
-        }
+        Self { transport, signer }
     }
 
-    pub async fn spark_service_client(
+    pub async fn get_authenticated_session(
         &self,
-    ) -> Result<SparkServiceClient<InterceptedService<Transport, OperationSession>>> {
-        let session = self.get_authenticated_session().await?;
-        Ok(SparkServiceClient::with_interceptor(
-            self.transport.clone(),
-            session,
-        ))
-    }
-
-    pub async fn spark_token_service_client(
-        &self,
-    ) -> Result<SparkTokenServiceClient<InterceptedService<Transport, OperationSession>>> {
-        let session = self.get_authenticated_session().await?;
-        Ok(SparkTokenServiceClient::with_interceptor(
-            self.transport.clone(),
-            session,
-        ))
-    }
-
-    pub async fn get_authenticated_session(&self) -> Result<OperationSession> {
-        if let Some(session) = self.session.lock().await.as_ref() {
-            // Check if the session is still valid
-            if session.expiration
+        session: Option<OperatorSession>,
+    ) -> Result<OperatorSession> {
+        // Check if the session is still valid
+        if let Some(session) = session
+            && session.expiration
                 > SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map_err(|_| {
                         OperatorRpcError::Unexpected("UNIX_EPOCH is in the future".to_string())
                     })?
                     .as_secs()
-            {
-                return Ok(session.clone());
-            }
+        {
+            return Ok(session.clone());
         }
 
         let session = self.authenticate().await?;
-        self.session.lock().await.replace(session.clone());
         Ok(session)
     }
 
-    async fn authenticate(&self) -> Result<OperationSession> {
+    async fn authenticate(&self) -> Result<OperatorSession> {
         let pk = self.signer.get_identity_public_key()?;
         let challenge_req = GetChallengeRequest {
             public_key: pk.serialize().to_vec(),
@@ -134,7 +96,7 @@ where
             .await?
             .into_inner();
 
-        let session = OperationSession {
+        let session = OperatorSession {
             token: verify_resp.session_token.parse().map_err(|_| {
                 OperatorRpcError::Authentication("Invalid session token".to_string())
             })?,
@@ -143,13 +105,5 @@ where
             })?,
         };
         Ok(session)
-    }
-}
-
-impl Interceptor for OperationSession {
-    fn call(&mut self, mut req: Request<()>) -> std::result::Result<Request<()>, Status> {
-        req.metadata_mut()
-            .insert("authorization", self.token.clone());
-        Ok(req)
     }
 }

@@ -23,6 +23,12 @@ pub enum OperatorRpcError {
 
     #[error("Signer error: {0}")]
     SignerError(#[from] crate::signer::SignerError),
+
+    #[error("Session manager error: {0}")]
+    SessionManagerError(#[from] crate::operator::SessionManagerError),
+
+    #[error("Generic: {0}")]
+    Generic(String),
 }
 
 impl From<Status> for OperatorRpcError {

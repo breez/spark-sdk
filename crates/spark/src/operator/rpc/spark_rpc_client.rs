@@ -5,13 +5,26 @@ use super::auth::OperatorAuth;
 use super::error::Result;
 use super::spark::*;
 use super::spark_token;
+use crate::operator::OperatorSession;
+use crate::operator::SessionManager;
+use crate::operator::rpc::OperatorRpcError;
 use crate::operator::rpc::spark::query_nodes_request::Source;
+use crate::operator::rpc::spark::spark_service_client::SparkServiceClient;
 use crate::operator::rpc::spark_token::CommitTransactionRequest;
 use crate::operator::rpc::spark_token::CommitTransactionResponse;
 use crate::operator::rpc::spark_token::StartTransactionRequest;
 use crate::operator::rpc::spark_token::StartTransactionResponse;
+use crate::operator::rpc::spark_token::spark_token_service_client::SparkTokenServiceClient;
 use crate::operator::rpc::transport::grpc_client::Transport;
 use crate::signer::Signer;
+use bitcoin::secp256k1::PublicKey;
+use tonic::Request;
+use tonic::Status;
+use tonic::metadata::Ascii;
+use tonic::metadata::MetadataValue;
+use tonic::service::Interceptor;
+use tonic::service::interceptor::InterceptedService;
+use tracing::error;
 use tracing::trace;
 
 pub struct QueryAllNodesRequest {
@@ -20,18 +33,29 @@ pub struct QueryAllNodesRequest {
     pub source: Option<Source>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SparkRpcClient<S> {
+    transport: Transport,
     auth: OperatorAuth<S>,
+    session_manager: Arc<dyn SessionManager>,
+    identity_public_key: PublicKey,
 }
 
 impl<S> SparkRpcClient<S>
 where
     S: Signer,
 {
-    pub fn new(channel: Transport, signer: Arc<S>) -> Self {
+    pub fn new(
+        channel: Transport,
+        signer: Arc<S>,
+        identity_public_key: PublicKey,
+        session_manager: Arc<dyn SessionManager>,
+    ) -> Self {
         Self {
+            transport: channel.clone(),
             auth: OperatorAuth::new(channel, signer),
+            session_manager,
+            identity_public_key,
         }
     }
 
@@ -40,7 +64,6 @@ where
         req: FinalizeNodeSignaturesRequest,
     ) -> Result<FinalizeNodeSignaturesResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .finalize_node_signatures_v2(req)
@@ -53,7 +76,6 @@ where
         req: GenerateDepositAddressRequest,
     ) -> Result<GenerateDepositAddressResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .generate_deposit_address(req)
@@ -66,7 +88,6 @@ where
         req: QueryUnusedDepositAddressesRequest,
     ) -> Result<QueryUnusedDepositAddressesResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .query_unused_deposit_addresses(req)
@@ -79,7 +100,6 @@ where
         req: StartDepositTreeCreationRequest,
     ) -> Result<StartDepositTreeCreationResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .start_deposit_tree_creation(req)
@@ -93,7 +113,6 @@ where
     ) -> Result<StartTransferResponse> {
         trace!("Calling start_transfer with request: {:?}", req);
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .start_transfer_v2(req)
@@ -106,7 +125,6 @@ where
         req: FinalizeTransferWithTransferPackageRequest,
     ) -> Result<FinalizeTransferResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .finalize_transfer_with_transfer_package(req)
@@ -119,7 +137,6 @@ where
         req: CancelTransferRequest,
     ) -> Result<CancelTransferResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .cancel_transfer(req)
@@ -133,7 +150,6 @@ where
     ) -> Result<QueryTransfersResponse> {
         trace!("Querying pending transfers with filter: {:?}", req);
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .query_pending_transfers(req)
@@ -143,7 +159,6 @@ where
 
     pub async fn query_all_transfers(&self, req: TransferFilter) -> Result<QueryTransfersResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .query_all_transfers(req)
@@ -155,8 +170,7 @@ where
         &self,
         req: ClaimTransferTweakKeysRequest,
     ) -> Result<()> {
-        self.auth
-            .spark_service_client()
+        self.spark_service_client()
             .await?
             .claim_transfer_tweak_keys(req)
             .await?
@@ -169,7 +183,6 @@ where
         req: ClaimTransferSignRefundsRequest,
     ) -> Result<ClaimTransferSignRefundsResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .claim_transfer_sign_refunds_v2(req)
@@ -178,8 +191,7 @@ where
     }
 
     pub async fn store_preimage_share(&self, req: StorePreimageShareRequest) -> Result<()> {
-        self.auth
-            .spark_service_client()
+        self.spark_service_client()
             .await?
             .store_preimage_share(req)
             .await?
@@ -192,7 +204,6 @@ where
         req: GetSigningCommitmentsRequest,
     ) -> Result<GetSigningCommitmentsResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .get_signing_commitments(req)
@@ -205,7 +216,6 @@ where
         req: CooperativeExitRequest,
     ) -> Result<CooperativeExitResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .cooperative_exit_v2(req)
@@ -218,7 +228,6 @@ where
         req: InitiatePreimageSwapRequest,
     ) -> Result<InitiatePreimageSwapResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .initiate_preimage_swap_v2(req)
@@ -231,7 +240,6 @@ where
         req: ProvidePreimageRequest,
     ) -> Result<ProvidePreimageResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .provide_preimage(req)
@@ -244,7 +252,6 @@ where
         req: StartTransferRequest,
     ) -> Result<StartTransferResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .start_leaf_swap_v2(req)
@@ -257,7 +264,6 @@ where
         req: CounterLeafSwapRequest,
     ) -> Result<CounterLeafSwapResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .counter_leaf_swap_v2(req)
@@ -270,7 +276,6 @@ where
         req: RefreshTimelockRequest,
     ) -> Result<RefreshTimelockResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .refresh_timelock_v2(req)
@@ -280,7 +285,6 @@ where
 
     pub async fn extend_leaf_v2(&self, req: ExtendLeafRequest) -> Result<ExtendLeafResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .extend_leaf_v2(req)
@@ -290,7 +294,6 @@ where
 
     pub async fn get_signing_operator_list(&self) -> Result<GetSigningOperatorListResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .get_signing_operator_list(())
@@ -338,7 +341,6 @@ where
 
     pub async fn query_nodes(&self, req: QueryNodesRequest) -> Result<QueryNodesResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .query_nodes(req)
@@ -351,7 +353,6 @@ where
         req: QueryNodesDistributionRequest,
     ) -> Result<QueryNodesDistributionResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .query_nodes_distribution(req)
@@ -364,7 +365,6 @@ where
         req: QueryNodesByValueRequest,
     ) -> Result<QueryNodesByValueResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .query_nodes_by_value(req)
@@ -374,7 +374,6 @@ where
 
     pub async fn query_balance(&self, req: QueryBalanceRequest) -> Result<QueryBalanceResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .query_balance(req)
@@ -387,7 +386,6 @@ where
         req: QueryUserSignedRefundsRequest,
     ) -> Result<QueryUserSignedRefundsResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .query_user_signed_refunds(req)
@@ -400,7 +398,6 @@ where
         req: StartTokenTransactionRequest,
     ) -> Result<StartTokenTransactionResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .start_token_transaction(req)
@@ -413,7 +410,6 @@ where
         req: SignTokenTransactionRequest,
     ) -> Result<SignTokenTransactionResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .sign_token_transaction(req)
@@ -425,8 +421,7 @@ where
         &self,
         req: FinalizeTokenTransactionRequest,
     ) -> Result<()> {
-        self.auth
-            .spark_service_client()
+        self.spark_service_client()
             .await?
             .finalize_token_transaction(req)
             .await?
@@ -439,7 +434,6 @@ where
         req: spark_token::FreezeTokensRequest,
     ) -> Result<spark_token::FreezeTokensResponse> {
         Ok(self
-            .auth
             .spark_token_service_client()
             .await?
             .freeze_tokens(req)
@@ -452,7 +446,6 @@ where
         req: spark_token::QueryTokenOutputsRequest,
     ) -> Result<spark_token::QueryTokenOutputsResponse> {
         Ok(self
-            .auth
             .spark_token_service_client()
             .await?
             .query_token_outputs(req)
@@ -465,7 +458,6 @@ where
         req: spark_token::QueryTokenMetadataRequest,
     ) -> Result<spark_token::QueryTokenMetadataResponse> {
         Ok(self
-            .auth
             .spark_token_service_client()
             .await?
             .query_token_metadata(req)
@@ -478,7 +470,6 @@ where
         req: spark_token::QueryTokenTransactionsRequest,
     ) -> Result<spark_token::QueryTokenTransactionsResponse> {
         Ok(self
-            .auth
             .spark_token_service_client()
             .await?
             .query_token_transactions(req)
@@ -491,7 +482,6 @@ where
         req: StartTransactionRequest,
     ) -> Result<StartTransactionResponse> {
         Ok(self
-            .auth
             .spark_token_service_client()
             .await?
             .start_transaction(req)
@@ -504,7 +494,6 @@ where
         req: CommitTransactionRequest,
     ) -> Result<CommitTransactionResponse> {
         Ok(self
-            .auth
             .spark_token_service_client()
             .await?
             .commit_transaction(req)
@@ -513,8 +502,7 @@ where
     }
 
     pub async fn return_lightning_payment(&self, req: ReturnLightningPaymentRequest) -> Result<()> {
-        self.auth
-            .spark_service_client()
+        self.spark_service_client()
             .await?
             .return_lightning_payment(req)
             .await?
@@ -527,7 +515,6 @@ where
         req: QueryStaticDepositAddressesRequest,
     ) -> Result<QueryStaticDepositAddressesResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .query_static_deposit_addresses(req)
@@ -540,7 +527,6 @@ where
         req: GetUtxosForAddressRequest,
     ) -> Result<GetUtxosForAddressResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .get_utxos_for_address(req)
@@ -553,7 +539,6 @@ where
         req: InitiateStaticDepositUtxoRefundRequest,
     ) -> Result<InitiateStaticDepositUtxoRefundResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .initiate_static_deposit_utxo_refund(req)
@@ -568,7 +553,6 @@ where
         // TODO: update to drop use of deprecated initiate_utxo_swap call
         #[allow(deprecated)]
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .initiate_utxo_swap(req)
@@ -581,7 +565,6 @@ where
         req: ExitSingleNodeTreesRequest,
     ) -> Result<ExitSingleNodeTreesResponse> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .exit_single_node_trees(req)
@@ -594,11 +577,75 @@ where
         req: SubscribeToEventsRequest,
     ) -> Result<tonic::codec::Streaming<SubscribeToEventsResponse>> {
         Ok(self
-            .auth
             .spark_service_client()
             .await?
             .subscribe_to_events(req)
             .await?
             .into_inner())
+    }
+
+    async fn spark_service_client(
+        &self,
+    ) -> Result<SparkServiceClient<InterceptedService<Transport, OperationSessionInterceptor>>>
+    {
+        let session = self.get_session_interceptor().await?;
+        Ok(SparkServiceClient::with_interceptor(
+            self.transport.clone(),
+            session,
+        ))
+    }
+
+    async fn spark_token_service_client(
+        &self,
+    ) -> Result<SparkTokenServiceClient<InterceptedService<Transport, OperationSessionInterceptor>>>
+    {
+        let session = self.get_session_interceptor().await?;
+        Ok(SparkTokenServiceClient::with_interceptor(
+            self.transport.clone(),
+            session,
+        ))
+    }
+
+    async fn get_session_interceptor(&self) -> Result<OperationSessionInterceptor> {
+        let current_session = self
+            .session_manager
+            .get_session(&self.identity_public_key)
+            .await;
+        let valid_session = match current_session {
+            Ok(session) => self.auth.get_authenticated_session(Some(session)).await,
+            Err(e) => {
+                error!("Failed to get session from session manager: {}", e);
+                self.auth.get_authenticated_session(None).await
+            }
+        }?;
+        self.session_manager
+            .set_session(&self.identity_public_key, valid_session.clone())
+            .await?;
+        valid_session.try_into()
+    }
+}
+
+impl TryFrom<OperatorSession> for OperationSessionInterceptor {
+    type Error = OperatorRpcError;
+
+    fn try_from(session: OperatorSession) -> std::result::Result<Self, Self::Error> {
+        Ok(OperationSessionInterceptor {
+            token: session.token.parse().map_err(|_| {
+                OperatorRpcError::Authentication("Invalid session token".to_string())
+            })?,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct OperationSessionInterceptor {
+    token: MetadataValue<Ascii>,
+}
+
+impl Interceptor for OperationSessionInterceptor {
+    fn call(&mut self, mut req: Request<()>) -> std::result::Result<Request<()>, Status> {
+        req.metadata_mut()
+            .insert("authorization", self.token.clone());
+        Ok(req)
     }
 }

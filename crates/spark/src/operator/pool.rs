@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
 use crate::{
-    operator::rpc::{ConnectionManager, OperatorRpcError, SparkRpcClient},
+    operator::{
+        SessionManager,
+        rpc::{ConnectionManager, OperatorRpcError, SparkRpcClient},
+    },
     signer::Signer,
 };
 
@@ -75,7 +78,7 @@ pub struct OperatorConfig {
 
 impl OperatorConfig {}
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Operator<S> {
     pub client: SparkRpcClient<S>,
     pub id: usize,
@@ -92,12 +95,18 @@ impl<S: Signer> OperatorPool<S> {
     pub async fn connect(
         config: &OperatorPoolConfig,
         connection_manager: &ConnectionManager,
+        session_manager: Arc<dyn SessionManager>,
         signer: Arc<S>,
     ) -> Result<Self, OperatorRpcError> {
         let mut operators = Vec::new();
         for operator in &config.operators {
             let transport = connection_manager.get_transport(operator).await?;
-            let client = SparkRpcClient::new(transport, Arc::clone(&signer));
+            let client = SparkRpcClient::new(
+                transport,
+                Arc::clone(&signer),
+                operator.identity_public_key,
+                session_manager.clone(),
+            );
             operators.push(Operator {
                 client,
                 id: operator.id,

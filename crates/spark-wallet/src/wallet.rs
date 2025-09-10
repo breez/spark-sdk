@@ -11,7 +11,7 @@ use spark::{
     address::SparkAddress,
     bitcoin::BitcoinService,
     events::{SparkEvent, subscribe_server_events},
-    operator::{OperatorPool, rpc::ConnectionManager},
+    operator::{InMemorySessionManager, OperatorPool, SessionManager, rpc::ConnectionManager},
     services::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
         InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment,
@@ -23,7 +23,7 @@ use spark::{
     ssp::{ServiceProvider, SspTransfer},
     tree::{
         InMemoryTreeStore, LeavesReservation, SynchronousTreeService, TargetAmounts, TreeNode,
-        TreeNodeId, TreeService, select_leaves_by_amounts, with_reserved_leaves,
+        TreeNodeId, TreeService, TreeStore, select_leaves_by_amounts, with_reserved_leaves,
     },
     utils::paging::PagingFilter,
 };
@@ -59,11 +59,25 @@ pub struct SparkWallet<S> {
 
 impl<S: Signer> SparkWallet<S> {
     pub async fn connect(config: SparkWalletConfig, signer: S) -> Result<Self, SparkWalletError> {
+        let signer = Arc::new(signer);
+        Self::new(
+            config,
+            signer,
+            Arc::new(InMemorySessionManager::default()),
+            Arc::new(InMemoryTreeStore::default()),
+        )
+        .await
+    }
+
+    pub(crate) async fn new(
+        config: SparkWalletConfig,
+        signer: Arc<S>,
+        session_manager: Arc<dyn SessionManager>,
+        tree_store: Arc<dyn TreeStore>,
+    ) -> Result<Self, SparkWalletError> {
         config.validate()?;
         let identity_public_key = signer.get_identity_public_key()?;
         let connection_manager = ConnectionManager::new();
-
-        let signer = Arc::new(signer);
 
         let bitcoin_service = BitcoinService::new(config.network);
         let service_provider = Arc::new(ServiceProvider::new(
@@ -75,6 +89,7 @@ impl<S: Signer> SparkWallet<S> {
             OperatorPool::connect(
                 &config.operator_pool,
                 &connection_manager,
+                Arc::clone(&session_manager),
                 Arc::clone(&signer),
             )
             .await?,
@@ -138,7 +153,7 @@ impl<S: Signer> SparkWallet<S> {
             identity_public_key,
             config.network,
             operator_pool.clone(),
-            Box::new(InMemoryTreeStore::new()),
+            tree_store.clone(),
             Arc::clone(&timelock_manager),
             Arc::clone(&signer),
             swap_service,
