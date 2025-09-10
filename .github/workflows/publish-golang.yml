@@ -118,6 +118,10 @@ jobs:
         with:
           name: bindings-x86_64-pc-windows-msvc
           path: breez_sdk_spark/lib/windows-amd64
+  
+      - name: Remove static libs
+        working-directory: breez_sdk_spark/lib
+        run: rm -rf **/*.a
 
       - name: Archive package
         if: ${{ !inputs.publish }}
