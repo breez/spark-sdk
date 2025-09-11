@@ -5,7 +5,8 @@ use crate::repository::LnurlRepositoryError;
 mod repository;
 
 pub async fn run_migrations(pool: &SqlitePool) -> Result<(), LnurlRepositoryError> {
-    Ok(sqlx::migrate!("migrations/sqlite").run(pool).await?)
+    let migrator = sqlx::migrate!("migrations/sqlite");
+    Ok(migrator.run(pool).await?)
 }
 
 pub use repository::LnurlRepository;

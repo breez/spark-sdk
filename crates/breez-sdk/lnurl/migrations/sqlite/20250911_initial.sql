@@ -1,7 +1,6 @@
--- Your SQL goes here
 CREATE TABLE `users`(
 	`pubkey` VARCHAR(66) NOT NULL PRIMARY KEY,
-	`name` VARCHAR(64) NOT NULL,
+	`name` VARCHAR(64) NOT NULL UNIQUE,
 	`description` VARCHAR(255) NOT NULL
 );
 
