@@ -586,8 +586,7 @@ where
 
     async fn spark_service_client(
         &self,
-    ) -> Result<SparkServiceClient<InterceptedService<Transport, OperationSessionInterceptor>>>
-    {
+    ) -> Result<SparkServiceClient<InterceptedService<Transport, OperatorSessionInterceptor>>> {
         let session = self.get_session_interceptor().await?;
         Ok(SparkServiceClient::with_interceptor(
             self.transport.clone(),
@@ -597,7 +596,7 @@ where
 
     async fn spark_token_service_client(
         &self,
-    ) -> Result<SparkTokenServiceClient<InterceptedService<Transport, OperationSessionInterceptor>>>
+    ) -> Result<SparkTokenServiceClient<InterceptedService<Transport, OperatorSessionInterceptor>>>
     {
         let session = self.get_session_interceptor().await?;
         Ok(SparkTokenServiceClient::with_interceptor(
@@ -606,7 +605,7 @@ where
         ))
     }
 
-    async fn get_session_interceptor(&self) -> Result<OperationSessionInterceptor> {
+    async fn get_session_interceptor(&self) -> Result<OperatorSessionInterceptor> {
         let current_session = self
             .session_manager
             .get_session(&self.identity_public_key)
@@ -625,11 +624,11 @@ where
     }
 }
 
-impl TryFrom<OperatorSession> for OperationSessionInterceptor {
+impl TryFrom<OperatorSession> for OperatorSessionInterceptor {
     type Error = OperatorRpcError;
 
     fn try_from(session: OperatorSession) -> std::result::Result<Self, Self::Error> {
-        Ok(OperationSessionInterceptor {
+        Ok(OperatorSessionInterceptor {
             token: session.token.parse().map_err(|_| {
                 OperatorRpcError::Authentication("Invalid session token".to_string())
             })?,
@@ -638,11 +637,11 @@ impl TryFrom<OperatorSession> for OperationSessionInterceptor {
 }
 
 #[derive(Clone, Debug)]
-struct OperationSessionInterceptor {
+struct OperatorSessionInterceptor {
     token: MetadataValue<Ascii>,
 }
 
-impl Interceptor for OperationSessionInterceptor {
+impl Interceptor for OperatorSessionInterceptor {
     fn call(&mut self, mut req: Request<()>) -> std::result::Result<Request<()>, Status> {
         req.metadata_mut()
             .insert("authorization", self.token.clone());
