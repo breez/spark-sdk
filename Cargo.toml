@@ -23,6 +23,7 @@ members = [
 
 [workspace.package]
 version = "0.1.0"
+rust-version = "1.88"
 
 [workspace.lints.clippy]
 suspicious = { level = "warn", priority = -1 }
