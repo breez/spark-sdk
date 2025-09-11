@@ -61,6 +61,14 @@ When receiving via Lightning, we can generate a BOLT11 invoice to be paid. Setti
 {{#include ../../snippets/python/src/receive_payment.py:receive-payment-lightning-bolt11}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/receive_payment.go:receive-payment-lightning-bolt11}}
+```
+</section>
 </custom-tabs>
 
 ### Bitcoin
@@ -116,6 +124,14 @@ The SDK monitors the specified address for new UTXOs and automatically initiates
 {{#include ../../snippets/python/src/receive_payment.py:receive-payment-onchain}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/receive_payment.go:receive-payment-onchain}}
+```
+</section>
 </custom-tabs>
 
 ### Spark
@@ -168,6 +184,14 @@ For payments between Spark users, you can use the static Spark address to receiv
 
 ```python,ignore 
 {{#include ../../snippets/python/src/receive_payment.py:receive-payment-spark}}
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/receive_payment.go:receive-payment-spark}}
 ```
 </section>
 </custom-tabs>

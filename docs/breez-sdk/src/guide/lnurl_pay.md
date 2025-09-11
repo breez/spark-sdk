@@ -63,6 +63,14 @@ The minimum and maximum sendable amount returned from calling parse is denominat
 {{#include ../../snippets/python/src/lnurl_pay.py:prepare-lnurl-pay}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/lnurl_pay.go:prepare-lnurl-pay}}
+```
+</section>
 </custom-tabs>
 
 <h2 id="lnurl-payments">
@@ -119,6 +127,14 @@ LNURL pay method.
 
 ```python,ignore 
 {{#include ../../snippets/python/src/lnurl_pay.py:lnurl-pay}}
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/lnurl_pay.go:lnurl-pay}}
 ```
 </section>
 </custom-tabs>

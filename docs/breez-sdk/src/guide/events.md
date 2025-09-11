@@ -60,6 +60,13 @@ The SDK emits several events to provide the application with an up-to-date state
 ```
 </section>
 
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/getting_started.go:add-event-listener}}
+```
+</section>
 </custom-tabs>
 
 <h2 id="remove-event-listener">
@@ -119,6 +126,14 @@ When you no longer need to listen to events, you can remove the listener.
 
 ```python,ignore 
 {{#include ../../snippets/python/src/getting_started.py:remove-event-listener}}
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/getting_started.go:remove-event-listener}}
 ```
 </section>
 </custom-tabs>

@@ -91,6 +91,14 @@ dependencies:
       url: https://github.com/breez/breez-sdk-spark-flutter
 ```
 
+## Go
+
+We recommend using our official Go package: [breez/breez-sdk-spark-go](https://github.com/breez/breez-sdk-spark-go).
+
+```console
+go get github.com/breez/breez-sdk-spark-go
+```
+
 ## Python
 
 We recommend using our official Python package: [breez-sdk-spark](https://pypi.org/project/breez-sdk-spark).

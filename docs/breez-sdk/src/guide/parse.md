@@ -57,4 +57,12 @@ The amounts returned from calling parse on Lightning based inputs (BOLT11, LNURL
 {{#include ../../snippets/python/src/parsing_inputs.py:parse-inputs}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/parsing_inputs.go:parse-inputs}}
+```
+</section>
 </custom-tabs>
