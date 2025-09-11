@@ -41,7 +41,7 @@ where
                     })?
                     .as_secs()
         {
-            return Ok(session.clone());
+            return Ok(session);
         }
 
         let session = self.authenticate().await?;
