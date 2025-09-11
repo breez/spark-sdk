@@ -16,10 +16,10 @@ use serde::{Deserialize, Serialize};
 use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
 use sqlx::{PgPool, SqlitePool};
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::state::State;
+use crate::{repository::LnurlRepository, routes::LnurlServer, state::State};
 
 mod error;
 mod postgresql;
@@ -33,7 +33,7 @@ mod user;
 #[command(version, about, long_about = None)]
 struct Args {
     /// Address the lnurl server will listen on.
-    #[arg(long, default_value = "127.0.0.1:8080")]
+    #[arg(long, default_value = "0.0.0.0:8080")]
     pub address: core::net::SocketAddr,
 
     #[arg(long, default_value = "lnurl.conf")]
@@ -73,8 +73,6 @@ struct Args {
     pub max_sendable: u64,
 }
 
-type LnurlServer = routes::LnurlServer<sqlite::LnurlRepository>;
-
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
@@ -106,7 +104,11 @@ async fn main() -> Result<(), anyhow::Error> {
             .map_err(|e| anyhow!("failed to create connection pool: {:?}", e))?;
 
         if args.auto_migrate {
+            debug!("running postgres database migrations");
             postgresql::run_migrations(&pool).await?;
+            debug!("finished running postgres database migrations");
+        } else {
+            debug!("skipping postgres database migrations");
         }
         let repository = postgresql::LnurlRepository::new(pool);
         main_part_2(args, repository).await?;
@@ -116,7 +118,11 @@ async fn main() -> Result<(), anyhow::Error> {
             .map_err(|e| anyhow!("failed to create connection pool: {:?}", e))?;
 
         if args.auto_migrate {
+            debug!("running sqlite database migrations");
             sqlite::run_migrations(&pool).await?;
+            debug!("finished running sqlite database migrations");
+        } else {
+            debug!("skipping sqlite database migrations");
         }
         let repository = sqlite::LnurlRepository::new(pool);
         main_part_2(args, repository).await?;
@@ -127,7 +133,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
 async fn main_part_2<DB>(args: Args, repository: DB) -> Result<(), anyhow::Error>
 where
-    DB: Clone + Send + Sync + 'static,
+    DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
     let wallet = Arc::new(
         spark_wallet::SparkWallet::connect(
@@ -146,17 +152,23 @@ where
     };
 
     let server_router = Router::new()
-        .route("/lnurlpay/{pubkey}", post(LnurlServer::register))
-        .route("/lnurlpay/{pubkey}", delete(LnurlServer::unregister))
-        .route("/lnurlpay/{pubkey}/recover", delete(LnurlServer::recover))
+        .route("/lnurlpay/{pubkey}", post(LnurlServer::<DB>::register))
+        .route("/lnurlpay/{pubkey}", delete(LnurlServer::<DB>::unregister))
+        .route(
+            "/lnurlpay/{pubkey}/recover",
+            delete(LnurlServer::<DB>::recover),
+        )
         .route(
             "/.well-known/lnurlp/{identifier}",
-            get(LnurlServer::handle_lnurl_pay),
+            get(LnurlServer::<DB>::handle_lnurl_pay),
         )
-        .route("/lnurlp/{identifier}", get(LnurlServer::handle_lnurl_pay))
+        .route(
+            "/lnurlp/{identifier}",
+            get(LnurlServer::<DB>::handle_lnurl_pay),
+        )
         .route(
             "/lnurlp/{identifier}/invoice",
-            get(LnurlServer::handle_invoice),
+            get(LnurlServer::<DB>::handle_invoice),
         )
         .layer(Extension(state))
         .layer(
