@@ -31,7 +31,7 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     config.api_key = Some("<breez api key>".to_string());
 
     // Create the default storage
-    let storage = default_storage("./.data".to_string())?;
+    let storage = default_storage("./.data".to_string()).await?;
 
     // Build the SDK using the config, mnemonic and storage
     let builder = SdkBuilder::new(config, mnemonic, storage);
