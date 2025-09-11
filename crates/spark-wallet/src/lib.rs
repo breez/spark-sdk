@@ -3,6 +3,7 @@ mod error;
 mod event;
 mod model;
 mod wallet;
+mod wallet_builder;
 
 pub use bitcoin::secp256k1::PublicKey;
 pub use config::*;
@@ -26,3 +27,4 @@ pub use spark::{
     },
 };
 pub use wallet::SparkWallet;
+pub use wallet_builder::WalletBuilder;

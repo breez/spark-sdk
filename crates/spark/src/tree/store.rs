@@ -9,7 +9,7 @@ use crate::tree::{
     TreeServiceError, TreeStore, select_helper,
 };
 
-// TODO: Implement proper tree state logic.
+#[derive(Default)]
 pub struct InMemoryTreeStore {
     leaves: Mutex<LeavesState>,
 }
@@ -18,12 +18,6 @@ pub struct InMemoryTreeStore {
 struct LeavesState {
     leaves: HashMap<TreeNodeId, TreeNode>,
     leaves_reservations: HashMap<LeavesReservationId, Vec<TreeNode>>,
-}
-
-impl Default for InMemoryTreeStore {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 #[macros::async_trait]
