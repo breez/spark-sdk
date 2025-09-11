@@ -63,8 +63,9 @@ jobs:
       - name: Set cargo version
         working-directory: packages/flutter/rust
         run: |
-          sed -i.bak -e 's/^breez-sdk-common = .*/breez-sdk-common = { git = "https:\/\/github.com\/breez\/spark-sdk.git", rev = "${{ github.sha }}" }/' Cargo.toml
-          sed -i.bak -e 's/^breez-sdk-spark = .*/breez-sdk-spark = { git = "https:\/\/github.com\/breez\/spark-sdk.git", rev = "${{ github.sha }}", features = ["openssl-vendored"] }/' Cargo.toml
+          HASH=$(git rev-parse HEAD)
+          sed -i.bak -e 's/^breez-sdk-common = .*/breez-sdk-common = { git = "https:\/\/github.com\/breez\/spark-sdk.git", rev = "'"$HASH"'" }/' Cargo.toml
+          sed -i.bak -e 's/^breez-sdk-spark = .*/breez-sdk-spark = { git = "https:\/\/github.com\/breez\/spark-sdk.git", rev = "'"$HASH"'", features = ["openssl-vendored"] }/' Cargo.toml
           rm Cargo.toml.bak
 
       - name: Generate bindings
