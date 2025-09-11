@@ -72,6 +72,14 @@ Use the `list_unclaimed_deposits` method to retrieve all deposits that have fail
 {{#include ../../snippets/python/src/refunding_payments.py:list-unclaimed-deposits}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/refunding_payments.go:list-unclaimed-deposits}}
+```
+</section>
 </custom-tabs>
 
 ## Retrying Deposit Claims
@@ -126,6 +134,14 @@ If a deposit claim failed due to insufficient fees, you can retry the claim oper
 {{#include ../../snippets/python/src/refunding_payments.py:claim-deposit}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/refunding_payments.go:claim-deposit}}
+```
+</section>
 </custom-tabs>
 
 ## Refunding Deposits
@@ -178,6 +194,14 @@ When a deposit cannot be successfully claimed, you can refund the funds to an ex
 
 ```python,ignore 
 {{#include ../../snippets/python/src/refunding_payments.py:refund-deposit}}
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/refunding_payments.go:refund-deposit}}
 ```
 </section>
 </custom-tabs>

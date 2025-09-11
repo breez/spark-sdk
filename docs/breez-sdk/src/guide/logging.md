@@ -53,4 +53,12 @@ The SDK implements detailed logging via a streaming interface you can manage wit
 {{#include ../../snippets/python/src/getting_started.py:logging}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/getting_started.go:logging}}
+```
+</section>
 </custom-tabs>

@@ -70,6 +70,14 @@ Once connected, you’re ready to start interacting with the SDK.
 {{#include ../../snippets/python/src/getting_started.py:init-sdk}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/getting_started.go:init-sdk}}
+```
+</section>
 </custom-tabs>
 
 <div class="warning">
@@ -138,6 +146,14 @@ For advanced use cases where you need more control, you can configure the SDK us
 {{#include ../../snippets/python/src/getting_started.py:init-sdk-advanced}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/getting_started.go:init-sdk-advanced}}
+```
+</section>
 </custom-tabs>
 
 <h2 id="disconnecting">
@@ -199,6 +215,14 @@ This is particularly useful if you need to re-instantiate the SDK, such as when 
 
 ```python,ignore 
 {{#include ../../snippets/python/src/getting_started.py:disconnect}}
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/getting_started.go:disconnect}}
 ```
 </section>
 </custom-tabs>

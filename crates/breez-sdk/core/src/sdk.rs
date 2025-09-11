@@ -95,7 +95,7 @@ pub fn init_logging(
 ///
 /// Result containing either the initialized `BreezSdk` or an `SdkError`
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkError> {
     let db_path = std::path::PathBuf::from_str(&request.storage_dir)?;
     let path_suffix: String = sha256::Hash::hash(request.mnemonic.as_bytes())

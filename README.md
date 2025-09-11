@@ -66,11 +66,13 @@ Funds are self-custodial: you can exit Spark at any time and reclaim your bitcoi
 
 - **crates**: Contains the root Rust cargo workspace.
     - **breez-sdk**: Collection of Breez SDK crates.
-        - **bindings**: The FFI bindings for Kotlin, Python, React Native, and Swift.
+        - **bindings**: The FFI bindings for Go, Kotlin, Python, React Native, and Swift.
         - **cli**: Contains the Rust command line interface client for the SDK.
+        - **common**: The common Breez SDK Rust library.
         - **core**: The core Breez SDK Rust library.
+        - **wasm**: The Wasm interface bindings.        
     - **spark**: The Spark crate.
-- **packages**: Contains the packages for Flutter and WASM.
+- **packages**: Contains the packages for Flutter and Wasm.
 
 
 ## **Contributing**
@@ -84,7 +86,7 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x]  Send/Receive Spark payments
 - [x]  Send/Receive via on-chain addresses
 - [x]  CLI Interface
-- [x]  JS, Swift, Kotlin & Python languages bindings
+- [x]  Go, JS, Kotlin, Python & Swift languages bindings
 - [x]  Send via LNURL-Pay
 - [x]  Send to a Lightning address
 - [x]  WebAssembly support
@@ -92,7 +94,7 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [ ]  Support Spark tokens
 - [ ]  Receive via LNURL-Pay w/ offline & Lightning address support
 - [ ]  Real-time sync
-- [ ]  React Native, Go & C# bindings
+- [ ]  React Native & C# bindings
 - [ ]  LNURL-Withdraw
 - [ ]  LNURL-Auth
 - [ ]  External input parsers

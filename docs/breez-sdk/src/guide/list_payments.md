@@ -53,6 +53,14 @@ To view your payment history, you can list all the payments that have been sent 
 {{#include ../../snippets/python/src/list_payments.py:list-payments}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/list_payments.go:list-payments}}
+```
+</section>
 </custom-tabs>
 
 ## Filtering Payments
@@ -104,6 +112,14 @@ When listing payment you can also page the list results:
 
 ```python,ignore 
 {{#include ../../snippets/python/src/list_payments.py:list-payments-filtered}}
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/list_payments.go:list-payments-filtered}}
 ```
 </section>
 </custom-tabs>
@@ -161,6 +177,14 @@ You can also retrieve a single payment using the payment id:
 
 ```python,ignore 
 {{#include ../../snippets/python/src/list_payments.py:get-payment}}
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/list_payments.go:get-payment}}
 ```
 </section>
 </custom-tabs>

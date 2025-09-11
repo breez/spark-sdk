@@ -34,6 +34,10 @@ __*[breez-sdk/wasm](crates/breez-sdk/wasm)*__
 * [models.rs](crates/breez-sdk/wasm/src/models.rs) - Update the structs/enums exported.
 * [sdk.rs](crates/breez-sdk/wasm/src/sdk.rs) - Update the Rust interface for the Wasm bindings.
 
+__*[packages/flutter/rust](packages/flutter/rust)*__
+* [models.rs](packages/flutter/rust/src/models.rs) - Update the structs/enums mirrored.
+* [sdk.rs](packages/flutter/rust/src/sdk.rs) - Update the Rust interface for the Flutter bindings.
+
 #### Testing
 Please adequately test your code using the existing tests and write additional tests for new features. You can run the tests from the project root using `make test`. You can also make use of the [CLI](crates/breez-sdk/cli) to test changes while developing your feature.
 

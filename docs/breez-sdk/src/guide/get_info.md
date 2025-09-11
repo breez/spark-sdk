@@ -53,6 +53,14 @@ Once connected, the balance can be retrieved at any time.
 {{#include ../../snippets/python/src/getting_started.py:fetch-balance}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/getting_started.go:fetch-balance}}
+```
+</section>
 </custom-tabs>
 
 You are now ready to receive a Lightning [payment](payments.md).

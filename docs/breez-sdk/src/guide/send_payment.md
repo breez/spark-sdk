@@ -72,6 +72,14 @@ If the invoice also contains a Spark address, it means the payment can be sent d
 {{#include ../../snippets/python/src/send_payment.py:prepare-send-payment-lightning-bolt11}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/send_payment.go:prepare-send-payment-lightning-bolt11}}
+```
+</section>
 </custom-tabs>
 
 ### Bitcoin
@@ -126,6 +134,14 @@ For Bitcoin addresses the amount must be set in the request. The prepare respons
 {{#include ../../snippets/python/src/send_payment.py:prepare-send-payment-onchain}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/send_payment.go:prepare-send-payment-onchain}}
+```
+</section>
 </custom-tabs>
 
 ### Spark
@@ -178,6 +194,14 @@ For Spark addresses the amount must be set in the request. Sending to a Spark ad
 
 ```python,ignore 
 {{#include ../../snippets/python/src/send_payment.py:prepare-send-payment-spark}}
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/send_payment.go:prepare-send-payment-spark}}
 ```
 </section>
 </custom-tabs>
@@ -241,6 +265,14 @@ In the send payment options for BOLT11 invoices, you can set whether to use Spar
 {{#include ../../snippets/python/src/send_payment.py:send-payment-lightning-bolt11}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/send_payment.go:send-payment-lightning-bolt11}}
+```
+</section>
 </custom-tabs>
 
 ### Bitcoin
@@ -295,6 +327,14 @@ For Bitcoin addresses you can set the confirmation speed in the send payment opt
 {{#include ../../snippets/python/src/send_payment.py:send-payment-onchain}}
 ```
 </section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/send_payment.go:send-payment-onchain}}
+```
+</section>
 </custom-tabs>
 
 ### Spark
@@ -347,6 +387,14 @@ For Spark addresses no send payment options are needed.
 
 ```python,ignore 
 {{#include ../../snippets/python/src/send_payment.py:send-payment-spark}}
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/send_payment.go:send-payment-spark}}
 ```
 </section>
 </custom-tabs>

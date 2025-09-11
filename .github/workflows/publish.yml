@@ -14,7 +14,7 @@ on:
         description: 'Array of packages to publish (remove what you do not want)'
         required: true
         type: string
-        default: '["android", "flutter", "kotlin-multiplatform", "python", "swift", "wasm"]'
+        default: '["android", "flutter", "golang", "kotlin-multiplatform", "python", "swift", "wasm"]'
       use-dummy-binaries:
         description: 'Should use dummies for the SDK binaries. Default = false.'
         required: false
@@ -43,7 +43,7 @@ on:
         description: 'Array of packages to publish (remove what you do not want)'
         required: true
         type: string
-        default: '["android", "flutter", "kotlin-multiplatform", "python", "swift", "wasm"]'
+        default: '["android", "flutter", "golang", "kotlin-multiplatform", "python", "swift", "wasm"]'
       use-dummy-binaries:
         description: 'Should use dummies for the SDK binaries. Default = false.'
         required: false
@@ -64,6 +64,7 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
       android-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'android') && inputs.package-version) || ''}}
       flutter-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'flutter') && inputs.package-version) || '' }}
+      golang-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'golang') && inputs.package-version) || '' }}
       kotlin-multiplatform-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'kotlin-multiplatform') && inputs.package-version) || '' }}
       python-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'python') && inputs.package-version) || '' }}
       swift-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'swift') && inputs.package-version) || '' }}
@@ -84,14 +85,15 @@ jobs:
       # to set these variables here to `true` or `false` 
       # (e.g. bindings-windows: true) if you want to test something.
       repository: ${{ needs.pre-setup.outputs.repository }}
-      bindings-android: ${{ !!needs.pre-setup.outputs.kotlin-multiplatform-package-version || !!needs.pre-setup.outputs.android-package-version }}
-      bindings-darwin: ${{ !!needs.pre-setup.outputs.python-package-version || !!needs.pre-setup.outputs.swift-package-version }}
+      bindings-android: ${{ !!needs.pre-setup.outputs.android-package-version || !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.kotlin-multiplatform-package-version }}
+      bindings-darwin: ${{ !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version || !!needs.pre-setup.outputs.swift-package-version }}
       bindings-ios: ${{ !!needs.pre-setup.outputs.kotlin-multiplatform-package-version || !!needs.pre-setup.outputs.swift-package-version }}
-      bindings-linux: ${{ !!needs.pre-setup.outputs.python-package-version }}
+      bindings-linux: ${{ !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version }}
       bindings-wasm: ${{ !!needs.pre-setup.outputs.wasm-package-version }}
-      bindings-windows: ${{ !!needs.pre-setup.outputs.python-package-version }}
+      bindings-windows: ${{ !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version }}
       android: ${{ !!needs.pre-setup.outputs.android-package-version }}
       flutter: ${{ !!needs.pre-setup.outputs.flutter-package-version }}
+      golang: ${{ !!needs.pre-setup.outputs.golang-package-version }}
       kotlin-multiplatform: ${{ !!needs.pre-setup.outputs.kotlin-multiplatform-package-version }}
       python: ${{ !!needs.pre-setup.outputs.python-package-version }}
       swift: ${{ !!needs.pre-setup.outputs.swift-package-version }}
@@ -99,6 +101,7 @@ jobs:
       ref: ${{ needs.pre-setup.outputs.ref }}
       android-package-version: ${{ needs.pre-setup.outputs.android-package-version || '0.0.2' }}
       flutter-package-version: ${{ needs.pre-setup.outputs.flutter-package-version || '0.0.2' }}
+      golang-package-version: ${{ needs.pre-setup.outputs.golang-package-version || '0.0.2' }}
       kotlin-multiplatform-package-version: ${{ needs.pre-setup.outputs.kotlin-multiplatform-package-version || '0.0.2' }}
       python-package-version: ${{ needs.pre-setup.outputs.python-package-version || '0.0.2' }}
       swift-package-version: ${{ needs.pre-setup.outputs.swift-package-version || '0.0.2' }}
@@ -192,6 +195,23 @@ jobs:
       FLUTTER_RELEASE_TOKEN: ${{ secrets.FLUTTER_RELEASE_TOKEN }}
       CARGOKIT_PRIVATE_KEY: ${{ secrets.CARGOKIT_PRIVATE_KEY }}
 
+  publish-golang:
+    needs:
+      - setup
+      - build-bindings-android
+      - build-bindings-windows
+      - build-bindings-darwin
+      - build-bindings-linux
+    if: ${{ needs.setup.outputs.golang == 'true' }}
+    uses: ./.github/workflows/publish-golang.yml
+    with:
+      repository: ${{ needs.setup.outputs.repository }}
+      ref: ${{ needs.setup.outputs.ref }}
+      package-version: ${{ needs.setup.outputs.golang-package-version }}
+      publish: ${{ needs.setup.outputs.publish == 'true' }}
+    secrets:
+      REPO_SSH_KEY: ${{ secrets.REPO_SSH_KEY }}
+  
   publish-kotlin-multiplatform:
     needs:
       - setup
