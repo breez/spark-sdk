@@ -5,6 +5,7 @@ use axum::{
     extract::{Path, Query},
     http::StatusCode,
 };
+use bech32::{Bech32, Hrp};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use lnurl::{Tag, pay::PayResponse};
@@ -18,6 +19,8 @@ use crate::{
     state::State,
     user::{USERNAME_VALIDATION_REGEX, User},
 };
+
+const LNURL_HRP: Hrp = Hrp::parse_unchecked("lnurl");
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LnurlPayParams {}
@@ -96,8 +99,16 @@ where
         }
 
         debug!("registered user '{}' for pubkey {}", user.name, pubkey);
+        let lnurl = format!("lnurlp://{}/lnurlp/{}", state.domain, user.name);
+        let lnurl = bech32::encode_upper::<Bech32>(LNURL_HRP, lnurl.as_bytes()).map_err(|e| {
+            error!("failed to encode lnurl: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(Value::String("internal server error".into())),
+            )
+        })?;
         Ok(Json(RegisterLnurlPayResponse {
-            lnurl: format!("{}://{}/lnurlp/{}", state.scheme, state.domain, user.name),
+            lnurl,
             lightning_address: format!("{}@{}", user.name, state.domain),
         }))
     }
@@ -144,12 +155,23 @@ where
             })?;
 
         match user {
-            Some(user) => Ok(Json(RecoverLnurlPayResponse {
-                lnurl: format!("{}://{}/lnurlp/{}", state.scheme, state.domain, user.name),
-                lightning_address: format!("{}@{}", user.name, state.domain),
-                username: user.name,
-                description: user.description,
-            })),
+            Some(user) => {
+                let lnurl = format!("lnurlp://{}/lnurlp/{}", state.domain, user.name);
+                let lnurl =
+                    bech32::encode_upper::<Bech32>(LNURL_HRP, lnurl.as_bytes()).map_err(|e| {
+                        error!("failed to encode lnurl: {}", e);
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(Value::String("internal server error".into())),
+                        )
+                    })?;
+                Ok(Json(RecoverLnurlPayResponse {
+                    lnurl,
+                    lightning_address: format!("{}@{}", user.name, state.domain),
+                    username: user.name,
+                    description: user.description,
+                }))
+            }
             None => Err((
                 StatusCode::NOT_FOUND,
                 Json(Value::String("user not found".into())),
