@@ -1,1 +1,4 @@
+.git/
+.vscode/
+.spark/
 **/target/
