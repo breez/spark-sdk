@@ -58,8 +58,14 @@ impl GraphQLError {
 
 impl From<reqwest::Error> for GraphQLError {
     fn from(err: reqwest::Error) -> Self {
+        let mut err_str = err.to_string();
+        let mut walk: &dyn std::error::Error = &err;
+        while let Some(src) = walk.source() {
+            err_str.push_str(format!(" : {src}").as_str());
+            walk = src;
+        }
         Self::Network {
-            reason: err.to_string(),
+            reason: err_str,
             code: err.status().map(|s| s.as_u16()),
         }
     }
