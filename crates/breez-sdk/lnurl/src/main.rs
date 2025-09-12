@@ -43,11 +43,11 @@ struct Args {
     #[arg(long)]
     pub auto_migrate: bool,
 
-    /// Connectionstring to the postgres database.
+    /// Connection string to the postgres database.
     #[arg(long, default_value = "")]
     pub db_url: String,
 
-    /// Loglevel to use. Can be used to filter loges through the env filter
+    /// Loglevel to use. Can be used to filter logs through the env filter
     /// format.
     #[arg(long, default_value = "info")]
     pub log_level: String,
@@ -111,7 +111,7 @@ async fn main() -> Result<(), anyhow::Error> {
             debug!("skipping postgres database migrations");
         }
         let repository = postgresql::LnurlRepository::new(pool);
-        main_part_2(args, repository).await?;
+        run_server(args, repository).await?;
     } else {
         let pool = SqlitePool::connect(&args.db_url)
             .await
@@ -125,13 +125,13 @@ async fn main() -> Result<(), anyhow::Error> {
             debug!("skipping sqlite database migrations");
         }
         let repository = sqlite::LnurlRepository::new(pool);
-        main_part_2(args, repository).await?;
+        run_server(args, repository).await?;
     }
 
     Ok(())
 }
 
-async fn main_part_2<DB>(args: Args, repository: DB) -> Result<(), anyhow::Error>
+async fn run_server<DB>(args: Args, repository: DB) -> Result<(), anyhow::Error>
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
