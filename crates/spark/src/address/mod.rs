@@ -26,10 +26,16 @@ use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::Network;
 
-const HRP_MAINNET: Hrp = Hrp::parse_unchecked("sp");
-const HRP_TESTNET: Hrp = Hrp::parse_unchecked("spt");
-const HRP_REGTEST: Hrp = Hrp::parse_unchecked("sprt");
-const HRP_SIGNET: Hrp = Hrp::parse_unchecked("sps");
+const HRP_MAINNET: Hrp = Hrp::parse_unchecked("spark");
+const HRP_TESTNET: Hrp = Hrp::parse_unchecked("sparkt");
+const HRP_REGTEST: Hrp = Hrp::parse_unchecked("sparkrt");
+const HRP_SIGNET: Hrp = Hrp::parse_unchecked("sparks");
+
+// TODO: Remove legacy HRPs for silent payment addresses
+const HRP_LEGACY_MAINNET: Hrp = Hrp::parse_unchecked("sp");
+const HRP_LEGACY_TESTNET: Hrp = Hrp::parse_unchecked("spt");
+const HRP_LEGACY_REGTEST: Hrp = Hrp::parse_unchecked("sprt");
+const HRP_LEGACY_SIGNET: Hrp = Hrp::parse_unchecked("sps");
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct SparkAddress {
@@ -217,10 +223,10 @@ impl SparkAddress {
 
     fn hrp_to_network(hrp: &Hrp) -> Result<Network, AddressError> {
         match hrp {
-            hrp if hrp == &HRP_MAINNET => Ok(Network::Mainnet),
-            hrp if hrp == &HRP_TESTNET => Ok(Network::Testnet),
-            hrp if hrp == &HRP_REGTEST => Ok(Network::Regtest),
-            hrp if hrp == &HRP_SIGNET => Ok(Network::Signet),
+            hrp if hrp == &HRP_MAINNET || hrp == &HRP_LEGACY_MAINNET => Ok(Network::Mainnet),
+            hrp if hrp == &HRP_TESTNET || hrp == &HRP_LEGACY_TESTNET => Ok(Network::Testnet),
+            hrp if hrp == &HRP_REGTEST || hrp == &HRP_LEGACY_REGTEST => Ok(Network::Regtest),
+            hrp if hrp == &HRP_SIGNET || hrp == &HRP_LEGACY_SIGNET => Ok(Network::Signet),
             _ => Err(AddressError::UnknownHrp(hrp.to_string())),
         }
     }
@@ -388,11 +394,32 @@ mod tests {
 
     #[test_all]
     fn test_parse_specific_regtest_address() {
+        let address_str = "sparkrt1pgssyuuuhnrrdjswal5c3s3rafw9w3y5dd4cjy3duxlf7hjzkp0rqx6dc0nltx";
+        let address = SparkAddress::from_str(address_str).unwrap();
+
+        assert_eq!(address.network, Network::Regtest);
+        assert_eq!(
+            address.identity_public_key,
+            PublicKey::from_str(
+                "02739cbcc636ca0eefe988c223ea5c5744946b6b89122de1be9f5e42b05e301b4d"
+            )
+            .unwrap()
+        );
+    }
+
+    #[test_all]
+    fn test_parse_specific_legacy_regtest_address() {
         let address_str = "sprt1pgssyuuuhnrrdjswal5c3s3rafw9w3y5dd4cjy3duxlf7hjzkp0rqx6dj6mrhu";
         let address = SparkAddress::from_str(address_str).unwrap();
 
         assert_eq!(address.network, Network::Regtest);
-        assert_eq!(address.identity_public_key.serialize().len(), 33); // Compressed public key
+        assert_eq!(
+            address.identity_public_key,
+            PublicKey::from_str(
+                "02739cbcc636ca0eefe988c223ea5c5744946b6b89122de1be9f5e42b05e301b4d"
+            )
+            .unwrap()
+        );
     }
 
     #[test_all]
@@ -416,15 +443,15 @@ mod tests {
         };
         let payload_bytes = proto_address.encode_to_vec();
 
-        // Use an unknown HRP "spx" instead of valid ones
+        // Use an unknown HRP "sparkx" instead of valid ones
         let address =
-            bech32::encode::<Bech32m>(Hrp::parse("spx").unwrap(), &payload_bytes).unwrap();
+            bech32::encode::<Bech32m>(Hrp::parse("sparkx").unwrap(), &payload_bytes).unwrap();
 
         let result = SparkAddress::from_str(&address);
         assert!(result.is_err());
         match result {
             Err(AddressError::UnknownHrp(hrp)) => {
-                assert_eq!(hrp, "spx");
+                assert_eq!(hrp, "sparkx");
             }
             _ => panic!("Expected UnknownHrp error"),
         }
