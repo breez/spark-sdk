@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::str::FromStr;
+use std::time::SystemTime;
 
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::{Transaction, TxOut, Txid};
@@ -801,9 +802,11 @@ impl
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TokenTransaction {
+    pub hash: String,
     pub inputs: TokenInputs,
     pub outputs: Vec<TokenOutput>,
     pub status: TokenTransactionStatus,
+    pub created_timestamp: SystemTime,
 }
 
 impl
@@ -824,6 +827,8 @@ impl
             "Missing token transaction".to_string(),
         ))?;
 
+        let hash = hex::encode(transaction.token_transaction_hash);
+
         let inputs = token_transaction
             .token_inputs
             .ok_or(ServiceError::Generic("Missing token inputs".to_string()))?
@@ -840,10 +845,24 @@ impl
                 .map_err(|_| ServiceError::Generic("Invalid token transaction status".to_string()))?
                 .into();
 
+        // client_created_timestamp will always be filled for V2 transactions and V1 transactions will be discontinued soon
+        let created_timestamp = token_transaction
+            .client_created_timestamp
+            .map(|ts| {
+                std::time::UNIX_EPOCH
+                    + std::time::Duration::from_secs(ts.seconds as u64)
+                    + std::time::Duration::from_nanos(ts.nanos as u64)
+            })
+            .ok_or(ServiceError::Generic(
+                "Missing client created timestamp. Could this be a V1 transaction?".to_string(),
+            ))?;
+
         Ok(TokenTransaction {
+            hash,
             inputs,
             outputs,
             status,
+            created_timestamp,
         })
     }
 }
@@ -915,8 +934,8 @@ impl TryFrom<operator_rpc::spark_token::TokenTransferInput> for TokenTransferInp
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TokenOutputToSpend {
-    prev_token_tx_hash: String,
-    prev_token_tx_vout: u32,
+    pub prev_token_tx_hash: String,
+    pub prev_token_tx_vout: u32,
 }
 
 impl TryFrom<operator_rpc::spark_token::TokenOutputToSpend> for TokenOutputToSpend {
@@ -985,11 +1004,18 @@ impl TryFrom<operator_rpc::spark_token::TokenCreateInput> for TokenCreateInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub enum TokenTransactionStatus {
+    /// Transaction was successfully constructed and validated by the Operator.
     Started,
+    /// If not transfer transaction, transaction was accepted by the Operator and outputs are spendable.
+    /// Else, transaction was accepted by the Operator, inputs are 'locked' until consensus or until transaction expiry (in the event that consensus is not reached)
     Signed,
+    /// Operator has shared its revocation secret shares with other operators and is waiting for the system to collect enough shares to finalize the transaction.
     Revealed,
+    /// Transaction has reached consensus across operators. Transaction is final.
     Finalized,
+    /// Transaction was cancelled and cannot be recovered.
     StartedCancelled,
+    /// Transaction was cancelled and cannot be recovered.
     SignedCancelled,
     Unknown,
 }
@@ -1024,7 +1050,8 @@ impl From<operator_rpc::spark_token::TokenTransactionStatus> for TokenTransactio
 
 #[derive(Debug, Clone)]
 pub struct QueryTokenTransactionsFilter {
-    pub owner_public_keys: Vec<PublicKey>,
+    /// If not provided, will use our own public key
+    pub owner_public_keys: Option<Vec<PublicKey>>,
     pub issuer_public_keys: Vec<PublicKey>,
     pub token_transaction_hashes: Vec<String>,
     pub token_ids: Vec<String>,

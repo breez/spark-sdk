@@ -116,16 +116,7 @@ impl<S: Signer> TokenService<S> {
 
         // Fetch metadata for owned tokens
         let token_identifiers = outputs_map.keys().cloned().collect();
-        let metadata = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .query_token_metadata(QueryTokenMetadataRequest {
-                token_identifiers,
-                ..Default::default()
-            })
-            .await?
-            .token_metadata;
+        let metadata = self.query_tokens_metadata_inner(token_identifiers).await?;
 
         if metadata.len() != outputs_map.keys().len() {
             return Err(ServiceError::Generic(
@@ -154,6 +145,76 @@ impl<S: Signer> TokenService<S> {
         Ok(())
     }
 
+    /// Returns the metadata for the given token identifiers.
+    ///
+    /// For token identifiers that are not found in the local cache, the metadata will be queried from the SE.
+    pub async fn get_tokens_metadata(
+        &self,
+        token_identifiers: &[&str],
+    ) -> Result<Vec<TokenMetadata>, ServiceError> {
+        let cached_outputs = { self.tokens_outputs.lock().await.clone() };
+
+        // Separate token identifiers into cached and uncached
+        let mut cached_metadata = Vec::new();
+        let mut uncached_identifiers = Vec::new();
+
+        for token_id in token_identifiers {
+            if let Some(outputs) = cached_outputs.get(*token_id) {
+                cached_metadata.push(outputs.metadata.clone());
+            } else {
+                uncached_identifiers.push(*token_id);
+            }
+        }
+
+        // Query metadata for uncached tokens
+        let mut queried_metadata = Vec::new();
+        if !uncached_identifiers.is_empty() {
+            queried_metadata = self.query_tokens_metadata(&uncached_identifiers).await?;
+        }
+
+        // Combine cached and queried metadata
+        let mut all_metadata = cached_metadata;
+        all_metadata.extend(queried_metadata);
+
+        Ok(all_metadata)
+    }
+
+    async fn query_tokens_metadata(
+        &self,
+        token_identifiers: &[&str],
+    ) -> Result<Vec<TokenMetadata>, ServiceError> {
+        let token_identifiers = token_identifiers
+            .iter()
+            .map(|id| {
+                bech32m_decode_token_id(id, Some(self.network))
+                    .map_err(|_| ServiceError::Generic("Invalid token id".to_string()))
+            })
+            .collect::<Result<Vec<Vec<u8>>, _>>()?;
+        let metadata = self.query_tokens_metadata_inner(token_identifiers).await?;
+        let metadata = metadata
+            .into_iter()
+            .map(|m| (m, self.network).try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(metadata)
+    }
+
+    async fn query_tokens_metadata_inner(
+        &self,
+        token_identifiers: Vec<Vec<u8>>,
+    ) -> Result<Vec<rpc::spark_token::TokenMetadata>, ServiceError> {
+        let metadata = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .query_token_metadata(QueryTokenMetadataRequest {
+                token_identifiers,
+                ..Default::default()
+            })
+            .await?
+            .token_metadata;
+        Ok(metadata)
+    }
+
     /// Returns owned token outputs from the local cache.
     pub async fn get_tokens_outputs(&self) -> HashMap<String, TokenOutputs> {
         self.tokens_outputs.lock().await.clone()
@@ -164,14 +225,16 @@ impl<S: Signer> TokenService<S> {
         filter: QueryTokenTransactionsFilter,
         paging: PagingFilter,
     ) -> Result<PagingResult<TokenTransaction>, ServiceError> {
-        let mut owner_public_keys = filter
-            .owner_public_keys
-            .iter()
-            .map(|k| k.serialize().to_vec())
-            .collect::<Vec<_>>();
-        if owner_public_keys.is_empty() {
-            owner_public_keys.push(self.signer.get_identity_public_key()?.serialize().to_vec());
-        }
+        let owner_public_keys = match filter.owner_public_keys {
+            Some(keys) => keys
+                .iter()
+                .map(|k| k.serialize().to_vec())
+                .collect::<Vec<_>>(),
+            None => vec![self.signer.get_identity_public_key()?.serialize().to_vec()],
+        };
+
+        // TODO: ask for ordering field to be added to QueryTokenTransactionsRequest
+        //  until then, PagingFilter's order is not being respected
         let response = self
             .operator_pool
             .get_coordinator()

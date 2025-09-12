@@ -341,6 +341,40 @@ pub enum SspUserRequest {
     LightningSendRequest(LightningSendRequest),
 }
 
+impl SspUserRequest {
+    pub fn get_lightning_invoice(&self) -> Option<String> {
+        let invoice = match self {
+            SspUserRequest::LightningReceiveRequest(request) => {
+                Some(request.invoice.encoded_invoice.clone())
+            }
+            SspUserRequest::LightningSendRequest(request) => Some(request.encoded_invoice.clone()),
+            _ => None,
+        };
+        invoice.map(|i| i.to_lowercase())
+    }
+
+    pub fn get_lightning_preimage(&self) -> Option<String> {
+        match self {
+            SspUserRequest::LightningReceiveRequest(request) => {
+                request.lightning_receive_payment_preimage.clone()
+            }
+            SspUserRequest::LightningSendRequest(request) => {
+                request.lightning_send_payment_preimage.clone()
+            }
+            _ => None,
+        }
+    }
+
+    pub fn get_total_fees_sats(&self) -> u64 {
+        match self {
+            SspUserRequest::LightningSendRequest(request) => request.fee.as_sats().unwrap_or(0),
+            SspUserRequest::CoopExitRequest(request) => request.get_total_fees_sats(),
+            SspUserRequest::ClaimStaticDeposit(request) => request.get_total_fees_sats(),
+            _ => 0,
+        }
+    }
+}
+
 #[macros::derive_from(TransfersClaimStaticDepositFragment)]
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ClaimStaticDepositInfo {
@@ -355,6 +389,12 @@ pub struct ClaimStaticDepositInfo {
     pub output_index: i64,
     pub bitcoin_network: BitcoinNetwork,
     pub transfer_spark_id: Option<String>,
+}
+
+impl ClaimStaticDepositInfo {
+    pub fn get_total_fees_sats(&self) -> u64 {
+        self.max_fee.as_sats().unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
@@ -484,6 +524,15 @@ pub struct CoopExitRequest {
     pub raw_coop_exit_transaction: String,
     pub coop_exit_txid: String,
     pub transfer: Option<Transfer>,
+}
+
+impl CoopExitRequest {
+    pub fn get_total_fees_sats(&self) -> u64 {
+        self.fee
+            .as_sats()
+            .unwrap_or(0)
+            .saturating_add(self.l1_broadcast_fee.as_sats().unwrap_or(0))
+    }
 }
 
 /// CoopExitFeeQuote structure

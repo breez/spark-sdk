@@ -12,11 +12,11 @@ pub use model::*;
 pub use spark::operator::{OperatorConfig, OperatorError, OperatorPoolConfig};
 pub use spark::{
     Identifier, Network,
-    address::SparkAddress,
+    address::{SparkAddress, SparkAddressPaymentType},
     services::{
         CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee, InvoiceDescription,
-        LightningSendPayment, LightningSendStatus, TransferStatus, TransferTokenOutput,
-        TransferType, Utxo,
+        LightningSendPayment, LightningSendStatus, TokenInputs, TokenMetadata, TokenTransaction,
+        TokenTransactionStatus, TransferStatus, TransferTokenOutput, TransferType, Utxo,
     },
     signer::{DefaultSigner, Signer},
     ssp::*,

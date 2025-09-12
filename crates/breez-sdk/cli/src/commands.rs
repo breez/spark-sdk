@@ -58,9 +58,14 @@ pub enum Command {
         #[arg(short = 'r', long)]
         payment_request: String,
 
-        /// Optional amount to pay in satoshis
+        /// Optional amount to pay. By default is denominated in sats.
+        /// If a token identifier is provided, the amount will be denominated in the token base units.
         #[arg(short = 'a', long)]
         amount: Option<u64>,
+
+        /// Optional token identifier. May only be provided if the payment request is a spark address.
+        #[arg(short = 't', long)]
+        token_identifier: Option<String>,
     },
 
     /// Pay using LNURL
@@ -252,11 +257,13 @@ pub(crate) async fn execute_command(
         Command::Pay {
             payment_request,
             amount,
+            token_identifier,
         } => {
             let prepared_payment = sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request,
-                    amount_sats: amount,
+                    amount,
+                    token_identifier,
                 })
                 .await;
 

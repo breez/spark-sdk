@@ -61,7 +61,7 @@ where
                 None
             };
 
-            let transfers = wallet.list_transfers(paging).await?;
+            let transfers = wallet.list_transfers(paging, None).await?;
             println!("Transfers: {}", serde_json::to_string_pretty(&transfers)?);
         }
         TransferCommand::ListPending { limit, offset } => {

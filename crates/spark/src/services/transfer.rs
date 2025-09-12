@@ -967,6 +967,7 @@ impl<S: Signer> TransferService<S> {
     async fn query_transfers_inner(
         &self,
         paging: PagingFilter,
+        transfer_ids: Option<Vec<String>>,
     ) -> Result<PagingResult<Transfer>, ServiceError> {
         trace!(
             "Querying transfers with limit: {:?}, offset: {:?}",
@@ -991,6 +992,7 @@ impl<S: Signer> TransferService<S> {
                     operator_rpc::spark::TransferType::CooperativeExit.into(),
                     operator_rpc::spark::TransferType::UtxoSwap.into(),
                 ],
+                transfer_ids: transfer_ids.unwrap_or_default(),
                 ..Default::default()
             })
             .await?;
@@ -1009,10 +1011,21 @@ impl<S: Signer> TransferService<S> {
     pub async fn query_transfers(
         &self,
         paging: Option<PagingFilter>,
+        transfer_ids: Option<Vec<String>>,
     ) -> Result<Vec<Transfer>, ServiceError> {
         let transfers = match paging {
-            Some(paging) => self.query_transfers_inner(paging).await?.items,
-            None => pager(|f| self.query_transfers_inner(f), PagingFilter::default()).await?,
+            Some(paging) => {
+                self.query_transfers_inner(paging, transfer_ids)
+                    .await?
+                    .items
+            }
+            None => {
+                pager(
+                    |f| self.query_transfers_inner(f, transfer_ids.clone()),
+                    PagingFilter::default(),
+                )
+                .await?
+            }
         };
         Ok(transfers)
     }

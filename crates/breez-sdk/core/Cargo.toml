@@ -53,6 +53,7 @@ uuid.workspace = true
 uniffi = { workspace = true, optional = true }
 web-time.workspace = true
 x509-parser = { version = "0.16.0" }
+sparkscan = { version = "0.3.7" }
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
