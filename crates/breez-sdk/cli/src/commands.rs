@@ -92,6 +92,9 @@ pub enum Command {
         #[arg(long)]
         sat_per_vbyte: Option<u64>,
     },
+    Parse {
+        input: String,
+    },
     RefundDeposit {
         /// The txid of the deposit
         txid: String,
@@ -185,6 +188,11 @@ pub(crate) async fn execute_command(
                     max_fee,
                 })
                 .await?;
+            print_value(&value)?;
+            Ok(true)
+        }
+        Command::Parse { input } => {
+            let value = parse(&input).await?;
             print_value(&value)?;
             Ok(true)
         }
