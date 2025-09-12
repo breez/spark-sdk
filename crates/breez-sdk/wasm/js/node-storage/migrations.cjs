@@ -178,8 +178,16 @@ class MigrationManager {
         ],
       },
       {
-        name: "Add token_metadata column to payments",
-        sql: `ALTER TABLE payments ADD COLUMN token_metadata TEXT`,
+        name: "Create payment_details_token table",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS payment_details_token (
+              payment_id TEXT PRIMARY KEY,
+              metadata TEXT,
+              tx_hash TEXT,
+              FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+            )`,
+          `CREATE INDEX IF NOT EXISTS idx_payment_details_token_payment_id ON payment_details_token(payment_id)`,
+        ],
       },
     ];
   }

@@ -24,7 +24,7 @@ use spark::{
     },
     session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
-    ssp::{ServiceProvider, SspTransfer},
+    ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     tree::{
         InMemoryTreeStore, LeavesReservation, SynchronousTreeService, TargetAmounts, TreeNode,
         TreeNodeId, TreeService, TreeStore, select_leaves_by_amounts, with_reserved_leaves,
@@ -539,7 +539,7 @@ impl SparkWallet {
         }
     }
 
-    pub async fn get_spark_address(&self) -> Result<SparkAddress, SparkWalletError> {
+    pub fn get_spark_address(&self) -> Result<SparkAddress, SparkWalletError> {
         Ok(SparkAddress::new(
             self.identity_public_key,
             self.config.network,
@@ -555,9 +555,13 @@ impl SparkWallet {
     pub async fn list_transfers(
         &self,
         paging: Option<PagingFilter>,
+        transfer_ids: Option<Vec<String>>,
     ) -> Result<PagingResult<WalletTransfer>, SparkWalletError> {
         let our_pubkey = self.identity_public_key;
-        let transfers = self.transfer_service.query_transfers(paging).await?;
+        let transfers = self
+            .transfer_service
+            .query_transfers(paging, transfer_ids)
+            .await?;
         create_transfers(transfers, &self.ssp_client, our_pubkey).await
     }
 
@@ -571,6 +575,24 @@ impl SparkWallet {
             .query_pending_transfers(paging)
             .await?;
         create_transfers(transfers, &self.ssp_client, our_pubkey).await
+    }
+
+    /// Queries the SSP for user requests by their associated transfer IDs
+    /// and returns a map of transfer IDs to user requests
+    pub async fn query_ssp_user_requests(
+        &self,
+        transfer_ids: Vec<String>,
+    ) -> Result<HashMap<String, SspUserRequest>, SparkWalletError> {
+        let transfers = self.ssp_client.get_transfers(transfer_ids).await?;
+        Ok(transfers
+            .into_iter()
+            .filter_map(
+                |transfer| match (transfer.spark_id, transfer.user_request) {
+                    (Some(spark_id), Some(user_request)) => Some((spark_id, user_request)),
+                    _ => None,
+                },
+            )
+            .collect())
     }
 
     /// Signs a message with the identity key using ECDSA and returns the signature.

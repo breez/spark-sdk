@@ -119,14 +119,14 @@ class SqliteStorage {
 
   // ===== Payment Operations =====
 
-  listPayments(offset = null, limit = null) {
+  listPayments(offset = null, limit = null, status = null) {
     try {
       // Handle null values by using default values
       const actualOffset = offset !== null ? offset : 0;
       const actualLimit = limit !== null ? limit : 4294967295; // u32::MAX
 
-      const stmt = this.db.prepare(`
-            SELECT p.id
+      let query = `
+        SELECT p.id
             ,       p.payment_type
             ,       p.status
             ,       p.amount
@@ -136,26 +136,36 @@ class SqliteStorage {
             ,       p.withdraw_tx_id
             ,       p.deposit_tx_id
             ,       p.spark
-            ,       p.token_metadata
             ,       l.invoice AS lightning_invoice
             ,       l.payment_hash AS lightning_payment_hash
             ,       l.destination_pubkey AS lightning_destination_pubkey
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
-             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-             ORDER BY p.timestamp DESC 
-             LIMIT ? OFFSET ?
-            `);
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
+             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id`;
 
-      const rows = stmt.all(actualLimit, actualOffset);
+      const queryParams = [];
+
+      if (status !== null) {
+        query += ` WHERE p.status = ?`;
+        queryParams.push(status);
+      }
+
+      query += ` ORDER BY p.timestamp DESC LIMIT ? OFFSET ?`;
+      queryParams.push(actualLimit, actualOffset);
+
+      const stmt = this.db.prepare(query);
+      const rows = stmt.all(...queryParams);
       return Promise.resolve(rows.map(this._rowToPayment.bind(this)));
     } catch (error) {
       return Promise.reject(
         new StorageError(
-          `Failed to list payments (offset: ${offset}, limit: ${limit}): ${error.message}`,
+          `Failed to list payments (offset: ${offset}, limit: ${limit}, status: ${status}): ${error.message}`,
           error
         )
       );
@@ -171,13 +181,18 @@ class SqliteStorage {
       }
 
       const paymentInsert = this.db.prepare(
-        `INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark, token_metadata) 
-         VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @depositTxId, @spark, @tokenMetadata)`
+        `INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark) 
+         VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @depositTxId, @spark)`
       );
       const lightningInsert = this.db.prepare(
         `INSERT OR REPLACE INTO payment_details_lightning 
           (payment_id, invoice, payment_hash, destination_pubkey, description, preimage) 
           VALUES (@id, @invoice, @paymentHash, @destinationPubkey, @description, @preimage)`
+      );
+      const tokenInsert = this.db.prepare(
+        `INSERT OR REPLACE INTO payment_details_token 
+          (payment_id, metadata, tx_hash) 
+          VALUES (@id, @metadata, @txHash)`
       );
       const transaction = this.db.transaction(() => {
         paymentInsert.run({
@@ -193,10 +208,6 @@ class SqliteStorage {
           depositTxId:
             payment.details?.type === "deposit" ? payment.details.txId : null,
           spark: payment.details?.type === "spark" ? 1 : null,
-          tokenMetadata:
-            payment.details?.type === "token"
-              ? JSON.stringify(payment.details.metadata)
-              : null,
         });
 
         if (payment.details?.type === "lightning") {
@@ -207,6 +218,14 @@ class SqliteStorage {
             destinationPubkey: payment.details.destinationPubkey,
             description: payment.details.description,
             preimage: payment.details.preimage,
+          });
+        }
+
+        if (payment.details?.type === "token") {
+          tokenInsert.run({
+            id: payment.id,
+            metadata: JSON.stringify(payment.details.metadata),
+            txHash: payment.details.txHash,
           });
         }
       });
@@ -242,15 +261,17 @@ class SqliteStorage {
             ,       p.withdraw_tx_id
             ,       p.deposit_tx_id
             ,       p.spark
-            ,       p.token_metadata
             ,       l.invoice AS lightning_invoice
             ,       l.payment_hash AS lightning_payment_hash
             ,       l.destination_pubkey AS lightning_destination_pubkey
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              WHERE p.id = ?
             `);
@@ -294,15 +315,17 @@ class SqliteStorage {
             ,       p.withdraw_tx_id
             ,       p.deposit_tx_id
             ,       p.spark
-            ,       p.token_metadata
             ,       l.invoice AS lightning_invoice
             ,       l.payment_hash AS lightning_payment_hash
             ,       l.destination_pubkey AS lightning_destination_pubkey
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              WHERE l.invoice = ?
             `);
@@ -490,6 +513,7 @@ class SqliteStorage {
       details = {
         type: "token",
         metadata: JSON.parse(row.token_metadata),
+        txHash: row.token_tx_hash,
       };
     }
 
