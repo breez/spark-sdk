@@ -574,7 +574,7 @@ pub struct _LnurlPayRequestDetails {
     pub domain: String,
     pub url: String,
     pub address: Option<String>,
-    pub allows_nostr: bool,
+    pub allows_nostr: Option<bool>,
     pub nostr_pubkey: Option<String>,
 }
 

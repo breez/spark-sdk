@@ -174,9 +174,7 @@ pub struct LnurlPayRequestDetails {
     /// Value indicating whether the recipient supports Nostr Zaps through NIP-57.
     ///
     /// See <https://github.com/nostr-protocol/nips/blob/master/57.md>
-    #[serde(default)]
-    pub allows_nostr: bool,
-
+    pub allows_nostr: Option<bool>,
     /// Optional recipient's lnurl provider's Nostr pubkey for NIP-57. If it exists it should be a
     /// valid BIP 340 public key in hex.
     ///
@@ -432,7 +430,7 @@ pub(crate) mod tests {
             metadata_str: String::new(),
             callback: "http://localhost:8080/callback".into(),
             domain: "localhost".into(),
-            allows_nostr: false,
+            allows_nostr: Some(false),
             nostr_pubkey: None,
             url: "http://localhost:8080/pay".into(),
             address: None,
