@@ -348,6 +348,7 @@ pub enum PaymentDetails {
     Spark,
     Token {
         metadata: TokenMetadata,
+        tx_hash: String,
     },
     Lightning {
         description: Option<String>,
@@ -451,6 +452,7 @@ pub struct Config {
     pub network: Network,
     pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<Fee>,
+    pub sparkscan_api_url: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Fee)]
@@ -492,7 +494,6 @@ pub struct TokenMetadata {
     /// Decimal representation of the token max supply (unsigned 128-bit integer)
     pub max_supply: u64,
     pub is_freezable: bool,
-    pub creation_entity_public_key: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SyncWalletRequest)]

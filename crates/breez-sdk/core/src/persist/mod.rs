@@ -1,18 +1,23 @@
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub(crate) mod sqlite;
 
-use std::{collections::HashMap, sync::Arc, time::SystemTime};
+use std::{collections::HashMap, sync::Arc};
 
 use macros::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{DepositClaimError, DepositInfo, LnurlPayInfo, TokenBalance, models::Payment};
+use crate::{
+    DepositClaimError, DepositInfo, LnurlPayInfo, PaymentStatus, TokenBalance, models::Payment,
+};
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
-const SYNC_OFFSET_KEY: &str = "sync_offset";
+const SPARKSCAN_SYNC_INFO_KEY: &str = "sparkscan_sync_info";
 const TX_CACHE_KEY: &str = "tx_cache";
 const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
+
+// Old keys (avoid using them)
+// const SYNC_OFFSET_KEY: &str = "sync_offset";
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UpdateDepositPayload {
@@ -73,6 +78,7 @@ pub trait Storage: Send + Sync {
         &self,
         offset: Option<u32>,
         limit: Option<u32>,
+        status: Option<PaymentStatus>,
     ) -> Result<Vec<Payment>, StorageError>;
 
     /// Inserts a payment into storage
@@ -198,7 +204,10 @@ impl ObjectCacheRepository {
 
     pub(crate) async fn save_sync_info(&self, value: &CachedSyncInfo) -> Result<(), StorageError> {
         self.storage
-            .set_cached_item(SYNC_OFFSET_KEY.to_string(), serde_json::to_string(value)?)
+            .set_cached_item(
+                SPARKSCAN_SYNC_INFO_KEY.to_string(),
+                serde_json::to_string(value)?,
+            )
             .await?;
         Ok(())
     }
@@ -206,7 +215,7 @@ impl ObjectCacheRepository {
     pub(crate) async fn fetch_sync_info(&self) -> Result<Option<CachedSyncInfo>, StorageError> {
         let value = self
             .storage
-            .get_cached_item(SYNC_OFFSET_KEY.to_string())
+            .get_cached_item(SPARKSCAN_SYNC_INFO_KEY.to_string())
             .await?;
         match value {
             Some(value) => Ok(Some(serde_json::from_str(&value)?)),
@@ -271,9 +280,7 @@ pub(crate) struct CachedAccountInfo {
 
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedSyncInfo {
-    pub(crate) offset: u64,
-    #[serde(default)]
-    pub(crate) last_synced_token_timestamp: Option<SystemTime>,
+    pub(crate) last_synced_payment_id: String,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -292,33 +299,78 @@ pub mod tests {
         DepositClaimError, Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType,
         Storage, UpdateDepositPayload,
     };
-    use chrono::Utc;
 
     pub async fn test_sqlite_storage(storage: Box<dyn Storage>) {
-        // Create test payment
+        // Create test payments
         let payment = Payment {
             id: "pmt123".to_string(),
             payment_type: PaymentType::Send,
             status: PaymentStatus::Completed,
             amount: 100_000,
             fees: 1000,
-            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            timestamp: 5000,
             method: PaymentMethod::Spark,
             details: Some(PaymentDetails::Spark),
         };
 
-        // Insert payment
+        let pending_payment = Payment {
+            id: "pmt456".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Pending,
+            amount: 200_000,
+            fees: 2000,
+            timestamp: 2000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
+        };
+
+        // Insert payments
         storage.insert_payment(payment.clone()).await.unwrap();
+        storage
+            .insert_payment(pending_payment.clone())
+            .await
+            .unwrap();
 
         // List payments
-        let payments = storage.list_payments(Some(0), Some(10)).await.unwrap();
-        assert_eq!(payments.len(), 1);
+        let payments = storage
+            .list_payments(Some(0), Some(10), None)
+            .await
+            .unwrap();
+        assert_eq!(payments.len(), 2);
         assert_eq!(payments[0].id, payment.id);
         assert_eq!(payments[0].payment_type, payment.payment_type);
         assert_eq!(payments[0].status, payment.status);
         assert_eq!(payments[0].amount, payment.amount);
         assert_eq!(payments[0].fees, payment.fees);
         assert!(matches!(payments[0].details, Some(PaymentDetails::Spark)));
+        assert_eq!(payments[0].timestamp, payment.timestamp);
+
+        assert_eq!(payments[1].id, pending_payment.id);
+        assert_eq!(payments[1].payment_type, pending_payment.payment_type);
+        assert_eq!(payments[1].status, pending_payment.status);
+        assert_eq!(payments[1].amount, pending_payment.amount);
+        assert_eq!(payments[1].fees, pending_payment.fees);
+        assert!(matches!(payments[1].details, Some(PaymentDetails::Spark)));
+        assert_eq!(payments[1].timestamp, pending_payment.timestamp);
+
+        let pending_payments = storage
+            .list_payments(Some(0), Some(10), Some(PaymentStatus::Pending))
+            .await
+            .unwrap();
+        assert_eq!(pending_payments.len(), 1);
+        assert_eq!(pending_payments[0].id, pending_payment.id);
+        assert_eq!(
+            pending_payments[0].payment_type,
+            pending_payment.payment_type
+        );
+        assert_eq!(pending_payments[0].status, pending_payment.status);
+        assert_eq!(pending_payments[0].amount, pending_payment.amount);
+        assert_eq!(pending_payments[0].fees, pending_payment.fees);
+        assert!(matches!(
+            pending_payments[0].details,
+            Some(PaymentDetails::Spark)
+        ));
+        assert_eq!(pending_payments[0].timestamp, pending_payment.timestamp);
 
         // Get payment by ID
         let retrieved_payment = storage.get_payment_by_id(payment.id.clone()).await.unwrap();
