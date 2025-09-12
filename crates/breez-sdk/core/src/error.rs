@@ -52,6 +52,9 @@ pub enum SdkError {
     #[error("Lnurl error: {0}")]
     LnurlError(String),
 
+    #[error("SparkScan error: {0}")]
+    SparkScanApiError(String),
+
     #[error("Error: {0}")]
     Generic(String),
 }
@@ -137,6 +140,12 @@ impl From<uuid::Error> for SdkError {
 impl From<ServiceConnectivityError> for SdkError {
     fn from(value: ServiceConnectivityError) -> Self {
         SdkError::NetworkError(value.to_string())
+    }
+}
+
+impl From<sparkscan::Error<sparkscan::types::HttpValidationError>> for SdkError {
+    fn from(e: sparkscan::Error<sparkscan::types::HttpValidationError>) -> Self {
+        SdkError::SparkScanApiError(format!("{e:?}"))
     }
 }
 
