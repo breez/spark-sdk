@@ -135,10 +135,11 @@ async fn main_part_2<DB>(args: Args, repository: DB) -> Result<(), anyhow::Error
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
+    let auth_seed: [u8; 32] = rand::random();
     let wallet = Arc::new(
         spark_wallet::SparkWallet::connect(
             SparkWalletConfig::default_config(args.network),
-            DefaultSigner::new(&[0; 32], args.network)?,
+            DefaultSigner::new(&auth_seed, args.network)?,
         )
         .await?,
     );
