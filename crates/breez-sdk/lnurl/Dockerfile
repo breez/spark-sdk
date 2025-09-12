@@ -18,6 +18,7 @@ FROM debian:bookworm-slim AS final
 
 RUN apt-get update -qq && \
     apt-get install -qq -y --no-install-recommends \
+        ca-certificates \
         openssl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
