@@ -402,6 +402,9 @@ pub struct Config {
     // The maximum fee that can be paid for a static deposit claim
     // If not set then any fee is allowed
     pub max_deposit_claim_fee: Option<Fee>,
+
+    /// The domain used for receiving through lnurl-pay and lightning address.
+    pub lnurl_domain: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

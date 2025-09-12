@@ -129,6 +129,7 @@ pub fn default_config(network: Network) -> Config {
         network,
         sync_interval_secs: 60, // every 1 minute
         max_deposit_claim_fee: None,
+        lnurl_domain: None,
     }
 }
 
