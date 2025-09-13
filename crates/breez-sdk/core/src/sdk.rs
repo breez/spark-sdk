@@ -131,7 +131,7 @@ pub fn default_config(network: Network) -> Config {
         network,
         sync_interval_secs: 60, // every 1 minute
         max_deposit_claim_fee: None,
-        lnurl_domain: None,
+        lnurl_domain: Some("spark-lnurl.fly.dev".to_string()),
     }
 }
 
@@ -1247,7 +1247,14 @@ impl BreezSdk {
             "username": config.username,
             "signature": sig,
         }))?;
-        let resp = self.lnurl_client.delete(url, None, Some(body)).await?;
+        let resp = self
+            .lnurl_client
+            .delete(
+                url,
+                Some([("Content-Type".to_string(), "application/json".to_string())].into()),
+                Some(body),
+            )
+            .await?;
         if !resp.is_success() {
             return Err(SdkError::Generic(format!(
                 "Failed to delete lightning address: {}",
