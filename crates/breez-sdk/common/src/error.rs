@@ -27,7 +27,12 @@ pub enum ServiceConnectivityError {
 
 impl From<reqwest::Error> for ServiceConnectivityError {
     fn from(err: reqwest::Error) -> Self {
-        let err_str = err.to_string();
+        let mut err_str = err.to_string();
+        let mut walk: &dyn std::error::Error = &err;
+        while let Some(src) = walk.source() {
+            err_str.push_str(format!(" : {src}").as_str());
+            walk = src;
+        }
         #[allow(unused_mut)]
         let mut res = if err.is_builder() {
             Self::Builder(err_str)
