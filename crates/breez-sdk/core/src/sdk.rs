@@ -1188,6 +1188,42 @@ impl BreezSdk {
         cache.save_lightning_address(&resp).await?;
         Ok(resp)
     }
+
+    pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let Some(config) = cache.fetch_lightning_address_config().await? else {
+            return Ok(());
+        };
+        let Some(lnurl_domain) = &self.config.lnurl_domain else {
+            return Err(SdkError::Generic(
+                "LNURL domain is not configured".to_string(),
+            ));
+        };
+        let spark_address = self.spark_wallet.get_spark_address().await?;
+        let pubkey = spark_address.identity_public_key;
+        let sig = self
+            .spark_wallet
+            .sign_message(&config.username)
+            .await?
+            .serialize_der()
+            .to_lower_hex_string();
+        let url = format!("https://{lnurl_domain}/lnurlpay/{pubkey}");
+        let body = serde_json::to_string(&json!({
+            "username": config.username,
+            "signature": sig,
+        }))?;
+        let resp = self.lnurl_client.delete(url, None, Some(body)).await?;
+        if !resp.is_success() {
+            return Err(SdkError::Generic(format!(
+                "Failed to delete lightning address: {}",
+                resp.body
+            )));
+        }
+
+        cache.delete_lightning_address().await?;
+        cache.delete_lightning_address_config().await?;
+        Ok(())
+    }
 }
 
 fn process_success_action(
