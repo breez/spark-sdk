@@ -29,7 +29,6 @@ pub struct LnurlPayCallbackParams {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecoverLnurlPayRequest {
-    pub domain: String,
     pub signature: String,
 }
 
@@ -46,6 +45,12 @@ pub struct RegisterLnurlPayRequest {
     pub username: String,
     pub signature: String,
     pub description: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UnregisterLnurlPayRequest {
+    pub username: String,
+    pub signature: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -132,7 +137,7 @@ where
         Host(host): Host,
         Path(pubkey): Path<String>,
         Extension(state): Extension<State<DB>>,
-        Json(payload): Json<RegisterLnurlPayRequest>,
+        Json(payload): Json<UnregisterLnurlPayRequest>,
     ) -> Result<(), (StatusCode, Json<Value>)> {
         let pubkey = validate(&pubkey, &payload.signature, &payload.username, &state).await?;
 
