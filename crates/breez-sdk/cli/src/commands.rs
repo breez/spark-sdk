@@ -1,9 +1,9 @@
 use breez_sdk_spark::{
-    BreezSdk, ClaimDepositRequest, Fee, GetInfoRequest, GetPaymentRequest, InputType,
-    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, OnchainConfirmationSpeed,
-    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SyncWalletRequest, parse,
+    BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee, GetInfoRequest,
+    GetPaymentRequest, InputType, ListPaymentsRequest, ListUnclaimedDepositsRequest,
+    LnurlPayRequest, OnchainConfirmationSpeed, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest, SendPaymentMethod,
+    SendPaymentOptions, SendPaymentRequest, SetLightningAddressRequest, SyncWalletRequest, parse,
 };
 use clap::Parser;
 use rustyline::{
@@ -114,6 +114,19 @@ pub enum Command {
         sat_per_vbyte: Option<u64>,
     },
     ListUnclaimedDeposits,
+    CheckLightningAddressAvailable {
+        /// The username to check
+        username: String,
+    },
+    GetLightningAddress,
+    SetLightningAddress {
+        /// The lightning address username
+        username: String,
+
+        /// Description in the lnurl response and the invoice.
+        description: String,
+    },
+    DeleteLightningAddress,
 }
 
 #[derive(Helper, Completer, Hinter, Validator)]
@@ -327,6 +340,35 @@ pub(crate) async fn execute_command(
             }?;
 
             print_value(&res)?;
+            Ok(true)
+        }
+        Command::CheckLightningAddressAvailable { username } => {
+            let res = sdk
+                .check_lightning_address_available(CheckLightningAddressRequest { username })
+                .await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::GetLightningAddress => {
+            let res = sdk.get_lightning_address().await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::SetLightningAddress {
+            username,
+            description,
+        } => {
+            let res = sdk
+                .set_lightning_address(SetLightningAddressRequest {
+                    username,
+                    description,
+                })
+                .await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::DeleteLightningAddress => {
+            sdk.delete_lightning_address().await?;
             Ok(true)
         }
     }

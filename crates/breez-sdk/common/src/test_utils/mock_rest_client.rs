@@ -74,4 +74,23 @@ impl RestClient for MockRestClient {
 
         Ok(RestResponse { status, body })
     }
+
+    async fn delete(
+        &self,
+        _url: String,
+        _headers: Option<HashMap<String, String>>,
+        _body: Option<String>,
+    ) -> Result<RestResponse, ServiceConnectivityError> {
+        let mut responses = self.responses.lock().unwrap();
+        let response = responses.pop_front().ok_or_else(|| {
+            ServiceConnectivityError::Other(String::from(
+                "No response available for DELETE request",
+            ))
+        })?;
+        debug!("Pop DELETE response: {response:?}");
+        let status = response.status_code;
+        let body = response.text;
+
+        Ok(RestResponse { status, body })
+    }
 }

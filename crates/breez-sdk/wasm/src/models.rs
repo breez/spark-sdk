@@ -443,6 +443,7 @@ pub struct Config {
     pub network: Network,
     pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<Fee>,
+    pub lnurl_domain: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Fee)]
@@ -634,4 +635,21 @@ pub enum UpdateDepositPayload {
         refund_txid: String,
         refund_tx: String,
     },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CheckLightningAddressRequest)]
+pub struct CheckLightningAddressRequest {
+    pub username: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SetLightningAddressRequest)]
+pub struct SetLightningAddressRequest {
+    pub username: String,
+    pub description: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::GetLightningAddressResponse)]
+pub struct GetLightningAddressResponse {
+    pub lnurl: String,
+    pub lightning_address: String,
 }

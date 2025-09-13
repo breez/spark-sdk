@@ -213,6 +213,15 @@ impl Storage for SqliteStorage {
         }
     }
 
+    async fn delete_cached_item(&self, key: String) -> Result<(), StorageError> {
+        sqlx::query("DELETE FROM settings WHERE key = ?")
+            .bind(&key)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
     async fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError> {
         let query = "SELECT id, payment_type, status, amount, fees, timestamp, details, method, pm.lnurl_pay_info 
                      FROM payments 

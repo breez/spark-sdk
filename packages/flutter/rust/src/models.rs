@@ -593,3 +593,20 @@ pub struct _SilentPaymentAddressDetails {
     pub network: BitcoinNetwork,
     pub source: PaymentRequestSource,
 }
+
+#[frb(mirror(CheckLightningAddressRequest))]
+pub struct _CheckLightningAddressRequest {
+    pub username: String,
+}
+
+#[frb(mirror(SetLightningAddressRequest))]
+pub struct _SetLightningAddressRequest {
+    pub username: String,
+    pub description: String,
+}
+
+#[frb(mirror(GetLightningAddressResponse))]
+pub struct _GetLightningAddressResponse {
+    pub lnurl: String,
+    pub lightning_address: String,
+}

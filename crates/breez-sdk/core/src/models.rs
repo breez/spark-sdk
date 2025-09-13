@@ -390,6 +390,9 @@ pub struct Config {
     // The maximum fee that can be paid for a static deposit claim
     // If not set then any fee is allowed
     pub max_deposit_claim_fee: Option<Fee>,
+
+    /// The domain used for receiving through lnurl-pay and lightning address.
+    pub lnurl_domain: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -765,4 +768,32 @@ pub trait Logger: Send + Sync {
 pub struct LogEntry {
     pub line: String,
     pub level: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckLightningAddressRequest {
+    pub username: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetLightningAddressRequest {
+    pub username: String,
+    pub description: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetLightningAddressResponse {
+    pub lnurl: String,
+    pub lightning_address: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct RecoverLnurlPayResponse {
+    pub lnurl: String,
+    pub lightning_address: String,
+    pub username: String,
+    pub description: String,
 }
