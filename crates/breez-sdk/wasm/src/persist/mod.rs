@@ -58,6 +58,16 @@ impl breez_sdk_spark::Storage for WasmStorage {
         Ok(())
     }
 
+    async fn delete_cached_item(&self, key: String) -> Result<(), breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .delete_cached_item(key)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
     async fn list_payments(
         &self,
         offset: Option<u32>,
