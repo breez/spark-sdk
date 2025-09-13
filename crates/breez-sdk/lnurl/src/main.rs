@@ -27,6 +27,7 @@ mod repository;
 mod routes;
 mod sqlite;
 mod state;
+mod time;
 mod user;
 
 #[derive(Clone, Parser, Debug, Serialize, Deserialize)]

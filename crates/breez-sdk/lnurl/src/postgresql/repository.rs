@@ -1,6 +1,6 @@
 use sqlx::{PgPool, Row};
 
-use crate::{repository::LnurlRepositoryError, user::User};
+use crate::{repository::LnurlRepositoryError, time::now, user::User};
 
 #[derive(Clone)]
 pub struct LnurlRepository {
@@ -72,15 +72,16 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "INSERT INTO users (domain, pubkey, name, description)
-             VALUES ($1, $2, $3, $4)
+            "INSERT INTO users (domain, pubkey, name, description, updated_at)
+             VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT(domain, pubkey) DO UPDATE
-             SET name = excluded.name, description = excluded.description",
+             SET name = excluded.name, description = excluded.description, updated_at = excluded.updated_at",
         )
         .bind(&user.domain)
         .bind(&user.pubkey)
         .bind(&user.name)
         .bind(&user.description)
+        .bind(now())
         .execute(&self.pool)
         .await?;
         Ok(())

@@ -1,6 +1,6 @@
 use sqlx::{Row, SqlitePool};
 
-use crate::{repository::LnurlRepositoryError, user::User};
+use crate::{repository::LnurlRepositoryError, time::now, user::User};
 
 #[derive(Clone)]
 pub struct LnurlRepository {
@@ -72,13 +72,14 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "REPLACE INTO users (domain, pubkey, name, description)
-            VALUES ($1, $2, $3, $4)",
+            "REPLACE INTO users (domain, pubkey, name, description, updated_at)
+            VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(&user.domain)
         .bind(&user.pubkey)
         .bind(&user.name)
         .bind(&user.description)
+        .bind(now())
         .execute(&self.pool)
         .await?;
         Ok(())
