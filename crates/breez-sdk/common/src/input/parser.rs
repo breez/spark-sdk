@@ -528,6 +528,13 @@ fn parse_bip21_key(
                 None => return Err(Bip21Error::invalid_parameter("sp")),
             }
         }
+        "spark" => {
+            let spark_address = parse_spark_address(value, source);
+            match spark_address {
+                Some(spark_address) => bip_21.payment_methods.push(spark_address),
+                None => return Err(Bip21Error::invalid_parameter("spark")),
+            }
+        }
         extra_key => {
             if is_required {
                 return Err(Bip21Error::UnknownRequiredParameter(extra_key.to_string()));
@@ -1060,6 +1067,33 @@ mod tests {
 
         // The result might be Err if DNS mocking isn't set up
         // Just check the method exists and runs without crashing
+    }
+
+    #[async_test_all]
+    async fn test_bip353_spark_address() {
+        let mock_dns_resolver = MockDnsResolver::new();
+        mock_dns_resolver.add_response(vec![String::from(
+            "bitcoin:?spark=sparkrt1pgssyuuuhnrrdjswal5c3s3rafw9w3y5dd4cjy3duxlf7hjzkp0rqx6dc0nltx",
+        )]);
+        let mock_rest_client = MockRestClient::new();
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+
+        // Test with a BIP-353 address
+        let bip353_address = "user@bitcoin-domain.com";
+
+        // This should be handled by parse_bip_353
+        let result = input_parser.parse(bip353_address).await.unwrap();
+        let InputType::Bip21(bip21_details) = result else {
+            panic!("Expected Bip21 result");
+        };
+        let spark_payment_method = bip21_details
+            .payment_methods
+            .into_iter()
+            .find(|pm| matches!(pm, InputType::SparkAddress(_)));
+        assert!(
+            spark_payment_method.is_some(),
+            "Expected SparkAddress payment method"
+        );
     }
 
     #[async_test_all]
