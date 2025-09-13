@@ -41,6 +41,18 @@ pub trait RestClient: Send + Sync {
         headers: Option<HashMap<String, String>>,
         body: Option<String>,
     ) -> Result<RestResponse, ServiceConnectivityError>;
+
+    /// Makes a DELETE request, and logs on DEBUG.
+    /// ### Arguments
+    /// - `url`: the URL on which DELETE will be called
+    /// - `headers`: the optional DELETE headers
+    /// - `body`: the optional DELETE body
+    async fn delete(
+        &self,
+        url: String,
+        headers: Option<HashMap<String, String>>,
+        body: Option<String>,
+    ) -> Result<RestResponse, ServiceConnectivityError>;
 }
 
 pub struct ReqwestRestClient {
@@ -86,6 +98,34 @@ impl RestClient for ReqwestRestClient {
     ) -> Result<RestResponse, ServiceConnectivityError> {
         debug!("Making POST request to: {url}");
         let mut req = self.client.post(url).timeout(REQUEST_TIMEOUT);
+        if let Some(headers) = headers {
+            for (key, value) in &headers {
+                req = req.header(key, value);
+            }
+        }
+        if let Some(body) = body {
+            req = req.body(body);
+        }
+        let response = req.send().await?;
+        let status = response.status();
+        let body = response.text().await?;
+        debug!("Received response, status: {status}");
+        trace!("raw response body: {body}");
+
+        Ok(RestResponse {
+            status: status.into(),
+            body,
+        })
+    }
+
+    async fn delete(
+        &self,
+        url: String,
+        headers: Option<HashMap<String, String>>,
+        body: Option<String>,
+    ) -> Result<RestResponse, ServiceConnectivityError> {
+        debug!("Making DELETE request to: {url}");
+        let mut req = self.client.delete(url).timeout(REQUEST_TIMEOUT);
         if let Some(headers) = headers {
             for (key, value) in &headers {
                 req = req.header(key, value);
