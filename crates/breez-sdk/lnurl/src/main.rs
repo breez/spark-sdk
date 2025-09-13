@@ -158,6 +158,10 @@ where
     };
 
     let server_router = Router::new()
+        .route(
+            "/lnurlpay/available/{identifier}",
+            get(LnurlServer::<DB>::available),
+        )
         .route("/lnurlpay/{pubkey}", post(LnurlServer::<DB>::register))
         .route("/lnurlpay/{pubkey}", delete(LnurlServer::<DB>::unregister))
         .route(

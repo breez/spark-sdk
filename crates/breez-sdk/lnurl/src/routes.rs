@@ -62,6 +62,28 @@ impl<DB> LnurlServer<DB>
 where
     DB: LnurlRepository,
 {
+    pub async fn available(
+        Host(host): Host,
+        Path(identifier): Path<String>,
+        Extension(state): Extension<State<DB>>,
+    ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+        let user = state
+            .db
+            .get_user_by_name(&sanitize_domain(&state, &host)?, &identifier)
+            .await
+            .map_err(|e| {
+                error!("failed to execute query: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(Value::String("internal server error".into())),
+                )
+            })?;
+
+        Ok(Json(json!({
+            "available": user.is_none()
+        })))
+    }
+
     pub async fn register(
         Host(host): Host,
         Path(pubkey): Path<String>,
