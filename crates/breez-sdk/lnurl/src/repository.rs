@@ -10,8 +10,16 @@ pub enum LnurlRepositoryError {
 
 #[async_trait::async_trait]
 pub trait LnurlRepository {
-    async fn delete_user(&self, pubkey: &str) -> Result<(), LnurlRepositoryError>;
-    async fn get_user_by_name(&self, name: &str) -> Result<Option<User>, LnurlRepositoryError>;
-    async fn get_user_by_pubkey(&self, pubkey: &str) -> Result<Option<User>, LnurlRepositoryError>;
+    async fn delete_user(&self, domain: &str, pubkey: &str) -> Result<(), LnurlRepositoryError>;
+    async fn get_user_by_name(
+        &self,
+        domain: &str,
+        name: &str,
+    ) -> Result<Option<User>, LnurlRepositoryError>;
+    async fn get_user_by_pubkey(
+        &self,
+        domain: &str,
+        pubkey: &str,
+    ) -> Result<Option<User>, LnurlRepositoryError>;
     async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError>;
 }

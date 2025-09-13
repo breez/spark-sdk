@@ -5,13 +5,14 @@ use axum::{
     extract::{Path, Query},
     http::StatusCode,
 };
+use axum_extra::extract::Host;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use lnurl::{Tag, pay::PayResponse};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 use crate::{
     repository::{LnurlRepository, LnurlRepositoryError},
@@ -28,6 +29,7 @@ pub struct LnurlPayCallbackParams {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecoverLnurlPayRequest {
+    pub domain: String,
     pub signature: String,
 }
 
@@ -61,6 +63,7 @@ where
     DB: LnurlRepository,
 {
     pub async fn register(
+        Host(host): Host,
         Path(pubkey): Path<String>,
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<RegisterLnurlPayRequest>,
@@ -73,6 +76,7 @@ where
             ));
         }
         let user = User {
+            domain: sanitize_domain(&state, &host)?,
             pubkey: pubkey.to_string(),
             name: payload.username,
             description: payload.description,
@@ -95,14 +99,15 @@ where
         }
 
         debug!("registered user '{}' for pubkey {}", user.name, pubkey);
-        let lnurl = format!("lnurlp://{}/lnurlp/{}", state.domain, user.name);
+        let lnurl = format!("lnurlp://{}/lnurlp/{}", user.domain, user.name);
         Ok(Json(RegisterLnurlPayResponse {
             lnurl,
-            lightning_address: format!("{}@{}", user.name, state.domain),
+            lightning_address: format!("{}@{}", user.name, user.domain),
         }))
     }
 
     pub async fn unregister(
+        Host(host): Host,
         Path(pubkey): Path<String>,
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<RegisterLnurlPayRequest>,
@@ -111,7 +116,7 @@ where
 
         state
             .db
-            .delete_user(&pubkey.to_string())
+            .delete_user(&sanitize_domain(&state, &host)?, &pubkey.to_string())
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -125,6 +130,7 @@ where
     }
 
     pub async fn recover(
+        Host(host): Host,
         Path(pubkey): Path<String>,
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<RecoverLnurlPayRequest>,
@@ -133,7 +139,7 @@ where
 
         let user = state
             .db
-            .get_user_by_pubkey(&pubkey.to_string())
+            .get_user_by_pubkey(&sanitize_domain(&state, &host)?, &pubkey.to_string())
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -145,10 +151,10 @@ where
 
         match user {
             Some(user) => {
-                let lnurl = format!("lnurlp://{}/lnurlp/{}", state.domain, user.name);
+                let lnurl = format!("lnurlp://{}/lnurlp/{}", &user.domain, user.name);
                 Ok(Json(RecoverLnurlPayResponse {
                     lnurl,
-                    lightning_address: format!("{}@{}", user.name, state.domain),
+                    lightning_address: format!("{}@{}", user.name, &user.domain),
                     username: user.name,
                     description: user.description,
                 }))
@@ -161,6 +167,7 @@ where
     }
 
     pub async fn handle_lnurl_pay(
+        Host(host): Host,
         Path(identifier): Path<String>,
         Extension(state): Extension<State<DB>>,
     ) -> Result<Json<PayResponse>, (StatusCode, Json<Value>)> {
@@ -168,10 +175,14 @@ where
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         }
 
-        let user = state.db.get_user_by_name(&identifier).await.map_err(|e| {
-            error!("failed to execute query: {}", e);
-            lnurl_error("internal server error")
-        })?;
+        let user = state
+            .db
+            .get_user_by_name(&sanitize_domain(&state, &host)?, &identifier)
+            .await
+            .map_err(|e| {
+                error!("failed to execute query: {}", e);
+                lnurl_error("internal server error")
+            })?;
 
         let Some(user) = user else {
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
@@ -180,12 +191,12 @@ where
         Ok(Json(PayResponse {
             callback: format!(
                 "{}://{}/lnurlp/{}/invoice",
-                state.scheme, state.domain, user.name
+                state.scheme, &user.domain, user.name
             ),
             max_sendable: state.max_sendable,
             min_sendable: state.min_sendable,
             tag: Tag::PayRequest,
-            metadata: get_metadata(&state.domain, &user),
+            metadata: get_metadata(&user.domain, &user),
             comment_allowed: None,
             allows_nostr: None,
             nostr_pubkey: None,
@@ -193,6 +204,7 @@ where
     }
 
     pub async fn handle_invoice(
+        Host(host): Host,
         Path(identifier): Path<String>,
         Query(params): Query<LnurlPayCallbackParams>,
         Extension(state): Extension<State<DB>>,
@@ -201,10 +213,15 @@ where
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         }
 
-        let user = state.db.get_user_by_name(&identifier).await.map_err(|e| {
-            error!("failed to execute query: {}", e);
-            lnurl_error("internal server error")
-        })?;
+        let domain = sanitize_domain(&state, &host)?;
+        let user = state
+            .db
+            .get_user_by_name(&domain, &identifier)
+            .await
+            .map_err(|e| {
+                error!("failed to execute query: {}", e);
+                lnurl_error("internal server error")
+            })?;
         let Some(user) = user else {
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         };
@@ -219,7 +236,7 @@ where
             return Err(lnurl_error("amount must be a whole sat amount"));
         }
 
-        let metadata = get_metadata(&state.domain, &user);
+        let metadata = get_metadata(&user.domain, &user);
         let desc_hash = sha256::Hash::hash(metadata.as_bytes());
         let pubkey = parse_pubkey(&user.pubkey)?;
         let invoice = state
@@ -348,4 +365,16 @@ fn lnurl_error(message: &str) -> (StatusCode, Json<Value>) {
             .collect(),
         )),
     )
+}
+
+fn sanitize_domain<DB>(
+    state: &State<DB>,
+    domain: &str,
+) -> Result<String, (StatusCode, Json<Value>)> {
+    let domain = domain.trim().to_lowercase();
+    if !state.domains.contains(&domain) {
+        warn!("domain not allowed: {}", domain);
+        return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
+    }
+    Ok(domain)
 }

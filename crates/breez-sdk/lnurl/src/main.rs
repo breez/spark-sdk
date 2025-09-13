@@ -60,10 +60,6 @@ struct Args {
     #[arg(long, default_value = "https")]
     pub scheme: String,
 
-    /// Domain for lnurl urls.
-    #[arg(long, default_value = "127.0.0.1:8080")]
-    pub domain: String,
-
     /// Minimum amount (in millisatoshi) that can be sent in a lnurl payment.
     #[arg(long, default_value = "1000")]
     pub min_sendable: u64,
@@ -71,6 +67,10 @@ struct Args {
     /// Maximum amount (in millisatoshi) that can be sent in a lnurl payment.
     #[arg(long, default_value = "4000000000")]
     pub max_sendable: u64,
+
+    /// List of domains that are allowed to use the lnurl server.
+    #[arg(long, default_value = "localhost:8080", value_delimiter = ',')]
+    pub domains: Vec<String>,
 }
 
 #[tokio::main]
@@ -147,9 +147,13 @@ where
         db: repository,
         wallet,
         scheme: args.scheme,
-        domain: args.domain,
         min_sendable: args.min_sendable,
         max_sendable: args.max_sendable,
+        domains: args
+            .domains
+            .into_iter()
+            .map(|d| d.trim().to_lowercase())
+            .collect(),
     };
 
     let server_router = Router::new()
