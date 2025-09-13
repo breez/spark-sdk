@@ -11,6 +11,12 @@ pub struct RestResponse {
     pub body: String,
 }
 
+impl RestResponse {
+    pub fn is_success(&self) -> bool {
+        self.status >= 200 && self.status < 300
+    }
+}
+
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
 pub trait RestClient: Send + Sync {

@@ -16,6 +16,7 @@ use breez_sdk_common::{
     },
     rest::RestClient,
 };
+use serde_json::json;
 use spark_wallet::{
     DefaultSigner, ExitSpeed, InvoiceDescription, Order, PagingFilter, PayLightningInvoiceResult,
     SparkAddress, SparkWallet, WalletEvent, WalletTransfer,
@@ -31,10 +32,11 @@ use x509_parser::parse_x509_certificate;
 
 use crate::{
     BitcoinChainService, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee,
-    GetPaymentRequest, GetPaymentResponse, ListUnclaimedDepositsRequest,
-    ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
-    Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    RefundDepositRequest, RefundDepositResponse, SendPaymentOptions,
+    GetLightningAddressResponse, GetPaymentRequest, GetPaymentResponse,
+    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest,
+    LnurlPayResponse, Logger, Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest,
+    PrepareLnurlPayResponse, RecoverLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
+    SendPaymentOptions, SetLightningAddressRequest,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -191,6 +193,37 @@ impl BreezSdk {
     /// 2. `monitor_deposits`: monitors for new deposits
     pub(crate) fn start(&self) {
         self.periodic_sync();
+        self.try_set_lightning_address();
+    }
+
+    /// Refreshes the user's lightning address on the server on startup.
+    fn try_set_lightning_address(&self) {
+        let sdk = self.clone();
+        tokio::spawn(async move {
+            if sdk.config.lnurl_domain.is_none() {
+                return;
+            }
+
+            let cache = ObjectCacheRepository::new(sdk.storage.clone());
+
+            match cache.fetch_lightning_address_config().await {
+                Ok(Some(config)) => match sdk.set_lightning_address(config).await {
+                    Ok(resp) => info!(
+                        "set lightning address on startup: lnurl: {}, address: {}",
+                        resp.lnurl, resp.lightning_address
+                    ),
+                    Err(e) => error!("Failed to set lightning address on startup: {e:?}"),
+                },
+                _ => match sdk.recover_lightning_address().await {
+                    Ok(None) => info!("no lightning address to recover on startup"),
+                    Ok(Some(value)) => info!(
+                        "recovered lightning address on startup: lnurl: {}, address: {}",
+                        value.lnurl, value.lightning_address
+                    ),
+                    Err(e) => error!("Failed to recover lightning address on startup: {e:?}"),
+                },
+            }
+        });
     }
 
     fn periodic_sync(&self) {
@@ -1071,6 +1104,89 @@ impl BreezSdk {
     ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
         let deposits = self.storage.list_deposits().await?;
         Ok(ListUnclaimedDepositsResponse { deposits })
+    }
+
+    /// Attempts to recover a lightning address from the lnurl server.
+    async fn recover_lightning_address(
+        &self,
+    ) -> Result<Option<GetLightningAddressResponse>, SdkError> {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let spark_address = self.spark_wallet.get_spark_address().await?;
+        let pubkey = spark_address.identity_public_key;
+        let sig = self.spark_wallet.sign_message(&pubkey.to_string()).await?;
+        let Some(lnurl_domain) = &self.config.lnurl_domain else {
+            return Err(SdkError::Generic(
+                "LNURL domain is not configured".to_string(),
+            ));
+        };
+        let url = format!("https://{lnurl_domain}/lnurlpay/{pubkey}/recover");
+        let body = serde_json::to_string(&json!({
+            "signature": sig,
+        }))?;
+        let resp = self.lnurl_client.post(url, None, Some(body)).await?;
+        if resp.is_success() {
+            let recovered: RecoverLnurlPayResponse = serde_json::from_str(&resp.body)
+                .map_err(|e| SdkError::Generic(format!("Failed to parse LNURL response: {e}")))?;
+            let resp = GetLightningAddressResponse {
+                lnurl: recovered.lnurl,
+                lightning_address: recovered.lightning_address,
+            };
+            cache
+                .save_lightning_address_config(&SetLightningAddressRequest {
+                    username: recovered.username,
+                    description: recovered.description,
+                })
+                .await?;
+            cache.save_lightning_address(&resp).await?;
+
+            return Ok(Some(resp));
+        }
+
+        if resp.status == 404 {
+            // No address to recover
+            return Ok(None);
+        }
+
+        Err(SdkError::Generic(format!(
+            "Failed to recover lightning address: {}",
+            resp.body
+        )))
+    }
+
+    pub async fn get_lightning_address(
+        &self,
+    ) -> Result<Option<GetLightningAddressResponse>, SdkError> {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        Ok(cache.fetch_lightning_address().await?)
+    }
+
+    pub async fn set_lightning_address(
+        &self,
+        request: SetLightningAddressRequest,
+    ) -> Result<GetLightningAddressResponse, SdkError> {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        cache.save_lightning_address_config(&request).await?;
+        let Some(lnurl_domain) = &self.config.lnurl_domain else {
+            return Err(SdkError::Generic(
+                "LNURL domain is not configured".to_string(),
+            ));
+        };
+
+        let spark_address = self.spark_wallet.get_spark_address().await?;
+        let pubkey = spark_address.identity_public_key;
+        let sig = self.spark_wallet.sign_message(&request.username).await?;
+        let sig = sig.serialize_der().to_lower_hex_string();
+        let url = format!("https://{lnurl_domain}/lnurlpay/{pubkey}");
+        let body = serde_json::to_string(&json!({
+            "username": request.username,
+            "signature": sig,
+            "description": request.description,
+        }))?;
+        let resp = self.lnurl_client.post(url, None, Some(body)).await?.body;
+        let resp: GetLightningAddressResponse = serde_json::from_str(&resp)
+            .map_err(|e| SdkError::Generic(format!("Failed to parse LNURL response: {e}")))?;
+        cache.save_lightning_address(&resp).await?;
+        Ok(resp)
     }
 }
 

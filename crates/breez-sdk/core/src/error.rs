@@ -3,6 +3,7 @@ use crate::{
     persist::{self},
 };
 use bitcoin::consensus::encode::FromHexError;
+use breez_sdk_common::error::ServiceConnectivityError;
 use serde::{Deserialize, Serialize};
 use spark_wallet::SparkWalletError;
 use std::{convert::Infallible, num::TryFromIntError};
@@ -128,6 +129,12 @@ impl From<FromHexError> for SdkError {
 impl From<uuid::Error> for SdkError {
     fn from(e: uuid::Error) -> Self {
         SdkError::InvalidUuid(e.to_string())
+    }
+}
+
+impl From<ServiceConnectivityError> for SdkError {
+    fn from(value: ServiceConnectivityError) -> Self {
+        SdkError::NetworkError(value.to_string())
     }
 }
 

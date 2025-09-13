@@ -443,6 +443,7 @@ pub struct Config {
     pub network: Network,
     pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<Fee>,
+    pub lnurl_domain: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Fee)]

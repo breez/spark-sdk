@@ -7,9 +7,14 @@ use macros::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{DepositClaimError, DepositInfo, LnurlPayInfo, models::Payment};
+use crate::{
+    DepositClaimError, DepositInfo, GetLightningAddressResponse, LnurlPayInfo,
+    SetLightningAddressRequest, models::Payment,
+};
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
+const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
+const LIGHTNING_ADDRESS_CONFIG_KEY: &str = "lightning_address_config";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
 const TX_CACHE_KEY: &str = "tx_cache";
 const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
@@ -254,6 +259,58 @@ impl ObjectCacheRepository {
         let value = self
             .storage
             .get_cached_item(STATIC_DEPOSIT_ADDRESS_CACHE_KEY.to_string())
+            .await?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn save_lightning_address_config(
+        &self,
+        value: &SetLightningAddressRequest,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                LIGHTNING_ADDRESS_CONFIG_KEY.to_string(),
+                serde_json::to_string(value)?,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_lightning_address_config(
+        &self,
+    ) -> Result<Option<SetLightningAddressRequest>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(LIGHTNING_ADDRESS_CONFIG_KEY.to_string())
+            .await?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn save_lightning_address(
+        &self,
+        value: &GetLightningAddressResponse,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                LIGHTNING_ADDRESS_KEY.to_string(),
+                serde_json::to_string(value)?,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_lightning_address(
+        &self,
+    ) -> Result<Option<GetLightningAddressResponse>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
             .await?;
         match value {
             Some(value) => Ok(Some(serde_json::from_str(&value)?)),

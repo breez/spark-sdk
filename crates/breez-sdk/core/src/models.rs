@@ -781,3 +781,25 @@ pub struct LogEntry {
     pub line: String,
     pub level: String,
 }
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetLightningAddressRequest {
+    pub username: String,
+    pub description: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetLightningAddressResponse {
+    pub lnurl: String,
+    pub lightning_address: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct RecoverLnurlPayResponse {
+    pub lnurl: String,
+    pub lightning_address: String,
+    pub username: String,
+    pub description: String,
+}
