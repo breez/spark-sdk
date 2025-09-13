@@ -214,6 +214,9 @@ extern "C" {
     #[wasm_bindgen(structural, method, js_name = setCachedItem, catch)]
     pub fn set_cached_item(this: &Storage, key: String, value: String) -> Result<Promise, JsValue>;
 
+    #[wasm_bindgen(structural, method, js_name = deleteCachedItem, catch)]
+    pub fn delete_cached_item(this: &Storage, key: String) -> Result<Promise, JsValue>;
+
     #[wasm_bindgen(structural, method, js_name = listPayments, catch)]
     pub fn list_payments(
         this: &Storage,

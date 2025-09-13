@@ -143,4 +143,21 @@ impl BreezSdk {
     ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
         self.inner.list_unclaimed_deposits(request).await
     }
+
+    pub async fn get_lightning_address(
+        &self,
+    ) -> Result<Option<GetLightningAddressResponse>, SdkError> {
+        self.inner.get_lightning_address().await
+    }
+
+    pub async fn set_lightning_address(
+        &self,
+        request: SetLightningAddressRequest,
+    ) -> Result<GetLightningAddressResponse, SdkError> {
+        self.inner.set_lightning_address(request).await
+    }
+
+    pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
+        self.inner.delete_lightning_address().await
+    }
 }

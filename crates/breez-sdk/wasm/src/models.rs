@@ -636,3 +636,15 @@ pub enum UpdateDepositPayload {
         refund_tx: String,
     },
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SetLightningAddressRequest)]
+pub struct SetLightningAddressRequest {
+    pub username: String,
+    pub description: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::GetLightningAddressResponse)]
+pub struct GetLightningAddressResponse {
+    pub lnurl: String,
+    pub lightning_address: String,
+}
