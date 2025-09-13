@@ -594,6 +594,11 @@ pub struct _SilentPaymentAddressDetails {
     pub source: PaymentRequestSource,
 }
 
+#[frb(mirror(CheckLightningAddressRequest))]
+pub struct _CheckLightningAddressRequest {
+    pub username: String,
+}
+
 #[frb(mirror(SetLightningAddressRequest))]
 pub struct _SetLightningAddressRequest {
     pub username: String,

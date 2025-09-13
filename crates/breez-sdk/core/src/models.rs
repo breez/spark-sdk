@@ -784,6 +784,12 @@ pub struct LogEntry {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckLightningAddressRequest {
+    pub username: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetLightningAddressRequest {
     pub username: String,
     pub description: String,

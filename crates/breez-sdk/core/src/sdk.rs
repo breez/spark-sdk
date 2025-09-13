@@ -16,7 +16,7 @@ use breez_sdk_common::{
     },
     rest::RestClient,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use spark_wallet::{
     DefaultSigner, ExitSpeed, InvoiceDescription, Order, PagingFilter, PayLightningInvoiceResult,
     SparkAddress, SparkWallet, WalletEvent, WalletTransfer,
@@ -31,8 +31,8 @@ use web_time::Instant;
 use x509_parser::parse_x509_certificate;
 
 use crate::{
-    BitcoinChainService, ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee,
-    GetLightningAddressResponse, GetPaymentRequest, GetPaymentResponse,
+    BitcoinChainService, CheckLightningAddressRequest, ClaimDepositRequest, ClaimDepositResponse,
+    DepositInfo, Fee, GetLightningAddressResponse, GetPaymentRequest, GetPaymentResponse,
     ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest,
     LnurlPayResponse, Logger, Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest,
     PrepareLnurlPayResponse, RecoverLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
@@ -1151,6 +1151,28 @@ impl BreezSdk {
             "Failed to recover lightning address: {}",
             resp.body
         )))
+    }
+
+    pub async fn check_lightning_address_available(
+        &self,
+        req: CheckLightningAddressRequest,
+    ) -> Result<bool, SdkError> {
+        let Some(lnurl_domain) = &self.config.lnurl_domain else {
+            return Err(SdkError::Generic(
+                "LNURL domain is not configured".to_string(),
+            ));
+        };
+        let url = format!("https://{lnurl_domain}/lnurlpay/available/{}", req.username);
+        let resp = self.lnurl_client.get(url, None).await?;
+        if !resp.is_success() {
+            return Err(SdkError::Generic(format!(
+                "Failed to check lightning address availability: {}",
+                resp.body
+            )));
+        }
+
+        let value: Value = serde_json::from_str(&resp.body)?;
+        Ok(value["available"].as_bool().unwrap_or(false))
     }
 
     pub async fn get_lightning_address(

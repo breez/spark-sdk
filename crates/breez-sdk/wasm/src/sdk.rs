@@ -193,9 +193,24 @@ impl BreezSdk {
             .into())
     }
 
+    #[wasm_bindgen(js_name = "checkLightningAddressAvailable")]
+    pub async fn check_lightning_address_available(
+        &self,
+        request: CheckLightningAddressRequest,
+    ) -> WasmResult<bool> {
+        Ok(self
+            .sdk
+            .check_lightning_address_available(request.into())
+            .await?)
+    }
+
     #[wasm_bindgen(js_name = "getLightningAddress")]
     pub async fn get_lightning_address(&self) -> WasmResult<Option<GetLightningAddressResponse>> {
-        Ok(self.sdk.get_lightning_address().await?.map(|resp| resp.into()))
+        Ok(self
+            .sdk
+            .get_lightning_address()
+            .await?
+            .map(|resp| resp.into()))
     }
 
     #[wasm_bindgen(js_name = "setLightningAddress")]

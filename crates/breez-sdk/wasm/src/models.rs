@@ -637,6 +637,11 @@ pub enum UpdateDepositPayload {
     },
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CheckLightningAddressRequest)]
+pub struct CheckLightningAddressRequest {
+    pub username: String,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SetLightningAddressRequest)]
 pub struct SetLightningAddressRequest {
     pub username: String,

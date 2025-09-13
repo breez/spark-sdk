@@ -144,6 +144,13 @@ impl BreezSdk {
         self.inner.list_unclaimed_deposits(request).await
     }
 
+    pub async fn check_lightning_address_available(
+        &self,
+    ) -> Result<Option<CheckLightningAddressResponse>, SdkError> {
+        self.inner.check_lightning_address_available().await
+    }
+
+
     pub async fn get_lightning_address(
         &self,
     ) -> Result<Option<GetLightningAddressResponse>, SdkError> {
