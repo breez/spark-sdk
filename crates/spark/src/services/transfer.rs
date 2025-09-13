@@ -972,7 +972,7 @@ impl<S: Signer> TransferService<S> {
             "Querying transfers with limit: {:?}, offset: {:?}",
             paging.limit, paging.offset
         );
-        let order: crate::operator::rpc::spark::Order = paging.order.clone().into();
+        let order: crate::operator::rpc::spark::Order = paging.order.into();
         let resp = self
             .operator_pool
             .get_coordinator()

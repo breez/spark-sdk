@@ -11,7 +11,7 @@ pub struct PagingFilter {
     pub order: Order,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Order {
     Ascending,
     Descending,
@@ -39,7 +39,7 @@ impl PagingFilter {
         Self {
             offset: self.offset + self.limit,
             limit: self.limit,
-            order: self.order.clone(),
+            order: self.order,
         }
     }
 
@@ -271,7 +271,7 @@ mod tests {
                             next: Some(PagingFilter {
                                 offset: filter_clone.offset,
                                 limit: filter_clone.limit,
-                                order: filter_clone.order.clone(),
+                                order: filter_clone.order,
                             }),
                         })
                     } else {

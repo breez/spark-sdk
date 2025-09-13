@@ -48,6 +48,7 @@ pub struct DepositAddress {
     pub verifying_public_key: PublicKey,
 }
 
+#[derive(Debug, Copy, Clone)]
 pub enum Fee {
     Fixed { amount: u64 },
     Rate { sat_per_vbyte: u64 },
@@ -116,7 +117,7 @@ impl TryFrom<crate::ssp::StaticDepositQuote> for StaticDepositQuote {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 #[repr(u8)]
 pub enum UtxoSwapRequestType {
     Fixed,
@@ -484,7 +485,7 @@ impl<S: Signer> DepositService<S> {
         // 4. Output index: UTXO output index (vout) as 4-byte unsigned integer (little-endian)
         payload.extend_from_slice(&output_index.to_le_bytes());
         // 5. Request type (1-byte unsigned integer, little-endian)
-        payload.extend_from_slice(&[request_type.clone() as u8]);
+        payload.extend_from_slice(&[request_type as u8]);
         // 6. Credit amount: amount of satoshis to credit as 8-byte unsigned integer (little-endian)
         payload.extend_from_slice(&credit_amount_sats.to_le_bytes());
         // 7. Signing payload: SSP signature or sighash of spend transaction (UTF-8 string)

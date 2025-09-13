@@ -70,7 +70,7 @@ pub struct LightningSendPayment {
     pub payment_preimage: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Copy, Clone, Deserialize, Serialize)]
 pub enum LightningSendStatus {
     Created,
     RequestValidated,

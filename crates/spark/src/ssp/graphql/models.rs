@@ -109,7 +109,7 @@ pub enum BitcoinNetwork {
 }
 
 /// Currency unit enum
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CurrencyUnit {
     Bitcoin,
@@ -305,7 +305,7 @@ pub struct UserRequest {
     pub on: TransferFragmentUserRequestOn,
 }
 
-#[derive(FromEnum, Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(FromEnum, Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
 #[from_enum(CompleteLeavesSwapUserRequestFragmentOn)]
 #[from_enum(RequestCoopExitUserRequestFragmentOn)]
 #[from_enum(RequestLeavesSwapUserRequestFragmentOn)]
@@ -357,7 +357,7 @@ pub struct ClaimStaticDepositInfo {
     pub transfer_spark_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClaimStaticDepositStatus {
     Created,
