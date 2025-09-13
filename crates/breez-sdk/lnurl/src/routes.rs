@@ -72,9 +72,10 @@ where
         Path(identifier): Path<String>,
         Extension(state): Extension<State<DB>>,
     ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+        let username = sanitize_username(&identifier);
         let user = state
             .db
-            .get_user_by_name(&sanitize_domain(&state, &host)?, &identifier)
+            .get_user_by_name(&sanitize_domain(&state, &host)?, &username)
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -95,7 +96,8 @@ where
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<RegisterLnurlPayRequest>,
     ) -> Result<Json<RegisterLnurlPayResponse>, (StatusCode, Json<Value>)> {
-        let pubkey = validate(&pubkey, &payload.signature, &payload.username, &state).await?;
+        let username = sanitize_username(&payload.username);
+        let pubkey = validate(&pubkey, &payload.signature, &username, &state).await?;
         if payload.description.chars().take(256).count() > 255 {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -105,7 +107,7 @@ where
         let user = User {
             domain: sanitize_domain(&state, &host)?,
             pubkey: pubkey.to_string(),
-            name: payload.username,
+            name: username,
             description: payload.description,
         };
 
@@ -139,7 +141,8 @@ where
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<UnregisterLnurlPayRequest>,
     ) -> Result<(), (StatusCode, Json<Value>)> {
-        let pubkey = validate(&pubkey, &payload.signature, &payload.username, &state).await?;
+        let username = sanitize_username(&payload.username);
+        let pubkey = validate(&pubkey, &payload.signature, &username, &state).await?;
 
         state
             .db
@@ -202,9 +205,10 @@ where
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         }
 
+        let username = sanitize_username(&identifier);
         let user = state
             .db
-            .get_user_by_name(&sanitize_domain(&state, &host)?, &identifier)
+            .get_user_by_name(&sanitize_domain(&state, &host)?, &username)
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -240,10 +244,11 @@ where
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         }
 
+        let username = sanitize_username(&identifier);
         let domain = sanitize_domain(&state, &host)?;
         let user = state
             .db
-            .get_user_by_name(&domain, &identifier)
+            .get_user_by_name(&domain, &username)
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -404,4 +409,8 @@ fn sanitize_domain<DB>(
         return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
     }
     Ok(domain)
+}
+
+fn sanitize_username(username: &str) -> String {
+    username.trim().to_lowercase()
 }
