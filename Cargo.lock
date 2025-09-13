@@ -2769,7 +2769,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum 0.8.4",
- "bech32",
  "bitcoin",
  "clap",
  "figment",
