@@ -1204,8 +1204,21 @@ impl BreezSdk {
             "signature": sig,
             "description": request.description,
         }))?;
-        let resp = self.lnurl_client.post(url, None, Some(body)).await?.body;
-        let resp: GetLightningAddressResponse = serde_json::from_str(&resp)
+        let resp = self
+            .lnurl_client
+            .post(
+                url,
+                Some([("Content-Type".to_string(), "application/json".to_string())].into()),
+                Some(body),
+            )
+            .await?;
+        if !resp.is_success() {
+            return Err(SdkError::Generic(format!(
+                "Failed to set lightning address: status {}: {}",
+                resp.status, resp.body
+            )));
+        }
+        let resp: GetLightningAddressResponse = serde_json::from_str(&resp.body)
             .map_err(|e| SdkError::Generic(format!("Failed to parse LNURL response: {e}")))?;
         cache.save_lightning_address(&resp).await?;
         Ok(resp)
