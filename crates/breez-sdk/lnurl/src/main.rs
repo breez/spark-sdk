@@ -69,9 +69,9 @@ struct Args {
     #[arg(long, default_value = "4000000000")]
     pub max_sendable: u64,
 
-    /// List of domains that are allowed to use the lnurl server.
-    #[arg(long, default_value = "localhost:8080", value_delimiter = ',')]
-    pub domains: Vec<String>,
+    /// List of domains that are allowed to use the lnurl server. Comma separated.
+    #[arg(long, default_value = "localhost:8080")]
+    pub domains: String,
 }
 
 #[tokio::main]
@@ -144,17 +144,18 @@ where
         )
         .await?,
     );
+    let domains = args
+        .domains
+        .split(',')
+        .map(|d| d.trim().to_lowercase())
+        .collect();
     let state = State {
         db: repository,
         wallet,
         scheme: args.scheme,
         min_sendable: args.min_sendable,
         max_sendable: args.max_sendable,
-        domains: args
-            .domains
-            .into_iter()
-            .map(|d| d.trim().to_lowercase())
-            .collect(),
+        domains,
     };
 
     let server_router = Router::new()
