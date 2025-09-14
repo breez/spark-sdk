@@ -6,10 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
 use crate::{
-    operator::{
-        SessionManager,
-        rpc::{ConnectionManager, OperatorRpcError, SparkRpcClient},
-    },
+    operator::rpc::{ConnectionManager, OperatorRpcError, SparkRpcClient},
+    session_manager::SessionManager,
     signer::Signer,
 };
 

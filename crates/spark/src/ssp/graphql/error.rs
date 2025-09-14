@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::signer::SignerError;
+use crate::{session_manager::SessionManagerError, signer::SignerError};
 
 /// Alias for Result with GraphQLError as the error type
 pub type GraphQLResult<T> = std::result::Result<T, GraphQLError>;
@@ -27,10 +27,6 @@ pub(crate) enum GraphQLError {
     /// Error during serialization or deserialization
     #[error("serialization error: {0}")]
     Serialization(String),
-
-    /// Generic error for various operations
-    #[error("error: {0}")]
-    Generic(String),
 }
 
 impl GraphQLError {
@@ -42,11 +38,6 @@ impl GraphQLError {
     /// Creates a new serialization error
     pub fn serialization<S: Into<String>>(reason: S) -> Self {
         Self::Serialization(reason.into())
-    }
-
-    /// Creates a new generic error
-    pub fn generic<S: Into<String>>(reason: S) -> Self {
-        Self::Generic(reason.into())
     }
 
     /// Creates a new GraphQL error from GraphQL error objects
@@ -68,5 +59,11 @@ impl From<reqwest::Error> for GraphQLError {
 impl From<SignerError> for GraphQLError {
     fn from(err: SignerError) -> Self {
         Self::Signer(err.to_string())
+    }
+}
+
+impl From<SessionManagerError> for GraphQLError {
+    fn from(err: SessionManagerError) -> Self {
+        Self::Authentication(err.to_string())
     }
 }

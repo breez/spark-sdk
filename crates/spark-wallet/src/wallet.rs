@@ -11,7 +11,7 @@ use spark::{
     address::SparkAddress,
     bitcoin::BitcoinService,
     events::{SparkEvent, subscribe_server_events},
-    operator::{InMemorySessionManager, OperatorPool, SessionManager, rpc::ConnectionManager},
+    operator::{OperatorPool, rpc::ConnectionManager},
     services::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
         InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment,
@@ -19,6 +19,7 @@ use spark::{
         TokenService, TokenTransaction, Transfer, TransferService, TransferTokenOutput,
         UnilateralExitService, Utxo,
     },
+    session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer},
     tree::{
@@ -85,6 +86,7 @@ impl SparkWallet {
         let service_provider = Arc::new(ServiceProvider::new(
             config.service_provider_config.clone(),
             signer.clone(),
+            session_manager.clone(),
         ));
 
         let operator_pool = Arc::new(

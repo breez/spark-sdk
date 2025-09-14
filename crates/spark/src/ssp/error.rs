@@ -43,7 +43,6 @@ impl From<GraphQLError> for ServiceProviderError {
             GraphQLError::Network { reason, code } => Self::Network { reason, code },
             GraphQLError::Signer(reason) => Self::Signer(reason),
             GraphQLError::Serialization(reason) => Self::Serialization(reason),
-            GraphQLError::Generic(reason) => Self::Generic(reason),
         }
     }
 }

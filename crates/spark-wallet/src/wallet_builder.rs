@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use spark::{
-    operator::{InMemorySessionManager, SessionManager},
+    session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
     tree::{InMemoryTreeStore, TreeStore},
 };

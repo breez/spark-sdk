@@ -5,8 +5,6 @@ use super::auth::OperatorAuth;
 use super::error::Result;
 use super::spark::*;
 use super::spark_token;
-use crate::operator::OperatorSession;
-use crate::operator::SessionManager;
 use crate::operator::rpc::OperatorRpcError;
 use crate::operator::rpc::spark::query_nodes_request::Source;
 use crate::operator::rpc::spark::spark_service_client::SparkServiceClient;
@@ -16,6 +14,8 @@ use crate::operator::rpc::spark_token::StartTransactionRequest;
 use crate::operator::rpc::spark_token::StartTransactionResponse;
 use crate::operator::rpc::spark_token::spark_token_service_client::SparkTokenServiceClient;
 use crate::operator::rpc::transport::grpc_client::Transport;
+use crate::session_manager::Session;
+use crate::session_manager::SessionManager;
 use crate::signer::Signer;
 use bitcoin::secp256k1::PublicKey;
 use tonic::Request;
@@ -621,10 +621,10 @@ impl SparkRpcClient {
     }
 }
 
-impl TryFrom<OperatorSession> for OperatorSessionInterceptor {
+impl TryFrom<Session> for OperatorSessionInterceptor {
     type Error = OperatorRpcError;
 
-    fn try_from(session: OperatorSession) -> std::result::Result<Self, Self::Error> {
+    fn try_from(session: Session) -> std::result::Result<Self, Self::Error> {
         Ok(OperatorSessionInterceptor {
             token: session.token.parse().map_err(|_| {
                 OperatorRpcError::Authentication("Invalid session token".to_string())

@@ -1,12 +1,15 @@
 use base64::Engine;
+use bitcoin::secp256k1::PublicKey;
 use graphql_client::{GraphQLQuery, Response};
 use reqwest::Client;
 use reqwest::header::HeaderMap;
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue};
 use serde::Serialize;
 use std::sync::Arc;
+use tracing::error;
 
+use crate::session_manager::{Session, SessionManager};
 use crate::signer::Signer;
-use crate::ssp::graphql::auth_provider::AuthProvider;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
 use crate::ssp::graphql::queries::{
     self, claim_static_deposit, complete_coop_exit, complete_leaves_swap, coop_exit_fee_quote,
@@ -28,13 +31,18 @@ pub struct GraphQLClient {
     client: Client,
     base_url: String,
     schema_endpoint: String,
-    auth_provider: Arc<AuthProvider>,
     signer: Arc<dyn Signer>,
+    session_manager: Arc<dyn SessionManager>,
+    ssp_identity_public_key: PublicKey,
 }
 
 impl GraphQLClient {
     /// Create a new GraphQLClient with the given configuration, and signer
-    pub fn new(config: GraphQLClientConfig, signer: Arc<dyn Signer>) -> Self {
+    pub fn new(
+        config: GraphQLClientConfig,
+        signer: Arc<dyn Signer>,
+        session_manager: Arc<dyn SessionManager>,
+    ) -> Self {
         let schema_endpoint = config
             .schema_endpoint
             .unwrap_or_else(|| String::from("graphql/spark/2025-03-19"));
@@ -46,8 +54,9 @@ impl GraphQLClient {
                 .unwrap(),
             base_url: config.base_url,
             schema_endpoint,
-            auth_provider: Arc::new(AuthProvider::new()),
             signer,
+            session_manager,
+            ssp_identity_public_key: config.ssp_identity_public_key,
         }
     }
 
@@ -105,14 +114,10 @@ impl GraphQLClient {
     where
         T: Serialize + Clone + Into<Q::Variables>,
     {
-        if needs_auth && !self.auth_provider.is_authorized().await? {
-            self.authenticate().await?;
-            tracing::debug!("Authenticated successfully with ssp");
-        }
-
+        let session = self.get_session().await?;
         let full_url = self.get_full_url();
         let mut headers = HeaderMap::new();
-        self.auth_provider.add_auth_headers(&mut headers).await?;
+        self.add_auth_headers(&session, &mut headers)?;
 
         match self
             .post_query_inner::<Q, T>(&full_url, &headers, variables.clone())
@@ -128,9 +133,9 @@ impl GraphQLClient {
                     && status_code == reqwest::StatusCode::UNAUTHORIZED.as_u16()
                     && needs_auth
                 {
-                    self.authenticate().await?;
+                    let session = self.get_session().await?;
                     let mut headers = HeaderMap::new();
-                    self.auth_provider.add_auth_headers(&mut headers).await?;
+                    self.add_auth_headers(&session, &mut headers)?;
 
                     return self
                         .post_query_inner::<Q, T>(&full_url, &headers, variables)
@@ -142,9 +147,8 @@ impl GraphQLClient {
     }
 
     /// Authenticate with the server using challenge-response
-    async fn authenticate(&self) -> GraphQLResult<()> {
+    async fn authenticate(&self) -> GraphQLResult<Session> {
         tracing::debug!("Authenticating with ssp");
-        self.auth_provider.remove_auth().await?;
 
         // Get the identity public key
         let identity_public_key = hex::encode(self.signer.get_identity_public_key()?.serialize());
@@ -191,15 +195,17 @@ impl GraphQLClient {
             .post_query_inner::<queries::VerifyChallenge, _>(&full_url, &headers, verify_vars)
             .await?;
 
-        // Store the session token
-        self.auth_provider
-            .set_auth(
-                verify_response.verify_challenge.session_token,
-                verify_response.verify_challenge.valid_until,
-            )
-            .await?;
-
-        Ok(())
+        Ok(Session {
+            token: verify_response.verify_challenge.session_token,
+            expiration: verify_response
+                .verify_challenge
+                .valid_until
+                .timestamp()
+                .try_into()
+                .map_err(|_| {
+                    GraphQLError::Authentication("Invalid expiration timestamp".to_string())
+                })?,
+        })
     }
 
     /// Get a swap fee estimate
@@ -488,5 +494,46 @@ impl GraphQLClient {
             .into_iter()
             .map(SspTransfer::from)
             .collect())
+    }
+
+    async fn get_session(&self) -> GraphQLResult<Session> {
+        let current_session = self
+            .session_manager
+            .get_session(&self.ssp_identity_public_key)
+            .await;
+        let valid_session = match current_session {
+            Ok(session) => {
+                if session.is_valid() {
+                    session
+                } else {
+                    self.authenticate().await?
+                }
+            }
+            Err(e) => {
+                error!("Failed to get session from session manager: {}", e);
+                self.authenticate().await?
+            }
+        };
+        self.session_manager
+            .set_session(&self.ssp_identity_public_key, valid_session.clone())
+            .await?;
+        Ok(valid_session)
+    }
+
+    fn add_auth_headers(
+        &self,
+        session: &Session,
+        headers: &mut HeaderMap,
+    ) -> Result<(), GraphQLError> {
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+        let auth_value = format!("Bearer {}", session.token);
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&auth_value)
+                .map_err(|_| GraphQLError::authentication("Invalid header"))?,
+        );
+
+        Ok(())
     }
 }
