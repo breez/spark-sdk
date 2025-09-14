@@ -4,11 +4,11 @@ pub mod core;
 pub mod events;
 pub mod operator;
 pub mod services;
+pub mod session_manager;
 pub mod signer;
 pub mod ssp;
 pub mod tree;
 pub mod utils;
-pub mod session_manager;
 
 pub use core::Network;
 pub use frost_secp256k1_tr::Identifier;
