@@ -9,6 +9,7 @@ pub struct State<DB> {
     pub min_sendable: u64,
     pub max_sendable: u64,
     pub domains: HashSet<String>,
+    pub ca_cert: Option<Vec<u8>>,
 }
 
 impl<DB> Clone for State<DB>
@@ -23,6 +24,7 @@ where
             min_sendable: self.min_sendable,
             max_sendable: self.max_sendable,
             domains: self.domains.clone(),
+            ca_cert: self.ca_cert.clone(),
         }
     }
 }

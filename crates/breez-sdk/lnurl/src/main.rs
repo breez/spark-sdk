@@ -5,8 +5,10 @@ use axum::{
     Extension, Router,
     extract::DefaultBodyLimit,
     http::{self, Method},
+    middleware,
     routing::{delete, get, post},
 };
+use base64::{Engine, prelude::BASE64_STANDARD};
 use clap::Parser;
 use figment::{
     Figment,
@@ -18,9 +20,11 @@ use sqlx::{PgPool, SqlitePool};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use x509_parser::prelude::{FromDer, X509Certificate};
 
 use crate::{repository::LnurlRepository, routes::LnurlServer, state::State};
 
+mod auth;
 mod error;
 mod postgresql;
 mod repository;
@@ -72,6 +76,11 @@ struct Args {
     /// List of domains that are allowed to use the lnurl server. Comma separated.
     #[arg(long, default_value = "localhost:8080")]
     pub domains: String,
+
+    /// Base64 encoded DER format CA certificate without begin/end certificate markers.
+    /// If set, the server will use this certificate to validate api keys.
+    #[arg(long)]
+    pub ca_cert: Option<String>,
 }
 
 #[tokio::main]
@@ -149,6 +158,18 @@ where
         .split(',')
         .map(|d| d.trim().to_lowercase())
         .collect();
+
+    let ca_cert = args
+        .ca_cert
+        .map(|ca_cert_str| {
+            let raw_ca = BASE64_STANDARD
+                .decode(ca_cert_str.trim())
+                .map_err(|e| anyhow!("failed to decode base64 ca_cert: {:?}", e))?;
+            let (_, ca_cert) = X509Certificate::from_der(&raw_ca)
+                .map_err(|e| anyhow!("failed to parse ca certificate: {e:?}"))?;
+            Ok::<_, anyhow::Error>(ca_cert.as_raw().to_vec())
+        })
+        .transpose()?;
     let state = State {
         db: repository,
         wallet,
@@ -156,6 +177,7 @@ where
         min_sendable: args.min_sendable,
         max_sendable: args.max_sendable,
         domains,
+        ca_cert,
     };
 
     let server_router = Router::new()
@@ -169,6 +191,10 @@ where
             "/lnurlpay/{pubkey}/recover",
             delete(LnurlServer::<DB>::recover),
         )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::auth::<DB>,
+        ))
         .route(
             "/.well-known/lnurlp/{identifier}",
             get(LnurlServer::<DB>::handle_lnurl_pay),
@@ -194,7 +220,7 @@ where
                     Method::OPTIONS,
                 ]),
         )
-        .layer(DefaultBodyLimit::max(1_000_000)); // max 1mb body size
+        .layer(DefaultBodyLimit::max(1_000_000));
 
     let listener = tokio::net::TcpListener::bind(args.address).await?;
     let server = axum::serve(listener, server_router.into_make_service());
