@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use spark_wallet::{DefaultSigner, SparkWallet};
+use spark_wallet::SparkWallet;
 use tracing::{error, info};
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
 
 pub struct DepositChainSyncer {
     storage: Arc<dyn Storage>,
-    spark_wallet: Arc<SparkWallet<DefaultSigner>>,
+    spark_wallet: Arc<SparkWallet>,
     utxo_fetcher: CachedUtxoFetcher,
 }
 
@@ -22,7 +22,7 @@ impl DepositChainSyncer {
     pub fn new(
         chain_service: Arc<dyn BitcoinChainService>,
         storage: Arc<dyn Storage>,
-        spark_wallet: Arc<SparkWallet<DefaultSigner>>,
+        spark_wallet: Arc<SparkWallet>,
     ) -> Self {
         Self {
             storage: storage.clone(),

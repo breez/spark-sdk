@@ -25,19 +25,19 @@ use crate::{
 
 use super::{TreeNode, error::TreeServiceError};
 
-pub struct SynchronousTreeService<S> {
+pub struct SynchronousTreeService {
     identity_pubkey: PublicKey,
     network: Network,
-    operator_pool: Arc<OperatorPool<S>>,
+    operator_pool: Arc<OperatorPool>,
     state: Arc<dyn TreeStore>,
-    timelock_manager: Arc<TimelockManager<S>>,
-    signer: Arc<S>,
-    swap_service: Swap<S>,
+    timelock_manager: Arc<TimelockManager>,
+    signer: Arc<dyn Signer>,
+    swap_service: Swap,
     leaf_optimization_lock: Mutex<()>,
 }
 
 #[macros::async_trait]
-impl<S: Signer> TreeService for SynchronousTreeService<S> {
+impl TreeService for SynchronousTreeService {
     async fn list_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
         self.state.get_leaves().await
     }
@@ -219,15 +219,15 @@ impl<S: Signer> TreeService for SynchronousTreeService<S> {
     }
 }
 
-impl<S: Signer> SynchronousTreeService<S> {
+impl SynchronousTreeService {
     pub fn new(
         identity_pubkey: PublicKey,
         network: Network,
-        operator_pool: Arc<OperatorPool<S>>,
+        operator_pool: Arc<OperatorPool>,
         state: Arc<dyn TreeStore>,
-        timelock_manager: Arc<TimelockManager<S>>,
-        signer: Arc<S>,
-        swap_service: Swap<S>,
+        timelock_manager: Arc<TimelockManager>,
+        signer: Arc<dyn Signer>,
+        swap_service: Swap,
     ) -> Self {
         SynchronousTreeService {
             identity_pubkey,
@@ -243,7 +243,7 @@ impl<S: Signer> SynchronousTreeService<S> {
 
     async fn query_nodes_inner(
         &self,
-        client: &SparkRpcClient<S>,
+        client: &SparkRpcClient,
         include_parents: bool,
         source: Option<Source>,
         paging: PagingFilter,
@@ -279,7 +279,7 @@ impl<S: Signer> SynchronousTreeService<S> {
 
     async fn query_nodes(
         &self,
-        client: &SparkRpcClient<S>,
+        client: &SparkRpcClient,
         include_parents: bool,
         source: Option<Source>,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {

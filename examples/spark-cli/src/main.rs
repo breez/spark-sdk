@@ -89,8 +89,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let network = config.spark_config.network;
     let signer = DefaultSigner::new(&seed, network)?;
-    let wallet =
-        Arc::new(spark_wallet::SparkWallet::connect(config.spark_config.clone(), signer).await?);
+    let wallet = Arc::new(
+        spark_wallet::SparkWallet::connect(config.spark_config.clone(), Arc::new(signer)).await?,
+    );
     let clone = Arc::clone(&wallet);
     tokio::spawn(async move {
         let mut receiver = clone.subscribe_events();

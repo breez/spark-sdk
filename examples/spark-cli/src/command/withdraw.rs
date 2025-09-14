@@ -85,14 +85,11 @@ pub enum WithdrawCommand {
     },
 }
 
-pub async fn handle_command<S>(
+pub async fn handle_command(
     config: &Config,
-    wallet: &SparkWallet<S>,
+    wallet: &SparkWallet,
     command: WithdrawCommand,
-) -> Result<(), Box<dyn std::error::Error>>
-where
-    S: spark_wallet::Signer + Clone,
-{
+) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         WithdrawCommand::FetchFeeQuote {
             withdrawal_address,

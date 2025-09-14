@@ -39,27 +39,29 @@ use crate::{
 
 use super::{SparkWalletConfig, SparkWalletError};
 
-pub struct SparkWallet<S> {
+pub struct SparkWallet {
     /// Cancellation token to stop background tasks. It is dropped when the wallet is dropped to stop background tasks.
     #[allow(dead_code)]
     cancel: watch::Sender<()>,
     config: SparkWalletConfig,
-    deposit_service: Arc<DepositService<S>>,
+    deposit_service: Arc<DepositService>,
     event_manager: Arc<EventManager>,
     identity_public_key: PublicKey,
-    signer: Arc<S>,
+    signer: Arc<dyn Signer>,
     tree_service: Arc<dyn TreeService>,
-    coop_exit_service: Arc<CoopExitService<S>>,
-    unilateral_exit_service: Arc<UnilateralExitService<S>>,
-    transfer_service: Arc<TransferService<S>>,
-    lightning_service: Arc<LightningService<S>>,
-    ssp_client: Arc<ServiceProvider<S>>,
-    token_service: Arc<TokenService<S>>,
+    coop_exit_service: Arc<CoopExitService>,
+    unilateral_exit_service: Arc<UnilateralExitService>,
+    transfer_service: Arc<TransferService>,
+    lightning_service: Arc<LightningService>,
+    ssp_client: Arc<ServiceProvider>,
+    token_service: Arc<TokenService>,
 }
 
-impl<S: Signer> SparkWallet<S> {
-    pub async fn connect(config: SparkWalletConfig, signer: S) -> Result<Self, SparkWalletError> {
-        let signer = Arc::new(signer);
+impl SparkWallet {
+    pub async fn connect(
+        config: SparkWalletConfig,
+        signer: Arc<dyn Signer>,
+    ) -> Result<Self, SparkWalletError> {
         Self::new(
             config,
             signer,
@@ -71,7 +73,7 @@ impl<S: Signer> SparkWallet<S> {
 
     pub(crate) async fn new(
         config: SparkWalletConfig,
-        signer: Arc<S>,
+        signer: Arc<dyn Signer>,
         session_manager: Arc<dyn SessionManager>,
         tree_store: Arc<dyn TreeStore>,
     ) -> Result<Self, SparkWalletError> {
@@ -202,7 +204,7 @@ impl<S: Signer> SparkWallet<S> {
     }
 }
 
-impl<S: Signer> SparkWallet<S> {
+impl SparkWallet {
     pub async fn list_leaves(&self) -> Result<Vec<WalletLeaf>, SparkWalletError> {
         let leaves = self.tree_service.list_leaves().await?;
         Ok(leaves.into_iter().map(WalletLeaf::from).collect())
@@ -553,7 +555,9 @@ impl<S: Signer> SparkWallet<S> {
     ///
     /// If exposing this, consider adding a prefix to prevent mistakenly signing messages.
     pub async fn sign_message(&self, message: &str) -> Result<Signature, SparkWalletError> {
-        Ok(self.signer.sign_message_ecdsa_with_identity_key(message)?)
+        Ok(self
+            .signer
+            .sign_message_ecdsa_with_identity_key(message.as_bytes())?)
     }
 
     /// Verifies a message was signed by the given public key and the signature is valid.
@@ -772,11 +776,11 @@ impl<S: Signer> SparkWallet<S> {
     }
 }
 
-async fn claim_pending_transfers<S: Signer>(
+async fn claim_pending_transfers(
     our_pubkey: PublicKey,
-    transfer_service: &Arc<TransferService<S>>,
+    transfer_service: &Arc<TransferService>,
     tree_service: &Arc<dyn TreeService>,
-    ssp_client: &Arc<ServiceProvider<S>>,
+    ssp_client: &Arc<ServiceProvider>,
 ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
     debug!("Claiming all pending transfers");
     let transfers = transfer_service
@@ -806,9 +810,9 @@ async fn claim_pending_transfers<S: Signer>(
     create_transfers(transfers, ssp_client, our_pubkey).await
 }
 
-async fn create_transfers<S: Signer>(
+async fn create_transfers(
     transfers: Vec<Transfer>,
-    ssp_client: &Arc<ServiceProvider<S>>,
+    ssp_client: &Arc<ServiceProvider>,
     our_public_key: PublicKey,
 ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
     let transfer_ids = transfers.iter().map(|t| t.id.to_string()).collect();
@@ -829,9 +833,9 @@ async fn create_transfers<S: Signer>(
         .collect())
 }
 
-async fn claim_transfer<S: Signer>(
+async fn claim_transfer(
     transfer: &Transfer,
-    transfer_service: &Arc<TransferService<S>>,
+    transfer_service: &Arc<TransferService>,
     tree_service: &Arc<dyn TreeService>,
 ) -> Result<Vec<TreeNode>, SparkWalletError> {
     trace!("Claiming transfer with id: {}", transfer.id);
@@ -845,28 +849,28 @@ async fn claim_transfer<S: Signer>(
     Ok(result_nodes)
 }
 
-struct BackgroundProcessor<S: Signer> {
-    operator_pool: Arc<OperatorPool<S>>,
+struct BackgroundProcessor {
+    operator_pool: Arc<OperatorPool>,
     event_manager: Arc<EventManager>,
     identity_public_key: PublicKey,
     reconnect_interval: Duration,
     tree_service: Arc<dyn TreeService>,
-    ssp_client: Arc<ServiceProvider<S>>,
-    transfer_service: Arc<TransferService<S>>,
-    deposit_service: Arc<DepositService<S>>,
+    ssp_client: Arc<ServiceProvider>,
+    transfer_service: Arc<TransferService>,
+    deposit_service: Arc<DepositService>,
 }
 
-impl<S: Signer> BackgroundProcessor<S> {
+impl BackgroundProcessor {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        operator_pool: Arc<OperatorPool<S>>,
+        operator_pool: Arc<OperatorPool>,
         event_manager: Arc<EventManager>,
         identity_public_key: PublicKey,
         reconnect_interval: Duration,
         tree_service: Arc<dyn TreeService>,
-        ssp_client: Arc<ServiceProvider<S>>,
-        transfer_service: Arc<TransferService<S>>,
-        deposit_service: Arc<DepositService<S>>,
+        ssp_client: Arc<ServiceProvider>,
+        transfer_service: Arc<TransferService>,
+        deposit_service: Arc<DepositService>,
     ) -> Self {
         Self {
             operator_pool,

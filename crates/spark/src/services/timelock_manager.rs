@@ -28,19 +28,19 @@ use crate::{
     },
 };
 
-pub struct TimelockManager<S> {
-    signer: Arc<S>,
+pub struct TimelockManager {
+    signer: Arc<dyn Signer>,
     network: Network,
-    operator_pool: Arc<OperatorPool<S>>,
-    transfer_service: Arc<TransferService<S>>,
+    operator_pool: Arc<OperatorPool>,
+    transfer_service: Arc<TransferService>,
 }
 
-impl<S: Signer> TimelockManager<S> {
+impl TimelockManager {
     pub fn new(
-        signer: Arc<S>,
+        signer: Arc<dyn Signer>,
         network: Network,
-        operator_pool: Arc<OperatorPool<S>>,
-        transfer_service: Arc<TransferService<S>>,
+        operator_pool: Arc<OperatorPool>,
+        transfer_service: Arc<TransferService>,
     ) -> Self {
         Self {
             signer,

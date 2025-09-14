@@ -79,24 +79,24 @@ pub struct OperatorConfig {
 impl OperatorConfig {}
 
 #[derive(Clone)]
-pub struct Operator<S> {
-    pub client: SparkRpcClient<S>,
+pub struct Operator {
+    pub client: SparkRpcClient,
     pub id: usize,
     pub identifier: Identifier,
     pub identity_public_key: PublicKey,
 }
 
-pub struct OperatorPool<S> {
+pub struct OperatorPool {
     coordinator_index: usize,
-    operators: Vec<Operator<S>>,
+    operators: Vec<Operator>,
 }
 
-impl<S: Signer> OperatorPool<S> {
+impl OperatorPool {
     pub async fn connect(
         config: &OperatorPoolConfig,
         connection_manager: &ConnectionManager,
         session_manager: Arc<dyn SessionManager>,
-        signer: Arc<S>,
+        signer: Arc<dyn Signer>,
     ) -> Result<Self, OperatorRpcError> {
         let mut operators = Vec::new();
         for operator in &config.operators {
@@ -121,29 +121,29 @@ impl<S: Signer> OperatorPool<S> {
         })
     }
     /// Returns the coordinator operator.
-    pub fn get_coordinator(&self) -> &Operator<S> {
+    pub fn get_coordinator(&self) -> &Operator {
         self.operators.get(self.coordinator_index).unwrap()
     }
 
     /// Returns an iterator over all operators, including the coordinator.
-    pub fn get_all_operators(&self) -> impl Iterator<Item = &Operator<S>> {
+    pub fn get_all_operators(&self) -> impl Iterator<Item = &Operator> {
         self.operators.iter()
     }
 
     /// Returns an iterator over all operators except the coordinator.
-    pub fn get_non_coordinator_operators(&self) -> impl Iterator<Item = &Operator<S>> {
+    pub fn get_non_coordinator_operators(&self) -> impl Iterator<Item = &Operator> {
         self.operators
             .iter()
             .filter(|op| op.id != self.coordinator_index)
     }
 
     /// Returns the operator at the given index.
-    pub fn get_operator_by_id(&self, id: usize) -> Option<&Operator<S>> {
+    pub fn get_operator_by_id(&self, id: usize) -> Option<&Operator> {
         self.operators.get(id)
     }
 
-    /// Returns the operator at the given identifier.
-    pub fn get_operator_by_identifier(&self, identifier: &Identifier) -> Option<&Operator<S>> {
+    /// Returns the operator with the given identifier.
+    pub fn get_operator_by_identifier(&self, identifier: &Identifier) -> Option<&Operator> {
         self.operators
             .iter()
             .find(|op| &op.identifier == identifier)

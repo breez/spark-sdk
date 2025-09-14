@@ -34,20 +34,17 @@ pub struct QueryAllNodesRequest {
 }
 
 #[derive(Clone)]
-pub struct SparkRpcClient<S> {
+pub struct SparkRpcClient {
     transport: Transport,
-    auth: OperatorAuth<S>,
+    auth: OperatorAuth,
     session_manager: Arc<dyn SessionManager>,
     identity_public_key: PublicKey,
 }
 
-impl<S> SparkRpcClient<S>
-where
-    S: Signer,
-{
+impl SparkRpcClient {
     pub fn new(
         channel: Transport,
-        signer: Arc<S>,
+        signer: Arc<dyn Signer>,
         identity_public_key: PublicKey,
         session_manager: Arc<dyn SessionManager>,
     ) -> Self {

@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use bitcoin::Amount;
 use rstest::*;
-use spark_wallet::{DefaultSigner, SparkWallet, WalletEvent};
+use spark_wallet::{SparkWallet, WalletEvent};
 use tracing::{debug, info};
 
 use spark_itest::fixtures::setup::{TestFixtures, create_test_signer};
@@ -17,7 +19,7 @@ async fn fixtures() -> TestFixtures {
 pub struct WalletFixture {
     #[allow(dead_code)]
     fixtures: TestFixtures,
-    wallet: SparkWallet<DefaultSigner>,
+    wallet: SparkWallet,
 }
 
 // Create a wallet for testing
@@ -30,7 +32,7 @@ async fn wallet(#[future] fixtures: TestFixtures) -> WalletFixture {
         .expect("failed to create wallet config");
     let signer = create_test_signer();
 
-    let wallet = SparkWallet::connect(config, signer)
+    let wallet = SparkWallet::connect(config, Arc::new(signer))
         .await
         .expect("Failed to connect wallet");
 

@@ -24,17 +24,17 @@ use crate::ssp::{
 };
 
 /// GraphQL client for interacting with the Spark server
-pub struct GraphQLClient<S> {
+pub struct GraphQLClient {
     client: Client,
     base_url: String,
     schema_endpoint: String,
     auth_provider: Arc<AuthProvider>,
-    signer: Arc<S>,
+    signer: Arc<dyn Signer>,
 }
 
-impl<S: Signer> GraphQLClient<S> {
+impl GraphQLClient {
     /// Create a new GraphQLClient with the given configuration, and signer
-    pub fn new(config: GraphQLClientConfig, signer: Arc<S>) -> Self {
+    pub fn new(config: GraphQLClientConfig, signer: Arc<dyn Signer>) -> Self {
         let schema_endpoint = config
             .schema_endpoint
             .unwrap_or_else(|| String::from("graphql/spark/2025-03-19"));

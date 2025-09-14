@@ -239,11 +239,11 @@ impl DefaultSigner {
 
 #[async_trait::async_trait]
 impl Signer for DefaultSigner {
-    fn sign_message_ecdsa_with_identity_key<T: AsRef<[u8]>>(
+    fn sign_message_ecdsa_with_identity_key(
         &self,
-        message: T,
+        message: &[u8],
     ) -> Result<Signature, SignerError> {
-        let digest = sha256::Hash::hash(message.as_ref());
+        let digest = sha256::Hash::hash(message);
         let sig = self.secp.sign_ecdsa(
             &Message::from_digest(digest.to_byte_array()),
             &self.identity_key_pair.secret_key(),
@@ -251,18 +251,17 @@ impl Signer for DefaultSigner {
         Ok(sig)
     }
 
-    fn sign_hash_schnorr_with_identity_key<T: AsRef<[u8]>>(
+    fn sign_hash_schnorr_with_identity_key(
         &self,
-        hash: T,
+        hash: &[u8],
     ) -> Result<schnorr::Signature, SignerError> {
-        let hash_bytes = hash.as_ref();
-        if hash_bytes.len() != 32 {
+        if hash.len() != 32 {
             return Err(SignerError::Generic(
                 "Hash must be exactly 32 bytes".to_string(),
             ));
         }
         let mut hash_array = [0u8; 32];
-        hash_array.copy_from_slice(hash_bytes);
+        hash_array.copy_from_slice(hash);
         let sig = self
             .secp
             .sign_schnorr_no_aux_rand(&Message::from_digest(hash_array), &self.identity_key_pair);
@@ -653,7 +652,7 @@ mod tests {
         let signer = create_test_signer();
         let message = "test message";
         let signature = signer
-            .sign_message_ecdsa_with_identity_key(message)
+            .sign_message_ecdsa_with_identity_key(message.as_bytes())
             .expect("Failed to sign message");
 
         verify_signature_ecdsa(
@@ -669,7 +668,7 @@ mod tests {
     fn test_verify_signature_ecdsa_invalid_signature() {
         let signer = create_test_signer();
         let signature = signer
-            .sign_message_ecdsa_with_identity_key("signed message")
+            .sign_message_ecdsa_with_identity_key("signed message".as_bytes())
             .expect("Failed to sign message");
 
         // Wrong message

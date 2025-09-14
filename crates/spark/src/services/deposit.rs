@@ -124,28 +124,28 @@ pub enum UtxoSwapRequestType {
     Refund,
 }
 
-pub struct DepositService<S> {
+pub struct DepositService {
     bitcoin_service: BitcoinService,
     identity_public_key: PublicKey,
     network: Network,
-    operator_pool: Arc<OperatorPool<S>>,
-    ssp_client: Arc<ServiceProvider<S>>,
-    signer: Arc<S>,
-    timelock_manager: Arc<TimelockManager<S>>,
-    transfer_service: Arc<TransferService<S>>,
+    operator_pool: Arc<OperatorPool>,
+    ssp_client: Arc<ServiceProvider>,
+    signer: Arc<dyn Signer>,
+    timelock_manager: Arc<TimelockManager>,
+    transfer_service: Arc<TransferService>,
 }
 
-impl<S: Signer> DepositService<S> {
+impl DepositService {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         bitcoin_service: BitcoinService,
         identity_public_key: PublicKey,
         network: impl Into<Network>,
-        operator_pool: Arc<OperatorPool<S>>,
-        ssp_client: Arc<ServiceProvider<S>>,
-        signer: Arc<S>,
-        timelock_manager: Arc<TimelockManager<S>>,
-        transfer_service: Arc<TransferService<S>>,
+        operator_pool: Arc<OperatorPool>,
+        ssp_client: Arc<ServiceProvider>,
+        signer: Arc<dyn Signer>,
+        timelock_manager: Arc<TimelockManager>,
+        transfer_service: Arc<TransferService>,
     ) -> Self {
         DepositService {
             bitcoin_service,

@@ -74,14 +74,11 @@ pub enum TokensCommand {
     },
 }
 
-pub async fn handle_command<S>(
+pub async fn handle_command(
     _config: &Config,
-    wallet: &SparkWallet<S>,
+    wallet: &SparkWallet,
     command: TokensCommand,
-) -> Result<(), Box<dyn std::error::Error>>
-where
-    S: spark_wallet::Signer + Clone,
-{
+) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         TokensCommand::L1Address => {
             let l1_address = wallet.get_token_l1_address()?;

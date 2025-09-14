@@ -12,19 +12,16 @@ use crate::{
         rpc::spark::{SubscribeToEventsRequest, subscribe_to_events_response::Event},
     },
     services::Transfer,
-    signer::Signer,
     tree::TreeNode,
 };
 
-pub async fn subscribe_server_events<S>(
+pub async fn subscribe_server_events(
     identity_public_key: PublicKey,
-    operator_pool: Arc<OperatorPool<S>>,
+    operator_pool: Arc<OperatorPool>,
     publisher: &EventPublisher,
     reconnect_interval: Duration,
     cancellation_token: &mut tokio::sync::watch::Receiver<()>,
-) where
-    S: Signer,
-{
+) {
     loop {
         match cancellation_token.has_changed() {
             Ok(true) => {

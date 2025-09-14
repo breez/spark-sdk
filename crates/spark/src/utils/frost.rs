@@ -11,8 +11,8 @@ use crate::signer::{
 };
 use crate::signer::{SignFrostRequest, Signer};
 
-pub struct SignAggregateFrostParams<'a, S: Signer> {
-    pub signer: &'a Arc<S>,
+pub struct SignAggregateFrostParams<'a> {
+    pub signer: &'a Arc<dyn Signer>,
     pub tx: &'a Transaction,
     pub prev_out: &'a TxOut,
     pub signing_public_key: &'a PublicKey,
@@ -54,8 +54,8 @@ pub struct SignAggregateFrostParams<'a, S: Signer> {
 /// A `Result` containing:
 /// - `Ok(frost_secp256k1_tr::Signature)`: The aggregated FROST signature on success
 /// - `Err(SignerError)`: If any part of the signing or aggregation process fails
-pub async fn sign_aggregate_frost<S: Signer>(
-    params: SignAggregateFrostParams<'_, S>,
+pub async fn sign_aggregate_frost(
+    params: SignAggregateFrostParams<'_>,
 ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
     // Create the sighash for the transaction
     let sighash = sighash_from_tx(params.tx, 0, params.prev_out)

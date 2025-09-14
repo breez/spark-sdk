@@ -66,7 +66,7 @@ enum SyncType {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct BreezSdk {
     config: Config,
-    spark_wallet: Arc<SparkWallet<DefaultSigner>>,
+    spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
     chain_service: Arc<dyn BitcoinChainService>,
     lnurl_client: Arc<dyn RestClient>,
@@ -163,7 +163,7 @@ impl BreezSdk {
     ) -> Result<Self, SdkError> {
         let spark_wallet_config =
             spark_wallet::SparkWalletConfig::default_config(config.clone().network.into());
-        let spark_wallet = SparkWallet::connect(spark_wallet_config, signer).await?;
+        let spark_wallet = SparkWallet::connect(spark_wallet_config, Arc::new(signer)).await?;
 
         match &config.api_key {
             Some(api_key) => validate_breez_api_key(api_key)?,

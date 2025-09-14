@@ -15,14 +15,14 @@ pub(crate) use secret_sharing::from_bytes_to_scalar;
 
 #[async_trait::async_trait]
 pub trait Signer: Send + Sync + 'static {
-    fn sign_message_ecdsa_with_identity_key<T: AsRef<[u8]>>(
+    fn sign_message_ecdsa_with_identity_key(
         &self,
-        message: T,
+        message: &[u8],
     ) -> Result<Signature, SignerError>;
 
-    fn sign_hash_schnorr_with_identity_key<T: AsRef<[u8]>>(
+    fn sign_hash_schnorr_with_identity_key(
         &self,
-        message: T,
+        hash: &[u8],
     ) -> Result<schnorr::Signature, SignerError>;
 
     async fn generate_frost_signing_commitments(

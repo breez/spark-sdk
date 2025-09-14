@@ -9,14 +9,11 @@ pub enum LeavesCommand {
     List,
 }
 
-pub async fn handle_command<S>(
+pub async fn handle_command(
     _config: &Config,
-    wallet: &SparkWallet<S>,
+    wallet: &SparkWallet,
     command: LeavesCommand,
-) -> Result<(), Box<dyn std::error::Error>>
-where
-    S: spark_wallet::Signer + Clone,
-{
+) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         LeavesCommand::List => {
             let leaves = wallet.list_leaves().await?;

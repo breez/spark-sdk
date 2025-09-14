@@ -13,17 +13,14 @@ use prost::Message;
 use tonic::Request;
 use web_time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Clone, Debug)]
-pub struct OperatorAuth<S> {
+#[derive(Clone)]
+pub struct OperatorAuth {
     transport: Transport,
-    signer: Arc<S>,
+    signer: Arc<dyn Signer>,
 }
 
-impl<S> OperatorAuth<S>
-where
-    S: Signer,
-{
-    pub fn new(transport: Transport, signer: Arc<S>) -> Self {
+impl OperatorAuth {
+    pub fn new(transport: Transport, signer: Arc<dyn Signer>) -> Self {
         Self { transport, signer }
     }
 

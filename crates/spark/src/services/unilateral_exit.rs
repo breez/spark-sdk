@@ -19,7 +19,6 @@ use crate::{
         },
     },
     services::ServiceError,
-    signer::Signer,
     tree::{TreeNode, TreeNodeId},
     utils::{
         paging::{PagingFilter, PagingResult, pager},
@@ -44,16 +43,13 @@ pub struct LeafTxCpfpPsbts {
     pub tx_cpfp_psbts: Vec<TxCpfpPsbt>,
 }
 
-pub struct UnilateralExitService<S> {
-    operator_pool: Arc<OperatorPool<S>>,
+pub struct UnilateralExitService {
+    operator_pool: Arc<OperatorPool>,
     network: Network,
 }
 
-impl<S> UnilateralExitService<S>
-where
-    S: Signer,
-{
-    pub fn new(operator_pool: Arc<OperatorPool<S>>, network: Network) -> Self {
+impl UnilateralExitService {
+    pub fn new(operator_pool: Arc<OperatorPool>, network: Network) -> Self {
         UnilateralExitService {
             operator_pool,
             network,
@@ -183,7 +179,7 @@ where
 
     async fn fetch_leaves_parents_inner(
         &self,
-        client: &SparkRpcClient<S>,
+        client: &SparkRpcClient,
         leaf_ids: &[TreeNodeId],
         paging: PagingFilter,
     ) -> Result<PagingResult<TreeNode>, ServiceError> {

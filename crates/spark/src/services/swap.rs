@@ -25,21 +25,21 @@ use crate::{
 
 const SWAP_EXPIRY_DURATION: Duration = Duration::from_secs(2 * 60);
 
-pub struct Swap<S> {
+pub struct Swap {
     network: Network,
-    operator_pool: Arc<OperatorPool<S>>,
-    signer: Arc<S>,
-    ssp_client: Arc<ServiceProvider<S>>,
-    transfer_service: Arc<TransferService<S>>,
+    operator_pool: Arc<OperatorPool>,
+    signer: Arc<dyn Signer>,
+    ssp_client: Arc<ServiceProvider>,
+    transfer_service: Arc<TransferService>,
 }
 
-impl<S: Signer> Swap<S> {
+impl Swap {
     pub fn new(
         network: Network,
-        operator_pool: Arc<OperatorPool<S>>,
-        signer: Arc<S>,
-        ssp_client: Arc<ServiceProvider<S>>,
-        transfer_service: Arc<TransferService<S>>,
+        operator_pool: Arc<OperatorPool>,
+        signer: Arc<dyn Signer>,
+        ssp_client: Arc<ServiceProvider>,
+        transfer_service: Arc<TransferService>,
     ) -> Self {
         Swap {
             network,

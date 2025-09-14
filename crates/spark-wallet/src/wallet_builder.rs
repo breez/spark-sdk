@@ -9,15 +9,15 @@ use spark::{
 use crate::{SparkWallet, SparkWalletConfig, SparkWalletError};
 
 #[derive(Clone)]
-pub struct WalletBuilder<S> {
+pub struct WalletBuilder {
     config: SparkWalletConfig,
-    signer: S,
+    signer: Arc<dyn Signer>,
     session_manager: Option<Arc<dyn SessionManager>>,
     tree_store: Option<Arc<dyn TreeStore>>,
 }
 
-impl<S: Signer> WalletBuilder<S> {
-    pub fn new(config: SparkWalletConfig, signer: S) -> Self {
+impl WalletBuilder {
+    pub fn new(config: SparkWalletConfig, signer: Arc<dyn Signer>) -> Self {
         WalletBuilder {
             config,
             signer,
@@ -36,10 +36,10 @@ impl<S: Signer> WalletBuilder<S> {
         self
     }
 
-    pub async fn build(self) -> Result<SparkWallet<S>, SparkWalletError> {
+    pub async fn build(self) -> Result<SparkWallet, SparkWalletError> {
         SparkWallet::new(
             self.config,
-            Arc::new(self.signer),
+            self.signer,
             self.session_manager
                 .unwrap_or(Arc::new(InMemorySessionManager::default())),
             self.tree_store
