@@ -12,7 +12,6 @@ bitcoin.workspace = true
 clap = { workspace = true, features = ["derive"] }
 figment = { workspace = true, features = ["env", "toml"] }
 hex.workspace = true
-lnurl-rs.workspace = true
 rand.workspace = true
 regex.workspace = true
 serde = { workspace = true, features = ["derive"] }

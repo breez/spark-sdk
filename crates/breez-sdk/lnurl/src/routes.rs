@@ -6,9 +6,10 @@ use axum::{
     http::StatusCode,
 };
 use axum_extra::extract::Host;
-use bitcoin::hashes::{Hash, sha256};
-use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
-use lnurl::{Tag, pay::PayResponse};
+use bitcoin::{
+    hashes::{Hash, sha256},
+    secp256k1::{PublicKey, XOnlyPublicKey, ecdsa::Signature},
+};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -57,6 +58,51 @@ pub struct UnregisterLnurlPayRequest {
 pub struct RegisterLnurlPayResponse {
     pub lnurl: String,
     pub lightning_address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Tag {
+    #[serde(rename = "payRequest")]
+    Pay,
+    #[serde(rename = "withdrawRequest")]
+    Withdraw,
+    #[serde(rename = "channelRequest")]
+    Channel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PayResponse {
+    /// a second-level url which give you an invoice with a GET request
+    /// and an amount
+    pub callback: String,
+    /// max sendable amount for a given user on a given service
+    #[serde(rename = "maxSendable")]
+    pub max_sendable: u64,
+    /// min sendable amount for a given user on a given service,
+    /// can not be less than 1 or more than `max_sendable`
+    #[serde(rename = "minSendable")]
+    pub min_sendable: u64,
+    /// tag of the request
+    pub tag: Tag,
+    /// Metadata json which must be presented as raw string here,
+    /// this is required to pass signature verification at a later step
+    pub metadata: String,
+
+    /// Optional, if true, the service allows comments
+    /// the number is the max length of the comment
+    #[serde(rename = "commentAllowed")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment_allowed: Option<u32>,
+
+    /// Optional, if true, the service allows nostr zaps
+    #[serde(rename = "allowsNostr")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allows_nostr: Option<bool>,
+
+    /// Optional, if true, the nostr pubkey that will be used to sign zap events
+    #[serde(rename = "nostrPubkey")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nostr_pubkey: Option<XOnlyPublicKey>,
 }
 
 pub struct LnurlServer<DB> {
@@ -226,7 +272,7 @@ where
             ),
             max_sendable: state.max_sendable,
             min_sendable: state.min_sendable,
-            tag: Tag::PayRequest,
+            tag: Tag::Pay,
             metadata: get_metadata(&user.domain, &user),
             comment_allowed: None,
             allows_nostr: None,
