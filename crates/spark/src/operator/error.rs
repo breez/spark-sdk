@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Copy, Clone, Error)]
 pub enum OperatorError {
     #[error("Invalid coordinator index")]
     InvalidCoordinatorIndex,

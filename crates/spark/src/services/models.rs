@@ -117,7 +117,7 @@ impl TryFrom<SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(crate) enum SigningJobTxType {
     CpfpNode,
     DirectNode,
@@ -628,7 +628,7 @@ impl From<operator_rpc::spark::TransferType> for TransferType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum ExitSpeed {
     Fast,
     Medium,
@@ -983,7 +983,7 @@ impl TryFrom<operator_rpc::spark_token::TokenCreateInput> for TokenCreateInput {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub enum TokenTransactionStatus {
     Started,
     Signed,
