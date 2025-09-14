@@ -21,7 +21,7 @@ use spark_wallet::{
     DefaultSigner, ExitSpeed, InvoiceDescription, Order, PagingFilter, PayLightningInvoiceResult,
     SparkAddress, SparkWallet, WalletEvent, WalletTransfer,
 };
-use std::{str::FromStr, sync::Arc};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 use tracing::{error, info, trace};
 use web_time::{Duration, SystemTime};
 
@@ -1123,7 +1123,16 @@ impl BreezSdk {
         let body = serde_json::to_string(&json!({
             "signature": sig,
         }))?;
-        let resp = self.lnurl_client.post(url, None, Some(body)).await?;
+        let resp = self
+            .lnurl_client
+            .post(
+                url,
+                self.config.api_key.as_ref().map(|api_key| {
+                    [("Authorization".to_string(), format!("Bearer {api_key}"))].into()
+                }),
+                Some(body),
+            )
+            .await?;
         if resp.is_success() {
             let recovered: RecoverLnurlPayResponse = serde_json::from_str(&resp.body)
                 .map_err(|e| SdkError::Generic(format!("Failed to parse LNURL response: {e}")))?;
@@ -1163,7 +1172,15 @@ impl BreezSdk {
             ));
         };
         let url = format!("https://{lnurl_domain}/lnurlpay/available/{}", req.username);
-        let resp = self.lnurl_client.get(url, None).await?;
+        let resp = self
+            .lnurl_client
+            .get(
+                url,
+                self.config.api_key.as_ref().map(|api_key| {
+                    [("Authorization".to_string(), format!("Bearer {api_key}"))].into()
+                }),
+            )
+            .await?;
         if !resp.is_success() {
             return Err(SdkError::Generic(format!(
                 "Failed to check lightning address availability: {}",
@@ -1204,13 +1221,14 @@ impl BreezSdk {
             "signature": sig,
             "description": request.description,
         }))?;
+        let mut headers: HashMap<_, _> =
+            [("Content-Type".to_string(), "application/json".to_string())].into();
+        if let Some(api_key) = self.config.api_key.as_ref() {
+            headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+        }
         let resp = self
             .lnurl_client
-            .post(
-                url,
-                Some([("Content-Type".to_string(), "application/json".to_string())].into()),
-                Some(body),
-            )
+            .post(url, Some(headers), Some(body))
             .await?;
         if !resp.is_success() {
             return Err(SdkError::Generic(format!(
@@ -1247,13 +1265,14 @@ impl BreezSdk {
             "username": config.username,
             "signature": sig,
         }))?;
+        let mut headers: HashMap<_, _> =
+            [("Content-Type".to_string(), "application/json".to_string())].into();
+        if let Some(api_key) = self.config.api_key.as_ref() {
+            headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+        }
         let resp = self
             .lnurl_client
-            .delete(
-                url,
-                Some([("Content-Type".to_string(), "application/json".to_string())].into()),
-                Some(body),
-            )
+            .delete(url, Some(headers), Some(body))
             .await?;
         if !resp.is_success() {
             return Err(SdkError::Generic(format!(
