@@ -498,7 +498,7 @@ impl GraphQLClient {
                 }
             }
             Err(e) => {
-                error!("Failed to get session from session manager: {}", e);
+                error!("Failed to get ssp session from session manager: {}", e);
                 self.authenticate().await?
             }
         };
