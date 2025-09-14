@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use spark_wallet::DefaultSigner;
 
@@ -8,7 +8,7 @@ pub struct State<DB> {
     pub scheme: String,
     pub min_sendable: u64,
     pub max_sendable: u64,
-    pub domains: Vec<String>,
+    pub domains: HashSet<String>,
 }
 
 impl<DB> Clone for State<DB>
