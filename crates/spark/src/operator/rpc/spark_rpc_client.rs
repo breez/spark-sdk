@@ -610,7 +610,7 @@ impl SparkRpcClient {
         let valid_session = match current_session {
             Ok(session) => self.auth.get_authenticated_session(Some(session)).await,
             Err(e) => {
-                error!("Failed to get session from session manager: {}", e);
+                error!("Failed to get operator session from session manager: {}", e);
                 self.auth.get_authenticated_session(None).await
             }
         }?;

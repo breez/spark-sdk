@@ -92,7 +92,7 @@ pub struct OperatorPool {
 impl OperatorPool {
     pub async fn connect(
         config: &OperatorPoolConfig,
-        connection_manager: &ConnectionManager,
+        connection_manager: Arc<dyn ConnectionManager>,
         session_manager: Arc<dyn SessionManager>,
         signer: Arc<dyn Signer>,
     ) -> Result<Self, OperatorRpcError> {
