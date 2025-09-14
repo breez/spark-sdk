@@ -18,6 +18,7 @@ pub use spark::{
         LightningSendPayment, LightningSendStatus, TransferStatus, TransferTokenOutput,
         TransferType, Utxo,
     },
+    session_manager::InMemorySessionManager,
     signer::{DefaultSigner, Signer},
     ssp::*,
     tree::{SigningKeyshare, TreeNodeId},
