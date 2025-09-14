@@ -2,14 +2,15 @@ use std::sync::Arc;
 
 use breez_sdk_common::input::InputType;
 use breez_sdk_spark::{
-    ClaimDepositRequest, ClaimDepositResponse, Config, ConnectRequest, GetInfoRequest,
-    GetInfoResponse, GetPaymentRequest, GetPaymentResponse, ListPaymentsRequest,
-    ListPaymentsResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
-    LnurlPayRequest, LnurlPayResponse, LogEntry, Logger, Network, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, PrepareSendPaymentRequest, PrepareSendPaymentResponse,
-    ReceivePaymentRequest, ReceivePaymentResponse, RefundDepositRequest, RefundDepositResponse,
-    SdkError, SdkEvent, SendPaymentRequest, SendPaymentResponse, Storage, SyncWalletRequest,
-    SyncWalletResponse,
+    CheckLightningAddressRequest, ClaimDepositRequest, ClaimDepositResponse, Config,
+    ConnectRequest, GetInfoRequest, GetInfoResponse, GetLightningAddressResponse,
+    GetPaymentRequest, GetPaymentResponse, ListPaymentsRequest, ListPaymentsResponse,
+    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayRequest, LnurlPayResponse,
+    LogEntry, Logger, Network, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentRequest,
+    ReceivePaymentResponse, RefundDepositRequest, RefundDepositResponse, SdkError, SdkEvent,
+    SendPaymentRequest, SendPaymentResponse, SetLightningAddressRequest, Storage,
+    SyncWalletRequest, SyncWalletResponse,
 };
 use flutter_rust_bridge::frb;
 
@@ -146,10 +147,10 @@ impl BreezSdk {
 
     pub async fn check_lightning_address_available(
         &self,
-    ) -> Result<Option<CheckLightningAddressResponse>, SdkError> {
-        self.inner.check_lightning_address_available().await
+        request: CheckLightningAddressRequest,
+    ) -> Result<bool, SdkError> {
+        self.inner.check_lightning_address_available(request).await
     }
-
 
     pub async fn get_lightning_address(
         &self,

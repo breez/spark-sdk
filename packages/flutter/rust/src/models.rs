@@ -27,6 +27,7 @@ pub struct _Config {
     pub network: Network,
     pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<Fee>,
+    pub lnurl_domain: Option<String>,
 }
 
 #[frb(mirror(ConnectRequest))]
