@@ -1524,6 +1524,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
+name = "flashnet-simple-wallet"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bip39",
+ "bitcoin",
+ "clap",
+ "dotenvy",
+ "figment",
+ "hex",
+ "once_cell",
+ "qrcode-rs",
+ "reqwest",
+ "rustyline",
+ "serde",
+ "serde_json",
+ "shellwords",
+ "spark-wallet",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "flume"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

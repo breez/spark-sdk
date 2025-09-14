@@ -19,6 +19,7 @@ members = [
   "crates/spark-wallet",
   "crates/xtask",
   "examples/spark-cli",
+  "examples/flashnet-simple-wallet",
 ]
 
 [workspace.package]
