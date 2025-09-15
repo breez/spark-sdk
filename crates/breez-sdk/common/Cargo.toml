@@ -10,9 +10,9 @@ browser-tests = [] # Enable browser wasm-pack tests
 test-utils = []
 uniffi = ["dep:uniffi"]
 # TLS features
-default-tls = ["spark-wallet/default-tls"]
-rustls-tls = ["spark-wallet/rustls-tls"]
-native-tls = ["spark-wallet/native-tls"]
+default-tls = ["reqwest/default-tls", "spark-wallet/default-tls"]
+rustls-tls = ["reqwest/rustls-tls", "spark-wallet/rustls-tls"]
+native-tls = ["reqwest/native-tls", "spark-wallet/native-tls"]
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
