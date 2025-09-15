@@ -404,7 +404,7 @@ impl BreezSdk {
         &self,
         object_repository: &ObjectCacheRepository,
     ) -> Result<(), SdkError> {
-        // Get the last offset we processed from storage
+        // Get the last payment id we processed from storage
         let cached_sync_info = object_repository
             .fetch_sync_info()
             .await?
@@ -498,7 +498,18 @@ impl BreezSdk {
         Ok(())
     }
 
+    /// Syncs pending payments so that we have their latest status
+    /// Uses the Spark SDK API (SparkWallet) to get the latest status of the payments
     async fn sync_pending_payments(&self) -> Result<(), SdkError> {
+        // TODO: implement pending payment syncing using sparkscan API (including live updates)
+        // Advantages:
+        // - No need to maintain payment adapter code for both models
+        // - Can use live updates from sparkscan API
+        // Why it can't be done now:
+        // - Sparkscan needs one of the following:
+        //   - Batch transaction querying by id
+        //   - Sorting by updated_at timestamp in address transactions query (simpler)
+
         let pending_payments = self
             .storage
             .list_payments(None, None, Some(PaymentStatus::Pending))
@@ -537,7 +548,6 @@ impl BreezSdk {
             .map(|p| p.id.clone())
             .collect();
 
-        // TODO: Deal with paging (is necessary if there are a lot of pending payments)
         let transfers = self
             .spark_wallet
             .list_transfers(None, Some(transfer_ids.clone()))
@@ -580,7 +590,6 @@ impl BreezSdk {
             },
         )?;
 
-        // TODO: Deal with paging (is necessary if there are a lot of pending payments)
         let token_transactions = self
             .spark_wallet
             .list_token_transactions(ListTokenTransactionsRequest {
