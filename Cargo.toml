@@ -11,7 +11,8 @@ members = [
   "crates/breez-sdk/bindings",
   "crates/breez-sdk/cli",
   "crates/breez-sdk/common",
-  "crates/breez-sdk/core",
+  "crates/breez-sdk/core", 
+  "crates/breez-sdk/lnurl",
   "crates/breez-sdk/wasm",
   "crates/macros",
   "crates/spark",
@@ -41,6 +42,7 @@ arithmetic_side_effects = "warn"
 aes = "0.8.4"
 anyhow = "1.0.98"
 async-trait = "0.1.88"
+axum = "0.8.4"
 base64 = "0.22.1"
 bech32 = "0.11.0"
 bip39 = "2.2.0"
@@ -83,6 +85,7 @@ qrcode-rs = { version = "0.1", default-features = false }
 quote = "1.0.40"
 rand = "0.8"
 rayon = "1.10"
+regex = "1.11.2"
 reqwest = { version = "0.12.23", default-features = false, features = ["json", "http2", "charset", "system-proxy"] }
 rstest = "0.26.1"
 rustls = { version = "0.23.28", default-features = false, features = ["ring"] }
@@ -117,6 +120,7 @@ tokio_with_wasm = { version = "0.8.7", features = [
 tonic = { version = "0.12.3", default-features = false }
 tonic-build = { version = "0.12.3", features = ["prost"] }
 tonic-web-wasm-client = "0.6"
+tower-http = "0.6.6"
 tower-service = "0.3.3"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
@@ -127,4 +131,5 @@ wasm-bindgen = "0.2.100"
 wasm-bindgen-futures = "0.4.50"
 wasm-bindgen-test = "0.3.50"
 web-time = "1.1.0"
+x509-parser = "0.18.0"
 xshell = "0.2"

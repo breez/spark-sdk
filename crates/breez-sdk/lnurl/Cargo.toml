@@ -1,0 +1,31 @@
+[package]
+name = "lnurl"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+axum = { workspace = true, features = ["macros"] }
+axum-extra = { version = "0.10.1"  }
+base64.workspace = true
+bitcoin.workspace = true
+clap = { workspace = true, features = ["derive"] }
+figment = { workspace = true, features = ["env", "toml"] }
+hex.workspace = true
+rand.workspace = true
+regex.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+serde_with.workspace = true
+spark-wallet.workspace = true
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "sqlite", "tls-native-tls"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
+tower-http = { workspace = true, features = ["cors"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+x509-parser = { workspace = true, features = ["verify"] }
+
+[lints]
+workspace = true

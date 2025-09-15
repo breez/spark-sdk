@@ -380,6 +380,18 @@ impl From<Network> for BitcoinNetwork {
     }
 }
 
+impl FromStr for Network {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "mainnet" => Ok(Network::Mainnet),
+            "regtest" => Ok(Network::Regtest),
+            _ => Err("Invalid network".to_string()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Config {
