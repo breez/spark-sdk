@@ -11,7 +11,10 @@ use spark::{
     address::SparkAddress,
     bitcoin::BitcoinService,
     events::{SparkEvent, subscribe_server_events},
-    operator::{InMemorySessionManager, OperatorPool, SessionManager, rpc::ConnectionManager},
+    operator::{
+        OperatorPool,
+        rpc::{ConnectionManager, DefaultConnectionManager},
+    },
     services::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
         InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment,
@@ -19,6 +22,7 @@ use spark::{
         TokenService, TokenTransaction, Transfer, TransferService, TransferTokenOutput,
         UnilateralExitService, Utxo,
     },
+    session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer},
     tree::{
@@ -67,6 +71,8 @@ impl SparkWallet {
             signer,
             Arc::new(InMemorySessionManager::default()),
             Arc::new(InMemoryTreeStore::default()),
+            Arc::new(DefaultConnectionManager::new()),
+            true,
         )
         .await
     }
@@ -76,21 +82,23 @@ impl SparkWallet {
         signer: Arc<dyn Signer>,
         session_manager: Arc<dyn SessionManager>,
         tree_store: Arc<dyn TreeStore>,
+        connection_manager: Arc<dyn ConnectionManager>,
+        with_background_processing: bool,
     ) -> Result<Self, SparkWalletError> {
         config.validate()?;
         let identity_public_key = signer.get_identity_public_key()?;
-        let connection_manager = ConnectionManager::new();
 
         let bitcoin_service = BitcoinService::new(config.network);
         let service_provider = Arc::new(ServiceProvider::new(
             config.service_provider_config.clone(),
             signer.clone(),
+            session_manager.clone(),
         ));
 
         let operator_pool = Arc::new(
             OperatorPool::connect(
                 &config.operator_pool,
-                &connection_manager,
+                connection_manager,
                 Arc::clone(&session_manager),
                 Arc::clone(&signer),
             )
@@ -171,21 +179,22 @@ impl SparkWallet {
 
         let event_manager = Arc::new(EventManager::new());
         let (cancel, cancellation_token) = watch::channel(());
-        let reconnect_interval = Duration::from_secs(config.reconnect_interval_seconds);
-        let background_processor = Arc::new(BackgroundProcessor::new(
-            Arc::clone(&operator_pool),
-            Arc::clone(&event_manager),
-            identity_public_key,
-            reconnect_interval,
-            Arc::clone(&tree_service),
-            Arc::clone(&service_provider),
-            Arc::clone(&transfer_service),
-            Arc::clone(&deposit_service),
-        ));
-        background_processor
-            .run_background_tasks(cancellation_token.clone())
-            .await;
-
+        if with_background_processing {
+            let reconnect_interval = Duration::from_secs(config.reconnect_interval_seconds);
+            let background_processor = Arc::new(BackgroundProcessor::new(
+                Arc::clone(&operator_pool),
+                Arc::clone(&event_manager),
+                identity_public_key,
+                reconnect_interval,
+                Arc::clone(&tree_service),
+                Arc::clone(&service_provider),
+                Arc::clone(&transfer_service),
+                Arc::clone(&deposit_service),
+            ));
+            background_processor
+                .run_background_tasks(cancellation_token.clone())
+                .await;
+        }
         Ok(Self {
             cancel,
             config,

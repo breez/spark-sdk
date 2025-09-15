@@ -1,4 +1,3 @@
-mod auth_provider;
 mod client;
 mod error;
 pub(crate) mod models;

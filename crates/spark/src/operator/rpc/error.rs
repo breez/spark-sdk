@@ -1,6 +1,8 @@
 use thiserror::Error;
 use tonic::Status;
 
+use crate::session_manager::SessionManagerError;
+
 #[derive(Error, Debug, Clone)]
 pub enum OperatorRpcError {
     #[error("Transport error: {0}")]
@@ -24,9 +26,6 @@ pub enum OperatorRpcError {
     #[error("Signer error: {0}")]
     SignerError(#[from] crate::signer::SignerError),
 
-    #[error("Session manager error: {0}")]
-    SessionManagerError(#[from] crate::operator::SessionManagerError),
-
     #[error("Generic: {0}")]
     Generic(String),
 }
@@ -34,6 +33,12 @@ pub enum OperatorRpcError {
 impl From<Status> for OperatorRpcError {
     fn from(status: Status) -> Self {
         OperatorRpcError::Connection(Box::new(status))
+    }
+}
+
+impl From<SessionManagerError> for OperatorRpcError {
+    fn from(err: SessionManagerError) -> Self {
+        OperatorRpcError::Authentication(err.to_string())
     }
 }
 

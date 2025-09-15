@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use spark::{
-    operator::{InMemorySessionManager, SessionManager},
+    operator::rpc::{ConnectionManager, DefaultConnectionManager},
+    session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
     tree::{InMemoryTreeStore, TreeStore},
 };
@@ -14,6 +15,8 @@ pub struct WalletBuilder {
     signer: Arc<dyn Signer>,
     session_manager: Option<Arc<dyn SessionManager>>,
     tree_store: Option<Arc<dyn TreeStore>>,
+    connection_manager: Option<Arc<dyn ConnectionManager>>,
+    with_background_processing: bool,
 }
 
 impl WalletBuilder {
@@ -23,6 +26,8 @@ impl WalletBuilder {
             signer,
             session_manager: None,
             tree_store: None,
+            connection_manager: None,
+            with_background_processing: true,
         }
     }
 
@@ -36,6 +41,19 @@ impl WalletBuilder {
         self
     }
 
+    pub fn with_connection_manager(
+        mut self,
+        connection_manager: Arc<dyn ConnectionManager>,
+    ) -> Self {
+        self.connection_manager = Some(connection_manager);
+        self
+    }
+
+    pub fn with_background_processing(mut self, with_background_processing: bool) -> Self {
+        self.with_background_processing = with_background_processing;
+        self
+    }
+
     pub async fn build(self) -> Result<SparkWallet, SparkWalletError> {
         SparkWallet::new(
             self.config,
@@ -44,6 +62,9 @@ impl WalletBuilder {
                 .unwrap_or(Arc::new(InMemorySessionManager::default())),
             self.tree_store
                 .unwrap_or(Arc::new(InMemoryTreeStore::default())),
+            self.connection_manager
+                .unwrap_or(Arc::new(DefaultConnectionManager::new())),
+            self.with_background_processing,
         )
         .await
     }

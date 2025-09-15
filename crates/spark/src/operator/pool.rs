@@ -6,10 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
 use crate::{
-    operator::{
-        SessionManager,
-        rpc::{ConnectionManager, OperatorRpcError, SparkRpcClient},
-    },
+    operator::rpc::{ConnectionManager, OperatorRpcError, SparkRpcClient},
+    session_manager::SessionManager,
     signer::Signer,
 };
 
@@ -94,7 +92,7 @@ pub struct OperatorPool {
 impl OperatorPool {
     pub async fn connect(
         config: &OperatorPoolConfig,
-        connection_manager: &ConnectionManager,
+        connection_manager: Arc<dyn ConnectionManager>,
         session_manager: Arc<dyn SessionManager>,
         signer: Arc<dyn Signer>,
     ) -> Result<Self, OperatorRpcError> {

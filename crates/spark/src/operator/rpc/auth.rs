@@ -6,12 +6,11 @@ use super::spark_authn::{
     GetChallengeRequest, VerifyChallengeRequest,
     spark_authn_service_client::SparkAuthnServiceClient,
 };
-use crate::operator::OperatorSession;
 use crate::operator::rpc::transport::grpc_client::Transport;
+use crate::session_manager::Session;
 use crate::signer::Signer;
 use prost::Message;
 use tonic::Request;
-use web_time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
 pub struct OperatorAuth {
@@ -24,19 +23,10 @@ impl OperatorAuth {
         Self { transport, signer }
     }
 
-    pub async fn get_authenticated_session(
-        &self,
-        session: Option<OperatorSession>,
-    ) -> Result<OperatorSession> {
+    pub async fn get_authenticated_session(&self, session: Option<Session>) -> Result<Session> {
         // Check if the session is still valid
         if let Some(session) = session
-            && session.expiration
-                > SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|_| {
-                        OperatorRpcError::Unexpected("UNIX_EPOCH is in the future".to_string())
-                    })?
-                    .as_secs()
+            && session.is_valid()
         {
             return Ok(session);
         }
@@ -45,7 +35,7 @@ impl OperatorAuth {
         Ok(session)
     }
 
-    async fn authenticate(&self) -> Result<OperatorSession> {
+    async fn authenticate(&self) -> Result<Session> {
         let pk = self.signer.get_identity_public_key()?;
         let challenge_req = GetChallengeRequest {
             public_key: pk.serialize().to_vec(),
@@ -93,7 +83,7 @@ impl OperatorAuth {
             .await?
             .into_inner();
 
-        let session = OperatorSession {
+        let session = Session {
             token: verify_resp.session_token.parse().map_err(|_| {
                 OperatorRpcError::Authentication("Invalid session token".to_string())
             })?,

@@ -13,12 +13,15 @@ pub use spark::operator::{OperatorConfig, OperatorError, OperatorPoolConfig};
 pub use spark::{
     Identifier, Network,
     address::SparkAddress,
+    operator::rpc::{ConnectionManager, DefaultConnectionManager},
+    services::TokensConfig,
     services::{
         CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee, InvoiceDescription,
         LightningSendPayment, LightningSendStatus, TransferStatus, TransferTokenOutput,
         TransferType, Utxo,
     },
-    signer::{DefaultSigner, Signer},
+    session_manager::*,
+    signer::{DefaultSigner, DefaultSignerError, Signer},
     ssp::*,
     tree::{SigningKeyshare, TreeNodeId},
     utils::{

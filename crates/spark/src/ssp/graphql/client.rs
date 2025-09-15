@@ -1,12 +1,15 @@
 use base64::Engine;
+use bitcoin::secp256k1::PublicKey;
 use graphql_client::{GraphQLQuery, Response};
 use reqwest::Client;
 use reqwest::header::HeaderMap;
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue};
 use serde::Serialize;
 use std::sync::Arc;
+use tracing::error;
 
+use crate::session_manager::{Session, SessionManager};
 use crate::signer::Signer;
-use crate::ssp::graphql::auth_provider::AuthProvider;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
 use crate::ssp::graphql::queries::{
     self, claim_static_deposit, complete_coop_exit, complete_leaves_swap, coop_exit_fee_quote,
@@ -28,13 +31,18 @@ pub struct GraphQLClient {
     client: Client,
     base_url: String,
     schema_endpoint: String,
-    auth_provider: Arc<AuthProvider>,
     signer: Arc<dyn Signer>,
+    session_manager: Arc<dyn SessionManager>,
+    ssp_identity_public_key: PublicKey,
 }
 
 impl GraphQLClient {
     /// Create a new GraphQLClient with the given configuration, and signer
-    pub fn new(config: GraphQLClientConfig, signer: Arc<dyn Signer>) -> Self {
+    pub fn new(
+        config: GraphQLClientConfig,
+        signer: Arc<dyn Signer>,
+        session_manager: Arc<dyn SessionManager>,
+    ) -> Self {
         let schema_endpoint = config
             .schema_endpoint
             .unwrap_or_else(|| String::from("graphql/spark/2025-03-19"));
@@ -46,8 +54,9 @@ impl GraphQLClient {
                 .unwrap(),
             base_url: config.base_url,
             schema_endpoint,
-            auth_provider: Arc::new(AuthProvider::new()),
             signer,
+            session_manager,
+            ssp_identity_public_key: config.ssp_identity_public_key,
         }
     }
 
@@ -100,19 +109,14 @@ impl GraphQLClient {
     pub async fn post_query<Q: GraphQLQuery, T>(
         &self,
         variables: T,
-        needs_auth: bool,
     ) -> GraphQLResult<Q::ResponseData>
     where
         T: Serialize + Clone + Into<Q::Variables>,
     {
-        if needs_auth && !self.auth_provider.is_authorized().await? {
-            self.authenticate().await?;
-            tracing::debug!("Authenticated successfully with ssp");
-        }
-
+        let session = self.get_session().await?;
         let full_url = self.get_full_url();
         let mut headers = HeaderMap::new();
-        self.auth_provider.add_auth_headers(&mut headers).await?;
+        self.add_auth_headers(&session, &mut headers)?;
 
         match self
             .post_query_inner::<Q, T>(&full_url, &headers, variables.clone())
@@ -126,11 +130,10 @@ impl GraphQLClient {
                     ..
                 } = e.clone()
                     && status_code == reqwest::StatusCode::UNAUTHORIZED.as_u16()
-                    && needs_auth
                 {
-                    self.authenticate().await?;
+                    let session = self.get_session().await?;
                     let mut headers = HeaderMap::new();
-                    self.auth_provider.add_auth_headers(&mut headers).await?;
+                    self.add_auth_headers(&session, &mut headers)?;
 
                     return self
                         .post_query_inner::<Q, T>(&full_url, &headers, variables)
@@ -142,9 +145,8 @@ impl GraphQLClient {
     }
 
     /// Authenticate with the server using challenge-response
-    async fn authenticate(&self) -> GraphQLResult<()> {
+    async fn authenticate(&self) -> GraphQLResult<Session> {
         tracing::debug!("Authenticating with ssp");
-        self.auth_provider.remove_auth().await?;
 
         // Get the identity public key
         let identity_public_key = hex::encode(self.signer.get_identity_public_key()?.serialize());
@@ -191,15 +193,17 @@ impl GraphQLClient {
             .post_query_inner::<queries::VerifyChallenge, _>(&full_url, &headers, verify_vars)
             .await?;
 
-        // Store the session token
-        self.auth_provider
-            .set_auth(
-                verify_response.verify_challenge.session_token,
-                verify_response.verify_challenge.valid_until,
-            )
-            .await?;
-
-        Ok(())
+        Ok(Session {
+            token: verify_response.verify_challenge.session_token,
+            expiration: verify_response
+                .verify_challenge
+                .valid_until
+                .timestamp()
+                .try_into()
+                .map_err(|_| {
+                    GraphQLError::Authentication("Invalid expiration timestamp".to_string())
+                })?,
+        })
     }
 
     /// Get a swap fee estimate
@@ -211,7 +215,7 @@ impl GraphQLClient {
         };
 
         let response = self
-            .post_query::<queries::LeavesSwapFeeEstimate, _>(vars, true)
+            .post_query::<queries::LeavesSwapFeeEstimate, _>(vars)
             .await?;
 
         Ok(response.leaves_swap_fee_estimate.fee_estimate.into())
@@ -231,7 +235,7 @@ impl GraphQLClient {
         };
 
         let response = self
-            .post_query::<queries::LightningSendFeeEstimate, _>(vars, true)
+            .post_query::<queries::LightningSendFeeEstimate, _>(vars)
             .await?;
 
         Ok(response.lightning_send_fee_estimate.fee_estimate.into())
@@ -251,7 +255,7 @@ impl GraphQLClient {
         };
 
         let response = self
-            .post_query::<queries::CoopExitFeeQuote, _>(vars, true)
+            .post_query::<queries::CoopExitFeeQuote, _>(vars)
             .await?;
 
         Ok(response.coop_exit_fee_quote.quote.into())
@@ -271,7 +275,7 @@ impl GraphQLClient {
         };
 
         let response = self
-            .post_query::<queries::CompleteCoopExit, _>(vars, true)
+            .post_query::<queries::CompleteCoopExit, _>(vars)
             .await?;
 
         Ok(response.complete_coop_exit.request.into())
@@ -284,9 +288,7 @@ impl GraphQLClient {
     ) -> GraphQLResult<CoopExitRequest> {
         let vars = request_coop_exit::Variables { input };
 
-        let response = self
-            .post_query::<queries::RequestCoopExit, _>(vars, true)
-            .await?;
+        let response = self.post_query::<queries::RequestCoopExit, _>(vars).await?;
 
         Ok(response.request_coop_exit.request.into())
     }
@@ -299,7 +301,7 @@ impl GraphQLClient {
         let vars = request_lightning_receive::Variables { input };
 
         let response = self
-            .post_query::<queries::RequestLightningReceive, _>(vars, true)
+            .post_query::<queries::RequestLightningReceive, _>(vars)
             .await?;
 
         Ok(response.request_lightning_receive.request.into())
@@ -313,7 +315,7 @@ impl GraphQLClient {
         let vars = request_lightning_send::Variables { input };
 
         let response = self
-            .post_query::<queries::RequestLightningSend, _>(vars, true)
+            .post_query::<queries::RequestLightningSend, _>(vars)
             .await?;
 
         Ok(response.request_lightning_send.request.into())
@@ -327,7 +329,7 @@ impl GraphQLClient {
         let vars = request_leaves_swap::Variables { input };
 
         let response = self
-            .post_query::<queries::RequestLeavesSwap, _>(vars, true)
+            .post_query::<queries::RequestLeavesSwap, _>(vars)
             .await?;
 
         Ok(response.request_leaves_swap.request.into())
@@ -341,7 +343,7 @@ impl GraphQLClient {
         let vars = complete_leaves_swap::Variables { input };
 
         let response = self
-            .post_query::<queries::CompleteLeavesSwap, _>(vars, true)
+            .post_query::<queries::CompleteLeavesSwap, _>(vars)
             .await?;
 
         Ok(response.complete_leaves_swap.request.into())
@@ -356,9 +358,7 @@ impl GraphQLClient {
             request_id: request_id.to_string(),
         };
 
-        let response = self
-            .post_query::<queries::UserRequest, _>(vars, true)
-            .await?;
+        let response = self.post_query::<queries::UserRequest, _>(vars).await?;
 
         Ok(response.user_request.and_then(|user_request| {
             if let user_request::UserRequestUserRequest::LightningReceiveRequest(response) =
@@ -380,9 +380,7 @@ impl GraphQLClient {
             request_id: request_id.to_string(),
         };
 
-        let response = self
-            .post_query::<queries::UserRequest, _>(vars, true)
-            .await?;
+        let response = self.post_query::<queries::UserRequest, _>(vars).await?;
 
         Ok(response.user_request.and_then(|user_request| {
             if let user_request::UserRequestUserRequest::LightningSendRequest(response) =
@@ -404,9 +402,7 @@ impl GraphQLClient {
             request_id: request_id.to_string(),
         };
 
-        let response = self
-            .post_query::<queries::UserRequest, _>(vars, true)
-            .await?;
+        let response = self.post_query::<queries::UserRequest, _>(vars).await?;
 
         Ok(response.user_request.and_then(|user_request| {
             if let user_request::UserRequestUserRequest::LeavesSwapRequest(response) = user_request
@@ -427,9 +423,7 @@ impl GraphQLClient {
             request_id: request_id.to_string(),
         };
 
-        let response = self
-            .post_query::<queries::UserRequest, _>(vars, true)
-            .await?;
+        let response = self.post_query::<queries::UserRequest, _>(vars).await?;
 
         Ok(response.user_request.and_then(|user_request| {
             if let user_request::UserRequestUserRequest::CoopExitRequest(response) = user_request {
@@ -456,7 +450,7 @@ impl GraphQLClient {
         };
 
         let response = self
-            .post_query::<queries::StaticDepositQuote, _>(vars, true)
+            .post_query::<queries::StaticDepositQuote, _>(vars)
             .await?;
 
         Ok(response.static_deposit_quote.into())
@@ -470,7 +464,7 @@ impl GraphQLClient {
         let vars = claim_static_deposit::Variables { input };
 
         let response = self
-            .post_query::<queries::ClaimStaticDeposit, _>(vars, true)
+            .post_query::<queries::ClaimStaticDeposit, _>(vars)
             .await?;
 
         Ok(response.claim_static_deposit.into())
@@ -482,11 +476,52 @@ impl GraphQLClient {
         transfer_spark_ids: Vec<String>,
     ) -> GraphQLResult<Vec<SspTransfer>> {
         let vars = transfers::Variables { transfer_spark_ids };
-        let response = self.post_query::<queries::Transfers, _>(vars, true).await?;
+        let response = self.post_query::<queries::Transfers, _>(vars).await?;
         Ok(response
             .transfers
             .into_iter()
             .map(SspTransfer::from)
             .collect())
+    }
+
+    async fn get_session(&self) -> GraphQLResult<Session> {
+        let current_session = self
+            .session_manager
+            .get_session(&self.ssp_identity_public_key)
+            .await;
+        let valid_session = match current_session {
+            Ok(session) => {
+                if session.is_valid() {
+                    session
+                } else {
+                    self.authenticate().await?
+                }
+            }
+            Err(e) => {
+                error!("Failed to get ssp session from session manager: {}", e);
+                self.authenticate().await?
+            }
+        };
+        self.session_manager
+            .set_session(&self.ssp_identity_public_key, valid_session.clone())
+            .await?;
+        Ok(valid_session)
+    }
+
+    fn add_auth_headers(
+        &self,
+        session: &Session,
+        headers: &mut HeaderMap,
+    ) -> Result<(), GraphQLError> {
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+        let auth_value = format!("Bearer {}", session.token);
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&auth_value)
+                .map_err(|_| GraphQLError::authentication("Invalid header"))?,
+        );
+
+        Ok(())
     }
 }
