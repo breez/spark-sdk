@@ -49,7 +49,7 @@ pub async fn handle_command(
         } => {
             let desc = description.map(InvoiceDescription::Memo);
             let payment = wallet
-                .create_lightning_invoice(amount_sat, desc, None)
+                .create_lightning_invoice(amount_sat, desc, None, true)
                 .await?;
             let qr = QrCode::with_error_correction_level(&payment.invoice, EcLevel::L)
                 .unwrap()

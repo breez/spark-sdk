@@ -241,6 +241,7 @@ impl LightningService {
         description: Option<InvoiceDescription>,
         preimage: Option<Vec<u8>>,
         expiry_secs: Option<u32>,
+        include_spark_address: bool,
         identity_pubkey: Option<PublicKey>,
     ) -> Result<LightningReceivePayment, ServiceError> {
         let identity_pubkey = match identity_pubkey {
@@ -270,7 +271,7 @@ impl LightningService {
                 description_hash: description_hash.map(|h| h.encode_hex()),
                 expiry_secs: Some(expiry.into()),
                 memo,
-                include_spark_address: true,
+                include_spark_address,
             })
             .await?;
         let decoded_invoice = Bolt11Invoice::from_str(&invoice.invoice.encoded_invoice)

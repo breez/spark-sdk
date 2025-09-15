@@ -615,6 +615,7 @@ impl BreezSdk {
                         amount_sats.unwrap_or_default(),
                         Some(InvoiceDescription::Memo(description.clone())),
                         None,
+                        true,
                     )
                     .await?
                     .invoice,
