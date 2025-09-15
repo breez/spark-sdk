@@ -19,3 +19,6 @@ crates/breez-sdk/cli/.data
 
 # Deployment files
 fly.toml
+
+# Wasm package
+packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
