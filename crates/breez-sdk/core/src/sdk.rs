@@ -1086,15 +1086,13 @@ impl BreezSdk {
     /// Attempts to recover a lightning address from the lnurl server.
     async fn recover_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
-        let spark_address = self.spark_wallet.get_spark_address().await?;
-        let pubkey = spark_address.identity_public_key;
 
         let Some(client) = &self.lnurl_server_client else {
             return Err(SdkError::Generic(
                 "LNURL server is not configured".to_string(),
             ));
         };
-        let resp = client.recover_lightning_address(&pubkey).await?;
+        let resp = client.recover_lightning_address().await?;
 
         let result = if let Some(resp) = resp {
             let address_info = resp.into();
@@ -1138,15 +1136,12 @@ impl BreezSdk {
             ));
         };
 
-        let spark_address = self.spark_wallet.get_spark_address().await?;
-        let pubkey = spark_address.identity_public_key;
-
         let params = crate::lnurl::RegisterLightningAddressRequest {
             username: request.username.clone(),
             description: request.description.clone(),
         };
 
-        let response = client.register_lightning_address(&pubkey, &params).await?;
+        let response = client.register_lightning_address(&params).await?;
         let address_info = LightningAddressInfo {
             lightning_address: response.lightning_address,
             description: request.description,
@@ -1168,16 +1163,12 @@ impl BreezSdk {
                 "LNURL server is not configured".to_string(),
             ));
         };
-        let spark_address = self.spark_wallet.get_spark_address().await?;
-        let pubkey = spark_address.identity_public_key;
 
         let params = crate::lnurl::UnregisterLightningAddressRequest {
             username: address_info.username,
         };
 
-        client
-            .unregister_lightning_address(&pubkey, &params)
-            .await?;
+        client.unregister_lightning_address(&params).await?;
         cache.delete_lightning_address().await?;
         Ok(())
     }
