@@ -153,6 +153,9 @@ impl From<LnurlServerError> for SdkError {
                 message.unwrap_or(String::new())
             )),
             LnurlServerError::RequestFailure(e) => SdkError::NetworkError(e),
+            LnurlServerError::SigningError(e) => {
+                SdkError::Generic(format!("Failed to sign message: {e}"))
+            }
         }
     }
 }

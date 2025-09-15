@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use breez_sdk_common::rest::{ReqwestRestClient as CommonRequestRestClient, RestClient};
-use spark_wallet::DefaultSigner;
+use spark_wallet::{DefaultSigner, SparkWallet};
 use tokio::sync::watch;
 
 use crate::{
@@ -135,30 +135,39 @@ impl SdkBuilder {
                 CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?,
             ),
         };
+        let spark_wallet_config =
+            spark_wallet::SparkWalletConfig::default_config(self.config.network.into());
+        let spark_wallet =
+            Arc::new(SparkWallet::connect(spark_wallet_config, Arc::new(signer)).await?);
+
         let lnurl_server_client: Option<Arc<dyn LnurlServerClient>> = match self.lnurl_server_client
         {
             Some(client) => Some(client),
             None => match &self.config.lnurl_domain {
-                Some(domain) => Some(Arc::new(ReqwestLnurlServerClient::new(
-                    domain.clone(),
-                    self.config.api_key.clone(),
-                )?)),
+                Some(domain) => {
+                    // Get the SparkWallet instance for signing
+                    Some(Arc::new(ReqwestLnurlServerClient::new(
+                        domain.clone(),
+                        self.config.api_key.clone(),
+                        Arc::clone(&spark_wallet),
+                    )?))
+                }
                 None => None,
             },
         };
         let (shutdown_sender, shutdown_receiver) = watch::channel::<()>(());
+
         // Create the SDK instance
         let sdk = BreezSdk::new(BreezSdkParams {
             config: self.config,
-            signer,
             storage: self.storage,
             chain_service,
             lnurl_client,
             lnurl_server_client,
             shutdown_sender,
             shutdown_receiver,
-        })
-        .await?;
+            spark_wallet,
+        })?;
 
         sdk.start();
         Ok(sdk)

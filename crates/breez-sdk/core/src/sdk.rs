@@ -16,10 +16,9 @@ use breez_sdk_common::{
     },
     rest::RestClient,
 };
-use lnurl_models::{RecoverLnurlPayRequest, RegisterLnurlPayRequest, UnregisterLnurlPayRequest};
 use spark_wallet::{
-    DefaultSigner, ExitSpeed, InvoiceDescription, Order, PagingFilter, PayLightningInvoiceResult,
-    SparkAddress, SparkWallet, WalletEvent, WalletTransfer,
+    ExitSpeed, InvoiceDescription, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress,
+    SparkWallet, WalletEvent, WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
 use tracing::{error, info, trace};
@@ -144,43 +143,25 @@ pub async fn parse(input: &str) -> Result<InputType, SdkError> {
 
 pub(crate) struct BreezSdkParams {
     pub config: Config,
-    pub signer: DefaultSigner,
     pub storage: Arc<dyn Storage>,
     pub chain_service: Arc<dyn BitcoinChainService>,
     pub lnurl_client: Arc<dyn RestClient>,
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub shutdown_sender: watch::Sender<()>,
     pub shutdown_receiver: watch::Receiver<()>,
+    pub spark_wallet: Arc<SparkWallet>,
 }
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - The Sdk configuration object
-    /// * `signer` - Implementation of the `SparkSigner` trait
-    /// * `storage` - Optional storage implementation for persistent data
-    /// * `chain_service` - Implementation of the `ChainService` trait
-    /// * `shutdown_sender` - Sender for shutdown signal
-    /// * `shutdown_receiver` - Receiver for shutdown signal
-    ///
-    /// # Returns
-    ///
-    /// Result containing either the initialized `BreezSdk` or an `SdkError`
-    pub(crate) async fn new(params: BreezSdkParams) -> Result<Self, SdkError> {
-        let spark_wallet_config =
-            spark_wallet::SparkWalletConfig::default_config(params.config.clone().network.into());
-        let spark_wallet =
-            SparkWallet::connect(spark_wallet_config, Arc::new(params.signer)).await?;
-
+    pub(crate) fn new(params: BreezSdkParams) -> Result<Self, SdkError> {
         match &params.config.api_key {
             Some(api_key) => validate_breez_api_key(api_key)?,
             None => return Err(SdkError::Generic("Missing Breez API key".to_string())),
         }
         let sdk = Self {
             config: params.config,
-            spark_wallet: Arc::new(spark_wallet),
+            spark_wallet: params.spark_wallet,
             storage: params.storage,
             chain_service: params.chain_service,
             lnurl_client: params.lnurl_client,
@@ -1107,20 +1088,13 @@ impl BreezSdk {
         let cache = ObjectCacheRepository::new(self.storage.clone());
         let spark_address = self.spark_wallet.get_spark_address().await?;
         let pubkey = spark_address.identity_public_key;
-        let signature = self
-            .spark_wallet
-            .sign_message(&pubkey.to_string())
-            .await?
-            .serialize_der()
-            .to_lower_hex_string();
+
         let Some(client) = &self.lnurl_server_client else {
             return Err(SdkError::Generic(
                 "LNURL server is not configured".to_string(),
             ));
         };
-        let resp = client
-            .recover_lnurl_pay(&pubkey, &RecoverLnurlPayRequest { signature })
-            .await?;
+        let resp = client.recover_lightning_address(&pubkey).await?;
 
         let result = if let Some(resp) = resp {
             let address_info = resp.into();
@@ -1166,22 +1140,13 @@ impl BreezSdk {
 
         let spark_address = self.spark_wallet.get_spark_address().await?;
         let pubkey = spark_address.identity_public_key;
-        let signature = self
-            .spark_wallet
-            .sign_message(&request.username)
-            .await?
-            .serialize_der()
-            .to_lower_hex_string();
-        let response = client
-            .register_lnurl_pay(
-                &pubkey,
-                &RegisterLnurlPayRequest {
-                    description: request.description.clone(),
-                    signature,
-                    username: request.username.clone(),
-                },
-            )
-            .await?;
+
+        let params = crate::lnurl::RegisterLightningAddressRequest {
+            username: request.username.clone(),
+            description: request.description.clone(),
+        };
+
+        let response = client.register_lightning_address(&pubkey, &params).await?;
         let address_info = LightningAddressInfo {
             lightning_address: response.lightning_address,
             description: request.description,
@@ -1205,20 +1170,13 @@ impl BreezSdk {
         };
         let spark_address = self.spark_wallet.get_spark_address().await?;
         let pubkey = spark_address.identity_public_key;
-        let sig = self
-            .spark_wallet
-            .sign_message(&address_info.username)
-            .await?
-            .serialize_der()
-            .to_lower_hex_string();
+
+        let params = crate::lnurl::UnregisterLightningAddressRequest {
+            username: address_info.username,
+        };
+
         client
-            .unregister_lnurl_pay(
-                &pubkey,
-                &UnregisterLnurlPayRequest {
-                    username: address_info.username,
-                    signature: sig,
-                },
-            )
+            .unregister_lightning_address(&pubkey, &params)
             .await?;
         cache.delete_lightning_address().await?;
         Ok(())
