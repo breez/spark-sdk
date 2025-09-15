@@ -149,7 +149,7 @@ where
     let wallet = Arc::new(
         spark_wallet::SparkWallet::connect(
             SparkWalletConfig::default_config(args.network),
-            DefaultSigner::new(&auth_seed, args.network)?,
+            Arc::new(DefaultSigner::new(&auth_seed, args.network)?),
         )
         .await?,
     );

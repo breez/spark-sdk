@@ -1,10 +1,8 @@
 use std::{collections::HashSet, sync::Arc};
 
-use spark_wallet::DefaultSigner;
-
 pub struct State<DB> {
     pub db: DB,
-    pub wallet: Arc<spark_wallet::SparkWallet<DefaultSigner>>,
+    pub wallet: Arc<spark_wallet::SparkWallet>,
     pub scheme: String,
     pub min_sendable: u64,
     pub max_sendable: u64,
