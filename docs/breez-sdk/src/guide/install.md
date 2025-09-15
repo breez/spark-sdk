@@ -24,7 +24,7 @@ as a package dependency in Xcode.
 Add the following to the dependencies array of your `Package.swift`:
 
 ``` swift
-.package(url: "https://github.com/breez/breez-sdk-spark-swift.git", from: "0.1.0"),
+.package(url: "https://github.com/breez/breez-sdk-spark-swift.git", from: "{VERSION}"),
 ```
 
 ### CocoaPods
@@ -77,7 +77,7 @@ Check [breez/spark-sdk](https://github.com/breez/spark-sdk/releases) for the lat
 
 ```toml
 [dependencies]
-breez-sdk-spark = { git = "https://github.com/breez/spark-sdk", tag = "0.1.0" }
+breez-sdk-spark = { git = "https://github.com/breez/spark-sdk", tag = "{VERSION}" }
 ```
 
 ## Flutter

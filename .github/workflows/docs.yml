@@ -29,6 +29,16 @@ jobs:
           cargo install --path ./snippets-processor
           cargo install mdbook-variables --vers "^0.2" --locked
 
+      - name: Get latest tag
+        uses: actions-ecosystem/action-get-latest-tag@v1
+        id: get-latest-tag
+      
+      - name: Set latest tag in book
+        working-directory: docs/breez-sdk/src/guide
+        run: |
+          sed -i.bak "s/{VERSION}/${{ steps.get-latest-tag.outputs.tag }}/" install.md
+          rm -f install.md.bak
+
       - name: Build mdbook
         working-directory: docs/breez-sdk
         run: mdbook build
