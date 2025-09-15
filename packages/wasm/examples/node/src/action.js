@@ -41,13 +41,7 @@ const initSdk = async () => {
     let config = defaultConfig('regtest')
     config.apiKey = process.env.BREEZ_API_KEY
 
-    // Ensure ./.data directory exists
-    const dataDir = './.data'
-    if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true })
-    }
-
-    const storage = await defaultStorage(dataDir)
+    const storage = await defaultStorage('./.data')
 
     let sdkBuilder = SdkBuilder.new(config, mnemonic, storage)
     sdkBuilder = sdkBuilder.withRestChainService('https://regtest-mempool.loadtest.dev.sparkinfra.net/api', {
@@ -108,7 +102,6 @@ const receivePayment = async (options) => {
     } else {
         paymentMethod = { type: options.paymentMethod }
     }
-
 
     const res = await sdk.receivePayment({ paymentMethod })
     console.log(JSON.stringify(res, null, 2))
