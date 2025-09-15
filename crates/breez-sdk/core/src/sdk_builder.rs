@@ -15,9 +15,10 @@ use crate::{
         rest_client::{BasicAuth, RestClientChainService},
     },
     error::SdkError,
+    lnurl::{LnurlServerClient, ReqwestLnurlServerClient},
     models::Config,
     persist::Storage,
-    sdk::BreezSdk,
+    sdk::{BreezSdk, BreezSdkParams},
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -28,6 +29,7 @@ pub struct SdkBuilder {
     storage: Arc<dyn Storage>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     lnurl_client: Option<Arc<dyn RestClient>>,
+    lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
 }
 
 impl SdkBuilder {
@@ -43,6 +45,7 @@ impl SdkBuilder {
             storage,
             chain_service: None,
             lnurl_client: None,
+            lnurl_server_client: None,
         }
     }
 
@@ -78,6 +81,16 @@ impl SdkBuilder {
     #[must_use]
     pub fn with_lnurl_client(mut self, lnurl_client: Arc<dyn RestClient>) -> Self {
         self.lnurl_client = Some(lnurl_client);
+        self
+    }
+
+    #[must_use]
+    #[allow(unused)]
+    pub fn with_lnurl_server_client(
+        mut self,
+        lnurl_serverclient: Arc<dyn LnurlServerClient>,
+    ) -> Self {
+        self.lnurl_server_client = Some(lnurl_serverclient);
         self
     }
 
@@ -122,17 +135,29 @@ impl SdkBuilder {
                 CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?,
             ),
         };
+        let lnurl_server_client: Option<Arc<dyn LnurlServerClient>> = match self.lnurl_server_client
+        {
+            Some(client) => Some(client),
+            None => match &self.config.lnurl_domain {
+                Some(domain) => Some(Arc::new(ReqwestLnurlServerClient::new(
+                    domain.clone(),
+                    self.config.api_key.clone(),
+                )?)),
+                None => None,
+            },
+        };
         let (shutdown_sender, shutdown_receiver) = watch::channel::<()>(());
         // Create the SDK instance
-        let sdk = BreezSdk::new(
-            self.config,
+        let sdk = BreezSdk::new(BreezSdkParams {
+            config: self.config,
             signer,
-            self.storage,
+            storage: self.storage,
             chain_service,
             lnurl_client,
+            lnurl_server_client,
             shutdown_sender,
             shutdown_receiver,
-        )
+        })
         .await?;
 
         sdk.start();

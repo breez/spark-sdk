@@ -1,5 +1,6 @@
 use crate::{
     Fee,
+    lnurl::{LnurlServerError, ReqwestLnurlServerClientError},
     persist::{self},
 };
 use bitcoin::consensus::encode::FromHexError;
@@ -135,6 +136,30 @@ impl From<uuid::Error> for SdkError {
 impl From<ServiceConnectivityError> for SdkError {
     fn from(value: ServiceConnectivityError) -> Self {
         SdkError::NetworkError(value.to_string())
+    }
+}
+
+impl From<LnurlServerError> for SdkError {
+    fn from(value: LnurlServerError) -> Self {
+        match value {
+            LnurlServerError::InvalidApiKey => {
+                SdkError::InvalidInput("Invalid api key".to_string())
+            }
+            LnurlServerError::Network {
+                statuscode,
+                message,
+            } => SdkError::NetworkError(format!(
+                "network request failed with status {statuscode}: {}",
+                message.unwrap_or(String::new())
+            )),
+            LnurlServerError::RequestFailure(e) => SdkError::NetworkError(e),
+        }
+    }
+}
+
+impl From<ReqwestLnurlServerClientError> for SdkError {
+    fn from(value: ReqwestLnurlServerClientError) -> Self {
+        SdkError::Generic(value.to_string())
     }
 }
 
