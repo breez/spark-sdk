@@ -374,6 +374,11 @@ class SqliteStorage {
 
 async function createDefaultStorage(dataDir, logger = null) {
   const path = require("path");
+  const fs = require("fs").promises;
+
+  // Create directory if it doesn't exist
+  await fs.mkdir(dataDir, { recursive: true });
+
   const dbPath = path.join(dataDir, "storage.sql");
   const storage = new SqliteStorage(dbPath, logger);
   storage.initialize();

@@ -3,7 +3,6 @@
  */
 
 const fs = require("fs");
-const path = require("path");
 
 /**
  * Remove a directory and all its contents recursively
@@ -23,26 +22,6 @@ function removeDirAll(dirPath) {
   });
 }
 
-/**
- * Create a directory and all its parent directories if they don't exist
- * @param {string} dirPath - Path to the directory to create
- * @returns {Promise<void>}
- */
-function createDirAll(dirPath) {
-  return new Promise((resolve, reject) => {
-    fs.mkdir(dirPath, { recursive: true }, (err) => {
-      if (err) {
-        reject(
-          new Error(`Failed to create directory '${dirPath}': ${err.message}`)
-        );
-      } else {
-        resolve();
-      }
-    });
-  });
-}
-
 module.exports = {
   removeDirAll,
-  createDirAll,
 };

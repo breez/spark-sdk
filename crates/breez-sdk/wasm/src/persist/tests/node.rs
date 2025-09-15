@@ -20,21 +20,15 @@ extern "C" {
 extern "C" {
     #[wasm_bindgen(js_name = "removeDirAll", catch)]
     fn remove_dir_all(dir_path: &str) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(js_name = "createDirAll", catch)]
-    fn create_dir_all(dir_path: &str) -> Result<Promise, JsValue>;
 }
 
 // Helper to create a WasmStorage instance for testing using node-storage
 async fn create_test_storage(dir_name: &str) -> WasmStorage {
     let data_dir = format!("/tmp/breez-sdk-node-storage-test-{}", dir_name);
 
-    // Ensure the data_dir exists and is cleared before each test
+    // Ensure the data_dir is cleared before each test
     let future = JsFuture::from(remove_dir_all(&data_dir).expect("Failed to remove test data_dir"));
     let _ = future.await.expect("Failed to remove test data_dir");
-
-    let future = JsFuture::from(create_dir_all(&data_dir).expect("Failed to create test data_dir"));
-    let _ = future.await.expect("Failed to create test data_dir");
 
     let storage = create_default_storage(&data_dir, None)
         .await
