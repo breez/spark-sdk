@@ -109,7 +109,6 @@ impl GraphQLClient {
     pub async fn post_query<Q: GraphQLQuery, T>(
         &self,
         variables: T,
-        needs_auth: bool,
     ) -> GraphQLResult<Q::ResponseData>
     where
         T: Serialize + Clone + Into<Q::Variables>,
@@ -131,7 +130,6 @@ impl GraphQLClient {
                     ..
                 } = e.clone()
                     && status_code == reqwest::StatusCode::UNAUTHORIZED.as_u16()
-                    && needs_auth
                 {
                     let session = self.get_session().await?;
                     let mut headers = HeaderMap::new();
@@ -217,7 +215,7 @@ impl GraphQLClient {
         };
 
         let response = self
-            .post_query::<queries::LeavesSwapFeeEstimate, _>(vars, true)
+            .post_query::<queries::LeavesSwapFeeEstimate, _>(vars)
             .await?;
 
         Ok(response.leaves_swap_fee_estimate.fee_estimate.into())
@@ -237,7 +235,7 @@ impl GraphQLClient {
         };
 
         let response = self
-            .post_query::<queries::LightningSendFeeEstimate, _>(vars, true)
+            .post_query::<queries::LightningSendFeeEstimate, _>(vars)
             .await?;
 
         Ok(response.lightning_send_fee_estimate.fee_estimate.into())
@@ -257,7 +255,7 @@ impl GraphQLClient {
         };
 
         let response = self
-            .post_query::<queries::CoopExitFeeQuote, _>(vars, true)
+            .post_query::<queries::CoopExitFeeQuote, _>(vars)
             .await?;
 
         Ok(response.coop_exit_fee_quote.quote.into())
@@ -277,7 +275,7 @@ impl GraphQLClient {
         };
 
         let response = self
-            .post_query::<queries::CompleteCoopExit, _>(vars, true)
+            .post_query::<queries::CompleteCoopExit, _>(vars)
             .await?;
 
         Ok(response.complete_coop_exit.request.into())
@@ -290,9 +288,7 @@ impl GraphQLClient {
     ) -> GraphQLResult<CoopExitRequest> {
         let vars = request_coop_exit::Variables { input };
 
-        let response = self
-            .post_query::<queries::RequestCoopExit, _>(vars, true)
-            .await?;
+        let response = self.post_query::<queries::RequestCoopExit, _>(vars).await?;
 
         Ok(response.request_coop_exit.request.into())
     }
@@ -305,7 +301,7 @@ impl GraphQLClient {
         let vars = request_lightning_receive::Variables { input };
 
         let response = self
-            .post_query::<queries::RequestLightningReceive, _>(vars, true)
+            .post_query::<queries::RequestLightningReceive, _>(vars)
             .await?;
 
         Ok(response.request_lightning_receive.request.into())
@@ -319,7 +315,7 @@ impl GraphQLClient {
         let vars = request_lightning_send::Variables { input };
 
         let response = self
-            .post_query::<queries::RequestLightningSend, _>(vars, true)
+            .post_query::<queries::RequestLightningSend, _>(vars)
             .await?;
 
         Ok(response.request_lightning_send.request.into())
@@ -333,7 +329,7 @@ impl GraphQLClient {
         let vars = request_leaves_swap::Variables { input };
 
         let response = self
-            .post_query::<queries::RequestLeavesSwap, _>(vars, true)
+            .post_query::<queries::RequestLeavesSwap, _>(vars)
             .await?;
 
         Ok(response.request_leaves_swap.request.into())
@@ -347,7 +343,7 @@ impl GraphQLClient {
         let vars = complete_leaves_swap::Variables { input };
 
         let response = self
-            .post_query::<queries::CompleteLeavesSwap, _>(vars, true)
+            .post_query::<queries::CompleteLeavesSwap, _>(vars)
             .await?;
 
         Ok(response.complete_leaves_swap.request.into())
@@ -362,9 +358,7 @@ impl GraphQLClient {
             request_id: request_id.to_string(),
         };
 
-        let response = self
-            .post_query::<queries::UserRequest, _>(vars, true)
-            .await?;
+        let response = self.post_query::<queries::UserRequest, _>(vars).await?;
 
         Ok(response.user_request.and_then(|user_request| {
             if let user_request::UserRequestUserRequest::LightningReceiveRequest(response) =
@@ -386,9 +380,7 @@ impl GraphQLClient {
             request_id: request_id.to_string(),
         };
 
-        let response = self
-            .post_query::<queries::UserRequest, _>(vars, true)
-            .await?;
+        let response = self.post_query::<queries::UserRequest, _>(vars).await?;
 
         Ok(response.user_request.and_then(|user_request| {
             if let user_request::UserRequestUserRequest::LightningSendRequest(response) =
@@ -410,9 +402,7 @@ impl GraphQLClient {
             request_id: request_id.to_string(),
         };
 
-        let response = self
-            .post_query::<queries::UserRequest, _>(vars, true)
-            .await?;
+        let response = self.post_query::<queries::UserRequest, _>(vars).await?;
 
         Ok(response.user_request.and_then(|user_request| {
             if let user_request::UserRequestUserRequest::LeavesSwapRequest(response) = user_request
@@ -433,9 +423,7 @@ impl GraphQLClient {
             request_id: request_id.to_string(),
         };
 
-        let response = self
-            .post_query::<queries::UserRequest, _>(vars, true)
-            .await?;
+        let response = self.post_query::<queries::UserRequest, _>(vars).await?;
 
         Ok(response.user_request.and_then(|user_request| {
             if let user_request::UserRequestUserRequest::CoopExitRequest(response) = user_request {
@@ -462,7 +450,7 @@ impl GraphQLClient {
         };
 
         let response = self
-            .post_query::<queries::StaticDepositQuote, _>(vars, true)
+            .post_query::<queries::StaticDepositQuote, _>(vars)
             .await?;
 
         Ok(response.static_deposit_quote.into())
@@ -476,7 +464,7 @@ impl GraphQLClient {
         let vars = claim_static_deposit::Variables { input };
 
         let response = self
-            .post_query::<queries::ClaimStaticDeposit, _>(vars, true)
+            .post_query::<queries::ClaimStaticDeposit, _>(vars)
             .await?;
 
         Ok(response.claim_static_deposit.into())
@@ -488,7 +476,7 @@ impl GraphQLClient {
         transfer_spark_ids: Vec<String>,
     ) -> GraphQLResult<Vec<SspTransfer>> {
         let vars = transfers::Variables { transfer_spark_ids };
-        let response = self.post_query::<queries::Transfers, _>(vars, true).await?;
+        let response = self.post_query::<queries::Transfers, _>(vars).await?;
         Ok(response
             .transfers
             .into_iter()
