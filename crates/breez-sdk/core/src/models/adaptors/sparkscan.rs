@@ -93,8 +93,14 @@ pub(crate) fn payments_from_address_transaction_and_ssp_request(
     let context = extract_conversion_context(transaction)?;
     let method_info = extract_payment_method_and_details(transaction, ssp_user_request)?;
 
-    if transaction.multi_io_details.is_some() {
-        create_multi_io_payments(transaction, &method_info, &context, our_spark_address)
+    if let Some(multi_io_details) = transaction.multi_io_details.as_ref() {
+        create_multi_io_payments(
+            multi_io_details,
+            transaction,
+            &method_info,
+            &context,
+            our_spark_address,
+        )
     } else {
         let payment = create_single_payment(transaction, &method_info, &context)?;
         Ok(vec![payment])
@@ -262,13 +268,12 @@ fn create_token_payment_info(
 
 /// Creates multiple payments for multi-IO token transactions
 fn create_multi_io_payments(
+    multi_io_details: &MultiIoDetails,
     transaction: &AddressTransaction,
     method_info: &PaymentMethodInfo,
     context: &PaymentCommonContext,
     our_spark_address: &str,
 ) -> Result<Vec<Payment>, SdkError> {
-    let multi_io_details = transaction.multi_io_details.as_ref().unwrap();
-
     let payment_type = determine_multi_io_payment_type(multi_io_details, our_spark_address)?;
 
     let mut payments = Vec::new();
@@ -276,6 +281,9 @@ fn create_multi_io_payments(
     for (index, output) in multi_io_details.outputs.iter().enumerate() {
         // Create payments for outputs that are not ours (for send payments) or ours (for receive payments)
         if should_include_output(payment_type, &output.address, our_spark_address) {
+            // TODO: fix construction of id
+            // Currently sparkscan doesn't order outputs by vout making this construction unreliable
+            // There's no other output identifier we can use for now
             let id = format!("{}:{}", transaction.id, index);
             let amount = output.amount.try_into()?;
 
