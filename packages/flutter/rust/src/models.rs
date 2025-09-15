@@ -28,6 +28,7 @@ pub struct _Config {
     pub network: Network,
     pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<Fee>,
+    pub sparkscan_api_url: String,
 }
 
 #[frb(mirror(ConnectRequest))]
@@ -95,7 +96,6 @@ pub struct _TokenMetadata {
     pub decimals: u32,
     pub max_supply: u64,
     pub is_freezable: bool,
-    pub creation_entity_public_key: Option<String>,
 }
 
 #[frb(mirror(GetPaymentRequest))]
@@ -367,6 +367,7 @@ pub enum _PaymentDetails {
     Spark,
     Token {
         metadata: TokenMetadata,
+        tx_hash: String,
     },
     Lightning {
         description: Option<String>,
