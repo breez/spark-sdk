@@ -29,6 +29,7 @@ impl From<ServiceProviderConfig> for GraphQLClientConfig {
         Self {
             base_url: opts.base_url,
             schema_endpoint: opts.schema_endpoint,
+            ssp_identity_public_key: opts.identity_public_key,
         }
     }
 }

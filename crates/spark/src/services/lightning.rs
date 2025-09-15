@@ -207,22 +207,22 @@ struct SwapNodesForPreimageRequest<'a> {
     is_inbound_payment: bool,
 }
 
-pub struct LightningService<S> {
-    operator_pool: Arc<OperatorPool<S>>,
-    ssp_client: Arc<ServiceProvider<S>>,
+pub struct LightningService {
+    operator_pool: Arc<OperatorPool>,
+    ssp_client: Arc<ServiceProvider>,
     network: Network,
-    signer: Arc<S>,
-    transfer_service: Arc<TransferService<S>>,
+    signer: Arc<dyn Signer>,
+    transfer_service: Arc<TransferService>,
     split_secret_threshold: u32,
 }
 
-impl<S: Signer> LightningService<S> {
+impl LightningService {
     pub fn new(
-        operator_pool: Arc<OperatorPool<S>>,
-        ssp_client: Arc<ServiceProvider<S>>,
+        operator_pool: Arc<OperatorPool>,
+        ssp_client: Arc<ServiceProvider>,
         network: Network,
-        signer: Arc<S>,
-        transfer_service: Arc<TransferService<S>>,
+        signer: Arc<dyn Signer>,
+        transfer_service: Arc<TransferService>,
         split_secret_threshold: u32,
     ) -> Self {
         LightningService {

@@ -68,14 +68,11 @@ pub enum DepositCommand {
     },
 }
 
-pub async fn handle_command<S>(
+pub async fn handle_command(
     config: &Config,
-    wallet: &SparkWallet<S>,
+    wallet: &SparkWallet,
     command: DepositCommand,
-) -> Result<(), Box<dyn std::error::Error>>
-where
-    S: spark_wallet::Signer + Clone,
-{
+) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         DepositCommand::NewAddress { is_static } => {
             let address = wallet.generate_deposit_address(is_static).await?;

@@ -91,24 +91,21 @@ impl TryFrom<crate::ssp::CoopExitFeeQuote> for CoopExitFeeQuote {
     }
 }
 
-pub struct CoopExitService<S> {
-    operator_pool: Arc<OperatorPool<S>>,
-    ssp_client: Arc<ServiceProvider<S>>,
-    transfer_service: Arc<TransferService<S>>,
+pub struct CoopExitService {
+    operator_pool: Arc<OperatorPool>,
+    ssp_client: Arc<ServiceProvider>,
+    transfer_service: Arc<TransferService>,
     network: Network,
-    signer: Arc<S>,
+    signer: Arc<dyn Signer>,
 }
 
-impl<S> CoopExitService<S>
-where
-    S: Signer,
-{
+impl CoopExitService {
     pub fn new(
-        operator_pool: Arc<OperatorPool<S>>,
-        ssp_client: Arc<ServiceProvider<S>>,
-        transfer_service: Arc<TransferService<S>>,
+        operator_pool: Arc<OperatorPool>,
+        ssp_client: Arc<ServiceProvider>,
+        transfer_service: Arc<TransferService>,
         network: Network,
-        signer: Arc<S>,
+        signer: Arc<dyn Signer>,
     ) -> Self {
         CoopExitService {
             operator_pool,

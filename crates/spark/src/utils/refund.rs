@@ -50,8 +50,8 @@ pub struct SignedTx {
     pub network: Network,
 }
 
-pub async fn prepare_leaf_refund_signing_data<S: Signer>(
-    signer: &Arc<S>,
+pub async fn prepare_leaf_refund_signing_data(
+    signer: &Arc<dyn Signer>,
     leaf_key_tweaks: &[LeafKeyTweak],
     receiving_public_key: PublicKey,
 ) -> Result<HashMap<TreeNodeId, LeafRefundSigningData>, SignerError> {
@@ -85,8 +85,8 @@ pub async fn prepare_leaf_refund_signing_data<S: Signer>(
     Ok(leaf_data_map)
 }
 
-pub async fn sign_refunds<S: Signer>(
-    signer: &Arc<S>,
+pub async fn sign_refunds(
+    signer: &Arc<dyn Signer>,
     leaves: &[LeafKeyTweak],
     cpfp_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
     direct_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
@@ -219,8 +219,8 @@ pub async fn sign_refunds<S: Signer>(
 ///
 /// * `Ok(SignedTx)` - A structure containing the signed transaction and signing metadata
 /// * `Err(SignerError)` - If the signing process fails
-async fn sign_refund<S: Signer>(
-    signer: &Arc<S>,
+async fn sign_refund(
+    signer: &Arc<dyn Signer>,
     leaf: &LeafKeyTweak,
     tx: &Transaction,
     refund_tx: Transaction,
@@ -255,8 +255,8 @@ async fn sign_refund<S: Signer>(
 }
 
 /// Signs refund transactions using FROST threshold signatures
-pub async fn sign_aggregate_refunds<S: Signer>(
-    signer: &Arc<S>,
+pub async fn sign_aggregate_refunds(
+    signer: &Arc<dyn Signer>,
     leaf_data_map: &HashMap<TreeNodeId, LeafRefundSigningData>,
     operator_signing_results: &[crate::operator::rpc::spark::LeafRefundTxSigningResult],
     cpfp_adaptor_pubkey: Option<&PublicKey>,

@@ -51,19 +51,19 @@ pub struct TokensConfig {
     pub transaction_validity_duration_seconds: u64,
 }
 
-pub struct TokenService<S> {
+pub struct TokenService {
     tokens_outputs: Mutex<HashMap<String, TokenOutputs>>,
-    signer: Arc<S>,
-    operator_pool: Arc<OperatorPool<S>>,
+    signer: Arc<dyn Signer>,
+    operator_pool: Arc<OperatorPool>,
     network: Network,
     split_secret_threshold: u32,
     tokens_config: TokensConfig,
 }
 
-impl<S: Signer> TokenService<S> {
+impl TokenService {
     pub fn new(
-        signer: Arc<S>,
-        operator_pool: Arc<OperatorPool<S>>,
+        signer: Arc<dyn Signer>,
+        operator_pool: Arc<OperatorPool>,
         network: Network,
         split_secret_threshold: u32,
         tokens_config: TokensConfig,

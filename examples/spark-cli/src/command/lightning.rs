@@ -37,14 +37,11 @@ pub enum LightningCommand {
     },
 }
 
-pub async fn handle_command<S>(
+pub async fn handle_command(
     _config: &Config,
-    wallet: &SparkWallet<S>,
+    wallet: &SparkWallet,
     command: LightningCommand,
-) -> Result<(), Box<dyn std::error::Error>>
-where
-    S: spark_wallet::Signer + Clone,
-{
+) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         LightningCommand::CreateInvoice {
             amount_sat,

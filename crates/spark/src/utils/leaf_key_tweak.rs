@@ -6,8 +6,8 @@ use crate::{
     tree::TreeNode,
 };
 
-pub fn prepare_leaf_key_tweaks_to_send<S: Signer>(
-    signer: &Arc<S>,
+pub fn prepare_leaf_key_tweaks_to_send(
+    signer: &Arc<dyn Signer>,
     leaves: Vec<TreeNode>,
     signing_key_source: Option<PrivateKeySource>,
 ) -> Result<Vec<LeafKeyTweak>, SignerError> {

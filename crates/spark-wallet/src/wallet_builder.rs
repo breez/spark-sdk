@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use spark::{
-    operator::{InMemorySessionManager, SessionManager},
+    operator::rpc::{ConnectionManager, DefaultConnectionManager},
+    session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
     tree::{InMemoryTreeStore, TreeStore},
 };
@@ -9,20 +10,24 @@ use spark::{
 use crate::{SparkWallet, SparkWalletConfig, SparkWalletError};
 
 #[derive(Clone)]
-pub struct WalletBuilder<S> {
+pub struct WalletBuilder {
     config: SparkWalletConfig,
-    signer: S,
+    signer: Arc<dyn Signer>,
     session_manager: Option<Arc<dyn SessionManager>>,
     tree_store: Option<Arc<dyn TreeStore>>,
+    connection_manager: Option<Arc<dyn ConnectionManager>>,
+    with_background_processing: bool,
 }
 
-impl<S: Signer> WalletBuilder<S> {
-    pub fn new(config: SparkWalletConfig, signer: S) -> Self {
+impl WalletBuilder {
+    pub fn new(config: SparkWalletConfig, signer: Arc<dyn Signer>) -> Self {
         WalletBuilder {
             config,
             signer,
             session_manager: None,
             tree_store: None,
+            connection_manager: None,
+            with_background_processing: true,
         }
     }
 
@@ -36,14 +41,30 @@ impl<S: Signer> WalletBuilder<S> {
         self
     }
 
-    pub async fn build(self) -> Result<SparkWallet<S>, SparkWalletError> {
+    pub fn with_connection_manager(
+        mut self,
+        connection_manager: Arc<dyn ConnectionManager>,
+    ) -> Self {
+        self.connection_manager = Some(connection_manager);
+        self
+    }
+
+    pub fn with_background_processing(mut self, with_background_processing: bool) -> Self {
+        self.with_background_processing = with_background_processing;
+        self
+    }
+
+    pub async fn build(self) -> Result<SparkWallet, SparkWalletError> {
         SparkWallet::new(
             self.config,
-            Arc::new(self.signer),
+            self.signer,
             self.session_manager
                 .unwrap_or(Arc::new(InMemorySessionManager::default())),
             self.tree_store
                 .unwrap_or(Arc::new(InMemoryTreeStore::default())),
+            self.connection_manager
+                .unwrap_or(Arc::new(DefaultConnectionManager::new())),
+            self.with_background_processing,
         )
         .await
     }

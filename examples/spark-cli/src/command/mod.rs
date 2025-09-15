@@ -54,15 +54,12 @@ pub enum Command {
     Tokens(TokensCommand),
 }
 
-pub(crate) async fn handle_command<S>(
+pub(crate) async fn handle_command(
     rl: &mut Editor<CliHelper, DefaultHistory>,
     config: &Config,
-    wallet: &SparkWallet<S>,
+    wallet: &SparkWallet,
     command: Command,
-) -> Result<(), Box<dyn std::error::Error>>
-where
-    S: spark_wallet::Signer + Clone,
-{
+) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         Command::Balance => {
             let balance = wallet.get_balance().await?;

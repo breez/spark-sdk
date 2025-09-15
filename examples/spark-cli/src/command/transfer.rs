@@ -38,14 +38,11 @@ pub enum TransferCommand {
     },
 }
 
-pub async fn handle_command<S>(
+pub async fn handle_command(
     _config: &Config,
-    wallet: &SparkWallet<S>,
+    wallet: &SparkWallet,
     command: TransferCommand,
-) -> Result<(), Box<dyn std::error::Error>>
-where
-    S: spark_wallet::Signer + Clone,
-{
+) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         TransferCommand::ClaimPending => {
             let transfers = wallet.claim_pending_transfers().await?;

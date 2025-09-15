@@ -71,19 +71,19 @@ impl Default for ClaimTransferConfig {
     }
 }
 
-pub struct TransferService<S> {
-    signer: Arc<S>,
+pub struct TransferService {
+    signer: Arc<dyn Signer>,
     network: Network,
     split_secret_threshold: u32,
-    operator_pool: Arc<OperatorPool<S>>,
+    operator_pool: Arc<OperatorPool>,
 }
 
-impl<S: Signer> TransferService<S> {
+impl TransferService {
     pub fn new(
-        signer: Arc<S>,
+        signer: Arc<dyn Signer>,
         network: Network,
         split_secret_threshold: u32,
-        operator_pool: Arc<OperatorPool<S>>,
+        operator_pool: Arc<OperatorPool>,
     ) -> Self {
         Self {
             signer,

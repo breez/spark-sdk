@@ -9,18 +9,23 @@ use crate::operator::{
 
 use super::error::Result;
 
-pub struct ConnectionManager {
+#[macros::async_trait]
+pub trait ConnectionManager: Send + Sync {
+    async fn get_transport(&self, operator: &OperatorConfig) -> Result<Transport>;
+}
+
+pub struct DefaultConnectionManager {
     connections_map: Mutex<HashMap<String, Transport>>,
 }
 
-impl Default for ConnectionManager {
+impl Default for DefaultConnectionManager {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ConnectionManager {
-    pub fn new() -> ConnectionManager {
+impl DefaultConnectionManager {
+    pub fn new() -> Self {
         #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
         {
             // Install rustls ring crypto provider for native targets only
@@ -36,8 +41,11 @@ impl ConnectionManager {
             connections_map: Mutex::new(connections_map),
         }
     }
+}
 
-    pub async fn get_transport(&self, operator: &OperatorConfig) -> Result<Transport> {
+#[macros::async_trait]
+impl ConnectionManager for DefaultConnectionManager {
+    async fn get_transport(&self, operator: &OperatorConfig) -> Result<Transport> {
         let mut map = self.connections_map.lock().await;
         let operator_connection = map.get(&operator.address.to_string());
         match operator_connection {
