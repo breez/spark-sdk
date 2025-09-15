@@ -11,8 +11,8 @@ use bitcoin::{
     secp256k1::{PublicKey, XOnlyPublicKey, ecdsa::Signature},
 };
 use lnurl_models::{
-    RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
-    RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
+    CheckUsernameAvailableResponse, RecoverLnurlPayRequest, RecoverLnurlPayResponse,
+    RegisterLnurlPayRequest, RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -89,7 +89,7 @@ where
         Host(host): Host,
         Path(identifier): Path<String>,
         Extension(state): Extension<State<DB>>,
-    ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    ) -> Result<Json<CheckUsernameAvailableResponse>, (StatusCode, Json<Value>)> {
         let username = sanitize_username(&identifier);
         let user = state
             .db
@@ -103,9 +103,9 @@ where
                 )
             })?;
 
-        Ok(Json(json!({
-            "available": user.is_none()
-        })))
+        Ok(Json(CheckUsernameAvailableResponse {
+            available: user.is_none(),
+        }))
     }
 
     pub async fn register(

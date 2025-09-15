@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct CheckUsernameAvailableResponse {
+    pub available: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RecoverLnurlPayRequest {
     pub signature: String,
 }

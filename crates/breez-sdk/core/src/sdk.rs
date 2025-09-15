@@ -17,7 +17,6 @@ use breez_sdk_common::{
     rest::RestClient,
 };
 use lnurl_models::{RecoverLnurlPayRequest, RegisterLnurlPayRequest, UnregisterLnurlPayRequest};
-use serde_json::Value;
 use spark_wallet::{
     DefaultSigner, ExitSpeed, InvoiceDescription, Order, PagingFilter, PayLightningInvoiceResult,
     SparkAddress, SparkWallet, WalletEvent, WalletTransfer,
@@ -134,7 +133,7 @@ pub fn default_config(network: Network) -> Config {
         network,
         sync_interval_secs: 60, // every 1 minute
         max_deposit_claim_fee: None,
-        lnurl_domain: None,
+        lnurl_domain: Some("breez.tips".to_string()),
     }
 }
 
@@ -1139,30 +1138,14 @@ impl BreezSdk {
         &self,
         req: CheckLightningAddressRequest,
     ) -> Result<bool, SdkError> {
-        let Some(lnurl_domain) = &self.config.lnurl_domain else {
+        let Some(client) = &self.lnurl_server_client else {
             return Err(SdkError::Generic(
-                "LNURL domain is not configured".to_string(),
+                "LNURL server is not configured".to_string(),
             ));
         };
-        let url = format!("https://{lnurl_domain}/lnurlpay/available/{}", req.username);
-        let resp = self
-            .lnurl_client
-            .get(
-                url,
-                self.config.api_key.as_ref().map(|api_key| {
-                    [("Authorization".to_string(), format!("Bearer {api_key}"))].into()
-                }),
-            )
-            .await?;
-        if !resp.is_success() {
-            return Err(SdkError::Generic(format!(
-                "Failed to check lightning address availability: {}",
-                resp.body
-            )));
-        }
 
-        let value: Value = serde_json::from_str(&resp.body)?;
-        Ok(value["available"].as_bool().unwrap_or(false))
+        let available = client.check_username_available(&req.username).await?;
+        Ok(available)
     }
 
     pub async fn get_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {

@@ -1,6 +1,6 @@
 use lnurl_models::{
-    RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
-    RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
+    CheckUsernameAvailableResponse, RecoverLnurlPayRequest, RecoverLnurlPayResponse,
+    RegisterLnurlPayRequest, RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
 };
 use reqwest::{
     StatusCode,
@@ -19,6 +19,7 @@ pub enum LnurlServerError {
 
 #[macros::async_trait]
 pub trait LnurlServerClient: Send + Sync {
+    async fn check_username_available(&self, username: &str) -> Result<bool, LnurlServerError>;
     async fn recover_lnurl_pay(
         &self,
         pubkey: &PublicKey,
@@ -77,6 +78,35 @@ impl ReqwestLnurlServerClient {
 
 #[macros::async_trait]
 impl LnurlServerClient for ReqwestLnurlServerClient {
+    async fn check_username_available(&self, username: &str) -> Result<bool, LnurlServerError> {
+        let url = format!("https://{}/lnurlpay/available/{}", self.domain, username);
+        let result = self.client.get(url).send().await;
+        let response = match result {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(LnurlServerError::RequestFailure(e.to_string()));
+            }
+        };
+
+        match response.status() {
+            StatusCode::UNAUTHORIZED => return Err(LnurlServerError::InvalidApiKey),
+            success if success.is_success() => {
+                let body: CheckUsernameAvailableResponse = response.json().await.map_err(|e| {
+                    LnurlServerError::RequestFailure(format!(
+                        "failed to deserialize response json: {e}"
+                    ))
+                })?;
+                return Ok(body.available);
+            }
+            other => {
+                return Err(LnurlServerError::Network {
+                    statuscode: other.as_u16(),
+                    message: response.text().await.ok(),
+                });
+            }
+        }
+    }
+
     async fn recover_lnurl_pay(
         &self,
         pubkey: &PublicKey,
