@@ -1,0 +1,11 @@
+[package]
+name = "lnurl-models"
+edition = "2024"
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[lints]
+workspace = true

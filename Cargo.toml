@@ -13,6 +13,7 @@ members = [
   "crates/breez-sdk/common",
   "crates/breez-sdk/core", 
   "crates/breez-sdk/lnurl",
+  "crates/breez-sdk/lnurl-models",
   "crates/breez-sdk/wasm",
   "crates/macros",
   "crates/spark",
@@ -75,6 +76,7 @@ http-body-util = "0.1.3"
 k256 = { version = "0.13.0", features = ["arithmetic", "schnorr", "ecdsa"] }
 lightning = "0.1.3"
 lightning-invoice = "0.33.1"
+lnurl-models = { path = "crates/breez-sdk/lnurl-models" }
 macros = { path = "crates/macros" }
 openssl = { version = "0.10.70", default-features = false, features = ["vendored"] }
 percent-encoding-rfc3986 = "0.1.3"
