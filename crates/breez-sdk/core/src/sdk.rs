@@ -33,10 +33,10 @@ use x509_parser::parse_x509_certificate;
 use crate::{
     BitcoinChainService, CheckLightningAddressRequest, ClaimDepositRequest, ClaimDepositResponse,
     DepositInfo, Fee, GetLightningAddressResponse, GetPaymentRequest, GetPaymentResponse,
-    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest,
-    LnurlPayResponse, Logger, Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, RecoverLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
-    SendPaymentOptions, SetLightningAddressRequest,
+    LightningAddressInfo, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
+    LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger, Network, PaymentDetails,
+    PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse, RefundDepositRequest,
+    RefundDepositResponse, RegisterLightningAddressRequest, SendPaymentOptions,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     logger,
@@ -193,35 +193,24 @@ impl BreezSdk {
     /// 2. `monitor_deposits`: monitors for new deposits
     pub(crate) fn start(&self) {
         self.periodic_sync();
-        self.try_set_lightning_address();
+        self.try_recover_lightning_address();
     }
 
     /// Refreshes the user's lightning address on the server on startup.
-    fn try_set_lightning_address(&self) {
+    fn try_recover_lightning_address(&self) {
         let sdk = self.clone();
         tokio::spawn(async move {
             if sdk.config.lnurl_domain.is_none() {
                 return;
             }
 
-            let cache = ObjectCacheRepository::new(sdk.storage.clone());
-
-            match cache.fetch_lightning_address_config().await {
-                Ok(Some(config)) => match sdk.set_lightning_address(config).await {
-                    Ok(resp) => info!(
-                        "set lightning address on startup: lnurl: {}, address: {}",
-                        resp.lnurl, resp.lightning_address
-                    ),
-                    Err(e) => error!("Failed to set lightning address on startup: {e:?}"),
-                },
-                _ => match sdk.recover_lightning_address().await {
-                    Ok(None) => info!("no lightning address to recover on startup"),
-                    Ok(Some(value)) => info!(
-                        "recovered lightning address on startup: lnurl: {}, address: {}",
-                        value.lnurl, value.lightning_address
-                    ),
-                    Err(e) => error!("Failed to recover lightning address on startup: {e:?}"),
-                },
+            match sdk.recover_lightning_address().await {
+                Ok(None) => info!("no lightning address to recover on startup"),
+                Ok(Some(value)) => info!(
+                    "recovered lightning address on startup: lnurl: {}, address: {}",
+                    value.lnurl, value.lightning_address
+                ),
+                Err(e) => error!("Failed to recover lightning address on startup: {e:?}"),
             }
         });
     }
@@ -1107,9 +1096,7 @@ impl BreezSdk {
     }
 
     /// Attempts to recover a lightning address from the lnurl server.
-    async fn recover_lightning_address(
-        &self,
-    ) -> Result<Option<GetLightningAddressResponse>, SdkError> {
+    async fn recover_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
         let spark_address = self.spark_wallet.get_spark_address().await?;
         let pubkey = spark_address.identity_public_key;
@@ -1134,24 +1121,16 @@ impl BreezSdk {
             )
             .await?;
         if resp.is_success() {
-            let recovered: RecoverLnurlPayResponse = serde_json::from_str(&resp.body)
+            let recovered: LightningAddressInfo = serde_json::from_str(&resp.body)
                 .map_err(|e| SdkError::Generic(format!("Failed to parse LNURL response: {e}")))?;
-            let resp = GetLightningAddressResponse {
-                lnurl: recovered.lnurl,
-                lightning_address: recovered.lightning_address,
-            };
-            cache
-                .save_lightning_address_config(&SetLightningAddressRequest {
-                    username: recovered.username,
-                    description: recovered.description,
-                })
-                .await?;
-            cache.save_lightning_address(&resp).await?;
+            cache.save_lightning_address(&recovered).await?;
 
-            return Ok(Some(resp));
+            return Ok(Some(recovered));
         }
 
         if resp.status == 404 {
+            cache.delete_lightning_address().await?;
+
             // No address to recover
             return Ok(None);
         }
@@ -1192,19 +1171,16 @@ impl BreezSdk {
         Ok(value["available"].as_bool().unwrap_or(false))
     }
 
-    pub async fn get_lightning_address(
-        &self,
-    ) -> Result<Option<GetLightningAddressResponse>, SdkError> {
+    pub async fn get_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
         Ok(cache.fetch_lightning_address().await?)
     }
 
-    pub async fn set_lightning_address(
+    pub async fn register_lightning_address(
         &self,
-        request: SetLightningAddressRequest,
-    ) -> Result<GetLightningAddressResponse, SdkError> {
+        request: RegisterLightningAddressRequest,
+    ) -> Result<LightningAddressInfo, SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
-        cache.save_lightning_address_config(&request).await?;
         let Some(lnurl_domain) = &self.config.lnurl_domain else {
             return Err(SdkError::Generic(
                 "LNURL domain is not configured".to_string(),
@@ -1238,15 +1214,22 @@ impl BreezSdk {
         }
         let resp: GetLightningAddressResponse = serde_json::from_str(&resp.body)
             .map_err(|e| SdkError::Generic(format!("Failed to parse LNURL response: {e}")))?;
-        cache.save_lightning_address(&resp).await?;
-        Ok(resp)
+        let address_info = LightningAddressInfo {
+            lightning_address: resp.lightning_address,
+            description: request.description,
+            lnurl: resp.lnurl,
+            username: request.username,
+        };
+        cache.save_lightning_address(&address_info).await?;
+        Ok(address_info)
     }
 
     pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
-        let Some(config) = cache.fetch_lightning_address_config().await? else {
+        let Some(address_info) = cache.fetch_lightning_address().await? else {
             return Ok(());
         };
+
         let Some(lnurl_domain) = &self.config.lnurl_domain else {
             return Err(SdkError::Generic(
                 "LNURL domain is not configured".to_string(),
@@ -1256,13 +1239,13 @@ impl BreezSdk {
         let pubkey = spark_address.identity_public_key;
         let sig = self
             .spark_wallet
-            .sign_message(&config.username)
+            .sign_message(&address_info.username)
             .await?
             .serialize_der()
             .to_lower_hex_string();
         let url = format!("https://{lnurl_domain}/lnurlpay/{pubkey}");
         let body = serde_json::to_string(&json!({
-            "username": config.username,
+            "username": address_info.username,
             "signature": sig,
         }))?;
         let mut headers: HashMap<_, _> =
@@ -1282,7 +1265,6 @@ impl BreezSdk {
         }
 
         cache.delete_lightning_address().await?;
-        cache.delete_lightning_address_config().await?;
         Ok(())
     }
 }

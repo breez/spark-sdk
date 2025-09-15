@@ -600,14 +600,16 @@ pub struct _CheckLightningAddressRequest {
     pub username: String,
 }
 
-#[frb(mirror(SetLightningAddressRequest))]
-pub struct _SetLightningAddressRequest {
+#[frb(mirror(RegisterLightningAddressRequest))]
+pub struct _RegisterLightningAddressRequest {
     pub username: String,
     pub description: String,
 }
 
-#[frb(mirror(GetLightningAddressResponse))]
-pub struct _GetLightningAddressResponse {
-    pub lnurl: String,
+#[frb(mirror(LightningAddressInfo))]
+pub struct _LightningAddressInfo {
+    pub description: String,
     pub lightning_address: String,
+    pub lnurl: String,
+    pub username: String,
 }

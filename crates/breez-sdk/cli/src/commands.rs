@@ -2,8 +2,9 @@ use breez_sdk_spark::{
     BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee, GetInfoRequest,
     GetPaymentRequest, InputType, ListPaymentsRequest, ListUnclaimedDepositsRequest,
     LnurlPayRequest, OnchainConfirmationSpeed, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest, SendPaymentMethod,
-    SendPaymentOptions, SendPaymentRequest, SetLightningAddressRequest, SyncWalletRequest, parse,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
+    SyncWalletRequest, parse,
 };
 use clap::Parser;
 use rustyline::{
@@ -119,7 +120,7 @@ pub enum Command {
         username: String,
     },
     GetLightningAddress,
-    SetLightningAddress {
+    RegisterLightningAddress {
         /// The lightning address username
         username: String,
 
@@ -354,12 +355,12 @@ pub(crate) async fn execute_command(
             print_value(&res)?;
             Ok(true)
         }
-        Command::SetLightningAddress {
+        Command::RegisterLightningAddress {
             username,
             description,
         } => {
             let res = sdk
-                .set_lightning_address(SetLightningAddressRequest {
+                .register_lightning_address(RegisterLightningAddressRequest {
                     username,
                     description,
                 })

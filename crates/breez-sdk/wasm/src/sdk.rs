@@ -205,7 +205,7 @@ impl BreezSdk {
     }
 
     #[wasm_bindgen(js_name = "getLightningAddress")]
-    pub async fn get_lightning_address(&self) -> WasmResult<Option<GetLightningAddressResponse>> {
+    pub async fn get_lightning_address(&self) -> WasmResult<Option<LightningAddressInfo>> {
         Ok(self
             .sdk
             .get_lightning_address()
@@ -213,12 +213,16 @@ impl BreezSdk {
             .map(|resp| resp.into()))
     }
 
-    #[wasm_bindgen(js_name = "setLightningAddress")]
-    pub async fn set_lightning_address(
+    #[wasm_bindgen(js_name = "registerLightningAddress")]
+    pub async fn register_lightning_address(
         &self,
-        request: SetLightningAddressRequest,
-    ) -> WasmResult<GetLightningAddressResponse> {
-        Ok(self.sdk.set_lightning_address(request.into()).await?.into())
+        request: RegisterLightningAddressRequest,
+    ) -> WasmResult<LightningAddressInfo> {
+        Ok(self
+            .sdk
+            .register_lightning_address(request.into())
+            .await?
+            .into())
     }
 
     #[wasm_bindgen(js_name = "deleteLightningAddress")]

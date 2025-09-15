@@ -642,14 +642,16 @@ pub struct CheckLightningAddressRequest {
     pub username: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::SetLightningAddressRequest)]
-pub struct SetLightningAddressRequest {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RegisterLightningAddressRequest)]
+pub struct RegisterLightningAddressRequest {
     pub username: String,
     pub description: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::GetLightningAddressResponse)]
-pub struct GetLightningAddressResponse {
-    pub lnurl: String,
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LightningAddressInfo)]
+pub struct LightningAddressInfo {
+    pub description: String,
     pub lightning_address: String,
+    pub lnurl: String,
+    pub username: String,
 }

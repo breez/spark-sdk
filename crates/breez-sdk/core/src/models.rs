@@ -790,7 +790,7 @@ pub struct CheckLightningAddressRequest {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetLightningAddressRequest {
+pub struct RegisterLightningAddressRequest {
     pub username: String,
     pub description: String,
 }
@@ -802,10 +802,11 @@ pub struct GetLightningAddressResponse {
     pub lightning_address: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct RecoverLnurlPayResponse {
-    pub lnurl: String,
-    pub lightning_address: String,
-    pub username: String,
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Deserialize, Serialize)]
+pub struct LightningAddressInfo {
     pub description: String,
+    pub lightning_address: String,
+    pub lnurl: String,
+    pub username: String,
 }
