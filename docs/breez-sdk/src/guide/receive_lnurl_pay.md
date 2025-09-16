@@ -53,6 +53,16 @@ config.lnurlDomain = "yourdomain.com"
 ```
 </section>
 
+<div slot="title">Javascript</div>
+<section>
+
+```typescript,ignore
+const config = defaultConfig('bitcoin');
+config.apiKey = 'your-api-key';
+config.lnurlDomain = 'yourdomain.com';
+```
+</section>
+
 <div slot="title">Flutter</div>
 <section>
 
@@ -65,13 +75,25 @@ final config = defaultConfig(network: Network.bitcoin)
 ```
 </section>
 
-<div slot="title">Javascript</div>
+<div slot="title">Python</div>
 <section>
 
-```typescript,ignore
-const config = defaultConfig('bitcoin');
-config.apiKey = 'your-api-key';
-config.lnurlDomain = 'yourdomain.com';
+```python,ignore
+config = default_config(network=Network.BITCOIN)
+config.api_key = "your-api-key"
+config.lnurl_domain = "yourdomain.com"
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+lnurlDomain := "yourdomain.com"
+apiKey := "your-api-key"
+config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkBitcoin)
+config.ApiKey = &apiKey
+config.LnurlDomain = &lnurlDomain
 ```
 </section>
 </custom-tabs>
@@ -114,6 +136,14 @@ Before registering a Lightning Address, you can check if the username is availab
 ```
 </section>
 
+<div slot="title">Javascript</div>
+<section>
+
+```typescript,ignore
+{{#include ../../snippets/wasm/lightning_address.ts:check-lightning-address}}
+```
+</section>
+
 <div slot="title">Flutter</div>
 <section>
 
@@ -122,11 +152,19 @@ Before registering a Lightning Address, you can check if the username is availab
 ```
 </section>
 
-<div slot="title">Javascript</div>
+<div slot="title">Python</div>
 <section>
 
-```typescript,ignore
-{{#include ../../snippets/wasm/lightning_address.ts:check-lightning-address}}
+```python,ignore
+{{#include ../../snippets/python/src/lightning_address.py:check-lightning-address}}
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/lightning_address.go:check-lightning-address}}
 ```
 </section>
 </custom-tabs>
@@ -162,6 +200,14 @@ Once you've confirmed a username is available, you can register it by passing a 
 ```
 </section>
 
+<div slot="title">Javascript</div>
+<section>
+
+```typescript,ignore
+{{#include ../../snippets/wasm/lightning_address.ts:register-lightning-address}}
+```
+</section>
+
 <div slot="title">Flutter</div>
 <section>
 
@@ -170,11 +216,19 @@ Once you've confirmed a username is available, you can register it by passing a 
 ```
 </section>
 
-<div slot="title">Javascript</div>
+<div slot="title">Python</div>
 <section>
 
-```typescript,ignore
-{{#include ../../snippets/wasm/lightning_address.ts:register-lightning-address}}
+```python,ignore
+{{#include ../../snippets/python/src/lightning_address.py:register-lightning-address}}
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/lightning_address.go:register-lightning-address}}
 ```
 </section>
 </custom-tabs>
@@ -210,6 +264,14 @@ You can retrieve information about the currently registered Lightning Address.
 ```
 </section>
 
+<div slot="title">Javascript</div>
+<section>
+
+```typescript,ignore
+{{#include ../../snippets/wasm/lightning_address.ts:get-lightning-address}}
+```
+</section>
+
 <div slot="title">Flutter</div>
 <section>
 
@@ -218,11 +280,19 @@ You can retrieve information about the currently registered Lightning Address.
 ```
 </section>
 
-<div slot="title">Javascript</div>
+<div slot="title">Python</div>
 <section>
 
-```typescript,ignore
-{{#include ../../snippets/wasm/lightning_address.ts:get-lightning-address}}
+```python,ignore
+{{#include ../../snippets/python/src/lightning_address.py:get-lightning-address}}
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/lightning_address.go:get-lightning-address}}
 ```
 </section>
 </custom-tabs>
@@ -258,6 +328,14 @@ When a user no longer wants to use the Lightning Address, you can delete it.
 ```
 </section>
 
+<div slot="title">Javascript</div>
+<section>
+
+```typescript,ignore
+{{#include ../../snippets/wasm/lightning_address.ts:delete-lightning-address}}
+```
+</section>
+
 <div slot="title">Flutter</div>
 <section>
 
@@ -266,11 +344,19 @@ When a user no longer wants to use the Lightning Address, you can delete it.
 ```
 </section>
 
-<div slot="title">Javascript</div>
+<div slot="title">Python</div>
 <section>
 
-```typescript,ignore
-{{#include ../../snippets/wasm/lightning_address.ts:delete-lightning-address}}
+```python,ignore
+{{#include ../../snippets/python/src/lightning_address.py:delete-lightning-address}}
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/lightning_address.go:delete-lightning-address}}
 ```
 </section>
 </custom-tabs>
