@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use breez_sdk_common::input::InputType;
 use breez_sdk_spark::{
-    ClaimDepositRequest, ClaimDepositResponse, Config, ConnectRequest, GetInfoRequest,
-    GetInfoResponse, GetPaymentRequest, GetPaymentResponse, ListPaymentsRequest,
-    ListPaymentsResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
-    LnurlPayRequest, LnurlPayResponse, LogEntry, Logger, Network, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, PrepareSendPaymentRequest, PrepareSendPaymentResponse,
-    ReceivePaymentRequest, ReceivePaymentResponse, RefundDepositRequest, RefundDepositResponse,
-    SdkError, SdkEvent, SendPaymentRequest, SendPaymentResponse, Storage, SyncWalletRequest,
+    CheckLightningAddressRequest, ClaimDepositRequest, ClaimDepositResponse, Config,
+    ConnectRequest, GetInfoRequest, GetInfoResponse, GetPaymentRequest, GetPaymentResponse,
+    LightningAddressInfo, ListPaymentsRequest, ListPaymentsResponse, ListUnclaimedDepositsRequest,
+    ListUnclaimedDepositsResponse, LnurlPayRequest, LnurlPayResponse, LogEntry, Logger, Network,
+    PrepareLnurlPayRequest, PrepareLnurlPayResponse, PrepareSendPaymentRequest,
+    PrepareSendPaymentResponse, ReceivePaymentRequest, ReceivePaymentResponse,
+    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest, SdkError,
+    SdkEvent, SendPaymentRequest, SendPaymentResponse, Storage, SyncWalletRequest,
     SyncWalletResponse,
 };
 use flutter_rust_bridge::frb;
@@ -142,5 +143,27 @@ impl BreezSdk {
         request: ListUnclaimedDepositsRequest,
     ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
         self.inner.list_unclaimed_deposits(request).await
+    }
+
+    pub async fn check_lightning_address_available(
+        &self,
+        request: CheckLightningAddressRequest,
+    ) -> Result<bool, SdkError> {
+        self.inner.check_lightning_address_available(request).await
+    }
+
+    pub async fn get_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
+        self.inner.get_lightning_address().await
+    }
+
+    pub async fn register_lightning_address(
+        &self,
+        request: RegisterLightningAddressRequest,
+    ) -> Result<LightningAddressInfo, SdkError> {
+        self.inner.register_lightning_address(request).await
+    }
+
+    pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
+        self.inner.delete_lightning_address().await
     }
 }

@@ -1,8 +1,10 @@
 use crate::{
     Fee,
+    lnurl::{LnurlServerError, ReqwestLnurlServerClientError},
     persist::{self},
 };
 use bitcoin::consensus::encode::FromHexError;
+use breez_sdk_common::error::ServiceConnectivityError;
 use serde::{Deserialize, Serialize};
 use spark_wallet::SparkWalletError;
 use std::{convert::Infallible, num::TryFromIntError};
@@ -128,6 +130,39 @@ impl From<FromHexError> for SdkError {
 impl From<uuid::Error> for SdkError {
     fn from(e: uuid::Error) -> Self {
         SdkError::InvalidUuid(e.to_string())
+    }
+}
+
+impl From<ServiceConnectivityError> for SdkError {
+    fn from(value: ServiceConnectivityError) -> Self {
+        SdkError::NetworkError(value.to_string())
+    }
+}
+
+impl From<LnurlServerError> for SdkError {
+    fn from(value: LnurlServerError) -> Self {
+        match value {
+            LnurlServerError::InvalidApiKey => {
+                SdkError::InvalidInput("Invalid api key".to_string())
+            }
+            LnurlServerError::Network {
+                statuscode,
+                message,
+            } => SdkError::NetworkError(format!(
+                "network request failed with status {statuscode}: {}",
+                message.unwrap_or(String::new())
+            )),
+            LnurlServerError::RequestFailure(e) => SdkError::NetworkError(e),
+            LnurlServerError::SigningError(e) => {
+                SdkError::Generic(format!("Failed to sign message: {e}"))
+            }
+        }
+    }
+}
+
+impl From<ReqwestLnurlServerClientError> for SdkError {
+    fn from(value: ReqwestLnurlServerClientError) -> Self {
+        SdkError::Generic(value.to_string())
     }
 }
 

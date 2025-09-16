@@ -10,6 +10,10 @@ use bitcoin::{
     hashes::{Hash, sha256},
     secp256k1::{PublicKey, XOnlyPublicKey, ecdsa::Signature},
 };
+use lnurl_models::{
+    CheckUsernameAvailableResponse, RecoverLnurlPayRequest, RecoverLnurlPayResponse,
+    RegisterLnurlPayRequest, RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
+};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -26,38 +30,6 @@ pub struct LnurlPayParams {}
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LnurlPayCallbackParams {
     pub amount: Option<u64>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RecoverLnurlPayRequest {
-    pub signature: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RecoverLnurlPayResponse {
-    pub lnurl: String,
-    pub lightning_address: String,
-    pub username: String,
-    pub description: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RegisterLnurlPayRequest {
-    pub username: String,
-    pub signature: String,
-    pub description: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UnregisterLnurlPayRequest {
-    pub username: String,
-    pub signature: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RegisterLnurlPayResponse {
-    pub lnurl: String,
-    pub lightning_address: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -117,7 +89,7 @@ where
         Host(host): Host,
         Path(identifier): Path<String>,
         Extension(state): Extension<State<DB>>,
-    ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    ) -> Result<Json<CheckUsernameAvailableResponse>, (StatusCode, Json<Value>)> {
         let username = sanitize_username(&identifier);
         let user = state
             .db
@@ -131,9 +103,9 @@ where
                 )
             })?;
 
-        Ok(Json(json!({
-            "available": user.is_none()
-        })))
+        Ok(Json(CheckUsernameAvailableResponse {
+            available: user.is_none(),
+        }))
     }
 
     pub async fn register(

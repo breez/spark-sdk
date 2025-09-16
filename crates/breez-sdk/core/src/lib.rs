@@ -3,6 +3,7 @@ mod bindings;
 mod chain;
 mod error;
 mod events;
+mod lnurl;
 mod logger;
 mod models;
 mod persist;

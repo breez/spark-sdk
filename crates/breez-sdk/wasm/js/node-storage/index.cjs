@@ -102,6 +102,21 @@ class SqliteStorage {
     }
   }
 
+  deleteCachedItem(key) {
+    try {
+      const stmt = this.db.prepare("DELETE FROM settings WHERE key = ?");
+      stmt.run(key);
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to delete cached item '${key}': ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
   // ===== Payment Operations =====
 
   listPayments(offset = null, limit = null) {

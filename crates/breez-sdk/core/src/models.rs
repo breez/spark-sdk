@@ -4,6 +4,7 @@ use breez_sdk_common::{
     network::BitcoinNetwork,
 };
 use core::fmt;
+use lnurl_models::RecoverLnurlPayResponse;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
     CoopExitFeeQuote, CoopExitSpeedFeeQuote, ExitSpeed, LightningSendPayment, LightningSendStatus,
@@ -402,6 +403,9 @@ pub struct Config {
     // The maximum fee that can be paid for a static deposit claim
     // If not set then any fee is allowed
     pub max_deposit_claim_fee: Option<Fee>,
+
+    /// The domain used for receiving through lnurl-pay and lightning address.
+    pub lnurl_domain: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -777,4 +781,37 @@ pub trait Logger: Send + Sync {
 pub struct LogEntry {
     pub line: String,
     pub level: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckLightningAddressRequest {
+    pub username: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterLightningAddressRequest {
+    pub username: String,
+    pub description: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Deserialize, Serialize)]
+pub struct LightningAddressInfo {
+    pub description: String,
+    pub lightning_address: String,
+    pub lnurl: String,
+    pub username: String,
+}
+
+impl From<RecoverLnurlPayResponse> for LightningAddressInfo {
+    fn from(resp: RecoverLnurlPayResponse) -> Self {
+        Self {
+            description: resp.description,
+            lightning_address: resp.lightning_address,
+            lnurl: resp.lnurl,
+            username: resp.username,
+        }
+    }
 }

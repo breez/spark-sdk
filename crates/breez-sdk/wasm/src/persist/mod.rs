@@ -58,6 +58,16 @@ impl breez_sdk_spark::Storage for WasmStorage {
         Ok(())
     }
 
+    async fn delete_cached_item(&self, key: String) -> Result<(), breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .delete_cached_item(key)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
     async fn list_payments(
         &self,
         offset: Option<u32>,
@@ -183,6 +193,7 @@ impl breez_sdk_spark::Storage for WasmStorage {
 const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     getCachedItem: (key: string) => Promise<string | null>;
     setCachedItem: (key: string, value: string) => Promise<void>;
+    deleteCachedItem: (key: string) => Promise<void>;
     listPayments: (offset?: number, limit?: number) => Promise<Payment[]>;
     insertPayment: (payment: Payment) => Promise<void>;
     setPaymentMetadata: (paymentId: string, metadata: PaymentMetadata) => Promise<void>;
@@ -203,6 +214,9 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = setCachedItem, catch)]
     pub fn set_cached_item(this: &Storage, key: String, value: String) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = deleteCachedItem, catch)]
+    pub fn delete_cached_item(this: &Storage, key: String) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = listPayments, catch)]
     pub fn list_payments(

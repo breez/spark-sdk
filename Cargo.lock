@@ -778,6 +778,7 @@ dependencies = [
  "dotenvy",
  "figment",
  "hex",
+ "lnurl-models",
  "macros",
  "openssl",
  "qrcode-rs",
@@ -2811,6 +2812,7 @@ dependencies = [
  "clap",
  "figment",
  "hex",
+ "lnurl-models",
  "rand 0.8.5",
  "regex",
  "serde",
@@ -2824,6 +2826,13 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "x509-parser 0.18.0",
+]
+
+[[package]]
+name = "lnurl-models"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

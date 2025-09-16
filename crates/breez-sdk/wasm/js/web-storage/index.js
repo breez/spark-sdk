@@ -254,6 +254,31 @@ class IndexedDBStorage {
     });
   }
 
+  async deleteCachedItem(key) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("settings", "readwrite");
+      const store = transaction.objectStore("settings");
+      const request = store.delete(key);
+
+      request.onsuccess = () => resolve();
+
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to delete cached item '${key}': ${
+              request.error?.message || "Unknown error"
+            }`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
   // ===== Payment Operations =====
 
   async listPayments(offset = null, limit = null) {

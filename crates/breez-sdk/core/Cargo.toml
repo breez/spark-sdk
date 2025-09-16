@@ -36,6 +36,7 @@ clap = { workspace = true, features = ["derive"] }
 dotenvy.workspace = true
 figment = { workspace = true, features = ["env", "yaml"] }
 hex.workspace = true
+lnurl-models.workspace = true
 macros.workspace = true
 openssl = { workspace = true, optional = true }
 qrcode-rs.workspace = true

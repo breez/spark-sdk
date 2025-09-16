@@ -1,8 +1,9 @@
 use breez_sdk_spark::{
-    BreezSdk, ClaimDepositRequest, Fee, GetInfoRequest, GetPaymentRequest, InputType,
-    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, OnchainConfirmationSpeed,
-    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
+    BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee, GetInfoRequest,
+    GetPaymentRequest, InputType, ListPaymentsRequest, ListUnclaimedDepositsRequest,
+    LnurlPayRequest, OnchainConfirmationSpeed, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
     SyncWalletRequest, parse,
 };
 use clap::Parser;
@@ -114,6 +115,19 @@ pub enum Command {
         sat_per_vbyte: Option<u64>,
     },
     ListUnclaimedDeposits,
+    CheckLightningAddressAvailable {
+        /// The username to check
+        username: String,
+    },
+    GetLightningAddress,
+    RegisterLightningAddress {
+        /// The lightning address username
+        username: String,
+
+        /// Description in the lnurl response and the invoice.
+        description: String,
+    },
+    DeleteLightningAddress,
 }
 
 #[derive(Helper, Completer, Hinter, Validator)]
@@ -327,6 +341,35 @@ pub(crate) async fn execute_command(
             }?;
 
             print_value(&res)?;
+            Ok(true)
+        }
+        Command::CheckLightningAddressAvailable { username } => {
+            let res = sdk
+                .check_lightning_address_available(CheckLightningAddressRequest { username })
+                .await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::GetLightningAddress => {
+            let res = sdk.get_lightning_address().await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::RegisterLightningAddress {
+            username,
+            description,
+        } => {
+            let res = sdk
+                .register_lightning_address(RegisterLightningAddressRequest {
+                    username,
+                    description,
+                })
+                .await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::DeleteLightningAddress => {
+            sdk.delete_lightning_address().await?;
             Ok(true)
         }
     }

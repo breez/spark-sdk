@@ -27,6 +27,7 @@ pub struct _Config {
     pub network: Network,
     pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<Fee>,
+    pub lnurl_domain: Option<String>,
 }
 
 #[frb(mirror(ConnectRequest))]
@@ -592,4 +593,23 @@ pub struct _SilentPaymentAddressDetails {
     pub address: String,
     pub network: BitcoinNetwork,
     pub source: PaymentRequestSource,
+}
+
+#[frb(mirror(CheckLightningAddressRequest))]
+pub struct _CheckLightningAddressRequest {
+    pub username: String,
+}
+
+#[frb(mirror(RegisterLightningAddressRequest))]
+pub struct _RegisterLightningAddressRequest {
+    pub username: String,
+    pub description: String,
+}
+
+#[frb(mirror(LightningAddressInfo))]
+pub struct _LightningAddressInfo {
+    pub description: String,
+    pub lightning_address: String,
+    pub lnurl: String,
+    pub username: String,
 }
