@@ -81,7 +81,7 @@ impl ReqwestLnurlServerClient {
         if let Some(api_key) = api_key {
             builder = builder.default_headers({
                 let mut headers = HeaderMap::new();
-                headers.insert(AUTHORIZATION, api_key.parse()?);
+                headers.insert(AUTHORIZATION, format!("Bearer {api_key}").parse()?);
                 headers
             });
         }
