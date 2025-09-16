@@ -19,7 +19,7 @@ regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_with.workspace = true
-spark-wallet.workspace = true
+spark-wallet = { workspace = true, features = ["native-tls"] }
 sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "sqlite", "tls-native-tls"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
