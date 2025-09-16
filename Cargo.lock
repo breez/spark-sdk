@@ -4549,15 +4549,15 @@ dependencies = [
 
 [[package]]
 name = "sparkscan"
-version = "0.3.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce37d4f7be4e6d03dbbce1edd8a362853a257f14960cc8f465004a08d87601fe"
+version = "0.3.8"
+source = "git+https://github.com/breez/sparkscan-rs?rev=250753cf6c9fd95a79c9f450b1f59534329251ab#250753cf6c9fd95a79c9f450b1f59534329251ab"
 dependencies = [
  "cfg-if",
  "chrono",
  "futures",
  "prettyplease",
  "progenitor",
+ "quote",
  "regress",
  "reqwest",
  "schemars 0.8.22",
@@ -4570,8 +4570,7 @@ dependencies = [
 [[package]]
 name = "sparkscan-client"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31dc0e035e973e408121b00a8c31d4562874725a2ff01bd3a458a66a88aeec6c"
+source = "git+https://github.com/breez/sparkscan-rs?rev=250753cf6c9fd95a79c9f450b1f59534329251ab#250753cf6c9fd95a79c9f450b1f59534329251ab"
 dependencies = [
  "bytes",
  "cfg-if",
