@@ -1,5 +1,8 @@
 # This file is auto-generated from all .gitignore files in the workspace
-# Last updated: Tue Sep 16 20:44:18 CEST 2025
+# Last updated: Tue Sep 16 21:04:15 CEST 2025
+
+# Always ignore .git folder in Docker builds
+.git/
 
 # From: crates/breez-sdk/lnurl/.gitignore
 crates/breez-sdk/lnurl/*.db

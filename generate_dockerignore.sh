@@ -17,6 +17,11 @@ echo "# This file is auto-generated from all .gitignore files in the workspace" 
 echo "# Last updated: $(date)" >> "$DOCKERIGNORE_FILE"
 echo "" >> "$DOCKERIGNORE_FILE"
 
+# Always add .git folder to .dockerignore
+echo "# Always ignore .git folder in Docker builds" >> "$DOCKERIGNORE_FILE"
+echo ".git/" >> "$DOCKERIGNORE_FILE"
+echo "" >> "$DOCKERIGNORE_FILE"
+
 # Function to process a .gitignore file and add its contents to .dockerignore
 process_gitignore() {
   local gitignore_path="$1"
