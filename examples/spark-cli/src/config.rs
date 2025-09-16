@@ -32,23 +32,23 @@ spark_config:
       - 
         id: 0
         identifier: 0000000000000000000000000000000000000000000000000000000000000001
-        address: https://0.spark.loadtest.dev.sparkinfra.net/
-        identity_public_key: 03d8d2d331e07f572636dfd371a30dfa139a8bdc99ea98f1f48e27dcc664589ecc
+        address: https://0.spark.lightspark.com/
+        identity_public_key: 03dfbdff4b6332c220f8fa2ba8ed496c698ceada563fa01b67d9983bfc5c95e763
       -
         id: 1
         identifier: 0000000000000000000000000000000000000000000000000000000000000002
-        address: https://1.spark.loadtest.dev.sparkinfra.net/
-        identity_public_key: 023b1f3e062137ffc541a8edeaab7a4648aafa506d0208956123507d66d3886ac6
+        address: https://1.spark.lightspark.com/
+        identity_public_key: 03e625e9768651c9be268e287245cc33f96a68ce9141b0b4769205db027ee8ed77
       -
         id: 2
         identifier: 0000000000000000000000000000000000000000000000000000000000000003
-        address: https://2.spark.loadtest.dev.sparkinfra.net/
-        identity_public_key: 02a2c62aa3230d9a51759b3d67399f57223455656369d28120fb39ef062b4469c8
+        address: https://2.spark.flashnet.xyz/
+        identity_public_key: 022eda13465a59205413086130a65dc0ed1b8f8e51937043161f8be0c369b1a410
   reconnect_interval_seconds: 1
   service_provider_config:
-    base_url: "https://api.loadtest.dev.sparkinfra.net"
+    base_url: "https://api.lightspark.com"
     schema_endpoint: "graphql/spark/rc"
-    identity_public_key: "03e23a4912c275d1ba8742cfdfc7e9befdc2243a74be2412b7b77d227643353a1f"
+    identity_public_key: "023e33e2920326f64ea31058d44777442d97d7d5cbfcf54e3060bc1695e5261c93"
   tokens_config:
     expected_withdraw_bond_sats: 10000
     expected_withdraw_relative_block_locktime: 1000

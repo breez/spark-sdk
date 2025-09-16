@@ -102,7 +102,7 @@ impl SdkBuilder {
                     None,
                 )),
                 Network::Regtest => Arc::new(RestClientChainService::new(
-                    "https://regtest-mempool.loadtest.dev.sparkinfra.net/api".to_string(),
+                    "https://regtest-mempool.us-west-2.sparkinfra.net/api".to_string(),
                     self.config.network,
                     5,
                     Box::new(inner_client),
