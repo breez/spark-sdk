@@ -27,9 +27,7 @@ To configure the domain in the sdk, you need to pass the `lnurl_domain` paramete
 <section>
 
 ```rust,ignore
-let mut config = default_config(Network::Bitcoin);
-config.api_key = Some("your-api-key".to_string());
-config.lnurl_domain = Some("yourdomain.com".to_string());
+{{#include ../../snippets/rust/src/lightning_address.rs:config-lightning-address}}
 ```
 </section>
 
@@ -37,9 +35,7 @@ config.lnurl_domain = Some("yourdomain.com".to_string());
 <section>
 
 ```swift,ignore
-var config = defaultConfig(network: Network.bitcoin)
-config.apiKey = "your-api-key"
-config.lnurlDomain = "yourdomain.com"
+{{#include ../../snippets/swift/BreezSdkSnippets/Sources/LightningAddress.swift:config-lightning-address}}
 ```
 </section>
 
@@ -47,9 +43,7 @@ config.lnurlDomain = "yourdomain.com"
 <section>
 
 ```kotlin,ignore
-val config = defaultConfig(Network.BITCOIN)
-config.apiKey = "your-api-key"
-config.lnurlDomain = "yourdomain.com"
+{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/LightningAddress.kt:config-lightning-address}}
 ```
 </section>
 
@@ -57,9 +51,7 @@ config.lnurlDomain = "yourdomain.com"
 <section>
 
 ```typescript,ignore
-const config = defaultConfig('bitcoin');
-config.apiKey = 'your-api-key';
-config.lnurlDomain = 'yourdomain.com';
+{{#include ../../snippets/wasm/lightning_address.ts:config-lightning-address}}
 ```
 </section>
 
@@ -67,11 +59,7 @@ config.lnurlDomain = 'yourdomain.com';
 <section>
 
 ```dart,ignore
-final config = defaultConfig(network: Network.bitcoin)
-    .copyWith(
-      apiKey: 'your-api-key',
-      lnurlDomain: 'yourdomain.com'
-    );
+{{#include ../../snippets/flutter/lib/lightning_address.dart:config-lightning-address}}
 ```
 </section>
 
@@ -79,9 +67,7 @@ final config = defaultConfig(network: Network.bitcoin)
 <section>
 
 ```python,ignore
-config = default_config(network=Network.BITCOIN)
-config.api_key = "your-api-key"
-config.lnurl_domain = "yourdomain.com"
+{{#include ../../snippets/python/src/lightning_address.py:config-lightning-address}}
 ```
 </section>
 
@@ -89,11 +75,7 @@ config.lnurl_domain = "yourdomain.com"
 <section>
 
 ```go,ignore
-lnurlDomain := "yourdomain.com"
-apiKey := "your-api-key"
-config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkBitcoin)
-config.ApiKey = &apiKey
-config.LnurlDomain = &lnurlDomain
+{{#include ../../snippets/go/lightning_address.go:config-lightning-address}}
 ```
 </section>
 </custom-tabs>

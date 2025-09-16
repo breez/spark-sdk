@@ -1,5 +1,14 @@
 use anyhow::anyhow;
-use breez_sdk_spark::{BreezSdk, CheckLightningAddressRequest, RegisterLightningAddressRequest};
+use breez_sdk_spark::{BreezSdk, CheckLightningAddressRequest, Config, Network, RegisterLightningAddressRequest, default_config};
+
+pub fn configure_lightning_address() -> Config {
+    // ANCHOR: config-lightning-address
+    let mut config = default_config(Network::Bitcoin);
+    config.api_key = Some("your-api-key".to_string());
+    config.lnurl_domain = Some("yourdomain.com".to_string());
+    // ANCHOR_END: config-lightning-address
+    config
+}
 
 pub async fn check_lightning_address_availability(sdk: &BreezSdk, username: String) -> anyhow::Result<bool> {
     // Define the username

@@ -1,5 +1,16 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
+Config configureLightningAddress() {
+  // ANCHOR: config-lightning-address
+  final config = defaultConfig(network: Network.bitcoin)
+      .copyWith(
+        apiKey: 'your-api-key',
+        lnurlDomain: 'yourdomain.com'
+      );
+  // ANCHOR_END: config-lightning-address
+  return config;
+}
+
 Future<void> checkLightningAddressAvailability(BreezSdk sdk) async {
   final username = 'myusername';
   

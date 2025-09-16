@@ -4,6 +4,17 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
+func ConfigLightningAddress() *breez_sdk_spark.Config {
+	// ANCHOR: config-lightning-address
+	lnurlDomain := "yourdomain.com"
+	apiKey := "your-api-key"
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkBitcoin)
+	config.ApiKey = &apiKey
+	config.LnurlDomain = &lnurlDomain
+	// ANCHOR_END: config-lightning-address
+	return config
+}
+
 func CheckLightningAddressAvailability(sdk *breez_sdk_spark.BreezSdk) (bool, error) {
 	username := "myusername"
 

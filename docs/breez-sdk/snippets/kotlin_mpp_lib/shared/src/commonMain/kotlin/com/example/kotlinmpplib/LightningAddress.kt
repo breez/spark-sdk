@@ -3,6 +3,15 @@ package com.example.kotlinmpplib
 import breez_sdk_spark.*
 
 class LightningAddress {
+    fun configureLightningAddress(): Config {
+        // ANCHOR: config-lightning-address
+        val config = defaultConfig(Network.BITCOIN)
+        config.apiKey = "your-api-key"
+        config.lnurlDomain = "yourdomain.com"
+        // ANCHOR_END: config-lightning-address
+        return config
+    }
+
     suspend fun checkLightningAddressAvailability(sdk: BreezSdk) {
         val username = "myusername"
         

@@ -2,8 +2,18 @@ import logging
 from breez_sdk_spark import (
     BreezSdk,
     CheckLightningAddressRequest,
-    RegisterLightningAddressRequest
+    Network,
+    RegisterLightningAddressRequest,
+    default_config
 )
+
+def configure_lightning_address():
+    # ANCHOR: config-lightning-address
+    config = default_config(network=Network.BITCOIN)
+    config.api_key = "your-api-key"
+    config.lnurl_domain = "yourdomain.com"
+    # ANCHOR_END: config-lightning-address
+    return config
 
 async def check_lightning_address_availability(sdk: BreezSdk, username: str) -> bool:
     username = "myusername"

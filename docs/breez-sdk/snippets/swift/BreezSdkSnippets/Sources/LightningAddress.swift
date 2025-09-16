@@ -1,6 +1,15 @@
 import BreezSdkSpark
 import Foundation
 
+func configureLightningAddress() -> Config {
+    // ANCHOR: config-lightning-address
+    var config = defaultConfig(network: Network.bitcoin)
+    config.apiKey = "your-api-key"
+    config.lnurlDomain = "yourdomain.com"
+    // ANCHOR_END: config-lightning-address
+    return config
+}
+
 func checkLightningAddressAvailability(sdk: BreezSdk) async throws {
     let username = "myusername"
     
