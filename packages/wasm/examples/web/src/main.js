@@ -12,7 +12,7 @@ import init, {
 const CONFIG = {
   mnemonic: import.meta.env.VITE_MNEMONIC || "",
   network: "regtest",
-  chainServiceUrl: "https://regtest-mempool.loadtest.dev.sparkinfra.net/api",
+  chainServiceUrl: "https://regtest-mempool.us-west-2.sparkinfra.net/api",
   chainServiceUsername: import.meta.env.VITE_CHAIN_SERVICE_USERNAME || "",
   chainServicePassword: import.meta.env.VITE_CHAIN_SERVICE_PASSWORD || "",
   apiKey: import.meta.env.VITE_BREEZ_API_KEY || "",
