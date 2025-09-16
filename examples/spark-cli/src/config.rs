@@ -17,7 +17,7 @@ pub struct Config {
 }
 
 pub const DEFAULT_CONFIG: &str = r#"
-mempool_url: "https://regtest-mempool.loadtest.dev.sparkinfra.net/api"
+mempool_url: "https://regtest-mempool.us-west-2.sparkinfra.net/api"
 mempool_username: "spark-sdk"
 mempool_password: "mCMk1JqlBNtetUNy"
 log_filter: "spark_wallet=debug,spark=debug,info"
