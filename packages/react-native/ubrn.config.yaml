@@ -1,0 +1,15 @@
+rust:
+  directory: ../..
+  manifestPath: crates/breez-sdk/bindings/Cargo.toml
+bindings:
+  cpp: cpp/generated
+  ts: src/generated
+ios:
+  targets:
+    - aarch64-apple-ios
+    - aarch64-apple-ios-sim
+    - x86_64-apple-ios
+  frameworkName: build/RnBreezSdkSpark
+turboModule:
+  cpp: cpp
+  ts: src

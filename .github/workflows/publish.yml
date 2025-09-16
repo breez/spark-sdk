@@ -14,7 +14,7 @@ on:
         description: 'Array of packages to publish (remove what you do not want)'
         required: true
         type: string
-        default: '["android", "flutter", "golang", "kotlin-multiplatform", "python", "swift", "wasm"]'
+        default: '["android", "flutter", "golang", "kotlin-multiplatform", "python", "react-native", "swift", "wasm"]'
       use-dummy-binaries:
         description: 'Should use dummies for the SDK binaries. Default = false.'
         required: false
@@ -43,7 +43,7 @@ on:
         description: 'Array of packages to publish (remove what you do not want)'
         required: true
         type: string
-        default: '["android", "flutter", "golang", "kotlin-multiplatform", "python", "swift", "wasm"]'
+        default: '["android", "flutter", "golang", "kotlin-multiplatform", "python","react-native", "swift", "wasm"]'
       use-dummy-binaries:
         description: 'Should use dummies for the SDK binaries. Default = false.'
         required: false
@@ -67,6 +67,7 @@ jobs:
       golang-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'golang') && inputs.package-version) || '' }}
       kotlin-multiplatform-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'kotlin-multiplatform') && inputs.package-version) || '' }}
       python-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'python') && inputs.package-version) || '' }}
+      react-native-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'react-native') && inputs.package-version) || '' }}
       swift-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'swift') && inputs.package-version) || '' }}
       wasm-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'wasm') && inputs.package-version) || '' }}
       use-dummy-binaries: ${{ inputs.use-dummy-binaries }}
@@ -85,9 +86,9 @@ jobs:
       # to set these variables here to `true` or `false` 
       # (e.g. bindings-windows: true) if you want to test something.
       repository: ${{ needs.pre-setup.outputs.repository }}
-      bindings-android: ${{ !!needs.pre-setup.outputs.android-package-version || !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.kotlin-multiplatform-package-version }}
+      bindings-android: ${{ !!needs.pre-setup.outputs.android-package-version || !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.kotlin-multiplatform-package-version || !!needs.pre-setup.outputs.react-native-package-version }}
       bindings-darwin: ${{ !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version || !!needs.pre-setup.outputs.swift-package-version }}
-      bindings-ios: ${{ !!needs.pre-setup.outputs.kotlin-multiplatform-package-version || !!needs.pre-setup.outputs.swift-package-version }}
+      bindings-ios: ${{ !!needs.pre-setup.outputs.kotlin-multiplatform-package-version || !!needs.pre-setup.outputs.swift-package-version || !!needs.pre-setup.outputs.react-native-package-version }}
       bindings-linux: ${{ !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version }}
       bindings-wasm: ${{ !!needs.pre-setup.outputs.wasm-package-version }}
       bindings-windows: ${{ !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version }}
@@ -96,6 +97,7 @@ jobs:
       golang: ${{ !!needs.pre-setup.outputs.golang-package-version }}
       kotlin-multiplatform: ${{ !!needs.pre-setup.outputs.kotlin-multiplatform-package-version }}
       python: ${{ !!needs.pre-setup.outputs.python-package-version }}
+      react-native: ${{ !!needs.pre-setup.outputs.react-native-package-version }}
       swift: ${{ !!needs.pre-setup.outputs.swift-package-version }}
       wasm: ${{ !!needs.pre-setup.outputs.wasm-package-version }}
       ref: ${{ needs.pre-setup.outputs.ref }}
@@ -104,6 +106,7 @@ jobs:
       golang-package-version: ${{ needs.pre-setup.outputs.golang-package-version || '0.0.2' }}
       kotlin-multiplatform-package-version: ${{ needs.pre-setup.outputs.kotlin-multiplatform-package-version || '0.0.2' }}
       python-package-version: ${{ needs.pre-setup.outputs.python-package-version || '0.0.2' }}
+      react-native-package-version: ${{ needs.pre-setup.outputs.react-native-package-version || '0.0.2' }}
       swift-package-version: ${{ needs.pre-setup.outputs.swift-package-version || '0.0.2' }}
       wasm-package-version: ${{ needs.pre-setup.outputs.wasm-package-version || '0.0.2' }}
       publish: ${{ needs.pre-setup.outputs.publish }}
@@ -260,6 +263,23 @@ jobs:
       REPO_SSH_KEY: ${{ secrets.REPO_SSH_KEY }}
       SWIFT_RELEASE_TOKEN: ${{ secrets.SWIFT_RELEASE_TOKEN }}
       COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
+
+  publish-react-native:
+    needs:
+      - setup
+      - build-bindings-android
+      - build-bindings-ios
+    if: ${{ needs.setup.outputs.react-native == 'true' }}
+    uses: ./.github/workflows/publish-react-native.yml
+    with:
+      repository: ${{ needs.setup.outputs.repository }}
+      ref: ${{ needs.setup.outputs.ref }}
+      package-version: ${{ needs.setup.outputs.react-native-package-version }}
+      publish: ${{ needs.setup.outputs.publish == 'true' }}
+    secrets:
+      REPO_SSH_KEY: ${{ secrets.REPO_SSH_KEY }}
+      RN_RELEASE_TOKEN: ${{ secrets.RN_RELEASE_TOKEN }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-wasm:
     needs:
