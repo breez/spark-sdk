@@ -189,7 +189,7 @@ where
         .route("/lnurlpay/{pubkey}", delete(LnurlServer::<DB>::unregister))
         .route(
             "/lnurlpay/{pubkey}/recover",
-            delete(LnurlServer::<DB>::recover),
+            post(LnurlServer::<DB>::recover),
         )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
