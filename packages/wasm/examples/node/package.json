@@ -7,8 +7,7 @@
         "cli": "node src/cli.js"
     },
     "dependencies": {
-        "@breeztech/breez-sdk-spark": "file:../../",
-        "better-sqlite3": "^12.2.0",
+        "@breeztech/breez-sdk-spark": "file:../../breeztech-breez-sdk-spark-v0.1.0.tgz",
         "commander": "^13.1.0",
         "dotenv": "^16.4.7",
         "qrcode": "^1.5.4",

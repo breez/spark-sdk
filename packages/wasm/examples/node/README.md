@@ -6,11 +6,12 @@ Copy the `example.env` file to `.env` and set the environment variables.
 
 ## Build
 
-If you are running from a local Wasm package, build the Wasm package first in the [Wasm package](../../) directory.
+If you are running from a local Wasm package, build the Wasm package first in the [Wasm package](../../) directory and package its dependencies.
 
 ```bash
-cd ..
+cd ../..
 make build
+yarn pack
 ```
 
 Install the dependencies
