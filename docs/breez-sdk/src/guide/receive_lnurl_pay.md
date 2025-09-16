@@ -27,12 +27,9 @@ To configure the domain in the sdk, you need to pass the `lnurl_domain` paramete
 <section>
 
 ```rust,ignore
-let config = Config {
-    api_key: Some("your-api-key".to_string()),
-    network: Network::Bitcoin,
-    lnurl_domain: Some("yourdomain.com".to_string()),
-    // ... other config options
-};
+let mut config = default_config(Network::Bitcoin);
+config.api_key = Some("your-api-key".to_string());
+config.lnurl_domain = Some("yourdomain.com".to_string());
 ```
 </section>
 
@@ -40,12 +37,9 @@ let config = Config {
 <section>
 
 ```swift,ignore
-let config = Config(
-    apiKey: "your-api-key",
-    network: Network.bitcoin,
-    lnurlDomain: "yourdomain.com",
-    // ... other config options
-)
+var config = defaultConfig(network: Network.bitcoin)
+config.apiKey = "your-api-key"
+config.lnurlDomain = "yourdomain.com"
 ```
 </section>
 
@@ -53,12 +47,9 @@ let config = Config(
 <section>
 
 ```kotlin,ignore
-val config = Config(
-    apiKey = "your-api-key",
-    network = Network.BITCOIN,
-    lnurlDomain = "yourdomain.com",
-    // ... other config options
-)
+val config = defaultConfig(Network.BITCOIN)
+config.apiKey = "your-api-key"
+config.lnurlDomain = "yourdomain.com"
 ```
 </section>
 
@@ -66,12 +57,11 @@ val config = Config(
 <section>
 
 ```dart,ignore
-final config = Config(
-  apiKey: 'your-api-key',
-  network: Network.bitcoin,
-  lnurlDomain: 'yourdomain.com',
-  // ... other config options
-);
+final config = defaultConfig(network: Network.bitcoin)
+    .copyWith(
+      apiKey: 'your-api-key',
+      lnurlDomain: 'yourdomain.com'
+    );
 ```
 </section>
 
@@ -79,12 +69,9 @@ final config = Config(
 <section>
 
 ```typescript,ignore
-const config: Config = {
-  apiKey: 'your-api-key',
-  network: Network.BITCOIN,
-  lnurlDomain: 'yourdomain.com',
-  // ... other config options
-};
+const config = defaultConfig('bitcoin');
+config.apiKey = 'your-api-key';
+config.lnurlDomain = 'yourdomain.com';
 ```
 </section>
 </custom-tabs>
