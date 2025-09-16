@@ -193,6 +193,7 @@ impl breez_sdk_spark::Storage for WasmStorage {
 const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     getCachedItem: (key: string) => Promise<string | null>;
     setCachedItem: (key: string, value: string) => Promise<void>;
+    deleteCachedItem: (key: string) => Promise<void>;
     listPayments: (offset?: number, limit?: number) => Promise<Payment[]>;
     insertPayment: (payment: Payment) => Promise<void>;
     setPaymentMetadata: (paymentId: string, metadata: PaymentMetadata) => Promise<void>;
