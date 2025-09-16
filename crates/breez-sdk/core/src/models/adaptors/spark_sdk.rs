@@ -154,6 +154,14 @@ impl Payment {
         payment: LightningSendPayment,
         amount_sat: u64,
     ) -> Result<Self, SdkError> {
+        let id = payment
+            .transfer_id
+            .ok_or(SdkError::Generic(
+                "Transfer id not found in LightningSendPayment".to_string(),
+            ))?
+            .clone()
+            .to_string();
+
         let status = match payment.status {
             LightningSendStatus::LightningPaymentSucceeded => PaymentStatus::Completed,
             LightningSendStatus::LightningPaymentFailed => PaymentStatus::Failed,
@@ -173,7 +181,7 @@ impl Payment {
         };
 
         Ok(Payment {
-            id: payment.id,
+            id,
             payment_type: PaymentType::Send,
             status,
             amount: amount_sat,

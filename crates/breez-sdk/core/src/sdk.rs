@@ -429,7 +429,7 @@ impl BreezSdk {
     }
 
     /// Syncs pending payments so that we have their latest status
-    /// Uses the Spark SDK API (SparkWallet) to get the latest status of the payments
+    /// Uses the Spark SDK API to get the latest status of the payments
     async fn sync_pending_payments(&self) -> Result<(), SdkError> {
         // TODO: implement pending payment syncing using sparkscan API (including live updates)
         // Advantages:
@@ -438,7 +438,7 @@ impl BreezSdk {
         // Why it can't be done now:
         // - Sparkscan needs one of the following:
         //   - Batch transaction querying by id
-        //   - Sorting by updated_at timestamp in address transactions query (simpler) 
+        //   - Sorting by updated_at timestamp in address transactions query (simpler)
 
         let pending_payments = self
             .storage
