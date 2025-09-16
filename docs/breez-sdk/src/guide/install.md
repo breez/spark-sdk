@@ -52,7 +52,7 @@ repositories {
 }
 
 dependencies {
-  implementation("breez_sdk_spark:bindings-android:<version>")
+  implementation("breez_sdk_spark:bindings-android:{VERSION}")
 }
 ```
 
