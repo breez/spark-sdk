@@ -370,7 +370,11 @@ impl BreezSdk {
             .unwrap_or_default();
         let last_synced_id = cached_sync_info.last_synced_payment_id;
 
-        let spark_address = self.spark_wallet.get_spark_address()?.to_string();
+        // TODO: use new spark address format once sparkscan supports it
+        let legacy_spark_address = self
+            .spark_wallet
+            .get_spark_address()?
+            .to_string_with_hrp_legacy();
 
         let mut payments_to_sync = Vec::new();
 
@@ -384,7 +388,7 @@ impl BreezSdk {
             let response = sparkscan::Client::new(&self.config.sparkscan_api_url)
                 .get_address_transactions_v1_address_address_transactions_get()
                 .network(sparkscan::types::Network::from(self.config.network))
-                .address(spark_address.to_string())
+                .address(legacy_spark_address.to_string())
                 .offset(next_offset)
                 .limit(PAYMENT_SYNC_BATCH_SIZE)
                 .send()
@@ -417,7 +421,7 @@ impl BreezSdk {
                 let payments = payments_from_address_transaction_and_ssp_request(
                     transaction,
                     ssp_user_requests.get(&transaction.id),
-                    &spark_address,
+                    &legacy_spark_address,
                 )?;
 
                 for payment in payments {
