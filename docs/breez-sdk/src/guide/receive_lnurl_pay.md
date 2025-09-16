@@ -9,7 +9,7 @@
 A Lightning Address is a human-readable identifier formatted like an email address (e.g., `user@domain.com`) that can be used to receive Bitcoin payments over the Lightning Network. Behind the scenes, it uses the LNURL-pay protocol to dynamically generate invoices when someone wants to send a payment to this address.
 
 <h2 id="lnurl-server">
-    <a class="header" href="#lnurl-server">lnurl server</a>
+    <a class="header" href="#lnurl-server">LNURL server</a>
 </h2>
 
 To use Lightning Addresses with the Breez SDK, you first need to supply a domain. There are two options:
@@ -18,7 +18,7 @@ To use Lightning Addresses with the Breez SDK, you first need to supply a domain
 2. **Self-hosted LNURL server**: You can run your own LNURL server.
 
 <h2 id="configuring-lightning-address">
-    <a class="header" href="#configuring-lightning-address">configuring lightning address</a>
+    <a class="header" href="#configuring-lightning-address">Configuring Lightning Address</a>
 </h2>
 To configure the domain in the sdk, you need to pass the `lnurl_domain` parameter in the SDK configuration:
 
@@ -62,7 +62,7 @@ val config = Config(
 ```
 </section>
 
-<div slot="title">Dart</div>
+<div slot="title">Flutter</div>
 <section>
 
 ```dart,ignore
@@ -75,7 +75,7 @@ final config = Config(
 ```
 </section>
 
-<div slot="title">React</div>
+<div slot="title">Javascript</div>
 <section>
 
 ```typescript,ignore
@@ -127,7 +127,7 @@ Before registering a Lightning Address, you can check if the username is availab
 ```
 </section>
 
-<div slot="title">Dart</div>
+<div slot="title">Flutter</div>
 <section>
 
 ```dart,ignore
@@ -135,7 +135,7 @@ Before registering a Lightning Address, you can check if the username is availab
 ```
 </section>
 
-<div slot="title">React</div>
+<div slot="title">Javascript</div>
 <section>
 
 ```typescript,ignore
@@ -175,7 +175,7 @@ Once you've confirmed a username is available, you can register it by passing a 
 ```
 </section>
 
-<div slot="title">Dart</div>
+<div slot="title">Flutter</div>
 <section>
 
 ```dart,ignore
@@ -183,7 +183,7 @@ Once you've confirmed a username is available, you can register it by passing a 
 ```
 </section>
 
-<div slot="title">React</div>
+<div slot="title">Javascript</div>
 <section>
 
 ```typescript,ignore
@@ -223,7 +223,7 @@ You can retrieve information about the currently registered Lightning Address.
 ```
 </section>
 
-<div slot="title">Dart</div>
+<div slot="title">Flutter</div>
 <section>
 
 ```dart,ignore
@@ -231,7 +231,7 @@ You can retrieve information about the currently registered Lightning Address.
 ```
 </section>
 
-<div slot="title">React</div>
+<div slot="title">Javascript</div>
 <section>
 
 ```typescript,ignore
@@ -271,7 +271,7 @@ When a user no longer wants to use the Lightning Address, you can delete it.
 ```
 </section>
 
-<div slot="title">Dart</div>
+<div slot="title">Flutter</div>
 <section>
 
 ```dart,ignore
@@ -279,7 +279,7 @@ When a user no longer wants to use the Lightning Address, you can delete it.
 ```
 </section>
 
-<div slot="title">React</div>
+<div slot="title">Javascript</div>
 <section>
 
 ```typescript,ignore
