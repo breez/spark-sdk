@@ -1,4 +1,548 @@
+# This file is auto-generated from all .gitignore files in the workspace
+# Last updated: Thu Sep 25 10:43:28 CEST 2025
+
+# Always ignore .git folder in Docker builds
 .git/
+
+# From: crates/breez-sdk/lnurl/.gitignore
+crates/breez-sdk/lnurl/*.db
+crates/breez-sdk/lnurl/target/
+crates/breez-sdk/lnurl/target/**/*
+
+# From: crates/breez-sdk/wasm/js/web-storage/.gitignore
+crates/breez-sdk/wasm/js/web-storage/node_modules/
+crates/breez-sdk/wasm/js/web-storage/node_modules/**/*
+
+# From: crates/breez-sdk/wasm/js/node-storage/.gitignore
+crates/breez-sdk/wasm/js/node-storage/node_modules/
+crates/breez-sdk/wasm/js/node-storage/node_modules/**/*
+
+# From: crates/breez-sdk/bindings/langs/python/.gitignore
+crates/breez-sdk/bindings/langs/python/src/breez_sdk_spark/*
+crates/breez-sdk/bindings/langs/python/!src/breez_sdk_spark/__init__.py
+crates/breez-sdk/bindings/langs/python/*.egg-info
+crates/breez-sdk/bindings/langs/python/build
+crates/breez-sdk/bindings/langs/python/build/**/*
+crates/breez-sdk/bindings/langs/python/dist
+crates/breez-sdk/bindings/langs/python/dist/**/*
+
+# From: crates/breez-sdk/bindings/langs/swift/.gitignore
+crates/breez-sdk/bindings/langs/swift/.swiftpm/
+crates/breez-sdk/bindings/langs/swift/.swiftpm/**/*
+crates/breez-sdk/bindings/langs/swift/.build/
+crates/breez-sdk/bindings/langs/swift/.build/**/*
+crates/breez-sdk/bindings/langs/swift/.index-build/
+crates/breez-sdk/bindings/langs/swift/.index-build/**/*
+crates/breez-sdk/bindings/langs/swift/*.xcodeproj
+crates/breez-sdk/bindings/langs/swift/*.podspec
+crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark/breez_sdk_*.swift
+crates/breez-sdk/bindings/langs/swift/**/breez_sdk_*FFI.h
+crates/breez-sdk/bindings/langs/swift/**/breez_sdk_*FFI
+crates/breez-sdk/bindings/langs/swift/**/breez_sdk_*FFI.modulemap
+
+# From: crates/breez-sdk/bindings/langs/android/.gitignore
+# Created by https://www.toptal.com/developers/gitignore/api/android
+# Edit at https://www.toptal.com/developers/gitignore?templates=android
+
+### Android ###
+# Gradle files
+crates/breez-sdk/bindings/langs/android/.gradle/
+crates/breez-sdk/bindings/langs/android/.gradle/**/*
+crates/breez-sdk/bindings/langs/android/build/
+crates/breez-sdk/bindings/langs/android/build/**/*
+
+# Local configuration file (sdk path, etc)
+crates/breez-sdk/bindings/langs/android/local.properties
+
+# Log/OS Files
+crates/breez-sdk/bindings/langs/android/*.log
+
+# Android Studio generated files and folders
+crates/breez-sdk/bindings/langs/android/captures/
+crates/breez-sdk/bindings/langs/android/captures/**/*
+crates/breez-sdk/bindings/langs/android/.externalNativeBuild/
+crates/breez-sdk/bindings/langs/android/.externalNativeBuild/**/*
+crates/breez-sdk/bindings/langs/android/.cxx/
+crates/breez-sdk/bindings/langs/android/.cxx/**/*
+crates/breez-sdk/bindings/langs/android/*.apk
+crates/breez-sdk/bindings/langs/android/output.json
+
+# IntelliJ
+crates/breez-sdk/bindings/langs/android/*.iml
+crates/breez-sdk/bindings/langs/android/.idea/
+crates/breez-sdk/bindings/langs/android/.idea/**/*
+crates/breez-sdk/bindings/langs/android/misc.xml
+crates/breez-sdk/bindings/langs/android/deploymentTargetDropDown.xml
+crates/breez-sdk/bindings/langs/android/render.experimental.xml
+
+# Keystore files
+crates/breez-sdk/bindings/langs/android/*.jks
+crates/breez-sdk/bindings/langs/android/*.keystore
+
+# Google Services (e.g. APIs or Firebase)
+crates/breez-sdk/bindings/langs/android/google-services.json
+
+# Android Profiling
+crates/breez-sdk/bindings/langs/android/*.hprof
+
+### Android Patch ###
+crates/breez-sdk/bindings/langs/android/gen-external-apklibs
+crates/breez-sdk/bindings/langs/android/gen-external-apklibs/**/*
+
+# Replacement of .externalNativeBuild directories introduced
+# with Android Studio 3.5.
+
+# End of https://www.toptal.com/developers/gitignore/api/android
+
+crates/breez-sdk/bindings/langs/android/lib/src/main/jniLibs/
+crates/breez-sdk/bindings/langs/android/lib/src/main/jniLibs/**/*
+crates/breez-sdk/bindings/langs/android/lib/src/main/kotlin/breez_sdk_spark/**/breez_sdk_*.kt
+
+# From: crates/breez-sdk/bindings/langs/kotlin-multiplatform/.gitignore
+# Created by https://www.toptal.com/developers/gitignore/api/android
+# Edit at https://www.toptal.com/developers/gitignore?templates=android
+
+### Android ###
+# Gradle files
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/.gradle/
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/.gradle/**/*
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/build/
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/build/**/*
+
+# Local configuration file (sdk path, etc)
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/local.properties
+
+# Log/OS Files
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/*.log
+
+# Android Studio generated files and folders
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/captures/
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/captures/**/*
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/.externalNativeBuild/
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/.externalNativeBuild/**/*
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/.cxx/
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/.cxx/**/*
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/*.apk
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/output.json
+
+# IntelliJ
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/*.iml
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/.idea/
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/.idea/**/*
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/misc.xml
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/deploymentTargetDropDown.xml
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/render.experimental.xml
+
+# Keystore files
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/*.jks
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/*.keystore
+
+# Google Services (e.g. APIs or Firebase)
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/google-services.json
+
+# Android Profiling
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/*.hprof
+
+### Android Patch ###
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/gen-external-apklibs
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/gen-external-apklibs/**/*
+
+# Replacement of .externalNativeBuild directories introduced
+# with Android Studio 3.5.
+
+# End of https://www.toptal.com/developers/gitignore/api/android
+
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/androidMain/jniLibs/
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/androidMain/jniLibs/**/*
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/jvmMain/jniLibs/
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/jvmMain/jniLibs/**/*
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/lib/*
+
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/commonMain/kotlin/breez_sdk_spark
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/commonMain/kotlin/breez_sdk_spark/**/*
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/jvmMain/kotlin/breez_sdk_spark
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/jvmMain/kotlin/breez_sdk_spark/**/*
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/androidMain/kotlin/breez_sdk_spark
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/androidMain/kotlin/breez_sdk_spark/**/*
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/nativeMain/kotlin/breez_sdk_spark
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/nativeMain/kotlin/breez_sdk_spark/**/*
+crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/nativeInterop/cinterop/headers/*
+
+# From: crates/breez-sdk/bindings/.gitignore
+crates/breez-sdk/bindings/ffi
+crates/breez-sdk/bindings/ffi/**/*
+
+# From: crates/internal/.gitignore
+crates/internal/.spark/
+crates/internal/.spark/**/*
+crates/internal/.env
+
+# From: docs/breez-sdk/snippets/kotlin_mpp_lib/.gitignore
+docs/breez-sdk/snippets/kotlin_mpp_lib/*.iml
+docs/breez-sdk/snippets/kotlin_mpp_lib/.gradle
+docs/breez-sdk/snippets/kotlin_mpp_lib/.idea
+docs/breez-sdk/snippets/kotlin_mpp_lib/.DS_Store
+docs/breez-sdk/snippets/kotlin_mpp_lib/build
+docs/breez-sdk/snippets/kotlin_mpp_lib/build/**/*
+docs/breez-sdk/snippets/kotlin_mpp_lib/captures
+docs/breez-sdk/snippets/kotlin_mpp_lib/captures/**/*
+docs/breez-sdk/snippets/kotlin_mpp_lib/.externalNativeBuild
+docs/breez-sdk/snippets/kotlin_mpp_lib/.cxx
+docs/breez-sdk/snippets/kotlin_mpp_lib/local.properties
+docs/breez-sdk/snippets/kotlin_mpp_lib/xcuserdata
+docs/breez-sdk/snippets/kotlin_mpp_lib/xcuserdata/**/*
+
+docs/breez-sdk/snippets/kotlin_mpp_lib/*.sql
+
+# From: docs/breez-sdk/snippets/go/.gitignore
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+docs/breez-sdk/snippets/go/*.exe
+docs/breez-sdk/snippets/go/*.exe~
+docs/breez-sdk/snippets/go/*.dll
+docs/breez-sdk/snippets/go/*.so
+docs/breez-sdk/snippets/go/*.dylib
+
+# Test binary, built with `go test -c`
+docs/breez-sdk/snippets/go/*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+docs/breez-sdk/snippets/go/*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+docs/breez-sdk/snippets/go/go.work
+
+# Ignore Go binaries
+docs/breez-sdk/snippets/go/go.sum
+docs/breez-sdk/snippets/go/!**/*.go
+docs/breez-sdk/snippets/go/!**/*.md
+docs/breez-sdk/snippets/go/!**/
+docs/breez-sdk/snippets/go/!**/**/*
+
+docs/breez-sdk/snippets/go/packages
+docs/breez-sdk/snippets/go/packages/**/*
+docs/breez-sdk/snippets/go/vendor
+docs/breez-sdk/snippets/go/vendor/**/*
+
+# From: docs/breez-sdk/snippets/react-native/.gitignore
+docs/breez-sdk/snippets/react-native/node_modules
+docs/breez-sdk/snippets/react-native/node_modules/**/*
+
+# From: docs/breez-sdk/snippets/python/.gitignore
+docs/breez-sdk/snippets/python/packages
+docs/breez-sdk/snippets/python/packages/**/*
+docs/breez-sdk/snippets/python/.data
+docs/breez-sdk/snippets/python/__pycache__
+docs/breez-sdk/snippets/python/__pycache__/**/*
+
+# From: docs/breez-sdk/snippets/rust/.gitignore
+docs/breez-sdk/snippets/rust/target
+docs/breez-sdk/snippets/rust/target/**/*
+
+# From: docs/breez-sdk/snippets/wasm/.gitignore
+docs/breez-sdk/snippets/wasm/node_modules
+docs/breez-sdk/snippets/wasm/node_modules/**/*
+docs/breez-sdk/snippets/wasm/yarn.lock
+docs/breez-sdk/snippets/wasm/packages/*
+
+# From: docs/breez-sdk/snippets/flutter/.gitignore
+# https://dart.dev/guides/libraries/private-files
+# Created by `dart pub`
+docs/breez-sdk/snippets/flutter/.dart_tool/
+docs/breez-sdk/snippets/flutter/.dart_tool/**/*
+docs/breez-sdk/snippets/flutter/packages/
+docs/breez-sdk/snippets/flutter/packages/**/*
+docs/breez-sdk/snippets/flutter/.flutter-version
+docs/breez-sdk/snippets/flutter/.flutter-plugins
+docs/breez-sdk/snippets/flutter/.flutter-plugins-dependencies
+
+# From: docs/breez-sdk/snippets/swift/BreezSdkSnippets/.gitignore
+docs/breez-sdk/snippets/swift/BreezSdkSnippets/sync/
+docs/breez-sdk/snippets/swift/BreezSdkSnippets/sync/**/*
+docs/breez-sdk/snippets/swift/BreezSdkSnippets/.swiftpm
+docs/breez-sdk/snippets/swift/BreezSdkSnippets/.build
+docs/breez-sdk/snippets/swift/BreezSdkSnippets/.index-build
+docs/breez-sdk/snippets/swift/BreezSdkSnippets/*.sql
+
+# From: docs/breez-sdk/snippets-processor/.gitignore
+docs/breez-sdk/snippets-processor/target
+docs/breez-sdk/snippets-processor/target/**/*
+
+# From: docs/breez-sdk/.gitignore
+docs/breez-sdk/book
+docs/breez-sdk/book/**/*
+docs/breez-sdk/.DS_Store
+docs/breez-sdk/.idea
+docs/breez-sdk/*.nupkg
+docs/breez-sdk/*.sln
+
+# From: ./.gitignore
+# IDE specific files
+.idea/
+.idea/**/*
 .vscode/
-.spark/
-**/target/
+.vscode/**/*
+*.swp
+*.swo
+
+# macOS specific files
+.DS_Store
+
+# Generated by Cargo
+/target/
+/target/**/*
+
+# in project js reference to help LLMs
+js_reference/
+js_reference/**/*
+
+# Example CLI files
+*.spark/
+*.spark/**/*
+crates/breez-sdk/cli/.data
+
+# Deployment files
+fly.toml
+
+# Wasm package
+packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
+
+# From: packages/react-native/.gitignore
+# OSX
+#
+packages/react-native/.DS_Store
+
+# XDE
+packages/react-native/.expo/
+packages/react-native/.expo/**/*
+
+# VSCode
+packages/react-native/.vscode/
+packages/react-native/.vscode/**/*
+packages/react-native/jsconfig.json
+
+# Xcode
+#
+packages/react-native/*.pbxuser
+packages/react-native/!default.pbxuser
+packages/react-native/*.mode1v3
+packages/react-native/!default.mode1v3
+packages/react-native/*.mode2v3
+packages/react-native/!default.mode2v3
+packages/react-native/*.perspectivev3
+packages/react-native/!default.perspectivev3
+packages/react-native/xcuserdata
+packages/react-native/xcuserdata/**/*
+packages/react-native/*.xccheckout
+packages/react-native/*.moved-aside
+packages/react-native/DerivedData
+packages/react-native/DerivedData/**/*
+packages/react-native/*.hmap
+packages/react-native/*.ipa
+packages/react-native/*.xcuserstate
+packages/react-native/project.xcworkspace
+packages/react-native/**/.xcode.env.local
+
+# Android/IJ
+#
+packages/react-native/.classpath
+packages/react-native/.cxx
+packages/react-native/.gradle
+packages/react-native/.idea
+packages/react-native/.project
+packages/react-native/.settings
+packages/react-native/local.properties
+packages/react-native/android.iml
+
+# Cocoapods
+#
+packages/react-native/example/ios/Pods
+packages/react-native/example/ios/Pods/**/*
+
+# Ruby
+packages/react-native/example/vendor/
+packages/react-native/example/vendor/**/*
+
+# node.js
+#
+packages/react-native/node_modules/
+packages/react-native/node_modules/**/*
+packages/react-native/npm-debug.log
+packages/react-native/yarn-debug.log
+packages/react-native/yarn-error.log
+
+# BUCK
+packages/react-native/buck-out/
+packages/react-native/buck-out/**/*
+packages/react-native/\.buckd/
+packages/react-native/\.buckd/**/*
+packages/react-native/android/app/libs
+packages/react-native/android/app/libs/**/*
+packages/react-native/android/keystores/debug.keystore
+
+# Yarn
+packages/react-native/.yarn/*
+packages/react-native/!.yarn/patches
+packages/react-native/!.yarn/plugins
+packages/react-native/!.yarn/releases
+packages/react-native/!.yarn/sdks
+packages/react-native/!.yarn/versions
+
+# Expo
+packages/react-native/.expo/
+packages/react-native/.expo/**/*
+
+# Turborepo
+packages/react-native/.turbo/
+packages/react-native/.turbo/**/*
+
+# generated by bob
+packages/react-native/lib/
+packages/react-native/lib/**/*
+
+# React Native Codegen
+packages/react-native/ios/generated
+packages/react-native/ios/generated/**/*
+packages/react-native/android/generated
+packages/react-native/android/generated/**/*
+
+# Uniffi Codegen
+packages/react-native/android/src/main/jniLibs
+packages/react-native/android/src/main/jniLibs/**/*
+packages/react-native/build/RnBreezSdkSpark.xcframework
+packages/react-native/cpp/generated
+packages/react-native/cpp/generated/**/*
+packages/react-native/rust_modules/
+packages/react-native/rust_modules/**/*
+packages/react-native/src/generated
+packages/react-native/src/generated/**/*
+
+# React Native Nitro Modules
+packages/react-native/nitrogen/
+packages/react-native/nitrogen/**/*
+
+# From: packages/wasm/examples/web/.gitignore
+# Logs
+packages/wasm/examples/web/logs
+packages/wasm/examples/web/logs/**/*
+packages/wasm/examples/web/*.log
+packages/wasm/examples/web/npm-debug.log*
+packages/wasm/examples/web/yarn-debug.log*
+packages/wasm/examples/web/yarn-error.log*
+packages/wasm/examples/web/pnpm-debug.log*
+packages/wasm/examples/web/lerna-debug.log*
+
+packages/wasm/examples/web/node_modules
+packages/wasm/examples/web/node_modules/**/*
+packages/wasm/examples/web/dist
+packages/wasm/examples/web/dist/**/*
+packages/wasm/examples/web/dist-ssr
+packages/wasm/examples/web/dist-ssr/**/*
+packages/wasm/examples/web/*.local
+
+# Editor directories and files
+packages/wasm/examples/web/.vscode/*
+packages/wasm/examples/web/!.vscode/extensions.json
+packages/wasm/examples/web/.idea
+packages/wasm/examples/web/.DS_Store
+packages/wasm/examples/web/*.suo
+packages/wasm/examples/web/*.ntvs*
+packages/wasm/examples/web/*.njsproj
+packages/wasm/examples/web/*.sln
+packages/wasm/examples/web/*.sw?
+
+# Environment variables
+packages/wasm/examples/web/.env
+
+# From: packages/wasm/examples/node/.gitignore
+packages/wasm/examples/node/.env
+packages/wasm/examples/node/node_modules/
+packages/wasm/examples/node/node_modules/**/*
+packages/wasm/examples/node/sdk.log
+packages/wasm/examples/node/.data/
+packages/wasm/examples/node/.data/**/*
+
+# From: packages/flutter/rust/.gitignore
+packages/flutter/rust/target
+packages/flutter/rust/target/**/*
+
+# From: packages/flutter/rust/src/.gitignore
+packages/flutter/rust/src/frb_generated.rs
+
+# From: packages/flutter/cargokit/.gitignore
+packages/flutter/cargokit/target
+packages/flutter/cargokit/target/**/*
+packages/flutter/cargokit/.dart_tool
+packages/flutter/cargokit/*.iml
+packages/flutter/cargokit/!pubspec.lock
+
+# From: packages/flutter/.gitignore
+# Miscellaneous
+packages/flutter/*.class
+packages/flutter/*.log
+packages/flutter/*.pyc
+packages/flutter/*.swp
+packages/flutter/.DS_Store
+packages/flutter/.atom/
+packages/flutter/.atom/**/*
+packages/flutter/.build/
+packages/flutter/.build/**/*
+packages/flutter/.buildlog/
+packages/flutter/.buildlog/**/*
+packages/flutter/.history
+packages/flutter/.svn/
+packages/flutter/.svn/**/*
+packages/flutter/.swiftpm/
+packages/flutter/.swiftpm/**/*
+packages/flutter/migrate_working_dir/
+packages/flutter/migrate_working_dir/**/*
+
+# IntelliJ related
+packages/flutter/*.iml
+packages/flutter/*.ipr
+packages/flutter/*.iws
+packages/flutter/.idea/
+packages/flutter/.idea/**/*
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+# Libraries should not include pubspec.lock, per https://dart.dev/guides/libraries/private-files#pubspeclock.
+packages/flutter/pubspec.lock
+packages/flutter/**/doc/api/
+packages/flutter/**/doc/api/**/*
+packages/flutter/.dart_tool/
+packages/flutter/.dart_tool/**/*
+packages/flutter/.data/
+packages/flutter/.data/**/*
+packages/flutter/.flutter-plugins
+packages/flutter/.flutter-plugins-dependencies
+packages/flutter/build/
+packages/flutter/build/**/*
+packages/flutter/**/Classes/*.h
+
+# From: packages/flutter/android/.gitignore
+packages/flutter/android/*.iml
+packages/flutter/android/.gradle
+packages/flutter/android/local.properties
+packages/flutter/android/.idea/workspace.xml
+packages/flutter/android/.idea/libraries
+packages/flutter/android/.DS_Store
+packages/flutter/android/build
+packages/flutter/android/build/**/*
+packages/flutter/android/captures
+packages/flutter/android/captures/**/*
+packages/flutter/android/.cxx
+
+# From: packages/flutter/lib/src/.gitignore
+packages/flutter/lib/src/rust
+packages/flutter/lib/src/rust/**/*
+
