@@ -88,7 +88,7 @@ pub(crate) async fn handle_command(
             println!("Signature: {signature}");
         }
         Command::SparkAddress => {
-            let spark_address = wallet.get_spark_address().await?;
+            let spark_address = wallet.get_spark_address()?;
             println!("{spark_address}")
         }
         Command::Sync => {

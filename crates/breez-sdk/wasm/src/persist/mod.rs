@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::js_sys::Promise;
 
-use crate::models::{DepositInfo, Payment, PaymentMetadata, UpdateDepositPayload};
+use crate::models::{DepositInfo, Payment, PaymentMetadata, PaymentStatus, UpdateDepositPayload};
 
 pub struct WasmStorage {
     pub storage: Storage,
@@ -62,10 +62,11 @@ impl breez_sdk_spark::Storage for WasmStorage {
         &self,
         offset: Option<u32>,
         limit: Option<u32>,
+        status: Option<breez_sdk_spark::PaymentStatus>,
     ) -> Result<Vec<breez_sdk_spark::Payment>, breez_sdk_spark::StorageError> {
         let promise = self
             .storage
-            .list_payments(offset, limit)
+            .list_payments(offset, limit, status.map(|s| s.into()))
             .map_err(js_error_to_storage_error)?;
         let future = JsFuture::from(promise);
         let result = future.await.map_err(js_error_to_storage_error)?;
@@ -209,6 +210,7 @@ extern "C" {
         this: &Storage,
         offset: Option<u32>,
         limit: Option<u32>,
+        status: Option<PaymentStatus>,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = insertPayment, catch)]

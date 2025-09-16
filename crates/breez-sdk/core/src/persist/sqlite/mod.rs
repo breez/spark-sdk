@@ -1,8 +1,10 @@
 #![allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
 
+use std::fmt::Write;
+use std::path::Path;
+
 use macros::async_trait;
 use sqlx::{Row, SqlitePool, migrate::MigrateDatabase};
-use std::path::Path;
 
 use crate::{
     DepositInfo, PaymentDetails, PaymentMethod,
@@ -74,18 +76,31 @@ impl Storage for SqliteStorage {
         &self,
         offset: Option<u32>,
         limit: Option<u32>,
+        status: Option<PaymentStatus>,
     ) -> Result<Vec<Payment>, StorageError> {
-        let query = format!(
+        let mut query = String::from(
             "SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, p.method, pm.lnurl_pay_info
              FROM payments p
-             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-             ORDER BY p.timestamp DESC 
-             LIMIT {} OFFSET {}",
-            limit.unwrap_or(u32::MAX),
-            offset.unwrap_or(0)
+             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id"
         );
 
-        let payments = sqlx::query(&query)
+        if status.is_some() {
+            query.push_str(" WHERE p.status = ?");
+        }
+        write!(
+            query,
+            " ORDER BY p.timestamp DESC LIMIT {} OFFSET {}",
+            limit.unwrap_or(u32::MAX),
+            offset.unwrap_or(0)
+        )
+        .map_err(|e| StorageError::Implementation(e.to_string()))?;
+
+        let mut query_builder = sqlx::query(&query);
+        if let Some(status) = status {
+            query_builder = query_builder.bind(status.to_string());
+        }
+
+        let payments = query_builder
             .fetch_all(&self.pool)
             .await?
             .into_iter()

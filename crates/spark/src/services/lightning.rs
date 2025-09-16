@@ -332,11 +332,16 @@ impl LightningService {
         let swap = self
             .start_lightning_swap(invoice, amount_to_send, leaves)
             .await?;
-        let _ = self
+        let transfer = self
             .transfer_service
             .deliver_transfer_package(&swap.transfer, &swap.leaves, Default::default())
             .await?;
-        self.finalize_lightning_swap(&swap).await
+        let mut lightning_payment = self.finalize_lightning_swap(&swap).await?;
+        // If ssp doesn't return a transfer id, we use the transfer id from the transfer service
+        if lightning_payment.transfer_id.is_none() {
+            lightning_payment.transfer_id = Some(transfer.id);
+        }
+        Ok(lightning_payment)
     }
 
     async fn start_lightning_swap(

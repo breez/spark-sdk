@@ -256,7 +256,7 @@ class IndexedDBStorage {
 
   // ===== Payment Operations =====
 
-  async listPayments(offset = null, limit = null) {
+  async listPayments(offset = null, limit = null, status = null) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
@@ -296,6 +296,12 @@ class IndexedDBStorage {
 
         const payment = cursor.value;
 
+        // Filter by status if provided
+        if (status !== null && payment.status !== status) {
+          cursor.continue();
+          return;
+        }
+
         // Get metadata for this payment
         const metadataRequest = metadataStore.get(payment.id);
         metadataRequest.onsuccess = () => {
@@ -319,7 +325,7 @@ class IndexedDBStorage {
       request.onerror = () => {
         reject(
           new StorageError(
-            `Failed to list payments: ${
+            `Failed to list payments (offset: ${offset}, limit: ${limit}, status: ${status}): ${
               request.error?.message || "Unknown error"
             }`,
             request.error
@@ -659,7 +665,10 @@ class IndexedDBStorage {
   }
 }
 
-export async function createDefaultStorage(dbName = "BreezSdkSpark", logger = null) {
+export async function createDefaultStorage(
+  dbName = "BreezSdkSpark",
+  logger = null
+) {
   const storage = new IndexedDBStorage(dbName, logger);
   await storage.initialize();
   return storage;
