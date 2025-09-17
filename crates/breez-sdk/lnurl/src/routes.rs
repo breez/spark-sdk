@@ -115,6 +115,7 @@ where
         Json(payload): Json<RegisterLnurlPayRequest>,
     ) -> Result<Json<RegisterLnurlPayResponse>, (StatusCode, Json<Value>)> {
         let username = sanitize_username(&payload.username);
+        validate_username(&username)?;
         let pubkey = validate(&pubkey, &payload.signature, &username, &state).await?;
         if payload.description.chars().take(256).count() > 255 {
             return Err((
@@ -317,12 +318,7 @@ where
     }
 }
 
-async fn validate<DB>(
-    pubkey: &str,
-    signature: &str,
-    username: &str,
-    state: &State<DB>,
-) -> Result<PublicKey, (StatusCode, Json<Value>)> {
+fn validate_username(username: &str) -> Result<(), (StatusCode, Json<Value>)> {
     if username.chars().take(65).count() > 64 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -346,6 +342,15 @@ async fn validate<DB>(
         ));
     }
 
+    Ok(())
+}
+
+async fn validate<DB>(
+    pubkey: &str,
+    signature: &str,
+    username: &str,
+    state: &State<DB>,
+) -> Result<PublicKey, (StatusCode, Json<Value>)> {
     let pubkey = parse_pubkey(pubkey)?;
     let signature = hex::decode(signature).map_err(|e| {
         trace!("invalid signature, could not decode: {}", e);
