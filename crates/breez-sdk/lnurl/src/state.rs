@@ -6,6 +6,7 @@ pub struct State<DB> {
     pub scheme: String,
     pub min_sendable: u64,
     pub max_sendable: u64,
+    pub include_spark_address: bool,
     pub domains: HashSet<String>,
     pub ca_cert: Option<Vec<u8>>,
 }
@@ -21,6 +22,7 @@ where
             scheme: self.scheme.clone(),
             min_sendable: self.min_sendable,
             max_sendable: self.max_sendable,
+            include_spark_address: self.include_spark_address,
             domains: self.domains.clone(),
             ca_cert: self.ca_cert.clone(),
         }

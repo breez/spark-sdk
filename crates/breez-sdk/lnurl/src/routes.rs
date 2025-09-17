@@ -298,7 +298,7 @@ where
                     desc_hash.to_byte_array(),
                 )),
                 Some(pubkey),
-                false, // don't include spark address, we want to keep it private here
+                state.include_spark_address,
             )
             .await
             .map_err(|e| {
