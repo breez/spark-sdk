@@ -9,7 +9,7 @@
 A Lightning Address is a human-readable identifier formatted like an email address (e.g., `user@domain.com`) that can be used to receive Bitcoin payments over the Lightning Network. Behind the scenes, it uses the LNURL-pay protocol to dynamically generate invoices when someone wants to send a payment to this address.
 
 <h2 id="lnurl-server">
-    <a class="header" href="#lnurl-server">LNURL server</a>
+    <a class="header" href="#lnurl-server">Configuring LNURL server</a>
 </h2>
 
 To use Lightning Addresses with the Breez SDK, you first need to supply a domain. There are two options:
@@ -17,10 +17,21 @@ To use Lightning Addresses with the Breez SDK, you first need to supply a domain
 1. **Use Breez's LNURL server**: You can have your domain added to the LNURL server run by Breez.
 2. **Self-hosted LNURL server**: You can run your own LNURL server.
 
+In case you choose to point your domain to Breez's LNURL server you need to add a CNAME record in your domain’s DNS settings:
+
+* **Host/Name**: @ (or the subdomain you want to use, e.g., www)
+* **Type**: CNAME
+* **Value/Target**: breez.tips
+
+Send us your domain name (e.g., example.com or www.example.com).
+
+We will verify and add it to our list of allowed domains.
+
 <h2 id="configuring-lightning-address">
     <a class="header" href="#configuring-lightning-address">Configuring Lightning Address</a>
 </h2>
-To configure the domain in the sdk, you need to pass the `lnurl_domain` parameter in the SDK configuration:
+
+To configure the domain in the SDK, you need to pass the `lnurl_domain` parameter in the SDK configuration:
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
@@ -347,7 +358,7 @@ When a user no longer wants to use the Lightning Address, you can delete it.
     <a class="header" href="#receiving-payments">Receiving Payments with Lightning Addresses</a>
 </h2>
 
-Once a Lightning Address is registered, it can be used to receive payments. When someone sends a payment to your Lightning Address (e.g., `username@yourdomain.com`), their wallet will:
+Once a Lightning Address is registered, it can be used to receive payments. When someone sends a payment to your Lightning Address (e.g., `username@yourdomain.com`), the sender will:
 
 1. Resolve the Lightning Address to a LNURL endpoint
 2. Query the endpoint for payment information
