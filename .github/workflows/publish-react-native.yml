@@ -68,6 +68,10 @@ jobs:
         working-directory: packages/react-native
         run: yarn --mode=skip-build
 
+      - name: Apply patches
+        working-directory: packages/react-native
+        run: npx patch-package
+
       - name: Build and generate native bindings
         working-directory: packages/react-native
         run: yarn ubrn:build
