@@ -41,6 +41,14 @@ API documentation is [here](https://breez.github.io/spark-sdk/breez_sdk_spark/in
 
 The [Breez SDK - Nodeless *(Spark Implementation)* cli](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/cli) is a command line client that allows you to interact with and test the functionality of the SDK.
 
+## WebAssembly (WASM) Demo
+
+Looking for a quick way to try the SDK in the browser? Check out our WASM demo app:
+
+- **Repo:** [breez/breez-sdk-spark-example](https://github.com/breez/breez-sdk-spark-example)  
+- **Live demo:** https://breez-sdk-spark-example.vercel.app  
+
+> **Note:** The demo is for demonstration purposes only and not intended for production use.
 
 ## **Support**
 
