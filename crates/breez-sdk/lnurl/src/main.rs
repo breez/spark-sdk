@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use axum::{
     Extension, Router,
     extract::DefaultBodyLimit,
-    http::{self, Method},
+    http::Method,
     middleware,
     routing::{delete, get, post},
 };
@@ -211,14 +211,8 @@ where
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
-                .allow_headers([http::header::CONTENT_TYPE, http::header::AUTHORIZATION])
-                .allow_methods([
-                    Method::GET,
-                    Method::POST,
-                    Method::PUT,
-                    Method::DELETE,
-                    Method::OPTIONS,
-                ]),
+                .allow_headers(Any)
+                .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS]),
         )
         .layer(DefaultBodyLimit::max(1_000_000));
 
