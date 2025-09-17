@@ -101,7 +101,8 @@ impl RestClientChainService {
                 );
             }
 
-            let RestResponse { body, status } = client.get(url.to_string(), headers).await?;
+            let RestResponse { body, status } =
+                client.get_request(url.to_string(), headers).await?;
             match status {
                 status if attempts < self.max_retries && is_status_retryable(status) => {
                     tokio::time::sleep(delay).await;
@@ -134,7 +135,7 @@ impl RestClientChainService {
         );
         let RestResponse { body, status } = self
             .client
-            .post(url.to_string(), Some(headers), body)
+            .post_request(url.to_string(), Some(headers), body)
             .await?;
         if !(200..300).contains(&status) {
             return Err(ServiceConnectivityError::Status { status, body }.into());

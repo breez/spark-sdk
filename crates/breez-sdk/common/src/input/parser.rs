@@ -300,7 +300,7 @@ where
             return Ok(InputType::LnurlAuth(data));
         }
 
-        let RestResponse { body, .. } = self.rest_client.get(url.to_string(), None).await?;
+        let RestResponse { body, .. } = self.rest_client.get_request(url.to_string(), None).await?;
         let lnurl_data: LnurlRequestDetails = parse_json(&body)?;
         let domain = url.host().ok_or(LnurlError::MissingDomain)?.to_string();
         Ok(match lnurl_data {

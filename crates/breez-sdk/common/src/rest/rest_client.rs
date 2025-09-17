@@ -24,7 +24,7 @@ pub trait RestClient: Send + Sync {
     /// ### Arguments
     /// - `url`: the URL on which GET will be called
     /// - `headers`: optional headers that will be set on the request
-    async fn get(
+    async fn get_request(
         &self,
         url: String,
         headers: Option<HashMap<String, String>>,
@@ -35,7 +35,7 @@ pub trait RestClient: Send + Sync {
     /// - `url`: the URL on which POST will be called
     /// - `headers`: the optional POST headers
     /// - `body`: the optional POST body
-    async fn post(
+    async fn post_request(
         &self,
         url: String,
         headers: Option<HashMap<String, String>>,
@@ -47,7 +47,7 @@ pub trait RestClient: Send + Sync {
     /// - `url`: the URL on which DELETE will be called
     /// - `headers`: the optional DELETE headers
     /// - `body`: the optional DELETE body
-    async fn delete(
+    async fn delete_request(
         &self,
         url: String,
         headers: Option<HashMap<String, String>>,
@@ -69,7 +69,7 @@ impl ReqwestRestClient {
 
 #[macros::async_trait]
 impl RestClient for ReqwestRestClient {
-    async fn get(
+    async fn get_request(
         &self,
         url: String,
         headers: Option<HashMap<String, String>>,
@@ -90,7 +90,7 @@ impl RestClient for ReqwestRestClient {
         Ok(RestResponse { status, body })
     }
 
-    async fn post(
+    async fn post_request(
         &self,
         url: String,
         headers: Option<HashMap<String, String>>,
@@ -118,7 +118,7 @@ impl RestClient for ReqwestRestClient {
         })
     }
 
-    async fn delete(
+    async fn delete_request(
         &self,
         url: String,
         headers: Option<HashMap<String, String>>,
