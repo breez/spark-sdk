@@ -98,9 +98,9 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x]  Send via LNURL-Pay
 - [x]  Send to a Lightning address
 - [x]  WebAssembly support
-- [x]  Flutter bindings 
+- [x]  Flutter bindings
+- [x]  Receive via LNURL-Pay w/ offline & Lightning address support
 - [ ]  Support Spark tokens
-- [ ]  Receive via LNURL-Pay w/ offline & Lightning address support
 - [ ]  Real-time sync
 - [ ]  React Native & C# bindings
 - [ ]  LNURL-Withdraw
