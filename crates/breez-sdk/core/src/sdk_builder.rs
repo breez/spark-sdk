@@ -124,7 +124,10 @@ impl SdkBuilder {
                         std::env::var("CHAIN_SERVICE_PASSWORD"),
                     ) {
                         (Ok(username), Ok(password)) => Some(BasicAuth::new(username, password)),
-                        _ => None,
+                        _ => Some(BasicAuth::new(
+                            "spark-sdk".to_string(),
+                            "mCMk1JqlBNtetUNy".to_string(),
+                        )),
                     },
                 )),
             }
