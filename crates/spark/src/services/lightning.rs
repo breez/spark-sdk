@@ -276,18 +276,22 @@ impl LightningService {
             .await?;
         let decoded_invoice = Bolt11Invoice::from_str(&invoice.invoice.encoded_invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
-        let spark_address = self.extract_spark_address(&decoded_invoice);
-        let Some(spark_address) = spark_address else {
-            return Err(ServiceError::SSPswapError(
-                "Invalid invoice. Spark address not found".to_string(),
-            ));
-        };
 
-        if spark_address.identity_public_key != identity_pubkey {
-            return Err(ServiceError::SSPswapError(
-                "Invalid invoice. Spark address mismatch".to_string(),
-            ));
+        // check if the spark address in the invoice matches the identity pubkey only
+        if include_spark_address {
+            let spark_address = self.extract_spark_address(&decoded_invoice);
+            let Some(spark_address) = spark_address else {
+                return Err(ServiceError::SSPswapError(
+                    "Invalid invoice. Spark address not found".to_string(),
+                ));
+            };
+            if spark_address.identity_public_key != identity_pubkey {
+                return Err(ServiceError::SSPswapError(
+                    "Invalid invoice. Spark address mismatch".to_string(),
+                ));
+            }
         }
+
         let shares = self.signer.split_secret_with_proofs(
             &SecretToSplit::Preimage(preimage),
             self.split_secret_threshold,
