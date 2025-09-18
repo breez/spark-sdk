@@ -38,6 +38,14 @@ Once connected, the balance can be retrieved at any time.
 ```
 </section>
 
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/getting_started.ts:fetch-balance}}
+```
+</section>
+
 <div slot="title">Flutter</div>
 <section>
 

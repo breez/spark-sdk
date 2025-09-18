@@ -38,6 +38,14 @@ To view your payment history, you can list all the payments that have been sent 
 ```
 </section>
 
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/list_payments.ts:list-payments}}
+```
+</section>
+
 <div slot="title">Flutter</div>
 <section>
 
@@ -97,6 +105,14 @@ When listing payment you can also page the list results:
 
 ```typescript
 {{#include ../../snippets/wasm/list_payments.ts:list-payments-filtered}}
+```
+</section>
+
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/list_payments.ts:list-payments-filtered}}
 ```
 </section>
 
@@ -161,6 +177,14 @@ You can also retrieve a single payment using the payment id:
 
 ```typescript
 {{#include ../../snippets/wasm/list_payments.ts:get-payment}}
+```
+</section>
+
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/list_payments.ts:get-payment}}
 ```
 </section>
 

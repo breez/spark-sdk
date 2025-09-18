@@ -42,6 +42,14 @@ The amounts returned from calling parse on Lightning based inputs (BOLT11, LNURL
 ```
 </section>
 
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/parsing_inputs.ts:parse-inputs}}
+```
+</section>
+
 <div slot="title">Flutter</div>
 <section>
 

@@ -46,6 +46,14 @@ When receiving via Lightning, we can generate a BOLT11 invoice to be paid. Setti
 ```
 </section>
 
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/receive_payment.ts:receive-payment-lightning-bolt11}}
+```
+</section>
+
 <div slot="title">Flutter</div>
 <section>
 
@@ -109,6 +117,14 @@ The SDK monitors the specified address for new UTXOs and automatically initiates
 ```
 </section>
 
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/receive_payment.ts:receive-payment-onchain}}
+```
+</section>
+
 <div slot="title">Flutter</div>
 <section>
 
@@ -168,6 +184,14 @@ For payments between Spark users, you can use the static Spark address to receiv
 
 ```typescript
 {{#include ../../snippets/wasm/receive_payment.ts:receive-payment-spark}}
+```
+</section>
+
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/receive_payment.ts:receive-payment-spark}}
 ```
 </section>
 

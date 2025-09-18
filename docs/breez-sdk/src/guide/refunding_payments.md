@@ -57,6 +57,14 @@ Use the `list_unclaimed_deposits` method to retrieve all deposits that have fail
 ```
 </section>
 
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/refunding_payments.ts:list-unclaimed-deposits}}
+```
+</section>
+
 <div slot="title">Flutter</div>
 <section>
 
@@ -119,6 +127,14 @@ If a deposit claim failed due to insufficient fees, you can retry the claim oper
 ```
 </section>
 
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/refunding_payments.ts:claim-deposit}}
+```
+</section>
+
 <div slot="title">Flutter</div>
 <section>
 
@@ -178,6 +194,14 @@ When a deposit cannot be successfully claimed, you can refund the funds to an ex
 
 ```typescript
 {{#include ../../snippets/wasm/refunding_payments.ts:refund-deposit}}
+```
+</section>
+
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/refunding_payments.ts:refund-deposit}}
 ```
 </section>
 
