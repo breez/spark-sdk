@@ -118,11 +118,16 @@ fn frost_signing_package(
 }
 
 #[derive(Clone)]
-pub struct DefaultSigner {
+struct KeySet {
     identity_key_pair: Keypair,
-    secp: Secp256k1<All>,
     signing_master_key: Xpriv,
     static_deposit_master_key: Xpriv,
+}
+
+#[derive(Clone)]
+pub struct DefaultSigner {
+    key_set: KeySet,
+    secp: Secp256k1<All>,
 }
 
 #[derive(Debug, Error)]
@@ -159,12 +164,12 @@ impl DefaultSigner {
             master_key.derive_priv(&secp, &signing_derivation_path(network))?;
         let static_deposit_master_key =
             master_key.derive_priv(&secp, &static_deposit_derivation_path(network))?;
-        Ok(DefaultSigner {
+        let key_set = KeySet {
             identity_key_pair,
-            secp,
             signing_master_key,
             static_deposit_master_key,
-        })
+        };
+        Ok(DefaultSigner { key_set, secp })
     }
 }
 
@@ -179,6 +184,7 @@ impl DefaultSigner {
             ChildNumber::from_hardened_idx(index).map_err(|_| SignerError::InvalidHash)?;
         let derivation_path = DerivationPath::from(vec![child_number]);
         let child = self
+            .key_set
             .signing_master_key
             .derive_priv(&self.secp, &derivation_path)
             .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {e}")))?
@@ -196,7 +202,7 @@ impl DefaultSigner {
     }
 
     fn decrypt_message_ecies(&self, ciphertext: &[u8]) -> Result<Vec<u8>, SignerError> {
-        ecies::decrypt(&self.identity_key_pair.secret_bytes(), ciphertext)
+        ecies::decrypt(&self.key_set.identity_key_pair.secret_bytes(), ciphertext)
             .map_err(|e| SignerError::Generic(format!("failed to decrypt: {e}")))
     }
 
@@ -246,7 +252,7 @@ impl Signer for DefaultSigner {
         let digest = sha256::Hash::hash(message);
         let sig = self.secp.sign_ecdsa(
             &Message::from_digest(digest.to_byte_array()),
-            &self.identity_key_pair.secret_key(),
+            &self.key_set.identity_key_pair.secret_key(),
         );
         Ok(sig)
     }
@@ -262,9 +268,10 @@ impl Signer for DefaultSigner {
         }
         let mut hash_array = [0u8; 32];
         hash_array.copy_from_slice(hash);
-        let sig = self
-            .secp
-            .sign_schnorr_no_aux_rand(&Message::from_digest(hash_array), &self.identity_key_pair);
+        let sig = self.secp.sign_schnorr_no_aux_rand(
+            &Message::from_digest(hash_array),
+            &self.key_set.identity_key_pair,
+        );
         Ok(sig)
     }
 
@@ -305,7 +312,7 @@ impl Signer for DefaultSigner {
     }
 
     fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
-        Ok(self.identity_key_pair.public_key())
+        Ok(self.key_set.identity_key_pair.public_key())
     }
 
     fn get_static_deposit_private_key_source(
@@ -325,6 +332,7 @@ impl Signer for DefaultSigner {
         })?;
         let derivation_path = DerivationPath::from(vec![child_number]);
         let private_key = self
+            .key_set
             .static_deposit_master_key
             .derive_priv(&self.secp, &derivation_path)
             .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {e}")))?
