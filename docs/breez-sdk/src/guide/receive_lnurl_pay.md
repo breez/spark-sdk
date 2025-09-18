@@ -6,18 +6,18 @@
     <a class="header" href="#what-is-lightning-address">What is a Lightning Address?</a>
 </h2>
 
-A Lightning Address is a human-readable identifier formatted like an email address (e.g., `user@domain.com`) that can be used to receive Bitcoin payments over the Lightning Network. Behind the scenes, it uses the LNURL-pay protocol to dynamically generate invoices when someone wants to send a payment to this address.
+A Lightning Address is a human-readable identifier formatted like an email address (e.g., `user@domain.com`) that can be used to receive Bitcoin payments over the Lightning Network. Behind the scenes, it uses the LNURL-Pay protocol to dynamically generate invoices when someone wants to send a payment to this address.
 
 <h2 id="lnurl-server">
-    <a class="header" href="#lnurl-server">Configuring LNURL server</a>
+    <a class="header" href="#lnurl-server">Configuring an LNURL server</a>
 </h2>
 
 To use Lightning Addresses with the Breez SDK, you first need to supply a domain. There are two options:
 
-1. **Use Breez's LNURL server**: You can have your domain added to the LNURL server run by Breez.
-2. **Self-hosted LNURL server**: You can run your own LNURL server.
+1. **Use a hosted LNURL server**: You can have your custom domain configured to an LNURL server run by Breez.
+2. **Self-hosted LNURL server**: You can run your own LNURL server in a self-hosted environment.
 
-In case you choose to point your domain to Breez's LNURL server you need to add a CNAME record in your domain’s DNS settings:
+In case you choose to point your domain to an hosted LNURL server, you will need to add a CNAME record in your domain’s DNS settings:
 
 * **Host/Name**: @ (or the subdomain you want to use, e.g., www)
 * **Type**: CNAME
@@ -28,10 +28,10 @@ Send us your domain name (e.g., example.com or www.example.com).
 We will verify and add it to our list of allowed domains.
 
 <h2 id="configuring-lightning-address">
-    <a class="header" href="#configuring-lightning-address">Configuring Lightning Address</a>
+    <a class="header" href="#configuring-lightning-address">Configuring Lightning addressed for users</a>
 </h2>
 
-To configure the domain in the SDK, you need to pass the `lnurl_domain` parameter in the SDK configuration:
+configure your domain in the SDK by passing the `lnurl_domain` parameter in the SDK configuration:
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
@@ -366,7 +366,3 @@ Once a Lightning Address is registered, it can be used to receive payments. When
 
 As the receiver, you don't need to take any additional steps. The payment will appear in your transaction history like any other incoming Lightning payment. You can use the `list_payments` method to view incoming payments, and the SDK will emit appropriate events when payments are received.
 
-<div class="warning">
-<h4>Important Note</h4>
-The LNURL domain must be properly configured to work with Lightning Addresses. When using Breez's LNURL server, ensure your domain is correctly set up with Breez. If self-hosting, make sure your LNURL server is properly configured and accessible.
-</div>
