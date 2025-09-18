@@ -3,16 +3,16 @@
 </h1>
 
 <h2 id="what-is-lightning-address">
-    <a class="header" href="#what-is-lightning-address">What is a Lightning Address?</a>
+    <a class="header" href="#what-is-lightning-address">What is a Lightning address?</a>
 </h2>
 
-A Lightning Address is a human-readable identifier formatted like an email address (e.g., `user@domain.com`) that can be used to receive Bitcoin payments over the Lightning Network. Behind the scenes, it uses the LNURL-Pay protocol to dynamically generate invoices when someone wants to send a payment to this address.
+A Lightning address is a human-readable identifier formatted like an email address (e.g., `user@domain.com`) that can be used to receive Bitcoin payments over the Lightning Network. Behind the scenes, it uses the LNURL-Pay protocol to dynamically generate invoices when someone wants to send a payment to this address.
 
 <h2 id="lnurl-server">
     <a class="header" href="#lnurl-server">Configuring an LNURL server</a>
 </h2>
 
-To use Lightning Addresses with the Breez SDK, you first need to supply a domain. There are two options:
+To use Lightning addresses with the Breez SDK, you first need to supply a domain. There are two options:
 
 1. **Use a hosted LNURL server**: You can have your custom domain configured to an LNURL server run by Breez.
 2. **Self-hosted LNURL server**: You can run your own LNURL server in a self-hosted environment.
@@ -92,17 +92,17 @@ configure your domain in the SDK by passing the `lnurl_domain` parameter in the 
 </custom-tabs>
 
 <h2 id="managing-lightning-address">
-    <a class="header" href="#managing-lightning-address">Managing Lightning Addresses</a>
+    <a class="header" href="#managing-lightning-address">Managing Lightning addresses</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.check_lightning_address_available">API docs</a>
 </h2>
 
-The SDK provides several functions to manage Lightning Addresses:
+The SDK provides several functions to manage Lightning addresses:
 
 <h3 id="checking-availability">
-    <a class="header" href="#checking-availability">Checking Address Availability</a>
+    <a class="header" href="#checking-availability">Checking address availability</a>
 </h3>
 
-Before registering a Lightning Address, you can check if the username is available. In your UI you can use a quick check mark to show the address is available before registering.
+Before registering a Lightning address, you can check if the username is available. In your UI you can use a quick check mark to show the address is available before registering.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
@@ -163,7 +163,7 @@ Before registering a Lightning Address, you can check if the username is availab
 </custom-tabs>
 
 <h3 id="registering-address">
-    <a class="header" href="#registering-address">Registering a Lightning Address</a>
+    <a class="header" href="#registering-address">Registering a Lightning address</a>
 </h3>
 
 Once you've confirmed a username is available, you can register it by passing a username and a description. The username will be used in `username@domain.com`. The description will be included in lnurl metadata and as the invoice description, so this is what the sender will see.
@@ -227,10 +227,10 @@ Once you've confirmed a username is available, you can register it by passing a 
 </custom-tabs>
 
 <h3 id="retrieving-address">
-    <a class="header" href="#retrieving-address">Retrieving Lightning Address Information</a>
+    <a class="header" href="#retrieving-address">Retrieving Lightning address information</a>
 </h3>
 
-You can retrieve information about the currently registered Lightning Address.
+You can retrieve information about the currently registered Lightning address.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
@@ -291,10 +291,10 @@ You can retrieve information about the currently registered Lightning Address.
 </custom-tabs>
 
 <h3 id="deleting-address">
-    <a class="header" href="#deleting-address">Deleting a Lightning Address</a>
+    <a class="header" href="#deleting-address">Deleting a Lightning address</a>
 </h3>
 
-When a user no longer wants to use the Lightning Address, you can delete it.
+When a user no longer wants to use the Lightning address, you can delete it.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
