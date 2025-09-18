@@ -444,6 +444,7 @@ pub struct Config {
     pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<Fee>,
     pub lnurl_domain: Option<String>,
+    pub prefer_spark_over_lightning: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Fee)]

@@ -28,6 +28,7 @@ pub struct _Config {
     pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<Fee>,
     pub lnurl_domain: Option<String>,
+    pub prefer_spark_over_lightning: bool,
 }
 
 #[frb(mirror(ConnectRequest))]

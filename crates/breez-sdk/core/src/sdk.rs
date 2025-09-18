@@ -133,6 +133,7 @@ pub fn default_config(network: Network) -> Config {
         sync_interval_secs: 60, // every 1 minute
         max_deposit_claim_fee: None,
         lnurl_domain: Some("breez.tips".to_string()),
+        prefer_spark_over_lightning: false,
     }
 }
 
@@ -615,7 +616,7 @@ impl BreezSdk {
                         amount_sats.unwrap_or_default(),
                         Some(InvoiceDescription::Memo(description.clone())),
                         None,
-                        true,
+                        self.config.prefer_spark_over_lightning,
                     )
                     .await?
                     .invoice,
@@ -842,7 +843,7 @@ impl BreezSdk {
                 };
                 let use_spark = match request.options {
                     Some(SendPaymentOptions::Bolt11Invoice { use_spark }) => use_spark,
-                    _ => false,
+                    _ => self.config.prefer_spark_over_lightning,
                 };
                 let fee_sats = match (use_spark, spark_transfer_fee_sats, lightning_fee_sats) {
                     (true, Some(fee), _) => fee,
