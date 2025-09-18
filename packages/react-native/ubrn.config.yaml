@@ -4,6 +4,8 @@ rust:
 bindings:
   cpp: cpp/generated
   ts: src/generated
+android:
+  useSharedLibrary: true
 ios:
   targets:
     - aarch64-apple-ios
