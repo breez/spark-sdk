@@ -28,7 +28,7 @@ Send us your domain name (e.g., example.com or www.example.com).
 We will verify and add it to our list of allowed domains.
 
 <h2 id="configuring-lightning-address">
-    <a class="header" href="#configuring-lightning-address">Configuring Lightning addressed for users</a>
+    <a class="header" href="#configuring-lightning-address">Configuring Lightning addresses for users</a>
 </h2>
 
 configure your domain in the SDK by passing the `lnurl_domain` parameter in the SDK configuration:
