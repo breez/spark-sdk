@@ -3,7 +3,7 @@ import Foundation
 
 func configureLightningAddress() -> Config {
     // ANCHOR: config-lightning-address
-    var config = defaultConfig(network: Network.bitcoin)
+    var config = defaultConfig(network: Network.mainnet)
     config.apiKey = "your-api-key"
     config.lnurlDomain = "yourdomain.com"
     // ANCHOR_END: config-lightning-address

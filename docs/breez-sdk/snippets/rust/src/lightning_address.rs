@@ -3,7 +3,7 @@ use breez_sdk_spark::{BreezSdk, CheckLightningAddressRequest, Config, Network, R
 
 pub fn configure_lightning_address() -> Config {
     // ANCHOR: config-lightning-address
-    let mut config = default_config(Network::Bitcoin);
+    let mut config = default_config(Network::Mainnet);
     config.api_key = Some("your-api-key".to_string());
     config.lnurl_domain = Some("yourdomain.com".to_string());
     // ANCHOR_END: config-lightning-address

@@ -2,7 +2,7 @@ import { type BreezSdk, defaultConfig } from '@breeztech/breez-sdk-spark'
 
 const configureLightningAddress = () => {
   // ANCHOR: config-lightning-address
-  const config = defaultConfig('bitcoin');
+  let config = defaultConfig('mainnet');
   config.apiKey = 'your-api-key';
   config.lnurlDomain = 'yourdomain.com';
   // ANCHOR_END: config-lightning-address
