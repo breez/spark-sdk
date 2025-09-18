@@ -1,5 +1,5 @@
 <h1 id="lightning-address">
-    <a class="header" href="#lightning-address">Using Lightning Addresses</a>
+    <a class="header" href="#lightning-address">Receiving payments using LNURL-Pay and Lightning addresses</a>
 </h1>
 
 <h2 id="what-is-lightning-address">
@@ -353,16 +353,4 @@ When a user no longer wants to use the Lightning Address, you can delete it.
 ```
 </section>
 </custom-tabs>
-
-<h2 id="receiving-payments">
-    <a class="header" href="#receiving-payments">Receiving Payments with Lightning Addresses</a>
-</h2>
-
-Once a Lightning Address is registered, it can be used to receive payments. When someone sends a payment to your Lightning Address (e.g., `username@yourdomain.com`), the sender will:
-
-1. Resolve the Lightning Address to a LNURL endpoint
-2. Query the endpoint for payment information
-3. Generate and pay an invoice
-
-As the receiver, you don't need to take any additional steps. The payment will appear in your transaction history like any other incoming Lightning payment. You can use the `list_payments` method to view incoming payments, and the SDK will emit appropriate events when payments are received.
 
