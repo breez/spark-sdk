@@ -1,5 +1,5 @@
 <h1 id="lnurl-pay">
-    <a class="header" href="#lnurl-pay">Sending payments using LNURL-Pay/Lightning address</a>
+    <a class="header" href="#lnurl-pay">Sending payments using LNURL-Pay and Lightning address</a>
 </h1>
 
 <h2 id="preparing-lnurl-payments">
