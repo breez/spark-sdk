@@ -20,7 +20,7 @@ members = [
   "crates/spark-itest",
   "crates/spark-wallet",
   "crates/xtask",
-  "examples/spark-cli",
+  "crates/internal",
 ]
 
 [workspace.package]
