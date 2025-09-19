@@ -270,10 +270,18 @@ impl SparkWallet {
         amount_sat: u64,
         description: Option<InvoiceDescription>,
         public_key: Option<PublicKey>,
+        include_spark_address: bool,
     ) -> Result<LightningReceivePayment, SparkWalletError> {
         Ok(self
             .lightning_service
-            .create_lightning_invoice(amount_sat, description, None, None, public_key)
+            .create_lightning_invoice(
+                amount_sat,
+                description,
+                None,
+                None,
+                include_spark_address,
+                public_key,
+            )
             .await?)
     }
 

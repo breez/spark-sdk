@@ -73,6 +73,12 @@ struct Args {
     #[arg(long, default_value = "4000000000")]
     pub max_sendable: u64,
 
+    /// Whether to include the spark address in the invoices generated.
+    /// If included this can reduce fees for wallets that support it at the
+    /// cost of privacy.
+    #[arg(long, default_value = "false")]
+    pub include_spark_address: bool,
+
     /// List of domains that are allowed to use the lnurl server. Comma separated.
     #[arg(long, default_value = "localhost:8080")]
     pub domains: String,
@@ -176,6 +182,7 @@ where
         scheme: args.scheme,
         min_sendable: args.min_sendable,
         max_sendable: args.max_sendable,
+        include_spark_address: args.include_spark_address,
         domains,
         ca_cert,
     };

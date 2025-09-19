@@ -241,6 +241,7 @@ impl LightningService {
         description: Option<InvoiceDescription>,
         preimage: Option<Vec<u8>>,
         expiry_secs: Option<u32>,
+        include_spark_address: bool,
         identity_pubkey: Option<PublicKey>,
     ) -> Result<LightningReceivePayment, ServiceError> {
         let identity_pubkey = match identity_pubkey {
@@ -270,23 +271,27 @@ impl LightningService {
                 description_hash: description_hash.map(|h| h.encode_hex()),
                 expiry_secs: Some(expiry.into()),
                 memo,
-                include_spark_address: true,
+                include_spark_address,
             })
             .await?;
         let decoded_invoice = Bolt11Invoice::from_str(&invoice.invoice.encoded_invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
-        let spark_address = self.extract_spark_address(&decoded_invoice);
-        let Some(spark_address) = spark_address else {
-            return Err(ServiceError::SSPswapError(
-                "Invalid invoice. Spark address not found".to_string(),
-            ));
-        };
 
-        if spark_address.identity_public_key != identity_pubkey {
-            return Err(ServiceError::SSPswapError(
-                "Invalid invoice. Spark address mismatch".to_string(),
-            ));
+        // check if the spark address in the invoice matches the identity pubkey only
+        if include_spark_address {
+            let spark_address = self.extract_spark_address(&decoded_invoice);
+            let Some(spark_address) = spark_address else {
+                return Err(ServiceError::SSPswapError(
+                    "Invalid invoice. Spark address not found".to_string(),
+                ));
+            };
+            if spark_address.identity_public_key != identity_pubkey {
+                return Err(ServiceError::SSPswapError(
+                    "Invalid invoice. Spark address mismatch".to_string(),
+                ));
+            }
         }
+
         let shares = self.signer.split_secret_with_proofs(
             &SecretToSplit::Preimage(preimage),
             self.split_secret_threshold,

@@ -406,6 +406,11 @@ pub struct Config {
 
     /// The domain used for receiving through lnurl-pay and lightning address.
     pub lnurl_domain: Option<String>,
+
+    /// When this is set to `true` we will prefer to use spark payments over
+    /// lightning when sending and receiving. This has the benefit of lower fees
+    /// but is at the cost of privacy.
+    pub prefer_spark_over_lightning: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

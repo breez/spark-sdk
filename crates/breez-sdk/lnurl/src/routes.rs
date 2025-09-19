@@ -298,6 +298,7 @@ where
                     desc_hash.to_byte_array(),
                 )),
                 Some(pubkey),
+                state.include_spark_address,
             )
             .await
             .map_err(|e| {
