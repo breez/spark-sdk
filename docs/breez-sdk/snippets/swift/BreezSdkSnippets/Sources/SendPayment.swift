@@ -66,7 +66,7 @@ func prepareSendPaymentSpark(sdk: BreezSdk) async throws {
 
 func sendPaymentLightningBolt11(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) async throws {
     // ANCHOR: send-payment-lightning-bolt11
-    let options = SendPaymentOptions.bolt11Invoice(useSpark: true)
+    let options = SendPaymentOptions.bolt11Invoice(preferSpark: true)
     let sendResponse = try await sdk.sendPayment(request: SendPaymentRequest (
         prepareResponse: prepareResponse,
         options: options

@@ -135,7 +135,7 @@ const sendPayment = async (options) => {
         if (await confirm(message)) {
             const res = await sdk.sendPayment({
                 prepareResponse,
-                options: { type: 'bolt11Invoice', useSpark: paymentMethod.sparkTransferFeeSats != null }
+                options: { type: 'bolt11Invoice', preferSpark: paymentMethod.sparkTransferFeeSats != null }
             })
             console.log(JSON.stringify(res, null, 2))
         }

@@ -102,7 +102,7 @@ async def send_payment_lightning_bolt11(
 ):
     # ANCHOR: send-payment-lightning-bolt11
     try:
-        options = SendPaymentOptions.BOLT11_INVOICE(use_spark=True)
+        options = SendPaymentOptions.BOLT11_INVOICE(prefer_spark=True)
         request = SendPaymentRequest(prepare_response=prepare_response, options=options)
         send_response = await sdk.send_payment(request=request)
         payment = send_response.payment

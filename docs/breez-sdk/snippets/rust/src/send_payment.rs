@@ -80,8 +80,7 @@ async fn send_payment_lightning_bolt11(
     prepare_response: PrepareSendPaymentResponse,
 ) -> Result<()> {
     // ANCHOR: send-payment-lightning-bolt11
-    // Only set to use spark if the spark transfer fee is available (Default = false)
-    let options = Some(SendPaymentOptions::Bolt11Invoice { use_spark: true });
+    let options = Some(SendPaymentOptions::Bolt11Invoice { prefer_spark: true });
     let send_response = sdk
         .send_payment(SendPaymentRequest {
             prepare_response,

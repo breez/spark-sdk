@@ -841,7 +841,7 @@ impl BreezSdk {
                     None => Some(request.prepare_response.amount_sats),
                 };
                 let prefer_spark = match request.options {
-                    Some(SendPaymentOptions::Bolt11Invoice { use_spark }) => use_spark,
+                    Some(SendPaymentOptions::Bolt11Invoice { prefer_spark }) => prefer_spark,
                     _ => self.config.prefer_spark_over_lightning,
                 };
                 let fee_sats = match (prefer_spark, spark_transfer_fee_sats, lightning_fee_sats) {
