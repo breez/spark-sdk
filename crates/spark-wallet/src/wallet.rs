@@ -985,9 +985,9 @@ impl BackgroundProcessor {
             return Ok(());
         }
 
-        println!("Claiming transfer from event");
+        trace!("Claiming transfer from event");
         claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
-        println!("Claimed transfer from event");
+        trace!("Claimed transfer from event");
         // get the ssp transfer details, if it fails just use None
         // Internal transfers will not have an SSP entry so just skip it
         let ssp_transfer = if transfer.transfer_type == spark::services::TransferType::Transfer {
