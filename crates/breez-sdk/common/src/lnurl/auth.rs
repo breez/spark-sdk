@@ -89,7 +89,9 @@ pub async fn perform_lnurl_auth<C: RestClient + ?Sized, S: LnurlAuthSigner>(
     callback_url
         .query_pairs_mut()
         .append_pair("key", &xpub.public_key.to_string());
-    let RestResponse { body, .. } = rest_client.get(callback_url.to_string(), None).await?;
+    let RestResponse { body, .. } = rest_client
+        .get_request(callback_url.to_string(), None)
+        .await?;
     Ok(parse_json(&body)?)
 }
 

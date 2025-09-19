@@ -70,6 +70,18 @@ or
 yarn add @breeztech/breez-sdk-spark
 ```
 
+## React Native
+
+We recommend using the official npm package: [@breeztech/breez-sdk-spark-react-native](https://www.npmjs.com/package/@breeztech/breez-sdk-spark-react-native).
+
+```console
+npm install @breeztech/breez-sdk-spark-react-native
+```
+or
+```console
+yarn add @breeztech/breez-sdk-spark-react-native
+```
+
 ## Rust
 
 We recommend to add breez sdk as a git dependency with a specific release tag.

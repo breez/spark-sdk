@@ -21,14 +21,14 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 	}
 
 	switch inputType := input.(type) {
-	case breez_sdk_common.InputTypeLnurlPay:
+	case breez_sdk_common.InputTypeLightningAddress:
 		amountSats := uint64(5_000)
 		optionalComment := "<comment>"
 		optionalValidateSuccessActionUrl := true
 
 		request := breez_sdk_spark.PrepareLnurlPayRequest{
 			AmountSats:               amountSats,
-			PayRequest:               inputType.Field0,
+			PayRequest:               inputType.Field0.PayRequest,
 			Comment:                  &optionalComment,
 			ValidateSuccessActionUrl: &optionalValidateSuccessActionUrl,
 		}

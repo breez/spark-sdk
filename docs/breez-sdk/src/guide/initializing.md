@@ -55,6 +55,15 @@ Once connected, you’re ready to start interacting with the SDK.
 
 </section>
 
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/getting_started.ts:init-sdk}}
+```
+
+</section>
+
 <div slot="title">Flutter</div>
 <section>
 
@@ -132,6 +141,15 @@ For advanced use cases where you need more control, you can configure the SDK us
 
 </section>
 
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/getting_started.ts:init-sdk-advanced}}
+```
+
+</section>
+
 <div slot="title">Flutter</div>
 <section>
 
@@ -199,6 +217,15 @@ This is particularly useful if you need to re-instantiate the SDK, such as when 
 
 ```typescript
 {{#include ../../snippets/wasm/getting_started.ts:disconnect}}
+```
+
+</section>
+
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/getting_started.ts:disconnect}}
 ```
 
 </section>

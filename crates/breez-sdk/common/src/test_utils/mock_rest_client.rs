@@ -42,7 +42,7 @@ impl MockRestClient {
 
 #[macros::async_trait]
 impl RestClient for MockRestClient {
-    async fn get(
+    async fn get_request(
         &self,
         _url: String,
         _headers: Option<HashMap<String, String>>,
@@ -58,7 +58,7 @@ impl RestClient for MockRestClient {
         Ok(RestResponse { status, body })
     }
 
-    async fn post(
+    async fn post_request(
         &self,
         _url: String,
         _headers: Option<HashMap<String, String>>,
@@ -75,7 +75,7 @@ impl RestClient for MockRestClient {
         Ok(RestResponse { status, body })
     }
 
-    async fn delete(
+    async fn delete_request(
         &self,
         _url: String,
         _headers: Option<HashMap<String, String>>,

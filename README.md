@@ -80,7 +80,7 @@ Funds are self-custodial: you can exit Spark at any time and reclaim your bitcoi
         - **core**: The core Breez SDK Rust library.
         - **wasm**: The Wasm interface bindings.        
     - **spark**: The Spark crate.
-- **packages**: Contains the packages for Flutter and Wasm.
+- **packages**: Contains the packages for Flutter, React Native and Wasm.
 
 
 ## **Contributing**
@@ -98,11 +98,11 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x]  Send via LNURL-Pay
 - [x]  Send to a Lightning address
 - [x]  WebAssembly support
-- [x]  Flutter bindings
+- [x]  Flutter & React Native bindings 
 - [x]  Receive via LNURL-Pay w/ offline & Lightning address support
 - [ ]  Support Spark tokens
 - [ ]  Real-time sync
-- [ ]  React Native & C# bindings
+- [ ]  C# language binding
 - [ ]  LNURL-Withdraw
 - [ ]  LNURL-Auth
 - [ ]  External input parsers

@@ -9,7 +9,7 @@ from breez_sdk_spark import (
 
 def configure_lightning_address():
     # ANCHOR: config-lightning-address
-    config = default_config(network=Network.BITCOIN)
+    config = default_config(network=Network.MAINNET)
     config.api_key = "your-api-key"
     config.lnurl_domain = "yourdomain.com"
     # ANCHOR_END: config-lightning-address

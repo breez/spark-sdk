@@ -41,7 +41,7 @@ pub async fn validate_lnurl_pay<C: RestClient + ?Sized>(
     )?;
 
     let callback_url = build_pay_callback_url(user_amount_msat, comment, pay_request)?;
-    let RestResponse { body, .. } = rest_client.get(callback_url, None).await?;
+    let RestResponse { body, .. } = rest_client.get_request(callback_url, None).await?;
     if let Ok(err) = serde_json::from_str::<LnurlErrorDetails>(&body) {
         return Ok(ValidatedCallbackResponse::EndpointError { data: err });
     }

@@ -8,7 +8,7 @@ func ConfigLightningAddress() *breez_sdk_spark.Config {
 	// ANCHOR: config-lightning-address
 	lnurlDomain := "yourdomain.com"
 	apiKey := "your-api-key"
-	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkBitcoin)
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
 	config.ApiKey = &apiKey
 	config.LnurlDomain = &lnurlDomain
 	// ANCHOR_END: config-lightning-address

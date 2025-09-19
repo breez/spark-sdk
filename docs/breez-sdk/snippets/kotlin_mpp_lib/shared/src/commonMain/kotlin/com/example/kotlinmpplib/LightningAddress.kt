@@ -5,7 +5,7 @@ import breez_sdk_spark.*
 class LightningAddress {
     fun configureLightningAddress(): Config {
         // ANCHOR: config-lightning-address
-        val config = defaultConfig(Network.BITCOIN)
+        val config = defaultConfig(Network.MAINNET)
         config.apiKey = "your-api-key"
         config.lnurlDomain = "yourdomain.com"
         // ANCHOR_END: config-lightning-address
