@@ -21,7 +21,7 @@ pub use spark::{
         TransferType, Utxo,
     },
     session_manager::*,
-    signer::{DefaultSigner, DefaultSignerError, Signer},
+    signer::{DefaultSigner, DefaultSignerError, KeySet, KeySetType, Signer},
     ssp::*,
     tree::{SigningKeyshare, TreeNodeId},
     utils::{
