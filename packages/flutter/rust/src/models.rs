@@ -613,3 +613,12 @@ pub struct _LightningAddressInfo {
     pub lnurl: String,
     pub username: String,
 }
+
+#[frb(mirror(KeySetType))]
+pub enum _KeySetType {
+    Default,
+    Taproot,
+    NativeSegwit,
+    WrappedSegwit,
+    Legacy,
+}

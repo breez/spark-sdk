@@ -815,3 +815,38 @@ impl From<RecoverLnurlPayResponse> for LightningAddressInfo {
         }
     }
 }
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum KeySetType {
+    #[default]
+    Default,
+    Taproot,
+    NativeSegwit,
+    WrappedSegwit,
+    Legacy,
+}
+
+impl From<spark_wallet::KeySetType> for KeySetType {
+    fn from(value: spark_wallet::KeySetType) -> Self {
+        match value {
+            spark_wallet::KeySetType::Default => KeySetType::Default,
+            spark_wallet::KeySetType::Taproot => KeySetType::Taproot,
+            spark_wallet::KeySetType::NativeSegwit => KeySetType::NativeSegwit,
+            spark_wallet::KeySetType::WrappedSegwit => KeySetType::WrappedSegwit,
+            spark_wallet::KeySetType::Legacy => KeySetType::Legacy,
+        }
+    }
+}
+
+impl From<KeySetType> for spark_wallet::KeySetType {
+    fn from(value: KeySetType) -> Self {
+        match value {
+            KeySetType::Default => spark_wallet::KeySetType::Default,
+            KeySetType::Taproot => spark_wallet::KeySetType::Taproot,
+            KeySetType::NativeSegwit => spark_wallet::KeySetType::NativeSegwit,
+            KeySetType::WrappedSegwit => spark_wallet::KeySetType::WrappedSegwit,
+            KeySetType::Legacy => spark_wallet::KeySetType::Legacy,
+        }
+    }
+}

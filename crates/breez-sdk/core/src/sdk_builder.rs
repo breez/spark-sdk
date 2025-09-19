@@ -9,7 +9,7 @@ use spark_wallet::{DefaultSigner, SparkWallet};
 use tokio::sync::watch;
 
 use crate::{
-    Credentials, Network,
+    Credentials, KeySetType, Network,
     chain::{
         BitcoinChainService,
         rest_client::{BasicAuth, RestClientChainService},
@@ -30,6 +30,8 @@ pub struct SdkBuilder {
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     lnurl_client: Option<Arc<dyn RestClient>>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
+    key_set_type: KeySetType,
+    use_address_index: bool,
 }
 
 impl SdkBuilder {
@@ -46,7 +48,20 @@ impl SdkBuilder {
             chain_service: None,
             lnurl_client: None,
             lnurl_server_client: None,
+            key_set_type: KeySetType::Default,
+            use_address_index: false,
         }
+    }
+
+    /// Sets the key set type to be used by the SDK.
+    /// Arguments:
+    /// - `key_set_type`: The key set type which determines the derivation path.
+    /// - `use_address_index`: Controls the structure of the BIP derivation path.
+    #[must_use]
+    pub fn with_key_set(mut self, key_set_type: KeySetType, use_address_index: bool) -> Self {
+        self.key_set_type = key_set_type;
+        self.use_address_index = use_address_index;
+        self
     }
 
     /// Sets the chain service to be used by the SDK.
@@ -99,8 +114,13 @@ impl SdkBuilder {
         // Create the signer from mnemonic
         let mnemonic =
             bip39::Mnemonic::parse(&self.mnemonic).map_err(|e| SdkError::Generic(e.to_string()))?;
-        let signer = DefaultSigner::new(&mnemonic.to_seed(""), self.config.network.into())
-            .map_err(|e| SdkError::Generic(e.to_string()))?;
+        let signer = DefaultSigner::with_keyset_type(
+            &mnemonic.to_seed(""),
+            self.config.network.into(),
+            self.key_set_type.into(),
+            self.use_address_index,
+        )
+        .map_err(|e| SdkError::Generic(e.to_string()))?;
         let chain_service = if let Some(service) = self.chain_service {
             service
         } else {

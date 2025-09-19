@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
+use bitcoin::key::Parity;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
 use bitcoin::secp256k1::{self, All, Keypair, Message, PublicKey, SecretKey, schnorr};
@@ -30,44 +31,11 @@ use crate::{
 
 use super::VerifiableSecretShare;
 
-const PURPOSE: u32 = 8797555;
-
-fn identity_derivation_path(network: Network) -> DerivationPath {
-    DerivationPath::from(vec![
-        purpose(),
-        coin_type(network),
-        ChildNumber::from_hardened_idx(0).expect("Hardened zero is invalid"),
-    ])
-}
-
-fn signing_derivation_path(network: Network) -> DerivationPath {
-    DerivationPath::from(vec![
-        purpose(),
-        coin_type(network),
-        ChildNumber::from_hardened_idx(1).expect("Hardened one is invalid"),
-    ])
-}
-
-fn static_deposit_derivation_path(network: Network) -> DerivationPath {
-    DerivationPath::from(vec![
-        purpose(),
-        coin_type(network),
-        ChildNumber::from_hardened_idx(3).expect("Hardened one is invalid"),
-    ])
-}
-
-fn coin_type(network: Network) -> ChildNumber {
-    let coin_type: u32 = match network {
+fn account_number(network: Network) -> u32 {
+    match network {
         Network::Regtest => 0,
         _ => 1,
-    };
-    ChildNumber::from_hardened_idx(coin_type)
-        .unwrap_or_else(|_| panic!("Hardened coin type {coin_type} is invalid"))
-}
-
-fn purpose() -> ChildNumber {
-    ChildNumber::from_hardened_idx(PURPOSE)
-        .unwrap_or_else(|_| panic!("Hardened purpose {PURPOSE} is invalid"))
+    }
 }
 
 fn frost_signing_package(
@@ -117,12 +85,156 @@ fn frost_signing_package(
     ))
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum KeySetType {
+    #[default]
+    Default,
+    Taproot,
+    NativeSegwit,
+    WrappedSegwit,
+    Legacy,
+}
+
+struct DerivedKeySet {
+    derivation_path: DerivationPath,
+    master_key: Xpriv,
+}
+
+impl DerivedKeySet {
+    fn new(
+        seed: &[u8],
+        network: Network,
+        derivation_path: DerivationPath,
+    ) -> Result<Self, bitcoin::bip32::Error> {
+        let master_key = Xpriv::new_master(network, seed)?;
+
+        Ok(DerivedKeySet {
+            derivation_path,
+            master_key,
+        })
+    }
+
+    fn to_key_set(
+        &self,
+        identity_child_number: Option<ChildNumber>,
+    ) -> Result<KeySet, DefaultSignerError> {
+        let secp = Secp256k1::new();
+        let mut identity_master_key = self.master_key.derive_priv(&secp, &self.derivation_path)?;
+
+        let signing_master_key =
+            identity_master_key.derive_priv(&secp, &[ChildNumber::from_hardened_idx(1)?])?;
+        let static_deposit_master_key =
+            identity_master_key.derive_priv(&secp, &[ChildNumber::from_hardened_idx(3)?])?;
+        if let Some(child_number) = identity_child_number {
+            identity_master_key =
+                identity_master_key.derive_priv(&secp, &DerivationPath::from(vec![child_number]))?
+        }
+        Ok(KeySet {
+            identity_key_pair: identity_master_key.private_key.keypair(&secp),
+            signing_master_key,
+            static_deposit_master_key,
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct KeySet {
+    pub identity_key_pair: Keypair,
+    pub signing_master_key: Xpriv,
+    pub static_deposit_master_key: Xpriv,
+}
+
+impl KeySet {
+    fn default_keys(seed: &[u8], network: Network) -> Result<Self, DefaultSignerError> {
+        let account_number = account_number(network);
+        let derivation_path = format!("m/8797555'/{account_number}'").parse()?;
+        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
+        derived_key_set.to_key_set(ChildNumber::from_hardened_idx(0).ok())
+    }
+
+    fn taproot_keys(
+        seed: &[u8],
+        network: Network,
+        use_address_index: bool,
+    ) -> Result<Self, DefaultSignerError> {
+        let account_number = account_number(network);
+        let derivation_path = if use_address_index {
+            format!("m/86'/0'/0'/0/{account_number}")
+        } else {
+            format!("m/86'/0'/{account_number}'/0/0")
+        }
+        .parse()?;
+        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
+        let mut key_set = derived_key_set.to_key_set(None)?;
+        let secp = Secp256k1::new();
+        if let (_, Parity::Odd) = key_set
+            .identity_key_pair
+            .secret_key()
+            .x_only_public_key(&secp)
+        {
+            key_set.identity_key_pair = key_set
+                .identity_key_pair
+                .secret_key()
+                .negate()
+                .keypair(&secp)
+        }
+
+        Ok(key_set)
+    }
+
+    fn native_segwit_keys(
+        seed: &[u8],
+        network: Network,
+        use_address_index: bool,
+    ) -> Result<Self, DefaultSignerError> {
+        let account_number = account_number(network);
+        let derivation_path = if use_address_index {
+            format!("m/84'/0'/0'/0/{account_number}")
+        } else {
+            format!("m/84'/0'/{account_number}'/0/0")
+        }
+        .parse()?;
+        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
+        derived_key_set.to_key_set(None)
+    }
+
+    fn wrapped_segwit_keys(
+        seed: &[u8],
+        network: Network,
+        use_address_index: bool,
+    ) -> Result<Self, DefaultSignerError> {
+        let account_number = account_number(network);
+        let derivation_path = if use_address_index {
+            format!("m/49'/0'/0'/0/{account_number}")
+        } else {
+            format!("m/49'/0'/{account_number}'/0/0")
+        }
+        .parse()?;
+        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
+        derived_key_set.to_key_set(None)
+    }
+
+    fn legacy_bitcoin_keys(
+        seed: &[u8],
+        network: Network,
+        use_address_index: bool,
+    ) -> Result<Self, DefaultSignerError> {
+        let account_number = account_number(network);
+        let derivation_path = if use_address_index {
+            format!("m/44'/0'/0'/0/{account_number}")
+        } else {
+            format!("m/44'/0'/{account_number}'/0/0")
+        }
+        .parse()?;
+        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
+        derived_key_set.to_key_set(None)
+    }
+}
+
 #[derive(Clone)]
 pub struct DefaultSigner {
-    identity_key_pair: Keypair,
+    key_set: KeySet,
     secp: Secp256k1<All>,
-    signing_master_key: Xpriv,
-    static_deposit_master_key: Xpriv,
 }
 
 #[derive(Debug, Error)]
@@ -148,23 +260,32 @@ impl From<bitcoin::bip32::Error> for DefaultSignerError {
 
 impl DefaultSigner {
     pub fn new(seed: &[u8], network: Network) -> Result<Self, DefaultSignerError> {
-        let master_key =
-            Xpriv::new_master(network, seed).map_err(|_| DefaultSignerError::InvalidSeed)?;
+        Self::with_keyset_type(seed, network, KeySetType::Default, false)
+    }
+
+    pub fn with_keyset_type(
+        seed: &[u8],
+        network: Network,
+        key_type: KeySetType,
+        use_address_index: bool,
+    ) -> Result<Self, DefaultSignerError> {
+        let key_set = match key_type {
+            KeySetType::Default => KeySet::default_keys(seed, network),
+            KeySetType::Taproot => KeySet::taproot_keys(seed, network, use_address_index),
+            KeySetType::NativeSegwit => {
+                KeySet::native_segwit_keys(seed, network, use_address_index)
+            }
+            KeySetType::WrappedSegwit => {
+                KeySet::wrapped_segwit_keys(seed, network, use_address_index)
+            }
+            KeySetType::Legacy => KeySet::legacy_bitcoin_keys(seed, network, use_address_index),
+        }?;
+        Ok(Self::from_key_set(key_set))
+    }
+
+    pub fn from_key_set(key_set: KeySet) -> Self {
         let secp = Secp256k1::new();
-        let identity_key = master_key
-            .derive_priv(&secp, &identity_derivation_path(network))?
-            .private_key;
-        let identity_key_pair = identity_key.keypair(&secp);
-        let signing_master_key =
-            master_key.derive_priv(&secp, &signing_derivation_path(network))?;
-        let static_deposit_master_key =
-            master_key.derive_priv(&secp, &static_deposit_derivation_path(network))?;
-        Ok(DefaultSigner {
-            identity_key_pair,
-            secp,
-            signing_master_key,
-            static_deposit_master_key,
-        })
+        DefaultSigner { key_set, secp }
     }
 }
 
@@ -179,6 +300,7 @@ impl DefaultSigner {
             ChildNumber::from_hardened_idx(index).map_err(|_| SignerError::InvalidHash)?;
         let derivation_path = DerivationPath::from(vec![child_number]);
         let child = self
+            .key_set
             .signing_master_key
             .derive_priv(&self.secp, &derivation_path)
             .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {e}")))?
@@ -196,7 +318,7 @@ impl DefaultSigner {
     }
 
     fn decrypt_message_ecies(&self, ciphertext: &[u8]) -> Result<Vec<u8>, SignerError> {
-        ecies::decrypt(&self.identity_key_pair.secret_bytes(), ciphertext)
+        ecies::decrypt(&self.key_set.identity_key_pair.secret_bytes(), ciphertext)
             .map_err(|e| SignerError::Generic(format!("failed to decrypt: {e}")))
     }
 
@@ -246,7 +368,7 @@ impl Signer for DefaultSigner {
         let digest = sha256::Hash::hash(message);
         let sig = self.secp.sign_ecdsa(
             &Message::from_digest(digest.to_byte_array()),
-            &self.identity_key_pair.secret_key(),
+            &self.key_set.identity_key_pair.secret_key(),
         );
         Ok(sig)
     }
@@ -262,9 +384,10 @@ impl Signer for DefaultSigner {
         }
         let mut hash_array = [0u8; 32];
         hash_array.copy_from_slice(hash);
-        let sig = self
-            .secp
-            .sign_schnorr_no_aux_rand(&Message::from_digest(hash_array), &self.identity_key_pair);
+        let sig = self.secp.sign_schnorr_no_aux_rand(
+            &Message::from_digest(hash_array),
+            &self.key_set.identity_key_pair,
+        );
         Ok(sig)
     }
 
@@ -305,7 +428,7 @@ impl Signer for DefaultSigner {
     }
 
     fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
-        Ok(self.identity_key_pair.public_key())
+        Ok(self.key_set.identity_key_pair.public_key())
     }
 
     fn get_static_deposit_private_key_source(
@@ -325,6 +448,7 @@ impl Signer for DefaultSigner {
         })?;
         let derivation_path = DerivationPath::from(vec![child_number]);
         let private_key = self
+            .key_set
             .static_deposit_master_key
             .derive_priv(&self.secp, &derivation_path)
             .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {e}")))?
@@ -612,35 +736,10 @@ mod tests {
     use crate::signer::{EncryptedPrivateKey, PrivateKeySource, Signer, SignerError};
     use crate::tree::TreeNodeId;
     use crate::utils::verify_signature::verify_signature_ecdsa;
-    use crate::{
-        Network,
-        signer::default_signer::DefaultSigner,
-        signer::default_signer::{
-            identity_derivation_path, signing_derivation_path, static_deposit_derivation_path,
-        },
-    };
+    use crate::{Network, signer::default_signer::DefaultSigner};
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
-
-    /// Ensure constants are defined correctly and don't panic.
-    #[test_all]
-    fn test_constant_derivation_paths() {
-        identity_derivation_path(Network::Mainnet);
-        identity_derivation_path(Network::Testnet);
-        identity_derivation_path(Network::Regtest);
-        identity_derivation_path(Network::Signet);
-
-        signing_derivation_path(Network::Mainnet);
-        signing_derivation_path(Network::Testnet);
-        signing_derivation_path(Network::Regtest);
-        signing_derivation_path(Network::Signet);
-
-        static_deposit_derivation_path(Network::Mainnet);
-        static_deposit_derivation_path(Network::Testnet);
-        static_deposit_derivation_path(Network::Regtest);
-        static_deposit_derivation_path(Network::Signet);
-    }
 
     fn create_test_signer() -> DefaultSigner {
         let test_seed = [42u8; 32]; // Deterministic seed for testing

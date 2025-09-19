@@ -54,6 +54,7 @@ async def init_sdk_advanced():
         # You can also pass your custom implementations:
         # builder.with_chain_service(<your chain service implementation>)
         # builder.with_rest_client(<your rest client implementation>)
+        # builder.with_key_set(<your key set type>, <use address index>)
         sdk = await builder.build()
         return sdk
     except Exception as error:

@@ -40,6 +40,7 @@ class GettingStarted {
             // You can also pass your custom implementations:
             // builder.withChainService(<your chain service implementation>)
             // builder.withRestClient(<your rest client implementation>)
+            // builder.withKeySet(<your key set type>, <use address index>)
             val sdk = builder.build()
         } catch (e: Exception) {
             // handle error

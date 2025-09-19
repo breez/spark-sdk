@@ -3,7 +3,7 @@ use std::sync::Arc;
 use breez_sdk_common::rest::RestClient;
 use tokio::sync::Mutex;
 
-use crate::{BitcoinChainService, BreezSdk, Config, Credentials, SdkError, Storage};
+use crate::{BitcoinChainService, BreezSdk, Config, Credentials, KeySetType, SdkError, Storage};
 
 /// Builder for creating `BreezSdk` instances with customizable components.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
@@ -25,6 +25,17 @@ impl SdkBuilder {
         SdkBuilder {
             inner: Mutex::new(inner),
         }
+    }
+
+    /// Sets the key set type to be used by the SDK.
+    /// Arguments:
+    /// - `key_set_type`: The key set type which determines the derivation path.
+    /// - `use_address_index`: Controls the structure of the BIP derivation path.
+    pub async fn with_key_set(&self, key_set_type: KeySetType, use_address_index: bool) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder
+            .clone()
+            .with_key_set(key_set_type, use_address_index);
     }
 
     /// Sets the chain service to be used by the SDK.
