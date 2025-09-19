@@ -1,32 +1,43 @@
 [package]
 name = "lnurl"
 edition = "2024"
-version.workspace = true
+version = "0.1.0"
+
+[workspace]
 
 [dependencies]
-anyhow.workspace = true
-async-trait.workspace = true
-axum = { workspace = true, features = ["macros"] }
-axum-extra = { version = "0.10.1"  }
-base64.workspace = true
-bitcoin.workspace = true
-clap = { workspace = true, features = ["derive"] }
-figment = { workspace = true, features = ["env", "toml"] }
-hex.workspace = true
-lnurl-models.workspace = true
-rand.workspace = true
-regex.workspace = true
-serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-serde_with.workspace = true
-spark-wallet = { workspace = true, features = ["native-tls"] }
-sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "sqlite", "tls-native-tls"] }
-thiserror.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
-tower-http = { workspace = true, features = ["cors"] }
-tracing.workspace = true
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
-x509-parser = { workspace = true, features = ["verify"] }
+anyhow = "1.0.98"
+async-trait = "0.1.88"
+axum = { version = "0.8.4", features = ["macros"] }
+axum-extra = { version = "0.10.1" }
+base64 = "0.22.1"
+bitcoin = { version = "0.32.6", features = ["serde"] }
+clap = { version = "4.5.40", features = ["derive"] }
+figment = { version = "0.10.19", features = ["env", "toml"] }
+hex = "0.4.3"
+lnurl-models = { path = "../lnurl-models" }
+rand = "0.8"
+regex = "1.11.2"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+serde_with = "3.13.0"
+spark-wallet = { path = "../../spark-wallet", features = ["native-tls"] }
+sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "sqlite", "tls-native-tls"] }
+thiserror = "2.0.12"
+tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "signal"] }
+tower-http = { version = "0.6.6", features = ["cors"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+x509-parser = { version = "0.18.0", features = ["verify"] }
 
 [lints]
-workspace = true
+clippy.suspicious = { level = "warn", priority = -1 }
+clippy.complexity = { level = "warn", priority = -1 }
+clippy.perf = { level = "warn", priority = -1 }
+clippy.style = { level = "warn", priority = -1 }
+clippy.pedantic = { level = "warn", priority = -1 }
+clippy.missing_errors_doc = "allow"
+clippy.missing_panics_doc = "allow"
+clippy.must_use_candidate = "allow"
+clippy.struct_field_names = "allow"
+clippy.arithmetic_side_effects = "warn"

@@ -12,7 +12,6 @@ members = [
   "crates/breez-sdk/cli",
   "crates/breez-sdk/common",
   "crates/breez-sdk/core", 
-  "crates/breez-sdk/lnurl",
   "crates/breez-sdk/lnurl-models",
   "crates/breez-sdk/wasm",
   "crates/macros",
