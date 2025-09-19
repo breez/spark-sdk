@@ -834,25 +834,19 @@ impl BreezSdk {
                 lightning_fee_sats,
             } => {
                 let amount_to_send = match invoice_details.amount_msat {
-                    // we are not sending amount in case the invoice contains it.
+                    // We are not sending amount in case the invoice contains it.
                     Some(_) => None,
                     // We are sending amount for zero amount invoice
                     None => Some(request.prepare_response.amount_sats),
                 };
-                let use_spark = match request.options {
-                    Some(SendPaymentOptions::Bolt11Invoice { use_spark }) => use_spark,
-                    _ => false,
+                let (prefer_spark, fee_sats) = match (request.options, spark_transfer_fee_sats) {
+                    // Use spark transfer fee if available and requested
+                    (Some(SendPaymentOptions::Bolt11Invoice { prefer_spark: true }), Some(fee)) => {
+                        (true, fee)
+                    }
+                    // Use lightning fee if spark is not preferred
+                    _ => (false, lightning_fee_sats),
                 };
-                let fee_sats = match (use_spark, spark_transfer_fee_sats, lightning_fee_sats) {
-                    (true, Some(fee), _) => fee,
-                    _ => lightning_fee_sats,
-                };
-                if use_spark && spark_transfer_fee_sats.is_none() {
-                    return Err(SdkError::InvalidInput(
-                        "Cannot use spark to pay invoice as it doesn't contain a spark address"
-                            .to_string(),
-                    ));
-                }
 
                 let payment_response = self
                     .spark_wallet
@@ -860,7 +854,7 @@ impl BreezSdk {
                         &invoice_details.invoice.bolt11,
                         amount_to_send,
                         Some(fee_sats),
-                        use_spark,
+                        prefer_spark,
                     )
                     .await?;
                 let payment = match payment_response {

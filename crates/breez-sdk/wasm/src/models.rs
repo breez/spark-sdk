@@ -579,7 +579,7 @@ pub enum SendPaymentOptions {
         confirmation_speed: OnchainConfirmationSpeed,
     },
     Bolt11Invoice {
-        use_spark: bool,
+        prefer_spark: bool,
     },
 }
 
