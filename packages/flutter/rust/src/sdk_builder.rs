@@ -4,7 +4,7 @@ pub use breez_sdk_spark::Storage;
 use breez_sdk_spark::{Config, Credentials, SdkError};
 use flutter_rust_bridge::frb;
 
-use crate::sdk::BreezSdk;
+use crate::{models::KeySetType, sdk::BreezSdk};
 
 pub struct SdkBuilder {
     inner: Arc<breez_sdk_spark::SdkBuilder>,
@@ -15,6 +15,15 @@ impl SdkBuilder {
     pub fn new(config: Config, mnemonic: String, storage: Arc<dyn Storage>) -> Self {
         Self {
             inner: Arc::new(breez_sdk_spark::SdkBuilder::new(config, mnemonic, storage)),
+        }
+    }
+
+    #[frb(sync)]
+    pub fn with_key_set(self, key_set_type: KeySetType, use_address_index: bool) -> Self {
+        let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
+            .with_key_set(key_set_type, use_address_index);
+        Self {
+            inner: Arc::new(builder),
         }
     }
 
