@@ -354,9 +354,7 @@ impl FromSql for PaymentDetails {
 
 impl ToSql for PaymentMethod {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        let json = serde_json::to_string(self)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        Ok(rusqlite::types::ToSqlOutput::from(json))
+        Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
     }
 }
 
@@ -365,8 +363,11 @@ impl FromSql for PaymentMethod {
         match value {
             ValueRef::Text(i) => {
                 let s = std::str::from_utf8(i).map_err(FromSqlError::other)?;
-                let payment_method: PaymentMethod =
-                    serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
+                // NOTE: to_lowercase is here, because this used to be serde_json serialized.
+                let payment_method: PaymentMethod = s
+                    .to_lowercase()
+                    .parse()
+                    .map_err(|()| FromSqlError::InvalidType)?;
                 Ok(payment_method)
             }
             _ => Err(FromSqlError::InvalidType),
