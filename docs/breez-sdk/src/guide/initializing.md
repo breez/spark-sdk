@@ -93,6 +93,7 @@ For advanced use cases where you need more control, you can configure the SDK us
 - Custom storage management (bring your own implementation)
 - Which chain service to use (custom or the SDK’s default)
 - Which REST client to use for LNURL requests (custom or the SDK’s default)
+- Which keyset to use for the signer (custom or the SDK’s default)
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
