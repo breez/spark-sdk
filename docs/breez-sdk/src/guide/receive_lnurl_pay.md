@@ -15,7 +15,7 @@ A Lightning address is a human-readable identifier formatted like an email addre
 To use Lightning addresses with the Breez SDK, you first need to supply a domain. There are two options:
 
 1. **Use a hosted LNURL server**: You can have your custom domain configured to an LNURL server run by Breez.
-2. **Self-hosted LNURL server**: You can run your own LNURL server in a self-hosted environment.
+2. **Self-hosted LNURL server**: You can run your own [LNURL server](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/lnurl) in a self-hosted environment.
 
 In case you choose to point your domain to an hosted LNURL server, you will need to add a CNAME record in your domain’s DNS settings:
 
