@@ -12,12 +12,18 @@ pub(crate) async fn init_sdk() -> Result<BreezSdk> {
     let mut config = default_config(Network::Mainnet);
     config.api_key = Some("<breez api key>".to_string());
 
+    let seed = Seed::Mnemonic {
+        mnemonic,
+        passphrase: None,
+    };
+
     // Connect to the SDK using the simplified connect method
     let sdk = connect(ConnectRequest {
         config,
-        mnemonic,
+        seed,
         storage_dir: "./.data".to_string(),
-    }).await?;
+    })
+    .await?;
 
     // ANCHOR_END: init-sdk
     Ok(sdk)
@@ -33,8 +39,13 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     // Create the default storage
     let storage = default_storage("./.data".to_string())?;
 
+    let seed = Seed::Mnemonic {
+        mnemonic,
+        passphrase: None,
+    };
+
     // Build the SDK using the config, mnemonic and storage
-    let builder = SdkBuilder::new(config, mnemonic, storage);
+    let builder = SdkBuilder::new(config, seed, storage);
 
     // You can also pass your custom implementations:
     // let builder = builder.with_chain_service(<your chain service implementation>)

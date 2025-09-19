@@ -25,10 +25,23 @@ pub enum KeySetType {
     Legacy,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Seed)]
+pub enum Seed {
+    /// A BIP-39 mnemonic phrase with an optional passphrase.
+    Mnemonic {
+        /// The mnemonic phrase. 12 or 24 words.
+        mnemonic: String,
+        /// An optional passphrase for the mnemonic.
+        passphrase: Option<String>,
+    },
+    /// Raw entropy bytes.
+    Entropy(Vec<u8>),
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConnectRequest)]
 pub struct ConnectRequest {
     pub config: Config,
-    pub mnemonic: String,
+    pub seed: Seed,
     pub storage_dir: String,
 }
 

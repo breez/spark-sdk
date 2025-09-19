@@ -21,11 +21,27 @@ use crate::{
     sdk::{BreezSdk, BreezSdkParams},
 };
 
+/// Represents the seed for wallet generation, either as a mnemonic phrase with an optional
+/// passphrase or as raw entropy bytes.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum Seed {
+    /// A BIP-39 mnemonic phrase with an optional passphrase.
+    Mnemonic {
+        /// The mnemonic phrase. 12 or 24 words.
+        mnemonic: String,
+        /// An optional passphrase for the mnemonic.
+        passphrase: Option<String>,
+    },
+    /// Raw entropy bytes.
+    Entropy(Vec<u8>),
+}
+
 /// Builder for creating `BreezSdk` instances with customizable components.
 #[derive(Clone)]
 pub struct SdkBuilder {
     config: Config,
-    mnemonic: String,
+    seed: Seed,
     storage: Arc<dyn Storage>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     lnurl_client: Option<Arc<dyn RestClient>>,
@@ -38,12 +54,12 @@ impl SdkBuilder {
     /// Creates a new `SdkBuilder` with the provided configuration.
     /// Arguments:
     /// - `config`: The configuration to be used.
-    /// - `mnemonic`: The mnemonic phrase for the wallet.
+    /// - `seed`: The seed for wallet generation.
     /// - `storage`: The storage backend to be used.
-    pub fn new(config: Config, mnemonic: String, storage: Arc<dyn Storage>) -> Self {
+    pub fn new(config: Config, seed: Seed, storage: Arc<dyn Storage>) -> Self {
         SdkBuilder {
             config,
-            mnemonic,
+            seed,
             storage,
             chain_service: None,
             lnurl_client: None,
@@ -111,11 +127,24 @@ impl SdkBuilder {
 
     /// Builds the `BreezSdk` instance with the configured components.
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
-        // Create the signer from mnemonic
-        let mnemonic =
-            bip39::Mnemonic::parse(&self.mnemonic).map_err(|e| SdkError::Generic(e.to_string()))?;
+        // Create the signer from seed
+        let seed = match self.seed {
+            Seed::Mnemonic {
+                mnemonic,
+                passphrase,
+            } => {
+                let mnemonic = bip39::Mnemonic::parse(&mnemonic)
+                    .map_err(|e| SdkError::Generic(e.to_string()))?;
+
+                mnemonic
+                    .to_seed(passphrase.as_deref().unwrap_or(""))
+                    .to_vec()
+            }
+            Seed::Entropy(entropy) => entropy,
+        };
+
         let signer = DefaultSigner::with_keyset_type(
-            &mnemonic.to_seed(""),
+            &seed,
             self.config.network.into(),
             self.key_set_type.into(),
             self.use_address_index,

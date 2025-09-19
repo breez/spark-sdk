@@ -37,17 +37,31 @@ pub async fn init_logging(logger: Logger, filter: Option<String>) -> WasmResult<
 #[wasm_bindgen(js_name = "connect")]
 pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
     let db_path = std::path::PathBuf::from_str(&request.storage_dir).map_err(WasmError::new)?;
-    let path_suffix: String = sha256::Hash::hash(request.mnemonic.as_bytes())
-        .to_string()
-        .chars()
-        .take(8)
-        .collect();
+    let path_suffix: String = match &request.seed {
+        Seed::Mnemonic {
+            mnemonic,
+            passphrase,
+        } => {
+            let str = format!("{mnemonic}:{passphrase:?}");
+            sha256::Hash::hash(str.as_bytes())
+                .to_string()
+                .chars()
+                .take(8)
+                .collect()
+        }
+        Seed::Entropy(vec) => sha256::Hash::hash(vec.as_slice())
+            .to_string()
+            .chars()
+            .take(8)
+            .collect(),
+    };
+
     let storage_dir = db_path
         .join(request.config.network.to_string().to_lowercase())
         .join(path_suffix);
 
     let storage = default_storage(storage_dir.to_string_lossy().as_ref()).await?;
-    let builder = SdkBuilder::new(request.config, request.mnemonic, storage)?;
+    let builder = SdkBuilder::new(request.config, request.seed, storage)?;
     let sdk = builder.build().await?;
     Ok(sdk)
 }

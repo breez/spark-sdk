@@ -22,6 +22,7 @@ pub use persist::{PaymentMetadata, Storage, StorageError, UpdateDepositPayload};
 pub use sdk::{BreezSdk, default_config, init_logging, parse_input};
 #[cfg(not(feature = "uniffi"))]
 pub use sdk_builder::SdkBuilder;
+pub use sdk_builder::Seed;
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use {

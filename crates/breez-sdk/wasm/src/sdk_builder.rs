@@ -1,13 +1,12 @@
 use std::{rc::Rc, sync::Arc};
 
-use wasm_bindgen::prelude::*;
-
 use crate::{
     error::WasmResult,
-    models::{Config, Credentials, KeySetType},
+    models::{Config, Credentials, KeySetType, Seed},
     persist::{Storage, WasmStorage},
     sdk::BreezSdk,
 };
+use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct SdkBuilder {
@@ -17,11 +16,11 @@ pub struct SdkBuilder {
 #[wasm_bindgen]
 impl SdkBuilder {
     #[wasm_bindgen(js_name = "new")]
-    pub fn new(config: Config, mnemonic: String, storage: Storage) -> WasmResult<Self> {
+    pub fn new(config: Config, seed: Seed, storage: Storage) -> WasmResult<Self> {
         Ok(Self {
             builder: breez_sdk_spark::SdkBuilder::new(
                 config.into(),
-                mnemonic,
+                seed.into(),
                 Arc::new(WasmStorage { storage }),
             ),
         })

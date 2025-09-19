@@ -31,10 +31,19 @@ pub struct _Config {
     pub prefer_spark_over_lightning: bool,
 }
 
+#[frb(mirror(Seed))]
+pub enum _Seed {
+    Mnemonic {
+        mnemonic: String,
+        passphrase: Option<String>,
+    },
+    Entropy(Vec<u8>),
+}
+
 #[frb(mirror(ConnectRequest))]
 pub struct _ConnectRequest {
     pub config: Config,
-    pub mnemonic: String,
+    pub seed: Seed,
     pub storage_dir: String,
 }
 

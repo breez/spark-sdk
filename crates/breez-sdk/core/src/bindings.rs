@@ -3,6 +3,7 @@ use std::sync::Arc;
 use breez_sdk_common::rest::RestClient;
 use tokio::sync::Mutex;
 
+use crate::sdk_builder::Seed;
 use crate::{BitcoinChainService, BreezSdk, Config, Credentials, KeySetType, SdkError, Storage};
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -17,11 +18,11 @@ impl SdkBuilder {
     /// Creates a new `SdkBuilder` with the provided configuration.
     /// Arguments:
     /// - `config`: The configuration to be used.
-    /// - `mnemonic`: The mnemonic phrase for the wallet.
+    /// - `seed`: The seed for wallet generation.
     /// - `storage`: The storage backend to be used.
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
-    pub fn new(config: Config, mnemonic: String, storage: Arc<dyn Storage>) -> Self {
-        let inner = crate::sdk_builder::SdkBuilder::new(config, mnemonic, storage);
+    pub fn new(config: Config, seed: Seed, storage: Arc<dyn Storage>) -> Self {
+        let inner = crate::sdk_builder::SdkBuilder::new(config, seed, storage);
         SdkBuilder {
             inner: Mutex::new(inner),
         }
