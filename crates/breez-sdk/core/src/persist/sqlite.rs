@@ -342,7 +342,7 @@ impl FromSql for PaymentDetails {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         match value {
             ValueRef::Text(i) => {
-                let s = std::str::from_utf8(i).map_err(FromSqlError::other)?;
+                let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
                 let payment_details: PaymentDetails =
                     serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
                 Ok(payment_details)
@@ -362,7 +362,7 @@ impl FromSql for PaymentMethod {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         match value {
             ValueRef::Text(i) => {
-                let s = std::str::from_utf8(i).map_err(FromSqlError::other)?;
+                let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
                 // NOTE: trim_matches/to_lowercase is here, because this used to be serde_json serialized.
                 let payment_method: PaymentMethod = s
                     .trim_matches('"')
@@ -396,7 +396,7 @@ impl FromSql for DepositClaimError {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         match value {
             ValueRef::Text(i) => {
-                let s = std::str::from_utf8(i).map_err(FromSqlError::other)?;
+                let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
                 let deposit_claim_error: DepositClaimError =
                     serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
                 Ok(deposit_claim_error)
@@ -410,7 +410,7 @@ impl FromSql for LnurlPayInfo {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         match value {
             ValueRef::Text(i) => {
-                let s = std::str::from_utf8(i).map_err(FromSqlError::other)?;
+                let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
                 let lnurl_pay_info: LnurlPayInfo =
                     serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
                 Ok(lnurl_pay_info)
