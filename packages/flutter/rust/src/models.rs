@@ -35,6 +35,7 @@ pub struct _Config {
 pub struct _ConnectRequest {
     pub config: Config,
     pub mnemonic: String,
+    pub passphrase: Option<String>,
     pub storage_dir: String,
 }
 

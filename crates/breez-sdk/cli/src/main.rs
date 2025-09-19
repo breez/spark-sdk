@@ -95,6 +95,7 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
     let sdk = connect(ConnectRequest {
         config,
         mnemonic: mnemonic.to_string(),
+        passphrase: None,
         storage_dir: data_dir.to_string_lossy().to_string(),
     })
     .await?;

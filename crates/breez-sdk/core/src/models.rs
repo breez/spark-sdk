@@ -20,6 +20,8 @@ pub struct ConnectRequest {
     pub config: Config,
     pub mnemonic: String,
     pub storage_dir: String,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub passphrase: Option<String>,
 }
 
 /// The type of payment

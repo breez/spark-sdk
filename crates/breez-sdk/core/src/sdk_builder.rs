@@ -26,6 +26,7 @@ use crate::{
 pub struct SdkBuilder {
     config: Config,
     mnemonic: String,
+    passphrase: Option<String>,
     storage: Arc<dyn Storage>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     lnurl_client: Option<Arc<dyn RestClient>>,
@@ -39,12 +40,19 @@ impl SdkBuilder {
     /// Arguments:
     /// - `config`: The configuration to be used.
     /// - `mnemonic`: The mnemonic phrase for the wallet.
+    /// - `passphrase`: An optional passphrase for the mnemonic.
     /// - `storage`: The storage backend to be used.
-    pub fn new(config: Config, mnemonic: String, storage: Arc<dyn Storage>) -> Self {
+    pub fn new(
+        config: Config,
+        mnemonic: String,
+        passphrase: Option<String>,
+        storage: Arc<dyn Storage>,
+    ) -> Self {
         SdkBuilder {
             config,
             mnemonic,
             storage,
+            passphrase,
             chain_service: None,
             lnurl_client: None,
             lnurl_server_client: None,
@@ -115,7 +123,7 @@ impl SdkBuilder {
         let mnemonic =
             bip39::Mnemonic::parse(&self.mnemonic).map_err(|e| SdkError::Generic(e.to_string()))?;
         let signer = DefaultSigner::with_keyset_type(
-            &mnemonic.to_seed(""),
+            &mnemonic.to_seed(self.passphrase.as_deref().unwrap_or("")),
             self.config.network.into(),
             self.key_set_type.into(),
             self.use_address_index,

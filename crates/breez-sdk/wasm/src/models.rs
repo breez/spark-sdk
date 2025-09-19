@@ -17,6 +17,7 @@ pub enum SdkEvent {
 pub struct ConnectRequest {
     pub config: Config,
     pub mnemonic: String,
+    pub passphrase: Option<String>,
     pub storage_dir: String,
 }
 

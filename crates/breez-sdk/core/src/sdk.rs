@@ -111,7 +111,12 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
         .join(path_suffix);
 
     let storage = default_storage(storage_dir.to_string_lossy().to_string())?;
-    let builder = crate::SdkBuilder::new(request.config, request.mnemonic, storage);
+    let builder = crate::SdkBuilder::new(
+        request.config,
+        request.mnemonic,
+        request.passphrase,
+        storage,
+    );
     builder.build().await
 }
 

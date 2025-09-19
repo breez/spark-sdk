@@ -47,7 +47,12 @@ pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
         .join(path_suffix);
 
     let storage = default_storage(storage_dir.to_string_lossy().as_ref()).await?;
-    let builder = SdkBuilder::new(request.config, request.mnemonic, storage)?;
+    let builder = SdkBuilder::new(
+        request.config,
+        request.mnemonic,
+        request.passphrase,
+        storage,
+    )?;
     let sdk = builder.build().await?;
     Ok(sdk)
 }
