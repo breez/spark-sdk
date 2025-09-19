@@ -363,8 +363,9 @@ impl FromSql for PaymentMethod {
         match value {
             ValueRef::Text(i) => {
                 let s = std::str::from_utf8(i).map_err(FromSqlError::other)?;
-                // NOTE: to_lowercase is here, because this used to be serde_json serialized.
+                // NOTE: trim_matches/to_lowercase is here, because this used to be serde_json serialized.
                 let payment_method: PaymentMethod = s
+                    .trim_matches('"')
                     .to_lowercase()
                     .parse()
                     .map_err(|()| FromSqlError::InvalidType)?;
