@@ -110,18 +110,18 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
         .join(request.config.network.to_string().to_lowercase())
         .join(path_suffix);
 
-    let storage = default_storage(storage_dir.to_string_lossy().to_string()).await?;
+    let storage = default_storage(storage_dir.to_string_lossy().to_string())?;
     let builder = crate::SdkBuilder::new(request.config, request.mnemonic, storage);
     builder.build().await
 }
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+#[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::needless_pass_by_value)]
-pub async fn default_storage(data_dir: String) -> Result<Arc<dyn Storage>, SdkError> {
+pub fn default_storage(data_dir: String) -> Result<Arc<dyn Storage>, SdkError> {
     let db_path = std::path::PathBuf::from_str(&data_dir)?;
 
-    let storage = crate::SqliteStorage::new(&db_path).await?;
+    let storage = crate::SqliteStorage::new(&db_path)?;
     Ok(Arc::new(storage))
 }
 

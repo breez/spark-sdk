@@ -26,7 +26,7 @@ func initSdkAdvanced() async throws -> BreezSdk {
     config.apiKey = "<breez api key>"
 
     // Create the default storage
-    let storage = try await defaultStorage(dataDir: "./.data")
+    let storage = try defaultStorage(dataDir: "./.data")
 
     // Build the SDK using the config, mnemonic and storage
     let builder = SdkBuilder(config: config, mnemonic: mnemonic, storage: storage)

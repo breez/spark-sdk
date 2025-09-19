@@ -33,7 +33,7 @@ Future<void> initSdkAdvanced() async {
       .copyWith(apiKey: "<breez api key>");
 
   // Create the default storage
-  final storage = await defaultStorage(dataDir: "./.data");
+  final storage = defaultStorage(dataDir: "./.data");
 
   final builder =
       SdkBuilder(config: config, mnemonic: mnemonic, storage: storage);

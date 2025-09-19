@@ -46,7 +46,7 @@ async def init_sdk_advanced():
 
     try:
         # Create the default storage
-        storage = await default_storage(data_dir="./.data")
+        storage = default_storage(data_dir="./.data")
 
         # Build the SDK using the config, mnemonic and storage
         builder = SdkBuilder(config=config, mnemonic=mnemonic, storage=storage)

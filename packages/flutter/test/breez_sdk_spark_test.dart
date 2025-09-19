@@ -27,7 +27,7 @@ void main() {
     const mnemonic =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     const apiKey = "<api key>";
-    final storage = await defaultStorage(dataDir: storageDir);    
+    final storage = defaultStorage(dataDir: storageDir);    
     final config = defaultConfig(
       network: Network.regtest,
     ).copyWith(apiKey: apiKey);
