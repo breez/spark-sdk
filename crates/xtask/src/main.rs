@@ -11,6 +11,7 @@ use xshell::{Shell, cmd};
 
 use crate::package::{TargetPackage, package_cmd};
 
+const OUT_OF_WORKSPACE_PACKAGES: &[&str] = &["crates/breez-sdk/lnurl/Cargo.toml"];
 #[derive(Parser, Debug)]
 #[command(name = "xtask")]
 #[command(about = "Workspace tasks")]
@@ -352,20 +353,64 @@ fn clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
         Ok(())
     };
 
+    let run_single_crate_clippy = |location: &str, target_type: &str, args: &[String]| {
+        let mut c = Command::new("cargo");
+        c.arg("clippy");
+        c.arg("--manifest-path").arg(location);
+        c.arg(target_type);
+        if fix {
+            c.arg("--fix");
+        }
+        c.arg("--");
+        c.arg("-D").arg("warnings");
+        c.args(args);
+        let status = c
+            .status()
+            .with_context(|| format!("failed to run cargo clippy {target_type}"))?;
+        if !status.success() {
+            bail!("clippy {target_type} failed");
+        }
+        Ok(())
+    };
+
     // Run clippy for all targets
     run_clippy("--all-targets", &rest)?;
     // Run clippy for tests
     run_clippy("--tests", &rest)?;
 
+    for package in OUT_OF_WORKSPACE_PACKAGES {
+        run_single_crate_clippy(package, "--all-targets", &rest)?;
+        run_single_crate_clippy(package, "--tests", &rest)?;
+    }
     Ok(())
 }
 
 fn fmt_cmd(check: bool) -> Result<()> {
-    let sh = Shell::new()?;
-    if check {
-        cmd!(sh, "cargo fmt --all --check").run()?;
-    } else {
-        cmd!(sh, "cargo fmt --all").run()?;
+    let fmt_cmd = |location: Option<&str>| {
+        let mut c = Command::new("cargo");
+        c.arg("fmt").arg("--all");
+        if check {
+            c.arg("--check");
+        }
+
+        if let Some(location) = location {
+            c.arg("--manifest-path").arg(location);
+        }
+
+        let status = c
+            .status()
+            .with_context(|| "failed to run cargo fmt".to_string())?;
+
+        if !status.success() {
+            bail!("fmt failed");
+        }
+
+        Ok(())
+    };
+
+    fmt_cmd(None)?;
+    for package in OUT_OF_WORKSPACE_PACKAGES {
+        fmt_cmd(Some(package))?;
     }
     Ok(())
 }

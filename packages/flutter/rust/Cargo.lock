@@ -529,6 +529,7 @@ dependencies = [
  "dotenvy",
  "figment",
  "hex",
+ "lnurl-models",
  "macros",
  "openssl",
  "qrcode-rs",
@@ -2290,6 +2291,13 @@ name = "litrs"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5e54036fe321fd421e10d732f155734c4e4afd610dd556d9a82833ab3ee0bed"
+
+[[package]]
+name = "lnurl-models"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "lock_api"
