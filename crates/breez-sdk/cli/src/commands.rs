@@ -408,10 +408,14 @@ fn read_payment_options(
                 println!("2. Lightning fee: {lightning_fee_sats} sats");
                 let line = rl.readline_with_initial("", ("1", ""))?.to_lowercase();
                 if line == "1" {
-                    return Ok(Some(SendPaymentOptions::Bolt11Invoice { use_spark: true }));
+                    return Ok(Some(SendPaymentOptions::Bolt11Invoice {
+                        prefer_spark: true,
+                    }));
                 }
             }
-            Ok(Some(SendPaymentOptions::Bolt11Invoice { use_spark: false }))
+            Ok(Some(SendPaymentOptions::Bolt11Invoice {
+                prefer_spark: false,
+            }))
         }
         SendPaymentMethod::SparkAddress { .. } => Ok(None),
     }

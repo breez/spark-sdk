@@ -841,7 +841,7 @@ impl BreezSdk {
                 };
                 let (prefer_spark, fee_sats) = match (request.options, spark_transfer_fee_sats) {
                     // Use spark transfer fee if available and requested
-                    (Some(SendPaymentOptions::Bolt11Invoice { use_spark: true }), Some(fee)) => {
+                    (Some(SendPaymentOptions::Bolt11Invoice { prefer_spark: true }), Some(fee)) => {
                         (true, fee)
                     }
                     // Use lightning fee if spark is not preferred
