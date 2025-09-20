@@ -19,3 +19,9 @@
 - [Using LNURL and Lightning addresses](guide/lnurl.md)
   - [Sending payments using LNURL-Pay/Lightning address](guide/lnurl_pay.md)
   - [Receiving payments using LNURL-Pay/Lightning address](guide/receive_lnurl_pay.md)
+
+---
+
+# User Experience
+
+- [UX Guidelines](guide/uxguide.md)
