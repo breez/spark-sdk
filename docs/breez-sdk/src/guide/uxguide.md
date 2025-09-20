@@ -3,9 +3,9 @@ These guidelines describe how to integrate the Breez SDK to create a consistent 
 > **Reference:** Many of these guidelines are implemented in **Misty Breez**. Use it as the primary UX reference during SDK implementation.
 
 ## Core UX Principles
-- **Simplicity over choice** — Users should not have to pick protocols or rails unless absolutely necessary.
-- **Transparency without jargon** — Show limits, fees, and conditions up front in plain language.
-- **Progressive disclosure** — Keep advanced details available but tucked away by default.
+- **Simplicity over choice**: users should not have to pick protocols or rails unless absolutely necessary.
+- **Transparency without jargon**: show limits, fees, and conditions up front in plain language.
+- **Progressive disclosure**: keep advanced details available but tucked away by default.
 
 ## Guidelines
 - **[Sending Payments]** 
