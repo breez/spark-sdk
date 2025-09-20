@@ -18,10 +18,16 @@ impl SdkBuilder {
     /// Arguments:
     /// - `config`: The configuration to be used.
     /// - `mnemonic`: The mnemonic phrase for the wallet.
+    /// - `passphrase`: An optional passphrase for the mnemonic.
     /// - `storage`: The storage backend to be used.
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
-    pub fn new(config: Config, mnemonic: String, storage: Arc<dyn Storage>) -> Self {
-        let inner = crate::sdk_builder::SdkBuilder::new(config, mnemonic, storage);
+    pub fn new(
+        config: Config,
+        mnemonic: String,
+        passphrase: Option<String>,
+        storage: Arc<dyn Storage>,
+    ) -> Self {
+        let inner = crate::sdk_builder::SdkBuilder::new(config, mnemonic, passphrase, storage);
         SdkBuilder {
             inner: Mutex::new(inner),
         }

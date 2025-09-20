@@ -12,9 +12,16 @@ pub struct SdkBuilder {
 
 impl SdkBuilder {
     #[frb(sync)]
-    pub fn new(config: Config, mnemonic: String, storage: Arc<dyn Storage>) -> Self {
+    pub fn new(
+        config: Config,
+        mnemonic: String,
+        passphrase: Option<String>,
+        storage: Arc<dyn Storage>,
+    ) -> Self {
         Self {
-            inner: Arc::new(breez_sdk_spark::SdkBuilder::new(config, mnemonic, storage)),
+            inner: Arc::new(breez_sdk_spark::SdkBuilder::new(
+                config, mnemonic, passphrase, storage,
+            )),
         }
     }
 

@@ -16,6 +16,7 @@ pub(crate) async fn init_sdk() -> Result<BreezSdk> {
     let sdk = connect(ConnectRequest {
         config,
         mnemonic,
+        passphrase: None,
         storage_dir: "./.data".to_string(),
     }).await?;
 
@@ -34,7 +35,7 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     let storage = default_storage("./.data".to_string())?;
 
     // Build the SDK using the config, mnemonic and storage
-    let builder = SdkBuilder::new(config, mnemonic, storage);
+    let builder = SdkBuilder::new(config, mnemonic, None, storage);
 
     // You can also pass your custom implementations:
     // let builder = builder.with_chain_service(<your chain service implementation>)

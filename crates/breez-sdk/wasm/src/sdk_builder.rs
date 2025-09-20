@@ -17,11 +17,17 @@ pub struct SdkBuilder {
 #[wasm_bindgen]
 impl SdkBuilder {
     #[wasm_bindgen(js_name = "new")]
-    pub fn new(config: Config, mnemonic: String, storage: Storage) -> WasmResult<Self> {
+    pub fn new(
+        config: Config,
+        mnemonic: String,
+        passphrase: Option<String>,
+        storage: Storage,
+    ) -> WasmResult<Self> {
         Ok(Self {
             builder: breez_sdk_spark::SdkBuilder::new(
                 config.into(),
                 mnemonic,
+                passphrase,
                 Arc::new(WasmStorage { storage }),
             ),
         })
