@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     error::WasmResult,
-    models::{Config, Credentials},
+    models::{Config, Credentials, KeySetType},
     persist::{Storage, WasmStorage},
     sdk::BreezSdk,
 };
@@ -36,6 +36,14 @@ impl SdkBuilder {
         self.builder = self
             .builder
             .with_rest_chain_service(url, credentials.map(|c| c.into()));
+        self
+    }
+
+    #[wasm_bindgen(js_name = "withKeySet")]
+    pub fn with_key_set(mut self, key_set_type: KeySetType, use_address_index: bool) -> Self {
+        self.builder = self
+            .builder
+            .with_key_set(key_set_type.into(), use_address_index);
         self
     }
 

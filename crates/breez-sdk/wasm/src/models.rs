@@ -16,6 +16,15 @@ pub enum SdkEvent {
     },
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::KeySetType)]
+pub enum KeySetType {
+    Default,
+    Taproot,
+    NativeSegwit,
+    WrappedSegwit,
+    Legacy,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConnectRequest)]
 pub struct ConnectRequest {
     pub config: Config,
