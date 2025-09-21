@@ -52,6 +52,7 @@ jobs:
       - name: Push book to main-docs-generated branch
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         run: |
+          sudo chmod -R ugo+rwX .git
           git config --global user.name "Generator"
           git config --global user.email "no-reply@breez.technology"
           git add -f docs/breez-sdk/book
@@ -61,6 +62,7 @@ jobs:
       - name: Push book to release-docs-generated branch
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/release' }}
         run: |
+          sudo chmod -R ugo+rwX .git
           git config --global user.name "Generator"
           git config --global user.email "no-reply@breez.technology"
           git add -f docs/breez-sdk/book
