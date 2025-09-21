@@ -8,12 +8,12 @@ These guidelines describe how to integrate the Breez SDK to create a consistent 
 - **Progressive disclosure**: keep advanced details available but tucked away by default.
 
 ## Guidelines
-- **[Sending Payments]** 
 - **[Receiving Payments]**
+- **[Sending Payments]** 
 - **[Displaying Payments]** 
-- **[Seed & Key Management]** 
-
-[Sending Payments]: uxguide_send.md
+- **[Seed & Key Management]**
+  
 [Receiving Payments]: uxguide_receive.md
+[Sending Payments]: uxguide_send.md
 [Displaying Payments]: uxguide_display.md
 [Seed & Key Management]: uxguide_seed.md
