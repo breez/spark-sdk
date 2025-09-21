@@ -25,7 +25,7 @@
 # UX Guidelines
 
 - [Overview](guide/uxguide.md)
-- [Sending Payments](guide/uxguide_send.md)
 - [Receiving Payments](guide/uxguide_receive.md)
+- [Sending Payments](guide/uxguide_send.md)
 - [Displaying Payments](guide/uxguide_display.md)
 - [Seed & Key Management](guide/uxguide_seed.md)
