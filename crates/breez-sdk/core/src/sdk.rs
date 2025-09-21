@@ -17,8 +17,8 @@ use breez_sdk_common::{
     rest::RestClient,
 };
 use spark_wallet::{
-    ExitSpeed, InvoiceDescription, Order, PagingFilter, PayLightningInvoiceResult, SparkAddress,
-    SparkWallet, WalletEvent, WalletTransfer,
+    ExitSpeed, InvoiceDescription, Order, PagingFilter, SparkAddress, SparkWallet, WalletEvent,
+    WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
 use tracing::{error, info, trace};
@@ -718,9 +718,8 @@ impl BreezSdk {
                 },
             )
             .await?;
-        self.event_emitter.emit(&SdkEvent::PaymentSucceeded {
-            payment: payment.clone(),
-        });
+
+        emit_optionaly_payment_complete(&self.event_emitter, payment.clone());
         Ok(LnurlPayResponse {
             payment,
             success_action,
@@ -865,12 +864,18 @@ impl BreezSdk {
                         use_spark,
                     )
                     .await?;
-                let payment = match payment_response {
-                    PayLightningInvoiceResult::LightningPayment(payment) => {
-                        self.poll_lightning_send_payment(&payment.id);
-                        Payment::from_lightning(payment, request.prepare_response.amount_sats)?
+                let payment = match payment_response.lightning_payment {
+                    Some(lightning_payment) => {
+                        let ssp_id = lightning_payment.id.clone();
+                        let payment = Payment::from_lightning(
+                            lightning_payment,
+                            request.prepare_response.amount_sats,
+                            payment_response.transfer.id.to_string(),
+                        )?;
+                        self.poll_lightning_send_payment(&payment, ssp_id);
+                        payment
                     }
-                    PayLightningInvoiceResult::Transfer(payment) => payment.try_into()?,
+                    None => payment_response.transfer.try_into()?,
                 };
                 Ok(SendPaymentResponse { payment })
             }
@@ -903,9 +908,7 @@ impl BreezSdk {
             // we trigger the sync here anyway to get the fresh payment.
             //self.storage.insert_payment(response.payment.clone()).await?;
             if !suppress_payment_event {
-                self.event_emitter.emit(&SdkEvent::PaymentSucceeded {
-                    payment: response.payment.clone(),
-                });
+                emit_optionaly_payment_complete(&self.event_emitter, response.payment.clone());
             }
             if let Err(e) = self.sync_trigger.send(SyncType::PaymentsOnly) {
                 error!("Failed to send sync trigger: {e:?}");
@@ -915,12 +918,15 @@ impl BreezSdk {
     }
 
     // Pools the lightning send payment untill it is in completed state.
-    fn poll_lightning_send_payment(&self, payment_id: &str) {
-        const MAX_POLL_ATTEMPTS: u32 = 10;
+    fn poll_lightning_send_payment(&self, payment: &Payment, ssp_id: String) {
+        const MAX_POLL_ATTEMPTS: u32 = 20;
+        let payment_id = payment.id.clone();
         info!("Polling lightning send payment {}", payment_id);
 
         let spark_wallet = self.spark_wallet.clone();
         let sync_trigger = self.sync_trigger.clone();
+        let event_emitter = self.event_emitter.clone();
+        let payment = payment.clone();
         let payment_id = payment_id.to_string();
         let mut shutdown = self.shutdown_receiver.clone();
 
@@ -935,14 +941,22 @@ impl BreezSdk {
                     info!("Shutdown signal received");
                     return;
                   },
-                    p = spark_wallet.fetch_lightning_send_payment(&payment_id) => {
-                      if let Ok(Some(p)) = p  && p.payment_preimage.is_some(){
-                          info!("Pollling payment preimage found");
-                          if let Err(e) = sync_trigger.send(SyncType::PaymentsOnly) {
-                              error!("Failed to send sync trigger: {e:?}");
-                          }
-                          return;
-                    }
+                    p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
+                      if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone()) {
+                        info!("Pollling payment status = {} {:?}", payment.status, p.status);
+                        match payment.status {
+                          s if s != PaymentStatus::Pending => {
+                              info!("Pollling payment completed status = {}", s);
+                              emit_optionaly_payment_complete(&event_emitter, payment.clone());
+                              if let Err(e) = sync_trigger.send(SyncType::PaymentsOnly) {
+                                error!("Failed to send sync trigger: {e:?}");
+                              }
+                              return;
+                            },
+                            _ => {}
+                        }
+                      }
+
                     let sleep_time = if i < 5 {
                         Duration::from_secs(1)
                     } else {
@@ -1216,6 +1230,14 @@ fn process_success_action(
     };
 
     Ok(Some(SuccessActionProcessed::Aes { result }))
+}
+
+fn emit_optionaly_payment_complete(event_emitter: &EventEmitter, payment: Payment) {
+    match payment.status {
+        PaymentStatus::Completed => event_emitter.emit(&SdkEvent::PaymentSucceeded { payment }),
+        PaymentStatus::Failed => event_emitter.emit(&SdkEvent::PaymentFailed { payment }),
+        PaymentStatus::Pending => (),
+    }
 }
 
 fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
