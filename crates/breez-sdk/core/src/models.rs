@@ -1,4 +1,5 @@
 use breez_sdk_common::{
+    fiat::{FiatCurrency, Rate},
     input::{self, BitcoinAddressDetails, Bolt11InvoiceDetails},
     lnurl::pay::{LnurlPayRequestDetails, SuccessAction, SuccessActionProcessed},
     network::BitcoinNetwork,
@@ -854,4 +855,20 @@ impl From<KeySetType> for spark_wallet::KeySetType {
             KeySetType::Legacy => spark_wallet::KeySetType::Legacy,
         }
     }
+}
+
+/// Response from listing fiat currencies
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ListFiatCurrenciesResponse {
+    /// The list of fiat currencies
+    pub currencies: Vec<FiatCurrency>,
+}
+
+/// Response from listing fiat rates
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ListFiatRatesResponse {
+    /// The list of fiat rates
+    pub rates: Vec<Rate>,
 }

@@ -27,7 +27,7 @@ void main() {
     const mnemonic =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     const apiKey = "<api key>";
-    final storage = defaultStorage(dataDir: storageDir);    
+    final storage = await defaultStorage(dataDir: storageDir);    
     final config = defaultConfig(
       network: Network.regtest,
     ).copyWith(apiKey: apiKey);
@@ -42,7 +42,7 @@ void main() {
         storageDir: storageDir,
       ),
     );*/
-    await sdk.syncWallet(request: SyncWalletRequest());
+    sdk.syncWallet(request: SyncWalletRequest());
     // Wait for 10 seconds
     await Future.delayed(const Duration(seconds: 10));
 

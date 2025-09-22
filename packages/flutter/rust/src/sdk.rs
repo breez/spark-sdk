@@ -10,7 +10,7 @@ use breez_sdk_spark::{
     PrepareSendPaymentResponse, ReceivePaymentRequest, ReceivePaymentResponse,
     RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest, SdkError,
     SdkEvent, SendPaymentRequest, SendPaymentResponse, Storage, SyncWalletRequest,
-    SyncWalletResponse,
+    SyncWalletResponse, ListFiatCurrenciesResponse, ListFiatRatesResponse,
 };
 use flutter_rust_bridge::frb;
 
@@ -166,5 +166,13 @@ impl BreezSdk {
 
     pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
         self.inner.delete_lightning_address().await
+    }
+
+    pub async fn list_fiat_currencies(&self) -> Result<ListFiatCurrenciesResponse, SdkError> {
+        self.inner.list_fiat_currencies().await
+    }
+
+    pub async fn list_fiat_rates(&self) -> Result<ListFiatRatesResponse, SdkError> {
+        self.inner.list_fiat_rates().await
     }
 }

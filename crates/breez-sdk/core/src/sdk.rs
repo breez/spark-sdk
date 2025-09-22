@@ -4,8 +4,8 @@ use bitcoin::{
     hashes::{Hash, sha256},
     hex::DisplayHex,
 };
-use breez_sdk_common::input::InputType;
 pub use breez_sdk_common::input::parse as parse_input;
+use breez_sdk_common::{fiat::FiatService, input::InputType};
 use breez_sdk_common::{
     lnurl::{
         error::LnurlError,
@@ -32,10 +32,11 @@ use x509_parser::parse_x509_certificate;
 use crate::{
     BitcoinChainService, CheckLightningAddressRequest, ClaimDepositRequest, ClaimDepositResponse,
     DepositInfo, Fee, GetPaymentRequest, GetPaymentResponse, LightningAddressInfo,
-    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest,
-    LnurlPayResponse, Logger, Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
-    RegisterLightningAddressRequest, SendPaymentOptions,
+    ListFiatCurrenciesResponse, ListFiatRatesResponse, ListUnclaimedDepositsRequest,
+    ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
+    Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
+    SendPaymentOptions,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     lnurl::LnurlServerClient,
@@ -71,6 +72,7 @@ pub struct BreezSdk {
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
     chain_service: Arc<dyn BitcoinChainService>,
+    fiat_service: Arc<dyn FiatService>,
     lnurl_client: Arc<dyn RestClient>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     event_emitter: Arc<EventEmitter>,
@@ -146,6 +148,7 @@ pub(crate) struct BreezSdkParams {
     pub config: Config,
     pub storage: Arc<dyn Storage>,
     pub chain_service: Arc<dyn BitcoinChainService>,
+    pub fiat_service: Arc<dyn FiatService>,
     pub lnurl_client: Arc<dyn RestClient>,
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub shutdown_sender: watch::Sender<()>,
@@ -165,6 +168,7 @@ impl BreezSdk {
             spark_wallet: params.spark_wallet,
             storage: params.storage,
             chain_service: params.chain_service,
+            fiat_service: params.fiat_service,
             lnurl_client: params.lnurl_client,
             lnurl_server_client: params.lnurl_server_client,
             event_emitter: Arc::new(EventEmitter::new()),
@@ -1173,6 +1177,19 @@ impl BreezSdk {
         client.unregister_lightning_address(&params).await?;
         cache.delete_lightning_address().await?;
         Ok(())
+    }
+
+    /// List fiat currencies for which there is a known exchange rate,
+    /// sorted by the canonical name of the currency.
+    pub async fn list_fiat_currencies(&self) -> Result<ListFiatCurrenciesResponse, SdkError> {
+        let currencies = self.fiat_service.fetch_fiat_currencies().await?;
+        Ok(ListFiatCurrenciesResponse { currencies })
+    }
+
+    /// List the latest rates of fiat currencies, sorted by name.
+    pub async fn list_fiat_rates(&self) -> Result<ListFiatRatesResponse, SdkError> {
+        let rates = self.fiat_service.fetch_fiat_rates().await?;
+        Ok(ListFiatRatesResponse { rates })
     }
 }
 

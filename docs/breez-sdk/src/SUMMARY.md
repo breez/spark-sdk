@@ -15,10 +15,11 @@
   - [Sending payments](guide/send_payment.md)
   - [Listing payments](guide/list_payments.md)
   - [Refunding payments](guide/refunding_payments.md)
-- [End-user fees](guide/end-user_fees.md)
 - [Using LNURL and Lightning addresses](guide/lnurl.md)
   - [Sending payments using LNURL-Pay/Lightning address](guide/lnurl_pay.md)
   - [Receiving payments using LNURL-Pay/Lightning address](guide/receive_lnurl_pay.md)
+- [Supporting fiat currencies](guide/fiat_currencies.md)
+- [End-user fees](guide/end-user_fees.md)
 
 ---
 

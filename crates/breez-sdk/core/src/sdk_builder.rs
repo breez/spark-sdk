@@ -4,7 +4,11 @@
 )]
 use std::sync::Arc;
 
-use breez_sdk_common::rest::{ReqwestRestClient as CommonRequestRestClient, RestClient};
+use breez_sdk_common::{
+    breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
+    fiat::FiatService,
+    rest::{ReqwestRestClient as CommonRequestRestClient, RestClient},
+};
 use spark_wallet::{DefaultSigner, SparkWallet};
 use tokio::sync::watch;
 
@@ -28,6 +32,7 @@ pub struct SdkBuilder {
     mnemonic: String,
     storage: Arc<dyn Storage>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
+    fiat_service: Option<Arc<dyn FiatService>>,
     lnurl_client: Option<Arc<dyn RestClient>>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     key_set_type: KeySetType,
@@ -46,6 +51,7 @@ impl SdkBuilder {
             mnemonic,
             storage,
             chain_service: None,
+            fiat_service: None,
             lnurl_client: None,
             lnurl_server_client: None,
             key_set_type: KeySetType::Default,
@@ -90,6 +96,15 @@ impl SdkBuilder {
             Box::new(CommonRequestRestClient::new().unwrap()),
             credentials.map(|c| BasicAuth::new(c.username, c.password)),
         )));
+        self
+    }
+
+    /// Sets the fiat service to be used by the SDK.
+    /// Arguments:
+    /// - `fiat_service`: The fiat service to be used.
+    #[must_use]
+    pub fn with_fiat_service(mut self, fiat_service: Arc<dyn FiatService>) -> Self {
+        self.fiat_service = Some(fiat_service);
         self
     }
 
@@ -152,6 +167,15 @@ impl SdkBuilder {
                 )),
             }
         };
+
+        let fiat_service: Arc<dyn FiatService> = match self.fiat_service {
+            Some(service) => service,
+            None => Arc::new(
+                BreezServer::new(PRODUCTION_BREEZSERVER_URL, None)
+                    .map_err(|e| SdkError::Generic(e.to_string()))?,
+            ),
+        };
+
         let lnurl_client: Arc<dyn RestClient> = match self.lnurl_client {
             Some(client) => client,
             None => Arc::new(
@@ -185,6 +209,7 @@ impl SdkBuilder {
             config: self.config,
             storage: self.storage,
             chain_service,
+            fiat_service,
             lnurl_client,
             lnurl_server_client,
             shutdown_sender,
