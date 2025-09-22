@@ -446,3 +446,26 @@ For Spark addresses no send payment options are needed.
 ```
 </section>
 </custom-tabs>
+
+## Event Flows
+Once a send payment is initiated, you can follow and react to the different payment events using the guide below for each payment method. See [Listening to events](/guide/events.html) for how to subscribe to events.
+
+| Event | Description | UX Suggestion |
+| --- | --- | --- |
+| **Synced** | The SDK has synced payments in the background.  | Update the payments list and balance. See [listing payments](/guide/list_payments.md) and [fetching the balance](/guide/get_info.md). |
+
+### Lightning
+| Event | Description | UX Suggestion |
+| --- | --- | --- |
+| **PaymentSucceeded** | The Lightning invoice has been paid either over Lightning or via a Spark transfer | Update the balance and show payment as complete. |
+| **PaymentFailed** | The attempt to pay the Lightning invoice failed. |  |
+
+### Bitcoin
+| Event | Description | UX Suggestion |
+| --- | --- | --- |
+| **PaymentSucceeded** | The payment amount was successfully withdrawn onchain. | Update the balance and show payment as complete. |
+
+### Spark
+| Event | Description | UX Suggestion |
+| --- | --- | --- |
+| **PaymentSucceeded** | The Spark transfer is complete. | Update the balance and show payment as complete. |
