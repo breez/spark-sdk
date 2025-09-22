@@ -92,11 +92,12 @@ impl WalletTransfer {
     }
 }
 
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize)]
-pub enum PayLightningInvoiceResult {
-    LightningPayment(LightningSendPayment),
-    Transfer(WalletTransfer),
+pub struct PayLightningInvoiceResult {
+    // The transfer associated with this lightinng payment.
+    pub transfer: WalletTransfer,
+    // The optional ssp lightning payment if the payment was created with the ssp.
+    pub lightning_payment: Option<LightningSendPayment>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]

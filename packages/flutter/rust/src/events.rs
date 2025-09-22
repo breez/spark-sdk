@@ -15,6 +15,9 @@ pub enum _SdkEvent {
     PaymentSucceeded {
         payment: Payment,
     },
+    PaymentFailed {
+        payment: Payment,
+    },
 }
 
 pub struct BindingEventListener {

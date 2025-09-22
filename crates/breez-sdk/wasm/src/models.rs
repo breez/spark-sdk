@@ -11,6 +11,18 @@ pub enum SdkEvent {
     PaymentSucceeded {
         payment: Payment,
     },
+    PaymentFailed {
+        payment: Payment,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::KeySetType)]
+pub enum KeySetType {
+    Default,
+    Taproot,
+    NativeSegwit,
+    WrappedSegwit,
+    Legacy,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConnectRequest)]

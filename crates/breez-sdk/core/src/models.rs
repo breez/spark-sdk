@@ -315,12 +315,20 @@ impl Payment {
     pub fn from_lightning(
         payment: LightningSendPayment,
         amount_sat: u64,
+        transfer_id: String,
     ) -> Result<Self, SdkError> {
-        let status = match payment.status {
+        let mut status = match payment.status {
             LightningSendStatus::LightningPaymentSucceeded => PaymentStatus::Completed,
-            LightningSendStatus::LightningPaymentFailed => PaymentStatus::Failed,
+            LightningSendStatus::LightningPaymentFailed
+            | LightningSendStatus::TransferFailed
+            | LightningSendStatus::PreimageProvidingFailed
+            | LightningSendStatus::UserSwapReturnFailed
+            | LightningSendStatus::UserSwapReturned => PaymentStatus::Failed,
             _ => PaymentStatus::Pending,
         };
+        if payment.payment_preimage.is_some() {
+            status = PaymentStatus::Completed;
+        }
 
         let invoice_details = input::parse_invoice(&payment.encoded_invoice).ok_or(
             SdkError::Generic("Invalid invoice in LightnintSendPayment".to_string()),
@@ -335,7 +343,7 @@ impl Payment {
         };
 
         Ok(Payment {
-            id: payment.id,
+            id: transfer_id,
             payment_type: PaymentType::Send,
             status,
             amount: amount_sat,

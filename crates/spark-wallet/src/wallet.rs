@@ -233,10 +233,12 @@ impl SparkWallet {
 
         // In case the invoice is for a spark address, we can just transfer the amount to the receiver.
         if let Some(receiver_spark_address) = receiver_spark_address {
-            return Ok(PayLightningInvoiceResult::Transfer(
-                self.transfer(total_amount_sat, &receiver_spark_address)
+            return Ok(PayLightningInvoiceResult {
+                transfer: self
+                    .transfer(total_amount_sat, &receiver_spark_address)
                     .await?,
-            ));
+                lightning_payment: None,
+            });
         }
 
         let target_amounts = TargetAmounts::new(total_amount_sat, None);
@@ -257,9 +259,14 @@ impl SparkWallet {
         .await?;
 
         // finalize the lightning swap with the ssp - send the actual lightning payment
-        Ok(PayLightningInvoiceResult::LightningPayment(
-            lightning_payment,
-        ))
+        Ok(PayLightningInvoiceResult {
+            transfer: WalletTransfer::from_transfer(
+                lightning_payment.transfer,
+                None,
+                self.identity_public_key,
+            ),
+            lightning_payment: Some(lightning_payment.lightning_send_payment),
+        })
     }
 
     /// Creates a Lightning invoice for the specified amount and description.

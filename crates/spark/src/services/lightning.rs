@@ -207,6 +207,11 @@ struct SwapNodesForPreimageRequest<'a> {
     is_inbound_payment: bool,
 }
 
+pub struct PayLightningResult {
+    pub transfer: Transfer,
+    pub lightning_send_payment: LightningSendPayment,
+}
+
 pub struct LightningService {
     operator_pool: Arc<OperatorPool>,
     ssp_client: Arc<ServiceProvider>,
@@ -333,15 +338,19 @@ impl LightningService {
         invoice: &str,
         amount_to_send: Option<u64>,
         leaves: &[TreeNode],
-    ) -> Result<LightningSendPayment, ServiceError> {
+    ) -> Result<PayLightningResult, ServiceError> {
         let swap = self
             .start_lightning_swap(invoice, amount_to_send, leaves)
             .await?;
-        let _ = self
+        let transfer = self
             .transfer_service
             .deliver_transfer_package(&swap.transfer, &swap.leaves, Default::default())
             .await?;
-        self.finalize_lightning_swap(&swap).await
+        let lightning_send_payment = self.finalize_lightning_swap(&swap).await?;
+        Ok(PayLightningResult {
+            lightning_send_payment,
+            transfer,
+        })
     }
 
     async fn start_lightning_swap(
