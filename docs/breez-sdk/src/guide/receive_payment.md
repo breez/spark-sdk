@@ -223,19 +223,23 @@ For payments between Spark users, you can use the static Spark address to receiv
 ## Event Flows
 Once a receive payment is initiated, you can follow and react to the different payment events using the guide below for each payment method. See [Listening to events](/guide/events.md) for how to subscribe to events.
 
+| Event | Description | UX Suggestion |
+| --- | --- | --- |
+| **Synced** | The SDK has synced payments in the background.  | Update the payments list and balance. See [listing payments](/guide/list_payments.md) and [fetching the balance](/guide/get_info.md). |
+
 ### Lightning
 | Event | Description | UX Suggestion |
 | --- | --- | --- |
-| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete. | Show payment as complete. |
+| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete. | Update the balance and show payment as complete. |
 
 ### Bitcoin
 | Event | Description | UX Suggestion |
 | --- | --- | --- |
 | **ClaimDepositsFailed** | The SDK attempted to claim static address deposits but they failed from one of several reasons. Either the claim fee exceeded the maximum allowed limit or there was an issue finding the available UTXO. | Allow the user to refund these failed deposits. See [Refunding payments](/guide/refunding_payments.md). |
 | **ClaimDepositsSucceeded** | The SDK successfully claimed static address deposits. |  |
-| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete. | Show payment as complete. |
+| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete. | Update the balance and show payment as complete. |
 
 ### Spark
 | Event | Description | UX Suggestion |
 | --- | --- | --- |
-| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete. | Show payment as complete. |
+| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete. | Update the balance and show payment as complete. |
