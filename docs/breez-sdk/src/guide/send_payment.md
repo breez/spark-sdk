@@ -239,7 +239,7 @@ Once the payment has been prepared, pass the prepare response as an argument to 
 
 ### Lightning
 
-In the send payment options for BOLT11 invoices, you can set whether to use Spark to transfer the payment. This should only be enabled if the prepare response contains a Spark transfer fee. By default, Spark usage is disabled.
+In the send payment options for BOLT11 invoices, you can set whether to prefer to use Spark to transfer the payment if the invoice contains a Spark address. By default, using Spark transfers are disabled.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
