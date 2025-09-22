@@ -10,3 +10,4 @@
 4. **Contacts:** Allow users to **save Lightning addresses** in a manageable **Contacts** list to improve the send experience (not yet implemented in Misty Breez, but recommended).
 5. Provide **Use all funds** when paying to a Lightning or Bitcoin address.
 6. **Validate and display amount limits and fees** before confirmation.
+7. Interact with the SDK events according to these [UX recommendations](/guide/send_payment.md#lightning-2). 

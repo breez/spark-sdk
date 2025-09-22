@@ -15,3 +15,4 @@
    (Matches patterns of popular Lightning wallets and maximizes compatibility.)
 6. **If BOLT12 can be supported (currently only on the Liquid implementation)**, use the **same Lightning address** and **enhance it with BIP-353** so the address can retrieve both **LNURL-Pay** (BOLT11 under the hood) **and a BOLT12 offer**.
 7. **If there are limits or fees, display them.** Make constraints visible before users attempt payment.
+8. Interact with the SDK events according to these [UX recommendations](/guide/receive_payment.md#lightning-1).
