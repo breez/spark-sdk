@@ -49,8 +49,8 @@ use crate::{
         SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
     persist::{
-        CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, PaymentMetadata,
-        StaticDepositAddress, Storage, UpdateDepositPayload,
+        CachedAccountInfo, ObjectCacheRepository, PaymentMetadata, StaticDepositAddress, Storage,
+        UpdateDepositPayload,
     },
     utils::{
         deposit_chain_syncer::DepositChainSyncer,
@@ -59,7 +59,8 @@ use crate::{
 };
 
 const SPARKSCAN_API_URL: &str = "https://api.sparkscan.io";
-const PAYMENT_SYNC_BATCH_SIZE: u64 = 50;
+const PAYMENT_SYNC_BATCH_SIZE: u64 = 25;
+const PAYMENT_SYNC_TAIL_MAX_PAGES: u64 = 5;
 
 #[derive(Clone, Debug)]
 enum SyncType {
@@ -254,18 +255,21 @@ impl BreezSdk {
                             }
                         }
                     }
-                    () = async {
-                      let sync_type_res = sync_trigger_receiver.recv().await;
-                      if let Ok(sync_type) = sync_type_res   {
-                          info!("Sync trigger changed: {:?}", &sync_type);
+                    sync_type_res = sync_trigger_receiver.recv() => {
+                        if let Ok(sync_type) = sync_type_res   {
+                            info!("Sync trigger changed: {:?}", &sync_type);
 
-                          if let Err(e) = sdk.sync_wallet_internal(sync_type.clone()).await {
-                              error!("Failed to sync wallet: {e:?}");
-                          } else if matches!(sync_type, SyncType::Full) {
-                            last_sync_time = SystemTime::now();
-                          }
-                      }
-                  } => {}
+                            if let Err(e) = sdk.sync_wallet_internal(sync_type.clone()).await {
+                                error!("Failed to sync wallet: {e:?}");
+                            } else if matches!(sync_type, SyncType::Full) {
+                                last_sync_time = SystemTime::now();
+                            }
+
+                            if let Err(e) = sdk.sync_payments_tail_to_storage().await {
+                                error!("Failed to sync payments tail to storage: {e:?}");
+                            }
+                        }
+                    }
                     // Ensure we sync at least the configured interval
                     () = tokio::time::sleep(Duration::from_secs(10)) => {
                         let now = SystemTime::now();
@@ -333,7 +337,8 @@ impl BreezSdk {
 
         self.sync_balances_to_storage(&object_repository).await?;
         self.sync_pending_payments().await?;
-        self.sync_payments_to_storage(&object_repository).await?;
+        self.sync_payments_to_storage(&object_repository, true, None)
+            .await?;
 
         Ok(())
     }
@@ -359,16 +364,51 @@ impl BreezSdk {
         Ok(())
     }
 
+    async fn sync_payments_tail_to_storage(&self) -> Result<(), SdkError> {
+        let object_repository = ObjectCacheRepository::new(self.storage.clone());
+        self.sync_payments_to_storage(&object_repository, false, Some(PAYMENT_SYNC_TAIL_MAX_PAGES))
+            .await
+    }
+
+    /// Synchronizes payments from the Spark network to persistent storage using the Sparkscan API.
+    ///
+    /// When syncing from head, it will start from the `next_head_offset` and page until it finds the
+    /// `last_synced_payment_id`. If `max_pages` is reached or we get an error response from the Sparkscan
+    /// API, it will update the `next_head_offset` for the next sync. This allows us to gradually sync the
+    /// head up to the `last_synced_payment_id` in multiple sync cycles.
+    ///
+    /// When syncing from tail, it will start from the count of completed payments in storage and page for
+    /// a maximum of `PAYMENT_SYNC_TAIL_MAX_PAGES` for one sync cycle. Once it reaches the end page,
+    /// it will update `tail_synced` in the sync info and the tail will no longer be synced in future cycles.
+    #[allow(clippy::too_many_lines)]
     async fn sync_payments_to_storage(
         &self,
         object_repository: &ObjectCacheRepository,
+        from_head: bool,
+        max_pages: Option<u64>,
     ) -> Result<(), SdkError> {
-        // Get the last payment id we processed from storage
+        info!("Syncing payments to storage, from_head = {from_head}, max_pages = {max_pages:?}");
         let cached_sync_info = object_repository
             .fetch_sync_info()
             .await?
             .unwrap_or_default();
+        if cached_sync_info.tail_synced && !from_head {
+            info!("Payments tail already synced, skipping");
+            return Ok(());
+        }
         let last_synced_id = cached_sync_info.last_synced_payment_id;
+        let mut max_pages = max_pages.unwrap_or(u64::MAX);
+        let mut found_last_synced = false;
+        let mut more_to_sync = true;
+
+        if last_synced_id.is_none() && from_head {
+            // There is no cached last synced payment id, limit the number of pages when syncing
+            // from head. Then let the rest of the payments be synced by the tail sync.
+            // Set `found_last_synced` to true to store the first payment as the last synced payment id.
+            info!("No last synced payment id found syncing from head, setting max_pages to 1");
+            max_pages = 1;
+            found_last_synced = true;
+        }
 
         // TODO: use new spark address format once sparkscan supports it
         let legacy_spark_address = self
@@ -376,15 +416,22 @@ impl BreezSdk {
             .get_spark_address()?
             .to_string_with_hrp_legacy();
 
-        let mut payments_to_sync = Vec::new();
+        let mut next_offset = if from_head {
+            // Sync from the next head offset in case we didn't finish syncing the head last time
+            cached_sync_info.next_head_offset
+        } else {
+            // Count the completed payments and start the sync from there
+            self.storage
+                .list_payments(None, None, Some(PaymentStatus::Completed))
+                .await?
+                .len() as u64
+        };
 
-        // We'll keep querying in batches until we have all payments or we find the last synced payment
-        let mut next_offset = 0_u64;
-        let mut has_more = true;
-        let mut found_last_synced = false;
-        info!("Syncing payments to storage, offset = {next_offset}");
-        while has_more && !found_last_synced {
-            // Get batch of address transactions starting from current offset
+        let mut payments_to_sync = Vec::new();
+        'page_loop: for page in 1..=max_pages {
+            info!(
+                "Fetching address transactions, offset = {next_offset}, page = {page}/{max_pages}"
+            );
             let response = sparkscan::Client::new(&self.config.sparkscan_api_url)
                 .get_address_transactions_v1_address_address_transactions_get()
                 .network(sparkscan::types::Network::from(self.config.network))
@@ -392,8 +439,14 @@ impl BreezSdk {
                 .offset(next_offset)
                 .limit(PAYMENT_SYNC_BATCH_SIZE)
                 .send()
-                .await?;
-            let address_transactions = &response.data;
+                .await;
+            let address_transactions = match &response {
+                Ok(response) => &response.data,
+                Err(e) => {
+                    error!("Failed to fetch address transactions: {e}");
+                    break 'page_loop;
+                }
+            };
 
             let ssp_transfer_types = [
                 sparkscan::types::AddressTransactionType::BitcoinDeposit,
@@ -412,7 +465,7 @@ impl BreezSdk {
                 .await?;
 
             info!(
-                "Syncing payments to storage, offset = {next_offset}, transactions = {}",
+                "Processing address transactions, offset = {next_offset}, transactions = {}",
                 address_transactions.len()
             );
             // Process transactions in this batch
@@ -425,36 +478,51 @@ impl BreezSdk {
                 )?;
 
                 for payment in payments {
-                    if payment.id == last_synced_id {
+                    if last_synced_id.as_ref().is_some_and(|id| payment.id == *id) {
                         info!(
-                            "Last synced payment id found ({last_synced_id}), stopping sync and proceeding to insert {} payments",
+                            "Last synced payment id found ({last_synced_id:?}), stopping sync and proceeding to insert {} payments",
                             payments_to_sync.len()
                         );
                         found_last_synced = true;
-                        break;
+                        break 'page_loop;
                     }
                     payments_to_sync.push(payment);
-                }
-
-                // If we found the last synced payment, stop processing this batch
-                if found_last_synced {
-                    break;
                 }
             }
 
             // Check if we have more transfers to fetch
             next_offset = next_offset.saturating_add(u64::try_from(address_transactions.len())?);
-            has_more = address_transactions.len() as u64 == PAYMENT_SYNC_BATCH_SIZE;
+            if (address_transactions.len() as u64) < PAYMENT_SYNC_BATCH_SIZE {
+                more_to_sync = false;
+                break 'page_loop;
+            }
         }
 
-        // Insert payment into storage from oldest to newest
+        let (next_head_offset, tail_synced) = match (from_head, found_last_synced) {
+            // If syncing from head and found the last synced payment, reset next head offset
+            (true, true) => (Some(0), None),
+            // If syncing from head and did not find the last synced payment, set the next head offset
+            (true, false) => (Some(next_offset), None),
+            // If syncing from tail and there is no more to sync, mark tail as synced
+            _ => (None, Some(!more_to_sync)),
+        };
+        // Insert what synced payments we have into storage from oldest to newest
         for payment in payments_to_sync.iter().rev() {
             self.storage.insert_payment(payment.clone()).await?;
             info!("Inserted payment: {payment:?}");
+            let last_synced_payment_id = if from_head && found_last_synced {
+                Some(payment.id.clone())
+            } else {
+                None
+            };
             object_repository
-                .save_sync_info(&CachedSyncInfo {
-                    last_synced_payment_id: payment.id.clone(),
-                })
+                .merge_sync_info(last_synced_payment_id, next_head_offset, tail_synced)
+                .await?;
+        }
+        if !from_head && payments_to_sync.is_empty() {
+            // If syncing from tail and no new payments were found, set tail synced
+            object_repository
+                .merge_sync_info(None, None, tail_synced)
                 .await?;
         }
 
