@@ -1240,7 +1240,7 @@ fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
             ))
         })?;
     let (_rem, cert) = parse_x509_certificate(&api_key_decoded).map_err(|err| {
-        SdkError::Generic(format!("Invaid certificate for Breez API key: {err:?}"))
+        SdkError::Generic(format!("Invalid certificate for Breez API key: {err:?}"))
     })?;
 
     let issuer = cert
