@@ -206,11 +206,22 @@ impl ObjectCacheRepository {
         }
     }
 
-    pub(crate) async fn save_sync_info(&self, value: &CachedSyncInfo) -> Result<(), StorageError> {
+    pub(crate) async fn merge_sync_info(
+        &self,
+        last_synced_payment_id: Option<String>,
+        next_head_offset: Option<u64>,
+        tail_synced: Option<bool>,
+    ) -> Result<(), StorageError> {
+        let cached_sync_info = self.fetch_sync_info().await?.unwrap_or_default();
         self.storage
             .set_cached_item(
                 SPARKSCAN_SYNC_INFO_KEY.to_string(),
-                serde_json::to_string(value)?,
+                serde_json::to_string(&CachedSyncInfo {
+                    last_synced_payment_id: last_synced_payment_id
+                        .or(cached_sync_info.last_synced_payment_id),
+                    next_head_offset: next_head_offset.unwrap_or(cached_sync_info.next_head_offset),
+                    tail_synced: tail_synced.unwrap_or(cached_sync_info.tail_synced),
+                })?,
             )
             .await?;
         Ok(())
@@ -317,7 +328,9 @@ pub(crate) struct CachedAccountInfo {
 
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedSyncInfo {
-    pub(crate) last_synced_payment_id: String,
+    pub(crate) last_synced_payment_id: Option<String>,
+    pub(crate) next_head_offset: u64,
+    pub(crate) tail_synced: bool,
 }
 
 #[derive(Serialize, Deserialize, Default)]
