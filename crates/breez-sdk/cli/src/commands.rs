@@ -1,10 +1,10 @@
 use breez_sdk_spark::{
     BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee, GetInfoRequest,
-    GetPaymentRequest, InputType, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, OnchainConfirmationSpeed, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
-    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SyncWalletRequest, parse,
+    GetPaymentRequest, InputType, LightningAddressDetails, ListPaymentsRequest,
+    ListUnclaimedDepositsRequest, LnurlPayRequest, OnchainConfirmationSpeed,
+    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
+    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SyncWalletRequest, parse,
 };
 use clap::Parser;
 use rustyline::{
@@ -309,7 +309,8 @@ pub(crate) async fn execute_command(
         } => {
             let input = parse(&lnurl).await?;
             let res = match input {
-                InputType::LnurlPay(pay_request) => {
+                InputType::LightningAddress(LightningAddressDetails { pay_request, .. })
+                | InputType::LnurlPay(pay_request) => {
                     let min_sendable = pay_request.min_sendable.div_ceil(1000);
                     let max_sendable = pay_request.max_sendable / 1000;
                     let prompt =
