@@ -668,3 +668,57 @@ pub struct LightningAddressInfo {
     pub lnurl: String,
     pub username: String,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ListFiatCurrenciesResponse)]
+pub struct ListFiatCurrenciesResponse {
+    pub currencies: Vec<FiatCurrency>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ListFiatRatesResponse)]
+pub struct ListFiatRatesResponse {
+    pub rates: Vec<Rate>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_common::fiat::Rate)]
+pub struct Rate {
+    pub coin: String,
+    pub value: f64,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_common::fiat::FiatCurrency)]
+pub struct FiatCurrency {
+    pub id: String,
+    pub info: CurrencyInfo,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_common::fiat::CurrencyInfo)]
+pub struct CurrencyInfo {
+    pub name: String,
+    pub fraction_size: u32,
+    pub spacing: Option<u32>,
+    pub symbol: Option<Symbol>,
+    pub uniq_symbol: Option<Symbol>,
+    pub localized_name: Vec<LocalizedName>,
+    pub locale_overrides: Vec<LocaleOverrides>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_common::fiat::LocaleOverrides)]
+pub struct LocaleOverrides {
+    pub locale: String,
+    pub spacing: Option<u32>,
+    pub symbol: Symbol,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_common::fiat::LocalizedName)]
+pub struct LocalizedName {
+    pub locale: String,
+    pub name: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_common::fiat::Symbol)]
+pub struct Symbol {
+    pub grapheme: Option<String>,
+    pub template: Option<String>,
+    pub rtl: Option<bool>,
+    pub position: Option<u32>,
+}

@@ -229,4 +229,14 @@ impl BreezSdk {
     pub async fn delete_lightning_address(&self) -> WasmResult<()> {
         Ok(self.sdk.delete_lightning_address().await?)
     }
+
+    #[wasm_bindgen(js_name = "listFiatCurrencies")]
+    pub async fn list_fiat_currencies(&self) -> WasmResult<ListFiatCurrenciesResponse> {
+        Ok(self.sdk.list_fiat_currencies().await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "listFiatRates")]
+    pub async fn list_fiat_rates(&self) -> WasmResult<ListFiatRatesResponse> {
+        Ok(self.sdk.list_fiat_rates().await?.into())
+    }
 }

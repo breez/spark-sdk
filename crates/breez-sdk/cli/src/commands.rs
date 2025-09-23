@@ -128,6 +128,10 @@ pub enum Command {
         description: String,
     },
     DeleteLightningAddress,
+    /// List fiat currencies
+    ListFiatCurrencies,
+    /// List available fiat rates
+    ListFiatRates,
 }
 
 #[derive(Helper, Completer, Hinter, Validator)]
@@ -371,6 +375,16 @@ pub(crate) async fn execute_command(
         }
         Command::DeleteLightningAddress => {
             sdk.delete_lightning_address().await?;
+            Ok(true)
+        }
+        Command::ListFiatCurrencies => {
+            let res = sdk.list_fiat_currencies().await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::ListFiatRates => {
+            let res = sdk.list_fiat_rates().await?;
+            print_value(&res)?;
             Ok(true)
         }
     }

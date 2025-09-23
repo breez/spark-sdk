@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use breez_sdk_common::rest::RestClient;
+use breez_sdk_common::{fiat::FiatService, rest::RestClient};
 use tokio::sync::Mutex;
 
 use crate::{BitcoinChainService, BreezSdk, Config, Credentials, KeySetType, SdkError, Storage};
@@ -53,6 +53,14 @@ impl SdkBuilder {
     pub async fn with_rest_chain_service(&self, url: String, credentials: Option<Credentials>) {
         let mut builder = self.inner.lock().await;
         *builder = builder.clone().with_rest_chain_service(url, credentials);
+    }
+
+    /// Sets the fiat service to be used by the SDK.
+    /// Arguments:
+    /// - `fiat_service`: The fiat service to be used.
+    pub async fn with_fiat_service(&self, fiat_service: Arc<dyn FiatService>) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_fiat_service(fiat_service);
     }
 
     pub async fn with_lnurl_client(&self, lnurl_client: Arc<dyn RestClient>) {

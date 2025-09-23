@@ -1,4 +1,5 @@
 pub use breez_sdk_common::input::*;
+pub use breez_sdk_common::fiat::*;
 pub use breez_sdk_common::lnurl::auth::*;
 pub use breez_sdk_common::lnurl::pay::*;
 pub use breez_sdk_common::network::BitcoinNetwork;
@@ -622,4 +623,58 @@ pub enum _KeySetType {
     NativeSegwit,
     WrappedSegwit,
     Legacy,
+}
+
+#[frb(mirror(ListFiatCurrenciesResponse))]
+pub struct _ListFiatCurrenciesResponse {
+    pub currencies: Vec<FiatCurrency>,
+}
+
+#[frb(mirror(ListFiatRatesResponse))]
+pub struct _ListFiatRatesResponse {
+    pub rates: Vec<Rate>,
+}
+
+#[frb(mirror(Rate))]
+pub struct _Rate {
+    pub coin: String,
+    pub value: f64,
+}
+
+#[frb(mirror(FiatCurrency))]
+pub struct _FiatCurrency {
+    pub id: String,
+    pub info: CurrencyInfo,
+}
+
+#[frb(mirror(CurrencyInfo))]
+pub struct _CurrencyInfo {
+    pub name: String,
+    pub fraction_size: u32,
+    pub spacing: Option<u32>,
+    pub symbol: Option<Symbol>,
+    pub uniq_symbol: Option<Symbol>,
+    pub localized_name: Vec<LocalizedName>,
+    pub locale_overrides: Vec<LocaleOverrides>,
+}
+
+#[frb(mirror(LocaleOverrides))]
+pub struct _LocaleOverrides {
+    pub locale: String,
+    pub spacing: Option<u32>,
+    pub symbol: Symbol,
+}
+
+#[frb(mirror(LocalizedName))]
+pub struct _LocalizedName {
+    pub locale: String,
+    pub name: String,
+}
+
+#[frb(mirror(Symbol))]
+pub struct _Symbol {
+    pub grapheme: Option<String>,
+    pub template: Option<String>,
+    pub rtl: Option<bool>,
+    pub position: Option<u32>,
 }

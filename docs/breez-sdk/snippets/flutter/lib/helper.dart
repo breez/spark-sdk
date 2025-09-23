@@ -7,6 +7,7 @@ extension ConfigCopyWith on Config {
     int? syncIntervalSecs,
     Fee? maxDepositClaimFee,
     String? lnurlDomain,
+    bool? preferSparkOverLightning,
   }) {
     return Config(
       apiKey: apiKey ?? this.apiKey,
@@ -14,6 +15,7 @@ extension ConfigCopyWith on Config {
       syncIntervalSecs: syncIntervalSecs ?? this.syncIntervalSecs,
       maxDepositClaimFee: maxDepositClaimFee ?? this.maxDepositClaimFee,
       lnurlDomain: lnurlDomain ?? this.lnurlDomain,
+      preferSparkOverLightning: preferSparkOverLightning ?? this.preferSparkOverLightning,
     );
   }
 }
