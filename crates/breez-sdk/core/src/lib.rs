@@ -9,6 +9,7 @@ mod models;
 mod persist;
 mod sdk;
 mod sdk_builder;
+mod sync;
 mod utils;
 
 #[cfg(feature = "uniffi")]
