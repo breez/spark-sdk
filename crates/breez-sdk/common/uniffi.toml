@@ -29,3 +29,8 @@ from_custom = "{}.description"
 type_name = "int"
 into_custom = "int({})"
 from_custom = "str({})"
+
+[bindings.typescript.customTypes.common_u128]
+typeName = "bigint"
+intoCustom = "BigInt({})"
+fromCustom = "{}.toString()"
