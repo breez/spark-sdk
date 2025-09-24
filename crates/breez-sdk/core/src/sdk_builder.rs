@@ -23,6 +23,7 @@ use crate::{
     models::Config,
     persist::Storage,
     sdk::{BreezSdk, BreezSdkParams},
+    sync::{SparkSyncService, SyncStrategy},
 };
 
 /// Represents the seed for wallet generation, either as a mnemonic phrase with an optional
@@ -149,6 +150,7 @@ impl SdkBuilder {
     }
 
     /// Builds the `BreezSdk` instance with the configured components.
+    #[allow(clippy::too_many_lines)]
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
         // Create the signer from seed
         let seed = match self.seed {
@@ -224,6 +226,10 @@ impl SdkBuilder {
             spark_wallet::SparkWalletConfig::default_config(self.config.network.into());
         let spark_wallet =
             Arc::new(SparkWallet::connect(spark_wallet_config, Arc::new(signer)).await?);
+        let sync_service = Arc::new(SyncStrategy::Spark(SparkSyncService::new(
+            Arc::clone(&spark_wallet),
+            Arc::clone(&self.storage),
+        )));
 
         let lnurl_server_client: Option<Arc<dyn LnurlServerClient>> = match self.lnurl_server_client
         {
@@ -247,6 +253,7 @@ impl SdkBuilder {
             config: self.config,
             storage: self.storage,
             chain_service,
+            sync_service,
             fiat_service,
             lnurl_client,
             lnurl_server_client,
