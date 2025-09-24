@@ -103,17 +103,31 @@ pub fn init_logging(
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkError> {
     let db_path = std::path::PathBuf::from_str(&request.storage_dir)?;
-    let path_suffix: String = sha256::Hash::hash(request.mnemonic.as_bytes())
-        .to_string()
-        .chars()
-        .take(8)
-        .collect();
+    let path_suffix: String = match &request.seed {
+        crate::Seed::Mnemonic {
+            mnemonic,
+            passphrase,
+        } => {
+            let str = format!("{mnemonic}:{passphrase:?}");
+            sha256::Hash::hash(str.as_bytes())
+                .to_string()
+                .chars()
+                .take(8)
+                .collect()
+        }
+        crate::Seed::Entropy(vec) => sha256::Hash::hash(vec.as_slice())
+            .to_string()
+            .chars()
+            .take(8)
+            .collect(),
+    };
+
     let storage_dir = db_path
         .join(request.config.network.to_string().to_lowercase())
         .join(path_suffix);
 
     let storage = default_storage(storage_dir.to_string_lossy().to_string())?;
-    let builder = crate::SdkBuilder::new(request.config, request.mnemonic, storage);
+    let builder = crate::SdkBuilder::new(request.config, request.seed, storage);
     builder.build().await
 }
 

@@ -4,7 +4,9 @@ mod persist;
 use crate::commands::CliHelper;
 use crate::persist::CliPersistence;
 use anyhow::{Result, anyhow};
-use breez_sdk_spark::{ConnectRequest, EventListener, Network, SdkEvent, connect, default_config};
+use breez_sdk_spark::{
+    ConnectRequest, EventListener, Network, SdkEvent, Seed, connect, default_config,
+};
 use clap::Parser;
 use commands::{Command, execute_command};
 use rustyline::Editor;
@@ -92,9 +94,15 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
         .map(|var| var.into_string().expect("Expected valid API key string"));
     let mut config = default_config(network);
     config.api_key = breez_api_key;
+
+    let seed = Seed::Mnemonic {
+        mnemonic: mnemonic.to_string(),
+        passphrase: None,
+    };
+
     let sdk = connect(ConnectRequest {
         config,
-        mnemonic: mnemonic.to_string(),
+        seed,
         storage_dir: data_dir.to_string_lossy().to_string(),
     })
     .await?;

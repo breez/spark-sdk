@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-pub use breez_sdk_spark::Storage;
 use breez_sdk_spark::{Config, Credentials, SdkError};
+pub use breez_sdk_spark::{Seed, Storage};
 use flutter_rust_bridge::frb;
 
 use crate::{models::KeySetType, sdk::BreezSdk};
@@ -12,9 +12,9 @@ pub struct SdkBuilder {
 
 impl SdkBuilder {
     #[frb(sync)]
-    pub fn new(config: Config, mnemonic: String, storage: Arc<dyn Storage>) -> Self {
+    pub fn new(config: Config, seed: Seed, storage: Arc<dyn Storage>) -> Self {
         Self {
-            inner: Arc::new(breez_sdk_spark::SdkBuilder::new(config, mnemonic, storage)),
+            inner: Arc::new(breez_sdk_spark::SdkBuilder::new(config, seed, storage)),
         }
     }
 

@@ -14,12 +14,13 @@ use spark_wallet::{
 };
 use std::{fmt::Display, str::FromStr, time::UNIX_EPOCH};
 
+use crate::sdk_builder::Seed;
 use crate::{SdkError, error::DepositClaimError};
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConnectRequest {
     pub config: Config,
-    pub mnemonic: String,
+    pub seed: Seed,
     pub storage_dir: String,
 }
 
