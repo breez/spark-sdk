@@ -90,25 +90,27 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 
 ## **SDK Development Roadmap**
 
-- [x]  Send/Receive Lightning payments
-- [x]  Send/Receive Spark payments
-- [x]  Send/Receive via on-chain addresses
-- [x]  CLI Interface
-- [x]  Go, JS, Kotlin, Python & Swift languages bindings
-- [x]  Send via LNURL-Pay
-- [x]  Send to a Lightning address
-- [x]  WebAssembly support
-- [x]  Flutter & React Native bindings 
-- [x]  Receive via LNURL-Pay w/ offline & Lightning address support
-- [ ]  Support Spark tokens
-- [ ]  Real-time sync
-- [ ]  C# language binding
-- [ ]  LNURL-Withdraw
-- [ ]  LNURL-Auth
-- [ ]  External input parsers
-- [ ]  Bolt12 
-- [ ]  WebLN
-- [ ]  NWC
+- [x] Send/Receive Lightning payments
+- [x] Send/Receive Spark payments
+- [x] Send/Receive via on-chain addresses
+- [x] CLI Interface
+- [x] Go, JS, Kotlin, Python & Swift languages bindings
+- [x] Send via LNURL-Pay
+- [x] Send to a Lightning address
+- [x] Payments persistency including restore support
+- [x] Automatic claims 
+- [x] WebAssembly support
+- [x] Flutter & React Native bindings 
+- [x] Receive via LNURL-Pay w/ offline & Lightning address support
+- [ ] Support Spark tokens
+- [ ] Real-time sync
+- [ ] C# language binding
+- [ ] LNURL-Withdraw
+- [ ] LNURL-Auth
+- [ ] External input parsers
+- [ ] Bolt12 
+- [ ] WebLN
+- [ ] NWC
 - [ ]  Add additional fees via a dedicated portal
 
 
