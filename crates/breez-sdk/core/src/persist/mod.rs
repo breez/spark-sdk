@@ -1,7 +1,7 @@
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub(crate) mod sqlite;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::SystemTime};
 
 use macros::async_trait;
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ const TX_CACHE_KEY: &str = "tx_cache";
 const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
 
 // Old keys (avoid using them)
-// const SYNC_OFFSET_KEY: &str = "sync_offset";
+const SYNC_OFFSET_KEY: &str = "sync_offset";
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UpdateDepositPayload {
@@ -206,17 +206,34 @@ impl ObjectCacheRepository {
         }
     }
 
-    pub(crate) async fn merge_sync_info(
+    pub(crate) async fn save_sync_info(&self, value: &CachedSyncInfo) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(SYNC_OFFSET_KEY.to_string(), serde_json::to_string(value)?)
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_sync_info(&self) -> Result<Option<CachedSyncInfo>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(SYNC_OFFSET_KEY.to_string())
+            .await?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
+    pub(crate) async fn merge_sparkscan_sync_info(
         &self,
         last_synced_payment_id: Option<String>,
         next_head_offset: Option<u64>,
         tail_synced: Option<bool>,
     ) -> Result<(), StorageError> {
-        let cached_sync_info = self.fetch_sync_info().await?.unwrap_or_default();
+        let cached_sync_info = self.fetch_sparkscan_sync_info().await?.unwrap_or_default();
         self.storage
             .set_cached_item(
                 SPARKSCAN_SYNC_INFO_KEY.to_string(),
-                serde_json::to_string(&CachedSyncInfo {
+                serde_json::to_string(&CachedSparkscanSyncInfo {
                     last_synced_payment_id: last_synced_payment_id
                         .or(cached_sync_info.last_synced_payment_id),
                     next_head_offset: next_head_offset.unwrap_or(cached_sync_info.next_head_offset),
@@ -227,7 +244,9 @@ impl ObjectCacheRepository {
         Ok(())
     }
 
-    pub(crate) async fn fetch_sync_info(&self) -> Result<Option<CachedSyncInfo>, StorageError> {
+    pub(crate) async fn fetch_sparkscan_sync_info(
+        &self,
+    ) -> Result<Option<CachedSparkscanSyncInfo>, StorageError> {
         let value = self
             .storage
             .get_cached_item(SPARKSCAN_SYNC_INFO_KEY.to_string())
@@ -327,10 +346,16 @@ pub(crate) struct CachedAccountInfo {
 }
 
 #[derive(Serialize, Deserialize, Default)]
-pub(crate) struct CachedSyncInfo {
+pub(crate) struct CachedSparkscanSyncInfo {
     pub(crate) last_synced_payment_id: Option<String>,
     pub(crate) next_head_offset: u64,
     pub(crate) tail_synced: bool,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub(crate) struct CachedSyncInfo {
+    pub(crate) offset: u64,
+    pub(crate) last_synced_token_timestamp: Option<SystemTime>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
