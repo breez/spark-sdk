@@ -195,7 +195,7 @@ impl Payment {
 
 impl PaymentStatus {
     pub(crate) fn from_token_transaction_status(
-        status: &TokenTransactionStatus,
+        status: TokenTransactionStatus,
         is_transfer_transaction: bool,
     ) -> Self {
         match status {

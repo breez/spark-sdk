@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    DepositClaimError, DepositInfo, LightningAddressInfo, LnurlPayInfo, PaymentStatus, TokenBalance, models::Payment,
+    DepositClaimError, DepositInfo, LightningAddressInfo, LnurlPayInfo, PaymentStatus,
+    TokenBalance, models::Payment,
 };
 
 const ACCOUNT_INFO_KEY: &str = "account_info";

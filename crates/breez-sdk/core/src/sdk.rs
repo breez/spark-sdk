@@ -567,7 +567,7 @@ impl BreezSdk {
             let is_transfer_transaction =
                 matches!(token_transaction.inputs, TokenInputs::Transfer(..));
             let payment_status = PaymentStatus::from_token_transaction_status(
-                &token_transaction.status,
+                token_transaction.status,
                 is_transfer_transaction,
             );
             if payment_status != PaymentStatus::Pending {
