@@ -2,7 +2,10 @@ import BreezSdkSpark
 
 func initSdk() async throws -> BreezSdk {
     // ANCHOR: init-sdk
+    // Construct the seed using mnemonic words or entropy bytes
     let mnemonic = "<mnemonic words>"
+    let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
+
     // Create the default config
     var config = defaultConfig(network: Network.mainnet)
     config.apiKey = "<breez api key>"
@@ -10,7 +13,7 @@ func initSdk() async throws -> BreezSdk {
     // Connect to the SDK using the simplified connect method
     let sdk = try await connect(request: ConnectRequest(
         config: config,
-        mnemonic: mnemonic,
+        seed: seed,
         storageDir: "./.data"
     ))
     // ANCHOR_END: init-sdk
@@ -20,7 +23,10 @@ func initSdk() async throws -> BreezSdk {
 
 func initSdkAdvanced() async throws -> BreezSdk {
     // ANCHOR: init-sdk-advanced
+    // Construct the seed using mnemonic words or entropy bytes
     let mnemonic = "<mnemonic words>"
+    let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
+
     // Create the default config
     var config = defaultConfig(network: Network.mainnet)
     config.apiKey = "<breez api key>"
@@ -28,9 +34,9 @@ func initSdkAdvanced() async throws -> BreezSdk {
     // Create the default storage
     let storage = try defaultStorage(dataDir: "./.data")
 
-    // Build the SDK using the config, mnemonic and storage
-    let builder = SdkBuilder(config: config, mnemonic: mnemonic, storage: storage)
-    
+    // Build the SDK using the config, seed and storage
+    let builder = SdkBuilder(config: config, seed: seed, storage: storage)
+
     // You can also pass your custom implementations:
     // builder = builder.withChainService(<your chain service implementation>)
     // builder = builder.withRestClient(<your rest client implementation>)

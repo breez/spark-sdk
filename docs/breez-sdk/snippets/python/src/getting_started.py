@@ -13,22 +13,22 @@ from breez_sdk_spark import (
     Network,
     SdkBuilder,
     SdkEvent,
+    Seed,
 )
 
 
 async def init_sdk():
     # ANCHOR: init-sdk
+    # Construct the seed using mnemonic words or entropy bytes
     mnemonic = "<mnemonic words>"
+    seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
     # Create the default config
     config = default_config(network=Network.MAINNET)
     config.api_key = "<breez api key>"
-
     try:
         # Connect to the SDK using the simplified connect method
         sdk = await connect(
-            request=ConnectRequest(
-                config=config, mnemonic=mnemonic, storage_dir="./.data"
-            )
+            request=ConnectRequest(config=config, seed=seed, storage_dir="./.data")
         )
         return sdk
     except Exception as error:
@@ -39,18 +39,17 @@ async def init_sdk():
 
 async def init_sdk_advanced():
     # ANCHOR: init-sdk-advanced
+    # Construct the seed using mnemonic words or entropy bytes
     mnemonic = "<mnemonic words>"
+    seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
     # Create the default config
     config = default_config(network=Network.MAINNET)
     config.api_key = "<breez api key>"
-
     try:
         # Create the default storage
         storage = default_storage(data_dir="./.data")
-
-        # Build the SDK using the config, mnemonic and storage
-        builder = SdkBuilder(config=config, mnemonic=mnemonic, storage=storage)
-
+        # Build the SDK using the config, seed and storage
+        builder = SdkBuilder(config=config, seed=seed, storage=storage)
         # You can also pass your custom implementations:
         # builder.with_chain_service(<your chain service implementation>)
         # builder.with_rest_client(<your rest client implementation>)

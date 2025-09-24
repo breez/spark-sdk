@@ -4,8 +4,10 @@ import breez_sdk_spark.*
 class GettingStarted {
     suspend fun initSdk() {
         // ANCHOR: init-sdk
-
+        // Construct the seed using mnemonic words or entropy bytes
         val mnemonic = "<mnemonic words>"
+        val seed = Seed.Mnemonic(mnemonic, null)
+
         // Create the default config
         val config = defaultConfig(Network.MAINNET)
         config.apiKey = "<breez api key>"
@@ -14,7 +16,7 @@ class GettingStarted {
             // Connect to the SDK using the simplified connect method
             val sdk = connect(ConnectRequest(
                 config = config,
-                mnemonic = mnemonic,
+                seed = seed,
                 storageDir = "./.data"
             ))
         } catch (e: Exception) {
@@ -25,8 +27,10 @@ class GettingStarted {
 
     suspend fun initSdkAdvanced() {
         // ANCHOR: init-sdk-advanced
-
+        // Construct the seed using mnemonic words or entropy bytes
         val mnemonic = "<mnemonic words>"
+        val seed = Seed.Mnemonic(mnemonic, null)
+
         // Create the default config
         val config = defaultConfig(Network.MAINNET)
         config.apiKey = "<breez api key>"
@@ -35,8 +39,7 @@ class GettingStarted {
             // Create the default storage
             val storage = defaultStorage("./.data")
 
-            val builder = SdkBuilder(config, mnemonic, storage)
-            
+            val builder = SdkBuilder(config, seed, storage)
             // You can also pass your custom implementations:
             // builder.withChainService(<your chain service implementation>)
             // builder.withRestClient(<your rest client implementation>)

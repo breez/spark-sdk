@@ -7,15 +7,16 @@ use log::info;
 
 pub(crate) async fn init_sdk() -> Result<BreezSdk> {
     // ANCHOR: init-sdk
+    // Construct the seed using mnemonic words or entropy bytes
     let mnemonic = "<mnemonic words>".to_string();
-    // Create the default config
-    let mut config = default_config(Network::Mainnet);
-    config.api_key = Some("<breez api key>".to_string());
-
     let seed = Seed::Mnemonic {
         mnemonic,
         passphrase: None,
     };
+
+    // Create the default config
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some("<breez api key>".to_string());
 
     // Connect to the SDK using the simplified connect method
     let sdk = connect(ConnectRequest {
@@ -31,7 +32,13 @@ pub(crate) async fn init_sdk() -> Result<BreezSdk> {
 
 pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     // ANCHOR: init-sdk-advanced
+    // Construct the seed using mnemonic words or entropy bytes
     let mnemonic = "<mnemonic words>".to_string();
+    let seed = Seed::Mnemonic {
+        mnemonic,
+        passphrase: None,
+    };
+
     // Create the default config
     let mut config = default_config(Network::Mainnet);
     config.api_key = Some("<breez api key>".to_string());
@@ -39,12 +46,7 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     // Create the default storage
     let storage = default_storage("./.data".to_string())?;
 
-    let seed = Seed::Mnemonic {
-        mnemonic,
-        passphrase: None,
-    };
-
-    // Build the SDK using the config, mnemonic and storage
+    // Build the SDK using the config, seed and storage
     let builder = SdkBuilder::new(config, seed, storage);
 
     // You can also pass your custom implementations:

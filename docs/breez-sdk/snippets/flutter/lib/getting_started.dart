@@ -9,14 +9,16 @@ Future<void> initSdk() async {
   // of the SDK across your Flutter app.
   await BreezSdkSparkLib.init();
 
+  // Construct the seed using mnemonic words or entropy bytes
   String mnemonic = "<mnemonic words>";
+  final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
 
   // Create the default config
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: "<breez api key>");
 
   final connectRequest =
-      ConnectRequest(config: config, mnemonic: mnemonic, storageDir: "./.data");
+      ConnectRequest(config: config, seed: seed, storageDir: "./.data");
 
   final sdk = await connect(request: connectRequest);
   // ANCHOR_END: init-sdk
@@ -25,8 +27,9 @@ Future<void> initSdk() async {
 
 Future<void> initSdkAdvanced() async {
   // ANCHOR: init-sdk-advanced
-  // It is recommended to use a single instance of the SDK across your Flutter app.
+  // Construct the seed using mnemonic words or entropy bytes
   String mnemonic = "<mnemonic words>";
+  final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
 
   // Create the default config
   final config = defaultConfig(network: Network.mainnet)
@@ -36,7 +39,7 @@ Future<void> initSdkAdvanced() async {
   final storage = defaultStorage(dataDir: "./.data");
 
   final builder =
-      SdkBuilder(config: config, mnemonic: mnemonic, storage: storage);
+      SdkBuilder(config: config, seed: seed, storage: storage);
   // You can also pass your custom implementations:
   // builder.withRestChainService(
   //     url: "https://custom.chain.service",
