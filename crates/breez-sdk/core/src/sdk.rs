@@ -1509,7 +1509,7 @@ impl BreezSdk {
             id: format!("{tx_hash}:0"), // Transaction output index 0 is for the receiver
             payment_type: PaymentType::Send,
             status: PaymentStatus::Pending,
-            amount: amount.try_into()?,
+            amount,
             fees: 0,
             timestamp: SystemTime::now()
                 .duration_since(web_time::UNIX_EPOCH)

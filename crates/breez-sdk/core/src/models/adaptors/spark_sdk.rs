@@ -234,7 +234,7 @@ impl From<Fee> for spark_wallet::Fee {
 impl From<spark_wallet::TokenBalance> for TokenBalance {
     fn from(value: spark_wallet::TokenBalance) -> Self {
         Self {
-            balance: value.balance.try_into().unwrap_or_default(), // balance will be changed to u128 or similar
+            balance: value.balance,
             token_metadata: value.token_metadata.into(),
         }
     }
@@ -248,7 +248,7 @@ impl From<spark_wallet::TokenMetadata> for TokenMetadata {
             name: value.name,
             ticker: value.ticker,
             decimals: value.decimals,
-            max_supply: value.max_supply.try_into().unwrap_or_default(), // max_supply will be changed to u128 or similar
+            max_supply: value.max_supply,
             is_freezable: value.is_freezable,
         }
     }
