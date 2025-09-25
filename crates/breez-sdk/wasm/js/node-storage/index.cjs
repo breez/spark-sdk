@@ -363,9 +363,9 @@ class SqliteStorage {
     }
 
     // If this is a Lightning payment and we have lnurl_pay_info, add it to details
-    if (row.lnurl_pay_info && details && details.Lightning) {
+    if (row.lnurl_pay_info && details && details.type == 'lightning') {
       try {
-        details.Lightning.lnurlPayInfo = JSON.parse(row.lnurl_pay_info);
+        details.lnurlPayInfo = JSON.parse(row.lnurl_pay_info);
       } catch (e) {
         throw new StorageError(
           `Failed to parse lnurl_pay_info JSON for payment ${row.id}: ${e.message}`,
