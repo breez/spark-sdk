@@ -19,11 +19,8 @@ pub struct SparkSyncService {
 #[macros::async_trait]
 impl SyncService for SparkSyncService {
     async fn sync_payments(&self) -> Result<(), SdkError> {
-        let object_repository = ObjectCacheRepository::new(self.storage.clone());
-        self.sync_bitcoin_payments_to_storage(&object_repository)
-            .await?;
-        self.sync_token_payments_to_storage(&object_repository)
-            .await
+        self.sync_bitcoin_payments_to_storage().await?;
+        self.sync_token_payments_to_storage().await
     }
 
     async fn sync_historical_payments(&self) -> Result<(), SdkError> {
@@ -39,11 +36,9 @@ impl SparkSyncService {
         }
     }
 
-    async fn sync_bitcoin_payments_to_storage(
-        &self,
-        object_repository: &ObjectCacheRepository,
-    ) -> Result<(), SdkError> {
+    async fn sync_bitcoin_payments_to_storage(&self) -> Result<(), SdkError> {
         // Get the last offset we processed from storage
+        let object_repository = ObjectCacheRepository::new(self.storage.clone());
         let cached_sync_info = object_repository
             .fetch_sync_info()
             .await?
@@ -94,7 +89,6 @@ impl SparkSyncService {
             let save_res = object_repository
                 .save_sync_info(&CachedSyncInfo {
                     offset: next_offset.saturating_sub(pending_payments),
-                    last_synced_token_timestamp: cached_sync_info.last_synced_token_timestamp,
                 })
                 .await;
             if let Err(err) = save_res {
@@ -107,28 +101,14 @@ impl SparkSyncService {
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn sync_token_payments_to_storage(
-        &self,
-        object_repository: &ObjectCacheRepository,
-    ) -> Result<(), SdkError> {
-        // Get the last offsets we processed from storage
-        let cached_sync_info = object_repository
-            .fetch_sync_info()
-            .await?
-            .unwrap_or_default();
-        let last_synced_token_timestamp = cached_sync_info.last_synced_token_timestamp;
-
+    async fn sync_token_payments_to_storage(&self) -> Result<(), SdkError> {
+        info!("Syncing token payments to storage");
         let our_public_key = self.spark_wallet.get_identity_public_key();
-
-        let mut latest_token_transaction_timestamp = None;
-
-        // We'll keep querying in batches until we have all transfers
         let mut next_offset = 0;
         let mut has_more = true;
-        info!(
-            "Syncing token payments to storage, last synced token timestamp = {last_synced_token_timestamp:?}"
-        );
-        while has_more {
+        // We'll keep querying in pages until we already have a completed or failed payment stored
+        // or we have fetched all transfers
+        'page_loop: while has_more {
             // Get batch of token transactions starting from current offset
             let token_transactions = self
                 .spark_wallet
@@ -141,11 +121,8 @@ impl SparkSyncService {
                     ..Default::default()
                 })
                 .await?;
-
-            // On first iteration, set the latest token transaction timestamp to the first transaction timestamp
-            if next_offset == 0 {
-                latest_token_transaction_timestamp =
-                    token_transactions.first().map(|tx| tx.created_timestamp);
+            if token_transactions.is_empty() {
+                break 'page_loop;
             }
 
             // Get prev out hashes of first input of each token transaction
@@ -179,75 +156,63 @@ impl SparkSyncService {
                 "Syncing token payments to storage, offset = {next_offset}, transactions = {}",
                 token_transactions.len()
             );
-            // Process transfers in this batch
+            // Process transfers in this page
             for transaction in &token_transactions {
-                // Stop syncing if we have reached the last synced token transaction timestamp
-                if let Some(last_synced_token_timestamp) = last_synced_token_timestamp
-                    && transaction.created_timestamp <= last_synced_token_timestamp
-                {
-                    break;
-                }
-
                 let tx_inputs_are_ours = match &transaction.inputs {
                     spark_wallet::TokenInputs::Transfer(token_transfer_input) => {
-                        let Some(first_input) = token_transfer_input.outputs_to_spend.first()
-                        else {
-                            return Err(SdkError::Generic(
-                                "No input in token transfer input".to_string(),
-                            ));
-                        };
-                        let Some(parent_transaction) = parent_transactions
+                        let first_input = token_transfer_input.outputs_to_spend.first().ok_or(
+                            SdkError::Generic("No input in token transfer input".to_string()),
+                        )?;
+                        let parent_transaction = parent_transactions
                             .iter()
                             .find(|tx| tx.hash == first_input.prev_token_tx_hash)
-                        else {
-                            return Err(SdkError::Generic(
+                            .ok_or(SdkError::Generic(
                                 "Parent transaction not found".to_string(),
-                            ));
-                        };
-                        let Some(output) = parent_transaction
+                            ))?;
+                        let output = parent_transaction
                             .outputs
                             .get(first_input.prev_token_tx_vout as usize)
-                        else {
-                            return Err(SdkError::Generic("Output not found".to_string()));
-                        };
+                            .ok_or(SdkError::Generic("Output not found".to_string()))?;
                         output.owner_public_key == our_public_key
                     }
-                    spark_wallet::TokenInputs::Mint(..) | spark_wallet::TokenInputs::Create(..) => {
+                    spark_wallet::TokenInputs::Mint(_) | spark_wallet::TokenInputs::Create(_) => {
                         false
                     }
                 };
 
                 // Create payment records
-                let payments = self
-                    .token_transaction_to_payments(transaction, tx_inputs_are_ours)
-                    .await?;
+                let payments = token_transaction_to_payments(
+                    &self.spark_wallet,
+                    transaction,
+                    tx_inputs_are_ours,
+                )
+                .await?;
 
                 for payment in payments {
+                    // Stop syncing if we encounter a finalized payment that we have already processed
+                    if let Ok(Payment {
+                        status: PaymentStatus::Completed | PaymentStatus::Failed,
+                        ..
+                    }) = self.storage.get_payment_by_id(payment.id.clone()).await
+                    {
+                        info!(
+                            "Encountered already finalized payment {}, stopping sync",
+                            payment.id
+                        );
+                        break 'page_loop;
+                    }
+
                     // Insert payment into storage
-                    if let Err(err) = self.storage.insert_payment(payment.clone()).await {
+                    info!("Inserting token payment: {payment:?}");
+                    if let Err(err) = self.storage.insert_payment(payment).await {
                         error!("Failed to insert token payment: {err:?}");
                     }
-                    info!("Inserted token payment: {payment:?}");
                 }
             }
 
             // Check if we have more transfers to fetch
             next_offset = next_offset.saturating_add(u64::try_from(token_transactions.len())?);
             has_more = token_transactions.len() as u64 == PAYMENT_SYNC_BATCH_SIZE;
-        }
-
-        // Update our last processed transaction timestamp in the storage
-        if let Some(latest_token_transaction_timestamp) = latest_token_transaction_timestamp {
-            let save_res = object_repository
-                .save_sync_info(&CachedSyncInfo {
-                    offset: cached_sync_info.offset,
-                    last_synced_token_timestamp: Some(latest_token_transaction_timestamp),
-                })
-                .await;
-
-            if let Err(err) = save_res {
-                error!("Failed to update last sync token timestamp: {err:?}");
-            }
         }
 
         Ok(())
