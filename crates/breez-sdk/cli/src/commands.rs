@@ -125,7 +125,7 @@ pub enum Command {
         username: String,
 
         /// Description in the lnurl response and the invoice.
-        description: String,
+        description: Option<String>,
     },
     DeleteLightningAddress,
     /// List fiat currencies

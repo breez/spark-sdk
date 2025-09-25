@@ -4,13 +4,13 @@ use breez_sdk_common::input::InputType;
 use breez_sdk_spark::{
     CheckLightningAddressRequest, ClaimDepositRequest, ClaimDepositResponse, Config,
     ConnectRequest, GetInfoRequest, GetInfoResponse, GetPaymentRequest, GetPaymentResponse,
-    LightningAddressInfo, ListPaymentsRequest, ListPaymentsResponse, ListUnclaimedDepositsRequest,
-    ListUnclaimedDepositsResponse, LnurlPayRequest, LnurlPayResponse, LogEntry, Logger, Network,
-    PrepareLnurlPayRequest, PrepareLnurlPayResponse, PrepareSendPaymentRequest,
-    PrepareSendPaymentResponse, ReceivePaymentRequest, ReceivePaymentResponse,
-    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest, SdkError,
-    SdkEvent, SendPaymentRequest, SendPaymentResponse, Storage, SyncWalletRequest,
-    SyncWalletResponse, ListFiatCurrenciesResponse, ListFiatRatesResponse,
+    LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse, ListPaymentsRequest,
+    ListPaymentsResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
+    LnurlPayRequest, LnurlPayResponse, LogEntry, Logger, Network, PrepareLnurlPayRequest,
+    PrepareLnurlPayResponse, PrepareSendPaymentRequest, PrepareSendPaymentResponse,
+    ReceivePaymentRequest, ReceivePaymentResponse, RefundDepositRequest, RefundDepositResponse,
+    RegisterLightningAddressRequest, SdkError, SdkEvent, SendPaymentRequest, SendPaymentResponse,
+    Storage, SyncWalletRequest, SyncWalletResponse,
 };
 use flutter_rust_bridge::frb;
 

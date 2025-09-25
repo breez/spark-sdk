@@ -671,7 +671,7 @@ pub struct CheckLightningAddressRequest {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::RegisterLightningAddressRequest)]
 pub struct RegisterLightningAddressRequest {
     pub username: String,
-    pub description: String,
+    pub description: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LightningAddressInfo)]

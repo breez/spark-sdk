@@ -1161,15 +1161,19 @@ impl BreezSdk {
             ));
         };
 
+        let description = match request.description {
+            Some(description) => description,
+            None => format!("Pay to {}@{}", request.username, client.domain()),
+        };
         let params = crate::lnurl::RegisterLightningAddressRequest {
             username: request.username.clone(),
-            description: request.description.clone(),
+            description: description.clone(),
         };
 
         let response = client.register_lightning_address(&params).await?;
         let address_info = LightningAddressInfo {
             lightning_address: response.lightning_address,
-            description: request.description,
+            description,
             lnurl: response.lnurl,
             username: request.username,
         };

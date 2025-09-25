@@ -808,7 +808,8 @@ pub struct CheckLightningAddressRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterLightningAddressRequest {
     pub username: String,
-    pub description: String,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub description: Option<String>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
