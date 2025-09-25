@@ -38,7 +38,7 @@ build-release-target-%: install-target-%
 	cargo build --release --target $*
 
 install-uniffi-bindgen-gobley:
-	$(INSTALL_PREFIX) cargo install gobley-uniffi-bindgen --git https://github.com/breez/gobley --rev f920c275e4f60e22080a6cd280d9562d64eb6ac9
+	$(INSTALL_PREFIX) cargo install gobley-uniffi-bindgen --git https://github.com/breez/gobley --rev 72753910f54a157de2f84b78dc6f78415e28d4f2
 
 install-uniffi-bindgen-golang:
 	$(INSTALL_PREFIX) cargo install uniffi-bindgen-go --git https://github.com/breez/uniffi-bindgen-go --rev 8b8c58f78b2dc16a252f325da91ce409f409fe3c
