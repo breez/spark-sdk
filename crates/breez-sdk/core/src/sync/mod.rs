@@ -4,8 +4,8 @@ use crate::SdkError;
 mod spark;
 mod sparkscan;
 
-pub use spark::SparkSyncService;
-pub use sparkscan::SparkscanSyncService;
+pub(crate) use spark::SparkSyncService;
+pub(crate) use sparkscan::SparkscanSyncService;
 
 #[macros::async_trait]
 pub trait SyncService: Send + Sync {
