@@ -28,7 +28,7 @@ pub async fn check_lightning_address_availability(sdk: &BreezSdk, username: Stri
 pub async fn register_lightning_address(
     sdk: &BreezSdk,
     username: String,
-    description: String,
+    description: Option<String>,
 ) -> anyhow::Result<(String, String)> {
     // Define the parameters
     let username = username;

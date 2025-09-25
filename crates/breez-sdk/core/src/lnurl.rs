@@ -18,14 +18,12 @@ pub enum LnurlServerError {
     SigningError(String),
 }
 
-// Public-facing request types that don't expose signature details
 #[derive(Debug, Clone)]
 pub struct RegisterLightningAddressRequest {
     pub username: String,
     pub description: String,
 }
 
-// No signature parameter needed for unregister
 #[derive(Debug, Clone)]
 pub struct UnregisterLightningAddressRequest {
     pub username: String,
@@ -33,6 +31,7 @@ pub struct UnregisterLightningAddressRequest {
 
 #[macros::async_trait]
 pub trait LnurlServerClient: Send + Sync {
+    fn domain(&self) -> &str;
     async fn check_username_available(&self, username: &str) -> Result<bool, LnurlServerError>;
     async fn recover_lightning_address(
         &self,
@@ -98,6 +97,10 @@ impl ReqwestLnurlServerClient {
 
 #[macros::async_trait]
 impl LnurlServerClient for ReqwestLnurlServerClient {
+    fn domain(&self) -> &str {
+        &self.domain
+    }
+
     async fn check_username_available(&self, username: &str) -> Result<bool, LnurlServerError> {
         let url = format!("https://{}/lnurlpay/available/{}", self.domain, username);
         let result = self.client.get(url).send().await;

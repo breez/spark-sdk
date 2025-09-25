@@ -182,7 +182,7 @@ Before registering a Lightning address, you can check if the username is availab
     <a class="header" href="#registering-address">Registering a Lightning address</a>
 </h3>
 
-Once you've confirmed a username is available, you can register it by passing a username and a description. The username will be used in `username@domain.com`. The description will be included in lnurl metadata and as the invoice description, so this is what the sender will see.
+Once you've confirmed a username is available, you can register it by passing a username and a description. The username will be used in `username@domain.com`. The description will be included in lnurl metadata and as the invoice description, so this is what the sender will see. The description is optional, and will default to `Pay to username@domain.com`.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
