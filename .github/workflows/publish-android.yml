@@ -52,7 +52,7 @@ jobs:
       - name: Build Kotlin language bindings
         working-directory: crates/breez-sdk/bindings
         run: |
-          cargo install gobley-uniffi-bindgen --git https://github.com/breez/gobley --rev f920c275e4f60e22080a6cd280d9562d64eb6ac9
+          cargo install gobley-uniffi-bindgen --git https://github.com/breez/gobley --rev 72753910f54a157de2f84b78dc6f78415e28d4f2
           gobley-uniffi-bindgen --library -o ffi/kotlin --crate-configs breez_sdk_spark_bindings=./uniffi.toml --crate-configs breez_sdk_spark=../core/uniffi.toml --crate-configs breez_sdk_common=../common/uniffi.toml ../../../aarch64-linux-android/libbreez_sdk_spark_bindings.so
 
       - name: Archive Kotlin language bindings
