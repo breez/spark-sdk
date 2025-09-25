@@ -7,13 +7,16 @@ import {
   BreezSdk,
   initLogging,
   LogEntry,
-  SdkEvent
+  SdkEvent,
+  Seed
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 
 const exampleGettingStarted = async () => {
   // ANCHOR: init-sdk
+  // Construct the seed using mnemonic words or entropy bytes
   const mnemonic = '<mnemonics words>'
+  const seed = new Seed.Mnemonic({ mnemonic, passphrase: undefined })
 
   // Create the default config
   let config = defaultConfig(Network.Mainnet)
@@ -21,7 +24,7 @@ const exampleGettingStarted = async () => {
 
   const sdk = await connect({
     config,
-    mnemonic,
+    seed,
     storageDir: `${RNFS.DocumentDirectoryPath}/data`
   })
   // ANCHOR_END: init-sdk
@@ -29,7 +32,9 @@ const exampleGettingStarted = async () => {
 
 const exampleGettingStartedAdvanced = async () => {
   // ANCHOR: init-sdk-advanced
+  // Construct the seed using mnemonic words or entropy bytes
   const mnemonic = '<mnemonics words>'
+  const seed = new Seed.Mnemonic({ mnemonic, passphrase: undefined })
 
   // Create the default config
   let config = defaultConfig(Network.Mainnet)
@@ -38,7 +43,7 @@ const exampleGettingStartedAdvanced = async () => {
   // Create the default storage
   const storage = await defaultStorage(`${RNFS.DocumentDirectoryPath}/data`)
 
-  const builder = new SdkBuilder(config, mnemonic, storage)
+  const builder = new SdkBuilder(config, seed, storage)
   // You can also pass your custom implementations:
   // builder.withRestChainService("https://custom.chain.service", {
   //   username: "service-username",
