@@ -23,6 +23,6 @@ RUN apt-get update -qq && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/lnurl /usr/local/bin
+COPY --from=builder /app/crates/breez-sdk/lnurl/target/release/lnurl /usr/local/bin
 
 ENTRYPOINT ["/usr/local/bin/lnurl"]
