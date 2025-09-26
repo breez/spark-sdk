@@ -27,10 +27,7 @@ pub struct SparkscanSyncService {
 impl SyncService for SparkscanSyncService {
     async fn sync_payments(&self) -> Result<(), SdkError> {
         self.sync_pending_payments().await?;
-        self.sync_payments_head_to_storage().await
-    }
-
-    async fn sync_historical_payments(&self) -> Result<(), SdkError> {
+        self.sync_payments_head_to_storage().await?;
         self.sync_payments_tail_to_storage().await
     }
 }
@@ -290,7 +287,8 @@ impl SparkscanSyncService {
         }
 
         // Insert what synced payments we have into storage from oldest to newest
-        for payment in payments_to_sync.iter().rev() {
+        payments_to_sync.sort_by_key(|p| p.timestamp);
+        for payment in payments_to_sync {
             self.storage.insert_payment(payment.clone()).await?;
             info!("Inserted payment: {payment:?}");
             let (last_synced_payment_id, next_head_offset) = if head_synced {
