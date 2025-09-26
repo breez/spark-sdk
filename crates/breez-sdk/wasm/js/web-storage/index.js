@@ -660,9 +660,9 @@ class IndexedDBStorage {
     }
 
     // If this is a Lightning payment and we have lnurl_pay_info, add it to details
-    if (metadata && metadata.lnurlPayInfo && details && details.Lightning) {
+    if (metadata && metadata.lnurlPayInfo && details && details.type == 'lightning') {
       try {
-        details.Lightning.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
+        details.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
       } catch (e) {
         throw new StorageError(
           `Failed to parse lnurl_pay_info JSON for payment ${payment.id}: ${e.message}`,
