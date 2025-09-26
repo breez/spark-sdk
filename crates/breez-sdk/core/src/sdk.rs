@@ -16,7 +16,6 @@ use breez_sdk_common::{
     },
     rest::RestClient,
 };
-use serde_json::Value;
 use spark_wallet::{
     ExitSpeed, InvoiceDescription, Order, PagingFilter, SparkAddress, SparkWallet, WalletEvent,
     WalletTransfer,
@@ -729,11 +728,13 @@ impl BreezSdk {
         };
         *lnurl_pay_info = Some(lnurl_info.clone());
 
+        let lnurl_description = lnurl_info.extract_description();
         self.storage
             .set_payment_metadata(
                 payment.id.clone(),
                 PaymentMetadata {
                     lnurl_pay_info: Some(lnurl_info),
+                    lnurl_description,
                 },
             )
             .await?;
@@ -1009,10 +1010,7 @@ impl BreezSdk {
         let payments = self
             .storage
             .list_payments(request.offset, request.limit)
-            .await?
-            .into_iter()
-            .map(map_payment)
-            .collect();
+            .await?;
         Ok(ListPaymentsResponse { payments })
     }
 
@@ -1020,7 +1018,7 @@ impl BreezSdk {
         &self,
         request: GetPaymentRequest,
     ) -> Result<GetPaymentResponse, SdkError> {
-        let payment = map_payment(self.storage.get_payment_by_id(request.payment_id).await?);
+        let payment = self.storage.get_payment_by_id(request.payment_id).await?;
         Ok(GetPaymentResponse { payment })
     }
 
@@ -1305,44 +1303,4 @@ fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
     }
 
     Ok(())
-}
-
-fn map_payment(mut payment: Payment) -> Payment {
-    let Some(ref mut details) = payment.details else {
-        return payment;
-    };
-
-    let PaymentDetails::Lightning {
-        description,
-        lnurl_pay_info,
-        ..
-    } = details
-    else {
-        return payment;
-    };
-
-    let Some(lnurl_pay_info) = lnurl_pay_info else {
-        return payment;
-    };
-
-    let Some(ref metadata) = lnurl_pay_info.metadata else {
-        return payment;
-    };
-
-    let Ok(metadata) = serde_json::from_str::<Vec<Vec<Value>>>(metadata) else {
-        return payment;
-    };
-
-    for arr in metadata {
-        if arr.len() != 2 {
-            continue;
-        }
-        if let (Some(key), Some(value)) = (arr[0].as_str(), arr[1].as_str())
-            && key == "text/plain"
-        {
-            *description = Some(value.to_string());
-            break;
-        }
-    }
-    payment
 }

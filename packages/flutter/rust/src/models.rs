@@ -373,6 +373,7 @@ pub enum _PaymentDetails {
 #[frb(mirror(PaymentMetadata))]
 pub struct _PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
+    pub lnurl_description: Option<String>,
 }
 
 #[frb(mirror(PaymentMethod))]

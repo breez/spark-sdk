@@ -52,6 +52,7 @@ impl From<serde_json::Error> for StorageError {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
+    pub lnurl_description: Option<String>,
 }
 
 /// Trait for persistent storage

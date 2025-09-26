@@ -7,6 +7,7 @@ use breez_sdk_common::{
 use core::fmt;
 use lnurl_models::RecoverLnurlPayResponse;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use spark_wallet::{
     CoopExitFeeQuote, CoopExitSpeedFeeQuote, ExitSpeed, LightningSendPayment, LightningSendStatus,
     Network as SparkNetwork, SspUserRequest, TransferDirection, TransferStatus, TransferType,
@@ -688,6 +689,31 @@ pub struct LnurlPayInfo {
     pub metadata: Option<String>,
     pub processed_success_action: Option<SuccessActionProcessed>,
     pub raw_success_action: Option<SuccessAction>,
+}
+
+impl LnurlPayInfo {
+    pub fn extract_description(&self) -> Option<String> {
+        let Some(metadata) = &self.metadata else {
+            return None;
+        };
+
+        let Ok(metadata) = serde_json::from_str::<Vec<Vec<Value>>>(metadata) else {
+            return None;
+        };
+
+        for arr in metadata {
+            if arr.len() != 2 {
+                continue;
+            }
+            if let (Some(key), Some(value)) = (arr[0].as_str(), arr[1].as_str())
+                && key == "text/plain"
+            {
+                return Some(value.to_string());
+            }
+        }
+
+        None
+    }
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]

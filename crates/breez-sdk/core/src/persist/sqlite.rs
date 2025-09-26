@@ -3,7 +3,7 @@ use rusqlite::{
     Connection, ToSql, params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
 };
-use rusqlite_migration::{M, Migrations};
+use rusqlite_migration::{M, Migrations, SchemaVersion};
 use std::path::{Path, PathBuf};
 
 use crate::{
@@ -56,7 +56,44 @@ impl SqliteStorage {
         let migrations =
             Migrations::new(Self::current_migrations().into_iter().map(M::up).collect());
         let mut conn = self.get_connection()?;
+        let previous_version = match migrations.current_version(&conn)? {
+            SchemaVersion::Inside(previous_version) => previous_version.get(),
+            _ => 0,
+        };
         migrations.to_latest(&mut conn)?;
+
+        if previous_version < 6 {
+            Self::migrate_lnurl_metadata_description(&mut conn)?;
+        }
+
+        Ok(())
+    }
+
+    fn migrate_lnurl_metadata_description(conn: &mut Connection) -> Result<(), StorageError> {
+        let mut stmt = conn.prepare("SELECT payment_id, lnurl_pay_info FROM payment_metadata")?;
+        let pay_infos: Vec<_> = stmt
+            .query_map([], |row| {
+                let payment_id: String = row.get(0)?;
+                let lnurl_pay_info: Option<LnurlPayInfo> = row.get(1)?;
+                Ok((payment_id, lnurl_pay_info))
+            })?
+            .collect::<Result<_, _>>()?;
+        let pay_infos = pay_infos
+            .into_iter()
+            .filter_map(|(payment_id, lnurl_pay_info)| {
+                let pay_info = lnurl_pay_info?;
+                let description = pay_info.extract_description()?;
+                Some((payment_id, description))
+            })
+            .collect::<Vec<_>>();
+
+        for pay_info in pay_infos {
+            conn.execute(
+                "UPDATE payment_metadata SET lnurl_description = ? WHERE payment_id = ?",
+                params![pay_info.1, pay_info.0],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -95,6 +132,7 @@ impl SqliteStorage {
               refund_tx_id TEXT NOT NULL,
               PRIMARY KEY (deposit_tx_id, deposit_vout)              
             );",
+            "ALTER TABLE payment_metadata ADD COLUMN lnurl_description TEXT;",
         ]
     }
 }
@@ -121,7 +159,7 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         let query = format!(
-            "SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, p.method, pm.lnurl_pay_info
+            "SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, p.method, pm.lnurl_pay_info, pm.lnurl_description
              FROM payments p
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              ORDER BY p.timestamp DESC 
@@ -134,8 +172,16 @@ impl Storage for SqliteStorage {
 
         let payment_iter = stmt.query_map(params![], |row| {
             let mut details: Option<PaymentDetails> = row.get(6)?;
-            if let Some(PaymentDetails::Lightning { lnurl_pay_info, .. }) = &mut details {
+            if let Some(PaymentDetails::Lightning {
+                lnurl_pay_info,
+                description,
+                ..
+            }) = &mut details
+            {
                 *lnurl_pay_info = row.get(8)?;
+                if description.is_none() {
+                    *description = row.get(9)?;
+                }
             }
 
             Ok(Payment {
@@ -187,8 +233,8 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         connection.execute(
-            "INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info) VALUES (?, ?)",
-            params![payment_id, metadata.lnurl_pay_info],
+            "INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_description) VALUES (?, ?, ?)",
+            params![payment_id, metadata.lnurl_pay_info, metadata.lnurl_description],
         )?;
 
         Ok(())
@@ -234,13 +280,23 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare(
-            "SELECT id, payment_type, status, amount, fees, timestamp, details, method, pm.lnurl_pay_info FROM payments LEFT JOIN payment_metadata pm ON payments.id = pm.payment_id WHERE payments.id = ?",
+            "SELECT id, payment_type, status, amount, fees, timestamp, details, method, pm.lnurl_pay_info, pm.lnurl_description
+             FROM payments 
+             LEFT JOIN payment_metadata pm ON payments.id = pm.payment_id WHERE payments.id = ?",
         )?;
 
         let result = stmt.query_row(params![id], |row| {
             let mut details: Option<PaymentDetails> = row.get(6)?;
-            if let Some(PaymentDetails::Lightning { lnurl_pay_info, .. }) = &mut details {
+            if let Some(PaymentDetails::Lightning {
+                lnurl_pay_info,
+                description,
+                ..
+            }) = &mut details
+            {
                 *lnurl_pay_info = row.get(8)?;
+                if description.is_none() {
+                    *description = row.get(9)?;
+                }
             }
 
             Ok(Payment {

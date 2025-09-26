@@ -145,6 +145,10 @@ class MigrationManager {
           `CREATE INDEX IF NOT EXISTS idx_payment_metadata_payment_id ON payment_metadata(payment_id)`,
         ],
       },
+      {
+        name: "Add lnurl_description column to payment_metadata",
+        sql: `ALTER TABLE payment_metadata ADD COLUMN lnurl_description TEXT`,
+      }
     ];
   }
 }
