@@ -721,7 +721,12 @@ impl BreezSdk {
             processed_success_action: success_action.clone(),
             raw_success_action: request.prepare_response.success_action,
         };
-        let Some(PaymentDetails::Lightning { lnurl_pay_info, .. }) = &mut payment.details else {
+        let Some(PaymentDetails::Lightning {
+            lnurl_pay_info,
+            description,
+            ..
+        }) = &mut payment.details
+        else {
             return Err(SdkError::Generic(
                 "Expected Lightning payment details".to_string(),
             ));
@@ -729,6 +734,8 @@ impl BreezSdk {
         *lnurl_pay_info = Some(lnurl_info.clone());
 
         let lnurl_description = lnurl_info.extract_description();
+        description.clone_from(&lnurl_description);
+
         self.storage
             .set_payment_metadata(
                 payment.id.clone(),
