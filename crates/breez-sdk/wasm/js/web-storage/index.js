@@ -450,6 +450,7 @@ class IndexedDBStorage {
         lnurlPayInfo: metadata.lnurlPayInfo
           ? JSON.stringify(metadata.lnurlPayInfo)
           : null,
+        lnurlDescription: metadata.lnurlDescription,
       };
 
       const request = store.put(metadataToStore);

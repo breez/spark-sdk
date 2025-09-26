@@ -126,7 +126,7 @@ class SqliteStorage {
       const actualLimit = limit !== null ? limit : 4294967295; // u32::MAX
 
       const stmt = this.db.prepare(`
-                SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, p.method, pm.lnurl_pay_info
+                SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, p.method, pm.lnurl_pay_info, pm.lnurl_description
                 FROM payments p
                 LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
                 ORDER BY p.timestamp DESC 
@@ -188,7 +188,7 @@ class SqliteStorage {
       }
 
       const stmt = this.db.prepare(`
-                SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, p.method, pm.lnurl_pay_info
+                SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, p.method, pm.lnurl_pay_info, pm.lnurl_description
                 FROM payments p
                 LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
                 WHERE p.id = ?
@@ -217,13 +217,14 @@ class SqliteStorage {
   setPaymentMetadata(paymentId, metadata) {
     try {
       const stmt = this.db.prepare(`
-                INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info) 
-                VALUES (?, ?)
+                INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_description) 
+                VALUES (?, ?, ?)
             `);
 
       stmt.run(
         paymentId,
-        metadata.lnurlPayInfo ? JSON.stringify(metadata.lnurlPayInfo) : null
+        metadata.lnurlPayInfo ? JSON.stringify(metadata.lnurlPayInfo) : null,
+        metadata.lnurlDescription
       );
       return Promise.resolve();
     } catch (error) {
