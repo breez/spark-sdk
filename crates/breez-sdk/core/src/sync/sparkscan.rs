@@ -209,6 +209,34 @@ impl SparkscanSyncService {
     /// `last_synced_payment_id`. If `max_pages` is reached or we get an error response from the Sparkscan
     /// API, it will update the `next_head_offset` for the next sync. This allows us to gradually sync the
     /// head up to the `last_synced_payment_id` in multiple sync cycles.
+    ///
+    /// Sync cycle 1:
+    ///                                                                   Last synced payment ID
+    ///                                                                                      ↓
+    ///                                        [   0 - 24  ][  25 - 49  ][  50 - 74  ][  75 - 99  ]
+    ///                                        [###########][###########]
+    ///                                                                  ↑
+    ///                                                       Next offset 50
+    /// 75 new payments added during sync
+    ///
+    /// [   0 - 24  ][  25 - 49  ][  50 - 74  ]
+    ///                           ↑
+    ///          Next offset still 50
+    ///                           [  50 - 74  ][  75 - 99  ][ 100 - 124 ][ 125 - 149 ][ 150 - 174 ]
+    ///                                        [###########][###########] <- Double synced
+    ///                           [###########][###########][###########][###########][#######    ]
+    ///                                                                                      ↑
+    ///                            ↑                                 Find last synced payment ID
+    ///                          New last synced payment ID
+    ///
+    /// Sync cycle 2:
+    ///         Last synced payment ID
+    ///                            ↓
+    /// [   0 - 24  ][  25 - 49  ][  50 - 74  ]
+    /// [###########][###########][#          ]
+    ///  ↑
+    /// New last synced payment ID
+    ///
     async fn sync_payments_head_to_storage(&self) -> Result<(), SdkError> {
         info!("Syncing payments head to storage");
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
