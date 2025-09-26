@@ -17,8 +17,8 @@ use breez_sdk_common::{
     rest::RestClient,
 };
 use spark_wallet::{
-    ExitSpeed, InvoiceDescription, ListTokenTransactionsRequest, SparkAddress, SparkWallet,
-    TokenInputs, TransferTokenOutput, WalletEvent, WalletTransfer,
+    ExitSpeed, InvoiceDescription, SparkAddress, SparkWallet, TransferTokenOutput, WalletEvent,
+    WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
 use tracing::{error, info, trace};
@@ -34,10 +34,9 @@ use crate::{
     DepositInfo, Fee, GetPaymentRequest, GetPaymentResponse, LightningAddressInfo,
     ListFiatCurrenciesResponse, ListFiatRatesResponse, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
-    Network, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
-    RegisterLightningAddressRequest, SendPaymentOptions,
-    adaptors::sparkscan::payments_from_address_transaction_and_ssp_request,
+    Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
+    SendPaymentOptions,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     lnurl::LnurlServerClient,
@@ -49,17 +48,18 @@ use crate::{
         SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
     persist::{
-        CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, PaymentMetadata,
-        StaticDepositAddress, Storage, UpdateDepositPayload,
+        CachedAccountInfo, ObjectCacheRepository, PaymentMetadata, StaticDepositAddress, Storage,
+        UpdateDepositPayload,
     },
+    sync::SyncStrategy,
     utils::{
         deposit_chain_syncer::DepositChainSyncer,
+        token::token_transaction_to_payments,
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
 
 const SPARKSCAN_API_URL: &str = "https://api.sparkscan.io";
-const PAYMENT_SYNC_BATCH_SIZE: u64 = 50;
 
 #[derive(Clone, Debug)]
 enum SyncType {
@@ -76,6 +76,7 @@ pub struct BreezSdk {
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
     chain_service: Arc<dyn BitcoinChainService>,
+    sync_service: Arc<SyncStrategy>,
     fiat_service: Arc<dyn FiatService>,
     lnurl_client: Arc<dyn RestClient>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
@@ -167,6 +168,7 @@ pub(crate) struct BreezSdkParams {
     pub config: Config,
     pub storage: Arc<dyn Storage>,
     pub chain_service: Arc<dyn BitcoinChainService>,
+    pub sync_service: Arc<SyncStrategy>,
     pub fiat_service: Arc<dyn FiatService>,
     pub lnurl_client: Arc<dyn RestClient>,
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
@@ -187,6 +189,7 @@ impl BreezSdk {
             spark_wallet: params.spark_wallet,
             storage: params.storage,
             chain_service: params.chain_service,
+            sync_service: params.sync_service,
             fiat_service: params.fiat_service,
             lnurl_client: params.lnurl_client,
             lnurl_server_client: params.lnurl_server_client,
@@ -254,18 +257,17 @@ impl BreezSdk {
                             }
                         }
                     }
-                    () = async {
-                      let sync_type_res = sync_trigger_receiver.recv().await;
-                      if let Ok(sync_type) = sync_type_res   {
-                          info!("Sync trigger changed: {:?}", &sync_type);
+                    sync_type_res = sync_trigger_receiver.recv() => {
+                        if let Ok(sync_type) = sync_type_res   {
+                            info!("Sync trigger changed: {:?}", &sync_type);
 
-                          if let Err(e) = sdk.sync_wallet_internal(sync_type.clone()).await {
-                              error!("Failed to sync wallet: {e:?}");
-                          } else if matches!(sync_type, SyncType::Full) {
-                            last_sync_time = SystemTime::now();
-                          }
-                      }
-                  } => {}
+                            if let Err(e) = sdk.sync_wallet_internal(sync_type.clone()).await {
+                                error!("Failed to sync wallet: {e:?}");
+                            } else if matches!(sync_type, SyncType::Full) {
+                                last_sync_time = SystemTime::now();
+                            }
+                        }
+                    }
                     // Ensure we sync at least the configured interval
                     () = tokio::time::sleep(Duration::from_secs(10)) => {
                         let now = SystemTime::now();
@@ -313,14 +315,16 @@ impl BreezSdk {
         let start_time = Instant::now();
         if let SyncType::Full = sync_type {
             // Sync with the Spark network
-            info!("sync_wallet_internal: Syncing with Spark network");
-            self.spark_wallet.sync().await?;
-            info!("sync_wallet_internal: Synced with Spark network completed");
+            if let Err(e) = self.spark_wallet.sync().await {
+                error!("sync_wallet_internal: Failed to sync with Spark network: {e:?}");
+            }
         }
-        self.sync_wallet_state_to_storage().await?;
-        info!("sync_wallet_internal: Synced wallet state to storage completed");
-        self.check_and_claim_static_deposits().await?;
-        info!("sync_wallet_internal: Checked and claimed static deposits completed");
+        if let Err(e) = self.sync_wallet_state_to_storage().await {
+            error!("sync_wallet_internal: Failed to sync wallet state to storage: {e:?}");
+        }
+        if let Err(e) = self.check_and_claim_static_deposits().await {
+            error!("sync_wallet_internal: Failed to check and claim static deposits: {e:?}");
+        }
         let elapsed = start_time.elapsed();
         info!("sync_wallet_internal: Wallet sync completed in {elapsed:?}");
         self.event_emitter.emit(&SdkEvent::Synced {});
@@ -332,10 +336,7 @@ impl BreezSdk {
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
 
         self.sync_balances_to_storage(&object_repository).await?;
-        self.sync_pending_payments().await?;
-        self.sync_payments_to_storage(&object_repository).await?;
-
-        Ok(())
+        self.sync_service.sync_payments().await
     }
 
     async fn sync_balances_to_storage(
@@ -356,234 +357,6 @@ impl BreezSdk {
                 token_balances,
             })
             .await?;
-        Ok(())
-    }
-
-    async fn sync_payments_to_storage(
-        &self,
-        object_repository: &ObjectCacheRepository,
-    ) -> Result<(), SdkError> {
-        // Get the last payment id we processed from storage
-        let cached_sync_info = object_repository
-            .fetch_sync_info()
-            .await?
-            .unwrap_or_default();
-        let last_synced_id = cached_sync_info.last_synced_payment_id;
-
-        // TODO: use new spark address format once sparkscan supports it
-        let legacy_spark_address = self
-            .spark_wallet
-            .get_spark_address()?
-            .to_string_with_hrp_legacy();
-
-        let mut payments_to_sync = Vec::new();
-
-        // We'll keep querying in batches until we have all payments or we find the last synced payment
-        let mut next_offset = 0_u64;
-        let mut has_more = true;
-        let mut found_last_synced = false;
-        info!("Syncing payments to storage, offset = {next_offset}");
-        while has_more && !found_last_synced {
-            // Get batch of address transactions starting from current offset
-            let response = sparkscan::Client::new(&self.config.sparkscan_api_url)
-                .get_address_transactions_v1_address_address_transactions_get()
-                .network(sparkscan::types::Network::from(self.config.network))
-                .address(legacy_spark_address.to_string())
-                .offset(next_offset)
-                .limit(PAYMENT_SYNC_BATCH_SIZE)
-                .send()
-                .await?;
-            let address_transactions = &response.data;
-
-            let ssp_transfer_types = [
-                sparkscan::types::AddressTransactionType::BitcoinDeposit,
-                sparkscan::types::AddressTransactionType::BitcoinWithdrawal,
-                sparkscan::types::AddressTransactionType::LightningPayment,
-            ];
-            let ssp_user_requests = self
-                .spark_wallet
-                .query_ssp_user_requests(
-                    address_transactions
-                        .iter()
-                        .filter(|tx| ssp_transfer_types.contains(&tx.type_))
-                        .map(|tx| tx.id.clone())
-                        .collect(),
-                )
-                .await?;
-
-            info!(
-                "Syncing payments to storage, offset = {next_offset}, transactions = {}",
-                address_transactions.len()
-            );
-            // Process transactions in this batch
-            for transaction in address_transactions {
-                // Create payment records
-                let payments = payments_from_address_transaction_and_ssp_request(
-                    transaction,
-                    ssp_user_requests.get(&transaction.id),
-                    &legacy_spark_address,
-                )?;
-
-                for payment in payments {
-                    if payment.id == last_synced_id {
-                        info!(
-                            "Last synced payment id found ({last_synced_id}), stopping sync and proceeding to insert {} payments",
-                            payments_to_sync.len()
-                        );
-                        found_last_synced = true;
-                        break;
-                    }
-                    payments_to_sync.push(payment);
-                }
-
-                // If we found the last synced payment, stop processing this batch
-                if found_last_synced {
-                    break;
-                }
-            }
-
-            // Check if we have more transfers to fetch
-            next_offset = next_offset.saturating_add(u64::try_from(address_transactions.len())?);
-            has_more = address_transactions.len() as u64 == PAYMENT_SYNC_BATCH_SIZE;
-        }
-
-        // Insert payment into storage from oldest to newest
-        for payment in payments_to_sync.iter().rev() {
-            self.storage.insert_payment(payment.clone()).await?;
-            info!("Inserted payment: {payment:?}");
-            object_repository
-                .save_sync_info(&CachedSyncInfo {
-                    last_synced_payment_id: payment.id.clone(),
-                })
-                .await?;
-        }
-
-        Ok(())
-    }
-
-    /// Syncs pending payments so that we have their latest status
-    /// Uses the Spark SDK API to get the latest status of the payments
-    async fn sync_pending_payments(&self) -> Result<(), SdkError> {
-        // TODO: implement pending payment syncing using sparkscan API (including live updates)
-        // Advantages:
-        // - No need to maintain payment adapter code for both models
-        // - Can use live updates from sparkscan API
-        // Why it can't be done now:
-        // - Sparkscan needs one of the following:
-        //   - Batch transaction querying by id
-        //   - Sorting by updated_at timestamp in address transactions query (simpler)
-
-        let pending_payments = self
-            .storage
-            .list_payments(None, None, Some(PaymentStatus::Pending))
-            .await?;
-
-        let (pending_token_payments, pending_bitcoin_payments): (Vec<_>, Vec<_>) = pending_payments
-            .iter()
-            .partition(|p| p.method == PaymentMethod::Token);
-
-        info!(
-            "Syncing pending bitcoin payments: {}",
-            pending_bitcoin_payments.len()
-        );
-        self.sync_pending_bitcoin_payments(&pending_bitcoin_payments)
-            .await?;
-        info!(
-            "Syncing pending token payments: {}",
-            pending_token_payments.len()
-        );
-        self.sync_pending_token_payments(&pending_token_payments)
-            .await?;
-
-        Ok(())
-    }
-
-    async fn sync_pending_bitcoin_payments(
-        &self,
-        pending_bitcoin_payments: &[&Payment],
-    ) -> Result<(), SdkError> {
-        if pending_bitcoin_payments.is_empty() {
-            return Ok(());
-        }
-
-        let transfer_ids: Vec<_> = pending_bitcoin_payments
-            .iter()
-            .map(|p| p.id.clone())
-            .collect();
-
-        let transfers = self
-            .spark_wallet
-            .list_transfers(None, Some(transfer_ids.clone()))
-            .await?;
-
-        for transfer in transfers {
-            let payment = Payment::try_from(transfer)?;
-            info!("Inserting previously pending bitcoin payment: {payment:?}");
-            self.storage.insert_payment(payment).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn sync_pending_token_payments(
-        &self,
-        pending_token_payments: &[&Payment],
-    ) -> Result<(), SdkError> {
-        if pending_token_payments.is_empty() {
-            return Ok(());
-        }
-
-        let hash_pending_token_payments_map = pending_token_payments.iter().try_fold(
-            std::collections::HashMap::new(),
-            |mut acc: std::collections::HashMap<&_, Vec<_>>, payment| {
-                let details = payment
-                    .details
-                    .as_ref()
-                    .ok_or_else(|| SdkError::Generic("Payment details missing".to_string()))?;
-
-                if let PaymentDetails::Token { tx_hash, .. } = details {
-                    acc.entry(tx_hash).or_default().push(payment);
-                    Ok(acc)
-                } else {
-                    Err(SdkError::Generic(
-                        "Payment is not a token payment".to_string(),
-                    ))
-                }
-            },
-        )?;
-
-        let token_transactions = self
-            .spark_wallet
-            .list_token_transactions(ListTokenTransactionsRequest {
-                token_transaction_hashes: hash_pending_token_payments_map
-                    .keys()
-                    .map(|k| (*k).to_string())
-                    .collect(),
-                ..Default::default()
-            })
-            .await?;
-
-        for token_transaction in token_transactions {
-            let is_transfer_transaction =
-                matches!(token_transaction.inputs, TokenInputs::Transfer(..));
-            let payment_status = PaymentStatus::from_token_transaction_status(
-                token_transaction.status,
-                is_transfer_transaction,
-            );
-            if payment_status != PaymentStatus::Pending {
-                let payments_to_update = hash_pending_token_payments_map
-                    .get(&token_transaction.hash)
-                    .ok_or(SdkError::Generic("Payment not found".to_string()))?;
-                for payment in payments_to_update {
-                    // For now, updating the status is enough
-                    let mut updated_payment = (**payment).clone();
-                    updated_payment.status = payment_status;
-                    info!("Inserting previously pending token payment: {updated_payment:?}");
-                    self.storage.insert_payment(updated_payment).await?;
-                }
-            }
-        }
-
         Ok(())
     }
 
@@ -1476,16 +1249,7 @@ impl BreezSdk {
         amount: u128,
         receiver_address: SparkAddress,
     ) -> Result<Payment, SdkError> {
-        // Get token metadata before sending the payment to make sure we get it from cache
-        let metadata = self
-            .spark_wallet
-            .get_tokens_metadata(&[&token_identifier])
-            .await?
-            .first()
-            .ok_or(SdkError::Generic("Token metadata not found".to_string()))?
-            .clone();
-
-        let tx_hash = self
+        let token_transaction = self
             .spark_wallet
             .transfer_tokens(vec![TransferTokenOutput {
                 token_id: token_identifier,
@@ -1494,26 +1258,18 @@ impl BreezSdk {
             }])
             .await?;
 
-        // Build and insert pending payment into storage as it may take some time for sparkscan to detect it
-        let payment = Payment {
-            id: format!("{tx_hash}:0"), // Transaction output index 0 is for the receiver
-            payment_type: PaymentType::Send,
-            status: PaymentStatus::Pending,
-            amount: amount.try_into()?,
-            fees: 0,
-            timestamp: SystemTime::now()
-                .duration_since(web_time::UNIX_EPOCH)
-                .map_err(|_| SdkError::Generic("Failed to get current timestamp".to_string()))?
-                .as_secs(),
-            method: PaymentMethod::Token,
-            details: Some(PaymentDetails::Token {
-                metadata: metadata.into(),
-                tx_hash,
-            }),
-        };
-        self.storage.insert_payment(payment.clone()).await?;
+        let payments =
+            token_transaction_to_payments(&self.spark_wallet, &token_transaction, true).await?;
+        for payment in &payments {
+            self.storage.insert_payment(payment.clone()).await?;
+        }
 
-        Ok(payment)
+        payments
+            .first()
+            .ok_or(SdkError::Generic(
+                "No payment created from token transfer".to_string(),
+            ))
+            .cloned()
     }
 }
 
