@@ -17,8 +17,6 @@ const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
 const SPARKSCAN_SYNC_INFO_KEY: &str = "sparkscan_sync_info";
 const TX_CACHE_KEY: &str = "tx_cache";
 const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
-
-// Old keys (avoid using them)
 const SYNC_OFFSET_KEY: &str = "sync_offset";
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -355,6 +353,7 @@ pub(crate) struct CachedSparkscanSyncInfo {
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedSyncInfo {
     pub(crate) offset: u64,
+    pub(crate) last_synced_token_payment_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

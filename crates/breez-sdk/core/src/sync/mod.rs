@@ -10,7 +10,6 @@ pub(crate) use sparkscan::SparkscanSyncService;
 #[macros::async_trait]
 pub trait SyncService: Send + Sync {
     async fn sync_payments(&self) -> Result<(), SdkError>;
-    async fn sync_historical_payments(&self) -> Result<(), SdkError>;
 }
 
 pub enum SyncStrategy {
@@ -23,13 +22,6 @@ impl SyncStrategy {
         match self {
             SyncStrategy::Spark(service) => service.sync_payments().await,
             SyncStrategy::Sparkscan(service) => service.sync_payments().await,
-        }
-    }
-
-    pub async fn sync_historical_payments(&self) -> Result<(), SdkError> {
-        match self {
-            SyncStrategy::Spark(service) => service.sync_historical_payments().await,
-            SyncStrategy::Sparkscan(service) => service.sync_historical_payments().await,
         }
     }
 }
