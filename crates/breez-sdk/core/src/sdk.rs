@@ -1088,7 +1088,7 @@ impl BreezSdk {
             .await?;
         let deposit: DepositInfo = detailed_utxo.into();
         let tx_hex = serialize(&tx).as_hex().to_string();
-        let tx_id = tx.compute_txid().to_string();
+        let tx_id = tx.compute_txid().as_raw_hash().to_string();
 
         // Store the refund transaction details separately
         self.storage

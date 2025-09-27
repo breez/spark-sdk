@@ -16,6 +16,13 @@ pub struct DepositChainSyncer {
     storage: Arc<dyn Storage>,
     spark_wallet: Arc<SparkWallet>,
     utxo_fetcher: CachedUtxoFetcher,
+    chain_service: Arc<dyn BitcoinChainService>,
+}
+
+#[derive(Eq, Hash, PartialEq, Clone)]
+struct TxOutput {
+    txid: String,
+    vout: u32,
 }
 
 impl DepositChainSyncer {
@@ -27,7 +34,8 @@ impl DepositChainSyncer {
         Self {
             storage: storage.clone(),
             spark_wallet,
-            utxo_fetcher: CachedUtxoFetcher::new(chain_service, storage),
+            utxo_fetcher: CachedUtxoFetcher::new(chain_service.clone(), storage),
+            chain_service,
         }
     }
 
@@ -76,11 +84,20 @@ impl DepositChainSyncer {
         // Now remove all deposits that are no longer claimable and not refunded
         let deposits = self.storage.list_deposits().await?;
         let mut refunded = HashSet::new();
+        let mut refunded_deposits = HashMap::new();
         for deposit in deposits {
             let key = format!("{}:{}", deposit.txid, deposit.vout);
-            match deposit.refund_tx_id {
+            match deposit.refund_tx_id.clone() {
                 Some(txid) => {
-                    refunded.insert(format!("{}:{}", txid, deposit.vout));
+                    info!(
+                        "Found refund transaction {}:{} deposit tx: {}",
+                        txid, deposit.vout, deposit.txid
+                    );
+                    refunded.insert(TxOutput {
+                        txid: deposit.txid.clone(),
+                        vout: deposit.vout,
+                    });
+                    refunded_deposits.insert(txid, deposit.clone());
                 }
                 None => {
                     if !all_utxos.contains_key(&key) {
@@ -92,9 +109,40 @@ impl DepositChainSyncer {
             }
         }
 
+        for (refund_tx_id, deposit) in &refunded_deposits {
+            info!(
+                "Checking refund transaction {}:{}",
+                deposit.txid, deposit.vout
+            );
+            let status = self
+                .chain_service
+                .get_transaction_status(refund_tx_id.to_string())
+                .await;
+            match status {
+                Ok(status) => {
+                    if status.confirmed {
+                        self.storage
+                            .delete_deposit(deposit.txid.clone(), deposit.vout)
+                            .await?;
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to download refund transaction {}:{}: {e}",
+                        refund_tx_id, deposit.vout
+                    );
+                }
+            }
+        }
+
         Ok(all_utxos
             .values()
-            .filter(|u| !refunded.contains(&format!("{}:{}", u.txid, u.vout)))
+            .filter(|u| {
+                !refunded.contains(&TxOutput {
+                    txid: u.txid.to_string(),
+                    vout: u.vout,
+                })
+            })
             .cloned()
             .collect())
     }
