@@ -332,7 +332,7 @@ pub trait TreeStore: Send + Sync {
     /// let available_count = all_leaves.available.iter()
     ///     .filter(|leaf| leaf.status == TreeNodeStatus::Available)
     ///     .count();
-    /// println!("Found {} available leaves out of {}", available_count, all_leaves.len());
+    /// println!("Found {} available leaves out of {}", available_count, all_leaves.available.len());
     /// # Ok(())
     /// # }
     /// ```
