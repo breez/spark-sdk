@@ -5,8 +5,8 @@ use tracing::{error, trace, warn};
 use uuid::Uuid;
 
 use crate::tree::{
-    LeavesReservation, LeavesReservationId, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus,
-    TreeServiceError, TreeStore, select_helper,
+    Leaves, LeavesReservation, LeavesReservationId, TargetAmounts, TreeNode, TreeNodeId,
+    TreeNodeStatus, TreeServiceError, TreeStore, select_helper,
 };
 
 #[derive(Default)]
@@ -17,6 +17,7 @@ pub struct InMemoryTreeStore {
 #[derive(Default)]
 struct LeavesState {
     leaves: HashMap<TreeNodeId, TreeNode>,
+    missing_operators_leaves: HashMap<TreeNodeId, TreeNode>,
     leaves_reservations: HashMap<LeavesReservationId, Vec<TreeNode>>,
 }
 
@@ -31,25 +32,60 @@ impl TreeStore for InMemoryTreeStore {
         Ok(())
     }
 
-    async fn get_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
-        Ok(self.leaves.lock().await.leaves.values().cloned().collect())
+    async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
+        let leaves = self.leaves.lock().await;
+        Ok(Leaves {
+            available: leaves
+                .leaves
+                .values()
+                .filter(|leaf| leaf.status == TreeNodeStatus::Available)
+                .cloned()
+                .collect(),
+            non_available: leaves
+                .leaves
+                .values()
+                .filter(|leaf| leaf.status != TreeNodeStatus::Available)
+                .cloned()
+                .collect(),
+            missing_from_operators: leaves.missing_operators_leaves.values().cloned().collect(),
+            reserved: leaves
+                .leaves_reservations
+                .values()
+                .flatten()
+                .cloned()
+                .collect(),
+        })
     }
 
-    async fn set_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
+    async fn set_leaves(
+        &self,
+        leaves: &[TreeNode],
+        missing_operators_leaves: &[TreeNode],
+    ) -> Result<(), TreeServiceError> {
         let mut leaves_state = self.leaves.lock().await;
         leaves_state.leaves = leaves.iter().map(|l| (l.id.clone(), l.clone())).collect();
+        leaves_state.missing_operators_leaves = missing_operators_leaves
+            .iter()
+            .map(|l| (l.id.clone(), l.clone()))
+            .collect();
 
         for (key, reserved_leaves) in leaves_state.leaves_reservations.clone().iter() {
             // remove leaves not existing in the main pool
             let mut filtered_leaves: Vec<TreeNode> = reserved_leaves
                 .iter()
-                .filter(|l| leaves_state.leaves.contains_key(&l.id))
+                .filter(|l| {
+                    leaves_state.leaves.contains_key(&l.id)
+                        || leaves_state.missing_operators_leaves.contains_key(&l.id)
+                })
                 .cloned()
                 .collect();
 
             // update reserved leaves that just got updated in the main pool
             for l in filtered_leaves.iter_mut() {
                 if let Some(leaf) = leaves_state.leaves.remove(&l.id) {
+                    *l = leaf;
+                }
+                if let Some(leaf) = leaves_state.missing_operators_leaves.remove(&l.id) {
                     *l = leaf;
                 }
             }
@@ -73,12 +109,7 @@ impl TreeStore for InMemoryTreeStore {
         trace!("Reserving leaves for amounts: {target_amounts:?}");
         let reservation = {
             // Filter available leaves from the state
-            let leaves: Vec<TreeNode> = self
-                .get_leaves()
-                .await?
-                .into_iter()
-                .filter(|leaf| leaf.status == TreeNodeStatus::Available)
-                .collect();
+            let leaves: Vec<TreeNode> = self.get_leaves().await?.available.into_iter().collect();
             // Select leaves that match the target amounts
             let target_leaves_res =
                 select_helper::select_leaves_by_amounts(&leaves, target_amounts);
@@ -245,7 +276,7 @@ mod tests {
 
         state.add_leaves(&leaves).await.unwrap();
 
-        let stored_leaves = state.get_leaves().await.unwrap();
+        let stored_leaves = state.get_leaves().await.unwrap().available;
         assert_eq!(stored_leaves.len(), 2);
         assert!(
             stored_leaves
@@ -268,7 +299,7 @@ mod tests {
         state.add_leaves(&[leaf1]).await.unwrap();
         state.add_leaves(&[leaf2]).await.unwrap();
 
-        let stored_leaves = state.get_leaves().await.unwrap();
+        let stored_leaves = state.get_leaves().await.unwrap().available;
         assert_eq!(stored_leaves.len(), 1);
         // Should have the second value (200) as it overwrites the first
         assert_eq!(stored_leaves[0].value, 200);
@@ -284,9 +315,9 @@ mod tests {
             create_test_tree_node("node2", 200),
             create_test_tree_node("node3", 300),
         ];
-        state.set_leaves(&new_leaves).await.unwrap();
+        state.set_leaves(&new_leaves, &[]).await.unwrap();
 
-        let stored_leaves = state.get_leaves().await.unwrap();
+        let stored_leaves = state.get_leaves().await.unwrap().available;
         assert_eq!(stored_leaves.len(), 2);
         assert!(stored_leaves.iter().any(|l| l.id.to_string() == "node2"));
         assert!(stored_leaves.iter().any(|l| l.id.to_string() == "node3"));
@@ -310,6 +341,7 @@ mod tests {
             .unwrap();
 
         // Update leaves with new data (including updated versions of reserved leaves)
+        let non_existing_operator_leaf = create_test_tree_node("node7", 1000); // Updated value
         let mut updated_leaf1 = create_test_tree_node("node1", 150); // Updated value
         updated_leaf1.status = crate::tree::TreeNodeStatus::TransferLocked;
         let new_leaves = vec![
@@ -317,7 +349,10 @@ mod tests {
             create_test_tree_node("node2", 250), // Updated value
             create_test_tree_node("node4", 400), // New leaf, node3 removed
         ];
-        state.set_leaves(&new_leaves).await.unwrap();
+        state
+            .set_leaves(&new_leaves, &[non_existing_operator_leaf])
+            .await
+            .unwrap();
 
         // Check that reserved leaves were updated with new data
         let reservation = state.get_reservation(&reservation.id).await.unwrap();
@@ -330,9 +365,18 @@ mod tests {
         assert_eq!(reservation[1].value, 250);
 
         // Check main pool
-        let main_leaves = state.get_leaves().await.unwrap();
-        assert_eq!(main_leaves.len(), 1); // Only node4 should be in main pool
-        assert!(main_leaves.iter().any(|l| l.id.to_string() == "node4"));
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.reserved_balance(), 400);
+        assert_eq!(all_leaves.available_balance(), 400);
+        assert_eq!(all_leaves.missing_operators_balance(), 1000);
+        assert_eq!(all_leaves.balance(), 400 + 1000);
+        assert_eq!(all_leaves.available.len(), 1); // Only node4 should be in main pool
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node4")
+        );
     }
 
     #[async_test_all]
@@ -352,7 +396,7 @@ mod tests {
 
         // Set new leaves that don't include the reserved ones
         let new_leaves = vec![create_test_tree_node("node3", 300)];
-        state.set_leaves(&new_leaves).await.unwrap();
+        state.set_leaves(&new_leaves, &[]).await.unwrap();
 
         // Reserved leaves should be removed since they don't exist in main pool
         let leaves_state = state.leaves.lock().await;
@@ -379,7 +423,7 @@ mod tests {
         assert_eq!(reserved.len(), 1);
         assert_eq!(reserved[0].id, leaves[0].id);
         // Check that leaf was removed from main pool
-        let main_leaves = state.get_leaves().await.unwrap();
+        let main_leaves = state.get_leaves().await.unwrap().available;
         assert_eq!(main_leaves.len(), 1);
         assert_eq!(main_leaves[0].id, leaves[1].id);
     }
@@ -405,7 +449,7 @@ mod tests {
         assert!(state.get_reservation(&reservation.id).await.is_none());
 
         // Check that leaf was returned to main pool
-        let main_leaves = state.get_leaves().await.unwrap();
+        let main_leaves = state.get_leaves().await.unwrap().available;
         assert_eq!(main_leaves.len(), 2);
         assert!(main_leaves.iter().any(|l| l.id == leaves[0].id));
         assert!(main_leaves.iter().any(|l| l.id == leaves[1].id));
@@ -445,7 +489,7 @@ mod tests {
         assert!(state.get_reservation(&reservation.id).await.is_none());
 
         // Check that leaf was NOT returned to main pool (it's considered used)
-        let main_leaves = state.get_leaves().await.unwrap();
+        let main_leaves = state.get_leaves().await.unwrap().available;
         assert_eq!(main_leaves.len(), 1);
         assert_eq!(main_leaves[0].id, leaves[1].id);
     }
@@ -462,7 +506,7 @@ mod tests {
         assert!(leaves_state.leaves_reservations.is_empty());
         drop(leaves_state);
 
-        let main_leaves = state.get_leaves().await.unwrap();
+        let main_leaves = state.get_leaves().await.unwrap().available;
         assert!(main_leaves.is_empty());
     }
 
@@ -499,19 +543,19 @@ mod tests {
         );
 
         // Check main pool has only one leaf left
-        let main_leaves = state.get_leaves().await.unwrap();
+        let main_leaves = state.get_leaves().await.unwrap().available;
         assert_eq!(main_leaves.len(), 1);
         assert_eq!(main_leaves[0].id, leaves[2].id);
 
         // Cancel one reservation
         state.cancel_reservation(&reservation1.id).await.unwrap();
         assert!(state.get_reservation(&reservation1.id).await.is_none());
-        assert_eq!(state.get_leaves().await.unwrap().len(), 2);
+        assert_eq!(state.get_leaves().await.unwrap().available.len(), 2);
 
         // Finalize the other
         state.finalize_reservation(&reservation2.id).await.unwrap();
         assert!(state.get_reservation(&reservation2.id).await.is_none());
-        assert_eq!(state.get_leaves().await.unwrap().len(), 2); // node1 returned, node3 was always there
+        assert_eq!(state.get_leaves().await.unwrap().available.len(), 2); // node1 returned, node3 was always there
     }
 
     #[async_test_all]
