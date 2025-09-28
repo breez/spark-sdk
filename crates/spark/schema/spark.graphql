@@ -543,7 +543,7 @@ type LightningSendRequest implements UserRequest & Entity {
   fee: CurrencyAmount!
 
   """The idempotency key of the request."""
-  idempotency_key: String!
+  idempotency_key: String
 
   """The status of the request."""
   status: LightningSendRequestStatus!
