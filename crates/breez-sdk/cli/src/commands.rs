@@ -172,7 +172,7 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::Sync => {
-            let value = sdk.sync_wallet(SyncWalletRequest {}).await?;
+            let value = sdk.sync_wallet(SyncWalletRequest {})?;
             print_value(&value)?;
             Ok(true)
         }
