@@ -13,10 +13,13 @@ It’s a nodeless integration that offers a self-custodial, end-to-end solution 
 **Key Features**
 
 - [x] Send and receive Lightning payments
+- [x] Send and receive via LNURL-pay & Lightning addresses 
 - [x] Send and receive Spark payments  
 - [x] On-chain interoperability
-- [x] Send LNURL-pay payments
+- [x] Bindings to add popular languages & frameworks
 - [x] Keys are only held by users
+- [x] Payments persistency including restore support
+- [x] Automatic claims
 - [x] WebAssembly support
 - [x] Free open-source solution
 
