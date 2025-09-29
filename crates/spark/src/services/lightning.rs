@@ -64,7 +64,7 @@ pub struct LightningSendPayment {
     pub network: Network,
     pub encoded_invoice: String,
     pub fee_sat: u64,
-    pub idempotency_key: String,
+    pub idempotency_key: Option<String>,
     pub status: LightningSendStatus,
     pub transfer_id: Option<TransferId>,
     pub payment_preimage: Option<String>,

@@ -36,7 +36,7 @@ use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, info, trace};
 
 use crate::{
-    ListTokenTransactionsRequest, TokenBalance, WalletEvent,
+    ListTokenTransactionsRequest, TokenBalance, WalletEvent, WalletLeaves,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
@@ -214,9 +214,9 @@ impl SparkWallet {
 }
 
 impl SparkWallet {
-    pub async fn list_leaves(&self) -> Result<Vec<WalletLeaf>, SparkWalletError> {
+    pub async fn list_leaves(&self) -> Result<WalletLeaves, SparkWalletError> {
         let leaves = self.tree_service.list_leaves().await?;
-        Ok(leaves.into_iter().map(WalletLeaf::from).collect())
+        Ok(leaves.into())
     }
 
     pub async fn pay_lightning_invoice(

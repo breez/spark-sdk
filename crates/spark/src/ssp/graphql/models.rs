@@ -429,7 +429,7 @@ pub struct LightningSendRequest {
     pub network: BitcoinNetwork,
     pub encoded_invoice: String,
     pub fee: CurrencyAmount,
-    pub idempotency_key: String,
+    pub idempotency_key: Option<String>,
     pub status: LightningSendRequestStatus,
     pub transfer: Option<Transfer>,
     pub lightning_send_payment_preimage: Option<String>,

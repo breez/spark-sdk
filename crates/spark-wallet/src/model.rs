@@ -12,7 +12,7 @@ use spark::{
         TransferType,
     },
     ssp::{SspTransfer, SspUserRequest},
-    tree::{SigningKeyshare, TreeNode, TreeNodeId},
+    tree::{Leaves, SigningKeyshare, TreeNode, TreeNodeId},
     utils::paging::PagingFilter,
 };
 
@@ -121,6 +121,40 @@ impl From<TransferLeaf> for WalletTransferLeaf {
                 &value.intermediate_refund_tx,
             )),
         }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub struct WalletLeaves {
+    pub available: Vec<WalletLeaf>,
+    pub missing_from_operators: Vec<WalletLeaf>,
+}
+
+impl From<Leaves> for WalletLeaves {
+    fn from(value: Leaves) -> Self {
+        WalletLeaves {
+            available: value.available.into_iter().map(Into::into).collect(),
+            missing_from_operators: value
+                .missing_from_operators
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }
+    }
+}
+
+impl WalletLeaves {
+    pub fn available_balance(&self) -> u64 {
+        self.available.iter().map(|leaf| leaf.value).sum()
+    }
+    pub fn missing_operators_balance(&self) -> u64 {
+        self.missing_from_operators
+            .iter()
+            .map(|leaf| leaf.value)
+            .sum()
+    }
+    pub fn balance(&self) -> u64 {
+        self.available_balance() + self.missing_operators_balance()
     }
 }
 
