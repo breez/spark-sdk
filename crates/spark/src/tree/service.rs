@@ -164,7 +164,7 @@ impl TreeService for SynchronousTreeService {
             .query_nodes(&self.operator_pool.get_coordinator().client, false, None)
             .await?;
 
-        let mut leaves_to_ignore: HashMap<TreeNodeId, TreeNode> = HashMap::new();
+        let mut missing_operator_leaves: HashMap<TreeNodeId, TreeNode> = HashMap::new();
 
         // TODO: on js sdk, leaves missing from operators are not ignored when checking balance
         // TODO: we can optimize this by fetching leaves from all operators in parallel
@@ -185,7 +185,7 @@ impl TreeService for SynchronousTreeService {
                                 "Ignoring leaf due to mismatch between coordinator and operator {}. Coordinator: {:?}, Operator: {:?}",
                                 operator.id, leaf, operator_leaf
                             );
-                            leaves_to_ignore.insert(leaf.id.clone(), leaf.clone());
+                            missing_operator_leaves.insert(leaf.id.clone(), leaf.clone());
                         }
                     }
                     None => {
@@ -193,7 +193,7 @@ impl TreeService for SynchronousTreeService {
                             "Ignoring leaf due to missing from operator {}: {:?}",
                             operator.id, leaf.id
                         );
-                        leaves_to_ignore.insert(leaf.id.clone(), leaf.clone());
+                        missing_operator_leaves.insert(leaf.id.clone(), leaf.clone());
                     }
                 }
             }
@@ -213,16 +213,19 @@ impl TreeService for SynchronousTreeService {
                     "Leaf {}'s verifying public key does not match the expected value",
                     leaf.id
                 );
-                leaves_to_ignore.insert(leaf.id.clone(), leaf.clone());
+                missing_operator_leaves.insert(leaf.id.clone(), leaf.clone());
             }
         }
 
         let new_leaves = coordinator_leaves
             .into_iter()
-            .filter(|leaf| !leaves_to_ignore.contains_key(&leaf.id))
+            .filter(|leaf| !missing_operator_leaves.contains_key(&leaf.id))
             .collect::<Vec<_>>();
 
-        let ignored_leaves = leaves_to_ignore.values().cloned().collect::<Vec<_>>();
+        let ignored_leaves = missing_operator_leaves
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
         let refreshed_leaves = self
             .check_timelock_nodes(new_leaves, async |e| {
                 // If this is a partial check timelock error, the extend node timelock failed
