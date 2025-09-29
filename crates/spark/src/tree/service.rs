@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
 use tokio::sync::Mutex;
+use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, info, trace, warn};
+use web_time::Duration;
 
 use crate::tree::Leaves;
 use crate::{
@@ -87,7 +89,7 @@ impl TreeService for SynchronousTreeService {
 
         let mut reservation: Option<LeavesReservation> = None;
 
-        for _ in 0..SELECT_LEAVES_MAX_RETRIES {
+        for i in 0..SELECT_LEAVES_MAX_RETRIES {
             let reserve_result = self.reserve_fresh_leaves(target_amounts, false).await;
             match reserve_result {
                 Ok(r) => {
@@ -99,7 +101,7 @@ impl TreeService for SynchronousTreeService {
                 }
             }
 
-            info!("Failed to select leaves, refreshing leaves and retyring");
+            info!("Failed to select leaves, refreshing leaves and retrying");
             self.refresh_leaves().await?;
             let leaves = self.state.get_leaves().await?;
             if let Some(target_amounts) = target_amounts
@@ -107,6 +109,10 @@ impl TreeService for SynchronousTreeService {
             {
                 info!("Not enough funds to select leaves after refresh");
                 return Err(TreeServiceError::InsufficientFunds);
+            }
+
+            if i < SELECT_LEAVES_MAX_RETRIES - 1 {
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
 

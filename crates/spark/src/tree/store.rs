@@ -41,7 +41,7 @@ impl TreeStore for InMemoryTreeStore {
                 .filter(|leaf| leaf.status == TreeNodeStatus::Available)
                 .cloned()
                 .collect(),
-            non_available: leaves
+            not_available: leaves
                 .leaves
                 .values()
                 .filter(|leaf| leaf.status != TreeNodeStatus::Available)

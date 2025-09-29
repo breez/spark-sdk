@@ -20,7 +20,7 @@ use crate::core::{TIME_LOCK_INTERVAL, next_sequence};
 
 pub struct Leaves {
     pub available: Vec<TreeNode>,
-    pub non_available: Vec<TreeNode>,
+    pub not_available: Vec<TreeNode>,
     pub missing_from_operators: Vec<TreeNode>,
     pub reserved: Vec<TreeNode>,
 }
@@ -28,9 +28,6 @@ pub struct Leaves {
 impl Leaves {
     pub fn available_balance(&self) -> u64 {
         self.available.iter().map(|leaf| leaf.value).sum()
-    }
-    pub fn non_available_balance(&self) -> u64 {
-        self.non_available.iter().map(|leaf| leaf.value).sum()
     }
     pub fn missing_operators_balance(&self) -> u64 {
         self.missing_from_operators
