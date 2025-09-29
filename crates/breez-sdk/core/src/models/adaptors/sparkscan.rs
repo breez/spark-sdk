@@ -88,7 +88,7 @@ struct PaymentMethodInfo {
 pub(crate) fn payments_from_address_transaction_and_ssp_request(
     transaction: &AddressTransaction,
     ssp_user_request: Option<&SspUserRequest>,
-    our_spark_address: &str,
+    identity_public_key: &str,
 ) -> Result<Vec<Payment>, SdkError> {
     let context = extract_conversion_context(transaction)?;
     let method_info = extract_payment_method_and_details(transaction, ssp_user_request)?;
@@ -99,7 +99,7 @@ pub(crate) fn payments_from_address_transaction_and_ssp_request(
             transaction,
             &method_info,
             &context,
-            our_spark_address,
+            identity_public_key,
         )
     } else {
         let payment = create_single_payment(transaction, &method_info, &context)?;
@@ -272,19 +272,28 @@ fn create_multi_io_payments(
     transaction: &AddressTransaction,
     method_info: &PaymentMethodInfo,
     context: &PaymentCommonContext,
-    our_spark_address: &str,
+    identity_public_key: &str,
 ) -> Result<Vec<Payment>, SdkError> {
-    let payment_type = determine_multi_io_payment_type(multi_io_details, our_spark_address)?;
-
+    let payment_type = determine_multi_io_payment_type(multi_io_details, identity_public_key)?;
+    let include_index = multi_io_details
+        .outputs
+        .iter()
+        .filter(|output| should_include_output(payment_type, &output.pubkey, identity_public_key))
+        .count()
+        > 1;
     let mut payments = Vec::new();
 
     for (index, output) in multi_io_details.outputs.iter().enumerate() {
         // Create payments for outputs that are not ours (for send payments) or ours (for receive payments)
-        if should_include_output(payment_type, &output.address, our_spark_address) {
+        if should_include_output(payment_type, &output.pubkey, identity_public_key) {
             // TODO: fix construction of id
             // Currently sparkscan doesn't order outputs by vout making this construction unreliable
             // There's no other output identifier we can use for now
-            let id = format!("{}:{}", transaction.id, index);
+            let id = if include_index {
+                format!("{}:{}", transaction.id, index)
+            } else {
+                transaction.id.clone()
+            };
             let amount = output.amount.try_into()?;
 
             payments.push(Payment {
@@ -306,13 +315,13 @@ fn create_multi_io_payments(
 /// Determines payment type for multi-IO transactions based on input ownership
 fn determine_multi_io_payment_type(
     multi_io_details: &MultiIoDetails,
-    our_spark_address: &str,
+    identity_public_key: &str,
 ) -> Result<PaymentType, SdkError> {
     let first_input = multi_io_details.inputs.first().ok_or(SdkError::Generic(
         "No inputs in multi IO details".to_string(),
     ))?;
 
-    if first_input.address == our_spark_address {
+    if first_input.pubkey == *identity_public_key {
         Ok(PaymentType::Send)
     } else {
         Ok(PaymentType::Receive)
@@ -322,12 +331,12 @@ fn determine_multi_io_payment_type(
 /// Determines if an output should be included in the payment list
 fn should_include_output(
     payment_type: PaymentType,
-    output_address: &str,
-    our_spark_address: &str,
+    output_pubkey: &str,
+    identity_public_key: &str,
 ) -> bool {
     match payment_type {
-        PaymentType::Send => output_address != our_spark_address,
-        PaymentType::Receive => output_address == our_spark_address,
+        PaymentType::Send => output_pubkey != identity_public_key,
+        PaymentType::Receive => output_pubkey == identity_public_key,
     }
 }
 
@@ -367,12 +376,17 @@ fn determine_single_payment_type(
                 transaction.id
             ))),
         },
-        PaymentMethod::Token => match transaction.type_ {
-            AddressTransactionType::TokenMint => Ok(PaymentType::Receive),
-            AddressTransactionType::TokenBurn => Ok(PaymentType::Send),
+        PaymentMethod::Token => match (transaction.type_, transaction.direction) {
+            (AddressTransactionType::TokenMint, _)
+            | (AddressTransactionType::TokenTransfer, AddressTransactionDirection::Incoming) => {
+                Ok(PaymentType::Receive)
+            }
+            (AddressTransactionType::TokenBurn, _)
+            | (AddressTransactionType::TokenTransfer, AddressTransactionDirection::Outgoing) => {
+                Ok(PaymentType::Send)
+            }
             _ => Err(SdkError::Generic(format!(
-                "Invalid type in TokenTransaction transaction {}",
-                transaction.id
+                "Invalid type in TokenTransaction transaction {transaction:?}",
             ))),
         },
         PaymentMethod::Deposit => Ok(PaymentType::Receive),
