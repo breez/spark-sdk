@@ -123,6 +123,7 @@ pub struct TreeNode {
 
 impl TreeNode {
     fn is_timelock_expiring(sequence: Sequence) -> Result<bool, TreeServiceError> {
+        error!("Checking timelock expiration for sequence: {sequence}");
         let (next_sequence, _) = next_sequence(sequence).ok_or(TreeServiceError::Generic(
             "Failed to get next sequence".to_string(),
         ))?;
@@ -138,19 +139,23 @@ impl TreeNode {
             .ok_or(TreeServiceError::Generic("No refund tx".to_string()))?
             .input[0]
             .sequence;
-        trace!("Refund tx sequence: {sequence:?}",);
-        TreeNode::is_timelock_expiring(sequence).inspect_err(|e| {
-            error!("Error checking timelock refresh expiration: {:?}", e);
-        })
+        error!(
+            "Refund tx sequence: {} node id: {}",
+            sequence.to_consensus_u32(),
+            self.id
+        );
+        let sequence_num = sequence.to_consensus_u32() as u16;
+        error!("Refund tx last sequence num: {sequence_num}");
+        return Ok(sequence_num == 0);
     }
 
     /// Checks if the node needs a timelock extension by checking if the node tx's timelock can be further reduced
     pub fn needs_timelock_extension(&self) -> Result<bool, TreeServiceError> {
         let sequence = self.node_tx.input[0].sequence;
         trace!("Node tx sequence: {:?}", sequence);
-        TreeNode::is_timelock_expiring(sequence).inspect_err(|e| {
-            error!("Error checking timelock extension expiration: {:?}", e);
-        })
+        let sequence_num = sequence.to_consensus_u32() as u16;
+        error!("Node tx last sequence num: {sequence_num}");
+        return Ok(sequence_num <= 100);
     }
 }
 
