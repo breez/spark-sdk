@@ -73,23 +73,23 @@ const exampleLogging = async () => {
   // ANCHOR_END: logging
 }
 
-const exampleAddEventListener = (sdk: BreezSdk) => {
+const exampleAddEventListener = async (sdk: BreezSdk) => {
   // ANCHOR: add-event-listener
   class JsEventListener {
-    onEvent = (event: SdkEvent) => {
+    onEvent = async (event: SdkEvent) => {
       console.log(`Received event: ${JSON.stringify(event)}`)
     }
   }
 
   const eventListener = new JsEventListener()
 
-  const listenerId = sdk.addEventListener(eventListener)
+  const listenerId = await sdk.addEventListener(eventListener)
   // ANCHOR_END: add-event-listener
 }
 
-const exampleRemoveEventListener = (sdk: BreezSdk, listenerId: string) => {
+const exampleRemoveEventListener = async (sdk: BreezSdk, listenerId: string) => {
   // ANCHOR: remove-event-listener
-  sdk.removeEventListener(listenerId)
+  await sdk.removeEventListener(listenerId)
   // ANCHOR_END: remove-event-listener
 }
 

@@ -24,8 +24,9 @@ pub struct BindingEventListener {
     pub listener: StreamSink<SdkEvent>,
 }
 
+#[async_trait::async_trait]
 impl EventListener for BindingEventListener {
-    fn on_event(&self, e: SdkEvent) {
+    async fn on_event(&self, e: SdkEvent) {
         let _ = self.listener.add(e);
     }
 }

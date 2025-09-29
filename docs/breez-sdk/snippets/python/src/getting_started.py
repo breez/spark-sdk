@@ -92,13 +92,13 @@ def set_logger(logger: SdkLogger):
 
 # ANCHOR: add-event-listener
 class SdkListener(EventListener):
-    def on_event(self, event: SdkEvent):
+    async def on_event(self, event: SdkEvent):
         logging.debug(f"Received event {event}")
 
 
-def add_event_listener(sdk: BreezSdk, listener: SdkListener):
+async def add_event_listener(sdk: BreezSdk, listener: SdkListener):
     try:
-        listener_id = sdk.add_event_listener(listener=listener)
+        listener_id = await sdk.add_event_listener(listener=listener)
         return listener_id
     except Exception as error:
         logging.error(error)
@@ -109,9 +109,9 @@ def add_event_listener(sdk: BreezSdk, listener: SdkListener):
 
 
 # ANCHOR: remove-event-listener
-def remove_event_listener(sdk: BreezSdk, listener_id: str):
+async def remove_event_listener(sdk: BreezSdk, listener_id: str):
     try:
-        sdk.remove_event_listener(listener_id=listener_id)
+        await sdk.remove_event_listener(listener_id=listener_id)
     except Exception as error:
         logging.error(error)
         raise

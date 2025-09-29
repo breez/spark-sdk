@@ -104,14 +104,15 @@ pub async fn parse(input: &str) -> WasmResult<InputType> {
 #[wasm_bindgen]
 impl BreezSdk {
     #[wasm_bindgen(js_name = "addEventListener")]
-    pub fn add_event_listener(&self, listener: EventListener) -> String {
+    pub async fn add_event_listener(&self, listener: EventListener) -> String {
         self.sdk
             .add_event_listener(Box::new(WasmEventListener { listener }))
+            .await
     }
 
     #[wasm_bindgen(js_name = "removeEventListener")]
-    pub fn remove_event_listener(&self, id: &str) -> bool {
-        self.sdk.remove_event_listener(id)
+    pub async fn remove_event_listener(&self, id: &str) -> bool {
+        self.sdk.remove_event_listener(id).await
     }
 
     #[wasm_bindgen(js_name = "disconnect")]

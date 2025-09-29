@@ -10,8 +10,9 @@ pub struct WasmEventListener {
 unsafe impl Send for WasmEventListener {}
 unsafe impl Sync for WasmEventListener {}
 
+#[macros::async_trait]
 impl breez_sdk_spark::EventListener for WasmEventListener {
-    fn on_event(&self, event: breez_sdk_spark::SdkEvent) {
+    async fn on_event(&self, event: breez_sdk_spark::SdkEvent) {
         self.listener.on_event(event.into());
     }
 }

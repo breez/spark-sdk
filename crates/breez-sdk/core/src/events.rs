@@ -1,7 +1,8 @@
 use core::fmt;
-use std::{collections::HashMap, sync::RwLock};
+use std::collections::HashMap;
 
 use serde::Serialize;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{DepositInfo, Payment};
@@ -50,9 +51,10 @@ impl fmt::Display for SdkEvent {
 
 /// Trait for event listeners
 #[cfg_attr(feature = "uniffi", uniffi::export(callback_interface))]
+#[macros::async_trait]
 pub trait EventListener: Send + Sync {
     /// Called when an event occurs
-    fn on_event(&self, event: SdkEvent);
+    async fn on_event(&self, event: SdkEvent);
 }
 
 /// Event publisher that manages event listeners
@@ -77,9 +79,9 @@ impl EventEmitter {
     /// # Returns
     ///
     /// A unique identifier for the listener, which can be used to remove it later
-    pub fn add_listener(&self, listener: Box<dyn EventListener>) -> String {
+    pub async fn add_listener(&self, listener: Box<dyn EventListener>) -> String {
         let id = Uuid::new_v4().to_string();
-        let mut listeners = self.listeners.write().unwrap();
+        let mut listeners = self.listeners.write().await;
         listeners.insert(id.clone(), listener);
         id
     }
@@ -93,19 +95,19 @@ impl EventEmitter {
     /// # Returns
     ///
     /// `true` if the listener was found and removed, `false` otherwise
-    pub fn remove_listener(&self, id: &str) -> bool {
-        let mut listeners = self.listeners.write().unwrap();
+    pub async fn remove_listener(&self, id: &str) -> bool {
+        let mut listeners = self.listeners.write().await;
         listeners.remove(id).is_some()
     }
 
     /// Emit an event to all registered listeners
-    pub fn emit(&self, event: &SdkEvent) {
+    pub async fn emit(&self, event: &SdkEvent) {
         // Get a read lock on the listeners
-        let listeners = self.listeners.read().unwrap();
+        let listeners = self.listeners.read().await;
 
         // Emit the event to each listener
         for listener in listeners.values() {
-            listener.on_event(event.clone());
+            listener.on_event(event.clone()).await;
         }
     }
 }
@@ -122,7 +124,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use macros::test_all;
+    use macros::async_test_all;
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
@@ -131,14 +133,15 @@ mod tests {
         received: Arc<AtomicBool>,
     }
 
+    #[macros::async_trait]
     impl EventListener for TestListener {
-        fn on_event(&self, _event: SdkEvent) {
+        async fn on_event(&self, _event: SdkEvent) {
             self.received.store(true, Ordering::Relaxed);
         }
     }
 
-    #[test_all]
-    fn test_event_emission() {
+    #[async_test_all]
+    async fn test_event_emission() {
         let emitter = EventEmitter::new();
         let received = Arc::new(AtomicBool::new(false));
 
@@ -147,18 +150,18 @@ mod tests {
             received: received.clone(),
         });
 
-        let _ = emitter.add_listener(listener);
+        let _ = emitter.add_listener(listener).await;
 
         let event = SdkEvent::Synced {};
 
-        emitter.emit(&event);
+        emitter.emit(&event).await;
 
         // Check if event was received using the shared reference
         assert!(received.load(Ordering::Relaxed));
     }
 
-    #[test_all]
-    fn test_remove_listener() {
+    #[async_test_all]
+    async fn test_remove_listener() {
         let emitter = EventEmitter::new();
 
         // Create shared atomic booleans to track event reception
@@ -174,15 +177,15 @@ mod tests {
             received: received2.clone(),
         });
 
-        let id1 = emitter.add_listener(listener1);
-        let id2 = emitter.add_listener(listener2);
+        let id1 = emitter.add_listener(listener1).await;
+        let id2 = emitter.add_listener(listener2).await;
 
         // Remove the first listener
-        assert!(emitter.remove_listener(&id1));
+        assert!(emitter.remove_listener(&id1).await);
 
         // Emit an event
         let event = SdkEvent::Synced {};
-        emitter.emit(&event);
+        emitter.emit(&event).await;
 
         // The first listener should not receive the event
         assert!(!received1.load(Ordering::Relaxed));
@@ -191,9 +194,9 @@ mod tests {
         assert!(received2.load(Ordering::Relaxed));
 
         // Remove the second listener
-        assert!(emitter.remove_listener(&id2));
+        assert!(emitter.remove_listener(&id2).await);
 
         // Try to remove a non-existent listener
-        assert!(!emitter.remove_listener("non-existent-id"));
+        assert!(!emitter.remove_listener("non-existent-id").await);
     }
 }
