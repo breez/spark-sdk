@@ -135,7 +135,7 @@ impl TreeNode {
         );
         let sequence_num = sequence.to_consensus_u32() as u16;
         trace!("Refund tx last sequence num: {sequence_num}");
-        Ok(sequence_num == 0)
+        Ok(sequence_num <= 100)
     }
 
     /// Checks if the node needs a timelock extension by checking if the node tx's timelock can be further reduced
@@ -144,7 +144,7 @@ impl TreeNode {
         trace!("Node tx sequence: {:?}", sequence);
         let sequence_num = sequence.to_consensus_u32() as u16;
         trace!("Node tx last sequence num: {sequence_num}");
-        sequence_num <= 100
+        sequence_num == 0
     }
 }
 
