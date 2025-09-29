@@ -167,7 +167,7 @@ pub enum SparkLeavesSwapRequestStatus {
 pub enum LightningReceiveRequestStatus {
     InvoiceCreated,
     TransferCreated,
-    TransferCreationFailed,    
+    TransferCreationFailed,
     PaymentPreimageRecovered,
     PaymentPreimageRecoveringFailed,
     TransferCancelled,
