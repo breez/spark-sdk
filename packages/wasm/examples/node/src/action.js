@@ -43,7 +43,7 @@ const initSdk = async () => {
 
     const storage = await defaultStorage('./.data')
 
-    let sdkBuilder = SdkBuilder.new(config, mnemonic, storage)
+    let sdkBuilder = SdkBuilder.new(config, { type: 'mnemonic', mnemonic: mnemonic }, storage)
     sdkBuilder = sdkBuilder.withRestChainService('https://regtest-mempool.us-west-2.sparkinfra.net/api', {
         username: process.env.CHAIN_SERVICE_USERNAME,
         password: process.env.CHAIN_SERVICE_PASSWORD
