@@ -335,20 +335,6 @@ fn update_nodejs_package_json(out_path: &Path) -> Result<()> {
         ]);
     }
 
-    // Add storage dependencies
-    if package_json.get("optionalDependencies").is_none() {
-        package_json["optionalDependencies"] = serde_json::json!({});
-    }
-
-    if let Some(dependencies) = package_json.get_mut("optionalDependencies")
-        && let Some(deps_obj) = dependencies.as_object_mut()
-    {
-        deps_obj.insert(
-            "better-sqlite3".to_string(),
-            serde_json::Value::String("^12.2.0".to_string()),
-        );
-    }
-
     // Write the updated package.json
     let updated_content = serde_json::to_string_pretty(&package_json)
         .with_context(|| "Failed to serialize package.json")?;
