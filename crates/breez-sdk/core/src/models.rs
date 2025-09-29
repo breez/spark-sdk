@@ -910,3 +910,19 @@ pub struct ListFiatRatesResponse {
     /// The list of fiat rates
     pub rates: Vec<Rate>,
 }
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WaitForPaymentRequest {
+    pub identifier: WaitForPaymentIdentifier,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum WaitForPaymentIdentifier {
+    PaymentId(String),
+    PaymentRequest(String),
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WaitForPaymentResponse {
+    pub payment: Payment,
+}

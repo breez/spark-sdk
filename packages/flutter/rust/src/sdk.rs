@@ -10,7 +10,7 @@ use breez_sdk_spark::{
     PrepareLnurlPayResponse, PrepareSendPaymentRequest, PrepareSendPaymentResponse,
     ReceivePaymentRequest, ReceivePaymentResponse, RefundDepositRequest, RefundDepositResponse,
     RegisterLightningAddressRequest, SdkError, SdkEvent, SendPaymentRequest, SendPaymentResponse,
-    Storage, SyncWalletRequest, SyncWalletResponse,
+    Storage, SyncWalletRequest, SyncWalletResponse, WaitForPaymentRequest, WaitForPaymentResponse,
 };
 use flutter_rust_bridge::frb;
 
@@ -172,5 +172,12 @@ impl BreezSdk {
 
     pub async fn list_fiat_rates(&self) -> Result<ListFiatRatesResponse, SdkError> {
         self.inner.list_fiat_rates().await
+    }
+
+    pub async fn wait_for_payment(
+        &self,
+        request: WaitForPaymentRequest,
+    ) -> Result<WaitForPaymentResponse, SdkError> {
+        self.inner.wait_for_payment(request).await
     }
 }

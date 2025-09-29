@@ -39,7 +39,8 @@ use crate::{
     ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
     Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
     RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
-    SendPaymentOptions,
+    SendOnchainFeeQuote, SendPaymentOptions, WaitForPaymentIdentifier, WaitForPaymentRequest,
+    WaitForPaymentResponse,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     lnurl::LnurlServerClient,
@@ -1297,6 +1298,67 @@ impl BreezSdk {
     pub async fn list_fiat_rates(&self) -> Result<ListFiatRatesResponse, SdkError> {
         let rates = self.fiat_service.fetch_fiat_rates().await?;
         Ok(ListFiatRatesResponse { rates })
+    }
+
+    pub async fn wait_for_payment(
+        &self,
+        request: WaitForPaymentRequest,
+    ) -> Result<WaitForPaymentResponse, SdkError> {
+        let (tx, mut rx) = mpsc::channel(20);
+        let id = self
+            .add_event_listener(Box::new(InternalEventListener::new(tx)))
+            .await;
+
+        // First check if we already have the payment in storage
+        if let WaitForPaymentIdentifier::PaymentRequest(payment_request) = &request.identifier
+            && let Some(payment) = self
+                .storage
+                .get_payment_by_invoice(payment_request.clone())
+                .await?
+        {
+            self.remove_event_listener(&id).await;
+            return Ok(WaitForPaymentResponse { payment });
+        }
+
+        // Otherwise, we wait for a matching payment event
+        let payment_result = loop {
+            let Some(event) = rx.recv().await else {
+                break Err(SdkError::Generic("Event channel closed".to_string()));
+            };
+
+            let SdkEvent::PaymentSucceeded { payment } = event else {
+                continue;
+            };
+
+            if is_payment_match(&payment, &request) {
+                break Ok(payment);
+            }
+        };
+
+        self.remove_event_listener(&id).await;
+        Ok(WaitForPaymentResponse {
+            payment: payment_result?,
+        })
+    }
+}
+
+fn is_payment_match(payment: &Payment, request: &WaitForPaymentRequest) -> bool {
+    match &request.identifier {
+        WaitForPaymentIdentifier::PaymentId(payment_id) => payment.id == *payment_id,
+        WaitForPaymentIdentifier::PaymentRequest(payment_request) => {
+            if let Some(details) = &payment.details {
+                match details {
+                    PaymentDetails::Lightning { invoice, .. } => {
+                        invoice.to_lowercase() == payment_request.to_lowercase()
+                    }
+                    PaymentDetails::Spark
+                    | PaymentDetails::Withdraw { tx_id: _ }
+                    | PaymentDetails::Deposit { tx_id: _ } => false,
+                }
+            } else {
+                false
+            }
+        }
     }
 }
 

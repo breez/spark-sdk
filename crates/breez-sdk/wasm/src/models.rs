@@ -738,3 +738,19 @@ pub struct Symbol {
     pub rtl: Option<bool>,
     pub position: Option<u32>,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WaitForPaymentRequest)]
+pub struct WaitForPaymentRequest {
+    pub identifier: WaitForPaymentIdentifier,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WaitForPaymentIdentifier)]
+pub enum WaitForPaymentIdentifier {
+    PaymentId(String),
+    PaymentRequest(String),
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WaitForPaymentResponse)]
+pub struct WaitForPaymentResponse {
+    pub payment: Payment,
+}

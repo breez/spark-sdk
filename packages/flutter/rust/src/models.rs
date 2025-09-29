@@ -690,3 +690,19 @@ pub struct _Symbol {
     pub rtl: Option<bool>,
     pub position: Option<u32>,
 }
+
+#[frb(mirror(WaitForPaymentRequest))]
+pub struct _WaitForPaymentRequest {
+    pub identifier: WaitForPaymentIdentifier,
+}
+
+#[frb(mirror(WaitForPaymentIdentifier))]
+pub enum _WaitForPaymentIdentifier {
+    PaymentId(String),
+    PaymentRequest(String),
+}
+
+#[frb(mirror(WaitForPaymentResponse))]
+pub struct _WaitForPaymentResponse {
+    pub payment: Payment,
+}

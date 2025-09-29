@@ -254,4 +254,12 @@ impl BreezSdk {
     pub async fn list_fiat_rates(&self) -> WasmResult<ListFiatRatesResponse> {
         Ok(self.sdk.list_fiat_rates().await?.into())
     }
+
+    #[wasm_bindgen(js_name = "waitForPayment")]
+    pub async fn wait_for_payment(
+        &self,
+        request: WaitForPaymentRequest,
+    ) -> WasmResult<WaitForPaymentResponse> {
+        Ok(self.sdk.wait_for_payment(request.into()).await?.into())
+    }
 }
