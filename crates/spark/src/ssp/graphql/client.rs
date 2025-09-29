@@ -270,7 +270,7 @@ impl GraphQLClient {
         let vars = complete_coop_exit::Variables {
             input: complete_coop_exit::CompleteCoopExitInput {
                 user_outbound_transfer_external_id: user_outbound_transfer_external_id.to_string(),
-                coop_exit_request_id: coop_exit_request_id.to_string(),
+                coop_exit_request_id: Some(coop_exit_request_id.to_string()),
             },
         };
 

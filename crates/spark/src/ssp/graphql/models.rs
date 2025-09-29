@@ -167,11 +167,11 @@ pub enum SparkLeavesSwapRequestStatus {
 pub enum LightningReceiveRequestStatus {
     InvoiceCreated,
     TransferCreated,
-    TransferCreationFailed,
-    RefundSigningCommitmentsQueryingFailed,
-    RefundSigningFailed,
+    TransferCreationFailed,    
     PaymentPreimageRecovered,
     PaymentPreimageRecoveringFailed,
+    TransferCancelled,
+    HtlcFailed,
     LightningPaymentReceived,
     TransferFailed,
     TransferCompleted,
@@ -185,6 +185,7 @@ pub enum LightningReceiveRequestStatus {
 pub enum LightningSendRequestStatus {
     Created,
     RequestValidated,
+    LightingTransferValidationFailed,
     LightningPaymentInitiated,
     LightningPaymentFailed,
     LightningPaymentSucceeded,
@@ -462,8 +463,8 @@ pub struct LeavesSwapRequest {
     pub total_amount: CurrencyAmount,
     pub target_amount: CurrencyAmount,
     pub fee: CurrencyAmount,
-    pub inbound_transfer: Transfer,
-    pub swap_leaves: Vec<SwapLeaf>,
+    pub inbound_transfer: Option<Transfer>,
+    pub swap_leaves: Option<Vec<SwapLeaf>>,
     pub outbound_transfer: Option<Transfer>,
     pub swap_expired_at: Option<DateTime<Utc>>,
 }

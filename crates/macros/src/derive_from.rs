@@ -1,6 +1,10 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{DeriveInput, Ident, Result, Type, parse::Parse, parse::ParseStream, parse_macro_input};
+use syn::{
+    DeriveInput, GenericArgument, Ident, PathArguments, Result, Type,
+    parse::{Parse, ParseStream},
+    parse_macro_input,
+};
 
 struct FromAttr {
     source_type: Ident,
@@ -67,6 +71,22 @@ fn is_vec_type(ty: &Type) -> bool {
     false
 }
 
+fn is_option_vec_type(ty: &Type) -> bool {
+    if let Type::Path(type_path) = ty
+        && type_path.path.segments.len() == 1
+        && type_path.path.segments[0].ident == "Option"
+        && let PathArguments::AngleBracketed(angle_bracketed_args) =
+            &type_path.path.segments[0].arguments
+        && angle_bracketed_args.args.len() == 1
+        && let GenericArgument::Type(inner_type) = &angle_bracketed_args.args[0]
+        && is_vec_type(inner_type)
+    {
+        return true;
+    }
+
+    false
+}
+
 fn generate_struct_impl(
     source_type: Ident,
     target_name: &Ident,
@@ -78,7 +98,9 @@ fn generate_struct_impl(
                 let field_name = &field.ident;
 
                 // Handle different container types
-                if is_option_type(&field.ty) {
+                if is_option_vec_type(&field.ty) {
+                    quote! { #field_name: source.#field_name.map(|v| v.into_iter().map(Into::into).collect()) }
+                } else if is_option_type(&field.ty) {
                     quote! { #field_name: source.#field_name.map(Into::into) }
                 } else if is_vec_type(&field.ty) {
                     quote! { #field_name: source.#field_name.into_iter().map(Into::into).collect() }

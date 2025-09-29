@@ -76,6 +76,7 @@ pub enum LightningSendStatus {
     RequestValidated,
     LightningPaymentInitiated,
     LightningPaymentFailed,
+    LightingTransferValidationFailed,
     LightningPaymentSucceeded,
     PreimageProvided,
     PreimageProvidingFailed,
@@ -94,6 +95,9 @@ impl From<LightningSendRequestStatus> for LightningSendStatus {
             LightningSendRequestStatus::RequestValidated => LightningSendStatus::RequestValidated,
             LightningSendRequestStatus::LightningPaymentInitiated => {
                 LightningSendStatus::LightningPaymentInitiated
+            }
+            LightningSendRequestStatus::LightingTransferValidationFailed => {
+                LightningSendStatus::LightingTransferValidationFailed
             }
             LightningSendRequestStatus::LightningPaymentFailed => {
                 LightningSendStatus::LightningPaymentFailed
@@ -395,14 +399,13 @@ impl LightningService {
         &self,
         swap: &LightningSwap,
     ) -> Result<LightningSendPayment, ServiceError> {
-        let decoded_invoice = Bolt11Invoice::from_str(&swap.bolt11_invoice)
-            .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
         let res = self
             .ssp_client
             .request_lightning_send(RequestLightningSendInput {
                 encoded_invoice: swap.bolt11_invoice.to_string(),
-                idempotency_key: decoded_invoice.payment_hash().encode_hex(),
+                idempotency_key: None,
                 amount_sats: swap.user_amount_sat,
+                user_outbound_transfer_external_id: Some(swap.transfer.id.to_string()),
             })
             .await?;
 
