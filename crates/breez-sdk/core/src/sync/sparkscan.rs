@@ -249,6 +249,7 @@ impl SparkscanSyncService {
             .spark_wallet
             .get_spark_address()?
             .to_string_with_hrp_legacy();
+        let identity_public_key = self.spark_wallet.get_identity_public_key().to_string();
         let last_synced_id = cached_sync_info.last_synced_payment_id;
         let (max_pages, mut head_synced) = if last_synced_id.is_some() {
             (u64::MAX, false)
@@ -290,7 +291,7 @@ impl SparkscanSyncService {
                 let payments = payments_from_address_transaction_and_ssp_request(
                     transaction,
                     ssp_user_requests.get(&transaction.id),
-                    &legacy_spark_address,
+                    &identity_public_key,
                 )?;
 
                 for payment in payments {
@@ -317,8 +318,8 @@ impl SparkscanSyncService {
         // Insert what synced payments we have into storage from oldest to newest
         payments_to_sync.sort_by_key(|p| p.timestamp);
         for payment in payments_to_sync {
+            info!("Inserting payment: {payment:?}");
             self.storage.insert_payment(payment.clone()).await?;
-            info!("Inserted payment: {payment:?}");
             let (last_synced_payment_id, next_head_offset) = if head_synced {
                 (Some(payment.id.clone()), 0)
             } else {
