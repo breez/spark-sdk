@@ -8,15 +8,13 @@ pub use select_helper::{select_leaves_by_amounts, with_reserved_leaves};
 use serde::{Deserialize, Serialize};
 pub use service::SynchronousTreeService;
 pub use store::InMemoryTreeStore;
-use tracing::{error, trace};
+use tracing::trace;
 
 use std::str::FromStr;
 
 use bitcoin::{Sequence, Transaction, secp256k1::PublicKey};
 use frost_secp256k1_tr::Identifier;
 use uuid::Uuid;
-
-use crate::core::{TIME_LOCK_INTERVAL, next_sequence};
 
 pub struct Leaves {
     pub available: Vec<TreeNode>,
@@ -122,15 +120,6 @@ pub struct TreeNode {
 }
 
 impl TreeNode {
-    fn is_timelock_expiring(sequence: Sequence) -> Result<bool, TreeServiceError> {
-        error!("Checking timelock expiration for sequence: {sequence}");
-        let (next_sequence, _) = next_sequence(sequence).ok_or(TreeServiceError::Generic(
-            "Failed to get next sequence".to_string(),
-        ))?;
-        let next_sequence_num = next_sequence.to_consensus_u32();
-        Ok(next_sequence_num <= TIME_LOCK_INTERVAL as u32)
-    }
-
     /// Checks if the node needs a timelock refresh by checking if the refund tx's timelock can be further reduced
     pub fn needs_timelock_refresh(&self) -> Result<bool, TreeServiceError> {
         let sequence = self
@@ -139,23 +128,23 @@ impl TreeNode {
             .ok_or(TreeServiceError::Generic("No refund tx".to_string()))?
             .input[0]
             .sequence;
-        error!(
+        trace!(
             "Refund tx sequence: {} node id: {}",
             sequence.to_consensus_u32(),
             self.id
         );
         let sequence_num = sequence.to_consensus_u32() as u16;
-        error!("Refund tx last sequence num: {sequence_num}");
-        return Ok(sequence_num == 0);
+        trace!("Refund tx last sequence num: {sequence_num}");
+        Ok(sequence_num == 0)
     }
 
     /// Checks if the node needs a timelock extension by checking if the node tx's timelock can be further reduced
-    pub fn needs_timelock_extension(&self) -> Result<bool, TreeServiceError> {
+    pub fn needs_timelock_extension(&self) -> bool {
         let sequence = self.node_tx.input[0].sequence;
         trace!("Node tx sequence: {:?}", sequence);
         let sequence_num = sequence.to_consensus_u32() as u16;
-        error!("Node tx last sequence num: {sequence_num}");
-        return Ok(sequence_num <= 100);
+        trace!("Node tx last sequence num: {sequence_num}");
+        sequence_num <= 100
     }
 }
 

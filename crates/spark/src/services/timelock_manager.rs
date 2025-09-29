@@ -389,7 +389,7 @@ impl TimelockManager {
         let mut ready_nodes = Vec::new();
 
         for node in nodes {
-            if node.needs_timelock_extension()? {
+            if node.needs_timelock_extension() {
                 nodes_to_extend.push(node);
             } else {
                 ready_nodes.push(node);
