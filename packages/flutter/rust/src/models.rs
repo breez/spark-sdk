@@ -270,6 +270,7 @@ pub enum _SendPaymentOptions {
     },
     Bolt11Invoice {
         prefer_spark: bool,
+        return_pending_after_secs: Option<u32>,
     },
 }
 

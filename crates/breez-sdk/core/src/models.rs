@@ -767,6 +767,11 @@ pub enum SendPaymentOptions {
     },
     Bolt11Invoice {
         prefer_spark: bool,
+
+        /// If set, the function will return the payment if it is still pending after this
+        /// number of seconds. If unset, the function will wait indefinitely until the payment is completed or failed.
+        /// To always return immediately, set to 0.
+        return_pending_after_secs: Option<u32>,
     },
 }
 
