@@ -124,6 +124,7 @@ pub enum CurrencyUnit {
     Eur,
     Gbp,
     Inr,
+    Usdt,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -166,15 +167,18 @@ pub enum SparkLeavesSwapRequestStatus {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LightningReceiveRequestStatus {
     InvoiceCreated,
+    HtlcReceived,
     TransferCreated,
     TransferCreationFailed,
     PaymentPreimageRecovered,
     PaymentPreimageRecoveringFailed,
-    TransferCancelled,
+    TransferCanceled,
     HtlcFailed,
     LightningPaymentReceived,
     TransferFailed,
     TransferCompleted,
+    RefundSigningCommitmentsQueryingFailed,
+    RefundSigningFailed,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -183,9 +187,8 @@ pub enum LightningReceiveRequestStatus {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LightningSendRequestStatus {
-    Created,
-    RequestValidated,
-    LightingTransferValidationFailed,
+    Created,    
+    UserTransferValidationFailed,
     LightningPaymentInitiated,
     LightningPaymentFailed,
     LightningPaymentSucceeded,
@@ -196,6 +199,7 @@ pub enum LightningSendRequestStatus {
     PendingUserSwapReturn,
     UserSwapReturned,
     UserSwapReturnFailed,
+    RequestValidated,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -267,7 +271,7 @@ pub struct CurrencyAmount {
 }
 
 impl Default for CurrencyAmount {
-    fn default() -> Self {
+    fn default() -> Self {      
         Self {
             original_value: 0,
             original_unit: CurrencyUnit::Satoshi,
