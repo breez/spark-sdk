@@ -187,7 +187,7 @@ pub enum LightningReceiveRequestStatus {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LightningSendRequestStatus {
-    Created,    
+    Created,
     UserTransferValidationFailed,
     LightningPaymentInitiated,
     LightningPaymentFailed,
@@ -271,7 +271,7 @@ pub struct CurrencyAmount {
 }
 
 impl Default for CurrencyAmount {
-    fn default() -> Self {      
+    fn default() -> Self {
         Self {
             original_value: 0,
             original_unit: CurrencyUnit::Satoshi,
