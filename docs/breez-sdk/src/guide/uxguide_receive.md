@@ -5,7 +5,7 @@
   
 ### Guidelines
 1. **Lightning should be the primary means of receiving payments.** Lightning is the common language of Bitcoin. **On-chain Bitcoin is secondary** and used as an additional way to on-ramp **only if needed**.
-2. **Don’t expose underlying implementation addresses** (i.e. Spark) to end users unless absolutely necessary. More options → more confusion.
+2. **Don’t expose underlying implementation addresses** (i.e. Spark) to end users unless absolutely necessary. More options → more confusion. Moreover, until Spark supports dynamic addresses, exposing a Spark address involves privacy trade-offs.
 3. **Display an LNURL-Pay QR code** by default (widest supported reusable method).  
    Provide **fallback to BOLT11** for one-off payment requests, typically with a specified amount.
 4. **Provide a human-readable Lightning address.** Start with a **random** address that the user can **customize later**.
