@@ -73,9 +73,9 @@ pub struct LightningSendPayment {
 #[derive(Debug, Copy, Clone, Deserialize, Serialize)]
 pub enum LightningSendStatus {
     Created,
-    UserTransferValidationFailed,    
+    UserTransferValidationFailed,
     LightningPaymentInitiated,
-    LightningPaymentFailed,    
+    LightningPaymentFailed,
     LightningPaymentSucceeded,
     PreimageProvided,
     PreimageProvidingFailed,
