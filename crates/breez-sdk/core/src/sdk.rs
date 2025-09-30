@@ -26,7 +26,7 @@ use web_time::{Duration, SystemTime};
 
 use tokio::{
     select,
-    sync::{mpsc, watch},
+    sync::{Mutex, mpsc, oneshot, watch},
 };
 use tokio_with_wasm::alias as tokio;
 use web_time::Instant;
@@ -56,6 +56,7 @@ use crate::{
     },
     utils::{
         deposit_chain_syncer::DepositChainSyncer,
+        run_with_shutdown,
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
@@ -64,6 +65,38 @@ use crate::{
 enum SyncType {
     Full,
     PaymentsOnly,
+}
+
+#[derive(Clone, Debug)]
+struct SyncRequest {
+    sync_type: SyncType,
+    #[allow(clippy::type_complexity)]
+    reply: Arc<Mutex<Option<oneshot::Sender<Result<(), SdkError>>>>>,
+}
+
+impl SyncRequest {
+    fn full(reply: Option<oneshot::Sender<Result<(), SdkError>>>) -> Self {
+        Self {
+            sync_type: SyncType::Full,
+            reply: Arc::new(Mutex::new(reply)),
+        }
+    }
+
+    fn payments_only(reply: Option<oneshot::Sender<Result<(), SdkError>>>) -> Self {
+        Self {
+            sync_type: SyncType::PaymentsOnly,
+            reply: Arc::new(Mutex::new(reply)),
+        }
+    }
+
+    async fn reply(&self, error: Option<SdkError>) {
+        if let Some(reply) = self.reply.lock().await.take() {
+            let _ = match error {
+                Some(e) => reply.send(Err(e)),
+                None => reply.send(Ok(())),
+            };
+        }
+    }
 }
 
 /// `BreezSDK` is a wrapper around `SparkSDK` that provides a more structured API
@@ -81,7 +114,7 @@ pub struct BreezSdk {
     event_emitter: Arc<EventEmitter>,
     shutdown_sender: watch::Sender<()>,
     shutdown_receiver: watch::Receiver<()>,
-    sync_trigger: tokio::sync::broadcast::Sender<SyncType>,
+    sync_trigger: tokio::sync::broadcast::Sender<SyncRequest>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -252,23 +285,31 @@ impl BreezSdk {
                             }
                         }
                     }
-                    () = async {
-                      let sync_type_res = sync_trigger_receiver.recv().await;
-                      if let Ok(sync_type) = sync_type_res   {
-                          info!("Sync trigger changed: {:?}", &sync_type);
-
-                          if let Err(e) = sdk.sync_wallet_internal(sync_type.clone()).await {
+                    sync_type_res = sync_trigger_receiver.recv() => {
+                      if let Ok(sync_request) = sync_type_res   {
+                          info!("Sync trigger changed: {:?}", &sync_request);
+                          let cloned_sdk = sdk.clone();
+                          if let Some(true) = run_with_shutdown(shutdown_receiver.clone(), "Sync trigger changed", async move {
+                          if let Err(e) = cloned_sdk.sync_wallet_internal(sync_request.sync_type.clone()).await {
                               error!("Failed to sync wallet: {e:?}");
-                          } else if matches!(sync_type, SyncType::Full) {
-                            last_sync_time = SystemTime::now();
+                              let () = sync_request.reply(Some(e)).await;
+                              return false
                           }
+                          if matches!(sync_request.sync_type, SyncType::Full) {
+                            let () = sync_request.reply(None).await;
+                            return true
+                          }
+                          false
+                        }).await {
+                          last_sync_time = SystemTime::now();
+                        }
                       }
-                  } => {}
+                    }
                     // Ensure we sync at least the configured interval
                     () = tokio::time::sleep(Duration::from_secs(10)) => {
                         let now = SystemTime::now();
                         if let Ok(elapsed) = now.duration_since(last_sync_time) && elapsed.as_secs() >= sync_interval
-                            && let Err(e) = sync_trigger_sender.send(SyncType::Full) {
+                            && let Err(e) = sync_trigger_sender.send(SyncRequest::full(None)) {
                             error!("Failed to trigger periodic sync: {e:?}");
                         }
                     }
@@ -290,7 +331,7 @@ impl BreezSdk {
             }
             WalletEvent::Synced => {
                 info!("Synced");
-                if let Err(e) = self.sync_trigger.send(SyncType::Full) {
+                if let Err(e) = self.sync_trigger.send(SyncRequest::full(None)) {
                     error!("Failed to sync wallet: {e:?}");
                 }
             }
@@ -301,7 +342,7 @@ impl BreezSdk {
                         .emit(&SdkEvent::PaymentSucceeded { payment })
                         .await;
                 }
-                if let Err(e) = self.sync_trigger.send(SyncType::PaymentsOnly) {
+                if let Err(e) = self.sync_trigger.send(SyncRequest::payments_only(None)) {
                     error!("Failed to sync wallet: {e:?}");
                 }
             }
@@ -937,7 +978,7 @@ impl BreezSdk {
             if !suppress_payment_event {
                 emit_final_payment_status(&self.event_emitter, response.payment.clone()).await;
             }
-            if let Err(e) = self.sync_trigger.send(SyncType::PaymentsOnly) {
+            if let Err(e) = self.sync_trigger.send(SyncRequest::payments_only(None)) {
                 error!("Failed to send sync trigger: {e:?}");
             }
         }
@@ -974,7 +1015,7 @@ impl BreezSdk {
                        if payment.status != PaymentStatus::Pending {
                           info!("Polling payment completed status = {}", payment.status);
                           emit_final_payment_status(&event_emitter, payment.clone()).await;
-                          if let Err(e) = sync_trigger.send(SyncType::PaymentsOnly) {
+                          if let Err(e) = sync_trigger.send(SyncRequest::payments_only(None)) {
                             error!("Failed to send sync trigger: {e:?}");
                           }
                           return;
@@ -995,10 +1036,19 @@ impl BreezSdk {
 
     /// Synchronizes the wallet with the Spark network
     #[allow(unused_variables)]
-    pub fn sync_wallet(&self, request: SyncWalletRequest) -> Result<SyncWalletResponse, SdkError> {
-        if let Err(e) = self.sync_trigger.send(SyncType::Full) {
+    pub async fn sync_wallet(
+        &self,
+        request: SyncWalletRequest,
+    ) -> Result<SyncWalletResponse, SdkError> {
+        let (tx, rx) = oneshot::channel();
+
+        if let Err(e) = self.sync_trigger.send(SyncRequest::full(Some(tx))) {
             error!("Failed to send sync trigger: {e:?}");
         }
+        let _ = rx.await.map_err(|e| {
+            error!("Failed to receive sync trigger: {e:?}");
+            SdkError::Generic(format!("sync trigger failed: {e:?}"))
+        })?;
         Ok(SyncWalletResponse {})
     }
 
@@ -1052,7 +1102,7 @@ impl BreezSdk {
                 self.storage
                     .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
                     .await?;
-                if let Err(e) = self.sync_trigger.send(SyncType::PaymentsOnly) {
+                if let Err(e) = self.sync_trigger.send(SyncRequest::payments_only(None)) {
                     error!("Failed to execute sync after deposit claim: {e:?}");
                 }
                 Ok(ClaimDepositResponse {
