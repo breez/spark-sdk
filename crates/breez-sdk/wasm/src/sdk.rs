@@ -163,7 +163,7 @@ impl BreezSdk {
     }
 
     #[wasm_bindgen(js_name = "syncWallet")]
-    pub fn sync_wallet(&self, request: SyncWalletRequest) -> WasmResult<SyncWalletResponse> {
+    pub async fn sync_wallet(&self, request: SyncWalletRequest) -> WasmResult<SyncWalletResponse> {
         Ok(self.sdk.sync_wallet(request.into()).await?.into())
     }
 

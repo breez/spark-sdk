@@ -610,6 +610,9 @@ impl BreezSdk {
     /// Returns the balance of the wallet in satoshis
     #[allow(unused_variables)]
     pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
+        if request.force_sync {
+            self.sync_wallet(SyncWalletRequest {}).await?;
+        }
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
         let account_info = object_repository
             .fetch_account_info()
