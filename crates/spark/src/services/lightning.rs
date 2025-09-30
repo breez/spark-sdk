@@ -73,10 +73,9 @@ pub struct LightningSendPayment {
 #[derive(Debug, Copy, Clone, Deserialize, Serialize)]
 pub enum LightningSendStatus {
     Created,
-    RequestValidated,
+    UserTransferValidationFailed,    
     LightningPaymentInitiated,
-    LightningPaymentFailed,
-    LightingTransferValidationFailed,
+    LightningPaymentFailed,    
     LightningPaymentSucceeded,
     PreimageProvided,
     PreimageProvidingFailed,
@@ -85,6 +84,7 @@ pub enum LightningSendStatus {
     PendingUserSwapReturn,
     UserSwapReturned,
     UserSwapReturnFailed,
+    RequestValidated,
     Unknown,
 }
 
@@ -96,8 +96,8 @@ impl From<LightningSendRequestStatus> for LightningSendStatus {
             LightningSendRequestStatus::LightningPaymentInitiated => {
                 LightningSendStatus::LightningPaymentInitiated
             }
-            LightningSendRequestStatus::LightingTransferValidationFailed => {
-                LightningSendStatus::LightingTransferValidationFailed
+            LightningSendRequestStatus::UserTransferValidationFailed => {
+                LightningSendStatus::UserTransferValidationFailed
             }
             LightningSendRequestStatus::LightningPaymentFailed => {
                 LightningSendStatus::LightningPaymentFailed
