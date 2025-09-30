@@ -65,7 +65,11 @@ func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
 
 func FetchBalance(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: fetch-balance
-	info, err := sdk.GetInfo(breez_sdk_spark.GetInfoRequest{})
+	info, err := sdk.GetInfo(breez_sdk_spark.GetInfoRequest{
+		// ForceSync: true will force the SDK to sync with the Spark network
+		// before returning the balance
+		ForceSync: false,
+	})
 
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return err
@@ -74,6 +78,7 @@ func FetchBalance(sdk *breez_sdk_spark.BreezSdk) error {
 	balanceSats := info.BalanceSats
 	log.Printf("Balance: %v sats", balanceSats)
 	// ANCHOR_END: fetch-balance
+	return nil
 }
 
 // ANCHOR: logging

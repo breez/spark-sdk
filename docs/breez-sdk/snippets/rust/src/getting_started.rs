@@ -61,7 +61,11 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
 
 pub(crate) async fn getting_started_node_info(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: fetch-balance
-    let info = sdk.get_info(GetInfoRequest {}).await?;
+    let info = sdk.get_info(GetInfoRequest {
+      // force_sync: true will force the SDK to sync with the Spark network
+      // before returning the balance
+      force_sync: false,
+    }).await?;
     let balance_sats = info.balance_sats;
     // ANCHOR_END: fetch-balance
     info!("Balance: {balance_sats} sats");

@@ -53,7 +53,9 @@ Future<void> initSdkAdvanced() async {
 
 Future<void> fetchBalance(BreezSdk sdk) async {
   // ANCHOR: fetch-balance
-  final info = await sdk.getInfo(request: GetInfoRequest());
+  // forceSync: true will force the SDK to sync with the Spark network
+  // before returning the balance
+  final info = await sdk.getInfo(request: GetInfoRequest(forceSync: false));
   final balanceSats = info.balanceSats;
   // ANCHOR_END: fetch-balance
   print(balanceSats);

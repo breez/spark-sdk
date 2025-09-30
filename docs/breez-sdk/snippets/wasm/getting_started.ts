@@ -11,7 +11,7 @@ import {
 } from '@breeztech/breez-sdk-spark'
 
 // Init stub
-const init = async () => {}
+const init = async () => { }
 
 const exampleGettingStarted = async () => {
   // ANCHOR: init-sdk
@@ -68,7 +68,11 @@ const exampleGettingStartedAdvanced = async () => {
 
 const exampleFetchNodeInfo = async (sdk: BreezSdk) => {
   // ANCHOR: fetch-balance
-  const info = await sdk.getInfo({})
+  const info = await sdk.getInfo({
+    // forceSync: true will force the SDK to sync with the Spark network
+    // before returning the balance
+    forceSync: false,
+  })
   const balanceSats = info.balanceSats
   // ANCHOR_END: fetch-balance
 }
