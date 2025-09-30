@@ -244,13 +244,6 @@ impl TimelockManager {
             signing_public_key,
             signing_commitments: self.signer.generate_frost_signing_commitments().await?,
         });
-        signing_jobs.push(SigningJob {
-            tx_type: SigningJobTxType::CpfpRefund,
-            tx: cpfp_refund_tx,
-            parent_tx_out: cpfp_node_tx.output[0].clone(),
-            signing_public_key,
-            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
-        });
 
         if let Some(direct_node_tx) = &direct_node_tx {
             signing_jobs.push(SigningJob {
@@ -261,6 +254,15 @@ impl TimelockManager {
                 signing_commitments: self.signer.generate_frost_signing_commitments().await?,
             });
         }
+
+        signing_jobs.push(SigningJob {
+            tx_type: SigningJobTxType::CpfpRefund,
+            tx: cpfp_refund_tx,
+            parent_tx_out: cpfp_node_tx.output[0].clone(),
+            signing_public_key,
+            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+        });
+
         if let (Some(direct_refund_tx), Some(direct_node_tx)) = (direct_refund_tx, &direct_node_tx)
         {
             signing_jobs.push(SigningJob {
