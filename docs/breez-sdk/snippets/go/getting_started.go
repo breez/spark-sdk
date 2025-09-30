@@ -56,7 +56,7 @@ func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
 	// You can also pass your custom implementations:
 	// builder.WithChainService(<your chain service implementation>)
 	// builder.WithRestClient(<your rest client implementation>)
-	// builder.WithKeySet(<your key set type>, <use address index>)
+	// builder.WithKeySet(<your key set type>, <use address index>, <account number>)
 	sdk, err := builder.Build()
 
 	return sdk, err

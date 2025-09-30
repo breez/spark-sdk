@@ -39,10 +39,15 @@ impl SdkBuilder {
     }
 
     #[wasm_bindgen(js_name = "withKeySet")]
-    pub fn with_key_set(mut self, key_set_type: KeySetType, use_address_index: bool) -> Self {
-        self.builder = self
-            .builder
-            .with_key_set(key_set_type.into(), use_address_index);
+    pub fn with_key_set(
+        mut self,
+        key_set_type: KeySetType,
+        use_address_index: bool,
+        account_number: Option<u32>,
+    ) -> Self {
+        self.builder =
+            self.builder
+                .with_key_set(key_set_type.into(), use_address_index, account_number);
         self
     }
 

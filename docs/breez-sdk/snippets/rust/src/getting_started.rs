@@ -52,7 +52,7 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     // You can also pass your custom implementations:
     // let builder = builder.with_chain_service(<your chain service implementation>)
     // let builder = builder.with_rest_client(<your rest client implementation>)
-    // let builder = builder.with_key_set(<your key set type>, <use address index>)
+    // let builder = builder.with_key_set(<your key set type>, <use address index>, <account number>)
     let sdk = builder.build().await?;
 
     // ANCHOR_END: init-sdk-advanced
