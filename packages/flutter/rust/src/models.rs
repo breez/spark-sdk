@@ -83,7 +83,9 @@ pub enum _Fee {
 }
 
 #[frb(mirror(GetInfoRequest))]
-pub struct _GetInfoRequest {}
+pub struct _GetInfoRequest {
+    pub force_sync: bool,
+}
 
 #[frb(mirror(GetInfoResponse))]
 pub struct _GetInfoResponse {
