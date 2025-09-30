@@ -124,6 +124,7 @@ pub enum CurrencyUnit {
     Eur,
     Gbp,
     Inr,
+    Usdt,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -166,15 +167,18 @@ pub enum SparkLeavesSwapRequestStatus {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LightningReceiveRequestStatus {
     InvoiceCreated,
+    HtlcReceived,
     TransferCreated,
     TransferCreationFailed,
-    RefundSigningCommitmentsQueryingFailed,
-    RefundSigningFailed,
     PaymentPreimageRecovered,
     PaymentPreimageRecoveringFailed,
+    TransferCanceled,
+    HtlcFailed,
     LightningPaymentReceived,
     TransferFailed,
     TransferCompleted,
+    RefundSigningCommitmentsQueryingFailed,
+    RefundSigningFailed,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -183,8 +187,8 @@ pub enum LightningReceiveRequestStatus {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LightningSendRequestStatus {
-    Created,
-    RequestValidated,
+    Created,    
+    UserTransferValidationFailed,
     LightningPaymentInitiated,
     LightningPaymentFailed,
     LightningPaymentSucceeded,
@@ -195,6 +199,7 @@ pub enum LightningSendRequestStatus {
     PendingUserSwapReturn,
     UserSwapReturned,
     UserSwapReturnFailed,
+    RequestValidated,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -266,7 +271,7 @@ pub struct CurrencyAmount {
 }
 
 impl Default for CurrencyAmount {
-    fn default() -> Self {
+    fn default() -> Self {      
         Self {
             original_value: 0,
             original_unit: CurrencyUnit::Satoshi,
@@ -462,8 +467,8 @@ pub struct LeavesSwapRequest {
     pub total_amount: CurrencyAmount,
     pub target_amount: CurrencyAmount,
     pub fee: CurrencyAmount,
-    pub inbound_transfer: Transfer,
-    pub swap_leaves: Vec<SwapLeaf>,
+    pub inbound_transfer: Option<Transfer>,
+    pub swap_leaves: Option<Vec<SwapLeaf>>,
     pub outbound_transfer: Option<Transfer>,
     pub swap_expired_at: Option<DateTime<Utc>>,
 }

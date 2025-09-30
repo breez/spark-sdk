@@ -28,8 +28,8 @@ use crate::utils::time::web_time_to_prost_timestamp;
 use crate::utils::transactions::{ConnectorRefundTxsParams, create_connector_refund_txs};
 use crate::{signer::Signer, tree::TreeNode};
 
-const COOP_EXIT_EXPIRY_DURATION_MAINNET: Duration = Duration::from_secs(24 * 60 * 60 * 2); // 48 hours
-const COOP_EXIT_EXPIRY_DURATION: Duration = Duration::from_secs(60 * 5); // 5 minutes
+const COOP_EXIT_EXPIRY_DURATION_MAINNET: Duration = Duration::from_secs(7 * 24 * 60 * 60 + 5 * 60); // 1 week + 5 minutes
+const COOP_EXIT_EXPIRY_DURATION: Duration = Duration::from_secs(35 * 60); // 35 minutes
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CoopExitSpeedFeeQuote {
@@ -156,16 +156,18 @@ impl CoopExitService {
 
         // Request cooperative exit from the SSP
         trace!("Requesting cooperative exit");
+        let transfer_id = TransferId::generate();
         let coop_exit_request = self
             .ssp_client
             .request_coop_exit(RequestCoopExitInput {
                 leaf_external_ids,
                 withdrawal_address: withdrawal_address.to_string(),
-                idempotency_key: uuid::Uuid::now_v7().to_string(),
+                idempotency_key: None,
                 exit_speed: exit_speed.into(),
                 withdraw_all,
                 fee_leaf_external_ids,
                 fee_quote_id,
+                user_outbound_transfer_external_id: Some(transfer_id.to_string()),
             })
             .await?;
 
@@ -183,7 +185,12 @@ impl CoopExitService {
         let coop_exit_input = connector_tx.input[0].previous_output.txid;
 
         let coop_exit_refund_signatures = self
-            .get_connector_refund_signatures(leaf_key_tweaks, connector_txid, coop_exit_input)
+            .get_connector_refund_signatures(
+                leaf_key_tweaks,
+                connector_txid,
+                coop_exit_input,
+                transfer_id,
+            )
             .await?;
         trace!("Got connector refund signatures: {coop_exit_refund_signatures:?}",);
         let transfer = coop_exit_refund_signatures.transfer;
@@ -202,12 +209,13 @@ impl CoopExitService {
         leaf_key_tweaks: Vec<LeafKeyTweak>,
         connector_txid: Txid,
         exit_txid: Txid,
+        transfer_id: TransferId,
     ) -> Result<CoopExitRefundSignatures, ServiceError> {
         debug!(
             "Getting connector refund signatures for connector_txid: {connector_txid}, exit_txid: {exit_txid}",
         );
         let coop_exit_refund_signatures = self
-            .sign_coop_exit_refunds(&leaf_key_tweaks, connector_txid, exit_txid)
+            .sign_coop_exit_refunds(&leaf_key_tweaks, connector_txid, exit_txid, transfer_id)
             .await?;
 
         trace!("Delivering transfer package for cooperative exit refund signatures");
@@ -231,6 +239,7 @@ impl CoopExitService {
         leaf_key_tweaks: &[LeafKeyTweak],
         connector_txid: Txid,
         exit_txid: Txid,
+        transfer_id: TransferId,
     ) -> Result<CoopExitRefundSignatures, ServiceError> {
         debug!(
             "Signing cooperative exit refunds for connector_txid: {connector_txid}, exit_txid: {exit_txid}",
@@ -259,7 +268,6 @@ impl CoopExitService {
         )
         .to_string();
 
-        let transfer_id = TransferId::generate();
         let expiry_time = if self.network == Network::Mainnet {
             COOP_EXIT_EXPIRY_DURATION_MAINNET
         } else {
