@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
-use bitcoin::key::Parity;
+use bitcoin::key::{Parity, TapTweak};
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
 use bitcoin::secp256k1::{self, All, Keypair, Message, PublicKey, SecretKey, schnorr};
@@ -167,6 +167,10 @@ impl KeySet {
         let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
         let mut key_set = derived_key_set.to_key_set(None)?;
         let secp = Secp256k1::new();
+        key_set.identity_key_pair = key_set
+            .identity_key_pair
+            .tap_tweak(&secp, None)
+            .to_keypair();
         if let (_, Parity::Odd) = key_set
             .identity_key_pair
             .secret_key()
