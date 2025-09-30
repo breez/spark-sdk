@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use breez_sdk_spark::{ParseError, SdkError};
+use tracing_subscriber::util::TryInitError;
 use wasm_bindgen::{JsError, JsValue};
 
 #[derive(Clone, Debug)]
@@ -23,6 +24,12 @@ impl From<WasmError> for JsValue {
 impl From<JsValue> for WasmError {
     fn from(err: JsValue) -> Self {
         Self(err)
+    }
+}
+
+impl From<TryInitError> for WasmError {
+    fn from(value: TryInitError) -> Self {
+        SdkError::from(value).into()
     }
 }
 

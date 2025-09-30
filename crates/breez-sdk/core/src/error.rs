@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use spark_wallet::SparkWalletError;
 use std::{convert::Infallible, num::TryFromIntError};
 use thiserror::Error;
+use tracing_subscriber::util::TryInitError;
 
 /// Error type for the `BreezSdk`
 #[derive(Debug, Error, Clone)]
@@ -163,6 +164,12 @@ impl From<LnurlServerError> for SdkError {
 impl From<ReqwestLnurlServerClientError> for SdkError {
     fn from(value: ReqwestLnurlServerClientError) -> Self {
         SdkError::Generic(value.to_string())
+    }
+}
+
+impl From<TryInitError> for SdkError {
+    fn from(_value: TryInitError) -> Self {
+        SdkError::Generic("Logging can only be initialized once".to_string())
     }
 }
 

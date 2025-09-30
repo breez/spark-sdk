@@ -29,7 +29,7 @@ pub async fn init_logging(logger: Logger, filter: Option<String>) -> WasmResult<
         .with(filter)
         .with(WasmTracingLayer {});
 
-    subscriber.init();
+    subscriber.try_init()?;
 
     Ok(())
 }

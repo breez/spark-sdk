@@ -66,9 +66,9 @@ pub(super) fn init_logging(
                     .with_line_number(true)
                     .with_writer(log_file),
             )
-            .init();
+            .try_init()?;
     } else {
-        registry.init();
+        registry.try_init()?;
     }
 
     Ok(())
