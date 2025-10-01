@@ -71,5 +71,13 @@ Once connected, the balance can be retrieved at any time.
 </section>
 </custom-tabs>
 
-You are now ready to receive a Lightning [payment](payments.md).
+<div class="warning">
+<h4>Developer note</h4>
+The SDK maintains a cached balance for fast responses and updates it on every change. The `get_info` call returns the value from this cache to provide a low-latency user experience.
 
+Right after startup, the cache may not yet reflect the latest state from the network. To get the fully up to date balance when fetching immediately after startup, use one of the following options:
+
+- Wait for the `SdkEvent::Synced` event before calling `get_info`.
+- Call `get_info` with `force_sync = true` to trigger a sync before reading the balance.
+
+</div>
