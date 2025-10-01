@@ -106,7 +106,7 @@ impl BreezSdk {
     }
     
     pub async fn sync_wallet(&self, request: SyncWalletRequest) -> Result<SyncWalletResponse, SdkError> {
-        self.inner.sync_wallet(request)
+        self.inner.sync_wallet(request).await
     }
 
     pub async fn list_payments(
