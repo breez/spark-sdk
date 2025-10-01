@@ -65,8 +65,9 @@ async def init_sdk_advanced():
 async def fetch_balance(sdk: BreezSdk):
     # ANCHOR: fetch-balance
     try:
-        # forceSync: True will force the SDK to sync with the Spark network
-        info = await sdk.get_info(request=GetInfoRequest(force_sync=False))
+        # ensure_synced: True will ensure the SDK is synced with the Spark network
+        # before returning the balance
+        info = await sdk.get_info(request=GetInfoRequest(ensure_synced=False))
         balance_sats = info.balance_sats
     except Exception as error:
         logging.error(error)

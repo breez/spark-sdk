@@ -77,7 +77,7 @@ The SDK maintains a cached balance for fast responses and updates it on every ch
 
 Right after startup, the cache may not yet reflect the latest state from the network. Depends on your use case you can use one of the following options to get the fully up to date balance:
 
-- If your application runs continuously in the background, wait for `SdkEvent::Synced` before calling `get_info`.
-- If you're only briefly using the SDK to fetch the balance, call `get_info` with `force_sync = true` before disconnecting.
+- If your application runs continuously in the background, call `get_info` after each `SdkEvent::Synced` event.
+- If you're only briefly using the SDK to fetch the balance, call `get_info` with `ensure_synced = true` before disconnecting.
 
 </div>

@@ -69,9 +69,9 @@ const exampleGettingStartedAdvanced = async () => {
 const exampleFetchNodeInfo = async (sdk: BreezSdk) => {
   // ANCHOR: fetch-balance
   const info = await sdk.getInfo({
-    // forceSync: true will force the SDK to sync with the Spark network
+    // ensureSynced: true will ensure the SDK is synced with the Spark network
     // before returning the balance
-    forceSync: false,
+    ensureSynced: false,
   })
   const balanceSats = info.balanceSats
   // ANCHOR_END: fetch-balance

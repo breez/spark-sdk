@@ -522,7 +522,7 @@ pub struct Credentials {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct GetInfoRequest {
-    pub force_sync: bool,
+    pub ensure_synced: bool,
 }
 
 /// Response containing the balance of the wallet

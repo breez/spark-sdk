@@ -486,7 +486,7 @@ pub struct Credentials {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::GetInfoRequest)]
 pub struct GetInfoRequest {
-    pub force_sync: bool,
+    pub ensure_synced: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::GetInfoResponse)]

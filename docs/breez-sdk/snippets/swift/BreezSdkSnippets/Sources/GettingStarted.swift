@@ -48,10 +48,10 @@ func initSdkAdvanced() async throws -> BreezSdk {
 
 func gettingStartedNodeInfo(sdk: BreezSdk) async throws {
     // ANCHOR: fetch-balance
-    // forceSync: true will force the SDK to sync with the Spark network
+    // ensureSynced: true will ensure the SDK is synced with the Spark network
     // before returning the balance
     let info = try await sdk.getInfo(request: GetInfoRequest(
-      forceSync: false
+      ensureSynced: false
     ))
     let balanceSats = info.balanceSats
     // ANCHOR_END: fetch-balance

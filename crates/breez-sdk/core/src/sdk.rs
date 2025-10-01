@@ -115,6 +115,7 @@ pub struct BreezSdk {
     shutdown_sender: watch::Sender<()>,
     shutdown_receiver: watch::Receiver<()>,
     sync_trigger: tokio::sync::broadcast::Sender<SyncRequest>,
+    initial_synced_watcher: watch::Receiver<bool>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -164,7 +165,8 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
 
     let storage = default_storage(storage_dir.to_string_lossy().to_string())?;
     let builder = crate::SdkBuilder::new(request.config, request.seed, storage);
-    builder.build().await
+    let sdk = builder.build().await?;
+    Ok(sdk)
 }
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -208,11 +210,12 @@ pub(crate) struct BreezSdkParams {
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
-    pub(crate) fn new(params: BreezSdkParams) -> Result<Self, SdkError> {
+    pub(crate) fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
         match &params.config.api_key {
             Some(api_key) => validate_breez_api_key(api_key)?,
             None => return Err(SdkError::Generic("Missing Breez API key".to_string())),
         }
+        let (initial_synced_sender, initial_synced_watcher) = watch::channel(false);
         let sdk = Self {
             config: params.config,
             spark_wallet: params.spark_wallet,
@@ -225,7 +228,9 @@ impl BreezSdk {
             shutdown_sender: params.shutdown_sender,
             shutdown_receiver: params.shutdown_receiver,
             sync_trigger: tokio::sync::broadcast::channel(10).0,
+            initial_synced_watcher,
         };
+        sdk.start(initial_synced_sender);
         Ok(sdk)
     }
 
@@ -234,8 +239,8 @@ impl BreezSdk {
     /// This method initiates the following backround tasks:
     /// 1. `periodic_sync`: the wallet with the Spark network    
     /// 2. `monitor_deposits`: monitors for new deposits
-    pub(crate) fn start(&self) {
-        self.periodic_sync();
+    fn start(&self, initial_synced_sender: watch::Sender<bool>) {
+        self.periodic_sync(initial_synced_sender);
         self.try_recover_lightning_address();
     }
 
@@ -258,7 +263,7 @@ impl BreezSdk {
         });
     }
 
-    fn periodic_sync(&self) {
+    fn periodic_sync(&self, initial_synced_sender: watch::Sender<bool>) {
         let sdk = self.clone();
         let mut shutdown_receiver = sdk.shutdown_receiver.clone();
         let mut subscription = sdk.spark_wallet.subscribe_events();
@@ -289,6 +294,7 @@ impl BreezSdk {
                       if let Ok(sync_request) = sync_type_res   {
                           info!("Sync trigger changed: {:?}", &sync_request);
                           let cloned_sdk = sdk.clone();
+                          let initial_synced_sender = initial_synced_sender.clone();
                           if let Some(true) = run_with_shutdown(shutdown_receiver.clone(), "Sync trigger changed", async move {
                           if let Err(e) = cloned_sdk.sync_wallet_internal(sync_request.sync_type.clone()).await {
                               error!("Failed to sync wallet: {e:?}");
@@ -297,6 +303,9 @@ impl BreezSdk {
                           }
                           if matches!(sync_request.sync_type, SyncType::Full) {
                             let () = sync_request.reply(None).await;
+                            if let Err(e) = initial_synced_sender.send(true) {
+                              error!("Failed to send initial synced signal: {e:?}");
+                            }
                             return true
                           }
                           false
@@ -610,8 +619,14 @@ impl BreezSdk {
     /// Returns the balance of the wallet in satoshis
     #[allow(unused_variables)]
     pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
-        if request.force_sync {
-            self.sync_wallet(SyncWalletRequest {}).await?;
+        if request.ensure_synced {
+            self.initial_synced_watcher
+                .clone()
+                .changed()
+                .await
+                .map_err(|_| {
+                    SdkError::Generic("Failed to receive initial synced signal".to_string())
+                })?;
         }
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
         let account_info = object_repository

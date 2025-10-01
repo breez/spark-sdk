@@ -23,7 +23,7 @@ pub enum Command {
     GetInfo {
         /// Force sync
         #[arg(short, long)]
-        force_sync: bool,
+        ensure_synced: bool,
     },
 
     /// Get the payment with the given ID
@@ -158,8 +158,8 @@ pub(crate) async fn execute_command(
 ) -> Result<bool, anyhow::Error> {
     match command {
         Command::Exit => Ok(false),
-        Command::GetInfo { force_sync } => {
-            let value = sdk.get_info(GetInfoRequest { force_sync }).await?;
+        Command::GetInfo { ensure_synced } => {
+            let value = sdk.get_info(GetInfoRequest { ensure_synced }).await?;
             print_value(&value)?;
             Ok(true)
         }
