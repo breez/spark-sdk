@@ -1320,7 +1320,7 @@ impl EventListener for BalanceWatcher {
         match event {
             SdkEvent::PaymentSucceeded { .. } | SdkEvent::ClaimDepositsSucceeded { .. } => {
                 match update_balance(self.spark_wallet.clone(), self.storage.clone()).await {
-                    Ok(_) => info!("Balance updated successfully"),
+                    Ok(()) => info!("Balance updated successfully"),
                     Err(e) => error!("Failed to update balance: {e:?}"),
                 }
             }
