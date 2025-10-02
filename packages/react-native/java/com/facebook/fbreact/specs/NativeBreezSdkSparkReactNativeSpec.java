@@ -10,7 +10,7 @@
  * @nolint
  */
 
-package com.breeztech.breezsdkspark;
+package com.facebook.fbreact.specs;
 
 import com.facebook.proguard.annotations.DoNotStrip;
 import com.facebook.react.bridge.ReactApplicationContext;
