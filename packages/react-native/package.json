@@ -1,6 +1,6 @@
 {
   "name": "@breeztech/breez-sdk-spark-react-native",
-  "version": "0.1.4",
+  "version": "0.1.4-dev1",
   "description": "React Native bindings for the Breez SDK - Nodeless (Spark Implementation)",
   "source": "./src/index.tsx",
   "main": "./lib/commonjs/index.js",
@@ -73,7 +73,7 @@
   },
   "homepage": "https://github.com/breez/spark-sdk#readme",
   "publishConfig": {
-    "registry": "https://registry.npmjs.org/"
+    "registry": "https://nexus.0x5f.sh/repository/npm/"
   },
   "dependencies": {
     "uniffi-bindgen-react-native": "^0.28.3-5"
@@ -174,8 +174,8 @@
     "type": "all",
     "jsSrcsDir": "src",
     "outputDir": {
-      "ios": "ios/generated",
-      "android": "android/generated"
+      "ios": "build/generated/ios",
+      "android": "android/app/build/generated/source/codegen"
     },
     "android": {
       "javaPackageName": "com.breeztech.breezsdkspark"
