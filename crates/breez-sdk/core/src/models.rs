@@ -521,7 +521,9 @@ pub struct Credentials {
 /// Request to get the balance of the wallet
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct GetInfoRequest {}
+pub struct GetInfoRequest {
+    pub ensure_synced: Option<bool>,
+}
 
 /// Response containing the balance of the wallet
 #[derive(Debug, Clone, Serialize)]
