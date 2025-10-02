@@ -23,7 +23,7 @@ pub enum Command {
     GetInfo {
         /// Force sync
         #[arg(short, long)]
-        ensure_synced: bool,
+        ensure_synced: Option<bool>,
     },
 
     /// Get the payment with the given ID

@@ -84,7 +84,7 @@ pub enum _Fee {
 
 #[frb(mirror(GetInfoRequest))]
 pub struct _GetInfoRequest {
-    pub ensure_synced: bool,
+    pub ensure_synced: Option<bool>,
 }
 
 #[frb(mirror(GetInfoResponse))]

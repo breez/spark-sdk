@@ -619,7 +619,7 @@ impl BreezSdk {
     /// Returns the balance of the wallet in satoshis
     #[allow(unused_variables)]
     pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
-        if request.ensure_synced {
+        if request.ensure_synced.unwrap_or_default() {
             self.initial_synced_watcher
                 .clone()
                 .changed()
