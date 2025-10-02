@@ -166,13 +166,13 @@ impl TreeService for SynchronousTreeService {
         let operators: Vec<_> = self
             .operator_pool
             .get_non_coordinator_operators()
-            .map(|op| (op.id.clone(), op.client.clone()))
+            .map(|op| (op.id, op.client.clone()))
             .collect();
 
         let coord_fut = self.query_nodes(&coordinator_client, false, None);
-        let op_futs = operators.iter().map(|(id, client)| async move {
-            (id.clone(), self.query_nodes(client, false, None).await)
-        });
+        let op_futs = operators
+            .iter()
+            .map(|(id, client)| async move { (*id, self.query_nodes(client, false, None).await) });
 
         let (coordinator_leaves_res, operator_results) = tokio::join!(coord_fut, join_all(op_futs));
         let coordinator_leaves = coordinator_leaves_res?;
