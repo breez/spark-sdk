@@ -1,0 +1,1115 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Sending payments - Breez SDK - Nodeless (Spark)</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Nodeless (Spark)</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/send_payment.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="sending-payments"><a class="header" href="#sending-payments">Sending payments</a></h1>
+<p>Once the SDK is initialized, you can directly begin sending payments. The send process takes two steps:</p>
+<ol>
+<li><a href="send_payment.html#preparing-payments">Preparing the Payment</a></li>
+<li><a href="send_payment.html#sending-payments">Sending the Payment</a></li>
+</ol>
+<p>For sending payments via LNURL, see <a href="lnurl_pay.html">LNURL-Pay</a>.</p>
+<h2 id="preparing-payments">
+    <a class="header" href="#preparing-payments">Preparing Payments</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
+</h2>
+<p>During the prepare step, the SDK ensures that the inputs are valid with respect to the payment request type,
+and also returns the fees related to the payment so they can be confirmed.</p>
+<p>The payment request field supports Lightning invoices, Bitcoin addresses and Spark addresses.</p>
+<h3 id="lightning"><a class="header" href="#lightning">Lightning</a></h3>
+<h4 id="bolt11-invoice"><a class="header" href="#bolt11-invoice">BOLT11 invoice</a></h4>
+<p>For BOLT11 invoices the amount can be optionally set. The amount set in the request is only taken into account if it's an amountless invoice.</p>
+<p>If the invoice also contains a Spark address, it means the payment can be sent directly with a Spark Transfer instead. When this is the case, the prepare response includes the Spark transfer fee.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let payment_request = "&lt;bolt11 invoice&gt;".to_string();
+// Optionally set the amount you wish the pay the receiver
+let optional_amount_sats = Some(5_000);
+let prepare_response = sdk
+    .prepare_send_payment(PrepareSendPaymentRequest {
+        payment_request,
+        amount_sats: optional_amount_sats,
+    })
+    .await?;
+
+// If the fees are acceptable, continue to create the Send Payment
+if let SendPaymentMethod::Bolt11Invoice {
+    spark_transfer_fee_sats,
+    lightning_fee_sats,
+    ..
+} = prepare_response.payment_method
+{
+    // Fees to pay via Lightning
+    info!("Lightning Fees: {lightning_fee_sats} sats");
+    // Or fees to pay (if available) via a Spark transfer
+    info!("Spark Transfer Fees: {spark_transfer_fee_sats:?} sats");
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let paymentRequest = "&lt;bolt11 invoice&gt;"
+// Optionally set the amount you wish the pay the receiver
+let optionalAmountSats: UInt64 = 5_000
+
+let prepareResponse = try await sdk.prepareSendPayment(
+    request: PrepareSendPaymentRequest (
+        paymentRequest: paymentRequest,
+        amountSats: optionalAmountSats
+    ))
+
+if case let .bolt11Invoice(_, sparkTransferFeeSats, lightningFeeSats) = prepareResponse.paymentMethod {
+    // Fees to pay via Lightning
+    print("Lightning Fee: \(lightningFeeSats) sats")
+    // Or fees to pay (if available) via a Spark transfer
+    if let sparkTransferFeeSats = sparkTransferFeeSats {
+        print("Spark Transfer Fee: \(sparkTransferFeeSats) sats")
+    }
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val paymentRequest = "&lt;bolt11 invoice&gt;"
+// Optionally set the amount you wish the pay the receiver
+val optionalAmountSats = 5_000UL
+try {
+    val req = PrepareSendPaymentRequest(paymentRequest, optionalAmountSats)
+    val prepareResponse = sdk.prepareSendPayment(req)
+
+    // If the fees are acceptable, continue to create the Send Payment
+    val paymentMethod = prepareResponse.paymentMethod
+    if (paymentMethod is SendPaymentMethod.Bolt11Invoice) {
+        // Fees to pay via Lightning
+        val lightningFeeSats = paymentMethod.lightningFeeSats
+        // Or fees to pay (if available) via a Spark transfer
+        val sparkTransferFeeSats = paymentMethod.sparkTransferFeeSats
+        // Log.v("Breez", "Lightning Fees: ${lightningFeeSats} sats")
+        // Log.v("Breez", "Spark Transfer Fees: ${sparkTransferFeeSats} sats")
+    }
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript">const paymentRequest = '&lt;bolt11 invoice&gt;'
+// Optionally set the amount you wish the pay the receiver
+const optionalAmountSats = 5_000
+
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest,
+  amountSats: optionalAmountSats
+})
+
+// If the fees are acceptable, continue to create the Send Payment
+if (prepareResponse.paymentMethod.type === 'bolt11Invoice') {
+  // Fees to pay via Lightning
+  const lightningFeeSats = prepareResponse.paymentMethod.lightningFeeSats
+  // Or fees to pay (if available) via a Spark transfer
+  const sparkTransferFeeSats = prepareResponse.paymentMethod.sparkTransferFeeSats
+  console.debug(`Lightning Fees: ${lightningFeeSats} sats`)
+  console.debug(`Spark Transfer Fees: ${sparkTransferFeeSats} sats`)
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript">const paymentRequest = '&lt;bolt11 invoice&gt;'
+// Optionally set the amount you wish the pay the receiver
+const optionalAmountSats = BigInt(5_000)
+
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest,
+  amountSats: optionalAmountSats
+})
+
+// If the fees are acceptable, continue to create the Send Payment
+if (prepareResponse.paymentMethod instanceof SendPaymentMethod.Bolt11Invoice) {
+  // Fees to pay via Lightning
+  const lightningFeeSats = prepareResponse.paymentMethod.inner.lightningFeeSats
+  // Or fees to pay (if available) via a Spark transfer
+  const sparkTransferFeeSats = prepareResponse.paymentMethod.inner.sparkTransferFeeSats
+  console.debug(`Lightning Fees: ${lightningFeeSats} sats`)
+  console.debug(`Spark Transfer Fees: ${sparkTransferFeeSats} sats`)
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">String paymentRequest = "&lt;bolt11 invoice&gt;";
+// Optionally set the amount you wish the pay the receiver
+BigInt optionalAmountSats = BigInt.from(5000);
+
+final request = PrepareSendPaymentRequest(
+    paymentRequest: paymentRequest, amountSats: optionalAmountSats);
+final response = await sdk.prepareSendPayment(request: request);
+
+// If the fees are acceptable, continue to create the Send Payment
+final paymentMethod = response.paymentMethod;
+if (paymentMethod is SendPaymentMethod_Bolt11Invoice) {
+  // Fees to pay via Lightning
+  final lightningFeeSats = paymentMethod.lightningFeeSats;
+  // Or fees to pay (if available) via a Spark transfer
+  final sparkTransferFeeSats = paymentMethod.sparkTransferFeeSats;
+  print("Lightning Fees: $lightningFeeSats sats");
+  print("Spark Transfer Fees: $sparkTransferFeeSats sats");
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">payment_request = "&lt;bolt11 invoice&gt;"
+# Optionally set the amount you wish the pay the receiver
+optional_amount_sats = 5_000
+try:
+    request = PrepareSendPaymentRequest(
+        payment_request=payment_request, amount_sats=optional_amount_sats
+    )
+    prepare_response = await sdk.prepare_send_payment(request=request)
+
+    # If the fees are acceptable, continue to create the Send Payment
+    if isinstance(
+        prepare_response.payment_method, SendPaymentMethod.BOLT11_INVOICE
+    ):
+        # Fees to pay via Lightning
+        lightning_fee_sats = prepare_response.payment_method.lightning_fee_sats
+        # Or fees to pay (if available) via a Spark transfer
+        spark_transfer_fee_sats = (
+            prepare_response.payment_method.spark_transfer_fee_sats
+        )
+        logging.debug(f"Lightning Fees: {lightning_fee_sats} sats")
+        logging.debug(f"Spark Transfer Fees: {spark_transfer_fee_sats} sats")
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">paymentRequest := "&lt;bolt11 invoice&gt;"
+// Optionally set the amount you wish the pay the receiver
+optionalAmountSats := uint64(5_000)
+
+request := breez_sdk_spark.PrepareSendPaymentRequest{
+    PaymentRequest: paymentRequest,
+    AmountSats:     &amp;optionalAmountSats,
+}
+response, err := sdk.PrepareSendPayment(request)
+
+if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+    return nil, err
+}
+
+// If the fees are acceptable, continue to create the Send Payment
+switch paymentMethod := response.PaymentMethod.(type) {
+case breez_sdk_spark.SendPaymentMethodBolt11Invoice:
+    // Fees to pay via Lightning
+    lightningFeeSats := paymentMethod.LightningFeeSats
+    // Or fees to pay (if available) via a Spark transfer
+    sparkTransferFeeSats := paymentMethod.SparkTransferFeeSats
+    log.Printf("Lightning Fees: %v sats", lightningFeeSats)
+    log.Printf("Spark Transfer Fees: %v sats", sparkTransferFeeSats)
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h3 id="bitcoin"><a class="header" href="#bitcoin">Bitcoin</a></h3>
+<p>For Bitcoin addresses the amount must be set in the request. The prepare response includes fee quotes for three payment speeds: Slow, Medium and Fast.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let payment_request = "&lt;bitcoin address&gt;".to_string();
+// Set the amount you wish the pay the receiver
+let amount_sats = Some(50_000);
+let prepare_response = sdk
+    .prepare_send_payment(PrepareSendPaymentRequest {
+        payment_request,
+        amount_sats,
+    })
+    .await?;
+
+// If the fees are acceptable, continue to create the Send Payment
+if let SendPaymentMethod::BitcoinAddress { fee_quote, .. } = &amp;prepare_response.payment_method {
+    info!("Slow Fees: {} sats", fee_quote.speed_slow.total_fee_sat());
+    info!(
+        "Medium Fees: {} sats",
+        fee_quote.speed_medium.total_fee_sat()
+    );
+    info!("Fast Fees: {} sats", fee_quote.speed_fast.total_fee_sat());
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let paymentRequest = "&lt;bitcoin address&gt;"
+// Set the amount you wish the pay the receiver
+let amountSats: UInt64 = 50_000
+
+let prepareResponse = try await sdk.prepareSendPayment(
+    request: PrepareSendPaymentRequest (
+        paymentRequest: paymentRequest,
+        amountSats: amountSats
+    ))
+
+if case let .bitcoinAddress(_, feeQuote) = prepareResponse.paymentMethod {
+    let slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
+    let mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
+    let fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat
+    print("Slow Fees: \(slowFeeSats) sats")
+    print("Medium Fees: \(mediumFeeSats) sats")
+    print("Fast Fees: \(fastFeeSats) sats")
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val paymentRequest = "&lt;bitcoin address&gt;"
+// Set the amount you wish the pay the receiver
+val amountSats = 50_000UL
+try {
+    val req = PrepareSendPaymentRequest(paymentRequest, amountSats)
+    val prepareResponse = sdk.prepareSendPayment(req)
+
+    // If the fees are acceptable, continue to create the Send Payment
+    val paymentMethod = prepareResponse.paymentMethod
+    if (paymentMethod is SendPaymentMethod.BitcoinAddress) {
+        val feeQuote = paymentMethod.feeQuote
+        val slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
+        val mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
+        val fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat
+        // Log.v("Breez", "Slow Fees: ${slowFeeSats} sats")
+        // Log.v("Breez", "Medium Fees: ${mediumFeeSats} sats")
+        // Log.v("Breez", "Fast Fees: ${fastFeeSats} sats")
+    }
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript">const paymentRequest = '&lt;bitcoin address&gt;'
+// Set the amount you wish the pay the receiver
+const amountSats = 50_000
+
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest,
+  amountSats
+})
+
+// If the fees are acceptable, continue to create the Send Payment
+if (prepareResponse.paymentMethod.type === 'bitcoinAddress') {
+  const feeQuote = prepareResponse.paymentMethod.feeQuote
+  const slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
+  const mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
+  const fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat
+  console.debug(`Slow Fees: ${slowFeeSats} sats`)
+  console.debug(`Medium Fees: ${mediumFeeSats} sats`)
+  console.debug(`Fast Fees: ${fastFeeSats} sats`)
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript">const paymentRequest = '&lt;bitcoin address&gt;'
+// Set the amount you wish the pay the receiver
+const amountSats = BigInt(50_000)
+
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest,
+  amountSats
+})
+
+// If the fees are acceptable, continue to create the Send Payment
+if (prepareResponse.paymentMethod instanceof SendPaymentMethod.BitcoinAddress) {
+  const feeQuote = prepareResponse.paymentMethod.inner.feeQuote
+  const slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
+  const mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
+  const fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat
+  console.debug(`Slow Fees: ${slowFeeSats} sats`)
+  console.debug(`Medium Fees: ${mediumFeeSats} sats`)
+  console.debug(`Fast Fees: ${fastFeeSats} sats`)
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">String paymentRequest = "&lt;bitcoin address&gt;";
+// Set the amount you wish the pay the receiver
+BigInt amountSats = BigInt.from(50000);
+
+final request = PrepareSendPaymentRequest(
+    paymentRequest: paymentRequest, amountSats: amountSats);
+final response = await sdk.prepareSendPayment(request: request);
+
+// If the fees are acceptable, continue to create the Send Payment
+final paymentMethod = response.paymentMethod;
+if (paymentMethod is SendPaymentMethod_BitcoinAddress) {
+  final feeQuote = paymentMethod.feeQuote;
+  final slowFeeSats =
+      feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat;
+  final mediumFeeSats = feeQuote.speedMedium.userFeeSat +
+      feeQuote.speedMedium.l1BroadcastFeeSat;
+  final fastFeeSats =
+      feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat;
+  print("Slow Fees: $slowFeeSats sats");
+  print("Medium Fees: $mediumFeeSats sats");
+  print("Fast Fees: $fastFeeSats sats");
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">payment_request = "&lt;bitcoin address&gt;"
+# Set the amount you wish the pay the receiver
+amount_sats = 50_000
+try:
+    request = PrepareSendPaymentRequest(
+        payment_request=payment_request, amount_sats=amount_sats
+    )
+    prepare_response = await sdk.prepare_send_payment(request=request)
+
+    # If the fees are acceptable, continue to create the Send Payment
+    if isinstance(
+        prepare_response.payment_method, SendPaymentMethod.BITCOIN_ADDRESS
+    ):
+        fee_quote = prepare_response.payment_method.fee_quote
+        slow_fee_sats = (
+            fee_quote.speed_slow.user_fee_sat
+            + fee_quote.speed_slow.l1_broadcast_fee_sat
+        )
+        medium_fee_sats = (
+            fee_quote.speed_medium.user_fee_sat
+            + fee_quote.speed_medium.l1_broadcast_fee_sat
+        )
+        fast_fee_sats = (
+            fee_quote.speed_fast.user_fee_sat
+            + fee_quote.speed_fast.l1_broadcast_fee_sat
+        )
+        logging.debug(f"Slow Fees: {slow_fee_sats} sats")
+        logging.debug(f"Medium Fees: {medium_fee_sats} sats")
+        logging.debug(f"Fast Fees: {fast_fee_sats} sats")
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">paymentRequest := "&lt;bitcoin address&gt;"
+// Set the amount you wish the pay the receiver
+amountSats := uint64(50_000)
+
+request := breez_sdk_spark.PrepareSendPaymentRequest{
+    PaymentRequest: paymentRequest,
+    AmountSats:     &amp;amountSats,
+}
+response, err := sdk.PrepareSendPayment(request)
+
+if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+    return nil, err
+}
+
+// If the fees are acceptable, continue to create the Send Payment
+switch paymentMethod := response.PaymentMethod.(type) {
+case breez_sdk_spark.SendPaymentMethodBitcoinAddress:
+    feeQuote := paymentMethod.FeeQuote
+    slowFeeQuote := feeQuote.SpeedSlow.UserFeeSat + feeQuote.SpeedSlow.L1BroadcastFeeSat
+    mediumFeeQuote := feeQuote.SpeedMedium.UserFeeSat + feeQuote.SpeedMedium.L1BroadcastFeeSat
+    fastFeeQuote := feeQuote.SpeedFast.UserFeeSat + feeQuote.SpeedFast.L1BroadcastFeeSat
+    log.Printf("Slow Fees: %v sats", slowFeeQuote)
+    log.Printf("Medium Fees: %v sats", mediumFeeQuote)
+    log.Printf("Fast Fees: %v sats", fastFeeQuote)
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h3 id="spark"><a class="header" href="#spark">Spark</a></h3>
+<p>For Spark addresses the amount must be set in the request. Sending to a Spark address uses a direct Spark transfer.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let payment_request = "&lt;spark address&gt;".to_string();
+// Set the amount you wish the pay the receiver
+let amount_sats = Some(50_000);
+let prepare_response = sdk
+    .prepare_send_payment(PrepareSendPaymentRequest {
+        payment_request,
+        amount_sats,
+    })
+    .await?;
+
+// If the fees are acceptable, continue to create the Send Payment
+if let SendPaymentMethod::SparkAddress { fee_sats, .. } = prepare_response.payment_method {
+    info!("Fees: {} sats", fee_sats);
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let paymentRequest = "&lt;spark address&gt;"
+// Set the amount you wish the pay the receiver
+let amountSats: UInt64 = 50_000
+
+let prepareResponse = try await sdk.prepareSendPayment(
+    request: PrepareSendPaymentRequest (
+        paymentRequest: paymentRequest,
+        amountSats: amountSats
+    ))
+
+if case let .sparkAddress(_, feeSats) = prepareResponse.paymentMethod {
+    print("Fees: \(feeSats) sats")
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val paymentRequest = "&lt;spark address&gt;"
+// Set the amount you wish the pay the receiver
+val amountSats = 50_000UL 
+try {
+    val req = PrepareSendPaymentRequest(paymentRequest, amountSats)
+    val prepareResponse = sdk.prepareSendPayment(req)
+
+    // If the fees are acceptable, continue to create the Send Payment
+    val paymentMethod = prepareResponse.paymentMethod
+    if (paymentMethod is SendPaymentMethod.SparkAddress) {
+        val feeSats = paymentMethod.feeSats
+        // Log.v("Breez", "Fees: ${feeSats} sats")
+    }
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript">const paymentRequest = '&lt;spark address&gt;'
+// Set the amount you wish the pay the receiver
+const amountSats = 50_000
+
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest,
+  amountSats
+})
+
+// If the fees are acceptable, continue to create the Send Payment
+if (prepareResponse.paymentMethod.type === 'sparkAddress') {
+  const feeSats = prepareResponse.paymentMethod.feeSats
+  console.debug(`Fees: ${feeSats} sats`)
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript">const paymentRequest = '&lt;spark address&gt;'
+// Set the amount you wish the pay the receiver
+const amountSats = BigInt(50_000)
+
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest,
+  amountSats
+})
+
+// If the fees are acceptable, continue to create the Send Payment
+if (prepareResponse.paymentMethod instanceof SendPaymentMethod.SparkAddress) {
+  const feeSats = prepareResponse.paymentMethod.inner.feeSats
+  console.debug(`Fees: ${feeSats} sats`)
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">payment_request = "&lt;spark address&gt;"
+# Set the amount you wish the pay the receiver
+amount_sats = 50_000
+try:
+    request = PrepareSendPaymentRequest(
+        payment_request=payment_request, amount_sats=amount_sats
+    )
+    prepare_response = await sdk.prepare_send_payment(request=request)
+
+    # If the fees are acceptable, continue to create the Send Payment
+    if isinstance(prepare_response.payment_method, SendPaymentMethod.SPARK_ADDRESS):
+        fee_sats = prepare_response.payment_method.fee_sats
+        logging.debug(f"Fees: {fee_sats} sats")
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">paymentRequest := "&lt;spark address&gt;"
+// Set the amount you wish the pay the receiver
+amountSats := uint64(50_000)
+
+request := breez_sdk_spark.PrepareSendPaymentRequest{
+    PaymentRequest: paymentRequest,
+    AmountSats:     &amp;amountSats,
+}
+response, err := sdk.PrepareSendPayment(request)
+
+if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+    return nil, err
+}
+
+// If the fees are acceptable, continue to create the Send Payment
+switch paymentMethod := response.PaymentMethod.(type) {
+case breez_sdk_spark.SendPaymentMethodSparkAddress:
+    feeSats := paymentMethod.FeeSats
+    log.Printf("Fees: %v sats", feeSats)
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="sending-payments">
+    <a class="header" href="#sending-payments">Sending Payments</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.send_payment">API docs</a>
+</h2>
+<p>Once the payment has been prepared, pass the prepare response as an argument to the send method and set any selected payment options.</p>
+<h3 id="lightning-1"><a class="header" href="#lightning-1">Lightning</a></h3>
+<p>In the send payment options for BOLT11 invoices, you can set whether to prefer to use Spark to transfer the payment if the invoice contains a Spark address. By default, using Spark transfers are disabled.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let options = Some(SendPaymentOptions::Bolt11Invoice { prefer_spark: true });
+let send_response = sdk
+    .send_payment(SendPaymentRequest {
+        prepare_response,
+        options,
+    })
+    .await?;
+let payment = send_response.payment;
+info!("Payment: {payment:?}");</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let options = SendPaymentOptions.bolt11Invoice(preferSpark: true)
+let sendResponse = try await sdk.sendPayment(request: SendPaymentRequest (
+    prepareResponse: prepareResponse,
+    options: options
+))
+let payment = sendResponse.payment
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val options = SendPaymentOptions.Bolt11Invoice(true)
+    val sendResponse = sdk.sendPayment(SendPaymentRequest(prepareResponse, options))
+    val payment = sendResponse.payment
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript">const options: SendPaymentOptions = { type: 'bolt11Invoice', preferSpark: true }
+const sendResponse = await sdk.sendPayment({
+  prepareResponse,
+  options
+})
+const payment = sendResponse.payment
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript">const options = new SendPaymentOptions.Bolt11Invoice({ preferSpark: true })
+const sendResponse = await sdk.sendPayment({
+  prepareResponse,
+  options
+})
+const payment = sendResponse.payment
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">final options = SendPaymentOptions.bolt11Invoice(preferSpark: true);
+final request =
+    SendPaymentRequest(prepareResponse: prepareResponse, options: options);
+SendPaymentResponse response = await sdk.sendPayment(request: request);
+Payment payment = response.payment;
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    options = SendPaymentOptions.BOLT11_INVOICE(prefer_spark=True)
+    request = SendPaymentRequest(prepare_response=prepare_response, options=options)
+    send_response = await sdk.send_payment(request=request)
+    payment = send_response.payment
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">var options breez_sdk_spark.SendPaymentOptions = breez_sdk_spark.SendPaymentOptionsBolt11Invoice{
+    PreferSpark: true,
+}
+
+request := breez_sdk_spark.SendPaymentRequest{
+    PrepareResponse: prepareResponse,
+    Options:         &amp;options,
+}
+response, err := sdk.SendPayment(request)
+
+if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+    return nil, err
+}
+
+payment := response.Payment
+</code></pre>
+</section>
+</custom-tabs>
+<h3 id="bitcoin-1"><a class="header" href="#bitcoin-1">Bitcoin</a></h3>
+<p>For Bitcoin addresses you can set the confirmation speed in the send payment options. By default it's set to Fast.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">// Send the payment, using Medium speed (Default = Fast)
+let options = Some(SendPaymentOptions::BitcoinAddress {
+    confirmation_speed: OnchainConfirmationSpeed::Medium,
+});
+let send_response = sdk
+    .send_payment(SendPaymentRequest {
+        prepare_response,
+        options,
+    })
+    .await?;
+let payment = send_response.payment;
+info!("Payment: {payment:?}");</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let options = SendPaymentOptions.bitcoinAddress(confirmationSpeed: .medium)
+let sendResponse = try await sdk.sendPayment(request: SendPaymentRequest (
+    prepareResponse: prepareResponse,
+    options: options
+))
+let payment = sendResponse.payment
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val options = SendPaymentOptions.BitcoinAddress(OnchainConfirmationSpeed.MEDIUM)
+    val sendResponse = sdk.sendPayment(SendPaymentRequest(prepareResponse, options))
+    val payment = sendResponse.payment
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript">const options: SendPaymentOptions = {
+  type: 'bitcoinAddress',
+  confirmationSpeed: 'medium'
+}
+const sendResponse = await sdk.sendPayment({
+  prepareResponse,
+  options
+})
+const payment = sendResponse.payment
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript">const options = new SendPaymentOptions.BitcoinAddress({
+  confirmationSpeed: OnchainConfirmationSpeed.Medium
+})
+const sendResponse = await sdk.sendPayment({
+  prepareResponse,
+  options
+})
+const payment = sendResponse.payment
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">final options = SendPaymentOptions.bitcoinAddress(
+    confirmationSpeed: OnchainConfirmationSpeed.medium);
+final request =
+    SendPaymentRequest(prepareResponse: prepareResponse, options: options);
+SendPaymentResponse response = await sdk.sendPayment(request: request);
+Payment payment = response.payment;
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    options = SendPaymentOptions.BITCOIN_ADDRESS(
+        confirmation_speed=OnchainConfirmationSpeed.MEDIUM
+    )
+    request = SendPaymentRequest(prepare_response=prepare_response, options=options)
+    send_response = await sdk.send_payment(request=request)
+    payment = send_response.payment
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">var options breez_sdk_spark.SendPaymentOptions = breez_sdk_spark.SendPaymentOptionsBitcoinAddress{
+    ConfirmationSpeed: breez_sdk_spark.OnchainConfirmationSpeedMedium,
+}
+
+request := breez_sdk_spark.SendPaymentRequest{
+    PrepareResponse: prepareResponse,
+    Options:         &amp;options,
+}
+response, err := sdk.SendPayment(request)
+
+if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+    return nil, err
+}
+
+payment := response.Payment
+</code></pre>
+</section>
+</custom-tabs>
+<h3 id="spark-1"><a class="header" href="#spark-1">Spark</a></h3>
+<p>For Spark addresses no send payment options are needed.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">// Send the payment
+let send_response = sdk
+    .send_payment(SendPaymentRequest {
+        prepare_response,
+        options: None,
+    })
+    .await?;
+let payment = send_response.payment;
+info!("Payment: {payment:?}");</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let sendResponse = try await sdk.sendPayment(request: SendPaymentRequest (
+    prepareResponse: prepareResponse,
+    options: nil
+))
+let payment = sendResponse.payment
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val sendResponse = sdk.sendPayment(SendPaymentRequest(prepareResponse, null))
+    val payment = sendResponse.payment
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript">const sendResponse = await sdk.sendPayment({
+  prepareResponse
+})
+const payment = sendResponse.payment
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript">const sendResponse = await sdk.sendPayment({
+  prepareResponse,
+  options: undefined
+})
+const payment = sendResponse.payment
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">final request = SendPaymentRequest(prepareResponse: prepareResponse);
+SendPaymentResponse response = await sdk.sendPayment(request: request);
+Payment payment = response.payment;
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    request = SendPaymentRequest(prepare_response=prepare_response)
+    send_response = await sdk.send_payment(request=request)
+    payment = send_response.payment
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">request := breez_sdk_spark.SendPaymentRequest{
+    PrepareResponse: prepareResponse,
+}
+response, err := sdk.SendPayment(request)
+
+if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+    return nil, err
+}
+
+payment := response.Payment
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="event-flows"><a class="header" href="#event-flows">Event Flows</a></h2>
+<p>Once a send payment is initiated, you can follow and react to the different payment events using the guide below for each payment method. See <a href="/guide/events.html">Listening to events</a> for how to subscribe to events.</p>
+<div class="table-wrapper"><table><thead><tr><th>Event</th><th>Description</th><th>UX Suggestion</th></tr></thead><tbody>
+<tr><td><strong>Synced</strong></td><td>The SDK has synced payments in the background.</td><td>Update the payments list and balance. See <a href="/guide/list_payments.html">listing payments</a> and <a href="/guide/get_info.html">fetching the balance</a>.</td></tr>
+</tbody></table>
+</div>
+<h3 id="lightning-2"><a class="header" href="#lightning-2">Lightning</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Event</th><th>Description</th><th>UX Suggestion</th></tr></thead><tbody>
+<tr><td><strong>PaymentSucceeded</strong></td><td>The Lightning invoice has been paid either over Lightning or via a Spark transfer</td><td>Update the balance and show payment as complete.</td></tr>
+<tr><td><strong>PaymentFailed</strong></td><td>The attempt to pay the Lightning invoice failed.</td><td></td></tr>
+</tbody></table>
+</div>
+<h3 id="bitcoin-2"><a class="header" href="#bitcoin-2">Bitcoin</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Event</th><th>Description</th><th>UX Suggestion</th></tr></thead><tbody>
+<tr><td><strong>PaymentSucceeded</strong></td><td>The payment amount was successfully withdrawn onchain.</td><td>Update the balance and show payment as complete.</td></tr>
+</tbody></table>
+</div>
+<h3 id="spark-2"><a class="header" href="#spark-2">Spark</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Event</th><th>Description</th><th>UX Suggestion</th></tr></thead><tbody>
+<tr><td><strong>PaymentSucceeded</strong></td><td>The Spark transfer is complete.</td><td>Update the balance and show payment as complete.</td></tr>
+</tbody></table>
+</div>
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/receive_payment.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/list_payments.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/receive_payment.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/list_payments.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
