@@ -98,6 +98,13 @@ class MigrationManager {
             });
             depositStore.createIndex("txid", "txid", { unique: false });
           }
+
+          const paymentStore = db.transaction("payments", "readwrite").objectStore("payments");
+          if (!paymentStore.indexNames.contains("invoice")) {
+            paymentStore.createIndex("invoice", "details.invoice", {
+              unique: false,
+            });
+          }
         },
       },
     ];
@@ -427,6 +434,58 @@ class IndexedDBStorage {
         reject(
           new StorageError(
             `Failed to get payment by id '${id}': ${
+              paymentRequest.error?.message || "Unknown error"
+            }`,
+            paymentRequest.error
+          )
+        );
+      };
+    });
+  }
+
+  async getPaymentByInvoice(invoice) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(
+        ["payments", "payment_metadata"],
+        "readonly"
+      );
+      const paymentStore = transaction.objectStore("payments");
+      const invoiceIndex = paymentStore.index("invoice");
+      const metadataStore = transaction.objectStore("payment_metadata");
+
+      const paymentRequest = invoiceIndex.get(invoice);
+
+      paymentRequest.onsuccess = () => {
+        const payment = paymentRequest.result;
+        if (!payment) {
+          resolve(null);
+          return;
+        }
+
+        // Get metadata for this payment
+        const metadataRequest = metadataStore.get(invoice);
+        metadataRequest.onsuccess = () => {
+          const metadata = metadataRequest.result;
+          const paymentWithMetadata = this._mergePaymentMetadata(
+            payment,
+            metadata
+          );
+          resolve(paymentWithMetadata);
+        };
+        metadataRequest.onerror = () => {
+          // Return payment without metadata if metadata fetch fails
+          resolve(payment);
+        };
+      };
+
+      paymentRequest.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to get payment by invoice '${invoice}': ${
               paymentRequest.error?.message || "Unknown error"
             }`,
             paymentRequest.error

@@ -366,6 +366,43 @@ impl Storage for SqliteStorage {
         Ok(payment)
     }
 
+    async fn get_payment_by_invoice(
+        &self,
+        invoice: String,
+    ) -> Result<Option<Payment>, StorageError> {
+        let connection = self.get_connection()?;
+
+        let mut stmt = connection.prepare(
+            "SELECT p.id
+            ,       p.payment_type
+            ,       p.status
+            ,       p.amount
+            ,       p.fees
+            ,       p.timestamp
+            ,       p.method
+            ,       p.withdraw_tx_id
+            ,       p.deposit_tx_id
+            ,       p.spark
+            ,       l.invoice AS lightning_invoice
+            ,       l.payment_hash AS lightning_payment_hash
+            ,       l.destination_pubkey AS lightning_destination_pubkey
+            ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
+            ,       l.preimage AS lightning_preimage
+            ,       pm.lnurl_pay_info
+             FROM payments p
+             LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             WHERE l.invoice = ?",
+        )?;
+
+        let payment = stmt.query_row(params![invoice], map_payment);
+        match payment {
+            Ok(payment) => Ok(Some(payment)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     async fn add_deposit(
         &self,
         txid: String,

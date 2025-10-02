@@ -115,6 +115,18 @@ pub trait Storage: Send + Sync {
     /// The payment if found or None if not found
     async fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError>;
 
+    /// Gets a payment by its invoice
+    /// # Arguments
+    ///
+    /// * `invoice` - The invoice of the payment to retrieve
+    /// # Returns
+    ///
+    /// The payment if found or None if not found
+    async fn get_payment_by_invoice(
+        &self,
+        invoice: String,
+    ) -> Result<Option<Payment>, StorageError>;
+
     /// Add a deposit to storage
     /// # Arguments
     ///

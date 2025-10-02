@@ -267,6 +267,55 @@ class SqliteStorage {
     }
   }
 
+  getPaymentByInvoice(invoice) {
+    try {
+      if (!invoice) {
+        return Promise.reject(
+          new StorageError("Invoice cannot be null or undefined")
+        );
+      }
+
+      const stmt = this.db.prepare(`
+            SELECT p.id
+            ,       p.payment_type
+            ,       p.status
+            ,       p.amount
+            ,       p.fees
+            ,       p.timestamp
+            ,       p.method
+            ,       p.withdraw_tx_id
+            ,       p.deposit_tx_id
+            ,       p.spark
+            ,       l.invoice AS lightning_invoice
+            ,       l.payment_hash AS lightning_payment_hash
+            ,       l.destination_pubkey AS lightning_destination_pubkey
+            ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
+            ,       l.preimage AS lightning_preimage
+            ,       pm.lnurl_pay_info
+             FROM payments p
+             LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             WHERE l.invoice = ?
+            `);
+
+      const row = stmt.get(invoice);
+      if (!row) {
+        return Promise.resolve(null);
+      }
+
+      return Promise.resolve(this._rowToPayment(row));
+    } catch (error) {
+      if (error instanceof StorageError) return Promise.reject(error);
+      const paymentId = id || "unknown";
+      return Promise.reject(
+        new StorageError(
+          `Failed to get payment by invoice '${invoice}': ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
   setPaymentMetadata(paymentId, metadata) {
     try {
       const stmt = this.db.prepare(`
