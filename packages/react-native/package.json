@@ -1,6 +1,6 @@
 {
   "name": "@breeztech/breez-sdk-spark-react-native",
-  "version": "0.1.4-dev2",
+  "version": "0.1.4-dev3",
   "description": "React Native bindings for the Breez SDK - Nodeless (Spark Implementation)",
   "source": "./src/index.tsx",
   "main": "./lib/commonjs/index.js",
