@@ -1,3 +1,4 @@
+use futures::future::join_all;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -160,17 +161,41 @@ impl TreeService for SynchronousTreeService {
     }
 
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
-        let coordinator_leaves = self
-            .query_nodes(&self.operator_pool.get_coordinator().client, false, None)
-            .await?;
+        // Prepare queries for coordinator and all operators and run them in parallel
+        let coordinator_client = self.operator_pool.get_coordinator().client.clone();
+        let operators: Vec<_> = self
+            .operator_pool
+            .get_non_coordinator_operators()
+            .map(|op| (op.id, op.client.clone()))
+            .collect();
+
+        let coord_fut = self.query_nodes(&coordinator_client, false, None);
+        let op_futs = operators
+            .iter()
+            .map(|(id, client)| async move { (*id, self.query_nodes(client, false, None).await) });
+
+        let (coordinator_leaves_res, operator_results) = tokio::join!(coord_fut, join_all(op_futs));
+        let coordinator_leaves = coordinator_leaves_res?;
+
+        // Propagate any operator query error to preserve original behavior and
+        // collect successful operator leaves for later comparison
+        let mut operator_leaves_vec: Vec<Vec<TreeNode>> = Vec::new();
+        for (id, res) in operator_results {
+            match res {
+                Ok(leaves) => operator_leaves_vec.push(leaves),
+                Err(e) => {
+                    error!("Failed to query operator {id}: {e:?}");
+                    return Err(e);
+                }
+            }
+        }
 
         let mut missing_operator_leaves: HashMap<TreeNodeId, TreeNode> = HashMap::new();
 
-        // TODO: on js sdk, leaves missing from operators are not ignored when checking balance
-        // TODO: we can optimize this by fetching leaves from all operators in parallel
-        for operator in self.operator_pool.get_non_coordinator_operators() {
-            let operator_leaves = self.query_nodes(&operator.client, false, None).await?;
-
+        // For each operator's leaves, compare against coordinator in the same way as before
+        for (operator_id, operator_leaves) in
+            operators.into_iter().zip(operator_leaves_vec.into_iter())
+        {
             for leaf in &coordinator_leaves {
                 match operator_leaves.iter().find(|l| l.id == leaf.id) {
                     Some(operator_leaf) => {
@@ -183,7 +208,7 @@ impl TreeService for SynchronousTreeService {
                         {
                             warn!(
                                 "Ignoring leaf due to mismatch between coordinator and operator {}. Coordinator: {:?}, Operator: {:?}",
-                                operator.id, leaf, operator_leaf
+                                operator_id.0, leaf, operator_leaf
                             );
                             missing_operator_leaves.insert(leaf.id.clone(), leaf.clone());
                         }
@@ -191,7 +216,7 @@ impl TreeService for SynchronousTreeService {
                     None => {
                         warn!(
                             "Ignoring leaf due to missing from operator {}: {:?}",
-                            operator.id, leaf.id
+                            operator_id.0, leaf.id
                         );
                         missing_operator_leaves.insert(leaf.id.clone(), leaf.clone());
                     }
