@@ -1,6 +1,9 @@
 # Getting Started
 
-Integrating Breez SDK - Nodeless *(Spark Implementation)* into your application takes just a few minutes. Follow these steps to get started:
+Integrating Breez SDK - Nodeless *(Spark Implementation)* into your application takes just a few minutes.
+
+Before you begin, make sure to read the [repository README](https://github.com/breez/spark-sdk#breez-sdk---nodeless-spark-implementation) carefully. Then follow these steps to get started:
+
 - **[Installing the SDK](/guide/install.md)**
 - **[Initializing the SDK](/guide/initializing.md)**
 - **[Fetching the balance](/guide/get_info.md)**
