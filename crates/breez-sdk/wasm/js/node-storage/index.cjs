@@ -126,11 +126,27 @@ class SqliteStorage {
       const actualLimit = limit !== null ? limit : 4294967295; // u32::MAX
 
       const stmt = this.db.prepare(`
-                SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, p.method, pm.lnurl_pay_info, pm.lnurl_description
-                FROM payments p
-                LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-                ORDER BY p.timestamp DESC 
-                LIMIT ? OFFSET ?
+            SELECT p.id
+            ,       p.payment_type
+            ,       p.status
+            ,       p.amount
+            ,       p.fees
+            ,       p.timestamp
+            ,       p.method
+            ,       p.withdraw_tx_id
+            ,       p.deposit_tx_id
+            ,       p.spark
+            ,       l.invoice AS lightning_invoice
+            ,       l.payment_hash AS lightning_payment_hash
+            ,       l.destination_pubkey AS lightning_destination_pubkey
+            ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
+            ,       l.preimage AS lightning_preimage
+            ,       pm.lnurl_pay_info
+             FROM payments p
+             LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             ORDER BY p.timestamp DESC 
+             LIMIT ? OFFSET ?
             `);
 
       const rows = stmt.all(actualLimit, actualOffset);
@@ -153,21 +169,42 @@ class SqliteStorage {
         );
       }
 
-      const stmt = this.db.prepare(`
-                 INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, details, method) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-             `);
-
-      stmt.run(
-        payment.id,
-        payment.paymentType,
-        payment.status,
-        payment.amount,
-        payment.fees,
-        payment.timestamp,
-        payment.details ? JSON.stringify(payment.details) : null,
-        payment.method ? JSON.stringify(payment.method) : null
+      const paymentInsert = this.db.prepare(
+        `INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark) 
+         VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @depositTxId, @spark)`
       );
+      const lightningInsert = this.db.prepare(
+        `INSERT OR REPLACE INTO payment_details_lightning 
+          (payment_id, invoice, payment_hash, destination_pubkey, description, preimage) 
+          VALUES (@id, @invoice, @paymentHash, @destinationPubkey, @description, @preimage)`
+      );
+      const transaction = this.db.transaction(() => {
+        paymentInsert.run({
+          id: payment.id,
+          paymentType: payment.paymentType,
+          status: payment.status,
+          amount: payment.amount,
+          fees: payment.fees,
+          timestamp: payment.timestamp,
+          method: payment.method ? JSON.stringify(payment.method) : null,
+          withdrawTxId: payment.details?.type === 'withdraw' ? payment.details.txId : null,
+          depositTxId: payment.details?.type === 'deposit' ? payment.details.txId : null,
+          spark: payment.details?.type === 'spark' ? 1 : null,
+        });
+
+        if (payment.details?.type === 'lightning') {
+          lightningInsert.run({
+            id: payment.id,
+            invoice: payment.details.invoice,
+            paymentHash: payment.details.paymentHash,
+            destinationPubkey: payment.details.destinationPubkey,
+            description: payment.details.description,
+            preimage: payment.details.preimage,
+          });
+        }
+      });
+      
+      transaction();
       return Promise.resolve();
     } catch (error) {
       return Promise.reject(
@@ -188,10 +225,26 @@ class SqliteStorage {
       }
 
       const stmt = this.db.prepare(`
-                SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, p.method, pm.lnurl_pay_info, pm.lnurl_description
-                FROM payments p
-                LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-                WHERE p.id = ?
+            SELECT p.id
+            ,       p.payment_type
+            ,       p.status
+            ,       p.amount
+            ,       p.fees
+            ,       p.timestamp
+            ,       p.method
+            ,       p.withdraw_tx_id
+            ,       p.deposit_tx_id
+            ,       p.spark
+            ,       l.invoice AS lightning_invoice
+            ,       l.payment_hash AS lightning_payment_hash
+            ,       l.destination_pubkey AS lightning_destination_pubkey
+            ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
+            ,       l.preimage AS lightning_preimage
+            ,       pm.lnurl_pay_info
+             FROM payments p
+             LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             WHERE p.id = ?
             `);
 
       const row = stmt.get(id);
@@ -340,15 +393,41 @@ class SqliteStorage {
 
   _rowToPayment(row) {
     let details = null;
-    if (row.details) {
-      try {
-        details = JSON.parse(row.details);
-      } catch (e) {
-        throw new StorageError(
-          `Failed to parse payment details JSON for payment ${row.id}: ${e.message}`,
-          e
-        );
+    if (row.lightning_invoice) {
+      details = {
+        type: 'lightning',
+        invoice: row.lightning_invoice,
+        paymentHash: row.lightning_payment_hash,
+        destinationPubkey: row.lightning_destination_pubkey,
+        description: row.lightning_description,
+        preimage: row.lightning_preimage,
+      };
+
+      if (row.lnurl_pay_info) {
+        try {
+          details.lnurlPayInfo = JSON.parse(row.lnurl_pay_info);
+        } catch (e) {
+          throw new StorageError(
+            `Failed to parse lnurl_pay_info JSON for payment ${row.id}: ${e.message}`,
+            e
+          );
+        }
       }
+    } else if (row.withdraw_tx_id) {
+      details = {
+        type: 'withdraw',
+        txId: row.withdraw_tx_id,
+      };
+    } else if (row.deposit_tx_id) {
+      details = {
+        type: 'deposit',
+        txId: row.deposit_tx_id,
+      };
+    } else if (row.spark) {
+      details = {
+        type: 'spark',
+        amount: row.spark,
+      };
     }
 
     let method = null;
@@ -358,21 +437,6 @@ class SqliteStorage {
       } catch (e) {
         throw new StorageError(
           `Failed to parse payment method JSON for payment ${row.id}: ${e.message}`,
-          e
-        );
-      }
-    }
-
-    // If this is a Lightning payment and we have lnurl_pay_info, add it to details
-    if (row.lnurl_pay_info && details && details.type == 'lightning') {
-      try {
-        details.lnurlPayInfo = JSON.parse(row.lnurl_pay_info);
-        if (row.lnurl_description && !details.description) {
-          details.description = row.lnurl_description;
-        }
-      } catch (e) {
-        throw new StorageError(
-          `Failed to parse lnurl_pay_info JSON for payment ${row.id}: ${e.message}`,
           e
         );
       }
