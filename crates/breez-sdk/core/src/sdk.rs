@@ -272,9 +272,15 @@ impl BreezSdk {
         let mut last_sync_time = SystemTime::now();
         let sync_interval = u64::from(self.config.sync_interval_secs);
         tokio::spawn(async move {
+            let balance_watcher =
+                BalanceWatcher::new(sdk.spark_wallet.clone(), sdk.storage.clone());
+            let balance_watcher_id = sdk.add_event_listener(Box::new(balance_watcher)).await;
             loop {
                 tokio::select! {
                     _ = shutdown_receiver.changed() => {
+                        if !sdk.remove_event_listener(&balance_watcher_id).await {
+                            error!("Failed to remove balance watcher listener");
+                        }
                         info!("Deposit tracking loop shutdown signal received");
                         return;
                     }
@@ -381,13 +387,8 @@ impl BreezSdk {
         const BATCH_SIZE: u64 = 50;
 
         // Sync balance
-        let balance = self.spark_wallet.get_balance().await?;
+        update_balance(self.spark_wallet.clone(), self.storage.clone()).await?;
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
-        object_repository
-            .save_account_info(&CachedAccountInfo {
-                balance_sats: balance,
-            })
-            .await?;
 
         // Get the last offset we processed from storage
         let cached_sync_info = object_repository
@@ -1297,6 +1298,49 @@ impl BreezSdk {
         let rates = self.fiat_service.fetch_fiat_rates().await?;
         Ok(ListFiatRatesResponse { rates })
     }
+}
+
+struct BalanceWatcher {
+    spark_wallet: Arc<SparkWallet>,
+    storage: Arc<dyn Storage>,
+}
+
+impl BalanceWatcher {
+    fn new(spark_wallet: Arc<SparkWallet>, storage: Arc<dyn Storage>) -> Self {
+        Self {
+            spark_wallet,
+            storage,
+        }
+    }
+}
+
+#[macros::async_trait]
+impl EventListener for BalanceWatcher {
+    async fn on_event(&self, event: SdkEvent) {
+        match event {
+            SdkEvent::PaymentSucceeded { .. } | SdkEvent::ClaimDepositsSucceeded { .. } => {
+                match update_balance(self.spark_wallet.clone(), self.storage.clone()).await {
+                    Ok(_) => info!("Balance updated successfully"),
+                    Err(e) => error!("Failed to update balance: {e:?}"),
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+async fn update_balance(
+    spark_wallet: Arc<SparkWallet>,
+    storage: Arc<dyn Storage>,
+) -> Result<(), SdkError> {
+    let balance = spark_wallet.get_balance().await?;
+    let object_repository = ObjectCacheRepository::new(storage.clone());
+    object_repository
+        .save_account_info(&CachedAccountInfo {
+            balance_sats: balance,
+        })
+        .await?;
+    Ok(())
 }
 
 struct InternalEventListener {
