@@ -68,20 +68,20 @@ func logging() throws {
 
 // ANCHOR: add-event-listener
 class SdkEventListener: EventListener {
-    func onEvent(event: SdkEvent) {
+    func onEvent(event: SdkEvent) async {
         print("Received event: ", event)
     }
 }
 
-func addEventListener(sdk: BreezSdk, listener: SdkEventListener) -> String {
-    let listenerId = sdk.addEventListener(listener: listener)
+func addEventListener(sdk: BreezSdk, listener: SdkEventListener) async -> String {
+    let listenerId = await sdk.addEventListener(listener: listener)
     return listenerId
 }
 // ANCHOR_END: add-event-listener
 
 // ANCHOR: remove-event-listener
-func removeEventListener(sdk: BreezSdk, listenerId: String) {
-    sdk.removeEventListener(id: listenerId)
+func removeEventListener(sdk: BreezSdk, listenerId: String) async {
+    await sdk.removeEventListener(id: listenerId)
 }
 // ANCHOR_END: remove-event-listener
 

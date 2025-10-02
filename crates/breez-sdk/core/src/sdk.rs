@@ -24,7 +24,10 @@ use std::{str::FromStr, sync::Arc};
 use tracing::{error, info, trace};
 use web_time::{Duration, SystemTime};
 
-use tokio::{select, sync::watch};
+use tokio::{
+    select,
+    sync::{mpsc, watch},
+};
 use tokio_with_wasm::alias as tokio;
 use web_time::Instant;
 use x509_parser::parse_x509_certificate;
@@ -242,7 +245,7 @@ impl BreezSdk {
                             Ok(event) => {
                                 info!("Received event: {event}");
                                 trace!("Received event: {:?}", event);
-                                sdk.handle_wallet_event(event);
+                                sdk.handle_wallet_event(event).await;
                             }
                             Err(e) => {
                                 error!("Failed to receive event: {e:?}");
@@ -274,7 +277,7 @@ impl BreezSdk {
         });
     }
 
-    fn handle_wallet_event(&self, event: WalletEvent) {
+    async fn handle_wallet_event(&self, event: WalletEvent) {
         match event {
             WalletEvent::DepositConfirmed(_) => {
                 info!("Deposit confirmed");
@@ -295,7 +298,8 @@ impl BreezSdk {
                 info!("Transfer claimed");
                 if let Ok(payment) = transfer.try_into() {
                     self.event_emitter
-                        .emit(&SdkEvent::PaymentSucceeded { payment });
+                        .emit(&SdkEvent::PaymentSucceeded { payment })
+                        .await;
                 }
                 if let Err(e) = self.sync_trigger.send(SyncType::PaymentsOnly) {
                     error!("Failed to sync wallet: {e:?}");
@@ -318,7 +322,7 @@ impl BreezSdk {
         info!("sync_wallet_internal: Checked and claimed static deposits completed");
         let elapsed = start_time.elapsed();
         info!("sync_wallet_internal: Wallet sync completed in {elapsed:?}");
-        self.event_emitter.emit(&SdkEvent::Synced {});
+        self.event_emitter.emit(&SdkEvent::Synced {}).await;
         Ok(())
     }
 
@@ -443,11 +447,13 @@ impl BreezSdk {
 
         if !unclaimed_deposits.is_empty() {
             self.event_emitter
-                .emit(&SdkEvent::ClaimDepositsFailed { unclaimed_deposits });
+                .emit(&SdkEvent::ClaimDepositsFailed { unclaimed_deposits })
+                .await;
         }
         if !claimed_deposits.is_empty() {
             self.event_emitter
-                .emit(&SdkEvent::ClaimDepositsSucceeded { claimed_deposits });
+                .emit(&SdkEvent::ClaimDepositsSucceeded { claimed_deposits })
+                .await;
         }
         Ok(())
     }
@@ -527,8 +533,8 @@ impl BreezSdk {
     /// # Returns
     ///
     /// A unique identifier for the listener, which can be used to remove it later
-    pub fn add_event_listener(&self, listener: Box<dyn EventListener>) -> String {
-        self.event_emitter.add_listener(listener)
+    pub async fn add_event_listener(&self, listener: Box<dyn EventListener>) -> String {
+        self.event_emitter.add_listener(listener).await
     }
 
     /// Removes a previously registered event listener
@@ -540,8 +546,8 @@ impl BreezSdk {
     /// # Returns
     ///
     /// `true` if the listener was found and removed, `false` otherwise
-    pub fn remove_event_listener(&self, id: &str) -> bool {
-        self.event_emitter.remove_listener(id)
+    pub async fn remove_event_listener(&self, id: &str) -> bool {
+        self.event_emitter.remove_listener(id).await
     }
 
     /// Stops the SDK's background tasks
@@ -746,7 +752,7 @@ impl BreezSdk {
             )
             .await?;
 
-        emit_final_payment_status(&self.event_emitter, payment.clone());
+        emit_final_payment_status(&self.event_emitter, payment.clone()).await;
         Ok(LnurlPayResponse {
             payment,
             success_action,
@@ -929,7 +935,7 @@ impl BreezSdk {
             // we trigger the sync here anyway to get the fresh payment.
             //self.storage.insert_payment(response.payment.clone()).await?;
             if !suppress_payment_event {
-                emit_final_payment_status(&self.event_emitter, response.payment.clone());
+                emit_final_payment_status(&self.event_emitter, response.payment.clone()).await;
             }
             if let Err(e) = self.sync_trigger.send(SyncType::PaymentsOnly) {
                 error!("Failed to send sync trigger: {e:?}");
@@ -967,7 +973,7 @@ impl BreezSdk {
                         info!("Polling payment status = {} {:?}", payment.status, p.status);
                        if payment.status != PaymentStatus::Pending {
                           info!("Polling payment completed status = {}", payment.status);
-                          emit_final_payment_status(&event_emitter, payment.clone());
+                          emit_final_payment_status(&event_emitter, payment.clone()).await;
                           if let Err(e) = sync_trigger.send(SyncType::PaymentsOnly) {
                             error!("Failed to send sync trigger: {e:?}");
                           }
@@ -1225,6 +1231,24 @@ impl BreezSdk {
     }
 }
 
+struct InternalEventListener {
+    tx: mpsc::Sender<SdkEvent>,
+}
+
+impl InternalEventListener {
+    #[allow(unused)]
+    pub fn new(tx: mpsc::Sender<SdkEvent>) -> Self {
+        Self { tx }
+    }
+}
+
+#[macros::async_trait]
+impl EventListener for InternalEventListener {
+    async fn on_event(&self, event: SdkEvent) {
+        let _ = self.tx.send(event).await;
+    }
+}
+
 fn process_success_action(
     payment: &Payment,
     success_action: Option<&SuccessAction>,
@@ -1267,10 +1291,18 @@ fn process_success_action(
     Ok(Some(SuccessActionProcessed::Aes { result }))
 }
 
-fn emit_final_payment_status(event_emitter: &EventEmitter, payment: Payment) {
+async fn emit_final_payment_status(event_emitter: &EventEmitter, payment: Payment) {
     match payment.status {
-        PaymentStatus::Completed => event_emitter.emit(&SdkEvent::PaymentSucceeded { payment }),
-        PaymentStatus::Failed => event_emitter.emit(&SdkEvent::PaymentFailed { payment }),
+        PaymentStatus::Completed => {
+            event_emitter
+                .emit(&SdkEvent::PaymentSucceeded { payment })
+                .await;
+        }
+        PaymentStatus::Failed => {
+            event_emitter
+                .emit(&SdkEvent::PaymentFailed { payment })
+                .await;
+        }
         PaymentStatus::Pending => (),
     }
 }

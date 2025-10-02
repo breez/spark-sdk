@@ -54,15 +54,14 @@ pub struct BreezSdk {
 }
 
 impl BreezSdk {
-    #[frb(sync)]
-    pub fn add_event_listener(&self, listener: StreamSink<SdkEvent>) -> String {
+    pub async fn add_event_listener(&self, listener: StreamSink<SdkEvent>) -> String {
         self.inner
             .add_event_listener(Box::new(BindingEventListener { listener }))
+            .await
     }
 
-    #[frb(sync)]
-    pub fn remove_event_listener(&self, id: &str) -> bool {
-        self.inner.remove_event_listener(id)
+    pub async fn remove_event_listener(&self, id: &str) -> bool {
+        self.inner.remove_event_listener(id).await
     }
 
     #[frb(sync)]

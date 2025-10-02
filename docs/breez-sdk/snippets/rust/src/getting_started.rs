@@ -80,24 +80,26 @@ pub(crate) fn getting_started_logging(data_dir: String) -> Result<()> {
 
 // ANCHOR: add-event-listener
 pub(crate) struct SdkEventListener {}
+
+#[async_trait::async_trait]
 impl EventListener for SdkEventListener {
-    fn on_event(&self, e: SdkEvent) {
+    async fn on_event(&self, e: SdkEvent) {
         info!("Received event: {e:?}");
     }
 }
 
-pub(crate) fn add_event_listener(
+pub(crate) async fn add_event_listener(
     sdk: &BreezSdk,
     listener: Box<SdkEventListener>,
 ) -> Result<String> {
-    let listener_id = sdk.add_event_listener(listener);
+    let listener_id = sdk.add_event_listener(listener).await;
     Ok(listener_id)
 }
 // ANCHOR_END: add-event-listener
 
 // ANCHOR: remove-event-listener
-pub(crate) fn remove_event_listener(sdk: &BreezSdk, listener_id: &str) -> Result<()> {
-    sdk.remove_event_listener(listener_id);
+pub(crate) async fn remove_event_listener(sdk: &BreezSdk, listener_id: &str) -> Result<()> {
+    sdk.remove_event_listener(listener_id).await;
     Ok(())
 }
 // ANCHOR_END: remove-event-listener
