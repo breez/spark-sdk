@@ -980,11 +980,11 @@ impl BreezSdk {
             // We are sending amount for zero amount invoice
             None => Some(request.prepare_response.amount_sats),
         };
-        let (prefer_spark, return_pending_after_secs) = match request.options {
+        let (prefer_spark, completion_timeout_secs) = match request.options {
             Some(SendPaymentOptions::Bolt11Invoice {
                 prefer_spark,
-                return_pending_after_secs,
-            }) => (prefer_spark, return_pending_after_secs),
+                completion_timeout_secs,
+            }) => (prefer_spark, completion_timeout_secs),
             _ => (self.config.prefer_spark_over_lightning, None),
         };
         let fee_sats = match (prefer_spark, spark_transfer_fee_sats, lightning_fee_sats) {
@@ -1016,7 +1016,7 @@ impl BreezSdk {
         };
 
         // Short-circuit and return the pending payment immediately.
-        if let Some(secs) = return_pending_after_secs
+        if let Some(secs) = completion_timeout_secs
             && secs == 0
         {
             return Ok(SendPaymentResponse { payment });
@@ -1025,7 +1025,7 @@ impl BreezSdk {
         let fut = self.wait_for_payment(WaitForPaymentRequest {
             identifier: WaitForPaymentIdentifier::PaymentId(payment.id.clone()),
         });
-        let payment = if let Some(secs) = return_pending_after_secs {
+        let payment = if let Some(secs) = completion_timeout_secs {
             match timeout(Duration::from_secs(secs.into()), fut).await {
                 Ok(res) => res?.payment,
                 // On timeout return the pending payment.

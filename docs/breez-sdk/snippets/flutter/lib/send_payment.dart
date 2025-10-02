@@ -79,7 +79,7 @@ Future<SendPaymentResponse> sendPaymentLightningBolt11(
   // ANCHOR: send-payment-lightning-bolt11
   final options = SendPaymentOptions.bolt11Invoice(
     preferSpark: true,
-    returnPendingAfterSecs: 0,
+    completionTimeoutSecs: 0,
   );
   final request =
       SendPaymentRequest(prepareResponse: prepareResponse, options: options);
