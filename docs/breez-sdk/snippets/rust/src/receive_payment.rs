@@ -56,3 +56,17 @@ async fn receive_spark(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR_END: receive-payment-spark
     Ok(())
 }
+
+async fn wait_for_payment_example(sdk: &BreezSdk, payment_request: String) -> Result<()> {
+    // ANCHOR: wait-for-payment
+    // Wait for a payment to be completed using a payment request
+    let response = sdk
+        .wait_for_payment(WaitForPaymentRequest {
+            identifier: WaitForPaymentIdentifier::PaymentRequest(payment_request),
+        })
+        .await?;
+
+    info!("Payment received with ID: {}", response.payment.id);
+    // ANCHOR_END: wait-for-payment
+    Ok(())
+}

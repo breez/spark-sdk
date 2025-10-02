@@ -1,5 +1,5 @@
 import logging
-from breez_sdk_spark import BreezSdk, ReceivePaymentMethod, ReceivePaymentRequest
+from breez_sdk_spark import BreezSdk, ReceivePaymentMethod, ReceivePaymentRequest, WaitForPaymentRequest, WaitForPaymentIdentifier
 
 
 async def receive_lightning(sdk: BreezSdk):
@@ -61,3 +61,21 @@ async def receive_spark(sdk: BreezSdk):
         logging.error(error)
         raise
     # ANCHOR_END: receive-payment-spark
+
+
+async def wait_for_payment(sdk: BreezSdk, payment_request: str):
+    # ANCHOR: wait-for-payment
+    try:
+        # Wait for a payment to be completed using a payment request
+        response = await sdk.wait_for_payment(
+            request=WaitForPaymentRequest(
+                identifier=WaitForPaymentIdentifier.PAYMENT_REQUEST(payment_request)
+            )
+        )
+        
+        logging.debug(f"Payment received with ID: {response.payment.id}")
+        return response.payment
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: wait-for-payment
