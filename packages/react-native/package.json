@@ -1,6 +1,6 @@
 {
   "name": "@breeztech/breez-sdk-spark-react-native",
-  "version": "0.1.4-dev8",
+  "version": "0.1.4-dev9",
   "description": "React Native bindings for the Breez SDK - Nodeless (Spark Implementation)",
   "source": "./src/index.tsx",
   "main": "./lib/commonjs/index.js",
@@ -24,10 +24,6 @@
     "ios",
     "cpp",
     "build",
-    "java",
-    "jni",
-    "BreezSdkSparkReactNativeSpec",
-    "react",
     "*.podspec",
     "react-native.config.js",
     "swift",
@@ -37,6 +33,7 @@
     "!android/gradlew",
     "!android/gradlew.bat",
     "!android/local.properties",
+    "!android/app",
     "!ios/build",
     "!**/__tests__",
     "!**/__fixtures__",
@@ -100,7 +97,7 @@
     "prettier": "latest",
     "react": "19.1.0",
     "react-native": "0.81.4",
-    "react-native-builder-bob": "^0.40.3",
+    "react-native-builder-bob": "^0.40.13",
     "release-it": "^17.10.0",
     "turbo": "latest",
     "typescript": "latest"
@@ -153,6 +150,7 @@
     "output": "lib",
     "exclude": "rust_modules/**",
     "targets": [
+      "codegen",
       [
         "module",
         {
@@ -179,6 +177,10 @@
     "jsSrcsDir": "src",
     "android": {
       "javaPackageName": "com.breeztech.breezsdkspark"
+    },
+    "outputDir": {
+      "android": "android/generated",
+      "ios": "ios/generated"
     },
     "includesGeneratedCode": true
   },

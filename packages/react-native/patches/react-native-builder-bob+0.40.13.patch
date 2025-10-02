@@ -1,13 +1,34 @@
-diff --git a/node_modules/react-native-builder-bob/lib/targets/codegen/index.js b/node_modules/react-native-builder-bob/lib/targets/codegen/index.js
-index 91db478..2b14d3f 100644
 --- a/node_modules/react-native-builder-bob/lib/targets/codegen/index.js
 +++ b/node_modules/react-native-builder-bob/lib/targets/codegen/index.js
-@@ -34,7 +34,7 @@ async function build({
+@@ -34,7 +34,30 @@
    }
    try {
      const codegenCLISupportsSource = await (0, _removeCodegenAppLevelCode.getCodegenCLISourceSupport)();
 -    await (0, _spawn.spawn)('npx', ['@react-native-community/cli', 'codegen', ...(codegenCLISupportsSource ? ['--source', 'library'] : [])]);
 +    await (0, _spawn.spawn)('npx', ['@react-native-community/cli', 'codegen', '--outputPath', '.', ...(codegenCLISupportsSource ? ['--source', 'library'] : [])]);
++
++    // Move generated files to outputDir locations
++    if (codegenAndroidPath != null && _fsExtra.default.existsSync('java')) {
++      await _fsExtra.default.ensureDir(codegenAndroidPath);
++      if (_fsExtra.default.existsSync('java')) {
++        await _fsExtra.default.copy('java', _path.default.join(codegenAndroidPath, 'java'));
++      }
++      if (_fsExtra.default.existsSync('jni')) {
++        await _fsExtra.default.copy('jni', _path.default.join(codegenAndroidPath, 'jni'));
++      }
++      await (0, _del.default)(['java', 'jni']);
++    }
++    if (codegenIosPath != null) {
++      await _fsExtra.default.ensureDir(codegenIosPath);
++      if (_fsExtra.default.existsSync('BreezSdkSparkReactNativeSpec')) {
++        await _fsExtra.default.copy('BreezSdkSparkReactNativeSpec', _path.default.join(codegenIosPath, 'BreezSdkSparkReactNativeSpec'));
++      }
++      if (_fsExtra.default.existsSync('react')) {
++        await _fsExtra.default.copy('react', _path.default.join(codegenIosPath, 'react'));
++      }
++      await (0, _del.default)(['BreezSdkSparkReactNativeSpec', 'react']);
++    }
++
      if (codegenType === 'modules' || codegenType === 'all') {
        await (0, _patchCodegenAndroidPackage.patchCodegenAndroidPackage)(root, packageJson, report);
      }
