@@ -5,7 +5,7 @@ module.exports = {
   dependency: {
     platforms: {
       android: {
-        cmakeListsPath: 'android/app/build/generated/source/codegen/jni/CMakeLists.txt',
+        cmakeListsPath: 'app/build/generated/source/codegen/jni/CMakeLists.txt',
       },
     },
   },
