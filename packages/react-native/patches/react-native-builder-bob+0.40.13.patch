@@ -1,0 +1,13 @@
+diff --git a/node_modules/react-native-builder-bob/lib/targets/codegen/index.js b/node_modules/react-native-builder-bob/lib/targets/codegen/index.js
+index 91db478..2b14d3f 100644
+--- a/node_modules/react-native-builder-bob/lib/targets/codegen/index.js
++++ b/node_modules/react-native-builder-bob/lib/targets/codegen/index.js
+@@ -34,7 +34,7 @@ async function build({
+   }
+   try {
+     const codegenCLISupportsSource = await (0, _removeCodegenAppLevelCode.getCodegenCLISourceSupport)();
+-    await (0, _spawn.spawn)('npx', ['@react-native-community/cli', 'codegen', ...(codegenCLISupportsSource ? ['--source', 'library'] : [])]);
++    await (0, _spawn.spawn)('npx', ['@react-native-community/cli', 'codegen', '--outputPath', '.', ...(codegenCLISupportsSource ? ['--source', 'library'] : [])]);
+     if (codegenType === 'modules' || codegenType === 'all') {
+       await (0, _patchCodegenAndroidPackage.patchCodegenAndroidPackage)(root, packageJson, report);
+     }
