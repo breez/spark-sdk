@@ -1,10 +1,13 @@
+use std::fmt::Write;
+use std::path::{Path, PathBuf};
+
 use macros::async_trait;
+use rusqlite::params_from_iter;
 use rusqlite::{
     Connection, ToSql, params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
 };
 use rusqlite_migration::{M, Migrations, SchemaVersion};
-use std::path::{Path, PathBuf};
 
 use crate::{
     DepositInfo, LnurlPayInfo, PaymentDetails, PaymentMethod,
@@ -155,22 +158,32 @@ impl Storage for SqliteStorage {
         &self,
         offset: Option<u32>,
         limit: Option<u32>,
+        status: Option<PaymentStatus>,
     ) -> Result<Vec<Payment>, StorageError> {
         let connection = self.get_connection()?;
-
-        let query = format!(
+        let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+        let mut query = String::from(
             "SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, p.method, pm.lnurl_pay_info, pm.lnurl_description
              FROM payments p
-             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-             ORDER BY p.timestamp DESC 
-             LIMIT {} OFFSET {}",
+             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id"
+        );
+
+        if let Some(status) = status {
+            query.push_str(" WHERE p.status = ?");
+            params.push(Box::new(status.to_string()));
+        }
+
+        write!(
+            query,
+            " ORDER BY p.timestamp DESC LIMIT {} OFFSET {}",
             limit.unwrap_or(u32::MAX),
             offset.unwrap_or(0)
-        );
+        )
+        .map_err(|e| StorageError::Implementation(e.to_string()))?;
 
         let mut stmt = connection.prepare(&query)?;
 
-        let payment_iter = stmt.query_map(params![], |row| {
+        let payment_iter = stmt.query_map(params_from_iter(params), |row| {
             let mut details: Option<PaymentDetails> = row.get(6)?;
             if let Some(PaymentDetails::Lightning {
                 lnurl_pay_info,
