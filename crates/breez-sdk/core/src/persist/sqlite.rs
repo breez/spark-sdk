@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use crate::{
     DepositInfo, LnurlPayInfo, PaymentDetails, PaymentMethod,
     error::DepositClaimError,
-    models::{PaymentStatus, PaymentType},
     persist::{PaymentMetadata, UpdateDepositPayload},
 };
 
@@ -505,8 +504,12 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
     };
     Ok(Payment {
         id: row.get(0)?,
-        payment_type: PaymentType::from(row.get::<_, String>(1)?.as_str()),
-        status: PaymentStatus::from(row.get::<_, String>(2)?.as_str()),
+        payment_type: row.get::<_, String>(1)?.parse().map_err(|e: String| {
+            rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, e.into())
+        })?,
+        status: row.get::<_, String>(2)?.parse().map_err(|e: String| {
+            rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, e.into())
+        })?,
         amount: row.get(3)?,
         fees: row.get(4)?,
         timestamp: row.get(5)?,
