@@ -769,8 +769,7 @@ pub enum SendPaymentOptions {
         prefer_spark: bool,
 
         /// If set, the function will return the payment if it is still pending after this
-        /// number of seconds. If unset, the function will wait indefinitely until the payment is completed or failed.
-        /// To always return immediately, set to 0.
+        /// number of seconds. If unset, the function will return immediately after initiating the payment.
         completion_timeout_secs: Option<u32>,
     },
 }

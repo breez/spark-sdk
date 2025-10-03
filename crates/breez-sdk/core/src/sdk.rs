@@ -1015,24 +1015,22 @@ impl BreezSdk {
             None => payment_response.transfer.try_into()?,
         };
 
-        // Short-circuit and return the pending payment immediately.
-        if let Some(secs) = completion_timeout_secs
-            && secs == 0
-        {
+        let Some(completion_timeout_secs) = completion_timeout_secs else {
+            return Ok(SendPaymentResponse { payment });
+        };
+
+        if completion_timeout_secs == 0 {
             return Ok(SendPaymentResponse { payment });
         }
 
         let fut = self.wait_for_payment(WaitForPaymentRequest {
             identifier: WaitForPaymentIdentifier::PaymentId(payment.id.clone()),
         });
-        let payment = if let Some(secs) = completion_timeout_secs {
-            match timeout(Duration::from_secs(secs.into()), fut).await {
-                Ok(res) => res?.payment,
-                // On timeout return the pending payment.
-                Err(_) => payment,
-            }
-        } else {
-            fut.await?.payment
+        let payment = match timeout(Duration::from_secs(completion_timeout_secs.into()), fut).await
+        {
+            Ok(res) => res?.payment,
+            // On timeout return the pending payment.
+            Err(_) => payment,
         };
 
         Ok(SendPaymentResponse { payment })

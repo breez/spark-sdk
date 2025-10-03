@@ -241,7 +241,7 @@ Once the payment has been prepared, pass the prepare response as an argument to 
 
 In the send payment options for BOLT11 invoices, you can set whether to prefer to use Spark to transfer the payment if the invoice contains a Spark address. By default, using Spark transfers are disabled.
 
-By default, this function waits until the Lightning payment is complete before returning. You can override this behavior by specifying a timeout in seconds, after which the function will return even if the payment is still pending. This is useful if you want to display the payment as 'pending' after a certain period. Setting the timeout to 0 will cause the function to return a pending payment immediately after initiating it.
+By default, this function returns immediately. You can override this behavior by specifying a completion timeout in seconds. If the completion timeout is hit, a pending payment object is returned. If the payment completes, the completed payment object is returned.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
