@@ -270,6 +270,7 @@ pub enum _SendPaymentOptions {
     },
     Bolt11Invoice {
         prefer_spark: bool,
+        completion_timeout_secs: Option<u32>,
     },
 }
 
@@ -689,4 +690,20 @@ pub struct _Symbol {
     pub template: Option<String>,
     pub rtl: Option<bool>,
     pub position: Option<u32>,
+}
+
+#[frb(mirror(WaitForPaymentRequest))]
+pub struct _WaitForPaymentRequest {
+    pub identifier: WaitForPaymentIdentifier,
+}
+
+#[frb(mirror(WaitForPaymentIdentifier))]
+pub enum _WaitForPaymentIdentifier {
+    PaymentId(String),
+    PaymentRequest(String),
+}
+
+#[frb(mirror(WaitForPaymentResponse))]
+pub struct _WaitForPaymentResponse {
+    pub payment: Payment,
 }

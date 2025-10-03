@@ -53,3 +53,18 @@ func receiveSpark(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
 
     return response
 }
+
+func waitForPayment(sdk: BreezSdk, paymentRequest: String) async throws -> Payment {
+    // ANCHOR: wait-for-payment
+    // Wait for a payment to be completed using a payment request
+    let response = try await sdk.waitForPayment(
+        request: WaitForPaymentRequest(
+            identifier: WaitForPaymentIdentifier.paymentRequest(value: paymentRequest)
+        )
+    )
+    
+    print("Payment received with ID: \(response.payment.id)")
+    // ANCHOR_END: wait-for-payment
+    
+    return payment
+}

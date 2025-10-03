@@ -1,4 +1,4 @@
-import { ReceivePaymentMethod, type BreezSdk } from '@breeztech/breez-sdk-spark-react-native'
+import { ReceivePaymentMethod, WaitForPaymentIdentifier, type BreezSdk } from '@breeztech/breez-sdk-spark-react-native'
 
 const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
   // ANCHOR: receive-payment-lightning-bolt11
@@ -44,4 +44,15 @@ const exampleReceiveSparkPayment = async (sdk: BreezSdk) => {
   const receiveFeeSats = response.feeSats
   console.log(`Fees: ${receiveFeeSats} sats`)
   // ANCHOR_END: receive-payment-spark
+}
+
+const exampleWaitForPayment = async (sdk: BreezSdk, paymentRequest: string) => {
+  // ANCHOR: wait-for-payment
+  // Wait for a payment to be completed using a payment request
+  const response = await sdk.waitForPayment({
+    identifier: new WaitForPaymentIdentifier.PaymentRequest(paymentRequest)
+  })
+
+  console.log(`Payment received with ID: ${response.payment.id}`)
+  // ANCHOR_END: wait-for-payment
 }

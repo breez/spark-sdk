@@ -429,11 +429,13 @@ fn read_payment_options(
                 if line == "1" {
                     return Ok(Some(SendPaymentOptions::Bolt11Invoice {
                         prefer_spark: true,
+                        completion_timeout_secs: Some(0),
                     }));
                 }
             }
             Ok(Some(SendPaymentOptions::Bolt11Invoice {
                 prefer_spark: false,
+                completion_timeout_secs: Some(0),
             }))
         }
         SendPaymentMethod::SparkAddress { .. } => Ok(None),

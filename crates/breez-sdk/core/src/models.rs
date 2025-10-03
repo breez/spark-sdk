@@ -767,6 +767,10 @@ pub enum SendPaymentOptions {
     },
     Bolt11Invoice {
         prefer_spark: bool,
+
+        /// If set, the function will return the payment if it is still pending after this
+        /// number of seconds. If unset, the function will return immediately after initiating the payment.
+        completion_timeout_secs: Option<u32>,
     },
 }
 
@@ -909,4 +913,20 @@ pub struct ListFiatCurrenciesResponse {
 pub struct ListFiatRatesResponse {
     /// The list of fiat rates
     pub rates: Vec<Rate>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WaitForPaymentRequest {
+    pub identifier: WaitForPaymentIdentifier,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum WaitForPaymentIdentifier {
+    PaymentId(String),
+    PaymentRequest(String),
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WaitForPaymentResponse {
+    pub payment: Payment,
 }

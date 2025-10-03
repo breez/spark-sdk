@@ -148,6 +148,34 @@ class MigrationManager {
       {
         name: "Add lnurl_description column to payment_metadata",
         sql: `ALTER TABLE payment_metadata ADD COLUMN lnurl_description TEXT`,
+      },
+      {
+        name: "Flatten payment details",
+        sql: [
+          `ALTER TABLE payments ADD COLUMN withdraw_tx_id TEXT`,
+          `ALTER TABLE payments ADD COLUMN deposit_tx_id TEXT`,
+          `ALTER TABLE payments ADD COLUMN spark INTEGER`,
+          `CREATE TABLE payment_details_lightning (
+              payment_id TEXT PRIMARY KEY,
+              invoice TEXT NOT NULL,
+              payment_hash TEXT NOT NULL,
+              destination_pubkey TEXT NOT NULL,
+              description TEXT,
+              preimage TEXT,
+              FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+            )`,
+          `INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage)
+            SELECT id, json_extract(details, '$.Lightning.invoice'), json_extract(details, '$.Lightning.payment_hash'), 
+                json_extract(details, '$.Lightning.destination_pubkey'), json_extract(details, '$.Lightning.description'), 
+                json_extract(details, '$.Lightning.preimage') 
+            FROM payments WHERE json_extract(details, '$.Lightning.invoice') IS NOT NULL`,
+            `UPDATE payments SET withdraw_tx_id = json_extract(details, '$.Withdraw.tx_id')
+            WHERE json_extract(details, '$.Withdraw.tx_id') IS NOT NULL`,
+            `UPDATE payments SET deposit_tx_id = json_extract(details, '$.Deposit.tx_id')
+            WHERE json_extract(details, '$.Deposit.tx_id') IS NOT NULL`,
+            `ALTER TABLE payments DROP COLUMN details`,
+            `CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice)`,
+        ]
       }
     ];
   }

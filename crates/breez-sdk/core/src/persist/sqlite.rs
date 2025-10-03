@@ -1,6 +1,6 @@
 use macros::async_trait;
 use rusqlite::{
-    Connection, ToSql, params,
+    Connection, Row, ToSql, params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
 };
 use rusqlite_migration::{M, Migrations, SchemaVersion};
@@ -124,7 +124,8 @@ impl SqliteStorage {
             );",
             "CREATE TABLE IF NOT EXISTS payment_metadata (
               payment_id TEXT PRIMARY KEY,
-              lnurl_pay_info TEXT);",
+              lnurl_pay_info TEXT
+            );",
             "CREATE TABLE IF NOT EXISTS deposit_refunds (
               deposit_tx_id TEXT NOT NULL,
               deposit_vout INTEGER NOT NULL,
@@ -133,6 +134,35 @@ impl SqliteStorage {
               PRIMARY KEY (deposit_tx_id, deposit_vout)              
             );",
             "ALTER TABLE payment_metadata ADD COLUMN lnurl_description TEXT;",
+            "
+            ALTER TABLE payments ADD COLUMN withdraw_tx_id TEXT;
+            ALTER TABLE payments ADD COLUMN deposit_tx_id TEXT;
+            ALTER TABLE payments ADD COLUMN spark INTEGER;
+            CREATE TABLE payment_details_lightning (
+              payment_id TEXT PRIMARY KEY,
+              invoice TEXT NOT NULL,
+              payment_hash TEXT NOT NULL,
+              destination_pubkey TEXT NOT NULL,
+              description TEXT,
+              preimage TEXT,
+              FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+            );
+            INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage)
+            SELECT id, json_extract(details, '$.Lightning.invoice'), json_extract(details, '$.Lightning.payment_hash'), 
+                json_extract(details, '$.Lightning.destination_pubkey'), json_extract(details, '$.Lightning.description'), 
+                json_extract(details, '$.Lightning.preimage') 
+            FROM payments WHERE json_extract(details, '$.Lightning.invoice') IS NOT NULL;
+
+            UPDATE payments SET withdraw_tx_id = json_extract(details, '$.Withdraw.tx_id')
+            WHERE json_extract(details, '$.Withdraw.tx_id') IS NOT NULL;
+
+            UPDATE payments SET deposit_tx_id = json_extract(details, '$.Deposit.tx_id')
+            WHERE json_extract(details, '$.Deposit.tx_id') IS NOT NULL;
+
+            ALTER TABLE payments DROP COLUMN details;
+
+            CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice);
+            ",
         ]
     }
 }
@@ -159,8 +189,24 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         let query = format!(
-            "SELECT p.id, p.payment_type, p.status, p.amount, p.fees, p.timestamp, p.details, p.method, pm.lnurl_pay_info, pm.lnurl_description
+            "SELECT p.id
+            ,       p.payment_type
+            ,       p.status
+            ,       p.amount
+            ,       p.fees
+            ,       p.timestamp
+            ,       p.method
+            ,       p.withdraw_tx_id
+            ,       p.deposit_tx_id
+            ,       p.spark
+            ,       l.invoice AS lightning_invoice
+            ,       l.payment_hash AS lightning_payment_hash
+            ,       l.destination_pubkey AS lightning_destination_pubkey
+            ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
+            ,       l.preimage AS lightning_preimage
+            ,       pm.lnurl_pay_info
              FROM payments p
+             LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              ORDER BY p.timestamp DESC 
              LIMIT {} OFFSET {}",
@@ -169,47 +215,18 @@ impl Storage for SqliteStorage {
         );
 
         let mut stmt = connection.prepare(&query)?;
-
-        let payment_iter = stmt.query_map(params![], |row| {
-            let mut details: Option<PaymentDetails> = row.get(6)?;
-            if let Some(PaymentDetails::Lightning {
-                lnurl_pay_info,
-                description,
-                ..
-            }) = &mut details
-            {
-                *lnurl_pay_info = row.get(8)?;
-                if description.is_none() {
-                    *description = row.get(9)?;
-                }
-            }
-
-            Ok(Payment {
-                id: row.get(0)?,
-                payment_type: PaymentType::from(row.get::<_, String>(1)?.as_str()),
-                status: PaymentStatus::from(row.get::<_, String>(2)?.as_str()),
-                amount: row.get(3)?,
-                fees: row.get(4)?,
-                timestamp: row.get(5)?,
-                details,
-                method: row.get(7)?,
-            })
-        })?;
-
-        let mut payments = Vec::new();
-        for payment in payment_iter {
-            payments.push(payment?);
-        }
-
+        let payments = stmt
+            .query_map(params![], map_payment)?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(payments)
     }
 
     async fn insert_payment(&self, payment: Payment) -> Result<(), StorageError> {
-        let connection = self.get_connection()?;
-
-        connection.execute(
-            "INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, details, method) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        let mut connection = self.get_connection()?;
+        let tx = connection.transaction()?;
+        tx.execute(
+            "INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, method) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
             params![
                 payment.id,
                 payment.payment_type.to_string(),
@@ -217,11 +234,54 @@ impl Storage for SqliteStorage {
                 payment.amount,
                 payment.fees,
                 payment.timestamp,
-                payment.details,
                 payment.method,
             ],
         )?;
 
+        match payment.details {
+            Some(PaymentDetails::Withdraw { tx_id }) => {
+                tx.execute(
+                    "UPDATE payments SET withdraw_tx_id = ? WHERE id = ?",
+                    params![tx_id, payment.id],
+                )?;
+            }
+            Some(PaymentDetails::Deposit { tx_id }) => {
+                tx.execute(
+                    "UPDATE payments SET deposit_tx_id = ? WHERE id = ?",
+                    params![tx_id, payment.id],
+                )?;
+            }
+            Some(PaymentDetails::Spark) => {
+                tx.execute(
+                    "UPDATE payments SET spark = 1 WHERE id = ?",
+                    params![payment.id],
+                )?;
+            }
+            Some(PaymentDetails::Lightning {
+                invoice,
+                payment_hash,
+                destination_pubkey,
+                description,
+                preimage,
+                lnurl_pay_info: _,
+            }) => {
+                tx.execute(
+                    "INSERT OR REPLACE INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage) 
+                     VALUES (?, ?, ?, ?, ?, ?)",
+                    params![
+                        payment.id,
+                        invoice,
+                        payment_hash,
+                        destination_pubkey,
+                        description,
+                        preimage,
+                    ],
+                )?;
+            }
+            None => {}
+        }
+
+        tx.commit()?;
         Ok(())
     }
 
@@ -280,37 +340,67 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare(
-            "SELECT id, payment_type, status, amount, fees, timestamp, details, method, pm.lnurl_pay_info, pm.lnurl_description
-             FROM payments 
-             LEFT JOIN payment_metadata pm ON payments.id = pm.payment_id WHERE payments.id = ?",
+            "SELECT p.id
+            ,       p.payment_type
+            ,       p.status
+            ,       p.amount
+            ,       p.fees
+            ,       p.timestamp
+            ,       p.method
+            ,       p.withdraw_tx_id
+            ,       p.deposit_tx_id
+            ,       p.spark
+            ,       l.invoice AS lightning_invoice
+            ,       l.payment_hash AS lightning_payment_hash
+            ,       l.destination_pubkey AS lightning_destination_pubkey
+            ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
+            ,       l.preimage AS lightning_preimage
+            ,       pm.lnurl_pay_info
+             FROM payments p
+             LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             WHERE p.id = ?",
         )?;
 
-        let result = stmt.query_row(params![id], |row| {
-            let mut details: Option<PaymentDetails> = row.get(6)?;
-            if let Some(PaymentDetails::Lightning {
-                lnurl_pay_info,
-                description,
-                ..
-            }) = &mut details
-            {
-                *lnurl_pay_info = row.get(8)?;
-                if description.is_none() {
-                    *description = row.get(9)?;
-                }
-            }
+        let payment = stmt.query_row(params![id], map_payment)?;
+        Ok(payment)
+    }
 
-            Ok(Payment {
-                id: row.get(0)?,
-                payment_type: PaymentType::from(row.get::<_, String>(1)?.as_str()),
-                status: PaymentStatus::from(row.get::<_, String>(2)?.as_str()),
-                amount: row.get(3)?,
-                fees: row.get(4)?,
-                timestamp: row.get(5)?,
-                details,
-                method: row.get(7)?,
-            })
-        });
-        result.map_err(StorageError::from)
+    async fn get_payment_by_invoice(
+        &self,
+        invoice: String,
+    ) -> Result<Option<Payment>, StorageError> {
+        let connection = self.get_connection()?;
+
+        let mut stmt = connection.prepare(
+            "SELECT p.id
+            ,       p.payment_type
+            ,       p.status
+            ,       p.amount
+            ,       p.fees
+            ,       p.timestamp
+            ,       p.method
+            ,       p.withdraw_tx_id
+            ,       p.deposit_tx_id
+            ,       p.spark
+            ,       l.invoice AS lightning_invoice
+            ,       l.payment_hash AS lightning_payment_hash
+            ,       l.destination_pubkey AS lightning_destination_pubkey
+            ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
+            ,       l.preimage AS lightning_preimage
+            ,       pm.lnurl_pay_info
+             FROM payments p
+             LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             WHERE l.invoice = ?",
+        )?;
+
+        let payment = stmt.query_row(params![invoice], map_payment);
+        match payment {
+            Ok(payment) => Ok(Some(payment)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     async fn add_deposit(
@@ -384,6 +474,45 @@ impl Storage for SqliteStorage {
         }
         Ok(())
     }
+}
+
+fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
+    let withdraw_tx_id: Option<String> = row.get(7)?;
+    let deposit_tx_id: Option<String> = row.get(8)?;
+    let spark: Option<i32> = row.get(9)?;
+    let lightning_invoice: Option<String> = row.get(10)?;
+    let details = match (lightning_invoice, withdraw_tx_id, deposit_tx_id, spark) {
+        (Some(invoice), _, _, _) => {
+            let payment_hash: String = row.get(11)?;
+            let destination_pubkey: String = row.get(12)?;
+            let description: Option<String> = row.get(13)?;
+            let preimage: Option<String> = row.get(14)?;
+            let lnurl_pay_info: Option<LnurlPayInfo> = row.get(15)?;
+
+            Some(PaymentDetails::Lightning {
+                invoice,
+                payment_hash,
+                destination_pubkey,
+                description,
+                preimage,
+                lnurl_pay_info,
+            })
+        }
+        (_, Some(tx_id), _, _) => Some(PaymentDetails::Withdraw { tx_id }),
+        (_, _, Some(tx_id), _) => Some(PaymentDetails::Deposit { tx_id }),
+        (_, _, _, Some(_)) => Some(PaymentDetails::Spark),
+        _ => None,
+    };
+    Ok(Payment {
+        id: row.get(0)?,
+        payment_type: PaymentType::from(row.get::<_, String>(1)?.as_str()),
+        status: PaymentStatus::from(row.get::<_, String>(2)?.as_str()),
+        amount: row.get(3)?,
+        fees: row.get(4)?,
+        timestamp: row.get(5)?,
+        details,
+        method: row.get(6)?,
+    })
 }
 
 impl ToSql for PaymentDetails {

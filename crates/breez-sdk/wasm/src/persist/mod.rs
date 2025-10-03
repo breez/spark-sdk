@@ -129,6 +129,22 @@ impl breez_sdk_spark::Storage for WasmStorage {
         Ok(payment.into())
     }
 
+    async fn get_payment_by_invoice(
+        &self,
+        invoice: String,
+    ) -> Result<Option<breez_sdk_spark::Payment>, breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .get_payment_by_invoice(invoice)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_storage_error)?;
+
+        let payment: Option<Payment> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| breez_sdk_spark::StorageError::Serialization(e.to_string()))?;
+        Ok(payment.map(|p| p.into()))
+    }
+
     async fn add_deposit(
         &self,
         txid: String,
@@ -198,6 +214,7 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     insertPayment: (payment: Payment) => Promise<void>;
     setPaymentMetadata: (paymentId: string, metadata: PaymentMetadata) => Promise<void>;
     getPaymentById: (id: string) => Promise<Payment>;
+    getPaymentByInvoice: (invoice: string) => Promise<Payment>;
     addDeposit: (txid: string, vout: number, amount_sats: number) => Promise<void>;
     deleteDeposit: (txid: string, vout: number) => Promise<void>;
     listDeposits: () => Promise<DepositInfo[]>;
@@ -237,6 +254,9 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = getPaymentById, catch)]
     pub fn get_payment_by_id(this: &Storage, id: String) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getPaymentByInvoice, catch)]
+    pub fn get_payment_by_invoice(this: &Storage, invoice: String) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = addDeposit, catch)]
     pub fn add_deposit(

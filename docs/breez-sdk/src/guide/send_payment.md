@@ -241,6 +241,8 @@ Once the payment has been prepared, pass the prepare response as an argument to 
 
 In the send payment options for BOLT11 invoices, you can set whether to prefer to use Spark to transfer the payment if the invoice contains a Spark address. By default, using Spark transfers are disabled.
 
+By default, this function returns immediately. You can override this behavior by specifying a completion timeout in seconds. If the completion timeout is hit, a pending payment object is returned. If the payment completes, the completed payment object is returned.
+
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
 <section>
