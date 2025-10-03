@@ -11,6 +11,7 @@ use breez_sdk_common::{
 };
 use spark_wallet::{DefaultSigner, SparkWallet};
 use tokio::sync::watch;
+use tracing::debug;
 
 use crate::{
     Credentials, KeySetType, Network,
@@ -253,6 +254,8 @@ impl SdkBuilder {
             shutdown_sender,
             spark_wallet,
         })?;
+
+        debug!("Initialized and started breez sdk.");
 
         Ok(sdk)
     }
