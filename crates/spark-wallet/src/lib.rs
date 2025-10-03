@@ -25,7 +25,7 @@ pub use spark::{
     ssp::*,
     tree::{SigningKeyshare, TreeNodeId},
     utils::{
-        paging::{Order, PagingFilter},
+        paging::{Order, PagingFilter, PagingResult},
         transactions::is_ephemeral_anchor_output,
     },
 };

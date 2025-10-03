@@ -937,22 +937,15 @@ impl DepositService {
             .map_err(|_| ServiceError::InvalidDepositAddress)?;
 
         // There is no offset in the static addresses response
-        Ok(PagingResult {
-            items: addresses,
-            next: None,
-        })
+        Ok(PagingResult::complete(addresses))
     }
 
     pub async fn query_static_deposit_addresses(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<DepositAddress>, ServiceError> {
-        let addresses = match paging {
-            Some(paging) => {
-                self.query_static_deposit_addresses_inner(paging)
-                    .await?
-                    .items
-            }
+    ) -> Result<PagingResult<DepositAddress>, ServiceError> {
+        let result = match paging {
+            Some(paging) => self.query_static_deposit_addresses_inner(paging).await?,
             None => {
                 pager(
                     |f| self.query_static_deposit_addresses_inner(f),
@@ -961,7 +954,7 @@ impl DepositService {
                 .await?
             }
         };
-        Ok(addresses)
+        Ok(result)
     }
 
     pub async fn get_unused_deposit_address(
@@ -970,7 +963,7 @@ impl DepositService {
     ) -> Result<Option<DepositAddress>, ServiceError> {
         // TODO: unused deposit addresses could be cached in the wallet, so they don't have to be queried from the server every time.
         let addresses = self.query_unused_deposit_addresses(None).await?;
-        Ok(addresses.into_iter().find(|d| &d.address == address))
+        Ok(addresses.items.into_iter().find(|d| &d.address == address))
     }
 
     async fn query_unused_deposit_addresses_inner(
@@ -1011,13 +1004,9 @@ impl DepositService {
     pub async fn query_unused_deposit_addresses(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<DepositAddress>, ServiceError> {
+    ) -> Result<PagingResult<DepositAddress>, ServiceError> {
         let addresses = match paging {
-            Some(paging) => {
-                self.query_unused_deposit_addresses_inner(paging)
-                    .await?
-                    .items
-            }
+            Some(paging) => self.query_unused_deposit_addresses_inner(paging).await?,
             None => {
                 pager(
                     |f| self.query_unused_deposit_addresses_inner(f),
@@ -1060,6 +1049,7 @@ impl DepositService {
         let static_addresses: HashSet<Address> = self
             .query_static_deposit_addresses(None)
             .await?
+            .items
             .into_iter()
             .map(|a| a.address)
             .collect();

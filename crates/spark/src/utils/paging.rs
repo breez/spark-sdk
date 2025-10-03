@@ -67,6 +67,30 @@ pub struct PagingResult<T> {
     pub next: Option<PagingFilter>,
 }
 
+impl<T> PagingResult<T> {
+    pub fn complete(items: Vec<T>) -> Self {
+        Self { items, next: None }
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub fn map<U, F>(self, f: F) -> PagingResult<U>
+    where
+        F: Fn(T) -> U,
+    {
+        PagingResult {
+            items: self.items.into_iter().map(f).collect(),
+            next: self.next,
+        }
+    }
+}
+
 impl<T: Debug> Debug for PagingResult<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PagingResult")
@@ -79,7 +103,7 @@ impl<T: Debug> Debug for PagingResult<T> {
 pub async fn pager<T, F, E>(
     query_fn: impl Fn(PagingFilter) -> F,
     mut paging_filter: PagingFilter,
-) -> Result<Vec<T>, E>
+) -> Result<PagingResult<T>, E>
 where
     F: Future<Output = Result<PagingResult<T>, E>>,
 {
@@ -107,7 +131,7 @@ where
         paging_filter = next;
     }
 
-    Ok(res)
+    Ok(PagingResult::complete(res))
 }
 #[cfg(test)]
 mod tests {
@@ -131,7 +155,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(result.unwrap(), Vec::<u32>::new());
+        assert_eq!(result.unwrap().items, Vec::<u32>::new());
     }
 
     #[async_test_all]
@@ -147,7 +171,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(result.unwrap(), vec![1, 2, 3]);
+        assert_eq!(result.unwrap().items, vec![1, 2, 3]);
     }
 
     #[async_test_all]
@@ -207,7 +231,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(result.unwrap(), vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(result.unwrap().items, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
         assert_eq!(call_count.load(Ordering::SeqCst), 3);
     }
 
@@ -239,7 +263,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(result.unwrap(), vec![10, 15, 20]);
+        assert_eq!(result.unwrap().items, vec![10, 15, 20]);
         assert_eq!(*expected_offsets.lock().unwrap(), vec![10, 15, 20]);
     }
 
@@ -287,7 +311,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(result.unwrap(), vec![1, 2, 3]);
+        assert_eq!(result.unwrap().items, vec![1, 2, 3]);
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 
@@ -321,7 +345,7 @@ mod tests {
         .await;
 
         // Result should be empty and call_count should be 1
-        assert_eq!(result.unwrap(), Vec::<i32>::new());
+        assert_eq!(result.unwrap().items, Vec::<i32>::new());
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 }

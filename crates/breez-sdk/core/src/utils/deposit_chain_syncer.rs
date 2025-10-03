@@ -47,7 +47,7 @@ impl DepositChainSyncer {
 
         // First add all existing deposits to the storage
         let mut all_utxos = HashMap::new();
-        for address in addresses {
+        for address in addresses.items {
             info!("Checking static deposit address: {}", address.to_string());
 
             let utxos = self

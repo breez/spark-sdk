@@ -347,7 +347,7 @@ impl SynchronousTreeService {
             PagingFilter::default(),
         )
         .await?;
-        Ok(nodes)
+        Ok(nodes.items)
     }
 
     async fn check_timelock_nodes<F>(

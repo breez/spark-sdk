@@ -220,13 +220,9 @@ impl TokenService {
         &self,
         filter: QueryTokenTransactionsFilter,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<TokenTransaction>, ServiceError> {
+    ) -> Result<PagingResult<TokenTransaction>, ServiceError> {
         let transactions = match paging {
-            Some(paging) => {
-                self.query_token_transactions_inner(filter, paging)
-                    .await?
-                    .items
-            }
+            Some(paging) => self.query_token_transactions_inner(filter, paging).await?,
             None => {
                 pager(
                     |p| self.query_token_transactions_inner(filter.clone(), p),
