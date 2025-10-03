@@ -97,8 +97,8 @@ const exampleRemoveEventListener = async (sdk: BreezSdk, listenerId: string) => 
   // ANCHOR_END: remove-event-listener
 }
 
-const exampleDisconnect = (sdk: BreezSdk) => {
+const exampleDisconnect = async (sdk: BreezSdk) => {
   // ANCHOR: disconnect
-  sdk.disconnect()
+  await sdk.disconnect()
   // ANCHOR_END: disconnect
 }

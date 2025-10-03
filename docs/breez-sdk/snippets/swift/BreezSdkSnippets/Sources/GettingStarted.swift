@@ -90,7 +90,7 @@ func removeEventListener(sdk: BreezSdk, listenerId: String) async {
 // ANCHOR_END: remove-event-listener
 
 // ANCHOR: disconnect
-func disconnect(sdk: BreezSdk) throws {
-    try sdk.disconnect()
+func disconnect(sdk: BreezSdk) async throws {
+    try await sdk.disconnect()
 }
 // ANCHOR_END: disconnect

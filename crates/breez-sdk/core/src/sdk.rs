@@ -118,7 +118,6 @@ pub struct BreezSdk {
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     event_emitter: Arc<EventEmitter>,
     shutdown_sender: watch::Sender<()>,
-    shutdown_receiver: watch::Receiver<()>,
     sync_trigger: tokio::sync::broadcast::Sender<SyncRequest>,
     initial_synced_watcher: watch::Receiver<bool>,
 }
@@ -209,7 +208,6 @@ pub(crate) struct BreezSdkParams {
     pub lnurl_client: Arc<dyn RestClient>,
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub shutdown_sender: watch::Sender<()>,
-    pub shutdown_receiver: watch::Receiver<()>,
     pub spark_wallet: Arc<SparkWallet>,
 }
 
@@ -231,7 +229,6 @@ impl BreezSdk {
             lnurl_server_client: params.lnurl_server_client,
             event_emitter: Arc::new(EventEmitter::new()),
             shutdown_sender: params.shutdown_sender,
-            shutdown_receiver: params.shutdown_receiver,
             sync_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
         };
@@ -270,7 +267,7 @@ impl BreezSdk {
 
     fn periodic_sync(&self, initial_synced_sender: watch::Sender<bool>) {
         let sdk = self.clone();
-        let mut shutdown_receiver = sdk.shutdown_receiver.clone();
+        let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
         let mut subscription = sdk.spark_wallet.subscribe_events();
         let sync_trigger_sender = sdk.sync_trigger.clone();
         let mut sync_trigger_receiver = sdk.sync_trigger.clone().subscribe();
@@ -614,11 +611,14 @@ impl BreezSdk {
     /// # Returns
     ///
     /// Result containing either success or an `SdkError` if the background task couldn't be stopped
-    pub fn disconnect(&self) -> Result<(), SdkError> {
+    pub async fn disconnect(&self) -> Result<(), SdkError> {
+        info!("Disconnecting Breez SDK");
         self.shutdown_sender
             .send(())
             .map_err(|_| SdkError::Generic("Failed to send shutdown signal".to_string()))?;
 
+        self.shutdown_sender.closed().await;
+        info!("Breez SDK disconnected");
         Ok(())
     }
 
@@ -1076,7 +1076,7 @@ impl BreezSdk {
         let event_emitter = self.event_emitter.clone();
         let payment = payment.clone();
         let payment_id = payment_id.to_string();
-        let mut shutdown = self.shutdown_receiver.clone();
+        let mut shutdown = self.shutdown_sender.subscribe();
 
         tokio::spawn(async move {
             for i in 0..MAX_POLL_ATTEMPTS {

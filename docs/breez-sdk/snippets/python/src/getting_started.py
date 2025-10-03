@@ -123,9 +123,9 @@ async def remove_event_listener(sdk: BreezSdk, listener_id: str):
 
 
 # ANCHOR: disconnect
-def disconnect(sdk: BreezSdk):
+async def disconnect(sdk: BreezSdk):
     try:
-        sdk.disconnect()
+        await sdk.disconnect()
     except Exception as error:
         logging.error(error)
         raise

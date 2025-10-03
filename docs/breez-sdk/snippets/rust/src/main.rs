@@ -17,7 +17,7 @@ async fn main() -> Result<()> {
             .await?;
     getting_started::getting_started_node_info(&sdk).await?;
     getting_started::remove_event_listener(&sdk, &listener_id).await?;
-    getting_started::disconnect(&sdk)?;
+    getting_started::disconnect(&sdk).await?;
 
     Ok(())
 }

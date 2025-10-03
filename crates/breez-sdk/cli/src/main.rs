@@ -161,7 +161,7 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
         }
     }
 
-    if let Err(e) = sdk.disconnect() {
+    if let Err(e) = sdk.disconnect().await {
         error!("Failed to gracefully stop SDK: {:?}", e);
     }
 

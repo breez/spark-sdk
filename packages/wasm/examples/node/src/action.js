@@ -61,9 +61,9 @@ const getInfo = async () => {
     console.log(JSON.stringify(res, null, 2))
 }
 
-const disconnect = () => {
+const disconnect = async () => {
     if (sdk) {
-        sdk.disconnect()
+        await sdk.disconnect()
     }
     process.exit(0)
 }

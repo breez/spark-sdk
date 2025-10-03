@@ -64,9 +64,8 @@ impl BreezSdk {
         self.inner.remove_event_listener(id).await
     }
 
-    #[frb(sync)]
-    pub fn disconnect(&self) -> Result<(), SdkError> {
-        self.inner.disconnect()
+    pub async fn disconnect(&self) -> Result<(), SdkError> {
+        self.inner.disconnect().await
     }
 
     pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {

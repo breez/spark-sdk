@@ -126,8 +126,8 @@ class BreezSdkSpark {
   // ANCHOR_END: remove-event-listener
 
   // ANCHOR: disconnect
-  void disconnect(BreezSdk sdk) {
-    sdk.disconnect();
+  Future<void> disconnect(BreezSdk sdk) async {
+    await sdk.disconnect();
   }
   // ANCHOR_END: disconnect
 }

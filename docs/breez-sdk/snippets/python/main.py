@@ -21,7 +21,7 @@ async def main():
 
     # disconnect
     remove_event_listener(sdk, listener_id)
-    disconnect(sdk)
+    await disconnect(sdk)
 
 
 asyncio.run(main())

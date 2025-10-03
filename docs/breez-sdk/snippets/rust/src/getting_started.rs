@@ -109,8 +109,8 @@ pub(crate) async fn remove_event_listener(sdk: &BreezSdk, listener_id: &str) -> 
 // ANCHOR_END: remove-event-listener
 
 // ANCHOR: disconnect
-pub(crate) fn disconnect(sdk: &BreezSdk) -> Result<()> {
-    sdk.disconnect()?;
+pub(crate) async fn disconnect(sdk: &BreezSdk) -> Result<()> {
+    sdk.disconnect().await?;
     Ok(())
 }
 // ANCHOR_END: disconnect

@@ -240,7 +240,7 @@ impl SdkBuilder {
                 None => None,
             },
         };
-        let (shutdown_sender, shutdown_receiver) = watch::channel::<()>(());
+        let shutdown_sender = watch::channel::<()>(()).0;
 
         // Create the SDK instance
         let sdk = BreezSdk::init_and_start(BreezSdkParams {
@@ -251,7 +251,6 @@ impl SdkBuilder {
             lnurl_client,
             lnurl_server_client,
             shutdown_sender,
-            shutdown_receiver,
             spark_wallet,
         })?;
 

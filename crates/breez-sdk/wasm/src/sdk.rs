@@ -116,8 +116,8 @@ impl BreezSdk {
     }
 
     #[wasm_bindgen(js_name = "disconnect")]
-    pub fn disconnect(&self) -> WasmResult<()> {
-        Ok(self.sdk.disconnect()?)
+    pub async fn disconnect(&self) -> WasmResult<()> {
+        Ok(self.sdk.disconnect().await?)
     }
 
     #[wasm_bindgen(js_name = "getInfo")]

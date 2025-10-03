@@ -90,7 +90,7 @@ const main = () => {
             try {
                 const res = await prompt('sdk')
                 if (res.trim().toLowerCase() === 'exit') {
-                    disconnect()
+                    await disconnect()
                     resolve()
                     break
                 } else {
