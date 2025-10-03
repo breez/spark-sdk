@@ -98,15 +98,19 @@ class MigrationManager {
             });
             depositStore.createIndex("txid", "txid", { unique: false });
           }
-
-          const paymentStore = db.transaction("payments", "readwrite").objectStore("payments");
+        },
+      },
+      {
+        name: "Create invoice index",
+        upgrade: (db, transaction) => {
+          const paymentStore = transaction.objectStore("payments");
           if (!paymentStore.indexNames.contains("invoice")) {
             paymentStore.createIndex("invoice", "details.invoice", {
               unique: false,
             });
           }
-        },
-      },
+        }
+      }
     ];
   }
 }
