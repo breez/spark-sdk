@@ -29,7 +29,7 @@ use spark::{
         InMemoryTreeStore, LeavesReservation, SynchronousTreeService, TargetAmounts, TreeNode,
         TreeNodeId, TreeService, TreeStore, select_leaves_by_amounts, with_reserved_leaves,
     },
-    utils::paging::PagingFilter,
+    utils::paging::{PagingFilter, PagingResult},
 };
 use tokio::sync::{broadcast, watch};
 use tokio_with_wasm::alias as tokio;
@@ -449,29 +449,23 @@ impl SparkWallet {
     pub async fn list_static_deposit_addresses(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<Address>, SparkWalletError> {
+    ) -> Result<PagingResult<Address>, SparkWalletError> {
         let static_addresses = self
             .deposit_service
             .query_static_deposit_addresses(paging)
             .await?;
-        Ok(static_addresses
-            .into_iter()
-            .map(|addr| addr.address)
-            .collect())
+        Ok(static_addresses.map(|addr| addr.address))
     }
 
     pub async fn list_unused_deposit_addresses(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<Address>, SparkWalletError> {
+    ) -> Result<PagingResult<Address>, SparkWalletError> {
         let deposit_addresses = self
             .deposit_service
             .query_unused_deposit_addresses(paging)
             .await?;
-        Ok(deposit_addresses
-            .into_iter()
-            .map(|addr| addr.address)
-            .collect())
+        Ok(deposit_addresses.map(|addr| addr.address))
     }
 
     /// Fetches a quote for the creditable amount when claiming a static deposit.
@@ -557,7 +551,7 @@ impl SparkWallet {
     pub async fn list_transfers(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+    ) -> Result<PagingResult<WalletTransfer>, SparkWalletError> {
         let our_pubkey = self.identity_public_key;
         let transfers = self.transfer_service.query_transfers(paging).await?;
         create_transfers(transfers, &self.ssp_client, our_pubkey).await
@@ -566,7 +560,7 @@ impl SparkWallet {
     pub async fn list_pending_transfers(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+    ) -> Result<PagingResult<WalletTransfer>, SparkWalletError> {
         let our_pubkey = self.identity_public_key;
         let transfers = self
             .transfer_service
@@ -650,13 +644,18 @@ impl SparkWallet {
         )
         .await?;
 
-        create_transfers(vec![transfer], &self.ssp_client, self.identity_public_key)
-            .await?
-            .first()
-            .cloned()
-            .ok_or(SparkWalletError::Generic(
-                "Failed to create transfer".to_string(),
-            ))
+        create_transfers(
+            PagingResult::complete(vec![transfer]),
+            &self.ssp_client,
+            self.identity_public_key,
+        )
+        .await?
+        .items
+        .first()
+        .cloned()
+        .ok_or(SparkWalletError::Generic(
+            "Failed to create transfer".to_string(),
+        ))
     }
 
     async fn withdraw_inner(
@@ -772,7 +771,7 @@ impl SparkWallet {
     pub async fn list_token_transactions(
         &self,
         request: ListTokenTransactionsRequest,
-    ) -> Result<Vec<TokenTransaction>, SparkWalletError> {
+    ) -> Result<PagingResult<TokenTransaction>, SparkWalletError> {
         self.token_service
             .query_token_transactions(
                 QueryTokenTransactionsFilter {
@@ -821,7 +820,7 @@ async fn claim_pending_transfers(
         transfers.len()
     );
 
-    for (i, transfer) in transfers.iter().enumerate() {
+    for (i, transfer) in transfers.items.iter().enumerate() {
         debug!("Claiming transfer: {}/{}", i + 1, transfers.len());
         claim_transfer(transfer, transfer_service, tree_service).await?;
         debug!(
@@ -831,30 +830,29 @@ async fn claim_pending_transfers(
         );
     }
     debug!("Claimed all transfers, creating wallet transfers");
-    create_transfers(transfers, ssp_client, our_pubkey).await
+    Ok(create_transfers(transfers, ssp_client, our_pubkey)
+        .await?
+        .items)
 }
 
 async fn create_transfers(
-    transfers: Vec<Transfer>,
+    transfers: PagingResult<Transfer>,
     ssp_client: &Arc<ServiceProvider>,
     our_public_key: PublicKey,
-) -> Result<Vec<WalletTransfer>, SparkWalletError> {
-    let transfer_ids = transfers.iter().map(|t| t.id.to_string()).collect();
+) -> Result<PagingResult<WalletTransfer>, SparkWalletError> {
+    let transfer_ids = transfers.items.iter().map(|t| t.id.to_string()).collect();
     let ssp_tranfers = ssp_client.get_transfers(transfer_ids).await?;
     let ssp_transfers_map: HashMap<String, SspTransfer> = ssp_tranfers
         .into_iter()
         .filter_map(|t| t.spark_id.clone().map(|spark_id| (spark_id, t.clone())))
         .collect();
-    Ok(transfers
-        .into_iter()
-        .map(|t| {
-            WalletTransfer::from_transfer(
-                t.clone(),
-                ssp_transfers_map.get(&t.id.to_string()).cloned(),
-                our_public_key,
-            )
-        })
-        .collect())
+    Ok(transfers.map(|t| {
+        WalletTransfer::from_transfer(
+            t.clone(),
+            ssp_transfers_map.get(&t.id.to_string()).cloned(),
+            our_public_key,
+        )
+    }))
 }
 
 async fn claim_transfer(

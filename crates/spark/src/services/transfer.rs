@@ -1009,9 +1009,9 @@ impl TransferService {
     pub async fn query_transfers(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<Transfer>, ServiceError> {
+    ) -> Result<PagingResult<Transfer>, ServiceError> {
         let transfers = match paging {
-            Some(paging) => self.query_transfers_inner(paging).await?.items,
+            Some(paging) => self.query_transfers_inner(paging).await?,
             None => pager(|f| self.query_transfers_inner(f), PagingFilter::default()).await?,
         };
         Ok(transfers)
@@ -1054,9 +1054,9 @@ impl TransferService {
     pub async fn query_pending_transfers(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<Transfer>, ServiceError> {
+    ) -> Result<PagingResult<Transfer>, ServiceError> {
         let transfers = match paging {
-            Some(paging) => self.query_pending_transfers_inner(paging).await?.items,
+            Some(paging) => self.query_pending_transfers_inner(paging).await?,
             None => {
                 pager(
                     |f| self.query_pending_transfers_inner(f),
@@ -1105,13 +1105,9 @@ impl TransferService {
     pub async fn query_pending_receiver_transfers(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<Vec<Transfer>, ServiceError> {
+    ) -> Result<PagingResult<Transfer>, ServiceError> {
         let transfers = match paging {
-            Some(paging) => {
-                self.query_pending_receiver_transfers_inner(paging)
-                    .await?
-                    .items
-            }
+            Some(paging) => self.query_pending_receiver_transfers_inner(paging).await?,
             None => {
                 pager(
                     |f| self.query_pending_receiver_transfers_inner(f),

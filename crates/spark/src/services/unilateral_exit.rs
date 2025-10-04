@@ -174,7 +174,7 @@ impl UnilateralExitService {
         )
         .await?;
 
-        Ok(nodes)
+        Ok(nodes.items)
     }
 
     async fn fetch_leaves_parents_inner(

@@ -122,7 +122,7 @@ pub async fn handle_command(
             } else {
                 None
             };
-            let addresses = wallet.list_static_deposit_addresses(paging).await?;
+            let addresses = wallet.list_static_deposit_addresses(paging).await?.items;
             println!("{}", serde_json::to_string_pretty(&addresses)?);
         }
         DepositCommand::ListUnusedAddresses { limit, offset } => {
@@ -132,7 +132,7 @@ pub async fn handle_command(
                 None
             };
             let addresses = wallet.list_unused_deposit_addresses(paging).await?;
-            println!("{}", serde_json::to_string_pretty(&addresses)?);
+            println!("{}", serde_json::to_string_pretty(&addresses.items)?);
         }
         DepositCommand::Refund {
             txid,

@@ -59,7 +59,10 @@ pub async fn handle_command(
             };
 
             let transfers = wallet.list_transfers(paging).await?;
-            println!("Transfers: {}", serde_json::to_string_pretty(&transfers)?);
+            println!(
+                "Transfers: {}",
+                serde_json::to_string_pretty(&transfers.items)?
+            );
         }
         TransferCommand::ListPending { limit, offset } => {
             let paging = if limit.is_some() || offset.is_some() {
@@ -71,7 +74,7 @@ pub async fn handle_command(
             let transfers = wallet.list_pending_transfers(paging).await?;
             println!(
                 "Pending transfers: {}",
-                serde_json::to_string_pretty(&transfers)?
+                serde_json::to_string_pretty(&transfers.items)?
             );
         }
         TransferCommand::Transfer {
