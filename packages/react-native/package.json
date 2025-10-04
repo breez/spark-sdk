@@ -1,6 +1,6 @@
 {
   "name": "@breeztech/breez-sdk-spark-react-native",
-  "version": "0.1.4",
+  "version": "0.1.4-dev14",
   "description": "React Native bindings for the Breez SDK - Nodeless (Spark Implementation)",
   "source": "./src/index.tsx",
   "main": "./lib/commonjs/index.js",
@@ -23,16 +23,18 @@
     "android",
     "ios",
     "cpp",
+    "build",
     "*.podspec",
     "react-native.config.js",
     "swift",
     "scripts",
-    "!ios/build",
-    "!android/build",
+    "patches",
     "!android/gradle",
     "!android/gradlew",
     "!android/gradlew.bat",
     "!android/local.properties",
+    "!android/app",
+    "!ios/build",
     "!**/__tests__",
     "!**/__fixtures__",
     "!**/__mocks__",
@@ -73,32 +75,32 @@
   },
   "homepage": "https://github.com/breez/spark-sdk#readme",
   "publishConfig": {
-    "registry": "https://registry.npmjs.org/"
+    "registry": "https://nexus.0x5f.sh/repository/npm/"
   },
   "dependencies": {
-    "uniffi-bindgen-react-native": "^0.28.3-5"
+    "uniffi-bindgen-react-native": "0.29.3-1"
   },
   "devDependencies": {
-    "@commitlint/config-conventional": "^17.0.2",
-    "@react-native-community/cli": "15.0.1",
-    "@react-native/eslint-config": "^0.73.1",
-    "@release-it/conventional-changelog": "^9.0.2",
-    "@types/jest": "^29.5.5",
-    "@types/react": "^18.2.44",
-    "commitlint": "^17.0.2",
-    "del-cli": "^5.1.0",
-    "eslint": "^8.51.0",
-    "eslint-config-prettier": "^9.0.0",
-    "eslint-plugin-prettier": "^5.0.1",
+    "@commitlint/config-conventional": "latest",
+    "@react-native-community/cli": "15.1.3",
+    "@react-native/eslint-config": "^0.76.1",
+    "@release-it/conventional-changelog": "latest",
+    "@types/jest": "latest",
+    "@types/react": "^19.0.6",
+    "commitlint": "latest",
+    "del-cli": "latest",
+    "eslint": "latest",
+    "eslint-config-prettier": "latest",
+    "eslint-plugin-prettier": "latest",
     "jest": "^29.7.0",
     "patch-package": "^8.0.0",
-    "prettier": "^3.0.3",
-    "react": "19.0.0",
-    "react-native": "0.78.0",
-    "react-native-builder-bob": "^0.40.3",
+    "prettier": "latest",
+    "react": "19.1.0",
+    "react-native": "0.81.4",
+    "react-native-builder-bob": "^0.40.13",
     "release-it": "^17.10.0",
-    "turbo": "^1.10.7",
-    "typescript": "^5.2.2"
+    "turbo": "latest",
+    "typescript": "latest"
   },
   "peerDependencies": {
     "react": "*",
@@ -173,14 +175,14 @@
     "name": "BreezSdkSparkReactNativeSpec",
     "type": "all",
     "jsSrcsDir": "src",
-    "outputDir": {
-      "ios": "ios/generated",
-      "android": "android/generated"
-    },
     "android": {
       "javaPackageName": "com.breeztech.breezsdkspark"
     },
-    "includesGeneratedCode": false
+    "outputDir": {
+      "android": "android/generated",
+      "ios": "ios/generated"
+    },
+    "includesGeneratedCode": true
   },
   "create-react-native-library": {
     "type": "turbo-module",
