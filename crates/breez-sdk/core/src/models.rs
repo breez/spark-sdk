@@ -44,12 +44,15 @@ impl fmt::Display for PaymentType {
     }
 }
 
-impl From<&str> for PaymentType {
-    fn from(s: &str) -> Self {
-        match s {
+impl FromStr for PaymentType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
             "receive" => PaymentType::Receive,
-            _ => PaymentType::Send, // Default to Send if unknown or 'send'
-        }
+            "send" => PaymentType::Send,
+            _ => return Err(format!("invalid payment type '{s}'")),
+        })
     }
 }
 
@@ -75,13 +78,16 @@ impl fmt::Display for PaymentStatus {
     }
 }
 
-impl From<&str> for PaymentStatus {
-    fn from(s: &str) -> Self {
-        match s {
+impl FromStr for PaymentStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
             "completed" => PaymentStatus::Completed,
+            "pending" => PaymentStatus::Pending,
             "failed" => PaymentStatus::Failed,
-            _ => PaymentStatus::Pending, // Default to Pending if unknown or 'pending'
-        }
+            _ => return Err(format!("Invalid payment status '{s}'")),
+        })
     }
 }
 
