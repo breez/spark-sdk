@@ -24,8 +24,6 @@ use crate::{
     state::State,
     user::{USERNAME_VALIDATION_REGEX, User},
 };
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct LnurlPayParams {}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LnurlPayCallbackParams {
