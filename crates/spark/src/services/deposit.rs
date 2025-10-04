@@ -225,7 +225,6 @@ impl DepositService {
             let nodes = self.timelock_manager.extend_time_lock(&node).await?;
 
             for n in nodes {
-                let node_id = n.id.clone();
                 if n.status != TreeNodeStatus::Available {
                     warn!("Leaf resulting from extend_time_lock is not available: {n:?}",);
                     // TODO: Handle other statuses appropriately.
@@ -233,26 +232,16 @@ impl DepositService {
                     continue;
                 }
 
-                let transfer_res = self
+                let transfer = self
                     .transfer_service
                     .transfer_leaves_to_self(
                         vec![n],
                         Some(PrivateKeySource::Derived(node.id.clone())),
                     )
-                    .await;
-
-                let transfer = match transfer_res {
-                    Ok(transfer) => transfer,
-                    Err(e) => {
-                        if let ServiceError::TransferAlreadyClaimed = e {
-                            warn!("Transfer for leaf {} is already claimed", node_id);
-                            continue;
-                        }
-                        return Err(ServiceError::Generic(format!(
-                            "Failed to transfer leaves to self: {e:?}"
-                        )))?;
-                    }
-                };
+                    .await
+                    .map_err(|e| {
+                        ServiceError::Generic(format!("Failed to transfer leaves to self: {e:?}"))
+                    })?;
 
                 resulting_nodes.extend(transfer.into_iter());
             }

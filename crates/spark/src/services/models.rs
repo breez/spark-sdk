@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::str::FromStr;
 
 use bitcoin::secp256k1::ecdsa::Signature;
@@ -571,6 +571,25 @@ pub enum TransferStatus {
     SenderInitiatedCoordinator,
     ReceiverKeyTweakLocked,
     ReceiverKeyTweakApplied,
+}
+
+impl Display for TransferStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let status_str = match self {
+            TransferStatus::SenderInitiated => "SenderInitiated",
+            TransferStatus::SenderKeyTweakPending => "SenderKeyTweakPending",
+            TransferStatus::SenderKeyTweaked => "SenderKeyTweaked",
+            TransferStatus::ReceiverKeyTweaked => "ReceiverKeyTweaked",
+            TransferStatus::ReceiverRefundSigned => "ReceiverRefundSigned",
+            TransferStatus::Completed => "Completed",
+            TransferStatus::Expired => "Expired",
+            TransferStatus::Returned => "Returned",
+            TransferStatus::SenderInitiatedCoordinator => "SenderInitiatedCoordinator",
+            TransferStatus::ReceiverKeyTweakLocked => "ReceiverKeyTweakLocked",
+            TransferStatus::ReceiverKeyTweakApplied => "ReceiverKeyTweakApplied",
+        };
+        write!(f, "{status_str}")
+    }
 }
 
 impl From<operator_rpc::spark::TransferStatus> for TransferStatus {

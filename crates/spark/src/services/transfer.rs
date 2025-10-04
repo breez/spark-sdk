@@ -3,8 +3,9 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::Network;
 use crate::operator::OperatorPool;
-use crate::operator::rpc::spark::TransferFilter;
+use crate::operator::rpc::spark::query_nodes_request::Source;
 use crate::operator::rpc::spark::transfer_filter::Participant;
+use crate::operator::rpc::spark::{QueryNodesRequest, TransferFilter, TreeNodeIds};
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{LeafKeyTweak, Transfer, map_signing_nonce_commitments};
 use crate::services::{ProofMap, TransferId, TransferStatus};
@@ -27,7 +28,6 @@ use frost_secp256k1_tr::Identifier;
 use k256::Scalar;
 use prost::Message as ProstMessage;
 use tokio_with_wasm::alias as tokio;
-use tonic::Code;
 use tracing::{debug, error, trace};
 
 use crate::{
@@ -580,10 +580,6 @@ impl TransferService {
             {
                 Ok(res) => res,
                 Err(e) => {
-                    if let ServiceError::TransferAlreadyClaimed = e {
-                        return Err(e);
-                    }
-
                     error!("Failed to claim transfer with leaves: {}", e);
                     retry_count += 1;
                     continue;
@@ -642,14 +638,44 @@ impl TransferService {
             None
         };
 
+        debug!("Claim transfer tweak keys successful.");
         // Sign refunds and get node signatures
-        let node_signatures = self
+        let node_signatures_result = self
             .claim_transfer_sign_refunds(transfer, &leaves_to_claim, proof_map.as_ref())
-            .await
-            .map_err(|e| {
+            .await;
+
+        let node_signatures = match node_signatures_result {
+            Ok(sigs) => sigs,
+            Err(ServiceError::TransferAlreadyClaimed) => {
+                debug!("Transfer already claimed, fetching nodes from coordinator");
+                let nodes = self
+                    .operator_pool
+                    .get_coordinator()
+                    .client
+                    .query_nodes(QueryNodesRequest {
+                        network: self.network.to_proto_network() as i32,
+                        source: Some(Source::NodeIds(TreeNodeIds {
+                            node_ids: leaves_to_claim
+                                .iter()
+                                .map(|l| l.node.id.to_string())
+                                .collect(),
+                        })),
+                        ..Default::default()
+                    })
+                    .await?
+                    .nodes
+                    .into_iter()
+                    .map(|n| n.1.try_into())
+                    .collect::<Result<Vec<TreeNode>, ServiceError>>()?;
+                debug!("Fetched nodes from coordinator: {:?}", nodes);
+                return Ok(nodes);
+            }
+            Err(e) => {
                 debug!("Failed to claim transfer sign refunds: {}", e);
-                e
-            })?;
+                return Err(e);
+            }
+        };
+        debug!("Claim transfer sign refunds successful.");
 
         // Finalize the node signatures with the coordinator
         let finalized_nodes = self
@@ -659,7 +685,7 @@ impl TransferService {
                 debug!("Failed to finalize node signatures: {}", e);
                 e
             })?;
-
+        debug!("Finalize node signatures successful.");
         Ok(finalized_nodes)
     }
 
@@ -675,35 +701,82 @@ impl TransferService {
         let mut tasks = Vec::new();
 
         for operator in self.operator_pool.get_all_operators() {
-            let leaves_to_receive = leaves_tweaks_map.get(&operator.identifier);
-            if let Some(leaves_to_receive) = leaves_to_receive {
-                let identity_public_key =
-                    self.signer.get_identity_public_key()?.serialize().to_vec();
-                let leaves_to_receive = leaves_to_receive.clone();
+            let Some(leaves_to_receive) = leaves_tweaks_map.get(&operator.identifier) else {
+                continue;
+            };
 
-                let task = async move {
-                    operator
-                        .client
-                        .claim_transfer_tweak_keys(
-                            operator_rpc::spark::ClaimTransferTweakKeysRequest {
-                                transfer_id: transfer.id.to_string(),
-                                owner_identity_public_key: identity_public_key,
-                                leaves_to_receive,
-                            },
-                        )
-                        .await
-                        .map_err(|e| {
-                            if let OperatorRpcError::Connection(status) = &e
-                                && status.code() == Code::AlreadyExists
-                            {
-                                return ServiceError::TransferAlreadyClaimed;
-                            }
+            let identity_public_key = self.signer.get_identity_public_key()?.serialize().to_vec();
+            let leaves_to_receive = leaves_to_receive.clone();
 
-                            e.into()
-                        })
+            let task = async move {
+                let result = operator
+                    .client
+                    .claim_transfer_tweak_keys(operator_rpc::spark::ClaimTransferTweakKeysRequest {
+                        transfer_id: transfer.id.to_string(),
+                        owner_identity_public_key: identity_public_key,
+                        leaves_to_receive,
+                    })
+                    .await;
+
+                let err = match result {
+                    Ok(()) => {
+                        trace!(
+                            "Operator {} successfully applied key tweaks for transfer {}",
+                            operator.identity_public_key, transfer.id
+                        );
+                        return Ok::<_, ServiceError>(());
+                    }
+                    Err(e) => e,
                 };
-                tasks.push(task);
-            }
+
+                let OperatorRpcError::Connection(status) = err else {
+                    return Err(err.into());
+                };
+
+                debug!(
+                    "Operator {} returned connection error: {:?}",
+                    operator.identity_public_key, status
+                );
+
+                // There was an error tweaking the keys. It's likely the transfer was not in state SenderKeyTweaked after all.
+                // Let's find out what state we're in.
+                // Fetch the leaf remotely from the operator. Determine its state, and return info about it to the caller.
+                let operator_transfers = operator
+                    .client
+                    .query_all_transfers(TransferFilter {
+                        transfer_ids: vec![transfer.id.to_string()],
+                        network: self.network.to_proto_network() as i32,
+                        participant: Some(Participant::ReceiverIdentityPublicKey(
+                            self.signer.get_identity_public_key()?.serialize().to_vec(),
+                        )),
+                        ..Default::default()
+                    })
+                    .await?;
+                let Some(operator_transfer) = operator_transfers.transfers.into_iter().nth(0)
+                else {
+                    debug!(
+                        "Attempting to recover from operator error, but operator doesn't know transfer {}",
+                        transfer.id
+                    );
+                    return Err(ServiceError::ClaimTransferError(status.to_string()));
+                };
+
+                let operator_transfer: Transfer = operator_transfer.try_into()?;
+                debug!(
+                    "Operator {} reports transfer {} is now in {} state (expected SenderKeyTweaked)",
+                    operator.identity_public_key, operator_transfer.id, operator_transfer.status
+                );
+                match operator_transfer.status {
+                    TransferStatus::ReceiverKeyTweaked
+                    | TransferStatus::ReceiverKeyTweakApplied
+                    | TransferStatus::ReceiverKeyTweakLocked
+                    | TransferStatus::ReceiverRefundSigned
+                    | TransferStatus::Completed => Ok(()),
+                    _ => Err(ServiceError::ClaimTransferError(status.to_string())),
+                }
+            };
+
+            tasks.push(task);
         }
 
         futures::future::try_join_all(tasks).await?;
@@ -859,7 +932,7 @@ impl TransferService {
             prepare_refund_so_signing_jobs(self.network, leaf_keys, &mut leaf_data_map)?;
 
         // Call the coordinator to get signing results
-        let response = self
+        let result = self
             .operator_pool
             .get_coordinator()
             .client
@@ -872,16 +945,21 @@ impl TransferService {
                     .to_vec(),
                 signing_jobs,
             })
-            .await
-            .map_err(|e| {
-                if let OperatorRpcError::Connection(status) = &e
-                    && status.code() == Code::AlreadyExists
-                {
-                    return ServiceError::TransferAlreadyClaimed;
-                }
+            .await;
 
-                e.into()
-            })?;
+        let response = match result {
+            Ok(resp) => resp,
+            Err(e) => {
+                if let OperatorRpcError::Connection(_) = e
+                    && let Some(coordinator_transfer) = self.query_transfer(&transfer.id).await?
+                    && coordinator_transfer.status == TransferStatus::Completed
+                {
+                    return Err(ServiceError::TransferAlreadyClaimed);
+                } else {
+                    return Err(e.into());
+                }
+            }
+        };
 
         // Sign the refunds using FROST
         let node_signatures = sign_aggregate_refunds(
