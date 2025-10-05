@@ -29,7 +29,7 @@ pub async fn init_logging(logger: Logger, filter: Option<String>) -> WasmResult<
         .with(filter)
         .with(WasmTracingLayer {});
 
-    subscriber.init();
+    subscriber.try_init()?;
 
     Ok(())
 }
@@ -104,19 +104,20 @@ pub async fn parse(input: &str) -> WasmResult<InputType> {
 #[wasm_bindgen]
 impl BreezSdk {
     #[wasm_bindgen(js_name = "addEventListener")]
-    pub fn add_event_listener(&self, listener: EventListener) -> String {
+    pub async fn add_event_listener(&self, listener: EventListener) -> String {
         self.sdk
             .add_event_listener(Box::new(WasmEventListener { listener }))
+            .await
     }
 
     #[wasm_bindgen(js_name = "removeEventListener")]
-    pub fn remove_event_listener(&self, id: &str) -> bool {
-        self.sdk.remove_event_listener(id)
+    pub async fn remove_event_listener(&self, id: &str) -> bool {
+        self.sdk.remove_event_listener(id).await
     }
 
     #[wasm_bindgen(js_name = "disconnect")]
-    pub fn disconnect(&self) -> WasmResult<()> {
-        Ok(self.sdk.disconnect()?)
+    pub async fn disconnect(&self) -> WasmResult<()> {
+        Ok(self.sdk.disconnect().await?)
     }
 
     #[wasm_bindgen(js_name = "getInfo")]
@@ -162,8 +163,8 @@ impl BreezSdk {
     }
 
     #[wasm_bindgen(js_name = "syncWallet")]
-    pub fn sync_wallet(&self, request: SyncWalletRequest) -> WasmResult<SyncWalletResponse> {
-        Ok(self.sdk.sync_wallet(request.into())?.into())
+    pub async fn sync_wallet(&self, request: SyncWalletRequest) -> WasmResult<SyncWalletResponse> {
+        Ok(self.sdk.sync_wallet(request.into()).await?.into())
     }
 
     #[wasm_bindgen(js_name = "listPayments")]
@@ -252,5 +253,13 @@ impl BreezSdk {
     #[wasm_bindgen(js_name = "listFiatRates")]
     pub async fn list_fiat_rates(&self) -> WasmResult<ListFiatRatesResponse> {
         Ok(self.sdk.list_fiat_rates().await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "waitForPayment")]
+    pub async fn wait_for_payment(
+        &self,
+        request: WaitForPaymentRequest,
+    ) -> WasmResult<WaitForPaymentResponse> {
+        Ok(self.sdk.wait_for_payment(request.into()).await?.into())
     }
 }

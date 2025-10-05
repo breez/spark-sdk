@@ -46,3 +46,17 @@ const exampleReceiveSparkPayment = async (sdk: BreezSdk) => {
   console.log(`Fees: ${receiveFeeSats} sats`)
   // ANCHOR_END: receive-payment-spark
 }
+
+const exampleWaitForPayment = async (sdk: BreezSdk, paymentRequest: string) => {
+  // ANCHOR: wait-for-payment
+  // Wait for a payment to be completed using a payment request
+  const response = await sdk.waitForPayment({
+    identifier: {
+      type: 'paymentRequest',
+      paymentRequest: paymentRequest
+    }
+  })
+
+  console.log(`Payment received with ID: ${response.payment.id}`)
+  // ANCHOR_END: wait-for-payment
+}

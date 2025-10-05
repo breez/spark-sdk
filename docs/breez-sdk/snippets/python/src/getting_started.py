@@ -53,7 +53,7 @@ async def init_sdk_advanced():
         # You can also pass your custom implementations:
         # builder.with_chain_service(<your chain service implementation>)
         # builder.with_rest_client(<your rest client implementation>)
-        # builder.with_key_set(<your key set type>, <use address index>)
+        # builder.with_key_set(<your key set type>, <use address index>, <account number>)
         sdk = await builder.build()
         return sdk
     except Exception as error:
@@ -65,7 +65,9 @@ async def init_sdk_advanced():
 async def fetch_balance(sdk: BreezSdk):
     # ANCHOR: fetch-balance
     try:
-        info = await sdk.get_info(request=GetInfoRequest())
+        # ensure_synced: True will ensure the SDK is synced with the Spark network
+        # before returning the balance
+        info = await sdk.get_info(request=GetInfoRequest(ensure_synced=False))
         balance_sats = info.balance_sats
     except Exception as error:
         logging.error(error)
@@ -92,13 +94,13 @@ def set_logger(logger: SdkLogger):
 
 # ANCHOR: add-event-listener
 class SdkListener(EventListener):
-    def on_event(self, event: SdkEvent):
+    async def on_event(self, event: SdkEvent):
         logging.debug(f"Received event {event}")
 
 
-def add_event_listener(sdk: BreezSdk, listener: SdkListener):
+async def add_event_listener(sdk: BreezSdk, listener: SdkListener):
     try:
-        listener_id = sdk.add_event_listener(listener=listener)
+        listener_id = await sdk.add_event_listener(listener=listener)
         return listener_id
     except Exception as error:
         logging.error(error)
@@ -109,9 +111,9 @@ def add_event_listener(sdk: BreezSdk, listener: SdkListener):
 
 
 # ANCHOR: remove-event-listener
-def remove_event_listener(sdk: BreezSdk, listener_id: str):
+async def remove_event_listener(sdk: BreezSdk, listener_id: str):
     try:
-        sdk.remove_event_listener(listener_id=listener_id)
+        await sdk.remove_event_listener(listener_id=listener_id)
     except Exception as error:
         logging.error(error)
         raise
@@ -121,9 +123,9 @@ def remove_event_listener(sdk: BreezSdk, listener_id: str):
 
 
 # ANCHOR: disconnect
-def disconnect(sdk: BreezSdk):
+async def disconnect(sdk: BreezSdk):
     try:
-        sdk.disconnect()
+        await sdk.disconnect()
     except Exception as error:
         logging.error(error)
         raise

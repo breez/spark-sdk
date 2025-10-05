@@ -1,10 +1,14 @@
-use std::collections::HashSet;
+use futures::future::join_all;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
 use tokio::sync::Mutex;
-use tracing::{debug, error, trace, warn};
+use tokio_with_wasm::alias as tokio;
+use tracing::{debug, error, info, trace, warn};
+use web_time::Duration;
 
+use crate::tree::Leaves;
 use crate::{
     Network,
     operator::{
@@ -17,14 +21,15 @@ use crate::{
     services::{ServiceError, Swap, TimelockManager},
     signer::Signer,
     tree::{
-        LeavesReservation, LeavesReservationId, TargetAmounts, TreeNodeId, TreeNodeStatus,
-        TreeService, TreeStore, select_helper, with_reserved_leaves,
+        LeavesReservation, LeavesReservationId, TargetAmounts, TreeNodeId, TreeService, TreeStore,
+        select_helper, with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult, pager},
 };
 
 use super::{TreeNode, error::TreeServiceError};
 
+const SELECT_LEAVES_MAX_RETRIES: u32 = 3;
 pub struct SynchronousTreeService {
     identity_pubkey: PublicKey,
     network: Network,
@@ -38,7 +43,7 @@ pub struct SynchronousTreeService {
 
 #[macros::async_trait]
 impl TreeService for SynchronousTreeService {
-    async fn list_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError> {
+    async fn list_leaves(&self) -> Result<Leaves, TreeServiceError> {
         self.state.get_leaves().await
     }
 
@@ -82,7 +87,36 @@ impl TreeService for SynchronousTreeService {
         target_amounts: Option<&TargetAmounts>,
     ) -> Result<LeavesReservation, TreeServiceError> {
         trace!("Selecting leaves for target amounts: {target_amounts:?}");
-        let reservation = self.reserve_fresh_leaves(target_amounts, false).await?;
+
+        let mut reservation: Option<LeavesReservation> = None;
+
+        for i in 0..SELECT_LEAVES_MAX_RETRIES {
+            let reserve_result = self.reserve_fresh_leaves(target_amounts, false).await;
+            match reserve_result {
+                Ok(r) => {
+                    reservation = r;
+                    break;
+                }
+                Err(e) => {
+                    error!("Failed to select leaves: {e:?}");
+                }
+            }
+
+            info!("Failed to select leaves, refreshing leaves and retrying");
+            self.refresh_leaves().await?;
+            let leaves = self.state.get_leaves().await?;
+            if let Some(target_amounts) = target_amounts
+                && leaves.balance() < target_amounts.total_sats()
+            {
+                info!("Not enough funds to select leaves after refresh");
+                return Err(TreeServiceError::InsufficientFunds);
+            }
+
+            if i < SELECT_LEAVES_MAX_RETRIES - 1 {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+
         let Some(reservation) = reservation else {
             return Err(TreeServiceError::InsufficientFunds);
         };
@@ -127,17 +161,41 @@ impl TreeService for SynchronousTreeService {
     }
 
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
-        let coordinator_leaves = self
-            .query_nodes(&self.operator_pool.get_coordinator().client, false, None)
-            .await?;
+        // Prepare queries for coordinator and all operators and run them in parallel
+        let coordinator_client = self.operator_pool.get_coordinator().client.clone();
+        let operators: Vec<_> = self
+            .operator_pool
+            .get_non_coordinator_operators()
+            .map(|op| (op.id, op.client.clone()))
+            .collect();
 
-        let mut leaves_to_ignore: HashSet<TreeNodeId> = HashSet::new();
+        let coord_fut = self.query_nodes(&coordinator_client, false, None);
+        let op_futs = operators
+            .iter()
+            .map(|(id, client)| async move { (*id, self.query_nodes(client, false, None).await) });
 
-        // TODO: on js sdk, leaves missing from operators are not ignored when checking balance
-        // TODO: we can optimize this by fetching leaves from all operators in parallel
-        for operator in self.operator_pool.get_non_coordinator_operators() {
-            let operator_leaves = self.query_nodes(&operator.client, false, None).await?;
+        let (coordinator_leaves_res, operator_results) = tokio::join!(coord_fut, join_all(op_futs));
+        let coordinator_leaves = coordinator_leaves_res?;
 
+        // Propagate any operator query error to preserve original behavior and
+        // collect successful operator leaves for later comparison
+        let mut operator_leaves_vec: Vec<Vec<TreeNode>> = Vec::new();
+        for (id, res) in operator_results {
+            match res {
+                Ok(leaves) => operator_leaves_vec.push(leaves),
+                Err(e) => {
+                    error!("Failed to query operator {id}: {e:?}");
+                    return Err(e);
+                }
+            }
+        }
+
+        let mut missing_operator_leaves: HashMap<TreeNodeId, TreeNode> = HashMap::new();
+
+        // For each operator's leaves, compare against coordinator in the same way as before
+        for (operator_id, operator_leaves) in
+            operators.into_iter().zip(operator_leaves_vec.into_iter())
+        {
             for leaf in &coordinator_leaves {
                 match operator_leaves.iter().find(|l| l.id == leaf.id) {
                     Some(operator_leaf) => {
@@ -150,17 +208,17 @@ impl TreeService for SynchronousTreeService {
                         {
                             warn!(
                                 "Ignoring leaf due to mismatch between coordinator and operator {}. Coordinator: {:?}, Operator: {:?}",
-                                operator.id, leaf, operator_leaf
+                                operator_id.0, leaf, operator_leaf
                             );
-                            leaves_to_ignore.insert(leaf.id.clone());
+                            missing_operator_leaves.insert(leaf.id.clone(), leaf.clone());
                         }
                     }
                     None => {
                         warn!(
                             "Ignoring leaf due to missing from operator {}: {:?}",
-                            operator.id, leaf.id
+                            operator_id.0, leaf.id
                         );
-                        leaves_to_ignore.insert(leaf.id.clone());
+                        missing_operator_leaves.insert(leaf.id.clone(), leaf.clone());
                     }
                 }
             }
@@ -180,28 +238,34 @@ impl TreeService for SynchronousTreeService {
                     "Leaf {}'s verifying public key does not match the expected value",
                     leaf.id
                 );
-                leaves_to_ignore.insert(leaf.id.clone());
+                missing_operator_leaves.insert(leaf.id.clone(), leaf.clone());
             }
         }
 
         let new_leaves = coordinator_leaves
             .into_iter()
-            .filter(|leaf| !leaves_to_ignore.contains(&leaf.id))
+            .filter(|leaf| !missing_operator_leaves.contains_key(&leaf.id))
             .collect::<Vec<_>>();
 
+        let ignored_leaves = missing_operator_leaves
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
         let refreshed_leaves = self
             .check_timelock_nodes(new_leaves, async |e| {
                 // If this is a partial check timelock error, the extend node timelock failed
                 // but we can still update the leaves that were refreshed
                 if let ServiceError::PartialCheckTimelockError(ref nodes) = e
-                    && let Err(e) = self.state.set_leaves(nodes).await
+                    && let Err(e) = self.state.set_leaves(nodes, &ignored_leaves).await
                 {
                     error!("Failed to set leaves: {e:?}");
                 }
             })
             .await?;
 
-        self.state.set_leaves(&refreshed_leaves).await?;
+        self.state
+            .set_leaves(&refreshed_leaves, &ignored_leaves)
+            .await?;
 
         self.optimize_leaves().await?;
 
@@ -209,13 +273,8 @@ impl TreeService for SynchronousTreeService {
     }
 
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
-        Ok(self
-            .list_leaves()
-            .await?
-            .into_iter()
-            .filter(|leaf| leaf.status == TreeNodeStatus::Available)
-            .map(|leaf| leaf.value)
-            .sum::<u64>())
+        let leaves = self.state.get_leaves().await?;
+        Ok(leaves.balance())
     }
 }
 
@@ -288,7 +347,7 @@ impl SynchronousTreeService {
             PagingFilter::default(),
         )
         .await?;
-        Ok(nodes)
+        Ok(nodes.items)
     }
 
     async fn check_timelock_nodes<F>(
@@ -333,7 +392,7 @@ impl SynchronousTreeService {
     }
 
     async fn leaves_need_optimization(&self) -> bool {
-        let leaves = self.state.get_leaves().await.unwrap();
+        let leaves = self.state.get_leaves().await.unwrap().available;
 
         if leaves.len() <= 1 {
             return false;

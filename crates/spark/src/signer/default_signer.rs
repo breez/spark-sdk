@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
-use bitcoin::key::Parity;
+use bitcoin::key::{Parity, TapTweak};
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
 use bitcoin::secp256k1::{self, All, Keypair, Message, PublicKey, SecretKey, schnorr};
@@ -145,8 +145,11 @@ pub struct KeySet {
 }
 
 impl KeySet {
-    fn default_keys(seed: &[u8], network: Network) -> Result<Self, DefaultSignerError> {
-        let account_number = account_number(network);
+    fn default_keys(
+        seed: &[u8],
+        network: Network,
+        account_number: u32,
+    ) -> Result<Self, DefaultSignerError> {
         let derivation_path = format!("m/8797555'/{account_number}'").parse()?;
         let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
         derived_key_set.to_key_set(ChildNumber::from_hardened_idx(0).ok())
@@ -156,8 +159,8 @@ impl KeySet {
         seed: &[u8],
         network: Network,
         use_address_index: bool,
+        account_number: u32,
     ) -> Result<Self, DefaultSignerError> {
-        let account_number = account_number(network);
         let derivation_path = if use_address_index {
             format!("m/86'/0'/0'/0/{account_number}")
         } else {
@@ -167,6 +170,10 @@ impl KeySet {
         let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
         let mut key_set = derived_key_set.to_key_set(None)?;
         let secp = Secp256k1::new();
+        key_set.identity_key_pair = key_set
+            .identity_key_pair
+            .tap_tweak(&secp, None)
+            .to_keypair();
         if let (_, Parity::Odd) = key_set
             .identity_key_pair
             .secret_key()
@@ -186,8 +193,8 @@ impl KeySet {
         seed: &[u8],
         network: Network,
         use_address_index: bool,
+        account_number: u32,
     ) -> Result<Self, DefaultSignerError> {
-        let account_number = account_number(network);
         let derivation_path = if use_address_index {
             format!("m/84'/0'/0'/0/{account_number}")
         } else {
@@ -202,8 +209,8 @@ impl KeySet {
         seed: &[u8],
         network: Network,
         use_address_index: bool,
+        account_number: u32,
     ) -> Result<Self, DefaultSignerError> {
-        let account_number = account_number(network);
         let derivation_path = if use_address_index {
             format!("m/49'/0'/0'/0/{account_number}")
         } else {
@@ -218,8 +225,8 @@ impl KeySet {
         seed: &[u8],
         network: Network,
         use_address_index: bool,
+        account_number: u32,
     ) -> Result<Self, DefaultSignerError> {
-        let account_number = account_number(network);
         let derivation_path = if use_address_index {
             format!("m/44'/0'/0'/0/{account_number}")
         } else {
@@ -260,7 +267,7 @@ impl From<bitcoin::bip32::Error> for DefaultSignerError {
 
 impl DefaultSigner {
     pub fn new(seed: &[u8], network: Network) -> Result<Self, DefaultSignerError> {
-        Self::with_keyset_type(seed, network, KeySetType::Default, false)
+        Self::with_keyset_type(seed, network, KeySetType::Default, false, None)
     }
 
     pub fn with_keyset_type(
@@ -268,17 +275,23 @@ impl DefaultSigner {
         network: Network,
         key_type: KeySetType,
         use_address_index: bool,
+        account_no: Option<u32>,
     ) -> Result<Self, DefaultSignerError> {
+        let account_number = account_no.unwrap_or_else(|| account_number(network));
         let key_set = match key_type {
-            KeySetType::Default => KeySet::default_keys(seed, network),
-            KeySetType::Taproot => KeySet::taproot_keys(seed, network, use_address_index),
+            KeySetType::Default => KeySet::default_keys(seed, network, account_number),
+            KeySetType::Taproot => {
+                KeySet::taproot_keys(seed, network, use_address_index, account_number)
+            }
             KeySetType::NativeSegwit => {
-                KeySet::native_segwit_keys(seed, network, use_address_index)
+                KeySet::native_segwit_keys(seed, network, use_address_index, account_number)
             }
             KeySetType::WrappedSegwit => {
-                KeySet::wrapped_segwit_keys(seed, network, use_address_index)
+                KeySet::wrapped_segwit_keys(seed, network, use_address_index, account_number)
             }
-            KeySetType::Legacy => KeySet::legacy_bitcoin_keys(seed, network, use_address_index),
+            KeySetType::Legacy => {
+                KeySet::legacy_bitcoin_keys(seed, network, use_address_index, account_number)
+            }
         }?;
         Ok(Self::from_key_set(key_set))
     }

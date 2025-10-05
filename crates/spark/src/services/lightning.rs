@@ -64,7 +64,7 @@ pub struct LightningSendPayment {
     pub network: Network,
     pub encoded_invoice: String,
     pub fee_sat: u64,
-    pub idempotency_key: String,
+    pub idempotency_key: Option<String>,
     pub status: LightningSendStatus,
     pub transfer_id: Option<TransferId>,
     pub payment_preimage: Option<String>,
@@ -73,7 +73,7 @@ pub struct LightningSendPayment {
 #[derive(Debug, Copy, Clone, Deserialize, Serialize)]
 pub enum LightningSendStatus {
     Created,
-    RequestValidated,
+    UserTransferValidationFailed,
     LightningPaymentInitiated,
     LightningPaymentFailed,
     LightningPaymentSucceeded,
@@ -84,6 +84,7 @@ pub enum LightningSendStatus {
     PendingUserSwapReturn,
     UserSwapReturned,
     UserSwapReturnFailed,
+    RequestValidated,
     Unknown,
 }
 
@@ -94,6 +95,9 @@ impl From<LightningSendRequestStatus> for LightningSendStatus {
             LightningSendRequestStatus::RequestValidated => LightningSendStatus::RequestValidated,
             LightningSendRequestStatus::LightningPaymentInitiated => {
                 LightningSendStatus::LightningPaymentInitiated
+            }
+            LightningSendRequestStatus::UserTransferValidationFailed => {
+                LightningSendStatus::UserTransferValidationFailed
             }
             LightningSendRequestStatus::LightningPaymentFailed => {
                 LightningSendStatus::LightningPaymentFailed
@@ -395,14 +399,13 @@ impl LightningService {
         &self,
         swap: &LightningSwap,
     ) -> Result<LightningSendPayment, ServiceError> {
-        let decoded_invoice = Bolt11Invoice::from_str(&swap.bolt11_invoice)
-            .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
         let res = self
             .ssp_client
             .request_lightning_send(RequestLightningSendInput {
                 encoded_invoice: swap.bolt11_invoice.to_string(),
-                idempotency_key: decoded_invoice.payment_hash().encode_hex(),
+                idempotency_key: None,
                 amount_sats: swap.user_amount_sat,
+                user_outbound_transfer_external_id: Some(swap.transfer.id.to_string()),
             })
             .await?;
 

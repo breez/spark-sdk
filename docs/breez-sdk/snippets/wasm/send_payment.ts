@@ -75,7 +75,11 @@ const exampleSendPaymentLightningBolt11 = async (
   prepareResponse: PrepareSendPaymentResponse
 ) => {
   // ANCHOR: send-payment-lightning-bolt11
-  const options: SendPaymentOptions = { type: 'bolt11Invoice', preferSpark: true }
+  const options: SendPaymentOptions = { 
+    type: 'bolt11Invoice', 
+    preferSpark: true,
+    completionTimeoutSecs: 10
+  }
   const sendResponse = await sdk.sendPayment({
     prepareResponse,
     options

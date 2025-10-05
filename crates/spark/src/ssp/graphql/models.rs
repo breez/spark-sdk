@@ -124,6 +124,7 @@ pub enum CurrencyUnit {
     Eur,
     Gbp,
     Inr,
+    Usdt,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -166,15 +167,18 @@ pub enum SparkLeavesSwapRequestStatus {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LightningReceiveRequestStatus {
     InvoiceCreated,
+    HtlcReceived,
     TransferCreated,
     TransferCreationFailed,
-    RefundSigningCommitmentsQueryingFailed,
-    RefundSigningFailed,
     PaymentPreimageRecovered,
     PaymentPreimageRecoveringFailed,
+    TransferCanceled,
+    HtlcFailed,
     LightningPaymentReceived,
     TransferFailed,
     TransferCompleted,
+    RefundSigningCommitmentsQueryingFailed,
+    RefundSigningFailed,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -184,7 +188,7 @@ pub enum LightningReceiveRequestStatus {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LightningSendRequestStatus {
     Created,
-    RequestValidated,
+    UserTransferValidationFailed,
     LightningPaymentInitiated,
     LightningPaymentFailed,
     LightningPaymentSucceeded,
@@ -195,6 +199,7 @@ pub enum LightningSendRequestStatus {
     PendingUserSwapReturn,
     UserSwapReturned,
     UserSwapReturnFailed,
+    RequestValidated,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -429,7 +434,7 @@ pub struct LightningSendRequest {
     pub network: BitcoinNetwork,
     pub encoded_invoice: String,
     pub fee: CurrencyAmount,
-    pub idempotency_key: String,
+    pub idempotency_key: Option<String>,
     pub status: LightningSendRequestStatus,
     pub transfer: Option<Transfer>,
     pub lightning_send_payment_preimage: Option<String>,
@@ -462,8 +467,8 @@ pub struct LeavesSwapRequest {
     pub total_amount: CurrencyAmount,
     pub target_amount: CurrencyAmount,
     pub fee: CurrencyAmount,
-    pub inbound_transfer: Transfer,
-    pub swap_leaves: Vec<SwapLeaf>,
+    pub inbound_transfer: Option<Transfer>,
+    pub swap_leaves: Option<Vec<SwapLeaf>>,
     pub outbound_transfer: Option<Transfer>,
     pub swap_expired_at: Option<DateTime<Utc>>,
 }

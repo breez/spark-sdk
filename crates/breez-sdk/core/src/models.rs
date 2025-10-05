@@ -44,12 +44,15 @@ impl fmt::Display for PaymentType {
     }
 }
 
-impl From<&str> for PaymentType {
-    fn from(s: &str) -> Self {
-        match s {
+impl FromStr for PaymentType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
             "receive" => PaymentType::Receive,
-            _ => PaymentType::Send, // Default to Send if unknown or 'send'
-        }
+            "send" => PaymentType::Send,
+            _ => return Err(format!("invalid payment type '{s}'")),
+        })
     }
 }
 
@@ -75,13 +78,16 @@ impl fmt::Display for PaymentStatus {
     }
 }
 
-impl From<&str> for PaymentStatus {
-    fn from(s: &str) -> Self {
-        match s {
+impl FromStr for PaymentStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
             "completed" => PaymentStatus::Completed,
+            "pending" => PaymentStatus::Pending,
             "failed" => PaymentStatus::Failed,
-            _ => PaymentStatus::Pending, // Default to Pending if unknown or 'pending'
-        }
+            _ => return Err(format!("Invalid payment status '{s}'")),
+        })
     }
 }
 
@@ -521,7 +527,9 @@ pub struct Credentials {
 /// Request to get the balance of the wallet
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct GetInfoRequest {}
+pub struct GetInfoRequest {
+    pub ensure_synced: Option<bool>,
+}
 
 /// Response containing the balance of the wallet
 #[derive(Debug, Clone, Serialize)]
@@ -765,6 +773,10 @@ pub enum SendPaymentOptions {
     },
     Bolt11Invoice {
         prefer_spark: bool,
+
+        /// If set, the function will return the payment if it is still pending after this
+        /// number of seconds. If unset, the function will return immediately after initiating the payment.
+        completion_timeout_secs: Option<u32>,
     },
 }
 
@@ -907,4 +919,20 @@ pub struct ListFiatCurrenciesResponse {
 pub struct ListFiatRatesResponse {
     /// The list of fiat rates
     pub rates: Vec<Rate>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WaitForPaymentRequest {
+    pub identifier: WaitForPaymentIdentifier,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum WaitForPaymentIdentifier {
+    PaymentId(String),
+    PaymentRequest(String),
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WaitForPaymentResponse {
+    pub payment: Payment,
 }

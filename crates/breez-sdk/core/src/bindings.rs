@@ -32,11 +32,16 @@ impl SdkBuilder {
     /// Arguments:
     /// - `key_set_type`: The key set type which determines the derivation path.
     /// - `use_address_index`: Controls the structure of the BIP derivation path.
-    pub async fn with_key_set(&self, key_set_type: KeySetType, use_address_index: bool) {
+    pub async fn with_key_set(
+        &self,
+        key_set_type: KeySetType,
+        use_address_index: bool,
+        account_number: Option<u32>,
+    ) {
         let mut builder = self.inner.lock().await;
         *builder = builder
             .clone()
-            .with_key_set(key_set_type, use_address_index);
+            .with_key_set(key_set_type, use_address_index, account_number);
     }
 
     /// Sets the chain service to be used by the SDK.

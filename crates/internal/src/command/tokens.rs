@@ -128,7 +128,7 @@ pub async fn handle_command(
 
             println!(
                 "Transactions: {}",
-                serde_json::to_string_pretty(&transactions)?
+                serde_json::to_string_pretty(&transactions.items)?
             );
             Ok(())
         }

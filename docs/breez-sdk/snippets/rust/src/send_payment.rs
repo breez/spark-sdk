@@ -80,7 +80,10 @@ async fn send_payment_lightning_bolt11(
     prepare_response: PrepareSendPaymentResponse,
 ) -> Result<()> {
     // ANCHOR: send-payment-lightning-bolt11
-    let options = Some(SendPaymentOptions::Bolt11Invoice { prefer_spark: true });
+    let options = Some(SendPaymentOptions::Bolt11Invoice { 
+        prefer_spark: true,
+        completion_timeout_secs: Some(10),
+    });
     let send_response = sdk
         .send_payment(SendPaymentRequest {
             prepare_response,

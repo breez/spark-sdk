@@ -210,7 +210,11 @@ async function initializeSdk() {
 
     // Create SDK builder
     let storage = await defaultStorage("BreezSDK");
-    let sdkBuilder = SdkBuilder.new(config, CONFIG.mnemonic, storage);
+    let sdkBuilder = SdkBuilder.new(
+      config,
+      { type: "mnemonic", mnemonic: CONFIG.mnemonic },
+      storage
+    );
 
     // Add chain service if configured
     if (

@@ -8,7 +8,7 @@ pub use select_helper::{select_leaves_by_amounts, with_reserved_leaves};
 use serde::{Deserialize, Serialize};
 pub use service::SynchronousTreeService;
 pub use store::InMemoryTreeStore;
-use tracing::{error, trace};
+use tracing::trace;
 
 use std::str::FromStr;
 
@@ -16,7 +16,30 @@ use bitcoin::{Sequence, Transaction, secp256k1::PublicKey};
 use frost_secp256k1_tr::Identifier;
 use uuid::Uuid;
 
-use crate::core::{TIME_LOCK_INTERVAL, next_sequence};
+pub struct Leaves {
+    pub available: Vec<TreeNode>,
+    pub not_available: Vec<TreeNode>,
+    pub missing_from_operators: Vec<TreeNode>,
+    pub reserved: Vec<TreeNode>,
+}
+
+impl Leaves {
+    pub fn available_balance(&self) -> u64 {
+        self.available.iter().map(|leaf| leaf.value).sum()
+    }
+    pub fn missing_operators_balance(&self) -> u64 {
+        self.missing_from_operators
+            .iter()
+            .map(|leaf| leaf.value)
+            .sum()
+    }
+    pub fn reserved_balance(&self) -> u64 {
+        self.reserved.iter().map(|leaf| leaf.value).sum()
+    }
+    pub fn balance(&self) -> u64 {
+        self.available_balance() + self.missing_operators_balance()
+    }
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum TreeNodeStatus {
@@ -97,14 +120,6 @@ pub struct TreeNode {
 }
 
 impl TreeNode {
-    fn is_timelock_expiring(sequence: Sequence) -> Result<bool, TreeServiceError> {
-        let (next_sequence, _) = next_sequence(sequence).ok_or(TreeServiceError::Generic(
-            "Failed to get next sequence".to_string(),
-        ))?;
-        let next_sequence_num = next_sequence.to_consensus_u32();
-        Ok(next_sequence_num <= TIME_LOCK_INTERVAL as u32)
-    }
-
     /// Checks if the node needs a timelock refresh by checking if the refund tx's timelock can be further reduced
     pub fn needs_timelock_refresh(&self) -> Result<bool, TreeServiceError> {
         let sequence = self
@@ -113,19 +128,23 @@ impl TreeNode {
             .ok_or(TreeServiceError::Generic("No refund tx".to_string()))?
             .input[0]
             .sequence;
-        trace!("Refund tx sequence: {sequence:?}",);
-        TreeNode::is_timelock_expiring(sequence).inspect_err(|e| {
-            error!("Error checking timelock refresh expiration: {:?}", e);
-        })
+        trace!(
+            "Refund tx sequence: {} node id: {}",
+            sequence.to_consensus_u32(),
+            self.id
+        );
+        let sequence_num = sequence.to_consensus_u32() as u16;
+        trace!("Refund tx last sequence num: {sequence_num}");
+        Ok(sequence_num <= 100)
     }
 
     /// Checks if the node needs a timelock extension by checking if the node tx's timelock can be further reduced
-    pub fn needs_timelock_extension(&self) -> Result<bool, TreeServiceError> {
+    pub fn needs_timelock_extension(&self) -> bool {
         let sequence = self.node_tx.input[0].sequence;
         trace!("Node tx sequence: {:?}", sequence);
-        TreeNode::is_timelock_expiring(sequence).inspect_err(|e| {
-            error!("Error checking timelock extension expiration: {:?}", e);
-        })
+        let sequence_num = sequence.to_consensus_u32() as u16;
+        trace!("Node tx last sequence num: {sequence_num}");
+        sequence_num == 0
     }
 }
 
@@ -284,7 +303,7 @@ pub trait TreeStore: Send + Sync {
     ///
     /// # Returns
     ///
-    /// * `Result<Vec<TreeNode>, TreeServiceError>` - A vector containing all stored
+    /// * `Result<Leaves, TreeServiceError>` - A vector containing all stored
     ///   tree nodes if successful, or an error if the operation fails
     ///
     /// # Errors
@@ -301,14 +320,14 @@ pub trait TreeStore: Send + Sync {
     ///
     /// # async fn example(store: &dyn TreeStore) -> Result<(), TreeServiceError> {
     /// let all_leaves = store.get_leaves().await?;
-    /// let available_count = all_leaves.iter()
+    /// let available_count = all_leaves.available.iter()
     ///     .filter(|leaf| leaf.status == TreeNodeStatus::Available)
     ///     .count();
-    /// println!("Found {} available leaves out of {}", available_count, all_leaves.len());
+    /// println!("Found {} available leaves out of {}", available_count, all_leaves.available.len());
     /// # Ok(())
     /// # }
     /// ```
-    async fn get_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError>;
+    async fn get_leaves(&self) -> Result<Leaves, TreeServiceError>;
 
     /// Replaces all leaves in the store with the provided set.
     ///
@@ -338,13 +357,17 @@ pub trait TreeStore: Send + Sync {
     /// ```
     /// use spark::tree::{TreeStore, TreeNode, TreeServiceError};
     ///
-    /// # async fn example(store: &dyn TreeStore, updated_leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
+    /// # async fn example(store: &dyn TreeStore, updated_leaves: &[TreeNode], missing_operators_leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
     /// // Replace all leaves with a new set
-    /// store.set_leaves(updated_leaves).await?;
+    /// store.set_leaves(updated_leaves, missing_operators_leaves).await?;
     /// # Ok(())
     /// # }
     /// ```
-    async fn set_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError>;
+    async fn set_leaves(
+        &self,
+        leaves: &[TreeNode],
+        missing_operators_leaves: &[TreeNode],
+    ) -> Result<(), TreeServiceError>;
 
     /// Reserves leaves that match the specified target amounts.
     ///
@@ -525,7 +548,7 @@ pub trait TreeService: Send + Sync {
     /// # Ok(())
     /// # }
     /// ```
-    async fn list_leaves(&self) -> Result<Vec<TreeNode>, TreeServiceError>;
+    async fn list_leaves(&self) -> Result<Leaves, TreeServiceError>;
 
     /// Refreshes the tree state by fetching the latest leaves from the server.
     ///

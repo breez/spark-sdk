@@ -48,7 +48,11 @@ func initSdkAdvanced() async throws -> BreezSdk {
 
 func gettingStartedNodeInfo(sdk: BreezSdk) async throws {
     // ANCHOR: fetch-balance
-    let info = try await sdk.getInfo(request: GetInfoRequest())
+    // ensureSynced: true will ensure the SDK is synced with the Spark network
+    // before returning the balance
+    let info = try await sdk.getInfo(request: GetInfoRequest(
+      ensureSynced: false
+    ))
     let balanceSats = info.balanceSats
     // ANCHOR_END: fetch-balance
     print(balanceSats)
@@ -68,25 +72,25 @@ func logging() throws {
 
 // ANCHOR: add-event-listener
 class SdkEventListener: EventListener {
-    func onEvent(event: SdkEvent) {
+    func onEvent(event: SdkEvent) async {
         print("Received event: ", event)
     }
 }
 
-func addEventListener(sdk: BreezSdk, listener: SdkEventListener) -> String {
-    let listenerId = sdk.addEventListener(listener: listener)
+func addEventListener(sdk: BreezSdk, listener: SdkEventListener) async -> String {
+    let listenerId = await sdk.addEventListener(listener: listener)
     return listenerId
 }
 // ANCHOR_END: add-event-listener
 
 // ANCHOR: remove-event-listener
-func removeEventListener(sdk: BreezSdk, listenerId: String) {
-    sdk.removeEventListener(id: listenerId)
+func removeEventListener(sdk: BreezSdk, listenerId: String) async {
+    await sdk.removeEventListener(id: listenerId)
 }
 // ANCHOR_END: remove-event-listener
 
 // ANCHOR: disconnect
-func disconnect(sdk: BreezSdk) throws {
-    try sdk.disconnect()
+func disconnect(sdk: BreezSdk) async throws {
+    try await sdk.disconnect()
 }
 // ANCHOR_END: disconnect

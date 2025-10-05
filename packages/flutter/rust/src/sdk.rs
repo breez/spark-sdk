@@ -10,7 +10,7 @@ use breez_sdk_spark::{
     PrepareLnurlPayResponse, PrepareSendPaymentRequest, PrepareSendPaymentResponse,
     ReceivePaymentRequest, ReceivePaymentResponse, RefundDepositRequest, RefundDepositResponse,
     RegisterLightningAddressRequest, SdkError, SdkEvent, SendPaymentRequest, SendPaymentResponse,
-    Storage, SyncWalletRequest, SyncWalletResponse,
+    Storage, SyncWalletRequest, SyncWalletResponse, WaitForPaymentRequest, WaitForPaymentResponse,
 };
 use flutter_rust_bridge::frb;
 
@@ -54,20 +54,18 @@ pub struct BreezSdk {
 }
 
 impl BreezSdk {
-    #[frb(sync)]
-    pub fn add_event_listener(&self, listener: StreamSink<SdkEvent>) -> String {
+    pub async fn add_event_listener(&self, listener: StreamSink<SdkEvent>) -> String {
         self.inner
             .add_event_listener(Box::new(BindingEventListener { listener }))
+            .await
     }
 
-    #[frb(sync)]
-    pub fn remove_event_listener(&self, id: &str) -> bool {
-        self.inner.remove_event_listener(id)
+    pub async fn remove_event_listener(&self, id: &str) -> bool {
+        self.inner.remove_event_listener(id).await
     }
 
-    #[frb(sync)]
-    pub fn disconnect(&self) -> Result<(), SdkError> {
-        self.inner.disconnect()
+    pub async fn disconnect(&self) -> Result<(), SdkError> {
+        self.inner.disconnect().await
     }
 
     pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
@@ -105,10 +103,9 @@ impl BreezSdk {
     ) -> Result<SendPaymentResponse, SdkError> {
         self.inner.send_payment(request).await
     }
-
-    #[frb(sync)]
-    pub fn sync_wallet(&self, request: SyncWalletRequest) -> Result<SyncWalletResponse, SdkError> {
-        self.inner.sync_wallet(request)
+    
+    pub async fn sync_wallet(&self, request: SyncWalletRequest) -> Result<SyncWalletResponse, SdkError> {
+        self.inner.sync_wallet(request).await
     }
 
     pub async fn list_payments(
@@ -174,5 +171,12 @@ impl BreezSdk {
 
     pub async fn list_fiat_rates(&self) -> Result<ListFiatRatesResponse, SdkError> {
         self.inner.list_fiat_rates().await
+    }
+
+    pub async fn wait_for_payment(
+        &self,
+        request: WaitForPaymentRequest,
+    ) -> Result<WaitForPaymentResponse, SdkError> {
+        self.inner.wait_for_payment(request).await
     }
 }

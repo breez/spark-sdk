@@ -43,7 +43,7 @@ class GettingStarted {
             // You can also pass your custom implementations:
             // builder.withChainService(<your chain service implementation>)
             // builder.withRestClient(<your rest client implementation>)
-            // builder.withKeySet(<your key set type>, <use address index>)
+            // builder.withKeySet(<your key set type>, <use address index>, <account number>)
             val sdk = builder.build()
         } catch (e: Exception) {
             // handle error
@@ -54,7 +54,9 @@ class GettingStarted {
     suspend fun fetchBalance(sdk: BreezSdk) {
         // ANCHOR: fetch-balance
         try {
-            val info = sdk.getInfo(GetInfoRequest)
+            // ensureSynced: true will ensure the SDK is synced with the Spark network
+            // before returning the balance
+            val info = sdk.getInfo(GetInfoRequest(false))
             val balanceSats = info.balanceSats
         } catch (e: Exception) {
             // handle error

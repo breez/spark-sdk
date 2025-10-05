@@ -45,7 +45,7 @@ Future<void> initSdkAdvanced() async {
   //     url: "https://custom.chain.service",
   //     credentials: Credentials(
   //         username: "service-username", password: "service-password"));
-  // builder.withKeySet(keySetType: <your key set type>, useAddressIndex: <use address index>);
+  // builder.withKeySet(keySetType: <your key set type>, useAddressIndex: <use address index>, accountNumber: <account number>);
   final sdk = await builder.build();
   // ANCHOR_END: init-sdk-advanced
   print(sdk);
@@ -53,7 +53,9 @@ Future<void> initSdkAdvanced() async {
 
 Future<void> fetchBalance(BreezSdk sdk) async {
   // ANCHOR: fetch-balance
-  final info = await sdk.getInfo(request: GetInfoRequest());
+  // ensureSynced: true will ensure the SDK is synced with the Spark network
+  // before returning the balance
+  final info = await sdk.getInfo(request: GetInfoRequest(ensureSynced: false));
   final balanceSats = info.balanceSats;
   // ANCHOR_END: fetch-balance
   print(balanceSats);
@@ -124,8 +126,8 @@ class BreezSdkSpark {
   // ANCHOR_END: remove-event-listener
 
   // ANCHOR: disconnect
-  void disconnect(BreezSdk sdk) {
-    sdk.disconnect();
+  Future<void> disconnect(BreezSdk sdk) async {
+    await sdk.disconnect();
   }
   // ANCHOR_END: disconnect
 }

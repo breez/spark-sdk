@@ -72,3 +72,23 @@ func ReceiveSpark(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.ReceivePaymen
 	// ANCHOR_END: receive-payment-spark
 	return &response, nil
 }
+
+func WaitForPayment(sdk *breez_sdk_spark.BreezSdk, paymentRequest string) (*breez_sdk_spark.Payment, error) {
+	// ANCHOR: wait-for-payment
+	// Wait for a payment to be completed using a payment request
+	request := breez_sdk_spark.WaitForPaymentRequest{
+		Identifier: breez_sdk_spark.WaitForPaymentIdentifierPaymentRequest{
+			PaymentRequest: paymentRequest,
+		},
+	}
+
+	response, err := sdk.WaitForPayment(request)
+
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return nil, err
+	}
+
+	log.Printf("Payment received with ID: %v", response.payment.Id)
+	// ANCHOR_END: wait-for-payment
+	return &response.payment, nil
+}

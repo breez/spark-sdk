@@ -225,6 +225,77 @@ For payments between Spark users, you can use the static Spark address to receiv
 </section>
 </custom-tabs>
 
+## Waiting for a lightning payment
+Generally it is recommended to use [event flows] to react to payment completion. There is a convenience function to wait for a lightning payment to be paid.
+
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+
+```rust,ignore
+{{#include ../../snippets/rust/src/receive_payment.rs:wait-for-payment}}
+```
+</section>
+
+<div slot="title">Swift</div>
+<section>
+
+```swift,ignore
+{{#include ../../snippets/swift/BreezSdkSnippets/Sources/ReceivePayment.swift:wait-for-payment}}
+```
+</section>
+
+<div slot="title">Kotlin</div>
+<section>
+
+```kotlin,ignore
+{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/ReceivePayment.kt:wait-for-payment}}
+```
+</section>
+
+<div slot="title">Javascript</div>
+<section>
+
+```typescript
+{{#include ../../snippets/wasm/receive_payment.ts:wait-for-payment}}
+```
+</section>
+
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/receive_payment.ts:wait-for-payment}}
+```
+</section>
+
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/receive_payment.dart:wait-for-payment}}
+```
+</section>
+
+<div slot="title">Python</div>
+<section>
+
+```python,ignore 
+{{#include ../../snippets/python/src/receive_payment.py:wait-for-payment}}
+```
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/receive_payment.go:wait-for-payment}}
+```
+</section>
+</custom-tabs>
+
+[event flows]: #event-flows
+
 ## Event Flows
 Once a receive payment is initiated, you can follow and react to the different payment events using the guide below for each payment method. See [Listening to events](/guide/events.md) for how to subscribe to events.
 

@@ -2,6 +2,7 @@ use base64::{Engine as _, engine::general_purpose};
 use bitcoin::{Address, address::NetworkUnchecked};
 use breez_sdk_common::rest::RestClient as CommonRestClient;
 use breez_sdk_common::{error::ServiceConnectivityError, rest::RestResponse};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio_with_wasm::alias as tokio;
@@ -22,6 +23,12 @@ pub const RETRYABLE_ERROR_CODES: [u16; 3] = [
 
 /// Base backoff in milliseconds.
 const BASE_BACKOFF_MILLIS: Duration = Duration::from_millis(256);
+
+#[derive(Serialize, Deserialize, Clone)]
+struct TxInfo {
+    txid: String,
+    status: super::TxStatus,
+}
 
 pub struct BasicAuth {
     username: String,
@@ -157,6 +164,16 @@ impl BitcoinChainService for RestClientChainService {
             .await?;
 
         Ok(utxos)
+    }
+
+    async fn get_transaction_status(
+        &self,
+        txid: String,
+    ) -> Result<super::TxStatus, ChainServiceError> {
+        let tx_info = self
+            .get_response_json::<TxInfo>(format!("/tx/{txid}").as_str())
+            .await?;
+        Ok(tx_info.status)
     }
 
     async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError> {

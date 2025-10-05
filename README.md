@@ -16,14 +16,16 @@ It’s a nodeless integration that offers a self-custodial, end-to-end solution 
 - Receive payments via various protocols such as: Bolt11, BTC address, Spark address
 
 **Key Features**
-
-- [x] Send/Receive Lightning payments
-- [x] Send/Receive Spark payments
-- [x] Send/Receive via on-chain addresses
-- [x] Send LNURL-pay & Lightning address payments
+- [x] Send and receive Lightning payments
+- [x] Send and receive via LNURL-pay & Lightning addresses 
+- [x] Send and receive Spark payments  
+- [x] On-chain interoperability
+- [x] Bindings to add popular languages & frameworks
 - [x] Keys are only held by users
+- [x] Payments persistency including restore support
+- [x] Automatic claims
+- [x] WebAssembly support
 - [x] Free open-source solution
-
 
 ## Getting Started 
 

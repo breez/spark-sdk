@@ -11,6 +11,7 @@ use breez_sdk_common::{
 };
 use spark_wallet::{DefaultSigner, SparkWallet};
 use tokio::sync::watch;
+use tracing::debug;
 
 use crate::{
     Credentials, KeySetType, Network,
@@ -53,6 +54,7 @@ pub struct SdkBuilder {
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     key_set_type: KeySetType,
     use_address_index: bool,
+    account_number: Option<u32>,
 }
 
 impl SdkBuilder {
@@ -72,6 +74,7 @@ impl SdkBuilder {
             lnurl_server_client: None,
             key_set_type: KeySetType::Default,
             use_address_index: false,
+            account_number: None,
         }
     }
 
@@ -80,9 +83,15 @@ impl SdkBuilder {
     /// - `key_set_type`: The key set type which determines the derivation path.
     /// - `use_address_index`: Controls the structure of the BIP derivation path.
     #[must_use]
-    pub fn with_key_set(mut self, key_set_type: KeySetType, use_address_index: bool) -> Self {
+    pub fn with_key_set(
+        mut self,
+        key_set_type: KeySetType,
+        use_address_index: bool,
+        account_number: Option<u32>,
+    ) -> Self {
         self.key_set_type = key_set_type;
         self.use_address_index = use_address_index;
+        self.account_number = account_number;
         self
     }
 
@@ -163,6 +172,7 @@ impl SdkBuilder {
             self.config.network.into(),
             self.key_set_type.into(),
             self.use_address_index,
+            self.account_number,
         )
         .map_err(|e| SdkError::Generic(e.to_string()))?;
         let chain_service = if let Some(service) = self.chain_service {
@@ -231,10 +241,10 @@ impl SdkBuilder {
                 None => None,
             },
         };
-        let (shutdown_sender, shutdown_receiver) = watch::channel::<()>(());
+        let shutdown_sender = watch::channel::<()>(()).0;
 
         // Create the SDK instance
-        let sdk = BreezSdk::new(BreezSdkParams {
+        let sdk = BreezSdk::init_and_start(BreezSdkParams {
             config: self.config,
             storage: self.storage,
             chain_service,
@@ -242,11 +252,11 @@ impl SdkBuilder {
             lnurl_client,
             lnurl_server_client,
             shutdown_sender,
-            shutdown_receiver,
             spark_wallet,
         })?;
 
-        sdk.start();
+        debug!("Initialized and started breez sdk.");
+
         Ok(sdk)
     }
 }

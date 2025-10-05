@@ -485,7 +485,9 @@ pub struct Credentials {
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::GetInfoRequest)]
-pub struct GetInfoRequest {}
+pub struct GetInfoRequest {
+    pub ensure_synced: Option<bool>,
+}
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::GetInfoResponse)]
 pub struct GetInfoResponse {
@@ -606,6 +608,7 @@ pub enum SendPaymentOptions {
     },
     Bolt11Invoice {
         prefer_spark: bool,
+        completion_timeout_secs: Option<u32>,
     },
 }
 
@@ -735,4 +738,20 @@ pub struct Symbol {
     pub template: Option<String>,
     pub rtl: Option<bool>,
     pub position: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WaitForPaymentRequest)]
+pub struct WaitForPaymentRequest {
+    pub identifier: WaitForPaymentIdentifier,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WaitForPaymentIdentifier)]
+pub enum WaitForPaymentIdentifier {
+    PaymentId(String),
+    PaymentRequest(String),
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WaitForPaymentResponse)]
+pub struct WaitForPaymentResponse {
+    pub payment: Payment,
 }

@@ -20,7 +20,11 @@ pub enum Command {
     Exit,
 
     /// Get balance information
-    GetInfo,
+    GetInfo {
+        /// Force sync
+        #[arg(short, long)]
+        ensure_synced: Option<bool>,
+    },
 
     /// Get the payment with the given ID
     GetPayment {
@@ -153,9 +157,12 @@ pub(crate) async fn execute_command(
     sdk: &BreezSdk,
 ) -> Result<bool, anyhow::Error> {
     match command {
-        Command::Exit => Ok(false),
-        Command::GetInfo => {
-            let value = sdk.get_info(GetInfoRequest {}).await?;
+        Command::Exit => {
+            sdk.disconnect().await?;
+            Ok(false)
+        }
+        Command::GetInfo { ensure_synced } => {
+            let value = sdk.get_info(GetInfoRequest { ensure_synced }).await?;
             print_value(&value)?;
             Ok(true)
         }
@@ -172,7 +179,7 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::Sync => {
-            let value = sdk.sync_wallet(SyncWalletRequest {})?;
+            let value = sdk.sync_wallet(SyncWalletRequest {}).await?;
             print_value(&value)?;
             Ok(true)
         }
@@ -425,11 +432,13 @@ fn read_payment_options(
                 if line == "1" {
                     return Ok(Some(SendPaymentOptions::Bolt11Invoice {
                         prefer_spark: true,
+                        completion_timeout_secs: Some(0),
                     }));
                 }
             }
             Ok(Some(SendPaymentOptions::Bolt11Invoice {
                 prefer_spark: false,
+                completion_timeout_secs: Some(0),
             }))
         }
         SendPaymentMethod::SparkAddress { .. } => Ok(None),

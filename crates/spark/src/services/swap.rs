@@ -287,13 +287,12 @@ impl Swap {
                 leaves_swap_request_id: swap_response.id,
             })
             .await?;
-        let transfer_id =
-            complete_response
-                .inbound_transfer
-                .spark_id
-                .ok_or(ServiceError::Generic(
-                    "inbound transfer spark_id missing".to_string(),
-                ))?;
+        let transfer_id = complete_response
+            .inbound_transfer
+            .and_then(|t| t.spark_id)
+            .ok_or(ServiceError::Generic(
+                "inbound transfer spark_id missing".to_string(),
+            ))?;
         let transfers = self
             .operator_pool
             .get_coordinator()

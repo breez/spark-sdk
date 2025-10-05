@@ -116,7 +116,7 @@ enum ClaimStaticDepositStatus {
 
 input CompleteCoopExitInput {
   user_outbound_transfer_external_id: UUID!
-  coop_exit_request_id: ID!
+  coop_exit_request_id: ID = null
 }
 
 type CompleteCoopExitOutput {
@@ -142,6 +142,14 @@ input CompleteSeedReleaseInput {
 
 type CompleteSeedReleaseOutput {
   seed: String!
+}
+
+input CompleteSwapInput {
+  user_outbound_transfer_external_id: UUID!
+}
+
+type CompleteSwapOutput {
+  request: LeavesSwapRequest!
 }
 
 interface Connection {
@@ -281,6 +289,9 @@ type CoopExitRequest implements UserRequest & Entity {
   """The transaction id of the coop exit transaction."""
   coop_exit_txid: String!
 
+  """The spark id of the swap transfer."""
+  transfer_spark_id: UUID
+
   """The swap transfer."""
   transfer: Transfer
 }
@@ -343,6 +354,9 @@ enum CurrencyUnit {
 
   """Indian Rupee."""
   INR
+
+  """Tether"""
+  USDT
 
   """
   0.000000001 (10e-9) Bitcoin or a billionth of a Bitcoin. We recommend using the Satoshi unit instead when possible.
@@ -450,7 +464,7 @@ type LeavesSwapRequest implements UserRequest & Entity {
   fee: CurrencyAmount!
 
   """The leaves transfer to user."""
-  inbound_transfer: Transfer!
+  inbound_transfer: Transfer
 
   """The leaves transfer out from user."""
   outbound_transfer: Transfer
@@ -459,7 +473,7 @@ type LeavesSwapRequest implements UserRequest & Entity {
   expires_at: DateTime
 
   """The swap leaves returned to the user"""
-  swap_leaves: [SwapLeaf!]!
+  swap_leaves: [SwapLeaf!]
 }
 
 type LightningReceiveRequest implements UserRequest & Entity {
@@ -497,15 +511,18 @@ type LightningReceiveRequest implements UserRequest & Entity {
 
 enum LightningReceiveRequestStatus {
   INVOICE_CREATED
+  HTLC_RECEIVED
   TRANSFER_CREATED
   TRANSFER_CREATION_FAILED
-  REFUND_SIGNING_COMMITMENTS_QUERYING_FAILED
-  REFUND_SIGNING_FAILED
   PAYMENT_PREIMAGE_RECOVERED
   PAYMENT_PREIMAGE_RECOVERING_FAILED
+  TRANSFER_CANCELED
+  HTLC_FAILED
   LIGHTNING_PAYMENT_RECEIVED
   TRANSFER_FAILED
   TRANSFER_COMPLETED
+  REFUND_SIGNING_COMMITMENTS_QUERYING_FAILED
+  REFUND_SIGNING_FAILED
 }
 
 input LightningSendFeeEstimateInput {
@@ -543,7 +560,7 @@ type LightningSendRequest implements UserRequest & Entity {
   fee: CurrencyAmount!
 
   """The idempotency key of the request."""
-  idempotency_key: String!
+  idempotency_key: String
 
   """The status of the request."""
   status: LightningSendRequestStatus!
@@ -557,6 +574,7 @@ type LightningSendRequest implements UserRequest & Entity {
 
 enum LightningSendRequestStatus {
   CREATED
+  USER_TRANSFER_VALIDATION_FAILED
   LIGHTNING_PAYMENT_INITIATED
   LIGHTNING_PAYMENT_FAILED
   LIGHTNING_PAYMENT_SUCCEEDED
@@ -586,6 +604,9 @@ type Mutation {
   """For spark users to complete a leaves swap."""
   complete_leaves_swap(input: CompleteLeavesSwapInput!): CompleteLeavesSwapOutput!
 
+  """For spark users to complete a swap."""
+  complete_swap(input: CompleteSwapInput!): CompleteSwapOutput!
+
   """Complete the process to request releasing seed."""
   complete_seed_release(input: CompleteSeedReleaseInput!): CompleteSeedReleaseOutput!
 
@@ -606,6 +627,9 @@ type Mutation {
 
   """For spark users to initiate a leaves swap."""
   request_leaves_swap(input: RequestLeavesSwapInput!): RequestLeavesSwapOutput!
+
+  """For spark users to initiate a swap."""
+  request_swap(input: RequestSwapInput!): RequestSwapOutput!
 
   """
   This function sends regtest funds to a specified address. It is only available in test mode.
@@ -696,11 +720,12 @@ type QuoteStaticDepositOutput {
 input RequestCoopExitInput {
   leaf_external_ids: [UUID!]!
   withdrawal_address: String!
-  idempotency_key: String!
   exit_speed: ExitSpeed!
   withdraw_all: Boolean! = true
   fee_leaf_external_ids: [UUID!] = null
   fee_quote_id: ID = null
+  idempotency_key: String = null
+  user_outbound_transfer_external_id: UUID = null
 }
 
 type RequestCoopExitOutput {
@@ -769,12 +794,13 @@ type RequestLightningReceiveOutput {
 
 input RequestLightningSendInput {
   encoded_invoice: String!
-  idempotency_key: String!
 
   """
   The amount you will pay for this invoice in sats. It should ONLY be set when the invoice amount is zero.
   """
   amount_sats: Long = null
+  idempotency_key: String = null
+  user_outbound_transfer_external_id: UUID = null
 }
 
 type RequestLightningSendOutput {
@@ -795,6 +821,19 @@ type RequestRegtestFundsOutput {
   transaction_hash: String!
 }
 
+input RequestSwapInput {
+  adaptor_pubkey: PublicKey!
+  total_amount_sats: Long!
+  target_amount_sats: [Long!]!
+  fee_sats: Long!
+  user_leaves: [UserLeafInput!]!
+  user_outbound_transfer_external_id: UUID!
+}
+
+type RequestSwapOutput {
+  request: LeavesSwapRequest!
+}
+
 enum SparkCoopExitRequestStatus {
   INITIATED
   INBOUND_TRANSFER_CHECKED
@@ -809,10 +848,10 @@ enum SparkCoopExitRequestStatus {
 enum SparkLeavesSwapRequestStatus {
   CREATED
   INITIATED
-  LEAVES_LOCKED
-  REFUND_TX_ADAPTOR_SIGNED
-  INBOUND_TRANSFER_CLAIMED
+  LEAVES_LOCKED @deprecated(reason: "No more needed")
   INBOUND_TRANSFER_VERIFIED
+  INBOUND_TRANSFER_CLAIMED
+  REFUND_TX_ADAPTOR_SIGNED @deprecated(reason: "Adaptor is not needed in signing")
   SUCCEEDED
   EXPIRED
   FAILED
