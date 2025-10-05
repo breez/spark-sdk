@@ -97,7 +97,7 @@ func SendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk, prepareResponse b
 	// ANCHOR: send-payment-lightning-bolt11
 	var completionTimeoutSecs uint32 = 10
 	var options breez_sdk_spark.SendPaymentOptions = breez_sdk_spark.SendPaymentOptionsBolt11Invoice{
-		PreferSpark:           true,
+		PreferSpark:           false,
 		CompletionTimeoutSecs: &completionTimeoutSecs,
 	}
 
