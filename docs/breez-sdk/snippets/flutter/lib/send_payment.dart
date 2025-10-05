@@ -78,7 +78,7 @@ Future<SendPaymentResponse> sendPaymentLightningBolt11(
     BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-lightning-bolt11
   final options = SendPaymentOptions.bolt11Invoice(
-    preferSpark: true,
+    preferSpark: false,
     completionTimeoutSecs: 10,
   );
   final request =
