@@ -1,0 +1,78 @@
+use anyhow::{Result, anyhow};
+
+use tonic::{
+    Request, Status, Streaming,
+    metadata::{Ascii, MetadataValue},
+    service::{Interceptor, interceptor::InterceptedService},
+};
+
+use crate::{
+    grpc::transport::{GrpcClient, Transport},
+    sync::{
+        ListChangesReply, ListChangesRequest, ListenChangesRequest, Notification, SetRecordReply,
+        SetRecordRequest, syncer_client::SyncerClient as ProtoSyncerClient,
+    },
+};
+
+#[allow(unused)]
+#[macros::async_trait]
+pub(crate) trait SyncerClient: Send + Sync {
+    async fn push(&self, req: SetRecordRequest) -> Result<SetRecordReply>;
+    async fn pull(&self, req: ListChangesRequest) -> Result<ListChangesReply>;
+    async fn listen(&self, req: ListenChangesRequest) -> Result<Streaming<Notification>>;
+}
+
+pub(crate) struct BreezSyncerClient {
+    #[allow(unused)]
+    client: ProtoSyncerClient<InterceptedService<Transport, ApiKeyInterceptor>>,
+}
+
+impl BreezSyncerClient {
+    #[allow(unused)]
+    pub(crate) fn new(server_url: &str, api_key: Option<String>) -> anyhow::Result<Self> {
+        let api_key_metadata = match &api_key {
+            Some(key) => Some(
+                format!("Bearer {key}")
+                    .parse()
+                    .map_err(|e| anyhow!("Invalid api key: {e}"))?,
+            ),
+            None => None,
+        };
+
+        let client = ProtoSyncerClient::with_interceptor(
+            GrpcClient::new(server_url)?.into_inner(),
+            ApiKeyInterceptor { api_key_metadata },
+        );
+        Ok(Self { client })
+    }
+}
+
+#[macros::async_trait]
+impl SyncerClient for BreezSyncerClient {
+    async fn push(&self, req: SetRecordRequest) -> Result<SetRecordReply> {
+        Ok(self.client.clone().set_record(req).await?.into_inner())
+    }
+
+    async fn pull(&self, req: ListChangesRequest) -> Result<ListChangesReply> {
+        Ok(self.client.clone().list_changes(req).await?.into_inner())
+    }
+
+    async fn listen(&self, req: ListenChangesRequest) -> Result<Streaming<Notification>> {
+        Ok(self.client.clone().listen_changes(req).await?.into_inner())
+    }
+}
+
+#[derive(Clone)]
+pub struct ApiKeyInterceptor {
+    api_key_metadata: Option<MetadataValue<Ascii>>,
+}
+
+impl Interceptor for ApiKeyInterceptor {
+    fn call(&mut self, mut req: Request<()>) -> Result<Request<()>, Status> {
+        if let Some(api_key_metadata) = &self.api_key_metadata {
+            req.metadata_mut()
+                .insert("authorization", api_key_metadata.clone());
+        }
+        Ok(req)
+    }
+}
