@@ -1,4 +1,4 @@
-UNAME := $(shell uname)
+maUNAME := $(shell uname)
 TARGET_DIR := rust/target/
 RELEASE_DIR := $(TARGET_DIR)release
 INSTALL_PREFIX := CARGO_TARGET_DIR="$(TARGET_DIR)"

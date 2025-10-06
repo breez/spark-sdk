@@ -31,7 +31,6 @@ pub struct _Config {
     pub max_deposit_claim_fee: Option<Fee>,
     pub lnurl_domain: Option<String>,
     pub prefer_spark_over_lightning: bool,
-    pub sparkscan_api_url: String,
 }
 
 #[frb(mirror(Seed))]

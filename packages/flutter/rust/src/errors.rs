@@ -38,7 +38,6 @@ pub enum _SdkError {
         vout: u32,
     },
     LnurlError(String),
-    SparkScanApiError(String),
     Generic(String),
 }
 

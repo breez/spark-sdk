@@ -8,7 +8,6 @@ extension ConfigCopyWith on Config {
     Fee? maxDepositClaimFee,
     String? lnurlDomain,
     bool? preferSparkOverLightning,
-    String? sparkscanApiUrl,
   }) {
     return Config(
       apiKey: apiKey ?? this.apiKey,
@@ -17,7 +16,6 @@ extension ConfigCopyWith on Config {
       maxDepositClaimFee: maxDepositClaimFee ?? this.maxDepositClaimFee,
       lnurlDomain: lnurlDomain ?? this.lnurlDomain,
       preferSparkOverLightning: preferSparkOverLightning ?? this.preferSparkOverLightning,
-      sparkscanApiUrl: sparkscanApiUrl ?? this.sparkscanApiUrl,
     );
   }
 }

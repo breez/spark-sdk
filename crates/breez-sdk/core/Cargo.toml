@@ -54,8 +54,6 @@ uuid.workspace = true
 uniffi = { workspace = true, optional = true }
 web-time.workspace = true
 x509-parser = { version = "0.16.0" }
-# TODO: switch to published version once CORS issue with `api-version` header is fixed
-sparkscan = { git = "https://github.com/breez/sparkscan-rs", rev = "250753cf6c9fd95a79c9f450b1f59534329251ab" }
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
