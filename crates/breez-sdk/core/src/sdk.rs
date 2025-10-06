@@ -372,14 +372,16 @@ impl BreezSdk {
         let start_time = Instant::now();
         if let SyncType::Full = sync_type {
             // Sync with the Spark network
-            info!("sync_wallet_internal: Syncing with Spark network");
-            self.spark_wallet.sync().await?;
-            info!("sync_wallet_internal: Synced with Spark network completed");
+            if let Err(e) = self.spark_wallet.sync().await {
+                error!("sync_wallet_internal: Failed to sync with Spark network: {e:?}");
+            }
         }
-        self.sync_wallet_state_to_storage().await?;
-        info!("sync_wallet_internal: Synced wallet state to storage completed");
-        self.check_and_claim_static_deposits().await?;
-        info!("sync_wallet_internal: Checked and claimed static deposits completed");
+        if let Err(e) = self.sync_wallet_state_to_storage().await {
+            error!("sync_wallet_internal: Failed to sync wallet state to storage: {e:?}");
+        }
+        if let Err(e) = self.check_and_claim_static_deposits().await {
+            error!("sync_wallet_internal: Failed to check and claim static deposits: {e:?}");
+        }
         let elapsed = start_time.elapsed();
         info!("sync_wallet_internal: Wallet sync completed in {elapsed:?}");
         self.event_emitter.emit(&SdkEvent::Synced {}).await;

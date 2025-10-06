@@ -324,6 +324,7 @@ pub(crate) struct CachedAccountInfo {
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedSyncInfo {
     pub(crate) offset: u64,
+    pub(crate) last_synced_token_payment_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

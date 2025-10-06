@@ -65,6 +65,13 @@ pub enum PaymentStatus {
     Failed,
 }
 
+impl PaymentStatus {
+    /// Returns true if the payment status is final (either Completed or Failed)
+    pub fn is_final(&self) -> bool {
+        matches!(self, PaymentStatus::Completed | PaymentStatus::Failed)
+    }
+}
+
 impl fmt::Display for PaymentStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
