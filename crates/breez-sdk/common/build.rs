@@ -2,6 +2,7 @@ use std::{io, path::Path};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     compile_protos("src/grpc/proto/breez.proto")?;
+    compile_protos("src/sync/proto/sync.proto")?;
     Ok(())
 }
 
