@@ -58,7 +58,7 @@ pub async fn handle_command(
                 None
             };
 
-            let transfers = wallet.list_transfers(paging, None).await?;
+            let transfers = wallet.list_transfers(paging).await?;
             println!(
                 "Transfers: {}",
                 serde_json::to_string_pretty(&transfers.items)?

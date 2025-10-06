@@ -905,7 +905,6 @@ impl BreezSdk {
         self.send_payment_internal(request, false).await
     }
 
-    #[allow(clippy::too_many_lines)]
     async fn send_payment_internal(
         &self,
         request: SendPaymentRequest,

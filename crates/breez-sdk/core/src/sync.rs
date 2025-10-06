@@ -54,14 +54,11 @@ impl SparkSyncService {
             // Get batch of transfers starting from current offset
             let transfers_response = self
                 .spark_wallet
-                .list_transfers(
-                    Some(PagingFilter::new(
-                        Some(next_offset),
-                        Some(PAYMENT_SYNC_BATCH_SIZE),
-                        Some(Order::Ascending),
-                    )),
-                    None,
-                )
+                .list_transfers(Some(PagingFilter::new(
+                    Some(next_offset),
+                    Some(PAYMENT_SYNC_BATCH_SIZE),
+                    Some(Order::Ascending),
+                )))
                 .await?
                 .items;
 
