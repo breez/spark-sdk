@@ -47,96 +47,40 @@ pub async fn token_transaction_to_payments(
         })?
         .as_secs();
 
-    // Group outputs by owner public key
-    let mut outputs_by_owner = std::collections::HashMap::new();
-    for output in &transaction.outputs {
-        outputs_by_owner
-            .entry(output.owner_public_key)
-            .or_insert_with(Vec::new)
-            .push(output);
-    }
+    let identity_public_key = spark_wallet.get_identity_public_key();
 
     let mut payments = Vec::new();
 
-    if tx_inputs_are_ours {
-        // If inputs are ours, add an outgoing payment for each output group that is not ours
-        for (owner_pubkey, outputs) in outputs_by_owner {
-            if owner_pubkey != spark_wallet.get_identity_public_key() {
-                // This is an outgoing payment to another user
-                let total_amount = outputs
-                    .iter()
-                    .map(|output| {
-                        let amount: u64 = output.token_amount.try_into().unwrap_or_default();
-                        amount
-                    })
-                    .sum();
+    for (vout, output) in transaction.outputs.iter().enumerate() {
+        let payment_type = if tx_inputs_are_ours && output.owner_public_key != identity_public_key {
+            // If inputs are ours and outputs are not ours, add an outgoing payment
+            PaymentType::Send
+        } else if !tx_inputs_are_ours && output.owner_public_key == identity_public_key {
+            // If inputs are not ours and outputs are ours, add an incoming payment
+            PaymentType::Receive
+        } else {
+            continue;
+        };
 
-                let id = outputs
-                    .first()
-                    .ok_or(SdkError::Generic("No outputs in output group".to_string()))?
-                    .id
-                    .clone();
+        let id = format!("{}:{}", transaction.hash, vout);
 
-                let payment = Payment {
-                    id,
-                    payment_type: PaymentType::Send,
-                    status: PaymentStatus::from_token_transaction_status(
-                        transaction.status,
-                        is_transfer_transaction,
-                    ),
-                    amount: total_amount,
-                    fees: 0, // TODO: calculate actual fees when they start being charged
-                    timestamp,
-                    method: PaymentMethod::Token,
-                    details: Some(PaymentDetails::Token {
-                        metadata: metadata.clone().into(),
-                        tx_hash: transaction.hash.clone(),
-                    }),
-                };
-
-                payments.push(payment);
-            }
-            // Ignore outputs that belong to us (potential change outputs)
-        }
-    } else {
-        // If inputs are not ours, add an incoming payment for our output group
-        if let Some(our_outputs) = outputs_by_owner.get(&spark_wallet.get_identity_public_key()) {
-            let total_amount: u64 = our_outputs
-                .iter()
-                .map(|output| {
-                    let amount: u64 = output.token_amount.try_into().unwrap_or_default();
-                    amount
-                })
-                .sum();
-
-            let id = our_outputs
-                .first()
-                .ok_or(SdkError::Generic(
-                    "No outputs in our output group".to_string(),
-                ))?
-                .id
-                .clone();
-
-            let payment = Payment {
-                id,
-                payment_type: PaymentType::Receive,
-                status: PaymentStatus::from_token_transaction_status(
-                    transaction.status,
-                    is_transfer_transaction,
-                ),
-                amount: total_amount,
-                fees: 0,
-                timestamp,
-                method: PaymentMethod::Token,
-                details: Some(PaymentDetails::Token {
-                    metadata: metadata.into(),
-                    tx_hash: transaction.hash.clone(),
-                }),
-            };
-
-            payments.push(payment);
-        }
-        // Ignore outputs that don't belong to us
+        let payment = Payment {
+            id,
+            payment_type,
+            status: PaymentStatus::from_token_transaction_status(
+                transaction.status,
+                is_transfer_transaction,
+            ),
+            amount: output.token_amount.try_into().unwrap_or_default(),
+            fees: 0, // TODO: calculate actual fees when they start being charged
+            timestamp,
+            method: PaymentMethod::Token,
+            details: Some(PaymentDetails::Token {
+                metadata: metadata.clone().into(),
+                tx_hash: transaction.hash.clone(),
+            }),
+        };
+        payments.push(payment);
     }
 
     Ok(payments)
