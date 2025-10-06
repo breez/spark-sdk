@@ -300,7 +300,7 @@ impl TokenService {
     pub async fn transfer_tokens(
         &self,
         receiver_outputs: Vec<TransferTokenOutput>,
-    ) -> Result<String, ServiceError> {
+    ) -> Result<TokenTransaction, ServiceError> {
         // Validate parameters
         if receiver_outputs.is_empty() {
             return Err(ServiceError::Generic(
@@ -347,6 +347,7 @@ impl TokenService {
         let identity_public_key_bytes = self.signer.get_identity_public_key()?.serialize();
         final_tx
             .token_outputs
+            .clone()
             .into_iter()
             .enumerate()
             .filter(|(_, o)| o.owner_public_key == identity_public_key_bytes)
@@ -359,7 +360,7 @@ impl TokenService {
                 Ok(())
             })?;
 
-        Ok(txid)
+        (final_tx, self.network).try_into()
     }
 
     /// Selects tokens to match a given amount.
@@ -831,7 +832,7 @@ pub(crate) fn bech32m_decode_token_id(
 
 const TOKEN_TRANSACTION_TRANSFER_TYPE: u32 = 3;
 
-trait HashableTokenTransaction {
+pub trait HashableTokenTransaction {
     fn compute_hash(&self, partial: bool) -> Result<Vec<u8>, ServiceError>;
 }
 

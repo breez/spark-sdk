@@ -789,9 +789,9 @@ impl SparkWallet {
     pub async fn transfer_tokens(
         &self,
         outputs: Vec<TransferTokenOutput>,
-    ) -> Result<String, SparkWalletError> {
-        let tx_hash = self.token_service.transfer_tokens(outputs).await?;
-        Ok(tx_hash)
+    ) -> Result<TokenTransaction, SparkWalletError> {
+        let tx = self.token_service.transfer_tokens(outputs).await?;
+        Ok(tx)
     }
 
     pub async fn list_token_transactions(

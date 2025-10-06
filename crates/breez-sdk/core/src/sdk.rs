@@ -41,10 +41,10 @@ use crate::{
     DepositInfo, Fee, GetPaymentRequest, GetPaymentResponse, LightningAddressInfo,
     ListFiatCurrenciesResponse, ListFiatRatesResponse, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
-    Network, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
-    RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions,
-    WaitForPaymentIdentifier, WaitForPaymentRequest, WaitForPaymentResponse,
+    Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
+    SendOnchainFeeQuote, SendPaymentOptions, WaitForPaymentIdentifier, WaitForPaymentRequest,
+    WaitForPaymentResponse,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     lnurl::LnurlServerClient,
@@ -63,6 +63,7 @@ use crate::{
     utils::{
         deposit_chain_syncer::DepositChainSyncer,
         run_with_shutdown,
+        token::token_transaction_to_payments,
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
@@ -1419,16 +1420,7 @@ impl BreezSdk {
         amount: u128,
         receiver_address: SparkAddress,
     ) -> Result<Payment, SdkError> {
-        // Get token metadata before sending the payment to make sure we get it from cache
-        let metadata = self
-            .spark_wallet
-            .get_tokens_metadata(&[&token_identifier])
-            .await?
-            .first()
-            .ok_or(SdkError::Generic("Token metadata not found".to_string()))?
-            .clone();
-
-        let tx_hash = self
+        let token_transaction = self
             .spark_wallet
             .transfer_tokens(vec![TransferTokenOutput {
                 token_id: token_identifier,
@@ -1437,26 +1429,18 @@ impl BreezSdk {
             }])
             .await?;
 
-        // Build and insert pending payment into storage as it may take some time for sparkscan to detect it
-        let payment = Payment {
-            id: format!("{tx_hash}:0"), // Transaction output index 0 is for the receiver
-            payment_type: PaymentType::Send,
-            status: PaymentStatus::Pending,
-            amount: amount.try_into()?,
-            fees: 0,
-            timestamp: SystemTime::now()
-                .duration_since(web_time::UNIX_EPOCH)
-                .map_err(|_| SdkError::Generic("Failed to get current timestamp".to_string()))?
-                .as_secs(),
-            method: PaymentMethod::Token,
-            details: Some(PaymentDetails::Token {
-                metadata: metadata.into(),
-                tx_hash,
-            }),
-        };
-        self.storage.insert_payment(payment.clone()).await?;
+        let payments =
+            token_transaction_to_payments(&self.spark_wallet, &token_transaction, true).await?;
+        for payment in &payments {
+            self.storage.insert_payment(payment.clone()).await?;
+        }
 
-        Ok(payment)
+        payments
+            .first()
+            .ok_or(SdkError::Generic(
+                "No payment created from token transfer".to_string(),
+            ))
+            .cloned()
     }
 }
 

@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
-use crate::services::bech32m_encode_token_id;
+use crate::services::{HashableTokenTransaction, bech32m_encode_token_id};
 use crate::signer::{FrostSigningCommitmentsWithNonces, PrivateKeySource};
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
 use crate::{ssp::BitcoinNetwork, utils::refund::SignedTx};
@@ -826,6 +826,49 @@ pub struct TokenTransaction {
     pub outputs: Vec<TokenOutput>,
     pub status: TokenTransactionStatus,
     pub created_timestamp: SystemTime,
+}
+
+impl TryFrom<(operator_rpc::spark_token::TokenTransaction, Network)> for TokenTransaction {
+    type Error = ServiceError;
+
+    fn try_from(
+        (token_transaction, network): (operator_rpc::spark_token::TokenTransaction, Network),
+    ) -> Result<Self, Self::Error> {
+        let hash = hex::encode(token_transaction.compute_hash(false)?);
+
+        let inputs = token_transaction
+            .token_inputs
+            .ok_or(ServiceError::Generic("Missing token inputs".to_string()))?
+            .try_into()?;
+
+        let outputs = token_transaction
+            .token_outputs
+            .into_iter()
+            .map(|output| (output, network).try_into())
+            .collect::<Result<Vec<TokenOutput>, _>>()?;
+
+        let status = TokenTransactionStatus::Unknown;
+
+        // client_created_timestamp will always be filled for V2 transactions and V1 transactions will be discontinued soon
+        let created_timestamp = token_transaction
+            .client_created_timestamp
+            .map(|ts| {
+                std::time::UNIX_EPOCH
+                    + std::time::Duration::from_secs(ts.seconds as u64)
+                    + std::time::Duration::from_nanos(ts.nanos as u64)
+            })
+            .ok_or(ServiceError::Generic(
+                "Missing client created timestamp. Could this be a V1 transaction?".to_string(),
+            ))?;
+
+        Ok(TokenTransaction {
+            hash,
+            inputs,
+            outputs,
+            status,
+            created_timestamp,
+        })
+    }
 }
 
 impl
