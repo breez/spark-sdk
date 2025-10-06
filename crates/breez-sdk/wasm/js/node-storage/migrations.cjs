@@ -186,7 +186,6 @@ class MigrationManager {
               tx_hash TEXT,
               FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
             )`,
-          `CREATE INDEX IF NOT EXISTS idx_payment_details_token_payment_id ON payment_details_token(payment_id)`,
         ],
       },
     ];

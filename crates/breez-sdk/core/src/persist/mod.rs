@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    DepositClaimError, DepositInfo, LightningAddressInfo, LnurlPayInfo, PaymentStatus,
-    TokenBalance, models::Payment,
+    DepositClaimError, DepositInfo, LightningAddressInfo, LnurlPayInfo, TokenBalance,
+    models::Payment,
 };
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
@@ -79,7 +79,6 @@ pub trait Storage: Send + Sync {
         &self,
         offset: Option<u32>,
         limit: Option<u32>,
-        status: Option<PaymentStatus>,
     ) -> Result<Vec<Payment>, StorageError>;
 
     /// Inserts a payment into storage
@@ -498,10 +497,7 @@ pub mod tests {
             .unwrap();
 
         // List all payments
-        let payments = storage
-            .list_payments(Some(0), Some(10), None)
-            .await
-            .unwrap();
+        let payments = storage.list_payments(Some(0), Some(10)).await.unwrap();
         assert_eq!(payments.len(), 7);
 
         // Test each payment type individually
@@ -641,13 +637,6 @@ pub mod tests {
             .filter(|p| p.method == PaymentMethod::Lightning)
             .count();
         assert_eq!(lightning_count, 2); // lightning and lightning_minimal
-
-        // Test listing pending payments
-        let pending_payments = storage
-            .list_payments(Some(0), Some(10), Some(PaymentStatus::Pending))
-            .await
-            .unwrap();
-        assert_eq!(pending_payments.len(), 2); // token and no_details
     }
 
     pub async fn test_unclaimed_deposits_crud(storage: Box<dyn Storage>) {

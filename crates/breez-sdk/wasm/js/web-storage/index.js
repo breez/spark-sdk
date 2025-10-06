@@ -109,8 +109,8 @@ class MigrationManager {
               unique: false,
             });
           }
-        }
-      }
+        },
+      },
     ];
   }
 }
@@ -292,7 +292,7 @@ class IndexedDBStorage {
 
   // ===== Payment Operations =====
 
-  async listPayments(offset = null, limit = null, status = null) {
+  async listPayments(offset = null, limit = null) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
@@ -332,12 +332,6 @@ class IndexedDBStorage {
 
         const payment = cursor.value;
 
-        // Filter by status if provided
-        if (status !== null && payment.status !== status) {
-          cursor.continue();
-          return;
-        }
-
         // Get metadata for this payment
         const metadataRequest = metadataStore.get(payment.id);
         metadataRequest.onsuccess = () => {
@@ -361,7 +355,7 @@ class IndexedDBStorage {
       request.onerror = () => {
         reject(
           new StorageError(
-            `Failed to list payments (offset: ${offset}, limit: ${limit}, status: ${status}): ${
+            `Failed to list payments (offset: ${offset}, limit: ${limit}): ${
               request.error?.message || "Unknown error"
             }`,
             request.error
@@ -730,7 +724,12 @@ class IndexedDBStorage {
     }
 
     // If this is a Lightning payment and we have lnurl_pay_info, add it to details
-    if (metadata && metadata.lnurlPayInfo && details && details.type == 'lightning') {
+    if (
+      metadata &&
+      metadata.lnurlPayInfo &&
+      details &&
+      details.type == "lightning"
+    ) {
       try {
         details.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
         if (metadata.lnurlDescription && !details.description) {

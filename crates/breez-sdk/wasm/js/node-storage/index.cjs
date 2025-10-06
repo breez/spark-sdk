@@ -119,14 +119,14 @@ class SqliteStorage {
 
   // ===== Payment Operations =====
 
-  listPayments(offset = null, limit = null, status = null) {
+  listPayments(offset = null, limit = null) {
     try {
       // Handle null values by using default values
       const actualOffset = offset !== null ? offset : 0;
       const actualLimit = limit !== null ? limit : 4294967295; // u32::MAX
 
-      let query = `
-        SELECT p.id
+      const stmt = this.db.prepare(`
+            SELECT p.id
             ,       p.payment_type
             ,       p.status
             ,       p.amount
@@ -147,25 +147,17 @@ class SqliteStorage {
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
-             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id`;
+             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             ORDER BY p.timestamp DESC
+             LIMIT ? OFFSET ?
+             `);
 
-      const queryParams = [];
-
-      if (status !== null) {
-        query += ` WHERE p.status = ?`;
-        queryParams.push(status);
-      }
-
-      query += ` ORDER BY p.timestamp DESC LIMIT ? OFFSET ?`;
-      queryParams.push(actualLimit, actualOffset);
-
-      const stmt = this.db.prepare(query);
-      const rows = stmt.all(...queryParams);
+      const rows = stmt.all(actualLimit, actualOffset);
       return Promise.resolve(rows.map(this._rowToPayment.bind(this)));
     } catch (error) {
       return Promise.reject(
         new StorageError(
-          `Failed to list payments (offset: ${offset}, limit: ${limit}, status: ${status}): ${error.message}`,
+          `Failed to list payments (offset: ${offset}, limit: ${limit}): ${error.message}`,
           error
         )
       );

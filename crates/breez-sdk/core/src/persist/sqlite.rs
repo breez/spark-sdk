@@ -1,15 +1,12 @@
-use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 use macros::async_trait;
-use rusqlite::params_from_iter;
 use rusqlite::{
     Connection, Row, ToSql, params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
 };
 use rusqlite_migration::{M, Migrations, SchemaVersion};
 
-use crate::PaymentStatus;
 use crate::{
     DepositInfo, LnurlPayInfo, PaymentDetails, PaymentMethod,
     error::DepositClaimError,
@@ -194,11 +191,10 @@ impl Storage for SqliteStorage {
         &self,
         offset: Option<u32>,
         limit: Option<u32>,
-        status: Option<PaymentStatus>,
     ) -> Result<Vec<Payment>, StorageError> {
         let connection = self.get_connection()?;
-        let mut params: Vec<Box<dyn ToSql>> = Vec::new();
-        let mut query = String::from(
+
+        let query = format!(
             "SELECT p.id
             ,       p.payment_type
             ,       p.status
@@ -220,25 +216,16 @@ impl Storage for SqliteStorage {
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
-             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id",
-        );
-
-        if let Some(status) = status {
-            query.push_str(" WHERE p.status = ?");
-            params.push(Box::new(status.to_string()));
-        }
-
-        write!(
-            query,
-            " ORDER BY p.timestamp DESC LIMIT {} OFFSET {}",
+             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             ORDER BY p.timestamp DESC 
+             LIMIT {} OFFSET {}",
             limit.unwrap_or(u32::MAX),
             offset.unwrap_or(0)
-        )
-        .map_err(|e| StorageError::Implementation(e.to_string()))?;
+        );
 
         let mut stmt = connection.prepare(&query)?;
         let payments = stmt
-            .query_map(params_from_iter(params), map_payment)?
+            .query_map(params![], map_payment)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(payments)
     }
@@ -544,7 +531,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         (_, _, _, Some(_), _) => Some(PaymentDetails::Spark),
         (_, _, _, _, Some(metadata)) => Some(PaymentDetails::Token {
             metadata: serde_json::from_str(&metadata).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, e.into())
+                rusqlite::Error::FromSqlConversionFailure(16, rusqlite::types::Type::Text, e.into())
             })?,
             tx_hash: row.get(17)?,
         }),

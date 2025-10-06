@@ -1165,7 +1165,7 @@ impl BreezSdk {
     ) -> Result<ListPaymentsResponse, SdkError> {
         let payments = self
             .storage
-            .list_payments(request.offset, request.limit, None)
+            .list_payments(request.offset, request.limit)
             .await?;
         Ok(ListPaymentsResponse { payments })
     }
