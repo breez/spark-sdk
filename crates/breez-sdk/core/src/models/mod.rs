@@ -244,7 +244,6 @@ pub struct Config {
     /// lightning when sending and receiving. This has the benefit of lower fees
     /// but is at the cost of privacy.
     pub prefer_spark_over_lightning: bool,
-    pub sparkscan_api_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

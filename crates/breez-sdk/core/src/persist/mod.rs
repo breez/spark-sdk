@@ -1,7 +1,7 @@
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub(crate) mod sqlite;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::SystemTime};
 
 use macros::async_trait;
 use serde::{Deserialize, Serialize};
@@ -14,12 +14,9 @@ use crate::{
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
 const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
-const SPARKSCAN_SYNC_INFO_KEY: &str = "sparkscan_sync_info";
+const SYNC_OFFSET_KEY: &str = "sync_offset";
 const TX_CACHE_KEY: &str = "tx_cache";
 const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
-
-// Old keys (avoid using them)
-// const SYNC_OFFSET_KEY: &str = "sync_offset";
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UpdateDepositPayload {
@@ -220,10 +217,7 @@ impl ObjectCacheRepository {
 
     pub(crate) async fn save_sync_info(&self, value: &CachedSyncInfo) -> Result<(), StorageError> {
         self.storage
-            .set_cached_item(
-                SPARKSCAN_SYNC_INFO_KEY.to_string(),
-                serde_json::to_string(value)?,
-            )
+            .set_cached_item(SYNC_OFFSET_KEY.to_string(), serde_json::to_string(value)?)
             .await?;
         Ok(())
     }
@@ -231,7 +225,7 @@ impl ObjectCacheRepository {
     pub(crate) async fn fetch_sync_info(&self) -> Result<Option<CachedSyncInfo>, StorageError> {
         let value = self
             .storage
-            .get_cached_item(SPARKSCAN_SYNC_INFO_KEY.to_string())
+            .get_cached_item(SYNC_OFFSET_KEY.to_string())
             .await?;
         match value {
             Some(value) => Ok(Some(serde_json::from_str(&value)?)),
@@ -329,7 +323,8 @@ pub(crate) struct CachedAccountInfo {
 
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedSyncInfo {
-    pub(crate) last_synced_payment_id: String,
+    pub(crate) offset: u64,
+    pub(crate) last_synced_token_timestamp: Option<SystemTime>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
