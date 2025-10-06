@@ -221,15 +221,6 @@ impl SparkAddress {
         }
     }
 
-    fn network_to_hrp_legacy(network: &Network) -> Hrp {
-        match network {
-            Network::Mainnet => HRP_LEGACY_MAINNET,
-            Network::Testnet => HRP_LEGACY_TESTNET,
-            Network::Regtest => HRP_LEGACY_REGTEST,
-            Network::Signet => HRP_LEGACY_SIGNET,
-        }
-    }
-
     fn hrp_to_network(hrp: &Hrp) -> Result<Network, AddressError> {
         match hrp {
             hrp if hrp == &HRP_MAINNET || hrp == &HRP_LEGACY_MAINNET => Ok(Network::Mainnet),
@@ -243,15 +234,6 @@ impl SparkAddress {
 
 impl Display for SparkAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let hrp = Self::network_to_hrp(&self.network);
-
-        let address = self.to_string_with_hrp(hrp);
-        write!(f, "{address}")
-    }
-}
-
-impl SparkAddress {
-    fn to_string_with_hrp(&self, hrp: Hrp) -> String {
         let spark_invoice_fields: Option<ProtoSparkInvoiceFields> =
             self.spark_invoice_fields.clone().map(|f| f.into());
 
@@ -263,13 +245,11 @@ impl SparkAddress {
 
         let payload_bytes = proto_address.encode_to_vec();
 
-        // This is safe to unwrap, because we are using a valid HRP and payload
-        bech32::encode::<Bech32m>(hrp, &payload_bytes).unwrap()
-    }
+        let hrp = Self::network_to_hrp(&self.network);
 
-    pub fn to_string_with_hrp_legacy(&self) -> String {
-        let hrp = Self::network_to_hrp_legacy(&self.network);
-        self.to_string_with_hrp(hrp)
+        // This is safe to unwrap, because we are using a valid HRP and payload
+        let address = bech32::encode::<Bech32m>(hrp, &payload_bytes).unwrap();
+        write!(f, "{address}")
     }
 }
 
