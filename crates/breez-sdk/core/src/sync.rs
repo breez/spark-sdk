@@ -45,55 +45,58 @@ impl SparkSyncService {
         let last_synced_token_payment_id = cached_sync_info.last_synced_token_payment_id;
 
         // We'll keep querying in batches until we have all transfers
-        let mut next_offset = current_offset;
-        let mut has_more = true;
-        info!("Syncing payments to storage, offset = {next_offset}");
+        let mut next_filter = Some(PagingFilter {
+            offset: current_offset,
+            limit: PAYMENT_SYNC_BATCH_SIZE,
+            order: Order::Ascending,
+        });
+        info!("Syncing payments to storage, offset = {}", current_offset);
         let mut pending_payments: u64 = 0;
-        while has_more {
-            info!("Fetching transfers, offset = {next_offset}");
+        while let Some(filter) = next_filter {
             // Get batch of transfers starting from current offset
             let transfers_response = self
                 .spark_wallet
-                .list_transfers(Some(PagingFilter::new(
-                    Some(next_offset),
-                    Some(PAYMENT_SYNC_BATCH_SIZE),
-                    Some(Order::Ascending),
-                )))
-                .await?
-                .items;
+                .list_transfers(Some(filter.clone()))
+                .await?;
 
             info!(
-                "Syncing bitcoin payments to storage, offset = {next_offset}, transfers = {}",
+                "Syncing payments to storage, offset = {}, transfers = {}",
+                filter.offset,
                 transfers_response.len()
             );
             // Process transfers in this batch
-            for transfer in &transfers_response {
+            for transfer in &transfers_response.items {
                 // Create a payment record
                 let payment: Payment = transfer.clone().try_into()?;
                 // Insert payment into storage
                 if let Err(err) = self.storage.insert_payment(payment.clone()).await {
-                    error!("Failed to insert bitcoin payment: {err:?}");
+                    error!("Failed to insert payment: {err:?}");
                 }
                 if payment.status == PaymentStatus::Pending {
                     pending_payments = pending_payments.saturating_add(1);
                 }
-                info!("Inserted bitcoin payment: {payment:?}");
+                info!("Inserted payment: {payment:?}");
             }
 
             // Check if we have more transfers to fetch
-            next_offset = next_offset.saturating_add(u64::try_from(transfers_response.len())?);
+            let cache_offset = filter
+                .offset
+                .saturating_add(u64::try_from(transfers_response.len())?);
+
             // Update our last processed offset in the storage. We should remove pending payments
             // from the offset as they might be removed from the list later.
             let save_res = object_repository
                 .save_sync_info(&CachedSyncInfo {
-                    offset: next_offset.saturating_sub(pending_payments),
+                    offset: cache_offset.saturating_sub(pending_payments),
                     last_synced_token_payment_id: last_synced_token_payment_id.clone(),
                 })
                 .await;
+
             if let Err(err) = save_res {
-                error!("Failed to update last sync bitcoin offset: {err:?}");
+                error!("Failed to update last sync offset: {err:?}");
             }
-            has_more = transfers_response.len() as u64 == PAYMENT_SYNC_BATCH_SIZE;
+
+            next_filter = transfers_response.next;
         }
 
         Ok(())
