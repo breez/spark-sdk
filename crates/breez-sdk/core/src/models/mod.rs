@@ -1,6 +1,8 @@
+pub(crate) mod adaptors;
+
 use breez_sdk_common::{
     fiat::{FiatCurrency, Rate},
-    input::{self, BitcoinAddressDetails, Bolt11InvoiceDetails},
+    input::{BitcoinAddressDetails, Bolt11InvoiceDetails},
     lnurl::pay::{LnurlPayRequestDetails, SuccessAction, SuccessActionProcessed},
     network::BitcoinNetwork,
 };
@@ -8,15 +10,10 @@ use core::fmt;
 use lnurl_models::RecoverLnurlPayResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use spark_wallet::{
-    CoopExitFeeQuote, CoopExitSpeedFeeQuote, ExitSpeed, LightningSendPayment, LightningSendStatus,
-    Network as SparkNetwork, SspUserRequest, TransferDirection, TransferStatus, TransferType,
-    WalletTransfer,
-};
-use std::{fmt::Display, str::FromStr, time::UNIX_EPOCH};
+use std::{collections::HashMap, fmt::Display, str::FromStr};
 
+use crate::error::DepositClaimError;
 use crate::sdk_builder::Seed;
-use crate::{SdkError, error::DepositClaimError};
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConnectRequest {
@@ -68,6 +65,13 @@ pub enum PaymentStatus {
     Failed,
 }
 
+impl PaymentStatus {
+    /// Returns true if the payment status is final (either Completed or Failed)
+    pub fn is_final(&self) -> bool {
+        matches!(self, PaymentStatus::Completed | PaymentStatus::Failed)
+    }
+}
+
 impl fmt::Display for PaymentStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -96,6 +100,7 @@ impl FromStr for PaymentStatus {
 pub enum PaymentMethod {
     Lightning,
     Spark,
+    Token,
     Deposit,
     Withdraw,
     Unknown,
@@ -106,6 +111,7 @@ impl Display for PaymentMethod {
         match self {
             PaymentMethod::Lightning => write!(f, "lightning"),
             PaymentMethod::Spark => write!(f, "spark"),
+            PaymentMethod::Token => write!(f, "token"),
             PaymentMethod::Deposit => write!(f, "deposit"),
             PaymentMethod::Withdraw => write!(f, "withdraw"),
             PaymentMethod::Unknown => write!(f, "unknown"),
@@ -120,6 +126,7 @@ impl FromStr for PaymentMethod {
         match s {
             "lightning" => Ok(PaymentMethod::Lightning),
             "spark" => Ok(PaymentMethod::Spark),
+            "token" => Ok(PaymentMethod::Token),
             "deposit" => Ok(PaymentMethod::Deposit),
             "withdraw" => Ok(PaymentMethod::Withdraw),
             "unknown" => Ok(PaymentMethod::Unknown),
@@ -128,17 +135,6 @@ impl FromStr for PaymentMethod {
     }
 }
 
-impl From<TransferType> for PaymentMethod {
-    fn from(value: TransferType) -> Self {
-        match value {
-            TransferType::PreimageSwap => PaymentMethod::Lightning,
-            TransferType::CooperativeExit => PaymentMethod::Withdraw,
-            TransferType::Transfer => PaymentMethod::Spark,
-            TransferType::UtxoSwap => PaymentMethod::Deposit,
-            _ => PaymentMethod::Unknown,
-        }
-    }
-}
 /// Represents a payment (sent or received)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -169,6 +165,10 @@ pub struct Payment {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum PaymentDetails {
     Spark,
+    Token {
+        metadata: TokenMetadata,
+        tx_hash: String,
+    },
     Lightning {
         /// Represents the invoice description
         description: Option<String>,
@@ -196,174 +196,6 @@ pub enum PaymentDetails {
     },
 }
 
-impl TryFrom<SspUserRequest> for PaymentDetails {
-    type Error = SdkError;
-    fn try_from(user_request: SspUserRequest) -> Result<Self, Self::Error> {
-        let details = match user_request {
-            SspUserRequest::CoopExitRequest(request) => PaymentDetails::Withdraw {
-                tx_id: request.coop_exit_txid,
-            },
-            SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark,
-            SspUserRequest::LightningReceiveRequest(request) => {
-                let invoice_details = input::parse_invoice(&request.invoice.encoded_invoice)
-                    .ok_or(SdkError::Generic(
-                        "Invalid invoice in SspUserRequest::LightningReceiveRequest".to_string(),
-                    ))?;
-                PaymentDetails::Lightning {
-                    description: invoice_details.description,
-                    preimage: request.lightning_receive_payment_preimage,
-                    invoice: request.invoice.encoded_invoice,
-                    payment_hash: request.invoice.payment_hash,
-                    destination_pubkey: invoice_details.payee_pubkey,
-                    lnurl_pay_info: None,
-                }
-            }
-            SspUserRequest::LightningSendRequest(request) => {
-                let invoice_details =
-                    input::parse_invoice(&request.encoded_invoice).ok_or(SdkError::Generic(
-                        "Invalid invoice in SspUserRequest::LightningSendRequest".to_string(),
-                    ))?;
-                PaymentDetails::Lightning {
-                    description: invoice_details.description,
-                    preimage: request.lightning_send_payment_preimage,
-                    invoice: request.encoded_invoice,
-                    payment_hash: invoice_details.payment_hash,
-                    destination_pubkey: invoice_details.payee_pubkey,
-                    lnurl_pay_info: None,
-                }
-            }
-            SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
-                tx_id: request.transaction_id,
-            },
-        };
-        Ok(details)
-    }
-}
-
-impl TryFrom<WalletTransfer> for Payment {
-    type Error = SdkError;
-    fn try_from(transfer: WalletTransfer) -> Result<Self, Self::Error> {
-        let payment_type = match transfer.direction {
-            TransferDirection::Incoming => PaymentType::Receive,
-            TransferDirection::Outgoing => PaymentType::Send,
-        };
-        let mut status = match transfer.status {
-            TransferStatus::Completed => PaymentStatus::Completed,
-            TransferStatus::SenderKeyTweaked
-                if transfer.direction == TransferDirection::Outgoing =>
-            {
-                PaymentStatus::Completed
-            }
-            TransferStatus::Expired | TransferStatus::Returned => PaymentStatus::Failed,
-            _ => PaymentStatus::Pending,
-        };
-        let (fees_sat, mut amount_sat): (u64, u64) = match transfer.clone().user_request {
-            Some(user_request) => match user_request {
-                SspUserRequest::LightningSendRequest(r) => {
-                    // TODO: if we have the preimage it is not pending. This is a workaround
-                    // until spark will implement incremental syncing based on updated time.
-                    if r.lightning_send_payment_preimage.is_some() {
-                        status = PaymentStatus::Completed;
-                    }
-                    let fee_sat = r.fee.as_sats().unwrap_or(0);
-                    (fee_sat, transfer.total_value_sat.saturating_sub(fee_sat))
-                }
-                SspUserRequest::CoopExitRequest(r) => {
-                    let fee_sat = r
-                        .fee
-                        .as_sats()
-                        .unwrap_or(0)
-                        .saturating_add(r.l1_broadcast_fee.as_sats().unwrap_or(0));
-                    (fee_sat, transfer.total_value_sat.saturating_sub(fee_sat))
-                }
-                SspUserRequest::ClaimStaticDeposit(r) => {
-                    let fee_sat = r.max_fee.as_sats().unwrap_or(0);
-                    (fee_sat, transfer.total_value_sat)
-                }
-                _ => (0, transfer.total_value_sat),
-            },
-            None => (0, transfer.total_value_sat),
-        };
-
-        let details: Option<PaymentDetails> = if let Some(user_request) = transfer.user_request {
-            Some(user_request.try_into()?)
-        } else {
-            // in case we have a completed status without user object we want
-            // to keep syncing this payment
-            if status == PaymentStatus::Completed
-                && [
-                    TransferType::CooperativeExit,
-                    TransferType::PreimageSwap,
-                    TransferType::UtxoSwap,
-                ]
-                .contains(&transfer.transfer_type)
-            {
-                status = PaymentStatus::Pending;
-            }
-            amount_sat = transfer.total_value_sat;
-            None
-        };
-
-        Ok(Payment {
-            id: transfer.id.to_string(),
-            payment_type,
-            status,
-            amount: amount_sat,
-            fees: fees_sat,
-            timestamp: match transfer.created_at.map(|t| t.duration_since(UNIX_EPOCH)) {
-                Some(Ok(duration)) => duration.as_secs(),
-                _ => 0,
-            },
-            method: transfer.transfer_type.into(),
-            details,
-        })
-    }
-}
-
-impl Payment {
-    pub fn from_lightning(
-        payment: LightningSendPayment,
-        amount_sat: u64,
-        transfer_id: String,
-    ) -> Result<Self, SdkError> {
-        let mut status = match payment.status {
-            LightningSendStatus::LightningPaymentSucceeded => PaymentStatus::Completed,
-            LightningSendStatus::LightningPaymentFailed
-            | LightningSendStatus::TransferFailed
-            | LightningSendStatus::PreimageProvidingFailed
-            | LightningSendStatus::UserSwapReturnFailed
-            | LightningSendStatus::UserSwapReturned => PaymentStatus::Failed,
-            _ => PaymentStatus::Pending,
-        };
-        if payment.payment_preimage.is_some() {
-            status = PaymentStatus::Completed;
-        }
-
-        let invoice_details = input::parse_invoice(&payment.encoded_invoice).ok_or(
-            SdkError::Generic("Invalid invoice in LightnintSendPayment".to_string()),
-        )?;
-        let details = PaymentDetails::Lightning {
-            description: invoice_details.description,
-            preimage: payment.payment_preimage,
-            invoice: payment.encoded_invoice,
-            payment_hash: invoice_details.payment_hash,
-            destination_pubkey: invoice_details.payee_pubkey,
-            lnurl_pay_info: None,
-        };
-
-        Ok(Payment {
-            id: transfer_id,
-            payment_type: PaymentType::Send,
-            status,
-            amount: amount_sat,
-            fees: payment.fee_sat,
-            timestamp: payment.created_at.cast_unsigned(),
-            method: PaymentMethod::Lightning,
-            details: Some(details),
-        })
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Network {
@@ -376,15 +208,6 @@ impl std::fmt::Display for Network {
         match self {
             Network::Mainnet => write!(f, "Mainnet"),
             Network::Regtest => write!(f, "Regtest"),
-        }
-    }
-}
-
-impl From<Network> for SparkNetwork {
-    fn from(network: Network) -> Self {
-        match network {
-            Network::Mainnet => SparkNetwork::Mainnet,
-            Network::Regtest => SparkNetwork::Regtest,
         }
     }
 }
@@ -444,15 +267,6 @@ impl Fee {
         match self {
             Fee::Fixed { amount } => *amount,
             Fee::Rate { sat_per_vbyte } => sat_per_vbyte.saturating_mul(vbytes),
-        }
-    }
-}
-
-impl From<Fee> for spark_wallet::Fee {
-    fn from(fee: Fee) -> Self {
-        match fee {
-            Fee::Fixed { amount } => spark_wallet::Fee::Fixed { amount },
-            Fee::Rate { sat_per_vbyte } => spark_wallet::Fee::Rate { sat_per_vbyte },
         }
     }
 }
@@ -537,6 +351,29 @@ pub struct GetInfoRequest {
 pub struct GetInfoResponse {
     /// The balance in satoshis
     pub balance_sats: u64,
+    /// The balances of the tokens in the wallet keyed by the token identifier
+    pub token_balances: HashMap<String, TokenBalance>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct TokenBalance {
+    pub balance: u64,
+    pub token_metadata: TokenMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct TokenMetadata {
+    pub identifier: String,
+    /// Hex representation of the issuer public key
+    pub issuer_public_key: String,
+    pub name: String,
+    pub ticker: String,
+    /// Number of decimals the token uses
+    pub decimals: u32,
+    pub max_supply: u64,
+    pub is_freezable: bool,
 }
 
 /// Request to sync the wallet with the Spark network
@@ -574,7 +411,12 @@ pub enum SendPaymentMethod {
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
-        fee_sats: u64,
+        /// Fee to pay for the transaction
+        /// Denominated in sats if token identifier is empty, otherwise in the token base units
+        fee: u64,
+        /// The presence of this field indicates that the payment is for a token
+        /// If empty, it is a Bitcoin payment
+        token_identifier: Option<String>,
     },
 }
 
@@ -588,29 +430,6 @@ pub struct SendOnchainFeeQuote {
     pub speed_slow: SendOnchainSpeedFeeQuote,
 }
 
-impl From<CoopExitFeeQuote> for SendOnchainFeeQuote {
-    fn from(value: CoopExitFeeQuote) -> Self {
-        Self {
-            id: value.id,
-            expires_at: value.expires_at,
-            speed_fast: value.speed_fast.into(),
-            speed_medium: value.speed_medium.into(),
-            speed_slow: value.speed_slow.into(),
-        }
-    }
-}
-
-impl From<SendOnchainFeeQuote> for CoopExitFeeQuote {
-    fn from(value: SendOnchainFeeQuote) -> Self {
-        Self {
-            id: value.id,
-            expires_at: value.expires_at,
-            speed_fast: value.speed_fast.into(),
-            speed_medium: value.speed_medium.into(),
-            speed_slow: value.speed_slow.into(),
-        }
-    }
-}
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize)]
 pub struct SendOnchainSpeedFeeQuote {
@@ -621,24 +440,6 @@ pub struct SendOnchainSpeedFeeQuote {
 impl SendOnchainSpeedFeeQuote {
     pub fn total_fee_sat(&self) -> u64 {
         self.user_fee_sat.saturating_add(self.l1_broadcast_fee_sat)
-    }
-}
-
-impl From<CoopExitSpeedFeeQuote> for SendOnchainSpeedFeeQuote {
-    fn from(value: CoopExitSpeedFeeQuote) -> Self {
-        Self {
-            user_fee_sat: value.user_fee_sat,
-            l1_broadcast_fee_sat: value.l1_broadcast_fee_sat,
-        }
-    }
-}
-
-impl From<SendOnchainSpeedFeeQuote> for CoopExitSpeedFeeQuote {
-    fn from(value: SendOnchainSpeedFeeQuote) -> Self {
-        Self {
-            user_fee_sat: value.user_fee_sat,
-            l1_broadcast_fee_sat: value.l1_broadcast_fee_sat,
-        }
     }
 }
 
@@ -732,38 +533,29 @@ pub enum OnchainConfirmationSpeed {
     Slow,
 }
 
-impl From<OnchainConfirmationSpeed> for ExitSpeed {
-    fn from(speed: OnchainConfirmationSpeed) -> Self {
-        match speed {
-            OnchainConfirmationSpeed::Fast => ExitSpeed::Fast,
-            OnchainConfirmationSpeed::Medium => ExitSpeed::Medium,
-            OnchainConfirmationSpeed::Slow => ExitSpeed::Slow,
-        }
-    }
-}
-
-impl From<ExitSpeed> for OnchainConfirmationSpeed {
-    fn from(speed: ExitSpeed) -> Self {
-        match speed {
-            ExitSpeed::Fast => OnchainConfirmationSpeed::Fast,
-            ExitSpeed::Medium => OnchainConfirmationSpeed::Medium,
-            ExitSpeed::Slow => OnchainConfirmationSpeed::Slow,
-        }
-    }
-}
-
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
+    /// Amount to send. By default is denominated in sats.
+    /// If a token identifier is provided, the amount will be denominated in the token base units.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub amount_sats: Option<u64>,
+    pub amount: Option<u64>,
+    /// If provided, the payment will be for a token
+    /// May only be provided if the payment request is a spark address
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub token_identifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    pub amount_sats: u64,
+    /// Amount to send. By default is denominated in sats.
+    /// If a token identifier is provided, the amount will be denominated in the token base units.
+    pub amount: u64,
+    /// The presence of this field indicates that the payment is for a token
+    /// If empty, it is a Bitcoin payment
+    pub token_identifier: Option<String>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]

@@ -109,8 +109,8 @@ class MigrationManager {
               unique: false,
             });
           }
-        }
-      }
+        },
+      },
     ];
   }
 }
@@ -355,7 +355,7 @@ class IndexedDBStorage {
       request.onerror = () => {
         reject(
           new StorageError(
-            `Failed to list payments: ${
+            `Failed to list payments (offset: ${offset}, limit: ${limit}): ${
               request.error?.message || "Unknown error"
             }`,
             request.error
@@ -724,7 +724,12 @@ class IndexedDBStorage {
     }
 
     // If this is a Lightning payment and we have lnurl_pay_info, add it to details
-    if (metadata && metadata.lnurlPayInfo && details && details.type == 'lightning') {
+    if (
+      metadata &&
+      metadata.lnurlPayInfo &&
+      details &&
+      details.type == "lightning"
+    ) {
       try {
         details.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
         if (metadata.lnurlDescription && !details.description) {
@@ -751,7 +756,10 @@ class IndexedDBStorage {
   }
 }
 
-export async function createDefaultStorage(dbName = "BreezSdkSpark", logger = null) {
+export async function createDefaultStorage(
+  dbName = "BreezSdkSpark",
+  logger = null
+) {
   const storage = new IndexedDBStorage(dbName, logger);
   await storage.initialize();
   return storage;

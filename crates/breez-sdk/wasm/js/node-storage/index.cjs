@@ -142,12 +142,15 @@ class SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-             ORDER BY p.timestamp DESC 
+             ORDER BY p.timestamp DESC
              LIMIT ? OFFSET ?
-            `);
+             `);
 
       const rows = stmt.all(actualLimit, actualOffset);
       return Promise.resolve(rows.map(this._rowToPayment.bind(this)));
@@ -178,6 +181,11 @@ class SqliteStorage {
           (payment_id, invoice, payment_hash, destination_pubkey, description, preimage) 
           VALUES (@id, @invoice, @paymentHash, @destinationPubkey, @description, @preimage)`
       );
+      const tokenInsert = this.db.prepare(
+        `INSERT OR REPLACE INTO payment_details_token 
+          (payment_id, metadata, tx_hash) 
+          VALUES (@id, @metadata, @txHash)`
+      );
       const transaction = this.db.transaction(() => {
         paymentInsert.run({
           id: payment.id,
@@ -187,12 +195,14 @@ class SqliteStorage {
           fees: payment.fees,
           timestamp: payment.timestamp,
           method: payment.method ? JSON.stringify(payment.method) : null,
-          withdrawTxId: payment.details?.type === 'withdraw' ? payment.details.txId : null,
-          depositTxId: payment.details?.type === 'deposit' ? payment.details.txId : null,
-          spark: payment.details?.type === 'spark' ? 1 : null,
+          withdrawTxId:
+            payment.details?.type === "withdraw" ? payment.details.txId : null,
+          depositTxId:
+            payment.details?.type === "deposit" ? payment.details.txId : null,
+          spark: payment.details?.type === "spark" ? 1 : null,
         });
 
-        if (payment.details?.type === 'lightning') {
+        if (payment.details?.type === "lightning") {
           lightningInsert.run({
             id: payment.id,
             invoice: payment.details.invoice,
@@ -202,8 +212,16 @@ class SqliteStorage {
             preimage: payment.details.preimage,
           });
         }
+
+        if (payment.details?.type === "token") {
+          tokenInsert.run({
+            id: payment.id,
+            metadata: JSON.stringify(payment.details.metadata),
+            txHash: payment.details.txHash,
+          });
+        }
       });
-      
+
       transaction();
       return Promise.resolve();
     } catch (error) {
@@ -241,8 +259,11 @@ class SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              WHERE p.id = ?
             `);
@@ -292,8 +313,11 @@ class SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              WHERE l.invoice = ?
             `);
@@ -444,7 +468,7 @@ class SqliteStorage {
     let details = null;
     if (row.lightning_invoice) {
       details = {
-        type: 'lightning',
+        type: "lightning",
         invoice: row.lightning_invoice,
         paymentHash: row.lightning_payment_hash,
         destinationPubkey: row.lightning_destination_pubkey,
@@ -464,18 +488,24 @@ class SqliteStorage {
       }
     } else if (row.withdraw_tx_id) {
       details = {
-        type: 'withdraw',
+        type: "withdraw",
         txId: row.withdraw_tx_id,
       };
     } else if (row.deposit_tx_id) {
       details = {
-        type: 'deposit',
+        type: "deposit",
         txId: row.deposit_tx_id,
       };
     } else if (row.spark) {
       details = {
-        type: 'spark',
+        type: "spark",
         amount: row.spark,
+      };
+    } else if (row.token_metadata) {
+      details = {
+        type: "token",
+        metadata: JSON.parse(row.token_metadata),
+        txHash: row.token_tx_hash,
       };
     }
 

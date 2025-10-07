@@ -350,7 +350,11 @@ impl LightningService {
             .transfer_service
             .deliver_transfer_package(&swap.transfer, &swap.leaves, Default::default())
             .await?;
-        let lightning_send_payment = self.finalize_lightning_swap(&swap).await?;
+        let mut lightning_send_payment = self.finalize_lightning_swap(&swap).await?;
+        // If ssp doesn't return a transfer id, we use the transfer id from the transfer service
+        if lightning_send_payment.transfer_id.is_none() {
+            lightning_send_payment.transfer_id = Some(transfer.id.clone());
+        }
         Ok(PayLightningResult {
             lightning_send_payment,
             transfer,

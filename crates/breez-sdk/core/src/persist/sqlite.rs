@@ -1,10 +1,11 @@
+use std::path::{Path, PathBuf};
+
 use macros::async_trait;
 use rusqlite::{
     Connection, Row, ToSql, params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
 };
 use rusqlite_migration::{M, Migrations, SchemaVersion};
-use std::path::{Path, PathBuf};
 
 use crate::{
     DepositInfo, LnurlPayInfo, PaymentDetails, PaymentMethod,
@@ -162,6 +163,12 @@ impl SqliteStorage {
 
             CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice);
             ",
+            "CREATE TABLE payment_details_token (
+              payment_id TEXT PRIMARY KEY,
+              metadata TEXT NOT NULL,
+              tx_hash TEXT NOT NULL,
+              FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+            );",
         ]
     }
 }
@@ -204,8 +211,11 @@ impl Storage for SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              ORDER BY p.timestamp DESC 
              LIMIT {} OFFSET {}",
@@ -254,6 +264,12 @@ impl Storage for SqliteStorage {
                 tx.execute(
                     "UPDATE payments SET spark = 1 WHERE id = ?",
                     params![payment.id],
+                )?;
+            }
+            Some(PaymentDetails::Token { metadata, tx_hash }) => {
+                tx.execute(
+                    "INSERT OR REPLACE INTO payment_details_token (payment_id, metadata, tx_hash) VALUES (?, ?, ?)",
+                    params![payment.id, serde_json::to_string(&metadata)?, tx_hash],
                 )?;
             }
             Some(PaymentDetails::Lightning {
@@ -355,8 +371,11 @@ impl Storage for SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              WHERE p.id = ?",
         )?;
@@ -388,8 +407,11 @@ impl Storage for SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              WHERE l.invoice = ?",
         )?;
@@ -480,8 +502,15 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
     let deposit_tx_id: Option<String> = row.get(8)?;
     let spark: Option<i32> = row.get(9)?;
     let lightning_invoice: Option<String> = row.get(10)?;
-    let details = match (lightning_invoice, withdraw_tx_id, deposit_tx_id, spark) {
-        (Some(invoice), _, _, _) => {
+    let token_metadata: Option<String> = row.get(16)?;
+    let details = match (
+        lightning_invoice,
+        withdraw_tx_id,
+        deposit_tx_id,
+        spark,
+        token_metadata,
+    ) {
+        (Some(invoice), _, _, _, _) => {
             let payment_hash: String = row.get(11)?;
             let destination_pubkey: String = row.get(12)?;
             let description: Option<String> = row.get(13)?;
@@ -497,9 +526,15 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 lnurl_pay_info,
             })
         }
-        (_, Some(tx_id), _, _) => Some(PaymentDetails::Withdraw { tx_id }),
-        (_, _, Some(tx_id), _) => Some(PaymentDetails::Deposit { tx_id }),
-        (_, _, _, Some(_)) => Some(PaymentDetails::Spark),
+        (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
+        (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
+        (_, _, _, Some(_), _) => Some(PaymentDetails::Spark),
+        (_, _, _, _, Some(metadata)) => Some(PaymentDetails::Token {
+            metadata: serde_json::from_str(&metadata).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(16, rusqlite::types::Type::Text, e.into())
+            })?,
+            tx_hash: row.get(17)?,
+        }),
         _ => None,
     };
     Ok(Payment {
