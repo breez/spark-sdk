@@ -78,7 +78,7 @@ func WaitForPayment(sdk *breez_sdk_spark.BreezSdk, paymentRequest string) (*bree
 	// Wait for a payment to be completed using a payment request
 	request := breez_sdk_spark.WaitForPaymentRequest{
 		Identifier: breez_sdk_spark.WaitForPaymentIdentifierPaymentRequest{
-			PaymentRequest: paymentRequest,
+			Field0: paymentRequest,
 		},
 	}
 
@@ -88,7 +88,7 @@ func WaitForPayment(sdk *breez_sdk_spark.BreezSdk, paymentRequest string) (*bree
 		return nil, err
 	}
 
-	log.Printf("Payment received with ID: %v", response.payment.Id)
+	log.Printf("Payment received with ID: %v", response.Payment.Id)
 	// ANCHOR_END: wait-for-payment
-	return &response.payment, nil
+	return &response.Payment, nil
 }
