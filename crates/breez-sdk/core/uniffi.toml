@@ -34,3 +34,12 @@ from_custom = "str({})"
 typeName = "bigint"
 intoCustom = "BigInt({})"
 fromCustom = "{}.toString()"
+
+[bindings.go.custom_types.u128]
+type_name = "*big.Int"
+imports = [ "math/big" ]
+into_custom = """
+result, _ := new(big.Int).SetString({}, 10)
+return result
+"""
+from_custom = "{}.String()"
