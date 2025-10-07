@@ -1,8 +1,11 @@
 use std::time::UNIX_EPOCH;
 
-use spark_wallet::{SparkWallet, TokenMetadata};
+use spark_wallet::SparkWallet;
 
-use crate::{Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError};
+use crate::{
+    Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError,
+    persist::ObjectCacheRepository,
+};
 
 /// Converts a token transaction to payments
 ///
@@ -15,6 +18,7 @@ use crate::{Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, 
 #[allow(clippy::too_many_lines)]
 pub async fn token_transaction_to_payments(
     spark_wallet: &SparkWallet,
+    object_repository: &ObjectCacheRepository,
     transaction: &spark_wallet::TokenTransaction,
     tx_inputs_are_ours: bool,
 ) -> Result<Vec<Payment>, SdkError> {
@@ -27,12 +31,23 @@ pub async fn token_transaction_to_payments(
         ))?
         .token_identifier
         .as_ref();
-    let metadata: TokenMetadata = spark_wallet
-        .get_tokens_metadata(&[token_identifier])
+
+    let metadata = if let Some(metadata) = object_repository
+        .fetch_token_metadata(token_identifier)
         .await?
-        .first()
-        .ok_or(SdkError::Generic("Token metadata not found".to_string()))?
-        .clone();
+    {
+        metadata
+    } else {
+        let metadata = spark_wallet
+            .get_tokens_metadata(&[token_identifier])
+            .await?
+            .first()
+            .ok_or(SdkError::Generic("Token metadata not found".to_string()))?
+            .clone()
+            .into();
+        object_repository.save_token_metadata(&metadata).await?;
+        metadata
+    };
 
     let is_transfer_transaction =
         matches!(&transaction.inputs, spark_wallet::TokenInputs::Transfer(..));
@@ -76,7 +91,7 @@ pub async fn token_transaction_to_payments(
             timestamp,
             method: PaymentMethod::Token,
             details: Some(PaymentDetails::Token {
-                metadata: metadata.clone().into(),
+                metadata: metadata.clone(),
                 tx_hash: transaction.hash.clone(),
             }),
         };

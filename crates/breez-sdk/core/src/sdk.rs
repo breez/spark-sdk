@@ -1430,8 +1430,14 @@ impl BreezSdk {
             }])
             .await?;
 
-        let payments =
-            token_transaction_to_payments(&self.spark_wallet, &token_transaction, true).await?;
+        let object_repository = ObjectCacheRepository::new(self.storage.clone());
+        let payments = token_transaction_to_payments(
+            &self.spark_wallet,
+            &object_repository,
+            &token_transaction,
+            true,
+        )
+        .await?;
         for payment in &payments {
             self.storage.insert_payment(payment.clone()).await?;
         }

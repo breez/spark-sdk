@@ -42,7 +42,8 @@ impl SparkSyncService {
             .await?
             .unwrap_or_default();
         let current_offset = cached_sync_info.offset;
-        let last_synced_token_payment_id = cached_sync_info.last_synced_token_payment_id;
+        let last_synced_final_token_payment_id =
+            cached_sync_info.last_synced_final_token_payment_id;
 
         // We'll keep querying in batches until we have all transfers
         let mut next_filter = Some(PagingFilter {
@@ -88,7 +89,7 @@ impl SparkSyncService {
             let save_res = object_repository
                 .save_sync_info(&CachedSyncInfo {
                     offset: cache_offset.saturating_sub(pending_payments),
-                    last_synced_token_payment_id: last_synced_token_payment_id.clone(),
+                    last_synced_final_token_payment_id: last_synced_final_token_payment_id.clone(),
                 })
                 .await;
 
@@ -113,7 +114,8 @@ impl SparkSyncService {
             .fetch_sync_info()
             .await?
             .unwrap_or_default();
-        let last_synced_token_payment_id = cached_sync_info.last_synced_token_payment_id;
+        let last_synced_final_token_payment_id =
+            cached_sync_info.last_synced_final_token_payment_id;
         let our_public_key = self.spark_wallet.get_identity_public_key();
 
         // We'll keep querying in batches until we have all token tranactions
@@ -146,6 +148,22 @@ impl SparkSyncService {
             // If no token transactions to sync
             if token_transactions.is_empty() {
                 break 'page_loop;
+            }
+            // Optimization: if the first transaction corresponds to the last synced final token payment id,
+            // we can stop syncing
+            if let (Some(first_transaction), Some(last_synced_final_token_payment_id)) = (
+                token_transactions.items.first(),
+                &last_synced_final_token_payment_id,
+            ) {
+                // Payment ids have the format <transaction_hash>:<output_index>
+                if last_synced_final_token_payment_id.starts_with(&first_transaction.hash) {
+                    info!(
+                        "Last synced token payment id found ({last_synced_final_token_payment_id:?}), stopping sync and processing {} payments",
+                        payments_to_sync.len()
+                    );
+                    has_more = false;
+                    break 'page_loop;
+                }
             }
 
             // Get prev out hashes of first input of each token transaction
@@ -215,18 +233,19 @@ impl SparkSyncService {
                 // Create payment records
                 let payments = token_transaction_to_payments(
                     &self.spark_wallet,
+                    object_repository,
                     transaction,
                     tx_inputs_are_ours,
                 )
                 .await?;
 
                 for payment in payments {
-                    if last_synced_token_payment_id
+                    if last_synced_final_token_payment_id
                         .as_ref()
                         .is_some_and(|id| payment.id == *id)
                     {
                         info!(
-                            "Last synced token payment id found ({last_synced_token_payment_id:?}), stopping sync and processing {} payments",
+                            "Last synced token payment id found ({last_synced_final_token_payment_id:?}), stopping sync and processing {} payments",
                             payments_to_sync.len()
                         );
                         has_more = false;
@@ -254,18 +273,18 @@ impl SparkSyncService {
         // If there was a failure to fetch transactions or no transactions exist,
         // we won't update the last synced token payment id
         if !has_more
-            && let Some(last_synced_token_payment_id) = payments_to_sync
+            && let Some(last_synced_final_token_payment_id) = payments_to_sync
                 .into_iter()
                 .filter(|p| p.status.is_final())
                 .next_back()
                 .map(|p| p.id)
         {
             // Update last synced token payment id to the newest final payment we have processed
-            info!("Updating last synced token payment id to {last_synced_token_payment_id}");
+            info!("Updating last synced token payment id to {last_synced_final_token_payment_id}");
             object_repository
                 .save_sync_info(&CachedSyncInfo {
                     offset: cached_sync_info.offset,
-                    last_synced_token_payment_id: Some(last_synced_token_payment_id),
+                    last_synced_final_token_payment_id: Some(last_synced_final_token_payment_id),
                 })
                 .await?;
         }

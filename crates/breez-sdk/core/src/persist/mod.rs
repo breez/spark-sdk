@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::{
     DepositClaimError, DepositInfo, LightningAddressInfo, LnurlPayInfo, TokenBalance,
-    models::Payment,
+    TokenMetadata, models::Payment,
 };
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
@@ -17,6 +17,7 @@ const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
 const TX_CACHE_KEY: &str = "tx_cache";
 const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
+const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UpdateDepositPayload {
@@ -311,6 +312,33 @@ impl ObjectCacheRepository {
             None => Ok(None),
         }
     }
+
+    pub(crate) async fn save_token_metadata(
+        &self,
+        value: &TokenMetadata,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                format!("{TOKEN_METADATA_KEY_PREFIX}{}", value.identifier),
+                serde_json::to_string(value)?,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_token_metadata(
+        &self,
+        identifier: &str,
+    ) -> Result<Option<TokenMetadata>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(format!("{TOKEN_METADATA_KEY_PREFIX}{identifier}"))
+            .await?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -323,7 +351,7 @@ pub(crate) struct CachedAccountInfo {
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedSyncInfo {
     pub(crate) offset: u64,
-    pub(crate) last_synced_token_payment_id: Option<String>,
+    pub(crate) last_synced_final_token_payment_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
