@@ -12,7 +12,7 @@ func ConfigLightningAddress() *breez_sdk_spark.Config {
 	config.ApiKey = &apiKey
 	config.LnurlDomain = &lnurlDomain
 	// ANCHOR_END: config-lightning-address
-	return config
+	return &config
 }
 
 func CheckLightningAddressAvailability(sdk *breez_sdk_spark.BreezSdk) (bool, error) {
@@ -39,7 +39,7 @@ func RegisterLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.L
 	// ANCHOR: register-lightning-address
 	request := breez_sdk_spark.RegisterLightningAddressRequest{
 		Username:    username,
-		Description: description,
+		Description: &description,
 	}
 
 	addressInfo, err := sdk.RegisterLightningAddress(request)
@@ -51,7 +51,7 @@ func RegisterLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.L
 	_ = addressInfo.Lnurl
 	// ANCHOR_END: register-lightning-address
 
-	return addressInfo, nil
+	return &addressInfo, nil
 }
 
 func GetLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.LightningAddressInfo, error) {

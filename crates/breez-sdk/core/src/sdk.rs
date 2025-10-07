@@ -913,6 +913,273 @@ impl BreezSdk {
         self.send_payment_internal(request, false).await
     }
 
+    /// Synchronizes the wallet with the Spark network
+    #[allow(unused_variables)]
+    pub async fn sync_wallet(
+        &self,
+        request: SyncWalletRequest,
+    ) -> Result<SyncWalletResponse, SdkError> {
+        let (tx, rx) = oneshot::channel();
+
+        if let Err(e) = self.sync_trigger.send(SyncRequest::full(Some(tx))) {
+            error!("Failed to send sync trigger: {e:?}");
+        }
+        let _ = rx.await.map_err(|e| {
+            error!("Failed to receive sync trigger: {e:?}");
+            SdkError::Generic(format!("sync trigger failed: {e:?}"))
+        })?;
+        Ok(SyncWalletResponse {})
+    }
+
+    /// Lists payments from the storage with pagination
+    ///
+    /// This method provides direct access to the payment history stored in the database.
+    /// It returns payments in reverse chronological order (newest first).
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - Contains pagination parameters (offset and limit)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(ListPaymentsResponse)` - Contains the list of payments if successful
+    /// * `Err(SdkError)` - If there was an error accessing the storage
+    ///
+    pub async fn list_payments(
+        &self,
+        request: ListPaymentsRequest,
+    ) -> Result<ListPaymentsResponse, SdkError> {
+        let payments = self
+            .storage
+            .list_payments(request.offset, request.limit)
+            .await?;
+        Ok(ListPaymentsResponse { payments })
+    }
+
+    pub async fn get_payment(
+        &self,
+        request: GetPaymentRequest,
+    ) -> Result<GetPaymentResponse, SdkError> {
+        let payment = self.storage.get_payment_by_id(request.payment_id).await?;
+        Ok(GetPaymentResponse { payment })
+    }
+
+    pub async fn claim_deposit(
+        &self,
+        request: ClaimDepositRequest,
+    ) -> Result<ClaimDepositResponse, SdkError> {
+        let detailed_utxo =
+            CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
+                .fetch_detailed_utxo(&request.txid, request.vout)
+                .await?;
+
+        let max_fee = request
+            .max_fee
+            .or(self.config.max_deposit_claim_fee.clone());
+        match self.claim_utxo(&detailed_utxo, max_fee).await {
+            Ok(transfer) => {
+                self.storage
+                    .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
+                    .await?;
+                if let Err(e) = self.sync_trigger.send(SyncRequest::payments_only(None)) {
+                    error!("Failed to execute sync after deposit claim: {e:?}");
+                }
+                Ok(ClaimDepositResponse {
+                    payment: transfer.try_into()?,
+                })
+            }
+            Err(e) => {
+                error!("Failed to claim deposit: {e:?}");
+                self.storage
+                    .update_deposit(
+                        detailed_utxo.txid.to_string(),
+                        detailed_utxo.vout,
+                        UpdateDepositPayload::ClaimError {
+                            error: e.clone().into(),
+                        },
+                    )
+                    .await?;
+                Err(e)
+            }
+        }
+    }
+
+    pub async fn refund_deposit(
+        &self,
+        request: RefundDepositRequest,
+    ) -> Result<RefundDepositResponse, SdkError> {
+        let detailed_utxo =
+            CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
+                .fetch_detailed_utxo(&request.txid, request.vout)
+                .await?;
+        let tx = self
+            .spark_wallet
+            .refund_static_deposit(
+                detailed_utxo.clone().tx,
+                Some(detailed_utxo.vout),
+                &request.destination_address,
+                request.fee.into(),
+            )
+            .await?;
+        let deposit: DepositInfo = detailed_utxo.into();
+        let tx_hex = serialize(&tx).as_hex().to_string();
+        let tx_id = tx.compute_txid().as_raw_hash().to_string();
+
+        // Store the refund transaction details separately
+        self.storage
+            .update_deposit(
+                deposit.txid.clone(),
+                deposit.vout,
+                UpdateDepositPayload::Refund {
+                    refund_tx: tx_hex.clone(),
+                    refund_txid: tx_id.clone(),
+                },
+            )
+            .await?;
+
+        self.chain_service
+            .broadcast_transaction(tx_hex.clone())
+            .await?;
+        Ok(RefundDepositResponse { tx_id, tx_hex })
+    }
+
+    #[allow(unused_variables)]
+    pub async fn list_unclaimed_deposits(
+        &self,
+        request: ListUnclaimedDepositsRequest,
+    ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
+        let deposits = self.storage.list_deposits().await?;
+        Ok(ListUnclaimedDepositsResponse { deposits })
+    }
+
+    pub async fn check_lightning_address_available(
+        &self,
+        req: CheckLightningAddressRequest,
+    ) -> Result<bool, SdkError> {
+        let Some(client) = &self.lnurl_server_client else {
+            return Err(SdkError::Generic(
+                "LNURL server is not configured".to_string(),
+            ));
+        };
+
+        let available = client.check_username_available(&req.username).await?;
+        Ok(available)
+    }
+
+    pub async fn get_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        Ok(cache.fetch_lightning_address().await?)
+    }
+
+    pub async fn register_lightning_address(
+        &self,
+        request: RegisterLightningAddressRequest,
+    ) -> Result<LightningAddressInfo, SdkError> {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let Some(client) = &self.lnurl_server_client else {
+            return Err(SdkError::Generic(
+                "LNURL server is not configured".to_string(),
+            ));
+        };
+
+        let description = match request.description {
+            Some(description) => description,
+            None => format!("Pay to {}@{}", request.username, client.domain()),
+        };
+        let params = crate::lnurl::RegisterLightningAddressRequest {
+            username: request.username.clone(),
+            description: description.clone(),
+        };
+
+        let response = client.register_lightning_address(&params).await?;
+        let address_info = LightningAddressInfo {
+            lightning_address: response.lightning_address,
+            description,
+            lnurl: response.lnurl,
+            username: request.username,
+        };
+        cache.save_lightning_address(&address_info).await?;
+        Ok(address_info)
+    }
+
+    pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let Some(address_info) = cache.fetch_lightning_address().await? else {
+            return Ok(());
+        };
+
+        let Some(client) = &self.lnurl_server_client else {
+            return Err(SdkError::Generic(
+                "LNURL server is not configured".to_string(),
+            ));
+        };
+
+        let params = crate::lnurl::UnregisterLightningAddressRequest {
+            username: address_info.username,
+        };
+
+        client.unregister_lightning_address(&params).await?;
+        cache.delete_lightning_address().await?;
+        Ok(())
+    }
+
+    /// List fiat currencies for which there is a known exchange rate,
+    /// sorted by the canonical name of the currency.
+    pub async fn list_fiat_currencies(&self) -> Result<ListFiatCurrenciesResponse, SdkError> {
+        let currencies = self.fiat_service.fetch_fiat_currencies().await?;
+        Ok(ListFiatCurrenciesResponse { currencies })
+    }
+
+    /// List the latest rates of fiat currencies, sorted by name.
+    pub async fn list_fiat_rates(&self) -> Result<ListFiatRatesResponse, SdkError> {
+        let rates = self.fiat_service.fetch_fiat_rates().await?;
+        Ok(ListFiatRatesResponse { rates })
+    }
+
+    pub async fn wait_for_payment(
+        &self,
+        request: WaitForPaymentRequest,
+    ) -> Result<WaitForPaymentResponse, SdkError> {
+        let (tx, mut rx) = mpsc::channel(20);
+        let id = self
+            .add_event_listener(Box::new(InternalEventListener::new(tx)))
+            .await;
+
+        // First check if we already have the payment in storage
+        if let WaitForPaymentIdentifier::PaymentRequest(payment_request) = &request.identifier
+            && let Some(payment) = self
+                .storage
+                .get_payment_by_invoice(payment_request.clone())
+                .await?
+        {
+            self.remove_event_listener(&id).await;
+            return Ok(WaitForPaymentResponse { payment });
+        }
+
+        // Otherwise, we wait for a matching payment event
+        let payment_result = loop {
+            let Some(event) = rx.recv().await else {
+                break Err(SdkError::Generic("Event channel closed".to_string()));
+            };
+
+            let SdkEvent::PaymentSucceeded { payment } = event else {
+                continue;
+            };
+
+            if is_payment_match(&payment, &request) {
+                break Ok(payment);
+            }
+        };
+
+        self.remove_event_listener(&id).await;
+        Ok(WaitForPaymentResponse {
+            payment: payment_result?,
+        })
+    }
+}
+
+// Separate impl block to avoid exposing private methods to uniffi.
+impl BreezSdk {
     async fn send_payment_internal(
         &self,
         request: SendPaymentRequest,
@@ -1118,145 +1385,6 @@ impl BreezSdk {
         });
     }
 
-    /// Synchronizes the wallet with the Spark network
-    #[allow(unused_variables)]
-    pub async fn sync_wallet(
-        &self,
-        request: SyncWalletRequest,
-    ) -> Result<SyncWalletResponse, SdkError> {
-        let (tx, rx) = oneshot::channel();
-
-        if let Err(e) = self.sync_trigger.send(SyncRequest::full(Some(tx))) {
-            error!("Failed to send sync trigger: {e:?}");
-        }
-        let _ = rx.await.map_err(|e| {
-            error!("Failed to receive sync trigger: {e:?}");
-            SdkError::Generic(format!("sync trigger failed: {e:?}"))
-        })?;
-        Ok(SyncWalletResponse {})
-    }
-
-    /// Lists payments from the storage with pagination
-    ///
-    /// This method provides direct access to the payment history stored in the database.
-    /// It returns payments in reverse chronological order (newest first).
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - Contains pagination parameters (offset and limit)
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(ListPaymentsResponse)` - Contains the list of payments if successful
-    /// * `Err(SdkError)` - If there was an error accessing the storage
-    ///
-    pub async fn list_payments(
-        &self,
-        request: ListPaymentsRequest,
-    ) -> Result<ListPaymentsResponse, SdkError> {
-        let payments = self
-            .storage
-            .list_payments(request.offset, request.limit)
-            .await?;
-        Ok(ListPaymentsResponse { payments })
-    }
-
-    pub async fn get_payment(
-        &self,
-        request: GetPaymentRequest,
-    ) -> Result<GetPaymentResponse, SdkError> {
-        let payment = self.storage.get_payment_by_id(request.payment_id).await?;
-        Ok(GetPaymentResponse { payment })
-    }
-
-    pub async fn claim_deposit(
-        &self,
-        request: ClaimDepositRequest,
-    ) -> Result<ClaimDepositResponse, SdkError> {
-        let detailed_utxo =
-            CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
-                .fetch_detailed_utxo(&request.txid, request.vout)
-                .await?;
-
-        let max_fee = request
-            .max_fee
-            .or(self.config.max_deposit_claim_fee.clone());
-        match self.claim_utxo(&detailed_utxo, max_fee).await {
-            Ok(transfer) => {
-                self.storage
-                    .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
-                    .await?;
-                if let Err(e) = self.sync_trigger.send(SyncRequest::payments_only(None)) {
-                    error!("Failed to execute sync after deposit claim: {e:?}");
-                }
-                Ok(ClaimDepositResponse {
-                    payment: transfer.try_into()?,
-                })
-            }
-            Err(e) => {
-                error!("Failed to claim deposit: {e:?}");
-                self.storage
-                    .update_deposit(
-                        detailed_utxo.txid.to_string(),
-                        detailed_utxo.vout,
-                        UpdateDepositPayload::ClaimError {
-                            error: e.clone().into(),
-                        },
-                    )
-                    .await?;
-                Err(e)
-            }
-        }
-    }
-
-    pub async fn refund_deposit(
-        &self,
-        request: RefundDepositRequest,
-    ) -> Result<RefundDepositResponse, SdkError> {
-        let detailed_utxo =
-            CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
-                .fetch_detailed_utxo(&request.txid, request.vout)
-                .await?;
-        let tx = self
-            .spark_wallet
-            .refund_static_deposit(
-                detailed_utxo.clone().tx,
-                Some(detailed_utxo.vout),
-                &request.destination_address,
-                request.fee.into(),
-            )
-            .await?;
-        let deposit: DepositInfo = detailed_utxo.into();
-        let tx_hex = serialize(&tx).as_hex().to_string();
-        let tx_id = tx.compute_txid().as_raw_hash().to_string();
-
-        // Store the refund transaction details separately
-        self.storage
-            .update_deposit(
-                deposit.txid.clone(),
-                deposit.vout,
-                UpdateDepositPayload::Refund {
-                    refund_tx: tx_hex.clone(),
-                    refund_txid: tx_id.clone(),
-                },
-            )
-            .await?;
-
-        self.chain_service
-            .broadcast_transaction(tx_hex.clone())
-            .await?;
-        Ok(RefundDepositResponse { tx_id, tx_hex })
-    }
-
-    #[allow(unused_variables)]
-    pub async fn list_unclaimed_deposits(
-        &self,
-        request: ListUnclaimedDepositsRequest,
-    ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
-        let deposits = self.storage.list_deposits().await?;
-        Ok(ListUnclaimedDepositsResponse { deposits })
-    }
-
     /// Attempts to recover a lightning address from the lnurl server.
     async fn recover_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
@@ -1278,131 +1406,6 @@ impl BreezSdk {
         };
 
         Ok(result)
-    }
-
-    pub async fn check_lightning_address_available(
-        &self,
-        req: CheckLightningAddressRequest,
-    ) -> Result<bool, SdkError> {
-        let Some(client) = &self.lnurl_server_client else {
-            return Err(SdkError::Generic(
-                "LNURL server is not configured".to_string(),
-            ));
-        };
-
-        let available = client.check_username_available(&req.username).await?;
-        Ok(available)
-    }
-
-    pub async fn get_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
-        let cache = ObjectCacheRepository::new(self.storage.clone());
-        Ok(cache.fetch_lightning_address().await?)
-    }
-
-    pub async fn register_lightning_address(
-        &self,
-        request: RegisterLightningAddressRequest,
-    ) -> Result<LightningAddressInfo, SdkError> {
-        let cache = ObjectCacheRepository::new(self.storage.clone());
-        let Some(client) = &self.lnurl_server_client else {
-            return Err(SdkError::Generic(
-                "LNURL server is not configured".to_string(),
-            ));
-        };
-
-        let description = match request.description {
-            Some(description) => description,
-            None => format!("Pay to {}@{}", request.username, client.domain()),
-        };
-        let params = crate::lnurl::RegisterLightningAddressRequest {
-            username: request.username.clone(),
-            description: description.clone(),
-        };
-
-        let response = client.register_lightning_address(&params).await?;
-        let address_info = LightningAddressInfo {
-            lightning_address: response.lightning_address,
-            description,
-            lnurl: response.lnurl,
-            username: request.username,
-        };
-        cache.save_lightning_address(&address_info).await?;
-        Ok(address_info)
-    }
-
-    pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
-        let cache = ObjectCacheRepository::new(self.storage.clone());
-        let Some(address_info) = cache.fetch_lightning_address().await? else {
-            return Ok(());
-        };
-
-        let Some(client) = &self.lnurl_server_client else {
-            return Err(SdkError::Generic(
-                "LNURL server is not configured".to_string(),
-            ));
-        };
-
-        let params = crate::lnurl::UnregisterLightningAddressRequest {
-            username: address_info.username,
-        };
-
-        client.unregister_lightning_address(&params).await?;
-        cache.delete_lightning_address().await?;
-        Ok(())
-    }
-
-    /// List fiat currencies for which there is a known exchange rate,
-    /// sorted by the canonical name of the currency.
-    pub async fn list_fiat_currencies(&self) -> Result<ListFiatCurrenciesResponse, SdkError> {
-        let currencies = self.fiat_service.fetch_fiat_currencies().await?;
-        Ok(ListFiatCurrenciesResponse { currencies })
-    }
-
-    /// List the latest rates of fiat currencies, sorted by name.
-    pub async fn list_fiat_rates(&self) -> Result<ListFiatRatesResponse, SdkError> {
-        let rates = self.fiat_service.fetch_fiat_rates().await?;
-        Ok(ListFiatRatesResponse { rates })
-    }
-
-    pub async fn wait_for_payment(
-        &self,
-        request: WaitForPaymentRequest,
-    ) -> Result<WaitForPaymentResponse, SdkError> {
-        let (tx, mut rx) = mpsc::channel(20);
-        let id = self
-            .add_event_listener(Box::new(InternalEventListener::new(tx)))
-            .await;
-
-        // First check if we already have the payment in storage
-        if let WaitForPaymentIdentifier::PaymentRequest(payment_request) = &request.identifier
-            && let Some(payment) = self
-                .storage
-                .get_payment_by_invoice(payment_request.clone())
-                .await?
-        {
-            self.remove_event_listener(&id).await;
-            return Ok(WaitForPaymentResponse { payment });
-        }
-
-        // Otherwise, we wait for a matching payment event
-        let payment_result = loop {
-            let Some(event) = rx.recv().await else {
-                break Err(SdkError::Generic("Event channel closed".to_string()));
-            };
-
-            let SdkEvent::PaymentSucceeded { payment } = event else {
-                continue;
-            };
-
-            if is_payment_match(&payment, &request) {
-                break Ok(payment);
-            }
-        };
-
-        self.remove_event_listener(&id).await;
-        Ok(WaitForPaymentResponse {
-            payment: payment_result?,
-        })
     }
 }
 
