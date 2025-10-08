@@ -537,7 +537,7 @@ pub struct TokenMetadata {
     pub name: String,
     pub ticker: String,
     pub decimals: u32,
-    // Serde doesn't support deserializing u128 types whenever they are user with flatten: https://github.com/serde-rs/json/issues/625
+    // Serde doesn't support deserializing u128 types whenever they are used with flatten: https://github.com/serde-rs/json/issues/625
     // This occurs in the storage implementation when parsing `PaymentDetails` due to the use of flatten in LnurlRequestDetails
     // Serializing as string is a workaround to avoid the issue.
     #[serde(with = "serde_u128_as_string")]
