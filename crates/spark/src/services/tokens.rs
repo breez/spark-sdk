@@ -334,8 +334,11 @@ impl TokenService {
             )));
         }
 
+        // TODO: Support spark invoices (including updating compute_hash)
+        let spark_invoices = None;
+
         let partial_tx = self
-            .build_partial_tx(inputs.clone(), receiver_outputs)
+            .build_partial_tx(inputs.clone(), receiver_outputs, spark_invoices)
             .await?;
 
         let (txid, final_tx) = self
@@ -411,6 +414,7 @@ impl TokenService {
         &self,
         mut inputs: Vec<TokenOutputWithPrevOut>,
         mut receiver_outputs: Vec<TransferTokenOutput>,
+        spark_invoices: Option<Vec<SparkAddress>>,
     ) -> Result<rpc::spark_token::TokenTransaction, ServiceError> {
         // Ensure inputs are ordered by vout ascending so that the input indices
         // used for owner signatures match the order expected by the SO, which sorts
@@ -485,6 +489,13 @@ impl TokenService {
                 }
             }),
             token_inputs: Some(inputs),
+            invoice_attachments: spark_invoices
+                .unwrap_or_default()
+                .into_iter()
+                .map(|invoice| rpc::spark_token::InvoiceAttachment {
+                    spark_invoice: invoice.to_string(),
+                })
+                .collect(),
         };
 
         Ok(transaction)
@@ -1093,6 +1104,7 @@ mod tests {
                         },
                     ],
                 })),
+                invoice_attachments: vec![],
             };
 
         let hash = tx.compute_hash(false).unwrap();
@@ -1197,6 +1209,7 @@ mod tests {
                         },
                     ],
                 })),
+                invoice_attachments: vec![],
             };
 
         let hash = tx.compute_hash(true).unwrap();
