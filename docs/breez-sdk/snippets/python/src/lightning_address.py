@@ -1,4 +1,3 @@
-import logging
 from breez_sdk_spark import (
     BreezSdk,
     CheckLightningAddressRequest,
