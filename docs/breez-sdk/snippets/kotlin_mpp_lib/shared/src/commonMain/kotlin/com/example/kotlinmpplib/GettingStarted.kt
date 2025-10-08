@@ -82,12 +82,12 @@ class GettingStarted {
 
     // ANCHOR: add-event-listener
     class SdkListener : EventListener {
-        override fun onEvent(e: SdkEvent) {
+        override suspend fun onEvent(e: SdkEvent) {
             // Log.v("SDKListener", "Received event $e")
         }
     }
 
-    fun addEventListener(sdk: BreezSdk, listener: SdkListener): String? {
+    suspend fun addEventListener(sdk: BreezSdk, listener: SdkListener): String? {
         try {
             val listenerId = sdk.addEventListener(listener)
             return listenerId
@@ -99,7 +99,7 @@ class GettingStarted {
     // ANCHOR_END: add-event-listener
 
     // ANCHOR: remove-event-listener
-    fun removeEventListener(sdk: BreezSdk, listenerId: String)  {
+    suspend fun removeEventListener(sdk: BreezSdk, listenerId: String)  {
         try {
             sdk.removeEventListener(listenerId)
         } catch (e: Exception) {
@@ -109,7 +109,7 @@ class GettingStarted {
     // ANCHOR_END: remove-event-listener
 
     // ANCHOR: disconnect
-    fun disconnect(sdk: BreezSdk)  {
+    suspend fun disconnect(sdk: BreezSdk)  {
         try {
             sdk.disconnect()
         } catch (e: Exception) {

@@ -1,13 +1,14 @@
 package com.example.kotlinmpplib
 
 import breez_sdk_spark.*
+import com.ionspin.kotlin.bignum.integer.BigInteger
 
 class SendPayment {
     suspend fun prepareSendPaymentLightningBolt11(sdk: BreezSdk) {
         // ANCHOR: prepare-send-payment-lightning-bolt11
         val paymentRequest = "<bolt11 invoice>"
         // Optionally set the amount you wish the pay the receiver
-        val optionalAmountSats = 5_000UL
+        val optionalAmountSats = BigInteger.fromLong(5_000L)
         try {
             val req = PrepareSendPaymentRequest(paymentRequest, optionalAmountSats)
             val prepareResponse = sdk.prepareSendPayment(req)
@@ -32,7 +33,7 @@ class SendPayment {
         // ANCHOR: prepare-send-payment-onchain
         val paymentRequest = "<bitcoin address>"
         // Set the amount you wish the pay the receiver
-        val amountSats = 50_000UL
+        val amountSats = BigInteger.fromLong(50_000L)
         try {
             val req = PrepareSendPaymentRequest(paymentRequest, amountSats)
             val prepareResponse = sdk.prepareSendPayment(req)
@@ -58,7 +59,7 @@ class SendPayment {
         // ANCHOR: prepare-send-payment-spark
         val paymentRequest = "<spark address>"
         // Set the amount you wish the pay the receiver
-        val amountSats = 50_000UL 
+        val amountSats = BigInteger.fromLong(50_000L)
         try {
             val req = PrepareSendPaymentRequest(paymentRequest, amountSats)
             val prepareResponse = sdk.prepareSendPayment(req)
@@ -66,7 +67,7 @@ class SendPayment {
             // If the fees are acceptable, continue to create the Send Payment
             val paymentMethod = prepareResponse.paymentMethod
             if (paymentMethod is SendPaymentMethod.SparkAddress) {
-                val feeSats = paymentMethod.feeSats
+                val feeSats = paymentMethod.fee
                 // Log.v("Breez", "Fees: ${feeSats} sats")
             }
         } catch (e: Exception) {
