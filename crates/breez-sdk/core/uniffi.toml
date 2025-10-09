@@ -6,8 +6,40 @@ kotlin_targets = ["jvm"]
 kotlin_target_version = "1.9.21"
 disable_java_cleaner = true
 
+# Kotlin custom types
+[custom_types.u128]
+type_name = "BigInteger"
+imports = [ "java.math.BigInteger" ]
+into_custom = "BigInteger({})"
+from_custom = "{}.toString()"
+
 # https://mozilla.github.io/uniffi-rs/swift/configuration.html
 [bindings.swift]
 ffi_module_name = "breez_sdk_sparkFFI"
 ffi_module_filename = "breez_sdk_sparkFFI"
 cdylib_name = "breez_sdk_spark_bindings"
+
+[bindings.swift.custom_types.u128]
+type_name = "BigUInt"
+imports = [ "BigInt" ]
+into_custom = "BigUInt(stringLiteral: {})"
+from_custom = "{}.description"
+
+[bindings.python.custom_types.U128]
+type_name = "int"
+into_custom = "int({})"
+from_custom = "str({})"
+
+[bindings.typescript.customTypes.u128]
+typeName = "bigint"
+intoCustom = "BigInt({})"
+fromCustom = "{}.toString()"
+
+[bindings.go.custom_types.u128]
+type_name = "*big.Int"
+imports = [ "math/big" ]
+into_custom = """
+result, _ := new(big.Int).SetString({}, 10)
+return result
+"""
+from_custom = "{}.String()"

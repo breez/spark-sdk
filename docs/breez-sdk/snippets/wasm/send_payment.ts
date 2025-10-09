@@ -8,11 +8,11 @@ const examplePrepareSendPaymentLightningBolt11 = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-send-payment-lightning-bolt11
   const paymentRequest = '<bolt11 invoice>'
   // Optionally set the amount you wish the pay the receiver
-  const optionalAmountSats = 5_000
+  const optionalAmountSats = BigInt(5_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    amountSats: optionalAmountSats
+    amount: optionalAmountSats
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -31,11 +31,11 @@ const examplePrepareSendPaymentOnchain = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-send-payment-onchain
   const paymentRequest = '<bitcoin address>'
   // Set the amount you wish the pay the receiver
-  const amountSats = 50_000
+  const amountSats = BigInt(50_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    amountSats
+    amount: amountSats
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -55,16 +55,16 @@ const examplePrepareSendPaymentSpark = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-send-payment-spark
   const paymentRequest = '<spark address>'
   // Set the amount you wish the pay the receiver
-  const amountSats = 50_000
+  const amountSats = BigInt(50_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    amountSats
+    amount: amountSats
   })
 
   // If the fees are acceptable, continue to create the Send Payment
   if (prepareResponse.paymentMethod.type === 'sparkAddress') {
-    const feeSats = prepareResponse.paymentMethod.feeSats
+    const feeSats = prepareResponse.paymentMethod.fee
     console.debug(`Fees: ${feeSats} sats`)
   }
   // ANCHOR_END: prepare-send-payment-spark
@@ -75,8 +75,8 @@ const exampleSendPaymentLightningBolt11 = async (
   prepareResponse: PrepareSendPaymentResponse
 ) => {
   // ANCHOR: send-payment-lightning-bolt11
-  const options: SendPaymentOptions = { 
-    type: 'bolt11Invoice', 
+  const options: SendPaymentOptions = {
+    type: 'bolt11Invoice',
     preferSpark: true,
     completionTimeoutSecs: 10
   }

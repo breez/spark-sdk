@@ -188,6 +188,29 @@ class MigrationManager {
             )`,
         ],
       },
+      {
+        name: "Change payments amount and fees from INTEGER to TEXT",
+        sql: [
+          `CREATE TABLE payments_new (
+                        id TEXT PRIMARY KEY,
+                        payment_type TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        amount TEXT NOT NULL,
+                        fees TEXT NOT NULL,
+                        timestamp INTEGER NOT NULL,
+                        method TEXT,
+                        withdraw_tx_id TEXT,
+                        deposit_tx_id TEXT,
+                        spark INTEGER
+                        method TEXT
+                    )`,
+          `INSERT INTO payments_new (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+           SELECT id, payment_type, status, CAST(amount AS TEXT), CAST(fees AS TEXT), timestamp, method, withdraw_tx_id, deposit_tx_id, spark
+           FROM payments`,
+          `DROP TABLE payments`,
+          `ALTER TABLE payments_new RENAME TO payments`,
+        ],
+      },
     ];
   }
 }

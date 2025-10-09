@@ -10,6 +10,7 @@ pluginManagement {
 dependencyResolutionManagement {
     // repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
+        mavenLocal()  // Allows to use local builds
         google()
         mavenCentral()
         maven("https://mvn.breez.technology/releases")

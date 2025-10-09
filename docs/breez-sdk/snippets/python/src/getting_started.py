@@ -94,7 +94,7 @@ def set_logger(logger: SdkLogger):
 
 # ANCHOR: add-event-listener
 class SdkListener(EventListener):
-    async def on_event(self, event: SdkEvent):
+    def on_event(self, event: SdkEvent):
         logging.debug(f"Received event {event}")
 
 

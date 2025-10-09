@@ -2,6 +2,26 @@ use std::collections::HashMap;
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
+// Helper module for serializing u128 as string
+mod serde_u128_as_string {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<u128, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SdkEvent)]
 pub enum SdkEvent {
@@ -161,7 +181,7 @@ pub enum SparkAddressPaymentType {
 #[macros::extern_wasm_bindgen(breez_sdk_common::input::TokensPaymentDetails)]
 pub struct TokensPaymentDetails {
     pub token_identifier: Option<String>,
-    pub amount: Option<u64>,
+    pub amount: Option<u128>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_common::input::SatsPaymentDetails)]
@@ -361,8 +381,8 @@ pub struct Payment {
     pub id: String,
     pub payment_type: PaymentType,
     pub status: PaymentStatus,
-    pub amount: u64,
-    pub fees: u64,
+    pub amount: u128,
+    pub fees: u128,
     pub timestamp: u64,
     pub method: PaymentMethod,
     pub details: Option<PaymentDetails>,
@@ -506,21 +526,22 @@ pub struct GetInfoResponse {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenBalance)]
 pub struct TokenBalance {
-    pub balance: u64,
+    pub balance: u128,
     pub token_metadata: TokenMetadata,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenMetadata)]
 pub struct TokenMetadata {
     pub identifier: String,
-    /// Hex representation of the issuer public key
     pub issuer_public_key: String,
     pub name: String,
     pub ticker: String,
-    /// Number of decimals the token uses
     pub decimals: u32,
-    /// Decimal representation of the token max supply (unsigned 128-bit integer)
-    pub max_supply: u64,
+    // Serde doesn't support deserializing u128 types whenever they are used with flatten: https://github.com/serde-rs/json/issues/625
+    // This occurs in the storage implementation when parsing `PaymentDetails` due to the use of flatten in LnurlRequestDetails
+    // Serializing as string is a workaround to avoid the issue.
+    #[serde(with = "serde_u128_as_string")]
+    pub max_supply: u128,
     pub is_freezable: bool,
 }
 
@@ -568,7 +589,7 @@ pub enum SendPaymentMethod {
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
-        fee: u64,
+        fee: u128,
         token_identifier: Option<String>,
     },
 }
@@ -616,14 +637,14 @@ pub struct LnurlPayResponse {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentRequest)]
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
-    pub amount: Option<u64>,
+    pub amount: Option<u128>,
     pub token_identifier: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    pub amount: u64,
+    pub amount: u128,
     pub token_identifier: Option<String>,
 }
 
