@@ -1,10 +1,10 @@
 use breez_sdk_spark::{
     BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee, GetInfoRequest,
-    GetPaymentRequest, InputType, LightningAddressDetails, ListPaymentsRequest,
-    ListUnclaimedDepositsRequest, LnurlPayRequest, OnchainConfirmationSpeed,
-    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
-    SendPaymentRequest, SyncWalletRequest, parse,
+    GetPaymentRequest, InputType, LightningAddressDetails, ListPaymentDetails, ListPaymentsRequest,
+    ListUnclaimedDepositsRequest, LnurlPayRequest, OnchainConfirmationSpeed, PaymentStatus,
+    PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
+    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest,
+    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SyncWalletRequest, parse,
 };
 use clap::Parser;
 use rustyline::{
@@ -34,6 +34,26 @@ pub enum Command {
     Sync,
     /// Lists payments
     ListPayments {
+        /// Filter by payment type
+        #[arg(short, long)]
+        type_filter: Option<Vec<PaymentType>>,
+
+        /// Filter by payment status
+        #[arg(short, long)]
+        status_filter: Option<Vec<PaymentStatus>>,
+
+        /// Filter by payment details
+        #[arg(short, long)]
+        details_filter: Option<ListPaymentDetails>,
+
+        /// Exclude payments before this timestamp
+        #[arg(short, long)]
+        from_timestamp: Option<u64>,
+
+        /// Exclude payments after this timestamp
+        #[arg(short, long)]
+        to_timestamp: Option<u64>,
+
         /// Number of payments to show
         #[arg(short, long, default_value = "10")]
         limit: Option<u32>,
@@ -41,6 +61,10 @@ pub enum Command {
         /// Number of payments to skip
         #[arg(short, long, default_value = "0")]
         offset: Option<u32>,
+
+        /// Sort payments in ascending order
+        #[arg(short, long)]
+        sort_ascending: Option<bool>,
     },
 
     /// Receive
@@ -176,9 +200,27 @@ pub(crate) async fn execute_command(
             print_value(&value)?;
             Ok(true)
         }
-        Command::ListPayments { limit, offset } => {
+        Command::ListPayments {
+            limit,
+            offset,
+            type_filter,
+            status_filter,
+            details_filter,
+            from_timestamp,
+            to_timestamp,
+            sort_ascending,
+        } => {
             let value = sdk
-                .list_payments(ListPaymentsRequest { limit, offset })
+                .list_payments(ListPaymentsRequest {
+                    limit,
+                    offset,
+                    type_filter,
+                    status_filter,
+                    details_filter,
+                    from_timestamp,
+                    to_timestamp,
+                    sort_ascending,
+                })
                 .await?;
             print_value(&value)?;
             Ok(true)

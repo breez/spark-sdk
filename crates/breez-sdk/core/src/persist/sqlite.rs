@@ -8,7 +8,8 @@ use rusqlite::{
 use rusqlite_migration::{M, Migrations, SchemaVersion};
 
 use crate::{
-    DepositInfo, LnurlPayInfo, PaymentDetails, PaymentMethod,
+    DepositInfo, ListPaymentDetails, ListPaymentsRequest, LnurlPayInfo, PaymentDetails,
+    PaymentMethod,
     error::DepositClaimError,
     persist::{PaymentMetadata, UpdateDepositPayload},
 };
@@ -205,12 +206,98 @@ impl From<rusqlite_migration::Error> for StorageError {
 
 #[async_trait]
 impl Storage for SqliteStorage {
+    #[allow(clippy::too_many_lines)]
     async fn list_payments(
         &self,
-        offset: Option<u32>,
-        limit: Option<u32>,
+        request: ListPaymentsRequest,
     ) -> Result<Vec<Payment>, StorageError> {
         let connection = self.get_connection()?;
+
+        // Build WHERE clauses based on filters
+        let mut where_clauses = Vec::new();
+        let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+
+        // Filter by payment type
+        if let Some(ref type_filter) = request.type_filter
+            && !type_filter.is_empty()
+        {
+            let placeholders = type_filter
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(", ");
+            where_clauses.push(format!("p.payment_type IN ({placeholders})"));
+            for payment_type in type_filter {
+                params.push(Box::new(payment_type.to_string()));
+            }
+        }
+
+        // Filter by status
+        if let Some(ref status_filter) = request.status_filter
+            && !status_filter.is_empty()
+        {
+            let placeholders = status_filter
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(", ");
+            where_clauses.push(format!("p.status IN ({placeholders})"));
+            for status in status_filter {
+                params.push(Box::new(status.to_string()));
+            }
+        }
+
+        // Filter by timestamp range
+        if let Some(from_timestamp) = request.from_timestamp {
+            where_clauses.push("p.timestamp >= ?".to_string());
+            params.push(Box::new(from_timestamp));
+        }
+
+        if let Some(to_timestamp) = request.to_timestamp {
+            where_clauses.push("p.timestamp <= ?".to_string());
+            params.push(Box::new(to_timestamp));
+        }
+
+        // Filter by payment details/method
+        if let Some(ref details_filter) = request.details_filter {
+            match details_filter {
+                ListPaymentDetails::Spark => {
+                    where_clauses.push("p.spark IS NOT NULL".to_string());
+                }
+                ListPaymentDetails::Lightning => {
+                    where_clauses.push("l.invoice IS NOT NULL".to_string());
+                }
+                ListPaymentDetails::Withdraw => {
+                    where_clauses.push("p.withdraw_tx_id IS NOT NULL".to_string());
+                }
+                ListPaymentDetails::Deposit => {
+                    where_clauses.push("p.deposit_tx_id IS NOT NULL".to_string());
+                }
+                ListPaymentDetails::Token { token_identifier } => {
+                    where_clauses.push("t.metadata IS NOT NULL".to_string());
+                    if let Some(identifier) = token_identifier {
+                        // Filter by specific token identifier
+                        where_clauses
+                            .push("json_extract(t.metadata, '$.identifier') = ?".to_string());
+                        params.push(Box::new(identifier.clone()));
+                    }
+                }
+            }
+        }
+
+        // Build the WHERE clause
+        let where_sql = if where_clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", where_clauses.join(" AND "))
+        };
+
+        // Determine sort order
+        let order_direction = if request.sort_ascending.unwrap_or(false) {
+            "ASC"
+        } else {
+            "DESC"
+        };
 
         let query = format!(
             "SELECT p.id
@@ -235,15 +322,19 @@ impl Storage for SqliteStorage {
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-             ORDER BY p.timestamp DESC 
+             {}
+             ORDER BY p.timestamp {} 
              LIMIT {} OFFSET {}",
-            limit.unwrap_or(u32::MAX),
-            offset.unwrap_or(0)
+            where_sql,
+            order_direction,
+            request.limit.unwrap_or(u32::MAX),
+            request.offset.unwrap_or(0)
         );
 
         let mut stmt = connection.prepare(&query)?;
+        let param_refs: Vec<&dyn ToSql> = params.iter().map(std::convert::AsRef::as_ref).collect();
         let payments = stmt
-            .query_map(params![], map_payment)?
+            .query_map(param_refs.as_slice(), map_payment)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(payments)
     }
@@ -709,5 +800,53 @@ mod tests {
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
         crate::persist::tests::test_deposit_refunds(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_type_filtering() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_type_filter").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_payment_type_filtering(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_status_filtering() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_status_filter").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_payment_status_filtering(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_details_filtering() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_details_filter").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_payment_details_filtering(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_timestamp_filtering() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_timestamp_filter").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_timestamp_filtering(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_combined_filters() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_combined_filter").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_combined_filters(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_sort_order() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_sort_order").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_sort_order(Box::new(storage)).await;
     }
 }
