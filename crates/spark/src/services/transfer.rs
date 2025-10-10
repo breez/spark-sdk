@@ -410,15 +410,15 @@ impl TransferService {
 
         let unsigned_transfer_package = operator_rpc::spark::TransferPackage {
             leaves_to_send: cpfp_signed_tx
-                .into_iter()
+                .iter()
                 .map(|l| l.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             direct_leaves_to_send: direct_signed_tx
-                .into_iter()
+                .iter()
                 .map(|l| l.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             direct_from_cpfp_leaves_to_send: direct_from_cpfp_signed_tx
-                .into_iter()
+                .iter()
                 .map(|l| l.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             key_tweak_package: encrypted_key_tweaks
