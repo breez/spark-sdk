@@ -318,6 +318,16 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    pub async fn renew_leaf(&self, req: RenewLeafRequest) -> Result<RenewLeafResponse> {
+        debug!("Calling renew_leaf with request: {:?}", req);
+        Ok(self
+            .spark_service_client()
+            .await?
+            .renew_leaf(req)
+            .await?
+            .into_inner())
+    }
+
     pub async fn get_signing_operator_list(&self) -> Result<GetSigningOperatorListResponse> {
         debug!("Calling get_signing_operator_list");
         Ok(self

@@ -61,7 +61,7 @@ impl TreeService for SynchronousTreeService {
         optimize: bool,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
         let result_nodes = self
-            .check_timelock_nodes(leaves, async |e| {
+            .check_renew_nodes(leaves, async |e| {
                 // If this is a partial check timelock error, the extend node timelock failed
                 // but we can still update the leaves that were refreshed
                 if let ServiceError::PartialCheckTimelockError(ref nodes) = e
@@ -252,7 +252,7 @@ impl TreeService for SynchronousTreeService {
             .cloned()
             .collect::<Vec<_>>();
         let refreshed_leaves = self
-            .check_timelock_nodes(new_leaves, async |e| {
+            .check_renew_nodes(new_leaves, async |e| {
                 // If this is a partial check timelock error, the extend node timelock failed
                 // but we can still update the leaves that were refreshed
                 if let ServiceError::PartialCheckTimelockError(ref nodes) = e
@@ -350,7 +350,7 @@ impl SynchronousTreeService {
         Ok(nodes.items)
     }
 
-    async fn check_timelock_nodes<F>(
+    async fn check_renew_nodes<F>(
         &self,
         nodes: Vec<TreeNode>,
         error_fn: impl FnOnce(ServiceError) -> F,
@@ -358,7 +358,7 @@ impl SynchronousTreeService {
     where
         F: Future<Output = ()>,
     {
-        match self.timelock_manager.check_timelock_nodes(nodes).await {
+        match self.timelock_manager.check_renew_nodes(nodes).await {
             Ok(nodes) => Ok(nodes),
             Err(e) => {
                 error_fn(e).await;
@@ -419,7 +419,7 @@ impl SynchronousTreeService {
             .await?;
 
         let new_leaves = self
-            .check_timelock_nodes(reservation.leaves, async |e| {
+            .check_renew_nodes(reservation.leaves, async |e| {
                 // Cancel the reservation if the timelock check fails
                 if let Err(e) = self.state.cancel_reservation(&reservation.id).await {
                     error!("Failed to cancel reservation: {e:?}");

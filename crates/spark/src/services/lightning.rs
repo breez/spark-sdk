@@ -607,15 +607,15 @@ impl LightningService {
                         .map_err(|_| ServiceError::Generic("Invalid expiry time".to_string()))?,
                 ),
                 leaves_to_send: cpfp_signed_tx
-                    .into_iter()
+                    .iter()
                     .map(|l| l.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
                 direct_leaves_to_send: direct_signed_tx
-                    .into_iter()
+                    .iter()
                     .map(|l| l.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
                 direct_from_cpfp_leaves_to_send: direct_from_cpfp_signed_tx
-                    .into_iter()
+                    .iter()
                     .map(|l| l.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
             }),

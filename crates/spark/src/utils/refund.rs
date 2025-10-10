@@ -5,13 +5,12 @@ use std::sync::Arc;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use bitcoin::{Sequence, Transaction};
-use frost_core::round2::SignatureShare;
+use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::SigningCommitments;
-use frost_secp256k1_tr::{Identifier, Secp256K1Sha256TR};
 use tracing::{info, trace};
 
 use crate::core::{current_sequence, next_lightning_htlc_sequence};
-use crate::services::{LeafRefundSigningData, ServiceError};
+use crate::services::{LeafRefundSigningData, ServiceError, SignedTx};
 use crate::signer::{SignFrostRequest, Signer, SignerError};
 use crate::tree::{TreeNode, TreeNodeId};
 use crate::utils::frost::{SignAggregateFrostParams, sign_aggregate_frost};
@@ -52,16 +51,6 @@ pub struct SignedRefundTransactions {
     pub cpfp_signed_tx: Vec<SignedTx>,
     pub direct_signed_tx: Vec<SignedTx>,
     pub direct_from_cpfp_signed_tx: Vec<SignedTx>,
-}
-
-pub struct SignedTx {
-    pub node_id: TreeNodeId,
-    pub signing_public_key: PublicKey,
-    pub tx: Transaction,
-    pub user_signature: SignatureShare<Secp256K1Sha256TR>,
-    pub signing_commitments: BTreeMap<Identifier, SigningCommitments>,
-    pub user_signature_commitment: SigningCommitments,
-    pub network: Network,
 }
 
 pub async fn prepare_leaf_refund_signing_data(
@@ -427,12 +416,19 @@ pub fn prepare_refund_so_signing_jobs(
         leaf_data_map,
         is_for_claim,
         |refund_tx_constructor| {
+            let RefundTxConstructor {
+                node,
+                cpfp_sequence,
+                direct_sequence,
+                receiving_pubkey,
+                ..
+            } = refund_tx_constructor;
             create_refund_txs(
-                &refund_tx_constructor.node.node_tx,
-                refund_tx_constructor.node.direct_tx.as_ref(),
-                refund_tx_constructor.cpfp_sequence,
-                refund_tx_constructor.direct_sequence,
-                refund_tx_constructor.receiving_pubkey,
+                &node.node_tx,
+                node.direct_tx.as_ref(),
+                cpfp_sequence,
+                direct_sequence,
+                receiving_pubkey,
                 network,
             )
         },

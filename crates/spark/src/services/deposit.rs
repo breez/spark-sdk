@@ -14,7 +14,6 @@ use tracing::{error, trace, warn};
 use crate::{
     Network,
     bitcoin::{BitcoinService, sighash_from_tx},
-    core::{initial_cpfp_sequence, initial_direct_sequence},
     operator::{
         OperatorPool,
         rpc::{
@@ -30,8 +29,8 @@ use crate::{
         frost::{SignAggregateFrostParams, sign_aggregate_frost},
         paging::{PagingFilter, PagingResult, pager},
         transactions::{
-            NodeTransactions, RefundTransactions, create_node_txs, create_refund_txs,
-            create_static_deposit_refund_tx,
+            NodeTransactions, RefundTransactions, create_initial_timelock_refund_txs,
+            create_root_node_txs, create_static_deposit_refund_tx,
         },
     },
 };
@@ -185,7 +184,6 @@ impl DepositService {
         vout: u32,
     ) -> Result<Vec<TreeNode>, ServiceError> {
         // TODO: Ensure all inputs are segwit inputs, so this tx is not malleable. Normally the tx should be already confirmed, but perhaps we get in trouble with a reorg?
-
         let params: Params = self.network.into();
 
         let output: &TxOut = deposit_tx
@@ -222,29 +220,27 @@ impl DepositService {
                 continue;
             }
 
-            let nodes = self.timelock_manager.extend_time_lock(&node).await?;
+            let new_node = self.timelock_manager.renew_zero_timelock(&node).await?;
 
-            for n in nodes {
-                if n.status != TreeNodeStatus::Available {
-                    warn!("Leaf resulting from extend_time_lock is not available: {n:?}",);
-                    // TODO: Handle other statuses appropriately.
-                    resulting_nodes.push(n);
-                    continue;
-                }
-
-                let transfer = self
-                    .transfer_service
-                    .transfer_leaves_to_self(
-                        vec![n],
-                        Some(PrivateKeySource::Derived(node.id.clone())),
-                    )
-                    .await
-                    .map_err(|e| {
-                        ServiceError::Generic(format!("Failed to transfer leaves to self: {e:?}"))
-                    })?;
-
-                resulting_nodes.extend(transfer.into_iter());
+            if new_node.status != TreeNodeStatus::Available {
+                warn!("Leaf resulting from renew_zero_timelock is not available: {new_node:?}",);
+                // TODO: Handle other statuses appropriately.
+                resulting_nodes.push(node);
+                continue;
             }
+
+            let transfer = self
+                .transfer_service
+                .transfer_leaves_to_self(
+                    vec![new_node],
+                    Some(PrivateKeySource::Derived(node.id.clone())),
+                )
+                .await
+                .map_err(|e| {
+                    ServiceError::Generic(format!("Failed to transfer leaves to self: {e:?}"))
+                })?;
+
+            resulting_nodes.extend(transfer.into_iter());
         }
 
         Ok(resulting_nodes)
@@ -548,38 +544,19 @@ impl DepositService {
             .output
             .get(vout as usize)
             .ok_or(ServiceError::InvalidOutputIndex)?;
-        let deposit_outpoint = OutPoint {
-            txid: deposit_txid,
-            vout,
-        };
 
         let NodeTransactions {
             cpfp_tx: cpfp_root_tx,
             direct_tx: direct_root_tx,
-        } = create_node_txs(
-            Default::default(),
-            Default::default(),
-            deposit_outpoint,
-            Some(deposit_outpoint),
-            deposit_tx_out.value,
-            deposit_tx_out.script_pubkey.clone(),
-            true,
-        );
-        let Some(direct_root_tx) = direct_root_tx else {
-            return Err(ServiceError::Generic(
-                "Direct root transaction is missing".to_string(),
-            ));
-        };
+        } = create_root_node_txs(&deposit_tx, vout);
 
         let RefundTransactions {
             cpfp_tx: cpfp_refund_tx,
             direct_tx: direct_refund_tx,
             direct_from_cpfp_tx: direct_from_cpfp_refund_tx,
-        } = create_refund_txs(
+        } = create_initial_timelock_refund_txs(
             &cpfp_root_tx,
             Some(&direct_root_tx),
-            initial_cpfp_sequence(),
-            initial_direct_sequence(),
             &signing_public_key,
             self.network,
         );

@@ -120,30 +120,33 @@ pub struct TreeNode {
 }
 
 impl TreeNode {
-    /// Checks if the node needs a timelock refresh by checking if the refund tx's timelock can be further reduced
-    pub fn needs_timelock_refresh(&self) -> Result<bool, TreeServiceError> {
-        let sequence = self
+    fn node_sequence(&self) -> Sequence {
+        self.node_tx.input[0].sequence
+    }
+
+    fn refund_sequence(&self) -> Result<Sequence, TreeServiceError> {
+        Ok(self
             .refund_tx
             .as_ref()
             .ok_or(TreeServiceError::Generic("No refund tx".to_string()))?
             .input[0]
-            .sequence;
-        trace!(
-            "Refund tx sequence: {} node id: {}",
-            sequence.to_consensus_u32(),
-            self.id
-        );
-        let sequence_num = sequence.to_consensus_u32() as u16;
-        trace!("Refund tx last sequence num: {sequence_num}");
+            .sequence)
+    }
+
+    pub fn needs_node_tx_renewed(&self) -> bool {
+        let sequence_num = self.node_sequence().to_consensus_u32() as u16;
+        trace!("Node tx sequence: {} node id: {}", sequence_num, self.id);
+        sequence_num <= 100
+    }
+
+    pub fn needs_refund_tx_renewed(&self) -> Result<bool, TreeServiceError> {
+        let sequence_num = self.refund_sequence()?.to_consensus_u32() as u16;
+        trace!("Refund tx sequence: {} node id: {}", sequence_num, self.id);
         Ok(sequence_num <= 100)
     }
 
-    /// Checks if the node needs a timelock extension by checking if the node tx's timelock can be further reduced
-    pub fn needs_timelock_extension(&self) -> bool {
-        let sequence = self.node_tx.input[0].sequence;
-        trace!("Node tx sequence: {:?}", sequence);
-        let sequence_num = sequence.to_consensus_u32() as u16;
-        trace!("Node tx last sequence num: {sequence_num}");
+    pub fn is_zero_timelock(&self) -> bool {
+        let sequence_num = self.node_sequence().to_consensus_u32() as u16;
         sequence_num == 0
     }
 }

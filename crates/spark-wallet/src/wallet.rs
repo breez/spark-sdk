@@ -125,7 +125,6 @@ impl SparkWallet {
             signer.clone(),
             config.network,
             operator_pool.clone(),
-            Arc::clone(&transfer_service),
         ));
 
         let deposit_service = Arc::new(DepositService::new(
