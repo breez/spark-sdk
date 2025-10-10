@@ -56,3 +56,45 @@ async fn test_deposit_refunds() {
 
     breez_sdk_spark::storage_tests::test_deposit_refunds(Box::new(storage)).await;
 }
+
+#[wasm_bindgen_test]
+async fn test_payment_type_filtering() {
+    let storage = create_test_storage("payment_type_filtering").await;
+
+    breez_sdk_spark::storage_tests::test_payment_type_filtering(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_payment_status_filtering() {
+    let storage = create_test_storage("payment_status_filtering").await;
+
+    breez_sdk_spark::storage_tests::test_payment_status_filtering(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_payment_details_filtering() {
+    let storage = create_test_storage("payment_details_filtering").await;
+
+    breez_sdk_spark::storage_tests::test_payment_details_filtering(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_timestamp_filtering() {
+    let storage = create_test_storage("timestamp_filtering").await;
+
+    breez_sdk_spark::storage_tests::test_timestamp_filtering(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_combined_filters() {
+    let storage = create_test_storage("combined_filters").await;
+
+    breez_sdk_spark::storage_tests::test_combined_filters(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_sort_order() {
+    let storage = create_test_storage("sort_order").await;
+
+    breez_sdk_spark::storage_tests::test_sort_order(Box::new(storage)).await;
+}

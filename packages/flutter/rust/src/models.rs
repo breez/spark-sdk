@@ -140,8 +140,23 @@ pub enum _InputType {
 
 #[frb(mirror(ListPaymentsRequest))]
 pub struct _ListPaymentsRequest {
+    pub type_filter: Option<Vec<PaymentType>>,
+    pub status_filter: Option<Vec<PaymentStatus>>,
+    pub details_filter: Option<ListPaymentDetails>,
+    pub from_timestamp: Option<u64>,
+    pub to_timestamp: Option<u64>,
     pub offset: Option<u32>,
     pub limit: Option<u32>,
+    pub sort_ascending: Option<bool>,
+}
+
+#[frb(mirror(ListPaymentDetails))]
+pub enum _ListPaymentDetails {
+    Spark,
+    Token { token_identifier: Option<String> },
+    Lightning,
+    Withdraw,
+    Deposit,
 }
 
 #[frb(mirror(ListPaymentsResponse))]
