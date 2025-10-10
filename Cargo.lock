@@ -642,6 +642,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "breez-sdk-itest"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcoin",
+ "breez-sdk-spark",
+ "hex",
+ "macros",
+ "reqwest",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tempdir",
+ "test-log",
+ "tokio",
+ "tokio_with_wasm",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "breez-sdk-spark"
 version = "0.1.0"
 dependencies = [
@@ -4364,14 +4385,17 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bitcoin",
+ "breez-sdk-spark",
  "futures",
  "hex",
+ "macros",
  "rand 0.8.5",
  "reqwest",
  "rstest",
  "serde",
  "serde_json",
  "spark-wallet",
+ "tempdir",
  "test-log",
  "testcontainers",
  "testcontainers-modules",

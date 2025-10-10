@@ -214,9 +214,13 @@ pub(crate) struct BreezSdkParams {
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
     pub(crate) fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
-        match &params.config.api_key {
-            Some(api_key) => validate_breez_api_key(api_key)?,
-            None => return Err(SdkError::Generic("Missing Breez API key".to_string())),
+        // In Regtest we allow running without a Breez API key to facilitate local
+        // integration tests. For non-regtest networks, a valid API key is required.
+        if !matches!(params.config.network, Network::Regtest) {
+            match &params.config.api_key {
+                Some(api_key) => validate_breez_api_key(api_key)?,
+                None => return Err(SdkError::Generic("Missing Breez API key".to_string())),
+            }
         }
         let (initial_synced_sender, initial_synced_watcher) = watch::channel(false);
         let sdk = Self {
@@ -1246,6 +1250,25 @@ impl BreezSdk {
             .broadcast_transaction(tx_hex.clone())
             .await?;
         Ok(RefundDepositResponse { tx_id, tx_hex })
+    }
+
+    #[cfg(feature = "test-utils")]
+    /// Test utility: claim a deposit by providing the raw transaction hex and vout directly.
+    ///
+    /// This bypasses the static-deposit claim flow through the service provider and instead
+    /// uses the direct deposit-claim path available in SparkWallet. Intended for local
+    /// integration tests running against regtest operators without an SSP.
+    pub async fn claim_deposit_with_tx(
+        &self,
+        tx_hex: String,
+        vout: u32,
+    ) -> Result<(), SdkError> {
+        use bitcoin::consensus::encode::deserialize_hex;
+        let tx: bitcoin::Transaction = deserialize_hex(tx_hex.as_str())?;
+        let _leaves = self.spark_wallet.claim_deposit(tx, vout).await?;
+        // Update cached balance
+        update_balance(self.spark_wallet.clone(), self.storage.clone()).await?;
+        Ok(())
     }
 
     #[allow(unused_variables)]

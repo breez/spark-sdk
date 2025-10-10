@@ -55,6 +55,10 @@ pub struct SdkBuilder {
     key_set_type: KeySetType,
     use_address_index: bool,
     account_number: Option<u32>,
+    /// Optional SparkWallet configuration override. If set, the SDK will
+    /// connect using this configuration instead of the default configuration
+    /// derived from the network.
+    spark_wallet_config: Option<spark_wallet::SparkWalletConfig>,
 }
 
 impl SdkBuilder {
@@ -75,6 +79,7 @@ impl SdkBuilder {
             key_set_type: KeySetType::Default,
             use_address_index: false,
             account_number: None,
+            spark_wallet_config: None,
         }
     }
 
@@ -146,6 +151,18 @@ impl SdkBuilder {
         lnurl_serverclient: Arc<dyn LnurlServerClient>,
     ) -> Self {
         self.lnurl_server_client = Some(lnurl_serverclient);
+        self
+    }
+
+    /// Overrides the default SparkWallet configuration used by the SDK.
+    /// This is useful for advanced or test scenarios where you want the SDK
+    /// to connect to custom/local operators or a custom service provider.
+    #[must_use]
+    pub fn with_spark_wallet_config(
+        mut self,
+        config: spark_wallet::SparkWalletConfig,
+    ) -> Self {
+        self.spark_wallet_config = Some(config);
         self
     }
 
@@ -221,8 +238,11 @@ impl SdkBuilder {
                 CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?,
             ),
         };
-        let spark_wallet_config =
-            spark_wallet::SparkWalletConfig::default_config(self.config.network.into());
+        let spark_wallet_config = self
+            .spark_wallet_config
+            .unwrap_or_else(|| {
+                spark_wallet::SparkWalletConfig::default_config(self.config.network.into())
+            });
         let spark_wallet =
             Arc::new(SparkWallet::connect(spark_wallet_config, Arc::new(signer)).await?);
 

@@ -14,7 +14,13 @@ mod utils;
 #[cfg(feature = "uniffi")]
 pub use bindings::*;
 pub use breez_sdk_common::input::*;
-pub use chain::{BitcoinChainService, ChainServiceError, rest_client::RestClientChainService};
+pub use chain::{
+    BitcoinChainService,
+    ChainServiceError,
+    TxStatus,
+    Utxo,
+    rest_client::RestClientChainService,
+};
 pub use error::{DepositClaimError, SdkError};
 pub use events::{EventEmitter, EventListener, SdkEvent};
 pub use models::*;

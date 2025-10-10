@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:app.lightspark.com)",
+      "Bash(curl -s -X POST https://app.lightspark.com/regtest-faucet -H \"User-Agent: Mozilla/5.0\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
