@@ -16,6 +16,9 @@ pub enum SignerError {
     SecretSharingError(String),
     #[error("serialization error: {0}")]
     SerializationError(String),
+    #[error("taproot builder error: {0}")]
+    TaprootBuilderError(String),
+
     #[error("unknown key")]
     UnknownKey,
     #[error("unknown nonce commitment")]

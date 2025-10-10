@@ -4,8 +4,8 @@ use crate::operator::OperatorPool;
 use crate::operator::rpc::spark::initiate_preimage_swap_request::Reason;
 use crate::operator::rpc::spark::{
     GetSigningCommitmentsRequest, InitiatePreimageSwapRequest, InitiatePreimageSwapResponse,
-    InvoiceAmount, InvoiceAmountProof, SecretShare, StartUserSignedTransferRequest,
-    StorePreimageShareRequest,
+    InvoiceAmount, InvoiceAmountProof, SecretShare, StartTransferRequest,
+    StartUserSignedTransferRequest, StorePreimageShareRequest,
 };
 use crate::services::{ServiceError, Transfer, TransferId, TransferService};
 use crate::signer::SecretToSplit;
@@ -13,7 +13,7 @@ use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
     ServiceProvider,
 };
-use crate::utils::refund::SignedRefundTransactions;
+use crate::utils::refund::{SignRefundsParams, SignedRefundTransactions};
 use crate::utils::time::web_time_to_prost_timestamp;
 use crate::utils::{leaf_key_tweak::prepare_leaf_key_tweaks_to_send, refund::sign_refunds};
 use crate::{signer::Signer, tree::TreeNode};
@@ -47,13 +47,6 @@ impl InvoiceDescription {
             InvoiceDescription::DescriptionHash(hash) => (None, Some(hash)),
         }
     }
-}
-
-struct LightningSwap {
-    pub transfer: Transfer,
-    pub leaves: Vec<LeafKeyTweak>,
-    pub bolt11_invoice: String,
-    pub user_amount_sat: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -202,6 +195,7 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
 }
 
 struct SwapNodesForPreimageRequest<'a> {
+    transfer_id: &'a TransferId,
     leaves: &'a [LeafKeyTweak],
     receiver_pubkey: &'a PublicKey,
     payment_hash: &'a sha256::Hash,
@@ -209,6 +203,8 @@ struct SwapNodesForPreimageRequest<'a> {
     invoice_amount_sats: u64,
     fee_sats: u64,
     is_inbound_payment: bool,
+    transfer_request: Option<StartTransferRequest>,
+    expiry_time: &'a SystemTime,
 }
 
 pub struct PayLightningResult {
@@ -343,77 +339,70 @@ impl LightningService {
         amount_to_send: Option<u64>,
         leaves: &[TreeNode],
     ) -> Result<PayLightningResult, ServiceError> {
-        let swap = self
-            .start_lightning_swap(invoice, amount_to_send, leaves)
-            .await?;
-        let transfer = self
-            .transfer_service
-            .deliver_transfer_package(&swap.transfer, &swap.leaves, Default::default())
-            .await?;
-        let mut lightning_send_payment = self.finalize_lightning_swap(&swap).await?;
-        // If ssp doesn't return a transfer id, we use the transfer id from the transfer service
-        if lightning_send_payment.transfer_id.is_none() {
-            lightning_send_payment.transfer_id = Some(transfer.id.clone());
-        }
-        Ok(PayLightningResult {
-            lightning_send_payment,
-            transfer,
-        })
-    }
+        let ssp_identity_public_key = self.ssp_client.identity_public_key();
+        let expiry_time = SystemTime::now() + Duration::from_secs(2 * 60);
+        let transfer_id = TransferId::generate();
 
-    async fn start_lightning_swap(
-        &self,
-        invoice: &str,
-        amount_to_send: Option<u64>,
-        leaves: &[TreeNode],
-    ) -> Result<LightningSwap, ServiceError> {
+        // Decode invoice and validate amount
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
         let amount_sats: u64 = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
         let payment_hash = decoded_invoice.payment_hash();
 
-        // prepare leaf tweaks
+        // Prepare leaf tweaks
         let leaf_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec(), None)?;
 
-        let swap_response = self
+        let transfer_request = self
+            .transfer_service
+            .prepare_transfer_request(
+                &transfer_id,
+                &leaf_tweaks,
+                &ssp_identity_public_key,
+                Default::default(),
+                Some(payment_hash),
+                Some(expiry_time),
+            )
+            .await?;
+
+        let transfer: Transfer = self
             .swap_nodes_for_preimage(SwapNodesForPreimageRequest {
+                transfer_id: &transfer_id,
                 leaves: &leaf_tweaks,
-                receiver_pubkey: &self.ssp_client.identity_public_key(),
+                receiver_pubkey: &ssp_identity_public_key,
                 payment_hash,
                 invoice,
                 invoice_amount_sats: amount_sats,
                 fee_sats: 0, // TODO: this must use the estimated fee.
                 is_inbound_payment: false,
+                transfer_request: Some(transfer_request),
+                expiry_time: &expiry_time,
             })
-            .await?;
+            .await?
+            .transfer
+            .ok_or(ServiceError::SSPswapError(
+                "Swap response did not contain a transfer".to_string(),
+            ))?
+            .try_into()?;
 
-        let transfer = swap_response.transfer.ok_or(ServiceError::SSPswapError(
-            "Swap response did not contain a transfer".to_string(),
-        ))?;
-
-        Ok(LightningSwap {
-            transfer: transfer.try_into()?,
-            leaves: leaf_tweaks,
-            bolt11_invoice: invoice.to_string(),
-            user_amount_sat: amount_to_send,
-        })
-    }
-
-    async fn finalize_lightning_swap(
-        &self,
-        swap: &LightningSwap,
-    ) -> Result<LightningSendPayment, ServiceError> {
-        let res = self
+        let mut lightning_send_payment: LightningSendPayment = self
             .ssp_client
             .request_lightning_send(RequestLightningSendInput {
-                encoded_invoice: swap.bolt11_invoice.to_string(),
+                encoded_invoice: invoice.to_string(),
                 idempotency_key: None,
-                amount_sats: swap.user_amount_sat,
-                user_outbound_transfer_external_id: Some(swap.transfer.id.to_string()),
+                amount_sats: amount_to_send,
+                user_outbound_transfer_external_id: Some(transfer_id.to_string()),
             })
-            .await?;
+            .await?
+            .try_into()?;
+        // If ssp doesn't return a transfer id, we use the transfer id from the initiate preimage swap
+        if lightning_send_payment.transfer_id.is_none() {
+            lightning_send_payment.transfer_id = Some(transfer.id.clone());
+        }
 
-        res.try_into()
+        Ok(PayLightningResult {
+            lightning_send_payment,
+            transfer,
+        })
     }
 
     pub async fn validate_payment(
@@ -526,9 +515,20 @@ impl LightningService {
         &self,
         req: SwapNodesForPreimageRequest<'_>,
     ) -> Result<InitiatePreimageSwapResponse, ServiceError> {
+        let SwapNodesForPreimageRequest {
+            transfer_id,
+            leaves,
+            receiver_pubkey,
+            payment_hash,
+            invoice,
+            invoice_amount_sats,
+            fee_sats,
+            is_inbound_payment,
+            transfer_request,
+            expiry_time,
+        } = req;
         // get signing commitments
-        let node_ids: Vec<String> = req
-            .leaves
+        let node_ids: Vec<String> = leaves
             .iter()
             .map(|l| l.node.id.clone().to_string())
             .collect();
@@ -543,9 +543,8 @@ impl LightningService {
             .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let chunked_signing_commitments = signing_commitments
-            .chunks(req.leaves.len())
-            .collect::<Vec<_>>();
+        let chunked_signing_commitments =
+            signing_commitments.chunks(leaves.len()).collect::<Vec<_>>();
 
         if chunked_signing_commitments.len() != 3 {
             return Err(ServiceError::SSPswapError(
@@ -561,32 +560,39 @@ impl LightningService {
             cpfp_signed_tx,
             direct_signed_tx,
             direct_from_cpfp_signed_tx,
-        } = sign_refunds(
-            &self.signer,
-            req.leaves,
+        } = sign_refunds(SignRefundsParams {
+            signer: &self.signer,
+            leaves,
             cpfp_signing_commitments,
             direct_signing_commitments,
             direct_from_cpfp_signing_commitments,
-            req.receiver_pubkey,
-            self.network,
-        )
+            receiver_pubkey,
+            payment_hash: None,
+            network: self.network,
+        })
         .await?;
 
-        let transfer_id = TransferId::generate();
-        let reason = if req.is_inbound_payment {
+        let reason = if is_inbound_payment {
             Reason::Receive
         } else {
             Reason::Send
         };
 
+        // When a transfer request is provided, we do not send the direct signed txs
+        let (direct_signed_tx, direct_from_cpfp_signed_tx) = if transfer_request.is_some() {
+            (Vec::new(), Vec::new())
+        } else {
+            (direct_signed_tx, direct_from_cpfp_signed_tx)
+        };
+
         let request_data = InitiatePreimageSwapRequest {
-            payment_hash: req.payment_hash.to_byte_array().to_vec(),
+            payment_hash: payment_hash.to_byte_array().to_vec(),
             reason: reason as i32,
             invoice_amount: Some(InvoiceAmount {
                 invoice_amount_proof: Some(InvoiceAmountProof {
-                    bolt11_invoice: req.invoice.to_string(),
+                    bolt11_invoice: invoice.to_string(),
                 }),
-                value_sats: req.invoice_amount_sats,
+                value_sats: invoice_amount_sats,
             }),
             transfer: Some(StartUserSignedTransferRequest {
                 transfer_id: transfer_id.to_string(),
@@ -595,9 +601,9 @@ impl LightningService {
                     .get_identity_public_key()?
                     .serialize()
                     .to_vec(),
-                receiver_identity_public_key: req.receiver_pubkey.serialize().to_vec(),
+                receiver_identity_public_key: receiver_pubkey.serialize().to_vec(),
                 expiry_time: Some(
-                    web_time_to_prost_timestamp(SystemTime::now() + Duration::from_secs(2 * 60))
+                    web_time_to_prost_timestamp(expiry_time)
                         .map_err(|_| ServiceError::Generic("Invalid expiry time".to_string()))?,
                 ),
                 leaves_to_send: cpfp_signed_tx
@@ -613,8 +619,9 @@ impl LightningService {
                     .map(|l| l.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
             }),
-            receiver_identity_public_key: req.receiver_pubkey.serialize().to_vec(),
-            fee_sats: req.fee_sats,
+            receiver_identity_public_key: receiver_pubkey.serialize().to_vec(),
+            fee_sats,
+            transfer_request,
         };
 
         let response = self

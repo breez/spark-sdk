@@ -45,7 +45,7 @@ pub(crate) struct ConnectorRefundTxsParams<'a> {
 /// * `script_pubkey` - The output script to pay to
 /// * `apply_fee` - Whether to subtract a fee from the value (using `DEFAULT_FEE_SATS`)
 /// * `include_anchor` - Whether to include an ephemeral anchor output (for CPFP)
-fn create_spark_tx(
+pub(crate) fn create_spark_tx(
     previous_output: OutPoint,
     sequence: Sequence,
     value: Amount,

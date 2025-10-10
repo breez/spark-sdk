@@ -8,7 +8,6 @@ use serde::Serialize;
 use tracing::{debug, trace};
 use web_time::SystemTime;
 
-use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::OperatorPool;
 use crate::operator::rpc as operator_rpc;
@@ -258,56 +257,45 @@ impl CoopExitService {
             &mut leaf_data_map,
         )?;
 
-        // Create the Spark payment intent
-        trace!("Creating Spark payment intent for cooperative exit");
-        let spark_payment_intent = SparkAddress::new(
-            self.signer.get_identity_public_key()?,
-            self.network,
-            None,
-            None,
-        )
-        .to_string();
-
-        let expiry_time = if self.network == Network::Mainnet {
-            COOP_EXIT_EXPIRY_DURATION_MAINNET
-        } else {
-            COOP_EXIT_EXPIRY_DURATION
-        };
+        let expiry_time = SystemTime::now()
+            + if self.network == Network::Mainnet {
+                COOP_EXIT_EXPIRY_DURATION_MAINNET
+            } else {
+                COOP_EXIT_EXPIRY_DURATION
+            };
 
         // Call the coordinator to get signing results
         // TODO: Use `transfer_package` as `leaves_to_send` is deprecated
         trace!("Calling coordinator for cooperative exit signing results");
-        let response = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .cooperative_exit_v2(operator_rpc::spark::CooperativeExitRequest {
-                transfer: Some(operator_rpc::spark::StartTransferRequest {
-                    transfer_id: transfer_id.to_string(),
-                    #[allow(deprecated)]
-                    leaves_to_send: signing_jobs,
-                    owner_identity_public_key: self
-                        .signer
-                        .get_identity_public_key()?
-                        .serialize()
-                        .to_vec(),
-                    receiver_identity_public_key: self
-                        .ssp_client
-                        .identity_public_key()
-                        .serialize()
-                        .to_vec(),
-                    expiry_time: Some(
-                        web_time_to_prost_timestamp(SystemTime::now() + expiry_time).map_err(
+        let response =
+            self.operator_pool
+                .get_coordinator()
+                .client
+                .cooperative_exit_v2(operator_rpc::spark::CooperativeExitRequest {
+                    transfer: Some(operator_rpc::spark::StartTransferRequest {
+                        transfer_id: transfer_id.to_string(),
+                        #[allow(deprecated)]
+                        leaves_to_send: signing_jobs,
+                        owner_identity_public_key: self
+                            .signer
+                            .get_identity_public_key()?
+                            .serialize()
+                            .to_vec(),
+                        receiver_identity_public_key: self
+                            .ssp_client
+                            .identity_public_key()
+                            .serialize()
+                            .to_vec(),
+                        expiry_time: Some(web_time_to_prost_timestamp(&expiry_time).map_err(
                             |_| ServiceError::Generic("Invalid expiry time".to_string()),
-                        )?,
-                    ),
-                    transfer_package: None,
-                    spark_payment_intent,
-                }),
-                exit_id: uuid::Uuid::now_v7().to_string(),
-                exit_txid: exit_txid.as_byte_array().to_vec(),
-            })
-            .await?;
+                        )?),
+                        transfer_package: None,
+                        ..Default::default()
+                    }),
+                    exit_id: uuid::Uuid::now_v7().to_string(),
+                    exit_txid: exit_txid.as_byte_array().to_vec(),
+                })
+                .await?;
         let transfer = response
             .transfer
             .ok_or(ServiceError::Generic("No transfer in response".to_string()))?
@@ -343,6 +331,7 @@ impl CoopExitService {
         prepare_refund_so_signing_jobs_with_tx_constructor(
             leaf_key_tweaks,
             leaf_data_map,
+            false,
             |refund_tx_constructor| {
                 create_connector_refund_txs(ConnectorRefundTxsParams {
                     cpfp_sequence: refund_tx_constructor.cpfp_sequence,

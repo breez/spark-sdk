@@ -34,10 +34,13 @@ service SparkService {
     rpc claim_transfer_tweak_keys(ClaimTransferTweakKeysRequest) returns (google.protobuf.Empty) {}
     rpc claim_transfer_sign_refunds(ClaimTransferSignRefundsRequest) returns (ClaimTransferSignRefundsResponse) {}
     rpc store_preimage_share(StorePreimageShareRequest) returns (google.protobuf.Empty) {}
+    // Gets a specified number of signing commmitments for a set of nodes, which can be used as
+    // part of a transfer package.
     rpc get_signing_commitments(GetSigningCommitmentsRequest) returns (GetSigningCommitmentsResponse) {}
     rpc cooperative_exit(CooperativeExitRequest) returns (CooperativeExitResponse) {}
     rpc initiate_preimage_swap(InitiatePreimageSwapRequest) returns (InitiatePreimageSwapResponse) {}
     rpc provide_preimage(ProvidePreimageRequest) returns (ProvidePreimageResponse) {}
+    rpc query_htlc(QueryHtlcRequest) returns (QueryHtlcResponse) {}
     // This is the exact same as start_transfer, but expresses to the SO
     // this transfer is specifically for a leaf swap.
     rpc start_leaf_swap(StartTransferRequest) returns (StartTransferResponse) {}
@@ -50,6 +53,13 @@ service SparkService {
     rpc counter_leaf_swap(CounterLeafSwapRequest) returns (CounterLeafSwapResponse) {}
     rpc refresh_timelock(RefreshTimelockRequest) returns (RefreshTimelockResponse) {}
     rpc extend_leaf(ExtendLeafRequest) returns (ExtendLeafResponse) {}
+
+    // Resets the timelocks for a leaf's transactions. Can be used to reset the
+    // refund transaction timelock for a leaf (when the node transaction
+    // timelock is still > 300) or reset the node and refund transaction
+    // timelock. Returns an error if a leaf is not yet eligible to renew the
+    // timelocks, see RenewLeafRequest for more details.
+    rpc renew_leaf(RenewLeafRequest) returns (RenewLeafResponse) {}
 
     rpc get_signing_operator_list(google.protobuf.Empty) returns (GetSigningOperatorListResponse) {}
 
@@ -84,7 +94,7 @@ service SparkService {
     rpc initiate_static_deposit_utxo_refund(InitiateStaticDepositUtxoRefundRequest) returns (InitiateStaticDepositUtxoRefundResponse) {}
 
     // DEPRECATED: This unified method is being split for better clarity and type safety
-    // 
+    //
     // For swap operations: Use spark_ssp_internal.initiate_static_deposit_utxo_swap()
     // For refund operations: Use initiate_static_deposit_utxo_refund()
     rpc initiate_utxo_swap(InitiateUtxoSwapRequest) returns (InitiateUtxoSwapResponse) {
@@ -141,6 +151,24 @@ enum Network {
     REGTEST = 2;
     TESTNET = 3;
     SIGNET = 4;
+}
+
+message PageRequest {
+    int32 page_size = 1;
+    string cursor = 2;
+    Direction direction = 3;
+}
+
+enum Direction {
+    NEXT = 0;
+    PREVIOUS = 1;
+}
+
+message PageResponse {
+    bool has_next_page = 1;
+    bool has_previous_page = 2;
+    string next_cursor = 3;
+    string previous_cursor = 4;
 }
 
 /**
@@ -292,6 +320,104 @@ message SigningResult {
     SigningKeyshare signing_keyshare = 4;
 }
 
+message RenewLeafRequest {
+    string leaf_id = 1;
+
+    oneof signing_jobs {
+      // Resets the node transaction timelock and refund transaction timelock
+      // for a leaf to 2000. The old node transaction is invalidated by
+      // introducing a "split node" with zero timelock that spends to a new
+      // node transaction. Takes in the signing jobs for the updated
+      // node, refund, and split node transactions with the new timelocks.
+      // Requires that the existing node transaction timelock is <= 300
+      // at the time this function is called. Returns an error if these
+      // conditions are not met.
+      RenewNodeTimelockSigningJob renew_node_timelock_signing_job = 2;
+
+      // Resets the refund transaction timelock for a leaf to 2000. Takes in
+      // the signing jobs for the updated transactions with the new timelocks.
+      // Requires that the existing refund transaction timelock is <= 300 and
+      // the node transaction timelock > 300 at the time this function is
+      // called. Returns an error if these conditions are not met.
+      RenewRefundTimelockSigningJob renew_refund_timelock_signing_job = 3;
+
+      // A special case of refresh for when the node transaction is at 0 and
+      // cannot be decremented further. This operation resets the refund
+      // transaction's timelock and, similar to renew node, adds an additional
+      // node transaction to the transaction chain with zero timelock as well.
+      // This case is mostly used for user-created trees from L1 deposits.
+      RenewNodeZeroTimelockSigningJob renew_node_zero_timelock_signing_job = 4;
+    }
+}
+
+message RenewNodeTimelockSigningJob {
+    // Signing job with the new "split node" transaction. This spends the
+    // inputs of the old node transaction and its outputs are spent by the new
+    // node transaction. Timelock of split node transaction must be 0.
+    UserSignedTxSigningJob split_node_tx_signing_job = 1;
+    UserSignedTxSigningJob split_node_direct_tx_signing_job = 2;
+
+    // Signing job with the updated node transaction. The updated transaction is
+    // expected to have a timelock of 2000.
+    UserSignedTxSigningJob node_tx_signing_job = 3;
+    UserSignedTxSigningJob refund_tx_signing_job = 4;
+    UserSignedTxSigningJob direct_node_tx_signing_job = 5;
+    UserSignedTxSigningJob direct_refund_tx_signing_job = 6;
+    UserSignedTxSigningJob direct_from_cpfp_refund_tx_signing_job = 7;
+}
+
+message RenewRefundTimelockSigningJob {
+    // Signing job with the updated node transaction. The updated transaction is
+    // expected to have a timelock of 100 less than the existing node transaction.
+    UserSignedTxSigningJob node_tx_signing_job = 1;
+
+    // Signing job with the updated refund transaction. This updated transaction
+    // must have a timelock of 2000.
+    UserSignedTxSigningJob refund_tx_signing_job = 2;
+    UserSignedTxSigningJob direct_node_tx_signing_job = 3;
+    UserSignedTxSigningJob direct_refund_tx_signing_job = 4;
+    UserSignedTxSigningJob direct_from_cpfp_refund_tx_signing_job = 5;
+}
+
+message RenewNodeZeroTimelockSigningJob {
+    reserved 4;
+
+    // Signing job with the new node transaction. The updated transaction is
+    // expected to have a timelock of 0.
+    UserSignedTxSigningJob node_tx_signing_job = 1;
+
+    // Signing job with the updated refund transaction. This updated transaction
+    // must have a timelock of 2000.
+    UserSignedTxSigningJob refund_tx_signing_job = 2;
+    UserSignedTxSigningJob direct_node_tx_signing_job = 3;
+    UserSignedTxSigningJob direct_from_cpfp_refund_tx_signing_job = 5;
+
+    // Notice no signing job for the split node; we will be using the existing
+    // node transaction.
+}
+
+message RenewLeafResponse {
+    oneof renew_result {
+      RenewNodeTimelockResult renew_node_timelock_result = 1;
+      RenewRefundTimelockResult renew_refund_timelock_result = 2;
+      RenewNodeZeroTimelockResult renew_node_zero_timelock_result = 3;
+    }
+}
+
+message RenewNodeTimelockResult {
+    TreeNode split_node = 1;
+    TreeNode node = 2;
+}
+
+message RenewRefundTimelockResult {
+    TreeNode node = 1;
+}
+
+message RenewNodeZeroTimelockResult {
+    TreeNode split_node = 1;
+    TreeNode node = 2;
+}
+
 /**
  * NodeSignatureShares is the signature shares for a node on the tree.
  * For each tree node, the verifying key stays the same for both transactions.
@@ -435,7 +561,7 @@ message TokenOutput {
     optional bytes revocation_commitment = 3 [(validate.rules).bytes.len = 33];
     optional uint64 withdraw_bond_sats = 4;
     optional uint64 withdraw_relative_block_locktime = 5;
-    optional bytes token_public_key = 6 [(validate.rules).bytes = {len: 33}]; 
+    optional bytes token_public_key = 6 [(validate.rules).bytes = {len: 33}];
     optional bytes token_identifier = 8 [(validate.rules).bytes.len = 32];
     bytes token_amount = 7 [(validate.rules).bytes.len = 16];  // Decoded uint128
 }
@@ -448,7 +574,7 @@ message TokenTransaction {
         TokenMintInput mint_input = 1;
         TokenTransferInput transfer_input = 2;
         TokenCreateInput create_input = 5;
-    }   
+    }
     repeated TokenOutput token_outputs = 3;
     repeated bytes spark_operator_identity_public_keys = 4 [(validate.rules).repeated.items.bytes.len = 33];
     Network network = 10 [(validate.rules).enum = {not_in: [0]}];
@@ -735,15 +861,20 @@ message StartUserSignedTransferRequest {
 
 message StartTransferRequest {
     reserved 6;
+    reserved 9;
 
     string transfer_id = 1;
     bytes owner_identity_public_key = 2;
-    repeated LeafRefundTxSigningJob leaves_to_send = 3 [deprecated = true];
+    // This field is used for swap and coop exits. Regular transfers must use
+    // the transfer_package field.
+    repeated LeafRefundTxSigningJob leaves_to_send = 3;
     bytes receiver_identity_public_key = 4;
     google.protobuf.Timestamp expiry_time = 5;
-    // If this field is set, the leaves_to_send and key_tweak_proofs will be ignored.
+    // This field is required for transfers of type "transfer". If this field
+    // is set, the leaves_to_send and key_tweak_proofs will be ignored.
     TransferPackage transfer_package = 7;
-    string spark_payment_intent = 9;
+    // The invoice this transfer pays.
+    string spark_invoice = 10;
 }
 
 message StartTransferResponse {
@@ -841,6 +972,7 @@ message Transfer {
     google.protobuf.Timestamp created_time = 8;
     google.protobuf.Timestamp updated_time = 9;
     TransferType type = 10;
+    string spark_invoice = 11;
 }
 
 message TransferLeaf {
@@ -911,15 +1043,24 @@ message RequestedSigningCommitments {
 }
 
 message GetSigningCommitmentsRequest {
+    // The node IDs for which to get signing commitments.
     repeated string node_ids = 1;
+    // The number of signing commitments to get per node ID.
     uint32 count = 2;
 }
 
 message GetSigningCommitmentsResponse {
+    // A list of signing commitments for each requested node ID. The signing commitments will be
+    // ordered in the same order as the requested node IDs, repeated for the number of commitments
+    // requested. For example, if node_ids = [A, B] and count = 2, the response will contain:
+    //
+    // [commitment_A1, commitment_B1, commitment_A2, commitment_B2]
     repeated RequestedSigningCommitments signing_commitments = 1;
 }
 
 message SigningCommitments {
+    // A map of signing operator ID (i.e. 000...01) to the signing commitment provided by that
+    // operator.
     map<string, common.SigningCommitment> signing_commitments = 1;
 }
 
@@ -954,6 +1095,7 @@ message InitiatePreimageSwapRequest {
     StartUserSignedTransferRequest transfer = 4;
     bytes receiver_identity_public_key = 5;
     uint64 fee_sats = 6;
+    StartTransferRequest transfer_request = 7;
 }
 
 message InitiatePreimageSwapResponse {
@@ -1118,6 +1260,39 @@ message QueryUserSignedRefundsResponse {
     Transfer transfer = 3;
 }
 
+enum PreimageRequestStatus {
+    PREIMAGE_REQUEST_STATUS_WAITING_FOR_PREIMAGE = 0;
+    PREIMAGE_REQUEST_STATUS_PREIMAGE_SHARED = 1;
+    PREIMAGE_REQUEST_STATUS_RETURNED = 2;
+}
+
+message PreimageRequestWithTransfer {
+    // Preimage request data
+    bytes payment_hash = 1 [(validate.rules).bytes.len = 32];
+    bytes receiver_identity_pubkey = 2 [(validate.rules).bytes.len = 33];
+    PreimageRequestStatus status = 3;
+    google.protobuf.Timestamp created_time = 4;
+    
+    // Associated transfer (if exists)
+    optional Transfer transfer = 5;
+    
+    // Preimage data (if available)
+    optional bytes preimage = 6;
+}
+
+message QueryHtlcRequest {
+    repeated bytes payment_hashes = 1;
+    bytes identity_public_key = 2;
+    optional PreimageRequestStatus status = 3;
+    int64 limit = 4; // defaults to 100 if not set.
+    int64 offset = 5; // defaults to 0 if not set.
+}
+
+message QueryHtlcResponse {
+    repeated PreimageRequestWithTransfer preimage_requests = 1;
+    int64 offset = 2; // defaults to -1 if there are no more results
+}
+
 message ProvidePreimageRequest {
     bytes payment_hash = 1;
     bytes preimage = 2;
@@ -1218,13 +1393,13 @@ message SparkAddress {
 
 message SparkInvoiceFields {
     uint32 version = 1;
-    bytes id = 2 [(validate.rules).bytes.len = 16]; 
+    bytes id = 2 [(validate.rules).bytes.len = 16];
     oneof payment_type {
         TokensPayment tokens_payment = 3;
         SatsPayment sats_payment = 4;
     }
     optional string memo = 5 [(validate.rules).string.max_bytes = 120];
-    optional bytes sender_public_key = 6 [(validate.rules).bytes.len = 33];  
+    optional bytes sender_public_key = 6 [(validate.rules).bytes.len = 33];
     optional google.protobuf.Timestamp expiry_time = 7;
 }
 
@@ -1378,11 +1553,26 @@ message QuerySparkInvoicesResponse {
 message InvoiceResponse {
     string invoice = 1;
     InvoiceStatus status = 2;
+    oneof transfer_type {
+        SatsTransfer sats_transfer = 3; 
+        TokenTransfer token_transfer = 4;
+    }
+}
+
+message SatsTransfer {
+    bytes transfer_id = 1 [(validate.rules).bytes.len = 16];
+}
+
+message TokenTransfer {
+    bytes final_token_transaction_hash = 1 [(validate.rules).bytes.len = 32];
 }
 
 enum InvoiceStatus {
+    reserved 3;
+
     NOT_FOUND = 0;
     PENDING = 1;
     FINALIZED = 2;
-    EXPIRED = 3;
+    RETURNED = 4;
 }
+
