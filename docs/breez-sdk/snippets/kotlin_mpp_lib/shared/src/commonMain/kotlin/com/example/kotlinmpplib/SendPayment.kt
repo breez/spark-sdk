@@ -8,8 +8,10 @@ class SendPayment {
         // ANCHOR: prepare-send-payment-lightning-bolt11
         val paymentRequest = "<bolt11 invoice>"
         // Optionally set the amount you wish the pay the receiver
-        val optionalAmountSats = BigInteger.fromLong(5_000L) // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
-        // val optionalAmountSats = BigInteger.valueOf(5_000L) // Android (BigInteger from java.math)
+        // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
+        val optionalAmountSats = BigInteger.fromLong(5_000L)
+        // Android (BigInteger from java.math)
+        // val optionalAmountSats = BigInteger.valueOf(5_000L)
         try {
             val req = PrepareSendPaymentRequest(paymentRequest, optionalAmountSats)
             val prepareResponse = sdk.prepareSendPayment(req)
@@ -34,7 +36,9 @@ class SendPayment {
         // ANCHOR: prepare-send-payment-onchain
         val paymentRequest = "<bitcoin address>"
         // Set the amount you wish the pay the receiver
-        val amountSats = BigInteger.fromLong(50_000L) // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
+        // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
+        val amountSats = BigInteger.fromLong(50_000L)
+        // Android (BigInteger from java.math)
         // val amountSats = BigInteger.valueOf(50_000L) // Android (BigInteger from java.math)
         try {
             val req = PrepareSendPaymentRequest(paymentRequest, amountSats)
@@ -61,7 +65,9 @@ class SendPayment {
         // ANCHOR: prepare-send-payment-spark
         val paymentRequest = "<spark address>"
         // Set the amount you wish the pay the receiver
-        val amountSats = BigInteger.fromLong(50_000L) // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
+        // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
+        val amountSats = BigInteger.fromLong(50_000L)
+        // Android (BigInteger from java.math)
         // val amountSats = BigInteger.valueOf(50_000L) // Android (BigInteger from java.math)
         try {
             val req = PrepareSendPaymentRequest(paymentRequest, amountSats)

@@ -33,7 +33,9 @@ class Tokens {
             // The token identifier (e.g., asset ID or token contract)
             val tokenIdentifier = "<token identifier>"
             // Set the amount of tokens you wish to send
-            val amount = BigInteger.fromLong(1_000L) // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
+            // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
+            val amount = BigInteger.fromLong(1_000L)
+            // Android (BigInteger from java.math)
             // val amount = BigInteger.valueOf(1_000L) // Android (BigInteger from java.math)
 
             val prepareResponse =
