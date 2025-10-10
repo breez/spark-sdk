@@ -119,13 +119,69 @@ class SqliteStorage {
 
   // ===== Payment Operations =====
 
-  listPayments(offset = null, limit = null) {
+  listPayments(request) {
     try {
-      // Handle null values by using default values
-      const actualOffset = offset !== null ? offset : 0;
-      const actualLimit = limit !== null ? limit : 4294967295; // u32::MAX
+      // Handle null/undefined values by using default values
+      const actualOffset = request.offset != null ? request.offset : 0;
+      const actualLimit = request.limit != null ? request.limit : 4294967295; // u32::MAX
 
-      const stmt = this.db.prepare(`
+      // Build WHERE clauses based on filters
+      const whereClauses = [];
+      const params = [];
+
+      // Filter by payment type
+      if (request.typeFilter && request.typeFilter.length > 0) {
+        const placeholders = request.typeFilter.map(() => "?").join(", ");
+        whereClauses.push(`p.payment_type IN (${placeholders})`);
+        params.push(...request.typeFilter);
+      }
+
+      // Filter by status
+      if (request.statusFilter && request.statusFilter.length > 0) {
+        const placeholders = request.statusFilter.map(() => "?").join(", ");
+        whereClauses.push(`p.status IN (${placeholders})`);
+        params.push(...request.statusFilter);
+      }
+
+      // Filter by timestamp range
+      if (request.fromTimestamp != null) {
+        whereClauses.push("p.timestamp >= ?");
+        params.push(request.fromTimestamp);
+      }
+
+      if (request.toTimestamp != null) {
+        whereClauses.push("p.timestamp <= ?");
+        params.push(request.toTimestamp);
+      }
+
+      // Filter by payment details/method
+      if (request.detailsFilter) {
+        const detailsFilter = request.detailsFilter;
+        if (detailsFilter.type === "spark") {
+          whereClauses.push("p.spark IS NOT NULL");
+        } else if (detailsFilter.type === "lightning") {
+          whereClauses.push("l.invoice IS NOT NULL");
+        } else if (detailsFilter.type === "withdraw") {
+          whereClauses.push("p.withdraw_tx_id IS NOT NULL");
+        } else if (detailsFilter.type === "deposit") {
+          whereClauses.push("p.deposit_tx_id IS NOT NULL");
+        } else if (detailsFilter.type === "token") {
+          whereClauses.push("t.metadata IS NOT NULL");
+          if (detailsFilter.tokenIdentifier) {
+            whereClauses.push("json_extract(t.metadata, '$.identifier') = ?");
+            params.push(detailsFilter.tokenIdentifier);
+          }
+        }
+      }
+
+      // Build the WHERE clause
+      const whereSql =
+        whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+
+      // Determine sort order
+      const orderDirection = request.sortAscending ? "ASC" : "DESC";
+
+      const query = `
             SELECT p.id
             ,       p.payment_type
             ,       p.status
@@ -148,16 +204,21 @@ class SqliteStorage {
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-             ORDER BY p.timestamp DESC
+             ${whereSql}
+             ORDER BY p.timestamp ${orderDirection}
              LIMIT ? OFFSET ?
-             `);
+             `;
 
-      const rows = stmt.all(actualLimit, actualOffset);
+      params.push(actualLimit, actualOffset);
+      const stmt = this.db.prepare(query);
+      const rows = stmt.all(...params);
       return Promise.resolve(rows.map(this._rowToPayment.bind(this)));
     } catch (error) {
       return Promise.reject(
         new StorageError(
-          `Failed to list payments (offset: ${offset}, limit: ${limit}): ${error.message}`,
+          `Failed to list payments (request: ${JSON.stringify(request)}: ${
+            error.message
+          }`,
           error
         )
       );
