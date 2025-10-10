@@ -39,7 +39,7 @@ class SendPayment {
         // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
         val amountSats = BigInteger.fromLong(50_000L)
         // Android (BigInteger from java.math)
-        // val amountSats = BigInteger.valueOf(50_000L) // Android (BigInteger from java.math)
+        // val amountSats = BigInteger.valueOf(50_000L)
         try {
             val req = PrepareSendPaymentRequest(paymentRequest, amountSats)
             val prepareResponse = sdk.prepareSendPayment(req)
@@ -68,7 +68,7 @@ class SendPayment {
         // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
         val amountSats = BigInteger.fromLong(50_000L)
         // Android (BigInteger from java.math)
-        // val amountSats = BigInteger.valueOf(50_000L) // Android (BigInteger from java.math)
+        // val amountSats = BigInteger.valueOf(50_000L)
         try {
             val req = PrepareSendPaymentRequest(paymentRequest, amountSats)
             val prepareResponse = sdk.prepareSendPayment(req)
