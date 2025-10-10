@@ -1,12 +1,12 @@
 {
   "pins" : [
     {
-      "identity" : "breez-sdk-spark-swift",
+      "identity" : "bigint",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/breez/breez-sdk-spark-swift",
+      "location" : "https://github.com/attaswift/BigInt.git",
       "state" : {
-        "revision" : "d4d157035f76184cec8443ba6bdd362a630dd349",
-        "version" : "0.1.3"
+        "revision" : "e07e00fa1fd435143a2dcf8b7eec9a7710b2fdfe",
+        "version" : "5.7.0"
       }
     },
     {

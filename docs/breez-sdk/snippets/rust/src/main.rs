@@ -4,6 +4,7 @@ mod lnurl_pay;
 mod parsing_inputs;
 mod receive_payment;
 mod send_payment;
+mod tokens;
 
 use anyhow::Result;
 
