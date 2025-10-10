@@ -93,7 +93,7 @@ Token balances are cached for fast responses. For details on ensuring up-to-date
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.receive_payment">API docs</a>
 </h2>
 
-A user just needs to share his spark address in order to receive tokens. The spark address can be fetched as described in [receiving spark payments](./receive_payment.md#spark).
+A user just needs to share their spark address in order to receive tokens. The spark address can be fetched as described in [receiving spark payments](./receive_payment.md#spark).
 
 <h2 id="preparing-payments">
     <a class="header" href="#preparing-payments">Sending a token payment</a>

@@ -39,13 +39,13 @@ class Tokens {
             // val amount = BigInteger.valueOf(1_000L) // Android (BigInteger from java.math)
 
             val prepareResponse =
-                    sdk.prepareSendPayment(
-                            PrepareSendPaymentRequest(
-                                    paymentRequest = paymentRequest,
-                                    amount = amount,
-                                    tokenIdentifier = tokenIdentifier
-                            )
+                sdk.prepareSendPayment(
+                    PrepareSendPaymentRequest(
+                        paymentRequest = paymentRequest,
+                        amount = amount,
+                        tokenIdentifier = tokenIdentifier
                     )
+                )
 
             // If the fees are acceptable, continue to send the token payment
             when (val method = prepareResponse.paymentMethod) {
@@ -58,9 +58,9 @@ class Tokens {
 
             // Send the token payment
             val sendResponse =
-                    sdk.sendPayment(
-                            SendPaymentRequest(prepareResponse = prepareResponse, options = null)
-                    )
+                sdk.sendPayment(
+                    SendPaymentRequest(prepareResponse = prepareResponse, options = null)
+                )
             val payment = sendResponse.payment
             println("Payment: $payment")
         } catch (e: Exception) {

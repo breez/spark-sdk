@@ -12,6 +12,6 @@ swift run
 
 ## To reference locally-built bindings:
 
-- In the local `breez-sdk-liquid/lib/bindings` run `make package-xcframework`
+- In the local `spark-sdk/crates/breez-sdk/bindings` run `make package-xcframework`
 - Edit `Package.swift`
-  - Follow the instructions indicated by "To use a local version of breez-sdk-liquid"
+  - Follow the instructions indicated by "To use a local version of BreezSdkSpark"
