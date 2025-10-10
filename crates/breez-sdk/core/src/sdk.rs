@@ -711,24 +711,23 @@ impl BreezSdk {
     }
 
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
-        let mut payment = self
-            .send_payment_internal(
-                SendPaymentRequest {
-                    prepare_response: PrepareSendPaymentResponse {
-                        payment_method: SendPaymentMethod::Bolt11Invoice {
-                            invoice_details: request.prepare_response.invoice_details,
-                            spark_transfer_fee_sats: None,
-                            lightning_fee_sats: request.prepare_response.fee_sats,
-                        },
-                        amount: request.prepare_response.amount_sats.into(),
-                        token_identifier: None,
+        let mut payment = Box::pin(self.send_payment_internal(
+            SendPaymentRequest {
+                prepare_response: PrepareSendPaymentResponse {
+                    payment_method: SendPaymentMethod::Bolt11Invoice {
+                        invoice_details: request.prepare_response.invoice_details,
+                        spark_transfer_fee_sats: None,
+                        lightning_fee_sats: request.prepare_response.fee_sats,
                     },
-                    options: None,
+                    amount: request.prepare_response.amount_sats.into(),
+                    token_identifier: None,
                 },
-                true,
-            )
-            .await?
-            .payment;
+                options: None,
+            },
+            true,
+        ))
+        .await?
+        .payment;
 
         let success_action =
             process_success_action(&payment, request.prepare_response.success_action.as_ref())?;
@@ -910,7 +909,7 @@ impl BreezSdk {
         &self,
         request: SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
-        self.send_payment_internal(request, false).await
+        Box::pin(self.send_payment_internal(request, false)).await
     }
 
     /// Synchronizes the wallet with the Spark network
