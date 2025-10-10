@@ -364,7 +364,7 @@ impl LightningService {
             )
             .await?;
 
-        let transfer = self
+        let transfer: Transfer = self
             .swap_nodes_for_preimage(SwapNodesForPreimageRequest {
                 transfer_id: &transfer_id,
                 leaves: &leaf_tweaks,
@@ -394,9 +394,9 @@ impl LightningService {
             })
             .await?
             .try_into()?;
-        // If ssp doesn't return a transfer id, we use the generated transfer id
+        // If ssp doesn't return a transfer id, we use the transfer id from the initiate preimage swap
         if lightning_send_payment.transfer_id.is_none() {
-            lightning_send_payment.transfer_id = Some(transfer_id.clone());
+            lightning_send_payment.transfer_id = Some(transfer.id.clone());
         }
 
         Ok(PayLightningResult {
