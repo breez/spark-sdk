@@ -54,6 +54,9 @@ uuid.workspace = true
 uniffi = { workspace = true, optional = true }
 web-time.workspace = true
 x509-parser = { version = "0.16.0" }
+semver = "1.0.27"
+anyhow.workspace = true
+zbase32 = "0.1.2"
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]

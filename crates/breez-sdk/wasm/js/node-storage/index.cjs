@@ -638,6 +638,437 @@ class SqliteStorage {
       details,
     };
   }
+
+  // ===== Sync Operations =====
+
+  sync_add_outgoing_change(record) {
+    try {
+      const transaction = this.db.transaction(() => {
+        // Get the next revision
+        const revisionQuery = this.db.prepare(`
+          UPDATE sync_revision
+          SET revision = revision + 1
+          RETURNING revision
+        `);
+        const revision = revisionQuery.get().revision;
+
+        // Insert the record
+        const stmt = this.db.prepare(`
+          INSERT INTO sync_outgoing (
+            record_type, 
+            data_id, 
+            schema_version, 
+            updated_fields, 
+            revision
+          ) VALUES (?, ?, ?, ?, ?)
+        `);
+
+        stmt.run(
+          record.id.type,
+          record.id.data_id,
+          record.schema_version,
+          JSON.stringify(record.updated_fields),
+          revision
+        );
+
+        return revision;
+      });
+
+      return Promise.resolve(transaction());
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to add outgoing change: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
+  sync_complete_outgoing_sync(record) {
+    try {
+      const transaction = this.db.transaction(() => {
+        // Delete records that have been synced
+        const deleteStmt = this.db.prepare(`
+          DELETE FROM sync_outgoing
+          WHERE record_type = ? AND data_id = ? AND revision = ?
+        `);
+        
+        deleteStmt.run(record.id.type, record.id.data_id, record.revision);
+
+        // Update or insert the sync state
+        const updateStateStmt = this.db.prepare(`
+          INSERT OR REPLACE INTO sync_state (
+            record_type, 
+            data_id, 
+            revision,
+            schema_version, 
+            data
+          ) VALUES (?, ?, ?, ?, ?)
+        `);
+        
+        updateStateStmt.run(
+          record.id.type,
+          record.id.data_id,
+          record.revision,
+          record.schema_version,
+          JSON.stringify(record.data)
+        );
+      });
+
+      transaction();
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to complete outgoing sync: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
+  sync_get_pending_outgoing_changes(limit) {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT 
+          o.record_type, 
+          o.data_id, 
+          o.schema_version, 
+          o.updated_fields, 
+          o.revision,
+          s.revision as parent_revision,
+          s.schema_version as parent_schema_version,
+          s.data as parent_data
+        FROM sync_outgoing o
+        LEFT JOIN sync_state s ON 
+          o.record_type = s.record_type AND 
+          o.data_id = s.data_id
+        ORDER BY o.revision ASC
+        LIMIT ?
+      `);
+      
+      const rows = stmt.all(limit);
+      
+      const changes = rows.map(row => {
+        const change = {
+          id: {
+            type: row.record_type,
+            data_id: row.data_id
+          },
+          schema_version: row.schema_version,
+          updated_fields: JSON.parse(row.updated_fields),
+          revision: row.revision
+        };
+        
+        let parent = null;
+        if (row.parent_data) {
+          parent = {
+            id: {
+              type: row.record_type,
+              data_id: row.data_id
+            },
+            revision: row.parent_revision,
+            schema_version: row.parent_schema_version,
+            data: JSON.parse(row.parent_data)
+          };
+        }
+        
+        return {
+          change,
+          parent
+        };
+      });
+      
+      return Promise.resolve(changes);
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to get pending outgoing changes: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
+  sync_get_last_revision() {
+    try {
+      const stmt = this.db.prepare(`SELECT revision FROM sync_revision LIMIT 1`);
+      const row = stmt.get();
+      
+      return Promise.resolve(row ? row.revision : 0);
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to get last revision: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
+  sync_insert_incoming_records(records) {
+    try {
+      if (!records || records.length === 0) {
+        return Promise.resolve();
+      }
+
+      const transaction = this.db.transaction(() => {
+        const stmt = this.db.prepare(`
+          INSERT INTO sync_incoming (
+            record_type, 
+            data_id, 
+            revision,
+            schema_version, 
+            data
+          ) VALUES (?, ?, ?, ?, ?)
+        `);
+        
+        for (const record of records) {
+          stmt.run(
+            record.id.type,
+            record.id.data_id,
+            record.revision,
+            record.schema_version,
+            JSON.stringify(record.data)
+          );
+        }
+      });
+      
+      transaction();
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to insert incoming records: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
+  sync_delete_incoming_record(record) {
+    try {
+      const stmt = this.db.prepare(`
+        DELETE FROM sync_incoming
+        WHERE record_type = ? 
+        AND data_id = ?
+        AND revision = ?
+      `);
+      
+      stmt.run(record.id.type, record.id.data_id, record.revision);
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to delete incoming record: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
+  sync_rebase_pending_outgoing_records(revision) {
+    try {
+      const transaction = this.db.transaction(() => {
+        // Get current revision
+        const getLastRevisionStmt = this.db.prepare(`
+          SELECT COALESCE(MAX(revision), 0) as last_revision FROM sync_state
+        `);
+        const revisionRow = getLastRevisionStmt.get();
+        const lastRevision = revisionRow ? revisionRow.last_revision : 0;
+        
+        // Calculate the difference to add to all revision numbers
+        const diff = revision > lastRevision ? revision - lastRevision : 0;
+        
+        if (diff === 0) {
+          return; // No rebasing needed
+        }
+        
+        // Update all pending outgoing records
+        const updateRecordsStmt = this.db.prepare(`
+          UPDATE sync_outgoing 
+          SET revision = revision + ?
+        `);
+        
+        updateRecordsStmt.run(diff);
+      });
+      
+      transaction();
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to rebase pending outgoing records: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
+  sync_get_incoming_records(limit) {
+    try {
+      const transaction = this.db.transaction(() => {
+        // Get records and then delete them (following the SQLite pattern)
+        const stmt = this.db.prepare(`
+          SELECT  i.record_type
+          ,       i.data_id
+          ,       i.schema_version
+          ,       i.data
+          ,       i.revision
+          ,       e.schema_version AS existing_schema_version
+          ,       e.commit_time AS existing_commit_time
+          ,       e.data AS existing_data
+          ,       e.revision AS existing_revision
+           FROM sync_incoming i
+           LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id
+           ORDER BY i.revision ASC
+           LIMIT ?
+        `);
+        
+        const rows = stmt.all(limit);
+        
+        // Join with parent records from sync_state
+        const results = rows.map(row => {
+          // Create the record
+          const newState = {
+            id: {
+              type: row.record_type,
+              data_id: row.data_id
+            },
+            revision: row.revision,
+            schema_version: row.schema_version,
+            data: JSON.parse(row.data)
+          };
+          
+          // Create parent if exists
+          let oldState = null;
+          if (row.existing_data) {
+            oldState = {
+              id: {
+                type: row.record_type,
+                data_id: row.data_id
+              },
+              revision: row.existing_revision,
+              schema_version: row.existing_schema_version,
+              data: JSON.parse(row.existing_data)
+            };
+          }
+          
+          return {
+            newState,
+            oldState
+          };
+        });
+        
+        return results;
+      });
+      
+      return Promise.resolve(transaction());
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to get incoming records: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
+  sync_get_latest_outgoing_change() {
+    try {
+      // Get the latest outgoing change
+      const stmt = this.db.prepare(`
+        SELECT 
+          o.record_type, 
+          o.data_id, 
+          o.schema_version, 
+          o.updated_fields, 
+          o.revision,
+          s.revision as parent_revision,
+          s.schema_version as parent_schema_version,
+          s.data as parent_data
+        FROM sync_outgoing o
+        LEFT JOIN sync_state s ON 
+          o.record_type = s.record_type AND 
+          o.data_id = s.data_id
+        ORDER BY o.revision DESC
+        LIMIT 1
+      `);
+      
+      const row = stmt.get();
+      
+      if (!row) {
+        return Promise.resolve(null);
+      }
+      
+      const change = {
+        id: {
+          type: row.record_type,
+          data_id: row.data_id
+        },
+        schema_version: row.schema_version,
+        updated_fields: JSON.parse(row.updated_fields),
+        revision: row.revision
+      };
+      
+      let parent = null;
+      if (row.parent_data) {
+        parent = {
+          id: {
+            type: row.record_type,
+            data_id: row.data_id
+          },
+          revision: row.parent_revision,
+          schema_version: row.parent_schema_version,
+          data: JSON.parse(row.parent_data)
+        };
+      }
+      
+      return Promise.resolve({
+        change,
+        parent
+      });
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to get latest outgoing change: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
+  sync_update_record_from_incoming(record) {
+    try {
+      const stmt = this.db.prepare(`
+        INSERT OR REPLACE INTO sync_state (
+          record_type, 
+          data_id, 
+          revision,
+          schema_version, 
+          data
+        ) VALUES (?, ?, ?, ?, ?)
+      `);
+      
+      stmt.run(
+        record.id.type,
+        record.id.data_id,
+        record.revision,
+        record.schema_version,
+        JSON.stringify(record.data)
+      );
+      
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to update record from incoming: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
 }
 
 async function createDefaultStorage(dataDir, logger = null) {

@@ -85,6 +85,11 @@ impl SdkBuilder {
         *builder = builder.clone().with_payment_observer(payment_observer);
     }
 
+    pub async fn with_real_time_sync(&self, server_url: String) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_real_time_sync(server_url);
+    }
+
     /// Builds the `BreezSdk` instance with the configured components.
     pub async fn build(&self) -> Result<BreezSdk, SdkError> {
         self.inner.lock().await.clone().build().await
