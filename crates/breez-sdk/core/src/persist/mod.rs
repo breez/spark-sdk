@@ -1,5 +1,6 @@
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub(crate) mod sqlite;
+mod sync;
 
 use std::sync::Arc;
 
@@ -48,7 +49,7 @@ impl From<serde_json::Error> for StorageError {
 }
 
 /// Metadata associated with a payment that cannot be extracted from the Spark operator.
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,

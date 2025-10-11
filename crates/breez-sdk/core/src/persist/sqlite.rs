@@ -1,10 +1,11 @@
+use breez_sdk_common::sync::{OutgoingRecord, Record, RecordId, SyncStorage};
 use macros::async_trait;
 use rusqlite::{
     Connection, Row, ToSql, params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
 };
 use rusqlite_migration::{M, Migrations, SchemaVersion};
-use std::path::{Path, PathBuf};
+use std::{path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
 
 use crate::{
     DepositInfo, LnurlPayInfo, PaymentDetails, PaymentMethod,
@@ -162,6 +163,13 @@ impl SqliteStorage {
 
             CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice);
             ",
+            "CREATE TABLE sync_outgoing(
+                data_id TEXT NOT NULL PRIMARY KEY,
+                record_type TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                commit_time INTEGER NOT NULL,
+                updated_fields_json TEXT NOT NULL,
+            );",
         ]
     }
 }
@@ -178,6 +186,48 @@ impl From<rusqlite_migration::Error> for StorageError {
     }
 }
 
+#[async_trait]
+impl SyncStorage for SqliteStorage {
+    async fn add_outgoing_record(&self, record: &OutgoingRecord) -> Result<(), breez_sdk_common::sync::StorageError> {
+        let connection = self.get_connection()?;
+
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_outgoing (data_id, record_type, schema_version, commit_time, updated_fields_json) 
+             VALUES (?, ?, ?, strftime('%s','now'), ?, ?)",
+            params![
+                record.id.data_id,
+                record.id.r#type,
+                record.schema_version.to_string(),
+                serde_json::to_string(&record.updated_fields)?,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    async fn get_pending_outgoing_records(&self, limit: usize) -> Result<Vec<OutgoingRecord>, breez_sdk_common::sync::StorageError> {
+        let connection = self.get_connection()?;
+
+        let mut stmt = connection.prepare(
+            "SELECT data_id, record_type, schema_version, commit_time, updated_fields_json 
+             FROM sync_outgoing 
+             ORDER BY commit_time ASC 
+             LIMIT ?",
+        )?;
+        stmt.bind_param(1, limit as i64)?;
+        let rows = stmt.query_map(params![], |row| {
+            
+            Ok(OutgoingRecord {
+                id: RecordId::new(row.get(1)?, row.get(0)?),
+                schema_version: row.get(2)?,
+                updated_fields: serde_json::from_str(&row.get::<_, String>(4)?)?,
+            })
+        })?;
+
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+}
+                                                                                                                                                                                                                                                                                                                                                                                                              
 #[async_trait]
 impl Storage for SqliteStorage {
     async fn list_payments(
