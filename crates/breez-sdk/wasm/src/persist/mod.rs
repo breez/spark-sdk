@@ -7,7 +7,8 @@ use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::js_sys::Promise;
 
 use crate::models::{
-    DepositInfo, ListPaymentsRequest, Payment, PaymentMetadata, UpdateDepositPayload,
+    DepositInfo, IncomingChange, ListPaymentsRequest, OutgoingChange, Payment, PaymentMetadata,
+    Record, UnversionedRecordChange, UpdateDepositPayload,
 };
 
 pub struct WasmStorage {
@@ -204,6 +205,152 @@ impl breez_sdk_spark::Storage for WasmStorage {
         future.await.map_err(js_error_to_storage_error)?;
         Ok(())
     }
+
+    async fn sync_add_outgoing_change(
+        &self,
+        record: breez_sdk_spark::UnversionedRecordChange,
+    ) -> Result<u64, breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .sync_add_outgoing_change(record.into())
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_storage_error)?;
+
+        let revision: u64 = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| breez_sdk_spark::StorageError::Serialization(e.to_string()))?;
+        Ok(revision)
+    }
+
+    async fn sync_complete_outgoing_sync(
+        &self,
+        record: breez_sdk_spark::Record,
+    ) -> Result<(), breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .sync_complete_outgoing_sync(record.into())
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
+    async fn sync_get_pending_outgoing_changes(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<breez_sdk_spark::OutgoingChange>, breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .sync_get_pending_outgoing_changes(limit)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_storage_error)?;
+
+        let changes: Vec<OutgoingChange> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| breez_sdk_spark::StorageError::Serialization(e.to_string()))?;
+        Ok(changes.into_iter().map(|c| c.into()).collect())
+    }
+
+    async fn sync_get_last_revision(&self) -> Result<u64, breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .sync_get_last_revision()
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_storage_error)?;
+
+        let revision: u64 = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| breez_sdk_spark::StorageError::Serialization(e.to_string()))?;
+        Ok(revision)
+    }
+
+    async fn sync_insert_incoming_records(
+        &self,
+        records: Vec<breez_sdk_spark::Record>,
+    ) -> Result<(), breez_sdk_spark::StorageError> {
+        let records: Vec<Record> = records.into_iter().map(|r| r.into()).collect();
+        let promise = self
+            .storage
+            .sync_insert_incoming_records(records)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
+    async fn sync_delete_incoming_record(
+        &self,
+        record: breez_sdk_spark::Record,
+    ) -> Result<(), breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .sync_delete_incoming_record(record.into())
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
+    async fn sync_rebase_pending_outgoing_records(
+        &self,
+        revision: u64,
+    ) -> Result<(), breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .sync_rebase_pending_outgoing_records(revision)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
+    async fn sync_get_incoming_records(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<breez_sdk_spark::IncomingChange>, breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .sync_get_incoming_records(limit)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_storage_error)?;
+
+        let records: Vec<IncomingChange> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| breez_sdk_spark::StorageError::Serialization(e.to_string()))?;
+        Ok(records.into_iter().map(|r| r.into()).collect())
+    }
+
+    async fn sync_get_latest_outgoing_change(
+        &self,
+    ) -> Result<Option<breez_sdk_spark::OutgoingChange>, breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .sync_get_latest_outgoing_change()
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_storage_error)?;
+
+        if result.is_null() || result.is_undefined() {
+            return Ok(None);
+        }
+
+        let change_set: OutgoingChange = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| breez_sdk_spark::StorageError::Serialization(e.to_string()))?;
+        Ok(Some(change_set.into()))
+    }
+
+    async fn sync_update_record_from_incoming(
+        &self,
+        record: breez_sdk_spark::Record,
+    ) -> Result<(), breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .sync_update_record_from_incoming(record.into())
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -220,6 +367,16 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     deleteDeposit: (txid: string, vout: number) => Promise<void>;
     listDeposits: () => Promise<DepositInfo[]>;
     updateDeposit: (txid: string, vout: number, payload: UpdateDepositPayload) => Promise<void>;
+    sync_add_outgoing_change: (record: UnversionedRecordChange) => Promise<number>;
+    sync_complete_outgoing_sync: (record: Record) => Promise<void>;
+    sync_get_pending_outgoing_changes: (limit: number) => Promise<OutgoingChange[]>;
+    sync_get_last_revision: () => Promise<number>;
+    sync_insert_incoming_records: (records: Record[]) => Promise<void>;
+    sync_delete_incoming_record: (record: Record) => Promise<void>;
+    sync_rebase_pending_outgoing_records: (revision: number) => Promise<void>;
+    sync_get_incoming_records: (limit: number) => Promise<IncomingChange[]>;
+    sync_get_latest_outgoing_change: () => Promise<OutgoingChange | null>;
+    sync_update_record_from_incoming: (record: Record) => Promise<void>;
 }"#;
 
 #[wasm_bindgen]
@@ -275,5 +432,50 @@ extern "C" {
         txid: String,
         vout: u32,
         payload: UpdateDepositPayload,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = sync_add_outgoing_change, catch)]
+    pub fn sync_add_outgoing_change(
+        this: &Storage,
+        record: UnversionedRecordChange,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = sync_complete_outgoing_sync, catch)]
+    pub fn sync_complete_outgoing_sync(this: &Storage, record: Record) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = sync_get_pending_outgoing_changes, catch)]
+    pub fn sync_get_pending_outgoing_changes(
+        this: &Storage,
+        limit: u32,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = sync_get_last_revision, catch)]
+    pub fn sync_get_last_revision(this: &Storage) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = sync_insert_incoming_records, catch)]
+    pub fn sync_insert_incoming_records(
+        this: &Storage,
+        records: Vec<Record>,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = sync_delete_incoming_record, catch)]
+    pub fn sync_delete_incoming_record(this: &Storage, record: Record) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = sync_rebase_pending_outgoing_records, catch)]
+    pub fn sync_rebase_pending_outgoing_records(
+        this: &Storage,
+        revision: u64,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = sync_get_incoming_records, catch)]
+    pub fn sync_get_incoming_records(this: &Storage, limit: u32) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = sync_get_latest_outgoing_change, catch)]
+    pub fn sync_get_latest_outgoing_change(this: &Storage) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = sync_update_record_from_incoming, catch)]
+    pub fn sync_update_record_from_incoming(
+        this: &Storage,
+        record: Record,
     ) -> Result<Promise, JsValue>;
 }

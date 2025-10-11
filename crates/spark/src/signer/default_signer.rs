@@ -386,6 +386,24 @@ impl Signer for DefaultSigner {
         Ok(sig)
     }
 
+    fn sign_message_ecdsa_from_path(
+        &self,
+        message: &[u8],
+        derivation_path: &DerivationPath,
+    ) -> Result<Signature, SignerError> {
+        let signing_key = self
+            .key_set
+            .signing_master_key
+            .derive_priv(&self.secp, derivation_path)
+            .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {e}")))?
+            .private_key;
+        let digest = sha256::Hash::hash(message);
+        let sig = self
+            .secp
+            .sign_ecdsa(&Message::from_digest(digest.to_byte_array()), &signing_key);
+        Ok(sig)
+    }
+
     fn sign_hash_schnorr_with_identity_key(
         &self,
         hash: &[u8],
