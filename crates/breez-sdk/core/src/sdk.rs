@@ -62,6 +62,7 @@ use crate::{
         CachedAccountInfo, ObjectCacheRepository, PaymentMetadata, PaymentRequestMetadata,
         StaticDepositAddress, Storage, UpdateDepositPayload,
     },
+    realtime_sync::SyncProcessor,
     sync::SparkSyncService,
     utils::{
         deposit_chain_syncer::DepositChainSyncer,
@@ -70,6 +71,8 @@ use crate::{
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
+
+pub const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology";
 
 #[derive(Clone, Debug)]
 enum SyncType {
@@ -178,6 +181,9 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
 
     let storage = default_storage(storage_dir.to_string_lossy().to_string())?;
     let builder = crate::SdkBuilder::new(request.config, request.seed, storage);
+    builder
+        .with_real_time_sync(BREEZ_SYNC_SERVICE_URL.to_string())
+        .await;
     let sdk = builder.build().await?;
     Ok(sdk)
 }
@@ -215,11 +221,12 @@ pub(crate) struct BreezSdkParams {
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub shutdown_sender: watch::Sender<()>,
     pub spark_wallet: Arc<SparkWallet>,
+    pub sync_processor: Option<Arc<SyncProcessor>>,
 }
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
-    pub(crate) fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
+    pub(crate) async fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
         // In Regtest we allow running without a Breez API key to facilitate local
         // integration tests. For non-regtest networks, a valid API key is required.
         if !matches!(params.config.network, Network::Regtest) {
@@ -244,6 +251,17 @@ impl BreezSdk {
             initial_synced_watcher,
             external_input_parsers,
         };
+
+        if let Some(sync_processor) = params.sync_processor {
+            // Failing to start sync will fail connect. Because it's important the initial database updates complete.
+            sync_processor
+                .start(sdk.shutdown_sender.subscribe())
+                .await
+                .map_err(|e| {
+                    SdkError::Generic(format!("Failed to start real-time sync processor: {e}"))
+                })?;
+        }
+
         sdk.start(initial_synced_sender);
         Ok(sdk)
     }
@@ -254,6 +272,8 @@ impl BreezSdk {
     /// 1. `periodic_sync`: the wallet with the Spark network    
     /// 2. `monitor_deposits`: monitors for new deposits
     fn start(&self, initial_synced_sender: watch::Sender<bool>) {
+        // TODO: update the local database from outgoing sync records.
+        // ensure there will be no races. (if we would just take the pending outgoing records, it's possible the remote update happens before the local update. Then we have an issue at startup, because the update would no longer be 'pending', while the local data model hasn't been updated yet.)
         self.periodic_sync(initial_synced_sender);
         self.try_recover_lightning_address();
     }

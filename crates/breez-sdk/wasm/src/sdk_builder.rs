@@ -91,6 +91,12 @@ impl SdkBuilder {
         self
     }
 
+    #[wasm_bindgen(js_name = "withRealTimeSync")]
+    pub fn with_real_time_sync(mut self, url: String) -> Self {
+        self.builder = self.builder.with_real_time_sync(url);
+        self
+    }
+
     #[wasm_bindgen(js_name = "build")]
     pub async fn build(self) -> WasmResult<BreezSdk> {
         let sdk = self.builder.build().await?;

@@ -8,7 +8,7 @@ use tonic::{
 
 use crate::{
     grpc::transport::{GrpcClient, Transport},
-    sync::{
+    sync::proto::{
         ListChangesReply, ListChangesRequest, ListenChangesRequest, Notification, SetRecordReply,
         SetRecordRequest, syncer_client::SyncerClient as ProtoSyncerClient,
     },
@@ -16,20 +16,20 @@ use crate::{
 
 #[allow(unused)]
 #[macros::async_trait]
-pub(crate) trait SyncerClient: Send + Sync {
-    async fn push(&self, req: SetRecordRequest) -> Result<SetRecordReply>;
-    async fn pull(&self, req: ListChangesRequest) -> Result<ListChangesReply>;
-    async fn listen(&self, req: ListenChangesRequest) -> Result<Streaming<Notification>>;
+pub trait SyncerClient: Send + Sync {
+    async fn set_record(&self, req: SetRecordRequest) -> Result<SetRecordReply>;
+    async fn list_changes(&self, req: ListChangesRequest) -> Result<ListChangesReply>;
+    async fn listen_changes(&self, req: ListenChangesRequest) -> Result<Streaming<Notification>>;
 }
 
-pub(crate) struct BreezSyncerClient {
+pub struct BreezSyncerClient {
     #[allow(unused)]
     client: ProtoSyncerClient<InterceptedService<Transport, ApiKeyInterceptor>>,
 }
 
 impl BreezSyncerClient {
     #[allow(unused)]
-    pub(crate) fn new(server_url: &str, api_key: Option<String>) -> anyhow::Result<Self> {
+    pub fn new(server_url: &str, api_key: Option<&str>) -> anyhow::Result<Self> {
         let api_key_metadata = match &api_key {
             Some(key) => Some(
                 format!("Bearer {key}")
@@ -49,15 +49,15 @@ impl BreezSyncerClient {
 
 #[macros::async_trait]
 impl SyncerClient for BreezSyncerClient {
-    async fn push(&self, req: SetRecordRequest) -> Result<SetRecordReply> {
+    async fn set_record(&self, req: SetRecordRequest) -> Result<SetRecordReply> {
         Ok(self.client.clone().set_record(req).await?.into_inner())
     }
 
-    async fn pull(&self, req: ListChangesRequest) -> Result<ListChangesReply> {
+    async fn list_changes(&self, req: ListChangesRequest) -> Result<ListChangesReply> {
         Ok(self.client.clone().list_changes(req).await?.into_inner())
     }
 
-    async fn listen(&self, req: ListenChangesRequest) -> Result<Streaming<Notification>> {
+    async fn listen_changes(&self, req: ListenChangesRequest) -> Result<Streaming<Notification>> {
         Ok(self.client.clone().listen_changes(req).await?.into_inner())
     }
 }

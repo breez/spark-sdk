@@ -616,6 +616,7 @@ dependencies = [
  "bitcoin",
  "cbc",
  "dns-parser",
+ "futures",
  "getrandom 0.2.16",
  "hex",
  "hickory-resolver",
@@ -626,6 +627,7 @@ dependencies = [
  "rand 0.8.5",
  "regex",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "spark",
@@ -640,6 +642,7 @@ dependencies = [
  "uniffi",
  "wasm-bindgen-test",
  "web-time",
+ "zbase32",
 ]
 
 [[package]]
@@ -670,6 +673,7 @@ dependencies = [
 name = "breez-sdk-spark"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64 0.22.1",
  "bip39",
@@ -688,6 +692,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "rusqlite_migration",
+ "semver",
  "serde",
  "serde_json",
  "shellwords",
@@ -703,6 +708,7 @@ dependencies = [
  "wasm-bindgen-test",
  "web-time",
  "x509-parser",
+ "zbase32",
 ]
 
 [[package]]
@@ -4095,11 +4101,12 @@ dependencies = [
 
 [[package]]
 name = "semver"
-version = "1.0.26"
+version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56e6fa9c48d24d85fb3de5ad847117517440f6beceb7798af16b4a87d616b8d0"
+checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 dependencies = [
  "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -6270,6 +6277,12 @@ dependencies = [
  "syn 2.0.105",
  "synstructure",
 ]
+
+[[package]]
+name = "zbase32"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f9079049688da5871a7558ddacb7f04958862c703e68258594cb7a862b5e33f"
 
 [[package]]
 name = "zerocopy"

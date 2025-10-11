@@ -145,6 +145,36 @@ class MigrationManager {
           };
         },
       },
+      {
+        name: "Add sync tables",
+        upgrade: (db, transaction) => {
+          // Create sync_revision table if it doesn't exist
+          if (!db.objectStoreNames.contains("sync_revision")) {
+            const syncRevisionStore = db.createObjectStore("sync_revision", { keyPath: "id" });
+            // Insert the initial revision (0)
+            transaction.objectStore("sync_revision").add({ id: 1, revision: 0 });
+          }
+
+          // Create sync_outgoing table if it doesn't exist
+          if (!db.objectStoreNames.contains("sync_outgoing")) {
+            db.createObjectStore("sync_outgoing", { keyPath: "id" });
+            // Create index on revision
+            transaction.objectStore("sync_outgoing").createIndex("revision", "revision");
+            // Create index on record_id 
+            transaction.objectStore("sync_outgoing").createIndex("record_id", ["record_id.type", "record_id.data_id"]);
+          }
+
+          // Create sync_incoming table if it doesn't exist
+          if (!db.objectStoreNames.contains("sync_incoming")) {
+            db.createObjectStore("sync_incoming", { keyPath: "id" });
+          }
+
+          // Create sync_state table if it doesn't exist
+          if (!db.objectStoreNames.contains("sync_state")) {
+            db.createObjectStore("sync_state", { keyPath: "id" });
+          }
+        }
+      }
     ];
   }
 }
@@ -740,6 +770,505 @@ class IndexedDBStorage {
             getRequest.error
           )
         );
+      };
+    });
+  }
+
+  async sync_add_outgoing_change(record) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(["sync_outgoing", "sync_revision"], "readwrite");
+      
+      // Get the next revision
+      const revisionStore = transaction.objectStore("sync_revision");
+      const getRevisionRequest = revisionStore.get(1);
+      
+      getRevisionRequest.onsuccess = () => {
+        const revisionData = getRevisionRequest.result || { id: 1, revision: 0 };
+        const nextRevision = revisionData.revision + 1;
+        
+        // Update the revision
+        const updateRequest = revisionStore.put({ id: 1, revision: nextRevision });
+        
+        updateRequest.onsuccess = () => {
+          // Create the record change
+          const outgoingStore = transaction.objectStore("sync_outgoing");
+          const recordId = `${record.id.type}:${record.id.data_id}`;
+          
+          const recordChange = {
+            id: `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
+            record_id: record.id,
+            schema_version: record.schema_version,
+            updated_fields: record.updated_fields,
+            revision: nextRevision,
+            synced: false
+          };
+          
+          const addRequest = outgoingStore.add(recordChange);
+          
+          addRequest.onsuccess = () => {
+            resolve(nextRevision);
+          };
+          
+          addRequest.onerror = (event) => {
+            reject(new StorageError(`Failed to add outgoing change: ${event.target.error.message}`));
+          };
+        };
+        
+        updateRequest.onerror = (event) => {
+          reject(new StorageError(`Failed to update revision: ${event.target.error.message}`));
+        };
+      };
+      
+      getRevisionRequest.onerror = (event) => {
+        reject(new StorageError(`Failed to get revision: ${event.target.error.message}`));
+      };
+      
+      transaction.onerror = (event) => {
+        reject(new StorageError(`Transaction failed: ${event.target.error.message}`));
+      };
+    });
+  }
+
+  async sync_complete_outgoing_sync(record) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(["sync_outgoing", "sync_state"], "readwrite");
+      const outgoingStore = transaction.objectStore("sync_outgoing");
+      const stateStore = transaction.objectStore("sync_state");
+      
+      // Find the record by record_id
+      const index = outgoingStore.index("record_id");
+      const request = index.openCursor([record.id.type, record.id.data_id]);
+      
+      request.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (cursor) {
+          // Delete the record instead of marking it as synced
+          cursor.delete();
+          
+          // Also store the record in the sync state
+          const stateRecord = {
+            id: `${record.id.type}:${record.id.data_id}`,
+            record: record
+          };
+          
+          stateStore.put(stateRecord);
+          resolve();
+        } else {
+          reject(new StorageError(`Record not found for sync completion`));
+        }
+      };
+      
+      request.onerror = (event) => {
+        reject(new StorageError(`Failed to complete outgoing sync: ${event.target.error.message}`));
+      };
+    });
+  }
+
+  async sync_get_pending_outgoing_changes(limit) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(["sync_outgoing", "sync_state"], "readonly");
+      const outgoingStore = transaction.objectStore("sync_outgoing");
+      const stateStore = transaction.objectStore("sync_state");
+      
+      // Get pending outgoing changes (all records in this store are pending)
+      const request = outgoingStore.openCursor();
+      const changes = [];
+      let count = 0;
+      
+      request.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (cursor && count < limit) {
+          const record = cursor.value;
+          // Look up parent record if it exists
+          const stateRequest = stateStore.get(`${record.record_id.type}:${record.record_id.data_id}`);
+          
+          stateRequest.onsuccess = () => {
+            const parent = stateRequest.result ? stateRequest.result.record : null;
+            
+            // Create a change set
+            const change = {
+              id: record.record_id,
+              schema_version: record.schema_version,
+              updated_fields: record.updated_fields,
+              revision: record.revision
+            };
+            
+            changes.push({
+              change: change,
+              parent: parent
+            });
+            
+            count++;
+            cursor.continue();
+          };
+          
+          stateRequest.onerror = () => {
+            // Continue even if parent lookup fails
+            const change = {
+              id: record.record_id,
+              schema_version: record.schema_version,
+              updated_fields: record.updated_fields,
+              revision: record.revision
+            };
+            
+            changes.push({
+              change: change,
+              parent: null
+            });
+            
+            count++;
+            cursor.continue();
+          };
+        } else {
+          resolve(changes);
+        }
+      };
+      
+      request.onerror = (event) => {
+        reject(new StorageError(`Failed to get pending outgoing changes: ${event.target.error.message}`));
+      };
+    });
+  }
+
+  async sync_get_last_revision() {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("sync_revision", "readonly");
+      const store = transaction.objectStore("sync_revision");
+      const request = store.get(1);
+      
+      request.onsuccess = () => {
+        const result = request.result || { id: 1, revision: 0 };
+        resolve(result.revision);
+      };
+      
+      request.onerror = (event) => {
+        reject(new StorageError(`Failed to get last revision: ${event.target.error.message}`));
+      };
+    });
+  }
+
+  async sync_insert_incoming_records(records) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(["sync_incoming"], "readwrite");
+      const store = transaction.objectStore("sync_incoming");
+      
+      // Add each record to the incoming store
+      let recordsProcessed = 0;
+      
+      for (const record of records) {
+        const incomingRecord = {
+          id: `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
+          record: record
+        };
+        
+        const request = store.add(incomingRecord);
+        
+        request.onsuccess = () => {
+          recordsProcessed++;
+          if (recordsProcessed === records.length) {
+            resolve();
+          }
+        };
+        
+        request.onerror = (event) => {
+          reject(new StorageError(`Failed to insert incoming record: ${event.target.error.message}`));
+        };
+      }
+      
+      // If no records were provided
+      if (records.length === 0) {
+        resolve();
+      }
+    });
+  }
+
+  async sync_delete_incoming_record(record) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(["sync_incoming"], "readwrite");
+      const store = transaction.objectStore("sync_incoming");
+      
+      // Find the record in the incoming store
+      const request = store.openCursor();
+      
+      request.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (cursor) {
+          const incomingRecord = cursor.value;
+          
+          if (incomingRecord.record && 
+              incomingRecord.record.id.type === record.id.type &&
+              incomingRecord.record.id.data_id === record.id.data_id &&
+              incomingRecord.record.revision === record.revision) {
+            
+            // Delete the record
+            const deleteRequest = cursor.delete();
+            
+            deleteRequest.onsuccess = () => {
+              resolve();
+            };
+            
+            deleteRequest.onerror = (event) => {
+              reject(new StorageError(`Failed to delete incoming record: ${event.target.error.message}`));
+            };
+          } else {
+            cursor.continue();
+          }
+        } else {
+          // Record not found, but we'll resolve anyway
+          resolve();
+        }
+      };
+      
+      request.onerror = (event) => {
+        reject(new StorageError(`Failed to search for incoming record: ${event.target.error.message}`));
+      };
+    });
+  }
+
+  async sync_rebase_pending_outgoing_records(revision) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(["sync_outgoing", "sync_revision"], "readwrite");
+      const outgoingStore = transaction.objectStore("sync_outgoing");
+      const revisionStore = transaction.objectStore("sync_revision");
+      
+      // Get the current revision
+      const getRevisionRequest = revisionStore.get(1);
+      
+      getRevisionRequest.onsuccess = () => {
+        const revisionData = getRevisionRequest.result || { id: 1, revision: 0 };
+        const currentRevision = revisionData.revision;
+        
+        if (revision > currentRevision) {
+          // Update the revision
+          revisionStore.put({ id: 1, revision: revision });
+          
+          // Get all records that need rebasing (where synced = false)
+          const recordsRequest = outgoingStore.openCursor();
+          const records = [];
+          
+          recordsRequest.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor) {
+              const record = cursor.value;
+              if (!record.synced) {
+                records.push({ cursor, record });
+              }
+              cursor.continue();
+            } else {
+              // Update all records that need rebasing
+              let newRevision = revision;
+              
+              for (const { cursor, record } of records) {
+                newRevision++;
+                record.revision = newRevision;
+                cursor.update(record);
+              }
+              
+              // Update the final revision
+              if (records.length > 0) {
+                revisionStore.put({ id: 1, revision: newRevision });
+              }
+              
+              resolve();
+            }
+          };
+          
+          recordsRequest.onerror = (event) => {
+            reject(new StorageError(`Failed to rebase outgoing records: ${event.target.error.message}`));
+          };
+        } else {
+          // No rebasing needed
+          resolve();
+        }
+      };
+      
+      getRevisionRequest.onerror = (event) => {
+        reject(new StorageError(`Failed to get revision for rebasing: ${event.target.error.message}`));
+      };
+    });
+  }
+
+  async sync_get_incoming_records(limit) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(["sync_incoming", "sync_state"], "readwrite");
+      const incomingStore = transaction.objectStore("sync_incoming");
+      const stateStore = transaction.objectStore("sync_state");
+      
+      // Get records up to the limit
+      const request = incomingStore.openCursor();
+      const records = [];
+      const recordsToDelete = [];
+      let count = 0;
+      
+      request.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (cursor && count < limit) {
+          const incomingRecord = cursor.value;
+          recordsToDelete.push(incomingRecord.id);
+          
+          // Look for parent record
+          const stateRequest = stateStore.get(`${incomingRecord.record.id.type}:${incomingRecord.record.id.data_id}`);
+          
+          stateRequest.onsuccess = () => {
+            const parent = stateRequest.result ? stateRequest.result.record : null;
+            
+            records.push({
+              record: incomingRecord.record,
+              parent: parent
+            });
+            
+            count++;
+            cursor.continue();
+          };
+          
+          stateRequest.onerror = () => {
+            // Continue even if parent lookup fails
+            records.push({
+              record: incomingRecord.record,
+              parent: null
+            });
+            
+            count++;
+            cursor.continue();
+          };
+        } else {
+          // Delete the fetched records
+          if (recordsToDelete.length > 0) {
+            recordsToDelete.forEach(id => {
+              incomingStore.delete(id);
+            });
+          }
+          
+          resolve(records);
+        }
+      };
+      
+      request.onerror = (event) => {
+        reject(new StorageError(`Failed to get incoming records: ${event.target.error.message}`));
+      };
+    });
+  }
+
+  async sync_get_latest_outgoing_change() {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(["sync_outgoing", "sync_state"], "readonly");
+      const outgoingStore = transaction.objectStore("sync_outgoing");
+      const stateStore = transaction.objectStore("sync_state");
+      
+      // Get the highest revision record
+      const index = outgoingStore.index("revision");
+      const request = index.openCursor(null, "prev");
+      
+      request.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (cursor) {
+          const record = cursor.value;
+          
+          // Get the parent record
+          const stateRequest = stateStore.get(`${record.record_id.type}:${record.record_id.data_id}`);
+          
+          stateRequest.onsuccess = () => {
+            const parent = stateRequest.result ? stateRequest.result.record : null;
+            
+            // Create a change set
+            const change = {
+              id: record.record_id,
+              schema_version: record.schema_version,
+              updated_fields: record.updated_fields,
+              revision: record.revision
+            };
+            
+            resolve({
+              change: change,
+              parent: parent
+            });
+          };
+          
+          stateRequest.onerror = () => {
+            // Return without parent if lookup fails
+            const change = {
+              id: record.record_id,
+              schema_version: record.schema_version,
+              updated_fields: record.updated_fields,
+              revision: record.revision
+            };
+            
+            resolve({
+              change: change,
+              parent: null
+            });
+          };
+        } else {
+          // No records found
+          resolve(null);
+        }
+      };
+      
+      request.onerror = (event) => {
+        reject(new StorageError(`Failed to get latest outgoing change: ${event.target.error.message}`));
+      };
+    });
+  }
+
+  async sync_update_record_from_incoming(record) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(["sync_state"], "readwrite");
+      const stateStore = transaction.objectStore("sync_state");
+      
+      // Store or update the record state
+      const stateRecord = {
+        id: `${record.id.type}:${record.id.data_id}`,
+        record: record
+      };
+      
+      const request = stateStore.put(stateRecord);
+      
+      request.onsuccess = () => {
+        resolve();
+      };
+      
+      request.onerror = (event) => {
+        reject(new StorageError(`Failed to update record from incoming: ${event.target.error.message}`));
       };
     });
   }
