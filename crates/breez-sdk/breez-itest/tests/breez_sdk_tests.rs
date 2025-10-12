@@ -17,7 +17,7 @@ async fn alice_sdk() -> Result<SdkInstance> {
     let alice_dir = TempDir::new("breez-sdk-alice")?;
     let path = alice_dir.path().to_string_lossy().to_string();
     info!("Initializing Alice's SDK at: {}", path);
-    build_sdk_with_dir(path, [2u8; 32], Some(alice_dir)).await
+    build_sdk_with_dir(path, [8u8; 32], Some(alice_dir)).await
 }
 
 /// Fixture: Bob's SDK with temporary storage
@@ -26,7 +26,7 @@ async fn bob_sdk() -> Result<SdkInstance> {
     let bob_dir = TempDir::new("breez-sdk-bob")?;
     let path = bob_dir.path().to_string_lossy().to_string();
     info!("Initializing Bob's SDK at: {}", path);
-    build_sdk_with_dir(path, [3u8; 32], Some(bob_dir)).await
+    build_sdk_with_dir(path, [9u8; 32], Some(bob_dir)).await
 }
 
 // ---------------------
@@ -333,7 +333,9 @@ async fn test_03_lightning_invoice_payment(
     info!("Payment prepared - amount: {} sats", prepare.amount);
 
     // The expected payment amount is either from the invoice or what Alice specified
-    let expected_amount = invoice_amount_sats.or(sender_amount).expect("Amount must be specified");
+    let expected_amount = invoice_amount_sats
+        .or(sender_amount)
+        .expect("Amount must be specified");
 
     // Alice sends the payment
     info!(

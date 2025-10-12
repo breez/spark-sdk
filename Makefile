@@ -57,3 +57,6 @@ wasm-test-node:
 
 itest:
 	cargo xtask itest
+
+breez-itest:
+	cargo xtask test --package breez-sdk-itest -- --test-threads=1
