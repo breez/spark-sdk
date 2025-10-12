@@ -2,7 +2,7 @@ import { type BreezSdk, defaultConfig, Network } from '@breeztech/breez-sdk-spar
 
 const configureLightningAddress = () => {
   // ANCHOR: config-lightning-address
-  let config = defaultConfig(Network.Mainnet)
+  const config = defaultConfig(Network.Mainnet)
   config.apiKey = 'your-api-key'
   config.lnurlDomain = 'yourdomain.com'
   // ANCHOR_END: config-lightning-address
@@ -41,7 +41,7 @@ const exampleGetLightningAddress = async (sdk: BreezSdk) => {
   // ANCHOR: get-lightning-address
   const addressInfoOpt = await sdk.getLightningAddress()
 
-  if (addressInfoOpt) {
+  if (addressInfoOpt != null) {
     const lightningAddress = addressInfoOpt.lightningAddress
     const username = addressInfoOpt.username
     const description = addressInfoOpt.description

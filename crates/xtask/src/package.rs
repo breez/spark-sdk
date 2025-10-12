@@ -128,6 +128,17 @@ fn package_wasm_cmd(wasm_package: WasmPackages) -> Result<()> {
             package_wasm_target(&wasm_crate_dir, &pkg_dir, "web", &clang_env)?;
         }
     }
+
+    // Run `yarn pack` in the pkg_dir after packaging WASM targets
+    let status = Command::new("yarn")
+        .arg("pack")
+        .current_dir(&pkg_dir)
+        .status()
+        .with_context(|| format!("failed to run `yarn pack` in {:?}", &pkg_dir))?;
+    if !status.success() {
+        bail!("`yarn pack` failed in {:?}", &pkg_dir);
+    }
+
     Ok(())
 }
 

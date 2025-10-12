@@ -1,4 +1,4 @@
-import { Payment, type BreezSdk } from '@breeztech/breez-sdk-spark'
+import type { Payment, BreezSdk } from '@breeztech/breez-sdk-spark'
 
 const exampleGetPayment = async (sdk: BreezSdk): Promise<Payment> => {
   // ANCHOR: get-payment

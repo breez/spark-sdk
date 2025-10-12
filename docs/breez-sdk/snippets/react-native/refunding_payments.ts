@@ -16,12 +16,16 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
     console.log(`Unclaimed deposit: ${deposit.txid}:${deposit.vout}`)
     console.log(`Amount: ${deposit.amountSats} sats`)
 
-    if (deposit.claimError) {
+    if (deposit.claimError != null) {
       if (deposit.claimError instanceof DepositClaimError.DepositClaimFeeExceeded) {
+        let maxFeeStr = ''
+        if (deposit.claimError.inner.maxFee instanceof Fee.Fixed) {
+          maxFeeStr = `${deposit.claimError.inner.maxFee.inner.amount} sats`
+        } else if (deposit.claimError.inner.maxFee instanceof Fee.Rate) {
+          maxFeeStr = `${deposit.claimError.inner.maxFee.inner.satPerVbyte} sat/vB`
+        }
         console.log(
-          `Claim failed: Fee exceeded. ` +
-            `Max: ${deposit.claimError.inner.maxFee}, ` +
-            `Actual: ${deposit.claimError.inner.actualFee}`
+          `Claim failed: Fee exceeded. Max: ${maxFeeStr}, Actual: ${deposit.claimError.inner.actualFee} sats`
         )
       } else if (deposit.claimError instanceof DepositClaimError.MissingUtxo) {
         console.log('Claim failed: UTXO not found')

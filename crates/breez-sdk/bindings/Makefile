@@ -87,8 +87,7 @@ build-darwin-universal: install-target-aarch64-apple-darwin install-target-x86_6
 	lipo -create -output $(TARGET_DIR)darwin-universal/release/$(BIN_NAME).dylib $(TARGET_DIR)aarch64-apple-darwin/release/$(BIN_NAME).dylib $(TARGET_DIR)x86_64-apple-darwin/release/$(BIN_NAME).dylib
 	lipo -create -output $(TARGET_DIR)darwin-universal/release/$(BIN_NAME).a $(TARGET_DIR)aarch64-apple-darwin/release/$(BIN_NAME).a $(TARGET_DIR)x86_64-apple-darwin/release/$(BIN_NAME).a
 
-package-xcframework: build-ios-universal build-darwin-universal
-	cargo run --features=uniffi/cli --bin uniffi-bindgen generate --library $(BIN_PATH) --no-format --language swift -o $(FFI_DIR)swift
+package-xcframework-no-binaries: bindings-swift
 	mkdir -p langs/swift/Sources/BreezSdkSpark
 	mv $(FFI_DIR)swift/*.swift langs/swift/Sources/BreezSdkSpark/
 	# WA pre 0.29.0: Fix redeclaration of protocol UniffiForeignFutureTask https://github.com/mozilla/uniffi-rs/pull/2341
@@ -96,22 +95,44 @@ package-xcframework: build-ios-universal build-darwin-universal
 	cp $(FFI_DIR)swift/breez_sdk_*FFI.h langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/Headers
 	cp $(FFI_DIR)swift/breez_sdk_*FFI.h langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/Headers
 	cp $(FFI_DIR)swift/breez_sdk_*FFI.h langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Headers
+	cd langs/swift && swift build
+
+package-xcframework: build-ios-universal build-darwin-universal package-xcframework-no-binaries
 	cp $(TARGET_DIR)aarch64-apple-ios/release/$(BIN_NAME).a langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
 	cp $(TARGET_DIR)ios-universal-sim/release/$(BIN_NAME).a langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
 	cp $(TARGET_DIR)darwin-universal/release/$(BIN_NAME).a langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
-	cd langs/swift && swift build
 
 ## Kotlin Multiplatform
 KMP_BASE := langs/kotlin-multiplatform/breez-sdk-spark-kmp/src
 KOTLIN_PACKAGE := kotlin/breez_sdk_spark
 
-build-kotlin-multiplatform: install-uniffi-bindgen-gobley build-ios-universal build-ndk-release-target-aarch64-linux-android build-ndk-release-target-armv7-linux-androideabi build-ndk-release-target-i686-linux-android build-ndk-release-target-x86_64-linux-android
+# Build only the minimum needed for uniffi-bindgen (one Android arch)
+build-kotlin-multiplatform-bindgen-only: install-uniffi-bindgen-gobley build-ndk-release-target-aarch64-linux-android
 	gobley-uniffi-bindgen --library -o $(FFI_DIR)kmp \
 		--crate-configs breez_sdk_spark_bindings=./uniffi.kotlin-multiplatform.toml \
 		--crate-configs breez_sdk_spark=../core/uniffi.kotlin-multiplatform.toml \
 		--crate-configs breez_sdk_common=../common/uniffi.kotlin-multiplatform.toml \
 		$(TARGET_DIR)aarch64-linux-android/release/$(BIN_NAME).so
 
+# Build all binaries + run bindgen
+build-kotlin-multiplatform: build-kotlin-multiplatform-bindgen-only build-ios-universal build-ndk-release-target-armv7-linux-androideabi build-ndk-release-target-i686-linux-android build-ndk-release-target-x86_64-linux-android
+
+# Package with dummy binaries (useful for testing)
+package-kotlin-multiplatform-dummy-binaries: build-kotlin-multiplatform-bindgen-only
+	mkdir -p $(KMP_BASE)/lib/ios-arm64 $(KMP_BASE)/lib/ios-simulator-arm64 $(KMP_BASE)/lib/ios-simulator-x64
+	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
+	rm -f $(KMP_BASE)/lib/ios-arm64/$(BIN_NAME).a $(KMP_BASE)/lib/ios-simulator-arm64/$(BIN_NAME).a $(KMP_BASE)/lib/ios-simulator-x64/$(BIN_NAME).a
+	echo "void dummy() {}" > /tmp/dummy.c
+	xcrun -sdk iphoneos clang -c /tmp/dummy.c -o /tmp/dummy_ios.o -arch arm64
+	xcrun -sdk iphonesimulator clang -c /tmp/dummy.c -o /tmp/dummy_sim.o -arch arm64
+	xcrun -sdk iphonesimulator clang -c /tmp/dummy.c -o /tmp/dummy_sim_x64.o -arch x86_64
+	ar crs $(KMP_BASE)/lib/ios-arm64/$(BIN_NAME).a /tmp/dummy_ios.o
+	ar crs $(KMP_BASE)/lib/ios-simulator-arm64/$(BIN_NAME).a /tmp/dummy_sim.o
+	ar crs $(KMP_BASE)/lib/ios-simulator-x64/$(BIN_NAME).a /tmp/dummy_sim_x64.o
+	rm -f /tmp/dummy.c /tmp/dummy_ios.o /tmp/dummy_sim.o /tmp/dummy_sim_x64.o
+	cd langs/kotlin-multiplatform && ./gradlew :breez-sdk-spark-kmp:assemble
+
+# Full package with all binaries
 package-kotlin-multiplatform: build-kotlin-multiplatform
 	mkdir -p $(KMP_BASE)/lib/ios-arm64 $(KMP_BASE)/lib/ios-simulator-arm64 $(KMP_BASE)/lib/ios-simulator-x64
 	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/

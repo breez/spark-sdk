@@ -19,8 +19,8 @@ async def prepare_pay(sdk: BreezSdk):
     lnurl_pay_url = "lightning@address.com"
     try:
         parsed_input = await parse(lnurl_pay_url)
-        details = parsed_input[0]
         if isinstance(parsed_input, InputType.LIGHTNING_ADDRESS):
+            details = parsed_input[0]
             amount_sats = 5_000
             optional_comment = "<comment>"
             pay_request = details.pay_request

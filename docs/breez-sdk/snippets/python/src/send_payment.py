@@ -89,8 +89,8 @@ async def prepare_send_payment_spark(sdk: BreezSdk):
 
         # If the fees are acceptable, continue to create the Send Payment
         if isinstance(prepare_response.payment_method, SendPaymentMethod.SPARK_ADDRESS):
-            fee_sats = prepare_response.payment_method.fee_sats
-            logging.debug(f"Fees: {fee_sats} sats")
+            fee = prepare_response.payment_method.fee
+            logging.debug(f"Fees: {fee} sats")
     except Exception as error:
         logging.error(error)
         raise

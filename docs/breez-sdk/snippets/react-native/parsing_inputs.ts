@@ -16,12 +16,12 @@ const parseInputs = async () => {
     )
   } else if (parsed instanceof InputType.LnurlPay) {
     console.log(
-      `Input is LNURL-Pay/Lightning address accepting min/max ` +
+      'Input is LNURL-Pay/Lightning address accepting min/max ' +
         `${parsed.inner[0].minSendable}/${parsed.inner[0].maxSendable} msats`
     )
   } else if (parsed instanceof InputType.LnurlWithdraw) {
     console.log(
-      `Input is LNURL-Withdraw for min/max ` +
+      'Input is LNURL-Withdraw for min/max ' +
         `${parsed.inner[0].minWithdrawable}/${parsed.inner[0].maxWithdrawable} msats`
     )
   } else {

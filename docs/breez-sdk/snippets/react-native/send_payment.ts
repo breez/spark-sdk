@@ -80,7 +80,7 @@ const exampleSendPaymentLightningBolt11 = async (
   prepareResponse: PrepareSendPaymentResponse
 ) => {
   // ANCHOR: send-payment-lightning-bolt11
-  const options = new SendPaymentOptions.Bolt11Invoice({ 
+  const options = new SendPaymentOptions.Bolt11Invoice({
     preferSpark: true,
     completionTimeoutSecs: 10
   })
