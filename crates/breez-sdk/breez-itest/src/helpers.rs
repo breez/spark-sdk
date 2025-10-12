@@ -184,7 +184,7 @@ pub enum EventResult {
     /// Deposit claim succeeded
     ClaimSucceeded,
     /// Payment succeeded with details
-    PaymentSucceeded(Payment),
+    PaymentSucceeded(Box<Payment>),
 }
 
 /// Generic event waiter with timeout
@@ -306,7 +306,7 @@ pub async fn wait_for_payment_event(
                     "Received PaymentSucceeded event: {} sats, type: {:?}",
                     payment.amount, payment.payment_type
                 );
-                Ok(Some(EventResult::PaymentSucceeded(payment)))
+                Ok(Some(EventResult::PaymentSucceeded(Box::new(payment))))
             }
             other => {
                 info!("Received SDK event: {:?}", other);
@@ -316,7 +316,7 @@ pub async fn wait_for_payment_event(
     )
     .await
     .and_then(|result| match result {
-        EventResult::PaymentSucceeded(payment) => Ok(payment),
+        EventResult::PaymentSucceeded(payment) => Ok(*payment),
         _ => Err(anyhow::anyhow!("Unexpected event result")),
     })
 }

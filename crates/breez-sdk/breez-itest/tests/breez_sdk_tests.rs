@@ -242,3 +242,268 @@ async fn test_02_deposit_claim(#[future] alice_sdk: Result<SdkInstance>) -> Resu
     info!("=== Test test_02_deposit_claim PASSED ===");
     Ok(())
 }
+
+/// Test 3: Lightning invoice payment with balance and fee verification
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_03_lightning_invoice_payment(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_03_lightning_invoice_payment ===");
+
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
+
+    // Ensure Alice is funded with enough for invoice + fees
+    ensure_funded(&mut alice, 100_000).await?;
+
+    // Get Alice's initial balance
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_initial_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    info!("Alice initial balance: {} sats", alice_initial_balance);
+
+    // Get Bob's initial balance
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_initial_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    info!("Bob initial balance: {} sats", bob_initial_balance);
+
+    // Bob creates a Lightning invoice for 10,000 sats
+    let invoice_amount = 10_000;
+    let bob_invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "Test payment".to_string(),
+                amount_sats: Some(invoice_amount),
+            },
+        })
+        .await?
+        .payment_request;
+
+    info!("Bob's Lightning invoice: {}", bob_invoice);
+
+    // Alice prepares to pay Bob's invoice
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_invoice.clone(),
+            amount: None,
+            token_identifier: None,
+        })
+        .await?;
+
+    info!("Payment prepared - amount: {} sats", prepare.amount);
+
+    // Alice sends the payment
+    info!(
+        "Sending {} sats from Alice to Bob via Lightning...",
+        invoice_amount
+    );
+
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare.clone(),
+            options: Some(SendPaymentOptions::Bolt11Invoice {
+                prefer_spark: false,
+                completion_timeout_secs: Some(10),
+            }),
+        })
+        .await?;
+
+    info!("Alice send payment status: {:?}", send_resp.payment.status);
+    info!("Alice payment fees: {} sats", send_resp.payment.fees);
+    assert!(
+        matches!(
+            send_resp.payment.status,
+            PaymentStatus::Completed | PaymentStatus::Pending
+        ),
+        "Payment should be completed or pending"
+    );
+
+    // Wait for Bob to receive the payment via event
+    info!("Waiting for Bob to receive payment event...");
+    let received_payment = wait_for_payment_event(&mut bob.events, 60).await?;
+
+    assert_eq!(
+        received_payment.payment_type,
+        PaymentType::Receive,
+        "Bob should receive a payment"
+    );
+    assert_eq!(
+        received_payment.amount, invoice_amount as u128,
+        "Bob should receive exactly {} sats",
+        invoice_amount
+    );
+    assert_eq!(
+        received_payment.method,
+        PaymentMethod::Lightning,
+        "Payment should be via Lightning"
+    );
+
+    info!(
+        "Bob received payment: {} sats, fees: {} sats, status: {:?}, method: {:?}",
+        received_payment.amount,
+        received_payment.fees,
+        received_payment.status,
+        received_payment.method
+    );
+
+    // Verify Alice's balance decreased by amount + fees
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_final_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    let alice_balance_change = alice_initial_balance as i64 - alice_final_balance as i64;
+    info!(
+        "Alice's balance: {} -> {} sats (change: -{})",
+        alice_initial_balance, alice_final_balance, alice_balance_change
+    );
+
+    assert!(
+        alice_final_balance < alice_initial_balance,
+        "Alice's balance should decrease"
+    );
+
+    info!(
+        "Alice paid {} sats total (amount: {}, fees: {})",
+        alice_balance_change, send_resp.payment.amount, send_resp.payment.fees
+    );
+
+    // Verify Bob's balance increased by invoice amount
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_final_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    let bob_balance_change = bob_final_balance as i64 - bob_initial_balance as i64;
+    info!(
+        "Bob's balance: {} -> {} sats (change: +{})",
+        bob_initial_balance, bob_final_balance, bob_balance_change
+    );
+
+    assert!(
+        bob_final_balance > bob_initial_balance,
+        "Bob's balance should increase"
+    );
+    assert_eq!(
+        bob_balance_change, invoice_amount as i64,
+        "Bob should receive exactly {} sats",
+        invoice_amount
+    );
+
+    // Verify payment appears in Alice's payment list
+    info!("Verifying Alice's payment list...");
+    let alice_payments = alice
+        .sdk
+        .list_payments(ListPaymentsRequest {
+            offset: None,
+            limit: None,
+        })
+        .await?;
+
+    let alice_payment = alice_payments
+        .payments
+        .iter()
+        .find(|p| p.id == send_resp.payment.id)
+        .expect("Payment should appear in Alice's payment list");
+
+    assert_eq!(
+        alice_payment.payment_type,
+        PaymentType::Send,
+        "Alice should have a Send payment"
+    );
+    assert_eq!(
+        alice_payment.amount, invoice_amount as u128,
+        "Payment amount should match invoice"
+    );
+    assert!(
+        alice_payment.fees > 0,
+        "Lightning payment should have non-zero fees"
+    );
+    assert_eq!(
+        alice_payment.method,
+        PaymentMethod::Lightning,
+        "Payment method should be Lightning"
+    );
+
+    info!(
+        "Alice's payment record - id: {}, amount: {} sats, fees: {} sats, method: {:?}",
+        alice_payment.id, alice_payment.amount, alice_payment.fees, alice_payment.method
+    );
+
+    // Verify payment appears in Bob's payment list
+    info!("Verifying Bob's payment list...");
+    let bob_payments = bob
+        .sdk
+        .list_payments(ListPaymentsRequest {
+            offset: None,
+            limit: None,
+        })
+        .await?;
+
+    let bob_payment = bob_payments
+        .payments
+        .iter()
+        .find(|p| p.id == received_payment.id)
+        .expect("Payment should appear in Bob's payment list");
+
+    assert_eq!(
+        bob_payment.payment_type,
+        PaymentType::Receive,
+        "Bob should have a Receive payment"
+    );
+    assert_eq!(
+        bob_payment.amount, invoice_amount as u128,
+        "Payment amount should match invoice"
+    );
+    assert_eq!(bob_payment.fees, 0, "Receiver should not pay fees");
+    assert_eq!(
+        bob_payment.method,
+        PaymentMethod::Lightning,
+        "Payment method should be Lightning"
+    );
+
+    info!(
+        "Bob's payment record - id: {}, amount: {} sats, fees: {} sats, method: {:?}",
+        bob_payment.id, bob_payment.amount, bob_payment.fees, bob_payment.method
+    );
+
+    // Final verification: Alice paid = Bob received
+    assert_eq!(
+        alice_payment.amount, bob_payment.amount,
+        "Sent amount should equal received amount"
+    );
+
+    info!(
+        "✓ Payment verified: Alice sent {} sats + {} fees, Bob received {} sats",
+        alice_payment.amount, alice_payment.fees, bob_payment.amount
+    );
+
+    info!("=== Test test_03_lightning_invoice_payment PASSED ===");
+    Ok(())
+}
