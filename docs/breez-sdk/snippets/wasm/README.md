@@ -1,4 +1,6 @@
 ## Steps to compile the snippets locally
+
+### Building package Using CI
 1. Build a Wasm package
   - By running the publish-all-platforms CI in the breez-sdk-spark repository
 2. Download the wasm-{VERSION} artifact 
@@ -17,6 +19,13 @@ tar xvfz *.tgz
 cp package/breez-sdk-spark.tgz ../packages/
 rm -rf package
 cd ..
+```
+
+### Building package locally
+```shell
+cd ../../../../packages/wasm/
+make build
+yarn pack
 ```
 
 To use published bindings:
