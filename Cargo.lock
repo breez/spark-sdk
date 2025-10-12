@@ -648,6 +648,7 @@ dependencies = [
  "anyhow",
  "bitcoin",
  "breez-sdk-spark",
+ "dotenvy",
  "hex",
  "macros",
  "reqwest",

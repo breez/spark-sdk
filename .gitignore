@@ -22,3 +22,5 @@ fly.toml
 
 # Wasm package
 packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
+.claude/
+.claude/settings.local.json

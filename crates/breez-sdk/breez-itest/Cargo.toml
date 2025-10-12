@@ -3,6 +3,10 @@ name = "breez-sdk-itest"
 edition = "2024"
 version.workspace = true
 
+[lib]
+name = "breez_sdk_itest"
+path = "src/lib.rs"
+
 [dependencies]
 # Breez SDK under test (enable test-utils for direct helpers)
 breez-sdk-spark = { workspace = true, features = ["test-utils"] }
@@ -24,3 +28,4 @@ macros.workspace = true
 tempdir.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+dotenvy.workspace = true

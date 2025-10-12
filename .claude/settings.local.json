@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:app.lightspark.com)",
-      "Bash(curl -s -X POST https://app.lightspark.com/regtest-faucet -H \"User-Agent: Mozilla/5.0\")"
+      "Bash(curl -s -X POST https://app.lightspark.com/regtest-faucet -H \"User-Agent: Mozilla/5.0\")",
+      "Bash(cargo build:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo test:*)"
     ],
     "deny": [],
     "ask": []
