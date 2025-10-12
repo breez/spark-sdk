@@ -1,9 +1,12 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use breez_sdk_spark::*;
 use tokio::sync::mpsc;
 use tokio_with_wasm::alias as tokio;
 use tracing::info;
 
+use crate::SdkInstance;
 use crate::faucet::RegtestFaucet;
 
 /// Event listener that forwards events to a channel
@@ -23,13 +26,15 @@ impl EventListener for ChannelEventListener {
 /// # Arguments
 /// * `storage_dir` - Directory path for SDK storage
 /// * `seed_bytes` - 32-byte seed for deterministic wallet generation
+/// * `temp_dir` - Optional TempDir to keep alive (prevents premature deletion)
 ///
 /// # Returns
-/// A tuple of (SDK instance, event receiver channel)
-pub async fn build_sdk(
+/// An SdkInstance containing the SDK, event channel, and optional TempDir
+pub async fn build_sdk_with_dir(
     storage_dir: String,
     seed_bytes: [u8; 32],
-) -> Result<(BreezSdk, mpsc::Receiver<SdkEvent>)> {
+    temp_dir: Option<tempdir::TempDir>,
+) -> Result<SdkInstance> {
     let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed
     config.lnurl_domain = None; // Avoid lnurl server in tests
@@ -54,7 +59,23 @@ pub async fn build_sdk(
         })
         .await?;
 
-    Ok((sdk, rx))
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        temp_dir,
+    })
+}
+
+/// Build and initialize a BreezSDK instance for testing (without TempDir management)
+///
+/// # Arguments
+/// * `storage_dir` - Directory path for SDK storage
+/// * `seed_bytes` - 32-byte seed for deterministic wallet generation
+///
+/// # Returns
+/// An SdkInstance containing the SDK and event channel
+pub async fn build_sdk(storage_dir: String, seed_bytes: [u8; 32]) -> Result<SdkInstance> {
+    build_sdk_with_dir(storage_dir, seed_bytes, None).await
 }
 
 /// Wait for SDK wallet balance to reach at least the specified amount
@@ -112,57 +133,23 @@ pub async fn wait_for_balance(sdk: &BreezSdk, min_balance: u64, timeout_secs: u6
     }
 }
 
-/// Fund an address using the regtest faucet and wait for funds to appear in SDK balance
-///
-/// This is a high-level helper that combines faucet funding with balance waiting.
-///
-/// # Arguments
-/// * `sdk` - The BreezSDK instance
-/// * `address` - Bitcoin address to fund
-/// * `amount_sats` - Amount to request from faucet
-/// * `min_expected_balance` - Minimum balance to wait for after funding
-///
-/// # Returns
-/// The transaction ID from the faucet
-pub async fn fund_address_and_wait(
-    sdk: &BreezSdk,
-    address: &str,
-    amount_sats: u64,
-    min_expected_balance: u64,
-) -> Result<String> {
-    let faucet = RegtestFaucet::new()?;
-
-    info!(
-        "Funding address {} with {} sats from faucet",
-        address, amount_sats
-    );
-
-    let txid = faucet.fund_and_wait(address, amount_sats).await?;
-
-    info!(
-        "Faucet sent funds in txid: {}, waiting for balance...",
-        txid
-    );
-
-    // Wait for balance to update (SDK auto-claims deposits in background)
-    wait_for_balance(sdk, min_expected_balance, 180).await?;
-
-    Ok(txid)
-}
-
 /// Get a deposit address and fund it from the faucet in one operation
 ///
-/// This helper generates a deposit address, funds it, and waits for the balance to appear.
+/// This helper generates a deposit address, funds it, and waits for the claim event.
 ///
 /// # Arguments
-/// * `sdk` - The BreezSDK instance
+/// * `sdk_instance` - The SdkInstance with SDK and event channel
 /// * `amount_sats` - Amount to request from faucet
 ///
 /// # Returns
 /// Tuple of (deposit_address, funding_txid)
-pub async fn receive_and_fund(sdk: &BreezSdk, amount_sats: u64) -> Result<(String, String)> {
+pub async fn receive_and_fund(
+    sdk_instance: &mut SdkInstance,
+    amount_sats: u64,
+) -> Result<(String, String)> {
     // Get a static deposit address
-    let receive = sdk
+    let receive = sdk_instance
+        .sdk
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::BitcoinAddress,
         })
@@ -171,16 +158,130 @@ pub async fn receive_and_fund(sdk: &BreezSdk, amount_sats: u64) -> Result<(Strin
     let deposit_address = receive.payment_request;
     info!("Generated deposit address: {}", deposit_address);
 
-    // Fund it
-    let info = sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?;
-    let txid =
-        fund_address_and_wait(sdk, &deposit_address, amount_sats, info.balance_sats + 1).await?;
+    // Fund the address
+    let faucet = RegtestFaucet::new()?;
+    info!(
+        "Funding address {} with {} sats from faucet",
+        deposit_address, amount_sats
+    );
+    let txid = faucet.fund_address(&deposit_address, amount_sats).await?;
+
+    info!(
+        "Faucet sent funds in txid: {}, waiting for claim event...",
+        txid
+    );
+
+    // Wait for the ClaimDepositsSucceeded event
+    wait_for_claim_event(&mut sdk_instance.events, 180).await?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     Ok((deposit_address, txid))
+}
+
+/// Result of waiting for a specific SDK event
+pub enum EventResult {
+    /// Deposit claim succeeded
+    ClaimSucceeded,
+    /// Payment succeeded with details
+    PaymentSucceeded(Payment),
+}
+
+/// Generic event waiter with timeout
+///
+/// # Arguments
+/// * `event_rx` - Event receiver channel
+/// * `timeout_secs` - Maximum time to wait in seconds
+/// * `matcher` - Function that matches and extracts the desired event
+///
+/// # Returns
+/// The matched event result or error on timeout/failure
+async fn wait_for_event<F>(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    timeout_secs: u64,
+    event_name: &str,
+    mut matcher: F,
+) -> Result<EventResult>
+where
+    F: FnMut(SdkEvent) -> Result<Option<EventResult>>,
+{
+    let timeout = tokio::time::Duration::from_secs(timeout_secs);
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!(
+                "Timeout waiting for {} event after {} seconds",
+                event_name,
+                timeout_secs
+            );
+        }
+
+        match tokio::time::timeout(remaining, event_rx.recv()).await {
+            Ok(Some(event)) => {
+                match matcher(event) {
+                    Ok(Some(result)) => return Ok(result),
+                    Ok(None) => {
+                        // Not the event we're looking for, keep waiting
+                        continue;
+                    }
+                    Err(e) => {
+                        // Matcher returned an error (e.g., failure event)
+                        return Err(e);
+                    }
+                }
+            }
+            Ok(None) => {
+                anyhow::bail!("Event channel closed unexpectedly");
+            }
+            Err(_) => {
+                anyhow::bail!(
+                    "Timeout waiting for {} event after {} seconds",
+                    event_name,
+                    timeout_secs
+                );
+            }
+        }
+    }
+}
+
+/// Wait for a deposit claim to succeed by listening to SDK events
+///
+/// # Arguments
+/// * `event_rx` - Event receiver channel from build_sdk
+/// * `timeout_secs` - Maximum time to wait in seconds
+///
+/// # Returns
+/// Ok if claim succeeded, Error if timeout or failure
+pub async fn wait_for_claim_event(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    timeout_secs: u64,
+) -> Result<()> {
+    wait_for_event(
+        event_rx,
+        timeout_secs,
+        "ClaimDeposits",
+        |event| match event {
+            SdkEvent::ClaimDepositsSucceeded { claimed_deposits } => {
+                info!(
+                    "Received ClaimDepositsSucceeded event: {} deposits claimed",
+                    claimed_deposits.len()
+                );
+                Ok(Some(EventResult::ClaimSucceeded))
+            }
+            SdkEvent::ClaimDepositsFailed { unclaimed_deposits } => Err(anyhow::anyhow!(
+                "Deposit claim failed: {} deposits unclaimed",
+                unclaimed_deposits.len()
+            )),
+            other => {
+                info!("Received SDK event: {:?}", other);
+                Ok(None)
+            }
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 /// Wait for a payment to succeed by listening to SDK events
@@ -190,46 +291,34 @@ pub async fn receive_and_fund(sdk: &BreezSdk, amount_sats: u64) -> Result<(Strin
 /// * `timeout_secs` - Maximum time to wait in seconds
 ///
 /// # Returns
-/// The payment details from the PaymentSucceed event
+/// The payment details from the PaymentSucceeded event
 pub async fn wait_for_payment_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     timeout_secs: u64,
 ) -> Result<Payment> {
-    let timeout = tokio::time::Duration::from_secs(timeout_secs);
-    let deadline = tokio::time::Instant::now() + timeout;
-
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            anyhow::bail!(
-                "Timeout waiting for payment event after {} seconds",
-                timeout_secs
-            );
-        }
-
-        match tokio::time::timeout(remaining, event_rx.recv()).await {
-            Ok(Some(SdkEvent::PaymentSucceeded { payment })) => {
+    wait_for_event(
+        event_rx,
+        timeout_secs,
+        "PaymentSucceeded",
+        |event| match event {
+            SdkEvent::PaymentSucceeded { payment } => {
                 info!(
                     "Received PaymentSucceeded event: {} sats, type: {:?}",
                     payment.amount, payment.payment_type
                 );
-                return Ok(payment);
+                Ok(Some(EventResult::PaymentSucceeded(payment)))
             }
-            Ok(Some(event)) => {
-                // Log other events but keep waiting
-                info!("Received SDK event: {:?}", event);
+            other => {
+                info!("Received SDK event: {:?}", other);
+                Ok(None)
             }
-            Ok(None) => {
-                anyhow::bail!("Event channel closed unexpectedly");
-            }
-            Err(_) => {
-                anyhow::bail!(
-                    "Timeout waiting for payment event after {} seconds",
-                    timeout_secs
-                );
-            }
-        }
-    }
+        },
+    )
+    .await
+    .and_then(|result| match result {
+        EventResult::PaymentSucceeded(payment) => Ok(payment),
+        _ => Err(anyhow::anyhow!("Unexpected event result")),
+    })
 }
 
 #[cfg(test)]
@@ -242,6 +331,6 @@ mod tests {
         let data_dir = tempdir::TempDir::new("test-sdk").unwrap();
         let result = build_sdk(data_dir.path().to_string_lossy().to_string(), [1u8; 32]).await;
         assert!(result.is_ok(), "SDK should build successfully");
-        let (_sdk, _rx) = result.unwrap();
+        let _sdk_instance = result.unwrap();
     }
 }

@@ -2,8 +2,7 @@ use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
 use rstest::*;
-use std::path::PathBuf;
-use tokio::sync::mpsc;
+use tempdir::TempDir;
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, info};
 
@@ -11,44 +10,35 @@ use tracing::{debug, info};
 // Fixtures
 // ---------------------
 
-/// Get the persistent test workspace directory
+/// Fixture: Alice's SDK with temporary storage
 #[fixture]
-fn test_workspace() -> PathBuf {
-    let workspace = PathBuf::from("target/breez-itest-workspace");
-    std::fs::create_dir_all(&workspace).expect("Failed to create test workspace");
-    workspace
+async fn alice_sdk() -> Result<SdkInstance> {
+    let alice_dir = TempDir::new("breez-sdk-alice")?;
+    let path = alice_dir.path().to_string_lossy().to_string();
+    info!("Initializing Alice's SDK at: {}", path);
+    build_sdk_with_dir(path, [2u8; 32], Some(alice_dir)).await
 }
 
-/// Fixture: Alice's SDK with persistent storage and event channel
+/// Fixture: Bob's SDK with temporary storage
 #[fixture]
-async fn alice_sdk(test_workspace: PathBuf) -> Result<(BreezSdk, mpsc::Receiver<SdkEvent>)> {
-    let alice_dir = test_workspace.join("alice");
-    std::fs::create_dir_all(&alice_dir)?;
-
-    info!("Initializing Alice's SDK at: {}", alice_dir.display());
-    build_sdk(alice_dir.to_string_lossy().to_string(), [2u8; 32]).await
-}
-
-/// Fixture: Bob's SDK with persistent storage and event channel
-#[fixture]
-async fn bob_sdk(test_workspace: PathBuf) -> Result<(BreezSdk, mpsc::Receiver<SdkEvent>)> {
-    let bob_dir = test_workspace.join("bob");
-    std::fs::create_dir_all(&bob_dir)?;
-
-    info!("Initializing Bob's SDK at: {}", bob_dir.display());
-    build_sdk(bob_dir.to_string_lossy().to_string(), [3u8; 32]).await
+async fn bob_sdk() -> Result<SdkInstance> {
+    let bob_dir = TempDir::new("breez-sdk-bob")?;
+    let path = bob_dir.path().to_string_lossy().to_string();
+    info!("Initializing Bob's SDK at: {}", path);
+    build_sdk_with_dir(path, [3u8; 32], Some(bob_dir)).await
 }
 
 // ---------------------
 // Helper Functions
 // ---------------------
 
-/// Ensure Alice has at least the specified balance, funding if necessary
-async fn ensure_funded(sdk: &BreezSdk, min_balance: u64) -> Result<()> {
+/// Ensure SDK has at least the specified balance, funding if necessary
+async fn ensure_funded(sdk_instance: &mut SdkInstance, min_balance: u64) -> Result<()> {
     // Sync to get latest balance
-    sdk.sync_wallet(SyncWalletRequest {}).await?;
+    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
-    let info = sdk
+    let info = sdk_instance
+        .sdk
         .get_info(GetInfoRequest {
             ensure_synced: Some(false),
         })
@@ -60,7 +50,7 @@ async fn ensure_funded(sdk: &BreezSdk, min_balance: u64) -> Result<()> {
             "Current balance: {} sats, need {} more sats. Funding with 50,000 sats...",
             info.balance_sats, needed
         );
-        receive_and_fund(sdk, 50_000).await?;
+        receive_and_fund(sdk_instance, 50_000).await?;
     } else {
         info!(
             "Already funded with {} sats (minimum: {} sats)",
@@ -75,22 +65,23 @@ async fn ensure_funded(sdk: &BreezSdk, min_balance: u64) -> Result<()> {
 // Tests
 // ---------------------
 
-/// Test 2: Send payment from Alice to Bob using Spark transfer
+/// Test 1: Send payment from Alice to Bob using Spark transfer
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_02_spark_transfer(
-    #[future] alice_sdk: Result<(BreezSdk, mpsc::Receiver<SdkEvent>)>,
-    #[future] bob_sdk: Result<(BreezSdk, mpsc::Receiver<SdkEvent>)>,
+async fn test_01_spark_transfer(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
 ) -> Result<()> {
-    info!("=== Starting test_02_spark_transfer ===");
+    info!("=== Starting test_01_spark_transfer ===");
 
-    let (alice, mut _alice_events) = alice_sdk.await?;
-    let (bob, mut bob_events) = bob_sdk.await?;
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
 
     // Ensure Alice is funded (100 sats minimum for small test)
-    ensure_funded(&alice, 100).await?;
+    ensure_funded(&mut alice, 100).await?;
 
     let alice_balance = alice
+        .sdk
         .get_info(GetInfoRequest {
             ensure_synced: Some(false),
         })
@@ -100,8 +91,9 @@ async fn test_02_spark_transfer(
     info!("Alice balance: {} sats", alice_balance);
 
     // Get Bob's initial balance
-    bob.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_initial_balance = bob
+        .sdk
         .get_info(GetInfoRequest {
             ensure_synced: Some(false),
         })
@@ -112,6 +104,7 @@ async fn test_02_spark_transfer(
 
     // Bob exposes a Spark address
     let bob_spark_address = bob
+        .sdk
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::SparkAddress,
         })
@@ -122,6 +115,7 @@ async fn test_02_spark_transfer(
 
     // Alice prepares and sends 5 sats to Bob
     let prepare = alice
+        .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
             amount_sats: Some(5),
@@ -131,6 +125,7 @@ async fn test_02_spark_transfer(
     info!("Sending 5 sats from Alice to Bob via Spark...");
 
     let send_resp = alice
+        .sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
             options: None,
@@ -148,7 +143,7 @@ async fn test_02_spark_transfer(
 
     // Wait for Bob to receive the payment via event
     info!("Waiting for Bob to receive payment event...");
-    let received_payment = wait_for_payment_event(&mut bob_events, 60).await?;
+    let received_payment = wait_for_payment_event(&mut bob.events, 60).await?;
 
     assert_eq!(
         received_payment.payment_type,
@@ -166,8 +161,9 @@ async fn test_02_spark_transfer(
     );
 
     // Verify Bob's balance increased
-    bob.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_final_balance = bob
+        .sdk
         .get_info(GetInfoRequest {
             ensure_synced: Some(false),
         })
@@ -186,36 +182,43 @@ async fn test_02_spark_transfer(
         "Bob's balance should increase"
     );
 
-    info!("=== Test test_02_spark_transfer PASSED ===");
+    info!("=== Test test_01_spark_transfer PASSED ===");
     Ok(())
 }
 
-/// Test 3: Verify deposit claim functionality
+/// Test 2: Verify deposit claim functionality
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_03_deposit_claim(
-    #[future] alice_sdk: Result<(BreezSdk, mpsc::Receiver<SdkEvent>)>,
-) -> Result<()> {
-    info!("=== Starting test_03_deposit_claim ===");
+async fn test_02_deposit_claim(#[future] alice_sdk: Result<SdkInstance>) -> Result<()> {
+    info!("=== Starting test_02_deposit_claim ===");
 
-    let (alice, mut _event_rx) = alice_sdk.await?;
+    let mut alice = alice_sdk.await?;
+
+    // Ensure Alice has some funds to begin with
+    ensure_funded(&mut alice, 100).await?;
+
     let initial_balance = alice
+        .sdk
         .get_info(GetInfoRequest {
-            ensure_synced: Some(true),
+            ensure_synced: Some(false),
         })
         .await?
         .balance_sats;
+
+    info!("Alice initial balance: {} sats", initial_balance);
+
     // Fund with a small amount to test claim (10,000 sats)
     info!("Funding additional 10,000 sats to test auto-claim...");
-    let (deposit_address, txid) = receive_and_fund(&alice, 10_000).await?;
+    let (deposit_address, txid) = receive_and_fund(&mut alice, 10_000).await?;
 
     info!(
         "Funded deposit address: {}, txid: {}",
         deposit_address, txid
     );
 
-    // Balance should have increased (auto-claimed by SDK background sync)
+    // Balance should have increased (auto-claimed by SDK)
     let final_balance = alice
+        .sdk
         .get_info(GetInfoRequest {
             ensure_synced: Some(false),
         })
@@ -235,6 +238,6 @@ async fn test_03_deposit_claim(
         final_balance - initial_balance
     );
 
-    info!("=== Test test_03_deposit_claim PASSED ===");
+    info!("=== Test test_02_deposit_claim PASSED ===");
     Ok(())
 }

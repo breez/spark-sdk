@@ -16,8 +16,6 @@ pub struct FaucetConfig {
     /// Optional password for basic authentication
     /// Can be set with FAUCET_PASSWORD environment variable
     pub password: Option<String>,
-    /// Maximum time to wait for funding confirmation (in seconds)
-    pub confirmation_timeout_secs: u64,
 }
 
 impl Default for FaucetConfig {
@@ -27,7 +25,6 @@ impl Default for FaucetConfig {
                 .unwrap_or_else(|_| "https://api.lightspark.com/graphql/spark/rc".to_string()),
             username: std::env::var("FAUCET_USERNAME").ok(),
             password: std::env::var("FAUCET_PASSWORD").ok(),
-            confirmation_timeout_secs: 120,
         }
     }
 }
@@ -149,24 +146,6 @@ impl RegtestFaucet {
             .transaction_hash;
 
         info!("Successfully funded address, transaction hash: {}", txid);
-        Ok(txid)
-    }
-
-    /// Fund an address and wait for the transaction to appear
-    ///
-    /// This is a convenience method that funds and then waits a moment for propagation
-    pub async fn fund_and_wait(&self, address: &str, amount_sats: u64) -> Result<String> {
-        let txid = self.fund_address(address, amount_sats).await?;
-
-        info!(
-            "Funded address {}, waiting for propagation... (txid: {})",
-            address, txid
-        );
-
-        // In regtest, transactions should appear almost immediately
-        // Just give it a moment to propagate
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
         Ok(txid)
     }
 }
