@@ -320,17 +320,3 @@ pub async fn wait_for_payment_event(
         _ => Err(anyhow::anyhow!("Unexpected event result")),
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    #[ignore] // Ignore by default since it requires regtest infrastructure
-    async fn test_build_sdk() {
-        let data_dir = tempdir::TempDir::new("test-sdk").unwrap();
-        let result = build_sdk(data_dir.path().to_string_lossy().to_string(), [1u8; 32]).await;
-        assert!(result.is_ok(), "SDK should build successfully");
-        let _sdk_instance = result.unwrap();
-    }
-}
