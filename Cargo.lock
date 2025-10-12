@@ -646,6 +646,7 @@ name = "breez-sdk-itest"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bitcoin",
  "breez-sdk-spark",
  "dotenvy",

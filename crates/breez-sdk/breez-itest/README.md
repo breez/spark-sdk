@@ -17,30 +17,61 @@ These tests verify end-to-end SDK functionality including:
 1. **Access to Lightspark regtest infrastructure**:
    - Spark operators running at `https://0.spark.lightspark.com`, etc.
    - Lightspark API available at `https://api.lightspark.com`
-   - Faucet GraphQL endpoint at `https://app.lightspark.com/graphql/spark/rc`
+   - Faucet GraphQL endpoint at `https://api.lightspark.com/graphql/spark/rc`
 
 2. **No additional dependencies required**:
    - Tests use the Lightspark GraphQL faucet API directly
    - Fully automated - no manual interaction needed!
 
+### Test Architecture
+
+Tests use **persistent storage** with shared fixtures:
+- Alice and Bob SDKs persist in `target/breez-itest-workspace/`
+- First test (`test_01_fund_alice`) funds Alice with 100k sats
+- Subsequent tests reuse Alice's balance, saving time and faucet requests
+- Tests are numbered (01, 02, 03...) to suggest execution order
+
 ### Running All Tests
 
-```bash
-# From workspace root
-cargo test -p breez-sdk-itest
+**Recommended: Run tests sequentially** to ensure proper ordering and avoid database contention:
 
-# With trace logging
-RUST_LOG=debug cargo test -p breez-sdk-itest -- --nocapture
+```bash
+# Sequential execution (recommended)
+cargo test -p breez-sdk-itest -- --test-threads=1 --nocapture
+
+# With debug logging
+RUST_LOG=debug cargo test -p breez-sdk-itest -- --test-threads=1 --nocapture
+```
+
+**Parallel execution** (not recommended, may cause issues):
+```bash
+# Parallel mode (may fail due to shared storage)
+cargo test -p breez-sdk-itest
 ```
 
 ### Running Specific Tests
 
 ```bash
-# Run only deposit test
-cargo test -p breez-sdk-itest test_breez_sdk_deposit_claim
+# Run only the funding test
+cargo test -p breez-sdk-itest test_01_fund_alice -- --nocapture
 
-# Run only payment test
-cargo test -p breez-sdk-itest test_breez_sdk_send_payment_prefer_spark
+# Run only the Spark transfer test
+cargo test -p breez-sdk-itest test_02_spark_transfer -- --nocapture
+
+# Run deposit claim test
+cargo test -p breez-sdk-itest test_03_deposit_claim -- --nocapture
+```
+
+### Cleaning Test State
+
+If you need to start fresh (e.g., after SDK changes or test failures):
+
+```bash
+# Remove persistent test workspace
+rm -rf target/breez-itest-workspace
+
+# Next test run will recreate everything from scratch
+cargo test -p breez-sdk-itest -- --test-threads=1 --nocapture
 ```
 
 ## Configuration
@@ -73,14 +104,14 @@ export RUST_LOG=debug
 cargo test -p breez-sdk-itest -- --nocapture
 ```
 
-## Test Architecture
+## Test Design Details
 
 ### Modules
 
 - **`faucet.rs`**: Automated regtest faucet client
-  - Supports multiple endpoint formats (REST, GraphQL)
-  - Environment variable configuration
-  - Automatic retries and fallbacks
+  - GraphQL-based API integration with Lightspark faucet
+  - Basic authentication support via environment variables
+  - Automatic transaction submission and tracking
 
 - **`helpers.rs`**: Reusable test utilities
   - `build_sdk()`: Initialize SDK instance for testing
@@ -89,18 +120,28 @@ cargo test -p breez-sdk-itest -- --nocapture
   - `receive_and_fund()`: Generate deposit address and fund in one step
 
 - **`tests/breez_sdk_tests.rs`**: Integration test cases
-  - Clean, focused test logic using helper functions
+  - **Fixtures**: `alice_sdk`, `bob_sdk` with persistent storage
+  - **Shared state**: Alice and Bob persist across test runs
+  - **Smart funding**: `ensure_funded()` only funds when balance is low
   - Comprehensive logging for debugging
-  - Proper resource cleanup
 
 ### Test Flow
 
-1. **Setup**: Create temporary storage directory and initialize SDK
-2. **Fund**: Generate deposit address and fund via automated faucet
-3. **Wait**: Poll for balance update (SDK auto-claims deposits)
-4. **Execute**: Perform test operations (transfers, payments, etc.)
-5. **Verify**: Assert expected outcomes
-6. **Cleanup**: Temporary directories are automatically cleaned up
+1. **First Run** (test_01_fund_alice):
+   - Initialize Alice and Bob SDKs with persistent storage
+   - Fund Alice with 100k sats via faucet
+   - Subsequent tests reuse this balance
+
+2. **Subsequent Tests**:
+   - Reuse existing Alice/Bob SDKs from `target/breez-itest-workspace/`
+   - Check Alice's balance, fund only if needed
+   - Execute test operations (transfers, payments, etc.)
+   - Verify expected outcomes
+
+3. **Benefits**:
+   - **Fast**: Only 1 faucet request instead of N
+   - **Reliable**: Tests work offline after initial funding
+   - **Debuggable**: Persistent state helps reproduce issues
 
 ## Faucet Implementation
 
@@ -177,48 +218,77 @@ Error: Failed to connect to operator at https://0.spark.lightspark.com
 
 To add a new integration test:
 
-1. Create a new test function in `tests/breez_sdk_tests.rs`:
+1. **Use the fixture-based pattern**:
 
 ```rust
+/// Test 4: Your new feature test
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_my_new_feature() -> Result<()> {
-    info!("=== Starting test_my_new_feature ===");
+async fn test_04_my_new_feature(
+    alice_sdk: Result<BreezSdk>,
+    bob_sdk: Result<BreezSdk>,
+) -> Result<()> {
+    info!("=== Starting test_04_my_new_feature ===");
 
-    // Setup
-    let data_dir = tempdir::TempDir::new("my-test")?;
-    let sdk = build_sdk(data_dir.path().to_string_lossy().to_string(), [4u8; 32]).await?;
+    let alice = alice_sdk?;
+    let bob = bob_sdk?;
 
-    // Fund if needed
-    let (_addr, _txid) = receive_and_fund(&sdk, 50_000).await?;
+    // Ensure Alice is funded if needed
+    ensure_funded(&alice, 50_000).await?;
 
-    // Test logic here
+    // Your test logic here...
 
-    info!("=== Test test_my_new_feature PASSED ===");
+    info!("=== Test test_04_my_new_feature PASSED ===");
     Ok(())
 }
 ```
 
-2. Use helper functions from `breez_sdk_itest::*` for common operations
-3. Add comprehensive logging for debugging
-4. Clean up resources (handled automatically with `TempDir`)
+2. **Best practices**:
+   - Number tests (04, 05, 06...) to suggest execution order
+   - Use `alice_sdk` and `bob_sdk` fixtures instead of creating new SDKs
+   - Call `ensure_funded()` if you need Alice to have a minimum balance
+   - Use helper functions from `breez_sdk_itest::*` for common operations
+   - Add comprehensive logging for debugging
+   - Don't manually fund unless testing the funding flow itself
+
+3. **When to create new SDK instances**:
+   - Only create new temporary SDKs if testing initialization/setup logic
+   - For most tests, reuse Alice/Bob fixtures for consistency and speed
 
 ## Performance
 
-- Test runtime: ~3-5 minutes per test (mostly waiting for faucet and confirmations)
-- Can be parallelized: Tests use independent storage directories
-- Background SDK sync: 5-second interval for faster test execution
+- **First run**: ~3-5 minutes (initial funding via faucet)
+- **Subsequent runs**: ~30-60 seconds per test (no funding needed)
+- **Sequential execution**: Required due to shared storage (use `--test-threads=1`)
+- **Background SDK sync**: 5-second interval for faster test execution
+- **Storage**: Persistent workspace in `target/breez-itest-workspace/`
 
 ## CI/CD Integration
 
 For automated CI/CD pipelines:
 
-1. Ensure `FAUCET_URL` and `FAUCET_API_KEY` are set as CI secrets
-2. Run tests with timeout to prevent hanging:
+1. **Set authentication secrets**:
+   ```bash
+   export FAUCET_USERNAME="your_ci_username"
+   export FAUCET_PASSWORD="your_ci_password"
+   ```
 
-```bash
-timeout 600 cargo test -p breez-sdk-itest --  --test-threads=1
-```
+2. **Clean workspace before tests** (recommended for CI):
+   ```bash
+   rm -rf target/breez-itest-workspace
+   ```
 
-3. Use `--test-threads=1` to avoid parallel test conflicts if needed
-4. Capture logs: `RUST_LOG=debug cargo test -p breez-sdk-itest -- --nocapture > test.log 2>&1`
+3. **Run tests sequentially with timeout**:
+   ```bash
+   timeout 600 cargo test -p breez-sdk-itest -- --test-threads=1 --nocapture
+   ```
+
+4. **Capture detailed logs**:
+   ```bash
+   RUST_LOG=debug cargo test -p breez-sdk-itest -- --test-threads=1 --nocapture > test.log 2>&1
+   ```
+
+5. **Cache workspace** (optional, for faster CI runs):
+   - Cache `target/breez-itest-workspace/` between CI runs
+   - First run: funds Alice (~3-5 min)
+   - Cached runs: reuse balance (~30-60 sec per test)

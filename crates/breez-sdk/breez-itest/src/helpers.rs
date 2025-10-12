@@ -1,9 +1,22 @@
 use anyhow::Result;
 use breez_sdk_spark::*;
+use tokio::sync::mpsc;
 use tokio_with_wasm::alias as tokio;
 use tracing::info;
 
 use crate::faucet::RegtestFaucet;
+
+/// Event listener that forwards events to a channel
+struct ChannelEventListener {
+    tx: mpsc::Sender<SdkEvent>,
+}
+
+#[async_trait::async_trait]
+impl EventListener for ChannelEventListener {
+    async fn on_event(&self, event: SdkEvent) {
+        let _ = self.tx.send(event).await;
+    }
+}
 
 /// Build and initialize a BreezSDK instance for testing
 ///
@@ -12,8 +25,11 @@ use crate::faucet::RegtestFaucet;
 /// * `seed_bytes` - 32-byte seed for deterministic wallet generation
 ///
 /// # Returns
-/// An initialized and synced BreezSDK instance
-pub async fn build_sdk(storage_dir: String, seed_bytes: [u8; 32]) -> Result<BreezSdk> {
+/// A tuple of (SDK instance, event receiver channel)
+pub async fn build_sdk(
+    storage_dir: String,
+    seed_bytes: [u8; 32],
+) -> Result<(BreezSdk, mpsc::Receiver<SdkEvent>)> {
     let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed
     config.lnurl_domain = None; // Avoid lnurl server in tests
@@ -26,6 +42,11 @@ pub async fn build_sdk(storage_dir: String, seed_bytes: [u8; 32]) -> Result<Bree
     let builder = SdkBuilder::new(config, seed, storage);
     let sdk = builder.build().await?;
 
+    // Set up event listener
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
     // Ensure initial sync completes
     let _ = sdk
         .get_info(GetInfoRequest {
@@ -33,7 +54,7 @@ pub async fn build_sdk(storage_dir: String, seed_bytes: [u8; 32]) -> Result<Bree
         })
         .await?;
 
-    Ok(sdk)
+    Ok((sdk, rx))
 }
 
 /// Wait for SDK wallet balance to reach at least the specified amount
@@ -151,9 +172,64 @@ pub async fn receive_and_fund(sdk: &BreezSdk, amount_sats: u64) -> Result<(Strin
     info!("Generated deposit address: {}", deposit_address);
 
     // Fund it
-    let txid = fund_address_and_wait(sdk, &deposit_address, amount_sats, 1).await?;
+    let info = sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?;
+    let txid =
+        fund_address_and_wait(sdk, &deposit_address, amount_sats, info.balance_sats + 1).await?;
 
     Ok((deposit_address, txid))
+}
+
+/// Wait for a payment to succeed by listening to SDK events
+///
+/// # Arguments
+/// * `event_rx` - Event receiver channel from build_sdk
+/// * `timeout_secs` - Maximum time to wait in seconds
+///
+/// # Returns
+/// The payment details from the PaymentSucceed event
+pub async fn wait_for_payment_event(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    timeout_secs: u64,
+) -> Result<Payment> {
+    let timeout = tokio::time::Duration::from_secs(timeout_secs);
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!(
+                "Timeout waiting for payment event after {} seconds",
+                timeout_secs
+            );
+        }
+
+        match tokio::time::timeout(remaining, event_rx.recv()).await {
+            Ok(Some(SdkEvent::PaymentSucceeded { payment })) => {
+                info!(
+                    "Received PaymentSucceeded event: {} sats, type: {:?}",
+                    payment.amount, payment.payment_type
+                );
+                return Ok(payment);
+            }
+            Ok(Some(event)) => {
+                // Log other events but keep waiting
+                info!("Received SDK event: {:?}", event);
+            }
+            Ok(None) => {
+                anyhow::bail!("Event channel closed unexpectedly");
+            }
+            Err(_) => {
+                anyhow::bail!(
+                    "Timeout waiting for payment event after {} seconds",
+                    timeout_secs
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -166,5 +242,6 @@ mod tests {
         let data_dir = tempdir::TempDir::new("test-sdk").unwrap();
         let result = build_sdk(data_dir.path().to_string_lossy().to_string(), [1u8; 32]).await;
         assert!(result.is_ok(), "SDK should build successfully");
+        let (_sdk, _rx) = result.unwrap();
     }
 }
