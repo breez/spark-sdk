@@ -1,0 +1,26 @@
+[package]
+name = "breez-sdk-itest"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+# Breez SDK under test (enable test-utils for direct helpers)
+breez-sdk-spark = { workspace = true, features = ["test-utils"] }
+
+# Async/test stack
+tokio = { workspace = true, features = ["full"] }
+tokio_with_wasm.workspace = true
+rstest.workspace = true
+reqwest = { workspace = true, features = ["default-tls"] }
+test-log = { workspace = true, features = ["trace"] }
+anyhow.workspace = true
+
+# Utils
+bitcoin = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+hex.workspace = true
+macros.workspace = true
+tempdir.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
