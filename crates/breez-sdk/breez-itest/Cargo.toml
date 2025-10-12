@@ -16,6 +16,7 @@ tokio = { workspace = true, features = ["full"] }
 tokio_with_wasm.workspace = true
 async-trait.workspace = true
 rstest.workspace = true
+rstest_reuse.workspace = true
 reqwest = { workspace = true, features = ["default-tls"] }
 test-log = { workspace = true, features = ["trace"] }
 anyhow.workspace = true

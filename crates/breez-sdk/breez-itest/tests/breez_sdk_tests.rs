@@ -2,6 +2,7 @@ use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
 use rstest::*;
+use rstest_reuse::{apply, template};
 use tempdir::TempDir;
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, info};
@@ -243,14 +244,36 @@ async fn test_02_deposit_claim(#[future] alice_sdk: Result<SdkInstance>) -> Resu
     Ok(())
 }
 
-/// Test 3: Lightning invoice payment with balance and fee verification
+// ---------------------
+// Lightning Test Template
+// ---------------------
+
+/// Template for Lightning invoice payment tests with different invoice amounts
+#[template]
 #[rstest]
+#[case::fixed_amount(Some(10_000), None, "fixed-amount")]
+#[case::zero_amount(None, Some(10_000), "zero-amount")]
+fn lightning_payment_cases(
+    #[case] invoice_amount_sats: Option<u64>,
+    #[case] sender_amount: Option<u64>,
+    #[case] test_type: &str,
+) {
+}
+
+/// Shared Lightning invoice payment test with parameterized invoice amount
+#[apply(lightning_payment_cases)]
 #[test_log::test(tokio::test)]
 async fn test_03_lightning_invoice_payment(
     #[future] alice_sdk: Result<SdkInstance>,
     #[future] bob_sdk: Result<SdkInstance>,
+    #[case] invoice_amount_sats: Option<u64>,
+    #[case] sender_amount: Option<u64>,
+    #[case] test_type: &str,
 ) -> Result<()> {
-    info!("=== Starting test_03_lightning_invoice_payment ===");
+    info!(
+        "=== Starting test_03_lightning_invoice_payment ({}) ===",
+        test_type
+    );
 
     let mut alice = alice_sdk.await?;
     let mut bob = bob_sdk.await?;
@@ -282,37 +305,40 @@ async fn test_03_lightning_invoice_payment(
 
     info!("Bob initial balance: {} sats", bob_initial_balance);
 
-    // Bob creates a Lightning invoice for 10,000 sats
-    let invoice_amount = 10_000;
+    // Bob creates a Lightning invoice (with or without amount)
     let bob_invoice = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
-                description: "Test payment".to_string(),
-                amount_sats: Some(invoice_amount),
+                description: format!("Test payment ({})", test_type),
+                amount_sats: invoice_amount_sats,
             },
         })
         .await?
         .payment_request;
 
-    info!("Bob's Lightning invoice: {}", bob_invoice);
+    info!("Bob's Lightning invoice ({}): {}", test_type, bob_invoice);
 
     // Alice prepares to pay Bob's invoice
+    // For zero-amount invoices, Alice must specify the amount
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
-            amount: None,
+            amount: sender_amount.map(|a| a as u128),
             token_identifier: None,
         })
         .await?;
 
     info!("Payment prepared - amount: {} sats", prepare.amount);
 
+    // The expected payment amount is either from the invoice or what Alice specified
+    let expected_amount = invoice_amount_sats.or(sender_amount).expect("Amount must be specified");
+
     // Alice sends the payment
     info!(
-        "Sending {} sats from Alice to Bob via Lightning...",
-        invoice_amount
+        "Sending {} sats from Alice to Bob via Lightning ({})...",
+        expected_amount, test_type
     );
 
     let send_resp = alice
@@ -346,9 +372,9 @@ async fn test_03_lightning_invoice_payment(
         "Bob should receive a payment"
     );
     assert_eq!(
-        received_payment.amount, invoice_amount as u128,
+        received_payment.amount, expected_amount as u128,
         "Bob should receive exactly {} sats",
-        invoice_amount
+        expected_amount
     );
     assert_eq!(
         received_payment.method,
@@ -411,9 +437,9 @@ async fn test_03_lightning_invoice_payment(
         "Bob's balance should increase"
     );
     assert_eq!(
-        bob_balance_change, invoice_amount as i64,
+        bob_balance_change, expected_amount as i64,
         "Bob should receive exactly {} sats",
-        invoice_amount
+        expected_amount
     );
 
     // Verify payment appears in Alice's payment list
@@ -438,7 +464,7 @@ async fn test_03_lightning_invoice_payment(
         "Alice should have a Send payment"
     );
     assert_eq!(
-        alice_payment.amount, invoice_amount as u128,
+        alice_payment.amount, expected_amount as u128,
         "Payment amount should match invoice"
     );
     assert!(
@@ -478,7 +504,7 @@ async fn test_03_lightning_invoice_payment(
         "Bob should have a Receive payment"
     );
     assert_eq!(
-        bob_payment.amount, invoice_amount as u128,
+        bob_payment.amount, expected_amount as u128,
         "Payment amount should match invoice"
     );
     assert_eq!(bob_payment.fees, 0, "Receiver should not pay fees");
@@ -504,6 +530,9 @@ async fn test_03_lightning_invoice_payment(
         alice_payment.amount, alice_payment.fees, bob_payment.amount
     );
 
-    info!("=== Test test_03_lightning_invoice_payment PASSED ===");
+    info!(
+        "=== Test test_03_lightning_invoice_payment ({}) PASSED ===",
+        test_type
+    );
     Ok(())
 }
