@@ -59,4 +59,4 @@ itest:
 	cargo xtask itest
 
 breez-itest:
-	cargo xtask test --package breez-sdk-itest -- --test-threads=1
+	cargo xtask test --package breez-sdk-itest -- --test-threads=1 --no-capture

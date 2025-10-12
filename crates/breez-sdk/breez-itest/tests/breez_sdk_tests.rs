@@ -4,7 +4,6 @@ use breez_sdk_spark::*;
 use rstest::*;
 use rstest_reuse::{apply, template};
 use tempdir::TempDir;
-use tokio_with_wasm::alias as tokio;
 use tracing::{debug, info};
 
 // ---------------------

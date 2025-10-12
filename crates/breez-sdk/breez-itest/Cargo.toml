@@ -13,7 +13,6 @@ breez-sdk-spark = { workspace = true, features = ["test-utils"] }
 
 # Async/test stack
 tokio = { workspace = true, features = ["full"] }
-tokio_with_wasm.workspace = true
 async-trait.workspace = true
 rstest.workspace = true
 rstest_reuse.workspace = true

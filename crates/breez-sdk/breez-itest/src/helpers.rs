@@ -3,7 +3,6 @@ use std::time::Duration;
 use anyhow::Result;
 use breez_sdk_spark::*;
 use tokio::sync::mpsc;
-use tokio_with_wasm::alias as tokio;
 use tracing::info;
 
 use crate::SdkInstance;

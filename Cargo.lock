@@ -660,7 +660,6 @@ dependencies = [
  "tempdir",
  "test-log",
  "tokio",
- "tokio_with_wasm",
  "tracing",
  "tracing-subscriber",
 ]
