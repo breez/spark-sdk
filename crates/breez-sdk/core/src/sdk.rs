@@ -193,6 +193,7 @@ pub fn default_config(network: Network) -> Config {
         sync_interval_secs: 60, // every 1 minute
         max_deposit_claim_fee: None,
         lnurl_domain: Some("breez.tips".to_string()),
+        nostr_pubkey: None,
         prefer_spark_over_lightning: false,
     }
 }
@@ -1088,6 +1089,7 @@ impl BreezSdk {
         let params = crate::lnurl::RegisterLightningAddressRequest {
             username: request.username.clone(),
             description: description.clone(),
+            nostr_pubkey: self.config.nostr_pubkey.clone(),
         };
 
         let response = client.register_lightning_address(&params).await?;
