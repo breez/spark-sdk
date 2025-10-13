@@ -36,11 +36,35 @@ func ListPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.Payment, er
 
 func ListPaymentsFiltered(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.Payment, error) {
 	// ANCHOR: list-payments-filtered
-	limit := uint32(50)
+	// Filter by asset (Bitcoin or Token)
+	tokenIdentifier := "token_identifier_here"
+	var assetFilter breez_sdk_spark.AssetFilter = breez_sdk_spark.AssetFilterToken{TokenIdentifier: &tokenIdentifier}
+	// To filter by Bitcoin instead:
+	// var assetFilter breez_sdk_spark.AssetFilter = breez_sdk_spark.AssetFilterBitcoin
+
+	// Filter options
+	typeFilter := []breez_sdk_spark.PaymentType{
+		breez_sdk_spark.PaymentTypeSend,
+		breez_sdk_spark.PaymentTypeReceive,
+	}
+	statusFilter := []breez_sdk_spark.PaymentStatus{
+		breez_sdk_spark.PaymentStatusCompleted,
+	}
+	fromTimestamp := uint64(1704067200) // Unix timestamp
+	toTimestamp := uint64(1735689600)   // Unix timestamp
 	offset := uint32(0)
+	limit := uint32(50)
+	sortAscending := false
+
 	request := breez_sdk_spark.ListPaymentsRequest{
-		Offset: &offset,
-		Limit:  &limit,
+		TypeFilter:    &typeFilter,    // Filter by payment type
+		StatusFilter:  &statusFilter,  // Filter by status
+		AssetFilter:   &assetFilter,   // Filter by asset (Bitcoin or Token)
+		FromTimestamp: &fromTimestamp, // Time range filters
+		ToTimestamp:   &toTimestamp,   // Time range filters
+		Offset:        &offset,        // Pagination
+		Limit:         &limit,         // Pagination
+		SortAscending: &sortAscending, // Sort order (true = oldest first, false = newest first)
 	}
 	response, err := sdk.ListPayments(request)
 

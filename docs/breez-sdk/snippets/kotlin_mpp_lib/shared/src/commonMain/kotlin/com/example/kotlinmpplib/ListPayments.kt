@@ -17,7 +17,7 @@ class ListPayments {
     suspend fun listPayments(sdk: BreezSdk) {
         // ANCHOR: list-payments
         try {
-            val response = sdk.listPayments(ListPaymentsRequest(null, null))
+            val response = sdk.listPayments(ListPaymentsRequest())
             val payments = response.payments
         } catch (e: Exception) {
             // handle error
@@ -28,10 +28,26 @@ class ListPayments {
     suspend fun listPaymentsFiltered(sdk: BreezSdk) {
         // ANCHOR: list-payments-filtered
         try {
+            // Filter by asset (Bitcoin or Token)
+            val assetFilter = AssetFilter.Token(tokenIdentifier = "token_identifier_here")
+            // To filter by Bitcoin instead:
+            // val assetFilter = AssetFilter.Bitcoin
+
             val response = sdk.listPayments(
                 ListPaymentsRequest(
+                    // Filter by payment type
+                    typeFilter = listOf(PaymentType.SEND, PaymentType.RECEIVE),
+                    // Filter by status
+                    statusFilter = listOf(PaymentStatus.COMPLETED),
+                    assetFilter = assetFilter,
+                    // Time range filters
+                    fromTimestamp = 1704067200u, // Unix timestamp
+                    toTimestamp = 1735689600u,   // Unix timestamp
+                    // Pagination
                     offset = 0u,
-                    limit = 50u
+                    limit = 50u,
+                    // Sort order (true = oldest first, false = newest first)
+                    sortAscending = false
                 ))
             val payments = response.payments
         } catch (e: Exception) {
