@@ -68,6 +68,9 @@ jobs:
   breez-test:
     name: Test
     runs-on: ubuntu-latest
+    env:
+      FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
+      FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
