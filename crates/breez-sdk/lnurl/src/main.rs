@@ -198,6 +198,10 @@ where
             "/lnurlpay/{pubkey}/recover",
             post(LnurlServer::<DB>::recover),
         )
+        .route(
+            "/lnurlpay/{pubkey}/invoices",
+            get(LnurlServer::<DB>::list_invoices),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::auth::<DB>,
