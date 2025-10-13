@@ -6,7 +6,9 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::js_sys::Promise;
 
-use crate::models::{DepositInfo, Payment, PaymentMetadata, UpdateDepositPayload};
+use crate::models::{
+    DepositInfo, LnurlInvoiceInfo, Payment, PaymentMetadata, UpdateDepositPayload,
+};
 
 pub struct WasmStorage {
     pub storage: Storage,
@@ -203,6 +205,20 @@ impl breez_sdk_spark::Storage for WasmStorage {
         future.await.map_err(js_error_to_storage_error)?;
         Ok(())
     }
+
+    async fn add_lnurl_invoices(
+        &self,
+        invoices: Vec<breez_sdk_spark::LnurlInvoiceInfo>,
+    ) -> Result<(), breez_sdk_spark::StorageError> {
+        let js_invoices: Vec<LnurlInvoiceInfo> = invoices.into_iter().map(|i| i.into()).collect();
+        let promise = self
+            .storage
+            .add_lnurl_invoices(js_invoices)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -219,6 +235,7 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     deleteDeposit: (txid: string, vout: number) => Promise<void>;
     listDeposits: () => Promise<DepositInfo[]>;
     updateDeposit: (txid: string, vout: number, payload: UpdateDepositPayload) => Promise<void>;
+    addLnurlInvoices: (invoices: LnurlInvoiceInfo[]) => Promise<void>;
 }"#;
 
 #[wasm_bindgen]
@@ -278,5 +295,11 @@ extern "C" {
         txid: String,
         vout: u32,
         payload: UpdateDepositPayload,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = addLnurlInvoices, catch)]
+    pub fn add_lnurl_invoices(
+        this: &Storage,
+        invoices: Vec<LnurlInvoiceInfo>,
     ) -> Result<Promise, JsValue>;
 }

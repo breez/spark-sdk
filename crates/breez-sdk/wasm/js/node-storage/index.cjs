@@ -142,12 +142,15 @@ class SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       i.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       i.sender_comment AS lnurl_sender_comment
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             LEFT JOIN lnurl_invoices i ON i.invoice = l.invoice
              ORDER BY p.timestamp DESC
              LIMIT ? OFFSET ?
              `);
@@ -259,12 +262,15 @@ class SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       i.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       i.sender_comment AS lnurl_sender_comment
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             LEFT JOIN lnurl_invoices i ON i.invoice = l.invoice
              WHERE p.id = ?
             `);
 
@@ -313,12 +319,15 @@ class SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       i.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       i.sender_comment AS lnurl_sender_comment
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             LEFT JOIN lnurl_invoices i ON i.invoice = l.invoice
              WHERE l.invoice = ?
             `);
 
@@ -462,6 +471,38 @@ class SqliteStorage {
     }
   }
 
+  addLnurlInvoices(invoices) {
+    try {
+      if (!Array.isArray(invoices) || invoices.length === 0) {
+        return Promise.resolve(); // Nothing to add
+      }
+
+      const insertStmt = this.db.prepare(`
+        INSERT OR REPLACE INTO lnurl_invoices (invoice, nostr_zap_request, sender_comment)
+        VALUES (?, ?, ?)
+      `);
+      const transaction = this.db.transaction(() => {
+        for (const invoiceInfo of invoices) {
+          insertStmt.run(
+            invoiceInfo.invoice,
+            invoiceInfo.nostrZapRequest || null,
+            invoiceInfo.senderComment || null
+          );
+        }
+      });
+
+      transaction();
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to add LNURL invoices: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
   // ===== Private Helper Methods =====
 
   _rowToPayment(row) {
@@ -485,6 +526,13 @@ class SqliteStorage {
             e
           );
         }
+      }
+
+      if (row.lnurl_nostr_zap_request || row.lnurl_sender_comment) {
+        details.lnurlReceiveInfo = {
+          nostrZapRequest: row.lnurl_nostr_zap_request || null,
+          senderComment: row.lnurl_sender_comment || null,
+        };
       }
     } else if (row.withdraw_tx_id) {
       details = {

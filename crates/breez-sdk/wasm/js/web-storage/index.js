@@ -111,6 +111,17 @@ class MigrationManager {
           }
         },
       },
+      {
+        name: "Add lnurl receive fields",
+        upgrade: (db, transaction) => {
+          // LNURL invoices store
+          if (!db.objectStoreNames.contains("lnurl_invoices")) {
+            const lnurlInvoicesStore = db.createObjectStore("lnurl_invoices", {
+              keyPath: "invoice",
+            });
+          }
+        },
+      }
     ];
   }
 }
@@ -134,7 +145,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 1; // Current schema version
+    this.dbVersion = 3; // Current schema version (aligned with the number of migrations)
   }
 
   /**
@@ -301,68 +312,72 @@ class IndexedDBStorage {
     const actualOffset = offset !== null ? offset : 0;
     const actualLimit = limit !== null ? limit : 4294967295; // u32::MAX
 
-    return new Promise((resolve, reject) => {
+    try {
       const transaction = this.db.transaction(
-        ["payments", "payment_metadata"],
+        ["payments", "payment_metadata", "lnurl_invoices"],
         "readonly"
       );
       const paymentStore = transaction.objectStore("payments");
       const metadataStore = transaction.objectStore("payment_metadata");
+      const lnurlInvoicesStore = transaction.objectStore("lnurl_invoices");
+      
+      // Get paginated payments using our helper
+      const rawPayments = await this._getPaginatedFromCursor(
+        paymentStore.index("timestamp"), 
+        actualOffset, 
+        actualLimit, 
+        "prev"
+      );
+      
+      // Process each payment with metadata and lnurl information
+      const enrichedPayments = [];
+      
+      for (const payment of rawPayments) {
+        try {
+          if (payment.details) {
+            try {
+              payment.details = JSON.parse(payment.details);
+            } catch (e) {
+              // Skip if we can't parse details
+              continue;
+            }
+          }
 
-      const payments = [];
-      let count = 0;
-      let skipped = 0;
+          if (payment.method) {
+            try {
+              payment.method = JSON.parse(payment.method);
+            } catch (e) {
+              // Skip if we can't parse method
+              continue;
+            }
+          }
 
-      // Use cursor to iterate through payments ordered by timestamp (descending)
-      const request = paymentStore.index("timestamp").openCursor(null, "prev");
-
-      request.onsuccess = (event) => {
-        const cursor = event.target.result;
-
-        if (!cursor || count >= actualLimit) {
-          resolve(payments);
-          return;
+          // Get metadata for this payment
+          const metadata = await this._getFromStore(metadataStore, payment.id).catch(() => null);
+          let enrichedPayment = this._mergePaymentMetadata(payment, metadata);
+          
+          // If there's an invoice, get the lnurl invoice info
+          if (payment.details && payment.details.invoice) {
+            const lnurlInvoice = await this._getFromStore(lnurlInvoicesStore, payment.details.invoice).catch(() => null);
+            if (lnurlInvoice) {
+              enrichedPayment = this._mergeLnurlInvoice(enrichedPayment, lnurlInvoice);
+            }
+          }
+          
+          enrichedPayments.push(enrichedPayment);
+        } catch (error) {
+          // If processing a single payment fails, add it without enrichment
+          enrichedPayments.push(payment);
         }
-
-        if (skipped < actualOffset) {
-          skipped++;
-          cursor.continue();
-          return;
-        }
-
-        const payment = cursor.value;
-
-        // Get metadata for this payment
-        const metadataRequest = metadataStore.get(payment.id);
-        metadataRequest.onsuccess = () => {
-          const metadata = metadataRequest.result;
-          const paymentWithMetadata = this._mergePaymentMetadata(
-            payment,
-            metadata
-          );
-          payments.push(paymentWithMetadata);
-          count++;
-          cursor.continue();
-        };
-        metadataRequest.onerror = () => {
-          // Continue without metadata if it fails
-          payments.push(payment);
-          count++;
-          cursor.continue();
-        };
-      };
-
-      request.onerror = () => {
-        reject(
-          new StorageError(
-            `Failed to list payments (offset: ${offset}, limit: ${limit}): ${
-              request.error?.message || "Unknown error"
-            }`,
-            request.error
-          )
-        );
-      };
-    });
+      }
+      
+      return enrichedPayments;
+    } catch (error) {
+      throw new StorageError(
+        `Failed to list payments (offset: ${offset}, limit: ${limit}): ${error.message || "Unknown error"}`,
+        error
+      );
+    }
   }
 
   async insertPayment(payment) {
@@ -401,50 +416,65 @@ class IndexedDBStorage {
       throw new StorageError("Database not initialized");
     }
 
-    return new Promise((resolve, reject) => {
+    try {
       const transaction = this.db.transaction(
-        ["payments", "payment_metadata"],
+        ["payments", "payment_metadata", "lnurl_invoices"],
         "readonly"
       );
       const paymentStore = transaction.objectStore("payments");
       const metadataStore = transaction.objectStore("payment_metadata");
+      const lnurlInvoicesStore = transaction.objectStore("lnurl_invoices");
 
-      const paymentRequest = paymentStore.get(id);
+      // Get the payment
+      const payment = await this._getFromStore(paymentStore, id);
+      if (!payment) {
+        throw new StorageError(`Payment with id '${id}' not found`);
+      }
 
-      paymentRequest.onsuccess = () => {
-        const payment = paymentRequest.result;
-        if (!payment) {
-          reject(new StorageError(`Payment with id '${id}' not found`));
-          return;
-        }
-
-        // Get metadata for this payment
-        const metadataRequest = metadataStore.get(id);
-        metadataRequest.onsuccess = () => {
-          const metadata = metadataRequest.result;
-          const paymentWithMetadata = this._mergePaymentMetadata(
-            payment,
-            metadata
+      if (payment.details) {
+        try {
+          payment.details = JSON.parse(payment.details);
+        } catch (e) {
+          throw new StorageError(
+            `Failed to parse payment details JSON for payment ${payment.id}: ${e.message}`,
+            e
           );
-          resolve(paymentWithMetadata);
-        };
-        metadataRequest.onerror = () => {
-          // Return payment without metadata if metadata fetch fails
-          resolve(payment);
-        };
-      };
+        }
+      }
 
-      paymentRequest.onerror = () => {
-        reject(
-          new StorageError(
-            `Failed to get payment by id '${id}': ${
-              paymentRequest.error?.message || "Unknown error"
-            }`,
-            paymentRequest.error
-          )
-        );
-      };
-    });
+      if (payment.method) {
+        try {
+          payment.method = JSON.parse(payment.method);
+        } catch (e) {
+          throw new StorageError(
+            `Failed to parse payment method JSON for payment ${payment.id}: ${e.message}`,
+            e
+          );
+        }
+      }
+
+      // Get metadata for this payment
+      const metadata = await this._getFromStore(metadataStore, id).catch(() => null);
+      let enrichedPayment = this._mergePaymentMetadata(payment, metadata);
+      
+      // If there's an invoice, get the lnurl invoice info
+      if (payment.details && payment.details.invoice) {
+        const lnurlInvoice = await this._getFromStore(lnurlInvoicesStore, payment.details.invoice).catch(() => null);
+        if (lnurlInvoice) {
+          enrichedPayment = this._mergeLnurlInvoice(enrichedPayment, lnurlInvoice);
+        }
+      }
+
+      return enrichedPayment;
+    } catch (error) {
+      if (error.name === 'StorageError') {
+        throw error;
+      }
+      throw new StorageError(
+        `Failed to get payment by id '${id}': ${error.message || "Unknown error"}`,
+        error
+      );
+    }
   }
 
   async getPaymentByInvoice(invoice) {
@@ -452,51 +482,62 @@ class IndexedDBStorage {
       throw new StorageError("Database not initialized");
     }
 
-    return new Promise((resolve, reject) => {
+    try {
       const transaction = this.db.transaction(
-        ["payments", "payment_metadata"],
+        ["payments", "payment_metadata", "lnurl_invoices"],
         "readonly"
       );
       const paymentStore = transaction.objectStore("payments");
-      const invoiceIndex = paymentStore.index("invoice");
       const metadataStore = transaction.objectStore("payment_metadata");
+      const lnurlInvoicesStore = transaction.objectStore("lnurl_invoices");
 
-      const paymentRequest = invoiceIndex.get(invoice);
+      // Get the payment by invoice
+      const payment = await this._getFromStore(invoiceIndex, invoice).catch(() => null);
+      if (!payment) {
+        return null;
+      }
 
-      paymentRequest.onsuccess = () => {
-        const payment = paymentRequest.result;
-        if (!payment) {
-          resolve(null);
-          return;
-        }
-
-        // Get metadata for this payment
-        const metadataRequest = metadataStore.get(invoice);
-        metadataRequest.onsuccess = () => {
-          const metadata = metadataRequest.result;
-          const paymentWithMetadata = this._mergePaymentMetadata(
-            payment,
-            metadata
+      if (payment.details) {
+        try {
+          payment.details = JSON.parse(payment.details);
+        } catch (e) {
+          throw new StorageError(
+            `Failed to parse payment details JSON for payment ${payment.id}: ${e.message}`,
+            e
           );
-          resolve(paymentWithMetadata);
-        };
-        metadataRequest.onerror = () => {
-          // Return payment without metadata if metadata fetch fails
-          resolve(payment);
-        };
-      };
+        }
+      }
 
-      paymentRequest.onerror = () => {
-        reject(
-          new StorageError(
-            `Failed to get payment by invoice '${invoice}': ${
-              paymentRequest.error?.message || "Unknown error"
-            }`,
-            paymentRequest.error
-          )
-        );
-      };
-    });
+      if (payment.method) {
+        try {
+          payment.method = JSON.parse(payment.method);
+        } catch (e) {
+          throw new StorageError(
+            `Failed to parse payment method JSON for payment ${payment.id}: ${e.message}`,
+            e
+          );
+        }
+      }
+
+      // Get metadata for this payment
+      const metadata = await this._getFromStore(metadataStore, payment.id).catch(() => null);
+      let enrichedPayment = this._mergePaymentMetadata(payment, metadata);
+      
+      // If there's an invoice, get the lnurl invoice info
+      if (payment.details && payment.details.invoice) {
+        const lnurlInvoice = await this._getFromStore(lnurlInvoicesStore, payment.details.invoice).catch(() => null);
+        if (lnurlInvoice) {
+          enrichedPayment = this._mergeLnurlInvoice(enrichedPayment, lnurlInvoice);
+        }
+      }
+      
+      return enrichedPayment;
+    } catch (error) {
+      throw new StorageError(
+        `Failed to get payment by invoice '${invoice}': ${error.message || "Unknown error"}`,
+        error
+      );
+    }
   }
 
   async setPaymentMetadata(paymentId, metadata) {
@@ -695,64 +736,166 @@ class IndexedDBStorage {
       };
     });
   }
+  
+  async addLnurlInvoices(invoices) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+    
+    if (!Array.isArray(invoices) || invoices.length === 0) {
+      return; // Nothing to add
+    }
+    
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("lnurl_invoices", "readwrite");
+      const store = transaction.objectStore("lnurl_invoices");
+      
+      let completed = 0;
+      let errors = [];
+      
+      // Process each invoice
+      invoices.forEach(invoiceInfo => {
+        const request = store.put({
+          invoice: invoiceInfo.invoice,
+          nostrZapRequest: invoiceInfo.nostrZapRequest || null,
+          senderComment: invoiceInfo.senderComment || null
+        });
+        
+        request.onsuccess = () => {
+          completed++;
+          if (completed === invoices.length) {
+            if (errors.length > 0) {
+              reject(
+                new StorageError(
+                  `Failed to add some LNURL invoices: ${errors.join(", ")}`
+                )
+              );
+            } else {
+              resolve();
+            }
+          }
+        };
+        
+        request.onerror = () => {
+          completed++;
+          errors.push(
+            `${invoiceInfo.invoice}: ${request.error?.message || "Unknown error"}`
+          );
+          
+          if (completed === invoices.length) {
+            reject(
+              new StorageError(
+                `Failed to add some LNURL invoices: ${errors.join(", ")}`
+              )
+            );
+          }
+        };
+      });
+      
+      transaction.onerror = () => {
+        reject(
+          new StorageError(
+            `Transaction failed while adding LNURL invoices: ${
+              transaction.error?.message || "Unknown error"
+            }`,
+            transaction.error
+          )
+        );
+      };
+    });
+  }
 
   // ===== Private Helper Methods =====
+  
+  // Helper function to wrap IndexedDB get request in a Promise
+  _getFromStore(store, key) {
+    return new Promise((resolve, reject) => {
+      const request = store.get(key);
+      
+      request.onsuccess = () => {
+        resolve(request.result);
+      };
+      
+      request.onerror = () => {
+        reject(new StorageError(
+          `Failed to get item from store: ${request.error?.message || "Unknown error"}`,
+          request.error
+        ));
+      };
+    });
+  }
+  
+  // Helper function for cursor with pagination
+  _getPaginatedFromCursor(index, offset = 0, limit = 4294967295, direction = "next", query = null) {
+    return new Promise((resolve, reject) => {
+      const results = [];
+      let count = 0;
+      let skipped = 0;
+      const request = index.openCursor(query, direction);
+      
+      request.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (!cursor || count >= limit) {
+          resolve(results);
+          return;
+        }
+        
+        if (skipped < offset) {
+          skipped++;
+          cursor.continue();
+          return;
+        }
+        
+        results.push(cursor.value);
+        count++;
+        cursor.continue();
+      };
+      
+      request.onerror = () => {
+        reject(new StorageError(
+          `Failed to iterate cursor with pagination: ${request.error?.message || "Unknown error"}`,
+          request.error
+        ));
+      };
+    });
+  }
 
   _mergePaymentMetadata(payment, metadata) {
-    let details = null;
-    if (payment.details) {
-      try {
-        details = JSON.parse(payment.details);
-      } catch (e) {
-        throw new StorageError(
-          `Failed to parse payment details JSON for payment ${payment.id}: ${e.message}`,
-          e
-        );
-      }
-    }
-
-    let method = null;
-    if (payment.method) {
-      try {
-        method = JSON.parse(payment.method);
-      } catch (e) {
-        throw new StorageError(
-          `Failed to parse payment method JSON for payment ${payment.id}: ${e.message}`,
-          e
-        );
-      }
+    if (!metadata || !payment || !payment.details || payment.details.type !== 'lightning') {
+      return payment;
     }
 
     // If this is a Lightning payment and we have lnurl_pay_info, add it to details
-    if (
-      metadata &&
-      metadata.lnurlPayInfo &&
-      details &&
-      details.type == "lightning"
-    ) {
-      try {
-        details.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
-        if (metadata.lnurlDescription && !details.description) {
-          details.description = metadata.lnurlDescription;
-        }
-      } catch (e) {
-        throw new StorageError(
-          `Failed to parse lnurl_pay_info JSON for payment ${payment.id}: ${e.message}`,
-          e
-        );
+    try {
+      payment.details.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
+      if (metadata.lnurlDescription && !details.description) {
+        payment.details.description = metadata.lnurlDescription;
       }
+    } catch (e) {
+      throw new StorageError(
+        `Failed to parse lnurl_pay_info JSON for payment ${payment.id}: ${e.message}`,
+        e
+      );
     }
 
-    return {
-      id: payment.id,
-      paymentType: payment.paymentType,
-      status: payment.status,
-      amount: payment.amount,
-      fees: payment.fees,
-      timestamp: payment.timestamp,
-      method,
-      details,
-    };
+    return payment;
+  }
+  
+  _mergeLnurlInvoice(payment, lnurlInvoice) {
+    if (!lnurlInvoice || !payment || !payment.details || payment.details.type !== 'lightning') {
+      return payment;
+    }
+    
+
+    // Add LNURL invoice information to payment details
+    if (lnurlInvoice.nostrZapRequest || lnurlInvoice.senderComment) {
+      payment.details.lnurlReceiveInfo = {};
+
+      payment.details.lnurlReceiveInfo.nostrZapRequest = lnurlInvoice.nostrZapRequest ?? null;
+      payment.details.lnurlReceiveInfo.senderComment = lnurlInvoice.senderComment ?? null;
+    }
+
+    return payment;
   }
 }
 

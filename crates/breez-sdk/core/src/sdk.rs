@@ -24,7 +24,7 @@ use spark_wallet::{
     WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
-use tracing::{error, info, trace};
+use tracing::{debug, error, info, trace};
 use web_time::{Duration, SystemTime};
 
 use tokio::{
@@ -40,14 +40,14 @@ use crate::{
     BitcoinChainService, CheckLightningAddressRequest, ClaimDepositRequest, ClaimDepositResponse,
     DepositInfo, Fee, GetPaymentRequest, GetPaymentResponse, LightningAddressInfo,
     ListFiatCurrenciesResponse, ListFiatRatesResponse, ListUnclaimedDepositsRequest,
-    ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
-    Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
-    SendOnchainFeeQuote, SendPaymentOptions, WaitForPaymentIdentifier, WaitForPaymentRequest,
-    WaitForPaymentResponse,
+    ListUnclaimedDepositsResponse, LnurlInvoiceInfo, LnurlPayInfo, LnurlPayRequest,
+    LnurlPayResponse, Logger, Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest,
+    PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
+    RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions,
+    WaitForPaymentIdentifier, WaitForPaymentRequest, WaitForPaymentResponse,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
-    lnurl::LnurlServerClient,
+    lnurl::{ListInvoicesRequest, LnurlServerClient},
     logger,
     models::{
         Config, GetInfoRequest, GetInfoResponse, ListPaymentsRequest, ListPaymentsResponse,
@@ -67,6 +67,8 @@ use crate::{
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
+
+const LNURL_INVOICES_LIMIT: u32 = 100;
 
 #[derive(Clone, Debug)]
 enum SyncType {
@@ -376,6 +378,10 @@ impl BreezSdk {
             if let Err(e) = self.spark_wallet.sync().await {
                 error!("sync_wallet_internal: Failed to sync with Spark network: {e:?}");
             }
+
+            if let Err(e) = self.sync_lnurl_invoices().await {
+                error!("sync_wallet_internal: Failed to sync lnurl invoices: {e:?}");
+            }
         }
         if let Err(e) = self.sync_wallet_state_to_storage().await {
             error!("sync_wallet_internal: Failed to sync wallet state to storage: {e:?}");
@@ -455,6 +461,61 @@ impl BreezSdk {
                 .emit(&SdkEvent::ClaimDepositsSucceeded { claimed_deposits })
                 .await;
         }
+        Ok(())
+    }
+
+    async fn sync_lnurl_invoices(&self) -> Result<(), SdkError> {
+        let Some(lnurl_server_client) = self.lnurl_server_client.clone() else {
+            return Ok(());
+        };
+
+        let cache = ObjectCacheRepository::new(Arc::clone(&self.storage));
+        let mut offset = cache.fetch_lnurl_invoices_offset().await?;
+
+        loop {
+            debug!("Syncing lnurl invoices from offset {offset}");
+            let invoices = lnurl_server_client
+                .list_invoices(&ListInvoicesRequest {
+                    offset: Some(offset),
+                    limit: Some(LNURL_INVOICES_LIMIT),
+                })
+                .await?;
+
+            if invoices.invoices.is_empty() {
+                debug!("No more lnurl invoices on offset {offset}");
+                break;
+            }
+
+            let invoices: Vec<_> = invoices
+                .invoices
+                .into_iter()
+                .map(|i| LnurlInvoiceInfo {
+                    invoice: i.invoice,
+                    nostr_zap_request: i.nostr_zap_request,
+                    sender_comment: i.sender_comment,
+                })
+                .collect();
+
+            self.storage.add_lnurl_invoices(invoices.clone()).await?;
+
+            if invoices.len() < LNURL_INVOICES_LIMIT as usize {
+                debug!(
+                    "Synchronized {} lnurl invoices at offset {offset}",
+                    invoices.len()
+                );
+                cache
+                    .save_lnurl_invoices_offset(
+                        offset.saturating_add(u32::try_from(invoices.len())?),
+                    )
+                    .await?;
+
+                // No more invoices to fetch
+                break;
+            }
+            offset = offset.saturating_add(LNURL_INVOICES_LIMIT);
+            cache.save_lnurl_invoices_offset(offset).await?;
+        }
+
         Ok(())
     }
 

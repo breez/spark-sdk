@@ -402,6 +402,7 @@ pub enum PaymentDetails {
         payment_hash: String,
         destination_pubkey: String,
         lnurl_pay_info: Option<LnurlPayInfo>,
+        lnurl_receive_info: Option<LnurlReceiveInfo>,
     },
     Withdraw {
         tx_id: String,
@@ -429,6 +430,19 @@ pub struct LnurlPayInfo {
     pub metadata: Option<String>,
     pub processed_success_action: Option<SuccessActionProcessed>,
     pub raw_success_action: Option<SuccessAction>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlReceiveInfo)]
+pub struct LnurlReceiveInfo {
+    pub nostr_zap_request: Option<String>,
+    pub sender_comment: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlInvoiceInfo)]
+pub struct LnurlInvoiceInfo {
+    pub invoice: String,
+    pub nostr_zap_request: Option<String>,
+    pub sender_comment: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::SuccessActionProcessed)]
@@ -498,6 +512,7 @@ pub struct Config {
     pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<Fee>,
     pub lnurl_domain: Option<String>,
+    pub nostr_pubkey: Option<String>,
     pub prefer_spark_over_lightning: bool,
 }
 

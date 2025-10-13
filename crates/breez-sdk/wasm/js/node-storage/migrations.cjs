@@ -211,6 +211,16 @@ class MigrationManager {
           `ALTER TABLE payments_new RENAME TO payments`,
         ],
       },
+      {
+        name: "Create lnurl_invoices table",
+        sql: [
+          `CREATE TABLE lnurl_invoices (
+              invoice TEXT NOT NULL PRIMARY KEY,
+              nostr_zap_request TEXT,
+              sender_comment TEXT
+           )`,
+        ],
+      }
     ];
   }
 }

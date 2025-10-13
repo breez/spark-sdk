@@ -207,6 +207,9 @@ pub enum PaymentDetails {
 
         /// Lnurl payment information if this was an lnurl payment.
         lnurl_pay_info: Option<LnurlPayInfo>,
+
+        /// Lnurl payment information if this was a received lnurl payment.
+        lnurl_receive_info: Option<LnurlReceiveInfo>,
     },
     Withdraw {
         tx_id: String,
@@ -548,6 +551,13 @@ impl LnurlPayInfo {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct LnurlReceiveInfo {
+    pub sender_comment: Option<String>,
+    pub nostr_zap_request: Option<String>,
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize)]
 pub enum OnchainConfirmationSpeed {
@@ -750,4 +760,12 @@ pub enum WaitForPaymentIdentifier {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct WaitForPaymentResponse {
     pub payment: Payment,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct LnurlInvoiceInfo {
+    pub invoice: String,
+    pub nostr_zap_request: Option<String>,
+    pub sender_comment: Option<String>,
 }
