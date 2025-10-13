@@ -253,7 +253,7 @@ impl Storage for SqliteStorage {
         }
 
         if let Some(to_timestamp) = request.to_timestamp {
-            where_clauses.push("p.timestamp <= ?".to_string());
+            where_clauses.push("p.timestamp < ?".to_string());
             params.push(Box::new(to_timestamp));
         }
 

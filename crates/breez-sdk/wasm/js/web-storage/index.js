@@ -732,7 +732,7 @@ class IndexedDBStorage {
     }
 
     if (request.toTimestamp !== null && request.toTimestamp !== undefined) {
-      if (payment.timestamp > request.toTimestamp) {
+      if (payment.timestamp >= request.toTimestamp) {
         return false;
       }
     }

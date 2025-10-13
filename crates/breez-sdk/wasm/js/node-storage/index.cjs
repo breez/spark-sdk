@@ -150,7 +150,7 @@ class SqliteStorage {
       }
 
       if (request.toTimestamp != null) {
-        whereClauses.push("p.timestamp <= ?");
+        whereClauses.push("p.timestamp < ?");
         params.push(request.toTimestamp);
       }
 

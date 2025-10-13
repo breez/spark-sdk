@@ -615,8 +615,10 @@ pub struct ListPaymentsRequest {
     pub status_filter: Option<Vec<PaymentStatus>>,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub asset_filter: Option<AssetFilter>,
+    /// Only include payments created after this timestamp (inclusive)
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub from_timestamp: Option<u64>,
+    /// Only include payments created before this timestamp (exclusive)
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub to_timestamp: Option<u64>,
     /// Number of records to skip

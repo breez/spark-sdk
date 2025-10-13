@@ -1125,9 +1125,8 @@ pub mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(to_2000.len(), 2);
+        assert_eq!(to_2000.len(), 1);
         assert!(to_2000.iter().any(|p| p.id == "ts_1000"));
-        assert!(to_2000.iter().any(|p| p.id == "ts_2000"));
 
         // Test filter by both from_timestamp and to_timestamp
         let range = storage

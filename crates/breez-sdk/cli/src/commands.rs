@@ -46,11 +46,11 @@ pub enum Command {
         #[arg(short, long)]
         asset_filter: Option<AssetFilter>,
 
-        /// Exclude payments before this timestamp
+        /// Only include payments created after this timestamp (inclusive)
         #[arg(short, long)]
         from_timestamp: Option<u64>,
 
-        /// Exclude payments after this timestamp
+        /// Only include payments created before this timestamp (exclusive)
         #[arg(short, long)]
         to_timestamp: Option<u64>,
 
