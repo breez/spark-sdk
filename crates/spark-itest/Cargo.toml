@@ -15,9 +15,6 @@ rstest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 spark-wallet.workspace = true
-breez-sdk-spark = { workspace = true, features = ["test-utils"] }
-macros.workspace = true
-tempdir.workspace = true
 test-log = { workspace = true, features = ["trace"] }
 testcontainers.workspace = true
 testcontainers-modules = { workspace = true, features = ["postgres"] }

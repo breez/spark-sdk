@@ -82,9 +82,6 @@ jobs:
       - name: Run Tests
         run: make breez-itest
 
-      - name: Check git status
-        uses: ./.github/actions/check-git-status
-
   wasm-clippy:
     name: Wasm clippy
     runs-on: ubuntu-latest
