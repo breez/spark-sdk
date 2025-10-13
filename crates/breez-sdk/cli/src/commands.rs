@@ -178,7 +178,7 @@ pub(crate) async fn execute_command(
         }
         Command::ListPayments { limit, offset } => {
             let value = sdk
-                .list_payments(ListPaymentsRequest { limit, offset })
+                .list_payment(ListPaymentsRequest { limit, offset })
                 .await?;
             print_value(&value)?;
             Ok(true)

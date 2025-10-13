@@ -948,7 +948,7 @@ impl BreezSdk {
     /// * `Ok(ListPaymentsResponse)` - Contains the list of payments if successful
     /// * `Err(SdkError)` - If there was an error accessing the storage
     ///
-    pub async fn list_payments(
+    pub async fn list_payment(
         &self,
         request: ListPaymentsRequest,
     ) -> Result<ListPaymentsResponse, SdkError> {

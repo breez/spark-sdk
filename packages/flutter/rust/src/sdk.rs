@@ -108,11 +108,11 @@ impl BreezSdk {
         self.inner.sync_wallet(request).await
     }
 
-    pub async fn list_payments(
+    pub async fn list_payment(
         &self,
         request: ListPaymentsRequest,
     ) -> Result<ListPaymentsResponse, SdkError> {
-        self.inner.list_payments(request).await
+        self.inner.list_payment(request).await
     }
 
     pub async fn get_payment(
