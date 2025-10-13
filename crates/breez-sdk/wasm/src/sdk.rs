@@ -167,12 +167,12 @@ impl BreezSdk {
         Ok(self.sdk.sync_wallet(request.into()).await?.into())
     }
 
-    #[wasm_bindgen(js_name = "listPayment")]
-    pub async fn list_payment(
+    #[wasm_bindgen(js_name = "listPayments")]
+    pub async fn list_payments(
         &self,
         request: ListPaymentsRequest,
     ) -> WasmResult<ListPaymentsResponse> {
-        Ok(self.sdk.list_payment(request.into()).await?.into())
+        Ok(self.sdk.list_payments(request.into()).await?.into())
     }
 
     #[wasm_bindgen(js_name = "getPayment")]
