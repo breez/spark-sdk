@@ -108,24 +108,24 @@ pub async fn wait_for_balance(
             })
             .await?;
 
-        if let Some(min_balance) = min_balance {
-            if info.balance_sats >= min_balance {
-                info!(
-                    "Balance requirement met: {} sats (required: {} sats)",
-                    info.balance_sats, min_balance
-                );
-                return Ok(info.balance_sats);
-            }
+        if let Some(min_balance) = min_balance
+            && info.balance_sats >= min_balance
+        {
+            info!(
+                "Balance requirement met: {} sats (required: {} sats)",
+                info.balance_sats, min_balance
+            );
+            return Ok(info.balance_sats);
         }
 
-        if let Some(max_balance) = max_balance {
-            if info.balance_sats >= max_balance {
-                info!(
-                    "Balance requirement met: {} sats (required: {} sats)",
-                    info.balance_sats, max_balance
-                );
-                return Ok(info.balance_sats);
-            }
+        if let Some(max_balance) = max_balance
+            && info.balance_sats >= max_balance
+        {
+            info!(
+                "Balance requirement met: {} sats (required: {} sats)",
+                info.balance_sats, max_balance
+            );
+            return Ok(info.balance_sats);
         }
 
         // Check timeout
