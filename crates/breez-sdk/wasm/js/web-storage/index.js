@@ -738,8 +738,8 @@ class IndexedDBStorage {
     }
 
     // Filter by payment details/method
-    if (request.detailsFilter) {
-      const detailsFilter = request.detailsFilter;
+    if (request.assetFilter) {
+      const assetFilter = request.assetFilter;
       let details = null;
 
       // Parse details if it's a string (stored in IndexedDB)
@@ -758,32 +758,20 @@ class IndexedDBStorage {
         return false;
       }
 
-      if (detailsFilter.type === "spark" && details.type !== "spark") {
+      if (assetFilter.type === "bitcoin" && details.type === "token") {
         return false;
       }
 
-      if (detailsFilter.type === "lightning" && details.type !== "lightning") {
-        return false;
-      }
-
-      if (detailsFilter.type === "withdraw" && details.type !== "withdraw") {
-        return false;
-      }
-
-      if (detailsFilter.type === "deposit" && details.type !== "deposit") {
-        return false;
-      }
-
-      if (detailsFilter.type === "token") {
+      if (assetFilter.type === "token") {
         if (details.type !== "token") {
           return false;
         }
 
         // Check token identifier if specified
-        if (detailsFilter.tokenIdentifier) {
+        if (assetFilter.tokenIdentifier) {
           if (
             !details.metadata ||
-            details.metadata.identifier !== detailsFilter.tokenIdentifier
+            details.metadata.identifier !== assetFilter.tokenIdentifier
           ) {
             return false;
           }

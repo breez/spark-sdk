@@ -614,7 +614,7 @@ pub struct ListPaymentsRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub status_filter: Option<Vec<PaymentStatus>>,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub details_filter: Option<ListPaymentDetails>,
+    pub asset_filter: Option<AssetFilter>,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub from_timestamp: Option<u64>,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
@@ -629,41 +629,35 @@ pub struct ListPaymentsRequest {
     pub sort_ascending: Option<bool>,
 }
 
-/// A field of [`ListPaymentsRequest`] when listing payments filtered by payment details
+/// A field of [`ListPaymentsRequest`] when listing payments filtered by asset
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum ListPaymentDetails {
-    Spark,
+pub enum AssetFilter {
+    Bitcoin,
     Token {
         /// Optional token identifier to filter by
         token_identifier: Option<String>,
     },
-    Lightning,
-    Withdraw,
-    Deposit,
 }
 
-impl FromStr for ListPaymentDetails {
+impl FromStr for AssetFilter {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s.to_lowercase().as_str() {
-            "spark" => ListPaymentDetails::Spark,
-            "token" => ListPaymentDetails::Token {
+            "bitcoin" => AssetFilter::Bitcoin,
+            "token" => AssetFilter::Token {
                 token_identifier: None,
             },
-            "lightning" => ListPaymentDetails::Lightning,
-            "withdraw" => ListPaymentDetails::Withdraw,
-            "deposit" => ListPaymentDetails::Deposit,
-            str if str.starts_with("token:") => ListPaymentDetails::Token {
+            str if str.starts_with("token:") => AssetFilter::Token {
                 token_identifier: Some(
                     str.split_once(':')
-                        .ok_or(format!("Invalid payment details '{s}'"))?
+                        .ok_or(format!("Invalid asset filter '{s}'"))?
                         .1
                         .to_string(),
                 ),
             },
-            _ => return Err(format!("Invalid payment details '{s}'")),
+            _ => return Err(format!("Invalid asset filter '{s}'")),
         })
     }
 }

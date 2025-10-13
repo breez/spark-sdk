@@ -72,10 +72,10 @@ async fn test_payment_status_filtering() {
 }
 
 #[wasm_bindgen_test]
-async fn test_payment_details_filtering() {
-    let storage = create_test_storage("payment_details_filtering").await;
+async fn test_asset_filtering() {
+    let storage = create_test_storage("asset_filtering").await;
 
-    breez_sdk_spark::storage_tests::test_payment_details_filtering(Box::new(storage)).await;
+    breez_sdk_spark::storage_tests::test_asset_filtering(Box::new(storage)).await;
 }
 
 #[wasm_bindgen_test]

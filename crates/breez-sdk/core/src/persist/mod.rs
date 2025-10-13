@@ -930,10 +930,10 @@ pub mod tests {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub async fn test_payment_details_filtering(storage: Box<dyn Storage>) {
+    pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
         use crate::models::TokenMetadata;
 
-        // Create payments with different detail types
+        // Create payments with different asset types
         let spark_payment = Payment {
             id: "spark_1".to_string(),
             payment_type: PaymentType::Send,
@@ -1017,32 +1017,20 @@ pub mod tests {
         storage.insert_payment(withdraw_payment).await.unwrap();
         storage.insert_payment(deposit_payment).await.unwrap();
 
-        // Test filter by Spark
+        // Test filter by Bitcoin
         let spark_only = storage
             .list_payments(ListPaymentsRequest {
-                details_filter: Some(crate::ListPaymentDetails::Spark),
+                asset_filter: Some(crate::AssetFilter::Bitcoin),
                 ..Default::default()
             })
             .await
             .unwrap();
-        assert_eq!(spark_only.len(), 1);
-        assert_eq!(spark_only[0].id, "spark_1");
-
-        // Test filter by Lightning
-        let lightning_only = storage
-            .list_payments(ListPaymentsRequest {
-                details_filter: Some(crate::ListPaymentDetails::Lightning),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert_eq!(lightning_only.len(), 1);
-        assert_eq!(lightning_only[0].id, "lightning_1");
+        assert_eq!(spark_only.len(), 4);
 
         // Test filter by Token (no identifier)
         let token_only = storage
             .list_payments(ListPaymentsRequest {
-                details_filter: Some(crate::ListPaymentDetails::Token {
+                asset_filter: Some(crate::AssetFilter::Token {
                     token_identifier: None,
                 }),
                 ..Default::default()
@@ -1055,7 +1043,7 @@ pub mod tests {
         // Test filter by Token with specific identifier
         let token_specific = storage
             .list_payments(ListPaymentsRequest {
-                details_filter: Some(crate::ListPaymentDetails::Token {
+                asset_filter: Some(crate::AssetFilter::Token {
                     token_identifier: Some("token_id_1".to_string()),
                 }),
                 ..Default::default()
@@ -1068,7 +1056,7 @@ pub mod tests {
         // Test filter by Token with non-existent identifier
         let token_no_match = storage
             .list_payments(ListPaymentsRequest {
-                details_filter: Some(crate::ListPaymentDetails::Token {
+                asset_filter: Some(crate::AssetFilter::Token {
                     token_identifier: Some("nonexistent".to_string()),
                 }),
                 ..Default::default()
@@ -1076,28 +1064,6 @@ pub mod tests {
             .await
             .unwrap();
         assert_eq!(token_no_match.len(), 0);
-
-        // Test filter by Withdraw
-        let withdraw_only = storage
-            .list_payments(ListPaymentsRequest {
-                details_filter: Some(crate::ListPaymentDetails::Withdraw),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert_eq!(withdraw_only.len(), 1);
-        assert_eq!(withdraw_only[0].id, "withdraw_1");
-
-        // Test filter by Deposit
-        let deposit_only = storage
-            .list_payments(ListPaymentsRequest {
-                details_filter: Some(crate::ListPaymentDetails::Deposit),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert_eq!(deposit_only.len(), 1);
-        assert_eq!(deposit_only[0].id, "deposit_1");
     }
 
     pub async fn test_timestamp_filtering(storage: Box<dyn Storage>) {
@@ -1241,30 +1207,30 @@ pub mod tests {
         assert_eq!(send_completed.len(), 1);
         assert_eq!(send_completed[0].id, "combined_1");
 
-        // Test: Lightning + timestamp range
-        let lightning_recent = storage
+        // Test: Bitcoin + timestamp range
+        let bitcoin_recent = storage
             .list_payments(ListPaymentsRequest {
-                details_filter: Some(crate::ListPaymentDetails::Lightning),
+                asset_filter: Some(crate::AssetFilter::Bitcoin),
                 from_timestamp: Some(2500),
                 ..Default::default()
             })
             .await
             .unwrap();
-        assert_eq!(lightning_recent.len(), 1);
-        assert_eq!(lightning_recent[0].id, "combined_3");
+        assert_eq!(bitcoin_recent.len(), 1);
+        assert_eq!(bitcoin_recent[0].id, "combined_3");
 
-        // Test: Type + Status + Details
-        let send_pending_lightning = storage
+        // Test: Type + Status + Asset
+        let send_pending_bitcoin = storage
             .list_payments(ListPaymentsRequest {
                 type_filter: Some(vec![PaymentType::Send]),
                 status_filter: Some(vec![PaymentStatus::Pending]),
-                details_filter: Some(crate::ListPaymentDetails::Lightning),
+                asset_filter: Some(crate::AssetFilter::Bitcoin),
                 ..Default::default()
             })
             .await
             .unwrap();
-        assert_eq!(send_pending_lightning.len(), 1);
-        assert_eq!(send_pending_lightning[0].id, "combined_2");
+        assert_eq!(send_pending_bitcoin.len(), 1);
+        assert_eq!(send_pending_bitcoin[0].id, "combined_2");
     }
 
     pub async fn test_sort_order(storage: Box<dyn Storage>) {

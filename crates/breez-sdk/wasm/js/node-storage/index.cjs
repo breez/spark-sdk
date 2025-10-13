@@ -155,21 +155,15 @@ class SqliteStorage {
       }
 
       // Filter by payment details/method
-      if (request.detailsFilter) {
-        const detailsFilter = request.detailsFilter;
-        if (detailsFilter.type === "spark") {
-          whereClauses.push("p.spark IS NOT NULL");
-        } else if (detailsFilter.type === "lightning") {
-          whereClauses.push("l.invoice IS NOT NULL");
-        } else if (detailsFilter.type === "withdraw") {
-          whereClauses.push("p.withdraw_tx_id IS NOT NULL");
-        } else if (detailsFilter.type === "deposit") {
-          whereClauses.push("p.deposit_tx_id IS NOT NULL");
-        } else if (detailsFilter.type === "token") {
+      if (request.assetFilter) {
+        const assetFilter = request.assetFilter;
+        if (assetFilter.type === "bitcoin") {
+          whereClauses.push("t.metadata IS NULL");
+        } else if (assetFilter.type === "token") {
           whereClauses.push("t.metadata IS NOT NULL");
-          if (detailsFilter.tokenIdentifier) {
+          if (assetFilter.tokenIdentifier) {
             whereClauses.push("json_extract(t.metadata, '$.identifier') = ?");
-            params.push(detailsFilter.tokenIdentifier);
+            params.push(assetFilter.tokenIdentifier);
           }
         }
       }

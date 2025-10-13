@@ -8,8 +8,7 @@ use rusqlite::{
 use rusqlite_migration::{M, Migrations, SchemaVersion};
 
 use crate::{
-    DepositInfo, ListPaymentDetails, ListPaymentsRequest, LnurlPayInfo, PaymentDetails,
-    PaymentMethod,
+    AssetFilter, DepositInfo, ListPaymentsRequest, LnurlPayInfo, PaymentDetails, PaymentMethod,
     error::DepositClaimError,
     persist::{PaymentMetadata, UpdateDepositPayload},
 };
@@ -258,22 +257,13 @@ impl Storage for SqliteStorage {
             params.push(Box::new(to_timestamp));
         }
 
-        // Filter by payment details/method
-        if let Some(ref details_filter) = request.details_filter {
-            match details_filter {
-                ListPaymentDetails::Spark => {
-                    where_clauses.push("p.spark IS NOT NULL".to_string());
+        // Filter by asset
+        if let Some(ref asset_filter) = request.asset_filter {
+            match asset_filter {
+                AssetFilter::Bitcoin => {
+                    where_clauses.push("t.metadata IS NULL".to_string());
                 }
-                ListPaymentDetails::Lightning => {
-                    where_clauses.push("l.invoice IS NOT NULL".to_string());
-                }
-                ListPaymentDetails::Withdraw => {
-                    where_clauses.push("p.withdraw_tx_id IS NOT NULL".to_string());
-                }
-                ListPaymentDetails::Deposit => {
-                    where_clauses.push("p.deposit_tx_id IS NOT NULL".to_string());
-                }
-                ListPaymentDetails::Token { token_identifier } => {
+                AssetFilter::Token { token_identifier } => {
                     where_clauses.push("t.metadata IS NOT NULL".to_string());
                     if let Some(identifier) = token_identifier {
                         // Filter by specific token identifier
@@ -823,7 +813,7 @@ mod tests {
         let temp_dir = tempdir::TempDir::new("sqlite_storage_details_filter").unwrap();
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
-        crate::persist::tests::test_payment_details_filtering(Box::new(storage)).await;
+        crate::persist::tests::test_asset_filtering(Box::new(storage)).await;
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 use breez_sdk_spark::{
-    BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee, GetInfoRequest,
-    GetPaymentRequest, InputType, LightningAddressDetails, ListPaymentDetails, ListPaymentsRequest,
+    AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee, GetInfoRequest,
+    GetPaymentRequest, InputType, LightningAddressDetails, ListPaymentsRequest,
     ListUnclaimedDepositsRequest, LnurlPayRequest, OnchainConfirmationSpeed, PaymentStatus,
     PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
     ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest,
@@ -44,7 +44,7 @@ pub enum Command {
 
         /// Filter by payment details
         #[arg(short, long)]
-        details_filter: Option<ListPaymentDetails>,
+        asset_filter: Option<AssetFilter>,
 
         /// Exclude payments before this timestamp
         #[arg(short, long)]
@@ -205,7 +205,7 @@ pub(crate) async fn execute_command(
             offset,
             type_filter,
             status_filter,
-            details_filter,
+            asset_filter,
             from_timestamp,
             to_timestamp,
             sort_ascending,
@@ -216,7 +216,7 @@ pub(crate) async fn execute_command(
                     offset,
                     type_filter,
                     status_filter,
-                    details_filter,
+                    asset_filter,
                     from_timestamp,
                     to_timestamp,
                     sort_ascending,
