@@ -366,7 +366,13 @@ async fn test_03_lightning_invoice_payment(
     // Wait for Bob to receive the payment via event
     info!("Waiting for Bob to receive payment event...");
     let received_payment = wait_for_payment_event(&mut bob.events, 60).await?;
-
+    wait_for_balance(
+        &bob.sdk,
+        Some(bob_initial_balance + expected_amount),
+        None,
+        20,
+    )
+    .await?;
     assert_eq!(
         received_payment.payment_type,
         PaymentType::Receive,
@@ -393,6 +399,13 @@ async fn test_03_lightning_invoice_payment(
 
     // Verify Alice's balance decreased by amount + fees
     let sent_payment = wait_for_payment_event(&mut alice.events, 60).await?;
+    wait_for_balance(
+        &alice.sdk,
+        Some(alice_initial_balance - sent_payment.amount as u64 - sent_payment.fees as u64),
+        None,
+        20,
+    )
+    .await?;
     assert_eq!(
         sent_payment.payment_type,
         PaymentType::Send,
@@ -451,19 +464,13 @@ async fn test_03_lightning_invoice_payment(
 
     // Verify payment appears in Alice's payment list
     info!("Verifying Alice's payment list...");
-    let alice_payments = alice
+    let alice_payment = alice
         .sdk
-        .list_payments(ListPaymentsRequest {
-            offset: None,
-            limit: None,
+        .get_payment(GetPaymentRequest {
+            payment_id: send_resp.payment.id,
         })
-        .await?;
-
-    let alice_payment = alice_payments
-        .payments
-        .iter()
-        .find(|p| p.id == send_resp.payment.id)
-        .expect("Payment should appear in Alice's payment list");
+        .await?
+        .payment;
 
     assert_eq!(
         alice_payment.payment_type,
@@ -491,19 +498,13 @@ async fn test_03_lightning_invoice_payment(
 
     // Verify payment appears in Bob's payment list
     info!("Verifying Bob's payment list...");
-    let bob_payments = bob
+    let bob_payment = bob
         .sdk
-        .list_payments(ListPaymentsRequest {
-            offset: None,
-            limit: None,
+        .get_payment(GetPaymentRequest {
+            payment_id: received_payment.id,
         })
-        .await?;
-
-    let bob_payment = bob_payments
-        .payments
-        .iter()
-        .find(|p| p.id == received_payment.id)
-        .expect("Payment should appear in Bob's payment list");
+        .await?
+        .payment;
 
     assert_eq!(
         bob_payment.payment_type,

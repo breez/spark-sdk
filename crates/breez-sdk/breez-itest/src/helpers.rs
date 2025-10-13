@@ -83,11 +83,17 @@ pub async fn build_sdk(storage_dir: String, seed_bytes: [u8; 32]) -> Result<SdkI
 /// # Arguments
 /// * `sdk` - The BreezSDK instance to check
 /// * `min_balance` - Minimum balance in satoshis to wait for
+/// * `max_balance` - Maximum balance in satoshis to wait for
 /// * `timeout_secs` - Maximum time to wait in seconds before giving up
 ///
 /// # Returns
 /// The current balance once it reaches the minimum, or error if timeout
-pub async fn wait_for_balance(sdk: &BreezSdk, min_balance: u64, timeout_secs: u64) -> Result<u64> {
+pub async fn wait_for_balance(
+    sdk: &BreezSdk,
+    min_balance: Option<u64>,
+    max_balance: Option<u64>,
+    timeout_secs: u64,
+) -> Result<u64> {
     let start = std::time::Instant::now();
     let poll_interval = std::time::Duration::from_secs(3);
 
@@ -102,27 +108,42 @@ pub async fn wait_for_balance(sdk: &BreezSdk, min_balance: u64, timeout_secs: u6
             })
             .await?;
 
-        if info.balance_sats >= min_balance {
-            info!(
-                "Balance requirement met: {} sats (required: {} sats)",
-                info.balance_sats, min_balance
-            );
-            return Ok(info.balance_sats);
+        if let Some(min_balance) = min_balance {
+            if info.balance_sats >= min_balance {
+                info!(
+                    "Balance requirement met: {} sats (required: {} sats)",
+                    info.balance_sats, min_balance
+                );
+                return Ok(info.balance_sats);
+            }
+        }
+
+        if let Some(max_balance) = max_balance {
+            if info.balance_sats >= max_balance {
+                info!(
+                    "Balance requirement met: {} sats (required: {} sats)",
+                    info.balance_sats, max_balance
+                );
+                return Ok(info.balance_sats);
+            }
         }
 
         // Check timeout
         if start.elapsed().as_secs() > timeout_secs {
             anyhow::bail!(
-                "Timeout waiting for balance >= {} sats after {} seconds. Current balance: {} sats",
-                min_balance,
+                "Timeout waiting for balance >= {} sats or <= {} sats after {} seconds. Current balance: {} sats",
+                min_balance.unwrap_or_default(),
+                max_balance.unwrap_or_default(),
                 timeout_secs,
                 info.balance_sats
             );
         }
 
         info!(
-            "Waiting for balance... current: {} sats, target: {} sats",
-            info.balance_sats, min_balance
+            "Waiting for balance... current: {} sats, target min: {} sats or max: {} sats",
+            info.balance_sats,
+            min_balance.unwrap_or_default(),
+            max_balance.unwrap_or_default()
         );
 
         // Wait before next poll
@@ -177,7 +198,7 @@ pub async fn receive_and_fund(
 
     // Wait for the ClaimDepositsSucceeded event
     wait_for_claim_event(&mut sdk_instance.events, 180).await?;
-    wait_for_balance(&sdk_instance.sdk, initial_balance + 1, 20).await?;
+    wait_for_balance(&sdk_instance.sdk, Some(initial_balance + 1), None, 20).await?;
     sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     Ok((deposit_address, txid))
