@@ -392,7 +392,13 @@ async fn test_03_lightning_invoice_payment(
     );
 
     // Verify Alice's balance decreased by amount + fees
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let sent_payment = wait_for_payment_event(&mut alice.events, 60).await?;
+    assert_eq!(
+        sent_payment.payment_type,
+        PaymentType::Send,
+        "Alice should send a payment"
+    );
+    //alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let alice_final_balance = alice
         .sdk
         .get_info(GetInfoRequest {

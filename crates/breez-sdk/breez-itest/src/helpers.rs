@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use anyhow::Result;
 use breez_sdk_spark::*;
 use tokio::sync::mpsc;
@@ -146,6 +144,13 @@ pub async fn receive_and_fund(
     sdk_instance: &mut SdkInstance,
     amount_sats: u64,
 ) -> Result<(String, String)> {
+    let initial_balance = sdk_instance
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
     // Get a static deposit address
     let receive = sdk_instance
         .sdk
@@ -172,7 +177,7 @@ pub async fn receive_and_fund(
 
     // Wait for the ClaimDepositsSucceeded event
     wait_for_claim_event(&mut sdk_instance.events, 180).await?;
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    wait_for_balance(&sdk_instance.sdk, initial_balance + 1, 20).await?;
     sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     Ok((deposit_address, txid))
