@@ -576,17 +576,10 @@ impl DepositService {
             direct_tx: direct_refund_tx,
             direct_from_cpfp_tx: direct_from_cpfp_refund_tx,
         } = create_refund_txs(
+            &cpfp_root_tx,
+            Some(&direct_root_tx),
             initial_cpfp_sequence(),
             initial_direct_sequence(),
-            OutPoint {
-                txid: cpfp_root_tx.compute_txid(),
-                vout: 0,
-            },
-            Some(OutPoint {
-                txid: direct_root_tx.compute_txid(),
-                vout: 0,
-            }),
-            deposit_tx_out.value.to_sat(),
             &signing_public_key,
             self.network,
         );

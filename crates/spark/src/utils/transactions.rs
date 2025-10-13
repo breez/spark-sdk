@@ -142,7 +142,7 @@ pub(crate) fn create_node_txs(
 ///
 /// This function generates three possible transactions:
 /// 1. A CPFP (Child Pays For Parent) transaction that always includes an anchor output
-/// 2. An optional direct transaction that spends from the direct outpoint (if provided)
+/// 2. An optional direct transaction that spends from the direct outpoint
 /// 3. An optional direct transaction that spends from the CPFP outpoint, but with a different
 ///    sequence number (used as an alternative spending path)
 ///
@@ -156,11 +156,10 @@ pub(crate) fn create_node_txs(
 ///
 /// # Arguments
 ///
+/// * `node_tx` - The current leaf node transaction
+/// * `direct_tx` - The current optional leaf direct transaction
 /// * `cpfp_sequence` - The sequence number to use for the CPFP transaction's input
 /// * `direct_sequence` - The sequence number to use for direct transactions' inputs
-/// * `cpfp_outpoint` - The outpoint to spend in the CPFP transaction
-/// * `direct_outpoint` - Optional outpoint to spend in the direct transaction
-/// * `amount_sat` - The amount in satoshis to send in the transactions
 /// * `receiving_pubkey` - The public key to send the funds to (used to create P2TR address)
 /// * `network` - The Bitcoin network to use (affects address format)
 ///
@@ -168,54 +167,60 @@ pub(crate) fn create_node_txs(
 ///
 /// A `RefundTransactions` struct containing:
 /// - `cpfp_tx`: Always present, includes an anchor output
-/// - `direct_tx`: Only present if `direct_outpoint` is provided
+/// - `direct_tx`: Only present if `direct_tx` is provided
 /// - `direct_from_cpfp_tx`: Alternative transaction that spends from the CPFP outpoint
-///   with the direct sequence number (only present if `direct_outpoint` is provided)
+///   with the direct sequence number
 pub(crate) fn create_refund_txs(
+    node_tx: &Transaction,
+    direct_tx: Option<&Transaction>,
     cpfp_sequence: Sequence,
     direct_sequence: Sequence,
-    cpfp_outpoint: OutPoint,
-    direct_outpoint: Option<OutPoint>,
-    amount_sat: u64,
     receiving_pubkey: &PublicKey,
     network: Network,
 ) -> RefundTransactions {
     // TODO: Isolate secp256k1 initialization to avoid multiple initializations
     let secp = Secp256k1::new();
     let network: bitcoin::Network = network.into();
-    let value = Amount::from_sat(amount_sat);
+    let node_value = node_tx.output[0].value;
+    let cpfp_outpoint = OutPoint {
+        txid: node_tx.compute_txid(),
+        vout: 0,
+    };
     let addr = Address::p2tr(&secp, receiving_pubkey.x_only_public_key().0, None, network);
 
     let cpfp_tx = create_spark_tx(
         cpfp_outpoint,
         cpfp_sequence,
-        value,
+        node_value,
         addr.script_pubkey(),
         false,
         true,
     );
 
-    let direct_tx = direct_outpoint.map(|outpoint| {
+    let direct_tx = direct_tx.map(|tx| {
+        let direct_value = tx.output[0].value;
+        let direct_outpoint = OutPoint {
+            txid: tx.compute_txid(),
+            vout: 0,
+        };
         create_spark_tx(
-            outpoint,
+            direct_outpoint,
             direct_sequence,
-            value,
+            direct_value,
             addr.script_pubkey(),
             true,
             false,
         )
     });
 
-    let direct_from_cpfp_tx = direct_outpoint.map(|_| {
-        create_spark_tx(
-            cpfp_outpoint,
-            direct_sequence,
-            value,
-            addr.script_pubkey(),
-            true,
-            false,
-        )
-    });
+    let direct_from_cpfp_tx = Some(create_spark_tx(
+        cpfp_outpoint,
+        direct_sequence,
+        node_value,
+        addr.script_pubkey(),
+        true,
+        false,
+    ));
 
     RefundTransactions {
         cpfp_tx,
