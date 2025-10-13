@@ -43,13 +43,16 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(name)
         .fetch_optional(&self.pool)
         .await?
-        .map(|row| User {
-            domain: domain.to_string(),
-            pubkey: row.get(0),
-            name: row.get(1),
-            description: row.get(2),
-            nostr_pubkey: row.get(3),
-        });
+        .map(|row| {
+            Ok::<_, sqlx::Error>(User {
+                domain: domain.to_string(),
+                pubkey: row.try_get(0)?,
+                name: row.try_get(1)?,
+                description: row.try_get(2)?,
+                nostr_pubkey: row.try_get(3)?,
+            })
+        })
+        .transpose()?;
         Ok(maybe_user)
     }
 
@@ -67,13 +70,16 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(pubkey)
         .fetch_optional(&self.pool)
         .await?
-        .map(|row| User {
-            domain: domain.to_string(),
-            pubkey: row.get(0),
-            name: row.get(1),
-            description: row.get(2),
-            nostr_pubkey: row.get(3),
-        });
+        .map(|row| {
+            Ok::<_, sqlx::Error>(User {
+                domain: domain.to_string(),
+                pubkey: row.try_get(0)?,
+                name: row.try_get(1)?,
+                description: row.try_get(2)?,
+                nostr_pubkey: row.try_get(3)?,
+            })
+        })
+        .transpose()?;
         Ok(maybe_user)
     }
 
