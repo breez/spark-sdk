@@ -8,7 +8,7 @@ use bitcoin::{Sequence, Transaction};
 use frost_core::round2::SignatureShare;
 use frost_secp256k1_tr::round1::SigningCommitments;
 use frost_secp256k1_tr::{Identifier, Secp256K1Sha256TR};
-use tracing::trace;
+use tracing::{info, trace};
 
 use crate::core::{current_sequence, next_lightning_htlc_sequence};
 use crate::services::{LeafRefundSigningData, ServiceError};
@@ -165,6 +165,11 @@ pub async fn sign_refunds(
                 )
             }
         };
+
+        info!(
+            "sign_refunds for leaf {}: Current refund sequence: {old_sequence}, next sequence: {}",
+            leaf.node.id, cpfp_refund_tx.input[0].sequence
+        );
 
         let signing_public_key =
             signer.get_public_key_from_private_key_source(&leaf.signing_key)?;
@@ -457,10 +462,11 @@ where
             .refund_tx
             .clone()
             .ok_or(ServiceError::Generic("No refund tx".to_string()))?;
+        let old_sequence = refund_tx.input[0].sequence;
         let (cpfp_sequence, direct_sequence) = if is_for_claim {
-            current_sequence(refund_tx.input[0].sequence)
+            current_sequence(old_sequence)
         } else {
-            next_sequence(refund_tx.input[0].sequence).ok_or(ServiceError::Generic(
+            next_sequence(old_sequence).ok_or(ServiceError::Generic(
                 "Failed to get next sequence".to_string(),
             ))?
         };
@@ -477,6 +483,11 @@ where
             direct_sequence,
             receiving_pubkey: &refund_signing_data.receiving_public_key,
         });
+
+        info!(
+            "prepare_refund_so_signing_jobs_with_tx_constructor for leaf {}: Current refund sequence: {old_sequence}, next sequence: {}",
+            leaf.node.id, cpfp_refund_tx.input[0].sequence
+        );
 
         let direct_refund_tx_signing_job = if let Some(direct_refund_tx) = &direct_refund_tx {
             Some(crate::operator::rpc::spark::SigningJob {

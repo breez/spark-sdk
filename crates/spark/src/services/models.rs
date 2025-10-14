@@ -332,6 +332,17 @@ pub struct TransferLeaf {
     pub intermediate_direct_from_cpfp_refund_tx: Option<Transaction>,
 }
 
+impl TransferLeaf {
+    pub fn leaf_with_intermediate_txs(&self) -> TreeNode {
+        TreeNode {
+            refund_tx: Some(self.intermediate_refund_tx.clone()),
+            direct_refund_tx: self.intermediate_direct_refund_tx.clone(),
+            direct_from_cpfp_refund_tx: self.intermediate_direct_from_cpfp_refund_tx.clone(),
+            ..self.leaf.clone()
+        }
+    }
+}
+
 impl TryFrom<operator_rpc::spark::TransferLeaf> for TransferLeaf {
     type Error = ServiceError;
 

@@ -652,7 +652,7 @@ impl TransferService {
             };
 
             leaves_to_claim.push(LeafKeyTweak {
-                node: leaf.leaf.clone(),
+                node: leaf.leaf_with_intermediate_txs(),
                 signing_key: leaf_key.clone(),
                 new_signing_key: PrivateKeySource::Derived(leaf.leaf.id.clone()),
             });
