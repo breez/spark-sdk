@@ -1,5 +1,6 @@
 use sqlx::{PgPool, Row};
 
+use crate::zap::Zap;
 use crate::{repository::LnurlRepositoryError, time::now, user::User};
 
 #[derive(Clone)]
@@ -85,5 +86,49 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn list_user_keys(&self) -> Result<Vec<String>, LnurlRepositoryError> {
+        // use DISTINCT to avoid duplicates in case of multiple users with same pubkey
+        let rows = sqlx::query("SELECT DISTINCT pubkey FROM users")
+            .fetch_all(&self.pool)
+            .await?;
+        let keys = rows.into_iter().map(|row| row.get(0)).collect();
+        Ok(keys)
+    }
+
+    async fn upsert_zap(&self, zap: &Zap) -> Result<(), LnurlRepositoryError> {
+        sqlx::query(
+            "INSERT INTO zaps (payment_hash, zap_request, zap_event)
+             VALUES ($1, $2, $3)
+             ON CONFLICT(payment_hash) DO UPDATE
+             SET zap_request = excluded.zap_request, zap_event = excluded.zap_event",
+        )
+        .bind(&zap.payment_hash)
+        .bind(&zap.zap_request)
+        .bind(&zap.zap_event)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_zap_by_payment_hash(
+        &self,
+        payment_hash: &str,
+    ) -> Result<Option<Zap>, LnurlRepositoryError> {
+        let maybe_zap = sqlx::query(
+            "SELECT payment_hash, zap_request, zap_event
+             FROM zaps
+             WHERE payment_hash = $1",
+        )
+        .bind(payment_hash)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(|row| Zap {
+            payment_hash: row.get(0),
+            zap_request: row.get(1),
+            zap_event: row.get(2),
+        });
+        Ok(maybe_zap)
     }
 }

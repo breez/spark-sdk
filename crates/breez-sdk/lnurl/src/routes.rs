@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use axum::{
     Extension, Json,
     extract::{Path, Query},
@@ -10,16 +8,22 @@ use bitcoin::{
     hashes::{Hash, sha256},
     secp256k1::{PublicKey, XOnlyPublicKey, ecdsa::Signature},
 };
+use lightning_invoice::Bolt11Invoice;
 use lnurl_models::{
     CheckUsernameAvailableResponse, RecoverLnurlPayRequest, RecoverLnurlPayResponse,
     RegisterLnurlPayRequest, RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
     sanitize_username,
 };
+use nostr::{Event, JsonUtil};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::marker::PhantomData;
+use std::str::FromStr;
+use std::sync::Arc;
 use tracing::{debug, error, trace, warn};
 
+use crate::zap::Zap;
 use crate::{
     repository::{LnurlRepository, LnurlRepositoryError},
     state::State,
@@ -29,6 +33,7 @@ use crate::{
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LnurlPayCallbackParams {
     pub amount: Option<u64>,
+    pub nostr: Option<Event>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -82,7 +87,7 @@ pub struct LnurlServer<DB> {
 
 impl<DB> LnurlServer<DB>
 where
-    DB: LnurlRepository,
+    DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
     pub async fn available(
         Host(host): Host,
@@ -143,6 +148,50 @@ where
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(Value::String("internal server error".into())),
             ));
+        }
+
+        // subscribe to new user for zap events if nostr is enabled
+        if let (
+            Some(nostr_keys),
+            Some(connection_manager),
+            Some(coordinator),
+            Some(signer),
+            Some(session_manager),
+            Some(service_provider),
+        ) = (
+            &state.nostr_keys,
+            &state.connection_manager,
+            &state.coordinator,
+            &state.signer,
+            &state.session_manager,
+            &state.service_provider,
+        ) {
+            let transport = connection_manager
+                .get_transport(coordinator)
+                .await
+                .map_err(|e| {
+                    error!("failed to get transport for new user subscription: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(Value::String("internal server error".into())),
+                    )
+                })?;
+
+            let rpc_client = spark::operator::rpc::SparkRpcClient::new(
+                transport,
+                signer.clone(),
+                pubkey,
+                session_manager.clone(),
+            );
+
+            crate::zap::subscribe_to_user_for_zaps(
+                state.db.clone(),
+                pubkey,
+                rpc_client,
+                service_provider.clone(),
+                nostr_keys.clone(),
+                Arc::clone(&state.subscribed_keys),
+            );
         }
 
         debug!("registered user '{}' for pubkey {}", user.name, pubkey);
@@ -247,8 +296,12 @@ where
             tag: Tag::Pay,
             metadata: get_metadata(&user.domain, &user),
             comment_allowed: None,
-            allows_nostr: None,
-            nostr_pubkey: None,
+            allows_nostr: if state.nostr_keys.is_some() {
+                Some(true)
+            } else {
+                None
+            },
+            nostr_pubkey: state.nostr_keys.and_then(|n| n.public_key.xonly().ok()),
         }))
     }
 
@@ -286,10 +339,23 @@ where
             return Err(lnurl_error("amount must be a whole sat amount"));
         }
 
-        let metadata = get_metadata(&user.domain, &user);
-        let desc_hash = sha256::Hash::hash(metadata.as_bytes());
+        let desc_hash = if let Some(event) = &params.nostr {
+            if state.nostr_keys.is_none() {
+                trace!("nostr zap not supported");
+                return Err(lnurl_error("nostr zap not supported"));
+            }
+
+            if event.kind != nostr::Kind::ZapRequest {
+                return Err(lnurl_error("invalid zap request"));
+            }
+            sha256::Hash::hash(event.as_json().as_bytes())
+        } else {
+            let metadata = get_metadata(&user.domain, &user);
+            sha256::Hash::hash(metadata.as_bytes())
+        };
+
         let pubkey = parse_pubkey(&user.pubkey)?;
-        let invoice = state
+        let res = state
             .wallet
             .create_lightning_invoice(
                 amount_msat / 1000,
@@ -305,14 +371,32 @@ where
                 lnurl_error("failed to create invoice")
             })?;
 
-        debug!("Created lightning invoice: {:?}", invoice);
+        debug!("Created lightning invoice: {:?}", res);
+
+        let invoice = Bolt11Invoice::from_str(&res.invoice).map_err(|e| {
+            error!("failed to parse invoice: {}", e);
+            lnurl_error("internal server error")
+        })?;
+
+        // save to zap event to db
+        if let Some(zap_request) = params.nostr {
+            let zap = Zap {
+                payment_hash: invoice.payment_hash().to_string(),
+                zap_request: zap_request.as_json(),
+                zap_event: None,
+            };
+            if let Err(e) = state.db.upsert_zap(&zap).await {
+                error!("failed to save zap event: {}", e);
+                return Err(lnurl_error("internal server error"));
+            }
+        }
 
         // TODO: Save things like the invoice/preimage/transfer id?
         // TODO: Validate invoice?
         // TODO: Add lnurl-verify
 
         Ok(Json(json!({
-            "pr": invoice.invoice,
+            "pr": res.invoice,
             "routes": Vec::<String>::new(),
         })))
     }

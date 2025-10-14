@@ -1,5 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
-
+use crate::{repository::LnurlRepository, routes::LnurlServer, state::State};
 use anyhow::anyhow;
 use axum::{
     Extension, Router,
@@ -15,14 +14,19 @@ use figment::{
     providers::{Env, Format, Serialized, Toml},
 };
 use serde::{Deserialize, Serialize};
+use spark::operator::rpc::{DefaultConnectionManager, SparkRpcClient};
+use spark::session_manager::InMemorySessionManager;
+use spark::ssp::ServiceProvider;
 use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
 use sqlx::{PgPool, SqlitePool};
+use std::collections::HashSet;
+use std::str::FromStr;
+use std::{path::PathBuf, sync::Arc};
+use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use x509_parser::prelude::{FromDer, X509Certificate};
-
-use crate::{repository::LnurlRepository, routes::LnurlServer, state::State};
 
 mod auth;
 mod error;
@@ -33,6 +37,7 @@ mod sqlite;
 mod state;
 mod time;
 mod user;
+mod zap;
 
 #[derive(Clone, Parser, Debug, Serialize, Deserialize)]
 #[command(version, about, long_about = None)]
@@ -82,6 +87,10 @@ struct Args {
     /// List of domains that are allowed to use the lnurl server. Comma separated.
     #[arg(long, default_value = "localhost:8080")]
     pub domains: String,
+
+    /// Nostr private key for zaps. If not set, zap requests will be ignored.
+    #[arg(long)]
+    pub nsec: Option<String>,
 
     /// Base64 encoded DER format CA certificate without begin/end certificate markers.
     /// If set, the server will use this certificate to validate api keys.
@@ -147,14 +156,18 @@ async fn main() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_server<DB>(args: Args, repository: DB) -> Result<(), anyhow::Error>
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
     let auth_seed: [u8; 32] = rand::random();
+
+    let spark_config = SparkWalletConfig::default_config(args.network);
+
     let wallet = Arc::new(
         spark_wallet::SparkWallet::connect(
-            SparkWalletConfig::default_config(args.network),
+            spark_config.clone(),
             Arc::new(DefaultSigner::new(&auth_seed, args.network)?),
         )
         .await?,
@@ -176,6 +189,67 @@ where
             Ok::<_, anyhow::Error>(ca_cert.as_raw().to_vec())
         })
         .transpose()?;
+
+    let nostr_keys = args
+        .nsec
+        .map(|nsec| {
+            let keys = nostr::Keys::from_str(&nsec)
+                .map_err(|e| anyhow!("failed to parse nsec key: {:?}", e))?;
+            Ok::<_, anyhow::Error>(keys)
+        })
+        .transpose()?;
+
+    let subscribed_keys = Arc::new(Mutex::new(HashSet::new()));
+
+    // initialize zap components if nostr keys are provided
+    let (connection_manager, coordinator, signer, session_manager, service_provider) =
+        if let Some(nostr_keys) = &nostr_keys {
+            let session_manager = Arc::new(InMemorySessionManager::default());
+            let signer = Arc::new(DefaultSigner::new(&auth_seed, args.network)?);
+            let service_provider = Arc::new(ServiceProvider::new(
+                spark_config.service_provider_config.clone(),
+                signer.clone(),
+                session_manager.clone(),
+            ));
+
+            let connection_manager: Arc<dyn spark::operator::rpc::ConnectionManager> =
+                Arc::new(DefaultConnectionManager::new());
+            let coordinator = spark_config.operator_pool.get_coordinator().clone();
+
+            // start bg task to subscribe to existing user events
+            for user in repository.list_user_keys().await? {
+                let user_pubkey = bitcoin::secp256k1::PublicKey::from_str(&user)
+                    .map_err(|e| anyhow!("failed to parse user pubkey: {e:?}"))?;
+
+                let transport = connection_manager.get_transport(&coordinator).await?;
+                let rpc_client = SparkRpcClient::new(
+                    transport,
+                    signer.clone(),
+                    user_pubkey,
+                    session_manager.clone(),
+                );
+
+                zap::subscribe_to_user_for_zaps(
+                    repository.clone(),
+                    user_pubkey,
+                    rpc_client,
+                    Arc::clone(&service_provider),
+                    nostr_keys.clone(),
+                    Arc::clone(&subscribed_keys),
+                );
+            }
+
+            (
+                Some(connection_manager),
+                Some(coordinator),
+                Some(signer),
+                Some(session_manager),
+                Some(service_provider),
+            )
+        } else {
+            (None, None, None, None, None)
+        };
+
     let state = State {
         db: repository,
         wallet,
@@ -184,7 +258,14 @@ where
         max_sendable: args.max_sendable,
         include_spark_address: args.include_spark_address,
         domains,
+        nostr_keys,
         ca_cert,
+        connection_manager,
+        coordinator,
+        signer,
+        session_manager,
+        service_provider,
+        subscribed_keys,
     };
 
     let server_router = Router::new()
