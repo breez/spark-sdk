@@ -38,13 +38,13 @@ use x509_parser::parse_x509_certificate;
 
 use crate::{
     BitcoinChainService, CheckLightningAddressRequest, ClaimDepositRequest, ClaimDepositResponse,
-    DepositInfo, Fee, GetPaymentRequest, GetPaymentResponse, LightningAddressInfo,
-    ListFiatCurrenciesResponse, ListFiatRatesResponse, ListUnclaimedDepositsRequest,
-    ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
-    Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
-    SendOnchainFeeQuote, SendPaymentOptions, WaitForPaymentIdentifier, WaitForPaymentRequest,
-    WaitForPaymentResponse,
+    DepositInfo, Fee, GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest,
+    GetTokensMetadataResponse, LightningAddressInfo, ListFiatCurrenciesResponse,
+    ListFiatRatesResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
+    LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger, Network, PaymentDetails,
+    PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse, RefundDepositRequest,
+    RefundDepositResponse, RegisterLightningAddressRequest, SendOnchainFeeQuote,
+    SendPaymentOptions, WaitForPaymentIdentifier, WaitForPaymentRequest, WaitForPaymentResponse,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     lnurl::LnurlServerClient,
@@ -63,7 +63,7 @@ use crate::{
     utils::{
         deposit_chain_syncer::DepositChainSyncer,
         run_with_shutdown,
-        token::token_transaction_to_payments,
+        token::{get_tokens_metadata_cached_or_query, token_transaction_to_payments},
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
@@ -1174,6 +1174,31 @@ impl BreezSdk {
         self.remove_event_listener(&id).await;
         Ok(WaitForPaymentResponse {
             payment: payment_result?,
+        })
+    }
+
+    /// Returns the metadata for the given token identifiers.
+    ///
+    /// Results are not guaranteed to be in the same order as the input token identifiers.    
+    ///
+    /// If the metadata is not found locally in cache, it will be queried from
+    /// the Spark network and then cached.
+    pub async fn get_tokens_metadata(
+        &self,
+        request: GetTokensMetadataRequest,
+    ) -> Result<GetTokensMetadataResponse, SdkError> {
+        let metadata = get_tokens_metadata_cached_or_query(
+            &self.spark_wallet,
+            &ObjectCacheRepository::new(self.storage.clone()),
+            &request
+                .token_identifiers
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        )
+        .await?;
+        Ok(GetTokensMetadataResponse {
+            tokens_metadata: metadata,
         })
     }
 }

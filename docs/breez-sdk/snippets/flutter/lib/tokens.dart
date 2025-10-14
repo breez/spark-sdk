@@ -18,6 +18,23 @@ Future<void> fetchTokenBalances(BreezSdk sdk) async {
   // ANCHOR_END: fetch-token-balances
 }
 
+Future<void> fetchTokenMetadata(BreezSdk sdk) async {
+  // ANCHOR: fetch-token-metadata
+  final response = await sdk.getTokensMetadata(request: GetTokensMetadataRequest(tokenIdentifiers: ['<token identifier 1>', '<token identifier 2>']));
+  
+  final tokensMetadata = response.tokensMetadata;
+  for (final tokenMetadata in tokensMetadata) {
+    print('Token ID: $tokenMetadata.identifier');
+    print('Name: ${tokenMetadata.name}');
+    print('Ticker: ${tokenMetadata.ticker}');
+    print('Decimals: ${tokenMetadata.decimals}');
+    print('Max Supply: ${tokenMetadata.maxSupply}');
+    print('Is Freezable: ${tokenMetadata.isFreezable}');
+  }
+  // ANCHOR_END: fetch-token-metadata
+}
+
+
 Future<void> sendTokenPayment(BreezSdk sdk) async {
   // ANCHOR: send-token-payment
   final paymentRequest = '<spark address>';

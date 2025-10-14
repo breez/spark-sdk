@@ -821,3 +821,13 @@ pub enum WaitForPaymentIdentifier {
 pub struct WaitForPaymentResponse {
     pub payment: Payment,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::GetTokensMetadataRequest)]
+pub struct GetTokensMetadataRequest {
+    pub token_identifiers: Vec<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::GetTokensMetadataResponse)]
+pub struct GetTokensMetadataResponse {
+    pub tokens_metadata: Vec<TokenMetadata>,
+}

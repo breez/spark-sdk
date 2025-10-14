@@ -795,3 +795,13 @@ pub enum WaitForPaymentIdentifier {
 pub struct WaitForPaymentResponse {
     pub payment: Payment,
 }
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct GetTokensMetadataRequest {
+    pub token_identifiers: Vec<String>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct GetTokensMetadataResponse {
+    pub tokens_metadata: Vec<TokenMetadata>,
+}

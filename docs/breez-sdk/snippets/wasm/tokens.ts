@@ -20,6 +20,24 @@ const exampleFetchTokenBalances = async (sdk: BreezSdk) => {
   // ANCHOR_END: fetch-token-balances
 }
 
+const exampleFetchTokenMetadata = async (sdk: BreezSdk) => {
+  // ANCHOR: fetch-token-metadata
+  const response = await sdk.getTokensMetadata({
+    tokenIdentifiers: ['<token identifier 1>', '<token identifier 2>']
+  })
+
+  const tokensMetadata = response.tokensMetadata
+  for (const tokenMetadata of tokensMetadata) {
+    console.log(`Token ID: ${tokenMetadata.identifier}`)
+    console.log(`Name: ${tokenMetadata.name}`)
+    console.log(`Ticker: ${tokenMetadata.ticker}`)
+    console.log(`Decimals: ${tokenMetadata.decimals}`)
+    console.log(`Max Supply: ${tokenMetadata.maxSupply}`)
+    console.log(`Is Freezable: ${tokenMetadata.isFreezable}`)
+  }
+  // ANCHOR_END: fetch-token-metadata
+}
+
 const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   // ANCHOR: send-token-payment
   const paymentRequest = '<spark address>'

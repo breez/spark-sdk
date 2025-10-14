@@ -746,3 +746,13 @@ pub enum _WaitForPaymentIdentifier {
 pub struct _WaitForPaymentResponse {
     pub payment: Payment,
 }
+
+#[frb(mirror(GetTokensMetadataRequest))]
+pub struct _GetTokensMetadataRequest {
+    pub token_identifiers: Vec<String>,
+}
+
+#[frb(mirror(GetTokensMetadataResponse))]
+pub struct _GetTokensMetadataResponse {
+    pub tokens_metadata: Vec<TokenMetadata>,
+}

@@ -4,11 +4,12 @@ use breez_sdk_common::input::InputType;
 use breez_sdk_spark::{
     CheckLightningAddressRequest, ClaimDepositRequest, ClaimDepositResponse, Config,
     ConnectRequest, GetInfoRequest, GetInfoResponse, GetPaymentRequest, GetPaymentResponse,
-    LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse, ListPaymentsRequest,
-    ListPaymentsResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
-    LnurlPayRequest, LnurlPayResponse, LogEntry, Logger, Network, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, PrepareSendPaymentRequest, PrepareSendPaymentResponse,
-    ReceivePaymentRequest, ReceivePaymentResponse, RefundDepositRequest, RefundDepositResponse,
+    GetTokensMetadataRequest, GetTokensMetadataResponse, LightningAddressInfo,
+    ListFiatCurrenciesResponse, ListFiatRatesResponse, ListPaymentsRequest, ListPaymentsResponse,
+    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayRequest, LnurlPayResponse,
+    LogEntry, Logger, Network, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentRequest,
+    ReceivePaymentResponse, RefundDepositRequest, RefundDepositResponse,
     RegisterLightningAddressRequest, SdkError, SdkEvent, SendPaymentRequest, SendPaymentResponse,
     Storage, SyncWalletRequest, SyncWalletResponse, WaitForPaymentRequest, WaitForPaymentResponse,
 };
@@ -103,8 +104,11 @@ impl BreezSdk {
     ) -> Result<SendPaymentResponse, SdkError> {
         self.inner.send_payment(request).await
     }
-    
-    pub async fn sync_wallet(&self, request: SyncWalletRequest) -> Result<SyncWalletResponse, SdkError> {
+
+    pub async fn sync_wallet(
+        &self,
+        request: SyncWalletRequest,
+    ) -> Result<SyncWalletResponse, SdkError> {
         self.inner.sync_wallet(request).await
     }
 
@@ -178,5 +182,12 @@ impl BreezSdk {
         request: WaitForPaymentRequest,
     ) -> Result<WaitForPaymentResponse, SdkError> {
         self.inner.wait_for_payment(request).await
+    }
+
+    pub async fn get_tokens_metadata(
+        &self,
+        request: GetTokensMetadataRequest,
+    ) -> Result<GetTokensMetadataResponse, SdkError> {
+        self.inner.get_tokens_metadata(request).await
     }
 }

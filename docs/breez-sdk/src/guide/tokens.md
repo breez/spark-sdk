@@ -88,6 +88,87 @@ Once connected, the token balances and their metadata can be retrieved.
 Token balances are cached for fast responses. For details on ensuring up-to-date balances, see the <a href="./get_info.md#fetching-the-balance">fetching the balance</a> section.
 </div>
 
+<h2 id="fetching-token-metadata">
+    <a class="header" href="#fetching-token-metadata">Fetching token metadata</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_tokens_metadata">API docs</a>
+</h2>
+
+The metadata of any existing token can be fetched and will be cached for faster subsequent lookups.
+
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+
+```rust,ignore
+{{#include ../../snippets/rust/src/tokens.rs:fetch-token-metadata}}
+```
+
+</section>
+
+<div slot="title">Swift</div>
+<section>
+
+```swift,ignore
+{{#include ../../snippets/swift/BreezSdkSnippets/Sources/Tokens.swift:fetch-token-metadata}}
+```
+
+</section>
+
+<div slot="title">Kotlin</div>
+<section>
+
+```kotlin,ignore
+{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/Tokens.kt:fetch-token-metadata}}
+```
+
+</section>
+
+<div slot="title">Javascript</div>
+<section>
+
+```typescript
+{{#include ../../snippets/wasm/tokens.ts:fetch-token-metadata}}
+```
+
+</section>
+
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/tokens.ts:fetch-token-metadata}}
+```
+
+</section>
+
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/tokens.dart:fetch-token-metadata}}
+```
+
+</section>
+
+<div slot="title">Python</div>
+<section>
+
+```python,ignore
+{{#include ../../snippets/python/src/tokens.py:fetch-token-metadata}}
+```
+
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/tokens.go:fetch-token-metadata}}
+```
+
+</section>
+</custom-tabs>
+
 <h2 id="receiving-payments">
     <a class="header" href="#receiving-payments">Receiving a token payment</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.receive_payment">API docs</a>

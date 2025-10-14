@@ -26,6 +26,31 @@ class Tokens {
         // ANCHOR_END: fetch-token-balances
     }
 
+    suspend fun fetchTokenMetadata(sdk: BreezSdk) {
+        // ANCHOR: fetch-token-metadata
+        try {
+            val response = 
+                sdk.getTokensMetadata(
+                    GetTokensMetadataRequest(
+                        tokenIdentifiers = listOf("<token identifier 1>", "<token identifier 2>")
+                )
+            )   
+
+            val tokensMetadata = response.tokensMetadata
+            for (tokenMetadata in tokensMetadata) {
+                println("Token ID: ${tokenMetadata.identifier}")
+                println("Name: ${tokenMetadata.name}")
+                println("Ticker: ${tokenMetadata.ticker}")
+                println("Decimals: ${tokenMetadata.decimals}")
+                println("Max Supply: ${tokenMetadata.maxSupply}")
+                println("Is Freezable: ${tokenMetadata.isFreezable}")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: fetch-token-metadata
+    }
+
     suspend fun sendTokenPayment(sdk: BreezSdk) {
         // ANCHOR: send-token-payment
         try {

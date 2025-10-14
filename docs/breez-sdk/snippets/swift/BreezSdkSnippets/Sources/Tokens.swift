@@ -22,6 +22,25 @@ func fetchTokenBalances(sdk: BreezSdk) async throws {
     // ANCHOR_END: fetch-token-balances
 }
 
+func fetchTokenMetadata(sdk: BreezSdk) async throws {
+    // ANCHOR: fetch-token-metadata
+    let response = try await sdk.getTokensMetadata(
+        request: GetTokensMetadataRequest(tokenIdentifiers: [
+            "<token identifier 1>", "<token identifier 2>",
+        ]))
+
+    let tokensMetadata = response.tokensMetadata
+    for tokenMetadata in tokensMetadata {
+        print("Token ID: \(tokenMetadata.identifier)")
+        print("Name: \(tokenMetadata.name)")
+        print("Ticker: \(tokenMetadata.ticker)")
+        print("Decimals: \(tokenMetadata.decimals)")
+        print("Max Supply: \(tokenMetadata.maxSupply)")
+        print("Is Freezable: \(tokenMetadata.isFreezable)")
+    }
+    // ANCHOR_END: fetch-token-metadata
+}
+
 func sendTokenPayment(sdk: BreezSdk) async throws {
     // ANCHOR: send-token-payment
     let paymentRequest = "<spark address>"
