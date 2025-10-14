@@ -216,9 +216,13 @@ pub(crate) struct BreezSdkParams {
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
     pub(crate) fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
-        match &params.config.api_key {
-            Some(api_key) => validate_breez_api_key(api_key)?,
-            None => return Err(SdkError::Generic("Missing Breez API key".to_string())),
+        // In Regtest we allow running without a Breez API key to facilitate local
+        // integration tests. For non-regtest networks, a valid API key is required.
+        if !matches!(params.config.network, Network::Regtest) {
+            match &params.config.api_key {
+                Some(api_key) => validate_breez_api_key(api_key)?,
+                None => return Err(SdkError::Generic("Missing Breez API key".to_string())),
+            }
         }
         let (initial_synced_sender, initial_synced_watcher) = watch::channel(false);
         let sdk = Self {

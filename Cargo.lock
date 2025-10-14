@@ -642,6 +642,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "breez-sdk-itest"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bitcoin",
+ "breez-sdk-spark",
+ "dotenvy",
+ "hex",
+ "macros",
+ "rand 0.8.5",
+ "reqwest",
+ "rstest",
+ "rstest_reuse",
+ "serde",
+ "serde_json",
+ "tempdir",
+ "test-log",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "breez-sdk-spark"
 version = "0.1.0"
 dependencies = [
@@ -3717,6 +3741,17 @@ dependencies = [
  "rustc_version",
  "syn 2.0.105",
  "unicode-ident",
+]
+
+[[package]]
+name = "rstest_reuse"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3a8fb4672e840a587a66fc577a5491375df51ddb88f2a2c2a792598c326fe14"
+dependencies = [
+ "quote",
+ "rand 0.8.5",
+ "syn 2.0.105",
 ]
 
 [[package]]

@@ -142,6 +142,7 @@ fn test_cmd(package: Option<String>, doc: bool, rest: Vec<String>) -> Result<()>
     if package.is_none() {
         c.arg("--workspace");
         c.args(["--exclude", "spark-itest"]);
+        c.args(["--exclude", "breez-sdk-itest"]);
         c.args(workspace_exclude_wasm());
     }
     if let Some(pkg) = package {

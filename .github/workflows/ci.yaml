@@ -64,6 +64,23 @@ jobs:
 
       - name: Check git status
         uses: ./.github/actions/check-git-status
+  
+  breez-test:
+    name: Breez integration tests
+    runs-on: ubuntu-latest
+    env:
+      FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
+      FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Tests
+        run: make breez-itest
 
   wasm-clippy:
     name: Wasm clippy
