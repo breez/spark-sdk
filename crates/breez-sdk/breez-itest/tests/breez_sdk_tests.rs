@@ -409,7 +409,10 @@ async fn test_03_lightning_invoice_payment(
     );
 
     // Verify Alice's balance decreased by amount + fees
-    let sent_payment = wait_for_payment_event(&mut alice.events, 60).await?;
+    let mut sent_payment = wait_for_payment_event(&mut alice.events, 60).await?;
+    if sent_payment.payment_type != PaymentType::Send {
+        sent_payment = wait_for_payment_event(&mut alice.events, 60).await?;
+    }
     wait_for_balance(
         &alice.sdk,
         Some(alice_initial_balance - sent_payment.amount as u64 - sent_payment.fees as u64),
