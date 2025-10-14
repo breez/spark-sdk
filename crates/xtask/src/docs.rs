@@ -89,6 +89,29 @@ fn check_doc_snippets_wasm_cmd(skip_binding_gen: bool) -> Result<()> {
     let workspace_root = env::current_dir()?;
     let doc_snippets_dir = workspace_root.join("docs/breez-sdk/snippets/wasm");
 
+    // Run yarn cache clean
+    let status = Command::new("yarn")
+        .arg("cache")
+        .arg("clean")
+        .current_dir(&doc_snippets_dir)
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("Doc snippet check failed: `yarn cache clean` failed");
+    }
+
+    // Remove node_modules directory if it exists
+    let node_modules_dir = doc_snippets_dir.join("node_modules");
+    if node_modules_dir.exists() {
+        println!("Removing node_modules");
+        std::fs::remove_dir_all(&node_modules_dir)?;
+    }
+    // Remove yarn.lock file if it exists
+    let yarn_lock_file = doc_snippets_dir.join("yarn.lock");
+    if yarn_lock_file.exists() {
+        println!("Removing yarn.lock");
+        std::fs::remove_file(&yarn_lock_file)?;
+    }
+
     // Run yarn install (yarn)
     let status = Command::new("yarn")
         .current_dir(&doc_snippets_dir)
