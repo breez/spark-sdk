@@ -1,10 +1,11 @@
 use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee, GetInfoRequest,
-    GetPaymentRequest, InputType, LightningAddressDetails, ListPaymentsRequest,
-    ListUnclaimedDepositsRequest, LnurlPayRequest, OnchainConfirmationSpeed, PaymentStatus,
-    PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest,
-    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SyncWalletRequest, parse,
+    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, OnchainConfirmationSpeed,
+    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
+    SyncWalletRequest, parse,
 };
 use clap::Parser;
 use rustyline::{
@@ -165,6 +166,10 @@ pub enum Command {
     ListFiatCurrencies,
     /// List available fiat rates
     ListFiatRates,
+    GetTokensMetadata {
+        /// The token identifiers to get metadata for
+        token_identifiers: Vec<String>,
+    },
 }
 
 #[derive(Helper, Completer, Hinter, Validator)]
@@ -439,6 +444,13 @@ pub(crate) async fn execute_command(
         }
         Command::ListFiatRates => {
             let res = sdk.list_fiat_rates().await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::GetTokensMetadata { token_identifiers } => {
+            let res = sdk
+                .get_tokens_metadata(GetTokensMetadataRequest { token_identifiers })
+                .await?;
             print_value(&res)?;
             Ok(true)
         }
