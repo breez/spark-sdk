@@ -192,7 +192,6 @@ impl TimelockManager {
 
         let node_tx = &node.node_tx;
         let node_outpoint = node_tx.input[0].previous_output;
-        let node_tx_out = &node_tx.output[0];
 
         let direct_tx = node.direct_tx;
         let direct_outpoint = direct_tx.as_ref().map(|tx| tx.input[0].previous_output);
@@ -220,17 +219,10 @@ impl TimelockManager {
             direct_tx: direct_refund_tx,
             direct_from_cpfp_tx: direct_from_cpfp_refund_tx,
         } = create_refund_txs(
+            &cpfp_node_tx,
+            direct_node_tx.as_ref(),
             initial_cpfp_sequence(),
             initial_direct_sequence(),
-            OutPoint {
-                txid: cpfp_node_tx.compute_txid(),
-                vout: 0,
-            },
-            direct_node_tx.as_ref().map(|tx| OutPoint {
-                txid: tx.compute_txid(),
-                vout: 0,
-            }),
-            node_tx_out.value.to_sat(),
             &signing_public_key,
             self.network,
         );
@@ -491,7 +483,6 @@ impl TimelockManager {
             .refund_tx
             .clone()
             .ok_or(ServiceError::Generic("No refund tx".to_string()))?;
-        let refund_tx_out = &refund_tx.output[0];
 
         let (cpfp_sequence, direct_sequence) = next_sequence(refund_tx.input[0].sequence).ok_or(
             ServiceError::Generic("Failed to get next sequence".to_string()),
@@ -515,17 +506,10 @@ impl TimelockManager {
             direct_tx: direct_refund_tx,
             direct_from_cpfp_tx: direct_from_cpfp_refund_tx,
         } = create_refund_txs(
+            &cpfp_node_tx,
+            direct_node_tx.as_ref(),
             initial_cpfp_sequence(),
             initial_direct_sequence(),
-            OutPoint {
-                txid: cpfp_node_tx.compute_txid(),
-                vout: 0,
-            },
-            direct_node_tx.as_ref().map(|tx| OutPoint {
-                txid: tx.compute_txid(),
-                vout: 0,
-            }),
-            refund_tx_out.value.to_sat(),
             &signing_public_key,
             self.network,
         );

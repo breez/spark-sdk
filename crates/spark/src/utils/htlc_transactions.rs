@@ -41,16 +41,14 @@ struct CreateLightningHtlcTxsParams<'a> {
 }
 
 pub struct CreateLightningHtlcRefundTxsParams<'a> {
+    /// The current leaf node transaction
+    pub node_tx: &'a Transaction,
+    /// The current optional leaf direct transaction
+    pub direct_tx: Option<&'a Transaction>,
     /// The sequence number to use for the CPFP transaction's input
     pub cpfp_sequence: Sequence,
     /// The sequence number to use for direct transactions' inputs
     pub direct_sequence: Sequence,
-    /// The outpoint to spend in the CPFP transaction
-    pub cpfp_outpoint: OutPoint,
-    /// Optional outpoint to spend in the direct transaction
-    pub direct_outpoint: Option<OutPoint>,
-    /// The amount in satoshis to send in the transactions
-    pub amount_sat: u64,
     /// The payment hash for the hash-lock condition
     pub hash: &'a sha256::Hash,
     /// The public key for the hash-lock spending path
@@ -120,7 +118,7 @@ fn create_lightning_htlc_tx(
 ///
 /// It creates three possible transactions:
 /// - A CPFP (Child Pays For Parent) transaction that always includes an anchor output
-/// - An optional direct transaction that spends from the direct outpoint (if provided)
+/// - An optional direct transaction that spends from the direct outpoint
 /// - An optional transaction that spends from the CPFP outpoint but with the direct sequence number
 ///
 /// The CPFP refund transaction is designed for user-initiated unilateral exits. The direct
@@ -133,11 +131,10 @@ fn create_lightning_htlc_tx(
 /// # Arguments
 ///
 /// * `params` - Parameters for creating the refund transactions, including:
+///   - `node_tx` - The current leaf node transaction
+///   - `direct_tx` - The current optional leaf direct transaction
 ///   - `cpfp_sequence`: The sequence number to use for the CPFP transaction's input
 ///   - `direct_sequence`: The sequence number to use for direct transactions' inputs
-///   - `cpfp_outpoint`: The outpoint to spend in the CPFP transaction
-///   - `direct_outpoint`: Optional outpoint to spend in the direct transaction
-///   - `amount_sat`: The amount in satoshis to send in the transactions
 ///   - `hash`: The payment hash for the hash-lock condition
 ///   - `hash_lock_pubkey`: The public key for the hash-lock spending path
 ///   - `sequence_lock_pubkey`: The public key for the time-lock spending path
@@ -147,29 +144,32 @@ fn create_lightning_htlc_tx(
 ///
 /// A `RefundTransactions` struct containing:
 /// - `cpfp_tx`: Always present, includes an anchor output
-/// - `direct_tx`: Only present if `direct_outpoint` is provided
+/// - `direct_tx`: Only present if `direct_tx` is provided
 /// - `direct_from_cpfp_tx`: Alternative transaction that spends from the CPFP outpoint
-///   with the direct sequence number (only present if `direct_outpoint` is provided)
+///   with the direct sequence number
 pub(crate) fn create_lightning_htlc_refund_txs(
     params: CreateLightningHtlcRefundTxsParams<'_>,
 ) -> Result<RefundTransactions, SignerError> {
     let CreateLightningHtlcRefundTxsParams {
+        node_tx,
+        direct_tx,
         cpfp_sequence,
         direct_sequence,
-        cpfp_outpoint,
-        direct_outpoint,
-        amount_sat,
         hash,
         hash_lock_pubkey,
         sequence_lock_pubkey,
         network,
     } = params;
-    let value = Amount::from_sat(amount_sat);
+    let node_value = node_tx.output[0].value;
+    let cpfp_outpoint = OutPoint {
+        txid: node_tx.compute_txid(),
+        vout: 0,
+    };
 
     let cpfp_tx = create_lightning_htlc_tx(CreateLightningHtlcTxsParams {
         previous_output: cpfp_outpoint,
         sequence: cpfp_sequence,
-        value,
+        value: node_value,
         hash,
         hash_lock_pubkey,
         sequence_lock_pubkey,
@@ -178,12 +178,17 @@ pub(crate) fn create_lightning_htlc_refund_txs(
         include_anchor: true,
     })?;
 
-    let direct_tx = direct_outpoint
-        .map(|outpoint| {
+    let direct_tx = direct_tx
+        .map(|tx| {
+            let direct_value = tx.output[0].value;
+            let direct_outpoint = OutPoint {
+                txid: tx.compute_txid(),
+                vout: 0,
+            };
             create_lightning_htlc_tx(CreateLightningHtlcTxsParams {
-                previous_output: outpoint,
+                previous_output: direct_outpoint,
                 sequence: direct_sequence,
-                value,
+                value: direct_value,
                 hash,
                 hash_lock_pubkey,
                 sequence_lock_pubkey,
@@ -194,21 +199,17 @@ pub(crate) fn create_lightning_htlc_refund_txs(
         })
         .transpose()?;
 
-    let direct_from_cpfp_tx = direct_outpoint
-        .map(|_| {
-            create_lightning_htlc_tx(CreateLightningHtlcTxsParams {
-                previous_output: cpfp_outpoint,
-                sequence: direct_sequence,
-                value,
-                hash,
-                hash_lock_pubkey,
-                sequence_lock_pubkey,
-                network,
-                apply_fee: true,
-                include_anchor: false,
-            })
-        })
-        .transpose()?;
+    let direct_from_cpfp_tx = Some(create_lightning_htlc_tx(CreateLightningHtlcTxsParams {
+        previous_output: cpfp_outpoint,
+        sequence: direct_sequence,
+        value: node_value,
+        hash,
+        hash_lock_pubkey,
+        sequence_lock_pubkey,
+        network,
+        apply_fee: true,
+        include_anchor: false,
+    })?);
 
     Ok(RefundTransactions {
         cpfp_tx,
