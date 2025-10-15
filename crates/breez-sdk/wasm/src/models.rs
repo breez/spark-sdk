@@ -679,8 +679,20 @@ pub struct SendPaymentResponse {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ListPaymentsRequest)]
 pub struct ListPaymentsRequest {
+    pub type_filter: Option<Vec<PaymentType>>,
+    pub status_filter: Option<Vec<PaymentStatus>>,
+    pub asset_filter: Option<AssetFilter>,
+    pub from_timestamp: Option<u64>,
+    pub to_timestamp: Option<u64>,
     pub offset: Option<u32>,
     pub limit: Option<u32>,
+    pub sort_ascending: Option<bool>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AssetFilter)]
+pub enum AssetFilter {
+    Bitcoin,
+    Token { token_identifier: Option<String> },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ListPaymentsResponse)]

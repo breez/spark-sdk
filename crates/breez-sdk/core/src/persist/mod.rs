@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    DepositClaimError, DepositInfo, LightningAddressInfo, LnurlPayInfo, TokenBalance,
-    TokenMetadata, models::Payment,
+    DepositClaimError, DepositInfo, LightningAddressInfo, ListPaymentsRequest, LnurlPayInfo,
+    TokenBalance, TokenMetadata, models::Payment,
 };
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
@@ -66,20 +66,18 @@ pub trait Storage: Send + Sync {
     async fn delete_cached_item(&self, key: String) -> Result<(), StorageError>;
     async fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError>;
     async fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError>;
-    /// Lists payments with pagination
+    /// Lists payments with optional filters and pagination
     ///
     /// # Arguments
     ///
-    /// * `offset` - Number of records to skip
-    /// * `limit` - Maximum number of records to return
+    /// * `list_payments_request` - The request to list payments
     ///
     /// # Returns
     ///
     /// A vector of payments or a `StorageError`
     async fn list_payments(
         &self,
-        offset: Option<u32>,
-        limit: Option<u32>,
+        request: ListPaymentsRequest,
     ) -> Result<Vec<Payment>, StorageError>;
 
     /// Inserts a payment into storage
@@ -369,8 +367,8 @@ pub mod tests {
     use chrono::Utc;
 
     use crate::{
-        DepositClaimError, Payment, PaymentDetails, PaymentMetadata, PaymentMethod, PaymentStatus,
-        PaymentType, Storage, UpdateDepositPayload,
+        DepositClaimError, ListPaymentsRequest, Payment, PaymentDetails, PaymentMetadata,
+        PaymentMethod, PaymentStatus, PaymentType, Storage, UpdateDepositPayload,
     };
 
     #[allow(clippy::too_many_lines)]
@@ -525,7 +523,14 @@ pub mod tests {
             .unwrap();
 
         // List all payments
-        let payments = storage.list_payments(Some(0), Some(10)).await.unwrap();
+        let payments = storage
+            .list_payments(ListPaymentsRequest {
+                offset: Some(0),
+                limit: Some(10),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
         assert_eq!(payments.len(), 7);
 
         // Test each payment type individually
@@ -769,5 +774,537 @@ pub mod tests {
             deposits[0].refund_tx,
             Some("0200000001abcd1234...".to_string())
         );
+    }
+
+    pub async fn test_payment_type_filtering(storage: Box<dyn Storage>) {
+        // Create test payments with different types
+        let send_payment = Payment {
+            id: "send_1".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 10_000,
+            fees: 100,
+            timestamp: 1000,
+            method: PaymentMethod::Lightning,
+            details: Some(PaymentDetails::Lightning {
+                invoice: "lnbc1".to_string(),
+                payment_hash: "hash1".to_string(),
+                destination_pubkey: "pubkey1".to_string(),
+                description: None,
+                preimage: None,
+                lnurl_pay_info: None,
+            }),
+        };
+
+        let receive_payment = Payment {
+            id: "receive_1".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 20_000,
+            fees: 200,
+            timestamp: 2000,
+            method: PaymentMethod::Lightning,
+            details: Some(PaymentDetails::Lightning {
+                invoice: "lnbc2".to_string(),
+                payment_hash: "hash2".to_string(),
+                destination_pubkey: "pubkey2".to_string(),
+                description: None,
+                preimage: None,
+                lnurl_pay_info: None,
+            }),
+        };
+
+        storage.insert_payment(send_payment).await.unwrap();
+        storage.insert_payment(receive_payment).await.unwrap();
+
+        // Test filter by Send type only
+        let send_only = storage
+            .list_payments(ListPaymentsRequest {
+                type_filter: Some(vec![PaymentType::Send]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(send_only.len(), 1);
+        assert_eq!(send_only[0].id, "send_1");
+
+        // Test filter by Receive type only
+        let receive_only = storage
+            .list_payments(ListPaymentsRequest {
+                type_filter: Some(vec![PaymentType::Receive]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(receive_only.len(), 1);
+        assert_eq!(receive_only[0].id, "receive_1");
+
+        // Test filter by both types
+        let both_types = storage
+            .list_payments(ListPaymentsRequest {
+                type_filter: Some(vec![PaymentType::Send, PaymentType::Receive]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(both_types.len(), 2);
+
+        // Test with no filter (should return all)
+        let all_payments = storage
+            .list_payments(ListPaymentsRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(all_payments.len(), 2);
+    }
+
+    pub async fn test_payment_status_filtering(storage: Box<dyn Storage>) {
+        // Create test payments with different statuses
+        let completed_payment = Payment {
+            id: "completed_1".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 10_000,
+            fees: 100,
+            timestamp: 1000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
+        };
+
+        let pending_payment = Payment {
+            id: "pending_1".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Pending,
+            amount: 20_000,
+            fees: 200,
+            timestamp: 2000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
+        };
+
+        let failed_payment = Payment {
+            id: "failed_1".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Failed,
+            amount: 30_000,
+            fees: 300,
+            timestamp: 3000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
+        };
+
+        storage.insert_payment(completed_payment).await.unwrap();
+        storage.insert_payment(pending_payment).await.unwrap();
+        storage.insert_payment(failed_payment).await.unwrap();
+
+        // Test filter by Completed status only
+        let completed_only = storage
+            .list_payments(ListPaymentsRequest {
+                status_filter: Some(vec![PaymentStatus::Completed]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(completed_only.len(), 1);
+        assert_eq!(completed_only[0].id, "completed_1");
+
+        // Test filter by Pending status only
+        let pending_only = storage
+            .list_payments(ListPaymentsRequest {
+                status_filter: Some(vec![PaymentStatus::Pending]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(pending_only.len(), 1);
+        assert_eq!(pending_only[0].id, "pending_1");
+
+        // Test filter by multiple statuses
+        let completed_or_failed = storage
+            .list_payments(ListPaymentsRequest {
+                status_filter: Some(vec![PaymentStatus::Completed, PaymentStatus::Failed]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(completed_or_failed.len(), 2);
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
+        use crate::models::TokenMetadata;
+
+        // Create payments with different asset types
+        let spark_payment = Payment {
+            id: "spark_1".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 10_000,
+            fees: 100,
+            timestamp: 1000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
+        };
+
+        let lightning_payment = Payment {
+            id: "lightning_1".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 20_000,
+            fees: 200,
+            timestamp: 2000,
+            method: PaymentMethod::Lightning,
+            details: Some(PaymentDetails::Lightning {
+                invoice: "lnbc1".to_string(),
+                payment_hash: "hash1".to_string(),
+                destination_pubkey: "pubkey1".to_string(),
+                description: None,
+                preimage: None,
+                lnurl_pay_info: None,
+            }),
+        };
+
+        let token_payment = Payment {
+            id: "token_1".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 30_000,
+            fees: 300,
+            timestamp: 3000,
+            method: PaymentMethod::Token,
+            details: Some(PaymentDetails::Token {
+                metadata: TokenMetadata {
+                    identifier: "token_id_1".to_string(),
+                    issuer_public_key: "pubkey".to_string(),
+                    name: "Token 1".to_string(),
+                    ticker: "TK1".to_string(),
+                    decimals: 8,
+                    max_supply: 1_000_000,
+                    is_freezable: false,
+                },
+                tx_hash: "tx_hash_1".to_string(),
+            }),
+        };
+
+        let withdraw_payment = Payment {
+            id: "withdraw_1".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 40_000,
+            fees: 400,
+            timestamp: 4000,
+            method: PaymentMethod::Withdraw,
+            details: Some(PaymentDetails::Withdraw {
+                tx_id: "withdraw_tx_1".to_string(),
+            }),
+        };
+
+        let deposit_payment = Payment {
+            id: "deposit_1".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 50_000,
+            fees: 500,
+            timestamp: 5000,
+            method: PaymentMethod::Deposit,
+            details: Some(PaymentDetails::Deposit {
+                tx_id: "deposit_tx_1".to_string(),
+            }),
+        };
+
+        storage.insert_payment(spark_payment).await.unwrap();
+        storage.insert_payment(lightning_payment).await.unwrap();
+        storage.insert_payment(token_payment).await.unwrap();
+        storage.insert_payment(withdraw_payment).await.unwrap();
+        storage.insert_payment(deposit_payment).await.unwrap();
+
+        // Test filter by Bitcoin
+        let spark_only = storage
+            .list_payments(ListPaymentsRequest {
+                asset_filter: Some(crate::AssetFilter::Bitcoin),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(spark_only.len(), 4);
+
+        // Test filter by Token (no identifier)
+        let token_only = storage
+            .list_payments(ListPaymentsRequest {
+                asset_filter: Some(crate::AssetFilter::Token {
+                    token_identifier: None,
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(token_only.len(), 1);
+        assert_eq!(token_only[0].id, "token_1");
+
+        // Test filter by Token with specific identifier
+        let token_specific = storage
+            .list_payments(ListPaymentsRequest {
+                asset_filter: Some(crate::AssetFilter::Token {
+                    token_identifier: Some("token_id_1".to_string()),
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(token_specific.len(), 1);
+        assert_eq!(token_specific[0].id, "token_1");
+
+        // Test filter by Token with non-existent identifier
+        let token_no_match = storage
+            .list_payments(ListPaymentsRequest {
+                asset_filter: Some(crate::AssetFilter::Token {
+                    token_identifier: Some("nonexistent".to_string()),
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(token_no_match.len(), 0);
+    }
+
+    pub async fn test_timestamp_filtering(storage: Box<dyn Storage>) {
+        // Create payments at different timestamps
+        let payment1 = Payment {
+            id: "ts_1000".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 10_000,
+            fees: 100,
+            timestamp: 1000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
+        };
+
+        let payment2 = Payment {
+            id: "ts_2000".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 20_000,
+            fees: 200,
+            timestamp: 2000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
+        };
+
+        let payment3 = Payment {
+            id: "ts_3000".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 30_000,
+            fees: 300,
+            timestamp: 3000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
+        };
+
+        storage.insert_payment(payment1).await.unwrap();
+        storage.insert_payment(payment2).await.unwrap();
+        storage.insert_payment(payment3).await.unwrap();
+
+        // Test filter by from_timestamp
+        let from_2000 = storage
+            .list_payments(ListPaymentsRequest {
+                from_timestamp: Some(2000),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(from_2000.len(), 2);
+        assert!(from_2000.iter().any(|p| p.id == "ts_2000"));
+        assert!(from_2000.iter().any(|p| p.id == "ts_3000"));
+
+        // Test filter by to_timestamp
+        let to_2000 = storage
+            .list_payments(ListPaymentsRequest {
+                to_timestamp: Some(2000),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(to_2000.len(), 1);
+        assert!(to_2000.iter().any(|p| p.id == "ts_1000"));
+
+        // Test filter by both from_timestamp and to_timestamp
+        let range = storage
+            .list_payments(ListPaymentsRequest {
+                from_timestamp: Some(1500),
+                to_timestamp: Some(2500),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(range.len(), 1);
+        assert_eq!(range[0].id, "ts_2000");
+    }
+
+    pub async fn test_combined_filters(storage: Box<dyn Storage>) {
+        // Create diverse test payments
+        let payment1 = Payment {
+            id: "combined_1".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 10_000,
+            fees: 100,
+            timestamp: 1000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
+        };
+
+        let payment2 = Payment {
+            id: "combined_2".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Pending,
+            amount: 20_000,
+            fees: 200,
+            timestamp: 2000,
+            method: PaymentMethod::Lightning,
+            details: Some(PaymentDetails::Lightning {
+                invoice: "lnbc1".to_string(),
+                payment_hash: "hash1".to_string(),
+                destination_pubkey: "pubkey1".to_string(),
+                description: None,
+                preimage: None,
+                lnurl_pay_info: None,
+            }),
+        };
+
+        let payment3 = Payment {
+            id: "combined_3".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 30_000,
+            fees: 300,
+            timestamp: 3000,
+            method: PaymentMethod::Lightning,
+            details: Some(PaymentDetails::Lightning {
+                invoice: "lnbc2".to_string(),
+                payment_hash: "hash2".to_string(),
+                destination_pubkey: "pubkey2".to_string(),
+                description: None,
+                preimage: None,
+                lnurl_pay_info: None,
+            }),
+        };
+
+        storage.insert_payment(payment1).await.unwrap();
+        storage.insert_payment(payment2).await.unwrap();
+        storage.insert_payment(payment3).await.unwrap();
+
+        // Test: Send + Completed
+        let send_completed = storage
+            .list_payments(ListPaymentsRequest {
+                type_filter: Some(vec![PaymentType::Send]),
+                status_filter: Some(vec![PaymentStatus::Completed]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(send_completed.len(), 1);
+        assert_eq!(send_completed[0].id, "combined_1");
+
+        // Test: Bitcoin + timestamp range
+        let bitcoin_recent = storage
+            .list_payments(ListPaymentsRequest {
+                asset_filter: Some(crate::AssetFilter::Bitcoin),
+                from_timestamp: Some(2500),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(bitcoin_recent.len(), 1);
+        assert_eq!(bitcoin_recent[0].id, "combined_3");
+
+        // Test: Type + Status + Asset
+        let send_pending_bitcoin = storage
+            .list_payments(ListPaymentsRequest {
+                type_filter: Some(vec![PaymentType::Send]),
+                status_filter: Some(vec![PaymentStatus::Pending]),
+                asset_filter: Some(crate::AssetFilter::Bitcoin),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(send_pending_bitcoin.len(), 1);
+        assert_eq!(send_pending_bitcoin[0].id, "combined_2");
+    }
+
+    pub async fn test_sort_order(storage: Box<dyn Storage>) {
+        // Create payments at different timestamps
+        let payment1 = Payment {
+            id: "sort_1".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 10_000,
+            fees: 100,
+            timestamp: 1000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
+        };
+
+        let payment2 = Payment {
+            id: "sort_2".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 20_000,
+            fees: 200,
+            timestamp: 2000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
+        };
+
+        let payment3 = Payment {
+            id: "sort_3".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 30_000,
+            fees: 300,
+            timestamp: 3000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark),
+        };
+
+        storage.insert_payment(payment1).await.unwrap();
+        storage.insert_payment(payment2).await.unwrap();
+        storage.insert_payment(payment3).await.unwrap();
+
+        // Test default sort (descending by timestamp)
+        let desc_payments = storage
+            .list_payments(ListPaymentsRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(desc_payments.len(), 3);
+        assert_eq!(desc_payments[0].id, "sort_3"); // Most recent first
+        assert_eq!(desc_payments[1].id, "sort_2");
+        assert_eq!(desc_payments[2].id, "sort_1");
+
+        // Test ascending sort
+        let asc_payments = storage
+            .list_payments(ListPaymentsRequest {
+                sort_ascending: Some(true),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(asc_payments.len(), 3);
+        assert_eq!(asc_payments[0].id, "sort_1"); // Oldest first
+        assert_eq!(asc_payments[1].id, "sort_2");
+        assert_eq!(asc_payments[2].id, "sort_3");
+
+        // Test explicit descending sort
+        let desc_explicit = storage
+            .list_payments(ListPaymentsRequest {
+                sort_ascending: Some(false),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(desc_explicit.len(), 3);
+        assert_eq!(desc_explicit[0].id, "sort_3");
+        assert_eq!(desc_explicit[1].id, "sort_2");
+        assert_eq!(desc_explicit[2].id, "sort_1");
     }
 }

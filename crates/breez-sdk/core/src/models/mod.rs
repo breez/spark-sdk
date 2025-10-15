@@ -605,16 +605,63 @@ pub struct SendPaymentResponse {
     pub payment: Payment,
 }
 
-/// Request to list payments with pagination
-#[derive(Debug, Clone)]
+/// Request to list payments with optional filters and pagination
+#[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ListPaymentsRequest {
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub type_filter: Option<Vec<PaymentType>>,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub status_filter: Option<Vec<PaymentStatus>>,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub asset_filter: Option<AssetFilter>,
+    /// Only include payments created after this timestamp (inclusive)
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub from_timestamp: Option<u64>,
+    /// Only include payments created before this timestamp (exclusive)
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub to_timestamp: Option<u64>,
     /// Number of records to skip
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub offset: Option<u32>,
     /// Maximum number of records to return
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub limit: Option<u32>,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub sort_ascending: Option<bool>,
+}
+
+/// A field of [`ListPaymentsRequest`] when listing payments filtered by asset
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum AssetFilter {
+    Bitcoin,
+    Token {
+        /// Optional token identifier to filter by
+        token_identifier: Option<String>,
+    },
+}
+
+impl FromStr for AssetFilter {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
+            "bitcoin" => AssetFilter::Bitcoin,
+            "token" => AssetFilter::Token {
+                token_identifier: None,
+            },
+            str if str.starts_with("token:") => AssetFilter::Token {
+                token_identifier: Some(
+                    str.split_once(':')
+                        .ok_or(format!("Invalid asset filter '{s}'"))?
+                        .1
+                        .to_string(),
+                ),
+            },
+            _ => return Err(format!("Invalid asset filter '{s}'")),
+        })
+    }
 }
 
 /// Response from listing payments

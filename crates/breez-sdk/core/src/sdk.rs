@@ -952,10 +952,7 @@ impl BreezSdk {
         &self,
         request: ListPaymentsRequest,
     ) -> Result<ListPaymentsResponse, SdkError> {
-        let payments = self
-            .storage
-            .list_payments(request.offset, request.limit)
-            .await?;
+        let payments = self.storage.list_payments(request).await?;
         Ok(ListPaymentsResponse { payments })
     }
 

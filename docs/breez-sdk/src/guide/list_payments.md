@@ -12,6 +12,7 @@ To view your payment history, you can list all the payments that have been sent 
 ```rust,ignore
 {{#include ../../snippets/rust/src/list_payments.rs:list-payments}}
 ```
+
 </section>
 
 <div slot="title">Swift</div>
@@ -20,6 +21,7 @@ To view your payment history, you can list all the payments that have been sent 
 ```swift,ignore
 {{#include ../../snippets/swift/BreezSdkSnippets/Sources/ListPayments.swift:list-payments}}
 ```
+
 </section>
 
 <div slot="title">Kotlin</div>
@@ -28,6 +30,7 @@ To view your payment history, you can list all the payments that have been sent 
 ```kotlin,ignore
 {{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/ListPayments.kt:list-payments}}
 ```
+
 </section>
 
 <div slot="title">Javascript</div>
@@ -36,6 +39,7 @@ To view your payment history, you can list all the payments that have been sent 
 ```typescript
 {{#include ../../snippets/wasm/list_payments.ts:list-payments}}
 ```
+
 </section>
 
 <div slot="title">React Native</div>
@@ -44,6 +48,7 @@ To view your payment history, you can list all the payments that have been sent 
 ```typescript
 {{#include ../../snippets/react-native/list_payments.ts:list-payments}}
 ```
+
 </section>
 
 <div slot="title">Flutter</div>
@@ -52,14 +57,16 @@ To view your payment history, you can list all the payments that have been sent 
 ```dart,ignore
 {{#include ../../snippets/flutter/lib/list_payments.dart:list-payments}}
 ```
+
 </section>
 
 <div slot="title">Python</div>
 <section>
 
-```python,ignore 
+```python,ignore
 {{#include ../../snippets/python/src/list_payments.py:list-payments}}
 ```
+
 </section>
 
 <div slot="title">Go</div>
@@ -68,12 +75,13 @@ To view your payment history, you can list all the payments that have been sent 
 ```go,ignore
 {{#include ../../snippets/go/list_payments.go:list-payments}}
 ```
+
 </section>
 </custom-tabs>
 
 ## Filtering Payments
 
-When listing payment you can also page the list results:
+When listing payments you can also filter and page the results.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
@@ -82,6 +90,7 @@ When listing payment you can also page the list results:
 ```rust,ignore
 {{#include ../../snippets/rust/src/list_payments.rs:list-payments-filtered}}
 ```
+
 </section>
 
 <div slot="title">Swift</div>
@@ -90,6 +99,7 @@ When listing payment you can also page the list results:
 ```swift,ignore
 {{#include ../../snippets/swift/BreezSdkSnippets/Sources/ListPayments.swift:list-payments-filtered}}
 ```
+
 </section>
 
 <div slot="title">Kotlin</div>
@@ -98,6 +108,7 @@ When listing payment you can also page the list results:
 ```kotlin,ignore
 {{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/ListPayments.kt:list-payments-filtered}}
 ```
+
 </section>
 
 <div slot="title">Javascript</div>
@@ -106,6 +117,7 @@ When listing payment you can also page the list results:
 ```typescript
 {{#include ../../snippets/wasm/list_payments.ts:list-payments-filtered}}
 ```
+
 </section>
 
 <div slot="title">React Native</div>
@@ -114,6 +126,7 @@ When listing payment you can also page the list results:
 ```typescript
 {{#include ../../snippets/react-native/list_payments.ts:list-payments-filtered}}
 ```
+
 </section>
 
 <div slot="title">Flutter</div>
@@ -122,13 +135,15 @@ When listing payment you can also page the list results:
 ```dart,ignore
 {{#include ../../snippets/flutter/lib/list_payments.dart:list-payments-filtered}}
 ```
+
 </section>
 <div slot="title">Python</div>
 <section>
 
-```python,ignore 
+```python,ignore
 {{#include ../../snippets/python/src/list_payments.py:list-payments-filtered}}
 ```
+
 </section>
 
 <div slot="title">Go</div>
@@ -137,6 +152,7 @@ When listing payment you can also page the list results:
 ```go,ignore
 {{#include ../../snippets/go/list_payments.go:list-payments-filtered}}
 ```
+
 </section>
 </custom-tabs>
 
@@ -154,6 +170,7 @@ You can also retrieve a single payment using the payment id:
 ```rust,ignore
 {{#include ../../snippets/rust/src/list_payments.rs:get-payment}}
 ```
+
 </section>
 
 <div slot="title">Swift</div>
@@ -162,6 +179,7 @@ You can also retrieve a single payment using the payment id:
 ```swift,ignore
 {{#include ../../snippets/swift/BreezSdkSnippets/Sources/ListPayments.swift:get-payment}}
 ```
+
 </section>
 
 <div slot="title">Kotlin</div>
@@ -170,6 +188,7 @@ You can also retrieve a single payment using the payment id:
 ```kotlin,ignore
 {{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/ListPayments.kt:get-payment}}
 ```
+
 </section>
 
 <div slot="title">Javascript</div>
@@ -178,6 +197,7 @@ You can also retrieve a single payment using the payment id:
 ```typescript
 {{#include ../../snippets/wasm/list_payments.ts:get-payment}}
 ```
+
 </section>
 
 <div slot="title">React Native</div>
@@ -186,6 +206,7 @@ You can also retrieve a single payment using the payment id:
 ```typescript
 {{#include ../../snippets/react-native/list_payments.ts:get-payment}}
 ```
+
 </section>
 
 <div slot="title">Flutter</div>
@@ -194,14 +215,16 @@ You can also retrieve a single payment using the payment id:
 ```dart,ignore
 {{#include ../../snippets/flutter/lib/list_payments.dart:get-payment}}
 ```
+
 </section>
 
 <div slot="title">Python</div>
 <section>
 
-```python,ignore 
+```python,ignore
 {{#include ../../snippets/python/src/list_payments.py:get-payment}}
 ```
+
 </section>
 
 <div slot="title">Go</div>
@@ -210,5 +233,6 @@ You can also retrieve a single payment using the payment id:
 ```go,ignore
 {{#include ../../snippets/go/list_payments.go:get-payment}}
 ```
+
 </section>
 </custom-tabs>

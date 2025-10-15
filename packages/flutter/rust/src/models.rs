@@ -140,8 +140,20 @@ pub enum _InputType {
 
 #[frb(mirror(ListPaymentsRequest))]
 pub struct _ListPaymentsRequest {
+    pub type_filter: Option<Vec<PaymentType>>,
+    pub status_filter: Option<Vec<PaymentStatus>>,
+    pub asset_filter: Option<AssetFilter>,
+    pub from_timestamp: Option<u64>,
+    pub to_timestamp: Option<u64>,
     pub offset: Option<u32>,
     pub limit: Option<u32>,
+    pub sort_ascending: Option<bool>,
+}
+
+#[frb(mirror(AssetFilter))]
+pub enum _AssetFilter {
+    Bitcoin,
+    Token { token_identifier: Option<String> },
 }
 
 #[frb(mirror(ListPaymentsResponse))]
