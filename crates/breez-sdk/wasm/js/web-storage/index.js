@@ -111,6 +111,40 @@ class MigrationManager {
           }
         },
       },
+      {
+        name: "Convert amount and fees from Number to BigInt for u128 support",
+        upgrade: (db, transaction) => {
+          const store = transaction.objectStore("payments");
+          const getAllRequest = store.getAll();
+
+          getAllRequest.onsuccess = () => {
+            const payments = getAllRequest.result;
+            let updated = 0;
+
+            payments.forEach((payment) => {
+              // Convert amount and fees from Number to BigInt if they're numbers
+              let needsUpdate = false;
+
+              if (typeof payment.amount === "number") {
+                payment.amount = BigInt(Math.round(payment.amount));
+                needsUpdate = true;
+              }
+
+              if (typeof payment.fees === "number") {
+                payment.fees = BigInt(Math.round(payment.fees));
+                needsUpdate = true;
+              }
+
+              if (needsUpdate) {
+                store.put(payment);
+                updated++;
+              }
+            });
+
+            console.log(`Migrated ${updated} payment records to BigInt format`);
+          };
+        },
+      },
     ];
   }
 }
@@ -134,7 +168,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 1; // Current schema version
+    this.dbVersion = 3; // Current schema version
   }
 
   /**
