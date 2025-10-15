@@ -20,7 +20,6 @@ pub struct Leaves {
     pub available: Vec<TreeNode>,
     pub not_available: Vec<TreeNode>,
     pub available_missing_from_operators: Vec<TreeNode>,
-    pub not_available_missing_from_operators: Vec<TreeNode>,
     pub reserved: Vec<TreeNode>,
 }
 

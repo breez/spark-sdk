@@ -53,12 +53,6 @@ impl TreeStore for InMemoryTreeStore {
                 .filter(|leaf| leaf.status == TreeNodeStatus::Available)
                 .cloned()
                 .collect(),
-            not_available_missing_from_operators: leaves
-                .missing_operators_leaves
-                .values()
-                .filter(|leaf| leaf.status != TreeNodeStatus::Available)
-                .cloned()
-                .collect(),
             reserved: leaves
                 .leaves_reservations
                 .values()
