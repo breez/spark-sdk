@@ -20,7 +20,11 @@ Future<void> fetchTokenBalances(BreezSdk sdk) async {
 
 Future<void> fetchTokenMetadata(BreezSdk sdk) async {
   // ANCHOR: fetch-token-metadata
-  final response = await sdk.getTokensMetadata(request: GetTokensMetadataRequest(tokenIdentifiers: ['<token identifier 1>', '<token identifier 2>']));
+  final response = await sdk.getTokensMetadata(
+    request: GetTokensMetadataRequest(
+      tokenIdentifiers: ['<token identifier 1>', '<token identifier 2>']
+      )
+    );
   
   final tokensMetadata = response.tokensMetadata;
   for (final tokenMetadata in tokensMetadata) {
