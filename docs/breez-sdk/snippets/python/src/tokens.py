@@ -5,6 +5,7 @@ from breez_sdk_spark import (
     PrepareSendPaymentRequest,
     SendPaymentRequest,
     SendPaymentMethod,
+    GetTokensMetadataRequest,
 )
 
 
@@ -27,6 +28,28 @@ async def fetch_token_balances(sdk: BreezSdk):
         logging.error(error)
         raise
     # ANCHOR_END: fetch-token-balances
+
+async def fetch_token_metadata(sdk: BreezSdk):
+    # ANCHOR: fetch-token-metadata
+    try:
+        response = await sdk.get_tokens_metadata(
+            request=GetTokensMetadataRequest(
+                token_identifiers=["<token identifier 1>", "<token identifier 2>"]
+                )
+            )
+
+        tokens_metadata = response.tokens_metadata
+        for token_metadata in tokens_metadata:
+            print(f"Token ID: {token_metadata.identifier}")
+            print(f"Name: {token_metadata.name}")
+            print(f"Ticker: {token_metadata.ticker}")
+            print(f"Decimals: {token_metadata.decimals}")
+            print(f"Max Supply: {token_metadata.max_supply}")
+            print(f"Is Freezable: {token_metadata.is_freezable}")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: fetch-token-metadata
 
 
 async def send_token_payment(sdk: BreezSdk):

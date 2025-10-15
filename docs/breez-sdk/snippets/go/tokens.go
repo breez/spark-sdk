@@ -33,6 +33,30 @@ func FetchTokenBalances(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
+func FetchTokenMetadata(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: fetch-token-metadata
+	tokenIdentifiers := []string{"<token identifier 1>", "<token identifier 2>"}
+	response, err := sdk.GetTokensMetadata(breez_sdk_spark.GetTokensMetadataRequest{
+		TokenIdentifiers: tokenIdentifiers,
+	})
+
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return err
+	}
+
+	tokensMetadata := response.TokensMetadata
+	for _, tokenMetadata := range tokensMetadata {
+		log.Printf("Token ID: %v", tokenMetadata.Identifier)
+		log.Printf("Name: %v", tokenMetadata.Name)
+		log.Printf("Ticker: %v", tokenMetadata.Ticker)
+		log.Printf("Decimals: %v", tokenMetadata.Decimals)
+		log.Printf("Max Supply: %v", tokenMetadata.MaxSupply)
+		log.Printf("Is Freezable: %v", tokenMetadata.IsFreezable)
+	}
+	// ANCHOR_END: fetch-token-metadata
+	return nil
+}
+
 func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: send-token-payment
 	paymentRequest := "<spark address>"

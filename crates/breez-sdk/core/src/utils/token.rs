@@ -3,9 +3,47 @@ use std::time::UNIX_EPOCH;
 use spark_wallet::SparkWallet;
 
 use crate::{
-    Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError,
+    Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError, TokenMetadata,
     persist::ObjectCacheRepository,
 };
+
+/// Returns the metadata for the given token identifiers.
+///
+/// Results are not guaranteed to be in the same order as the input token identifiers.
+///
+/// If the metadata is not found in the object cache, it will be queried from the Spark network.
+/// The metadata is then cached in the object cache.
+pub async fn get_tokens_metadata_cached_or_query(
+    spark_wallet: &SparkWallet,
+    object_repository: &ObjectCacheRepository,
+    token_identifiers: &[&str],
+) -> Result<Vec<TokenMetadata>, SdkError> {
+    let mut cached_results = Vec::new();
+    let mut uncached_identifiers = Vec::new();
+    for token_identifier in token_identifiers {
+        if let Some(metadata) = object_repository
+            .fetch_token_metadata(token_identifier)
+            .await?
+        {
+            cached_results.push(metadata);
+        } else {
+            uncached_identifiers.push(*token_identifier);
+        }
+    }
+
+    let queried_results = spark_wallet
+        .get_tokens_metadata(uncached_identifiers.as_slice())
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect();
+
+    for result in &queried_results {
+        object_repository.save_token_metadata(result).await?;
+    }
+
+    Ok([cached_results, queried_results].concat())
+}
 
 /// Converts a token transaction to payments
 ///
@@ -32,22 +70,12 @@ pub async fn token_transaction_to_payments(
         .token_identifier
         .as_ref();
 
-    let metadata = if let Some(metadata) = object_repository
-        .fetch_token_metadata(token_identifier)
-        .await?
-    {
-        metadata
-    } else {
-        let metadata = spark_wallet
-            .get_tokens_metadata(&[token_identifier])
+    let metadata =
+        get_tokens_metadata_cached_or_query(spark_wallet, object_repository, &[token_identifier])
             .await?
             .first()
-            .ok_or(SdkError::Generic("Token metadata not found".to_string()))?
-            .clone()
-            .into();
-        object_repository.save_token_metadata(&metadata).await?;
-        metadata
-    };
+            .cloned()
+            .ok_or(SdkError::Generic("Token metadata not found".to_string()))?;
 
     let is_transfer_transaction =
         matches!(&transaction.inputs, spark_wallet::TokenInputs::Transfer(..));

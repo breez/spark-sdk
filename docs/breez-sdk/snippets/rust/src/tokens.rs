@@ -23,6 +23,25 @@ pub(crate) async fn fetch_token_balances(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+async fn fetch_token_metadata(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: fetch-token-metadata
+    let response = sdk.get_tokens_metadata(GetTokensMetadataRequest {
+        token_identifiers: vec![String::from("<token identifier 1>"), String::from("<token identifier 2>")],
+    }).await?;
+
+    let tokens_metadata = response.tokens_metadata;
+    for token_metadata in tokens_metadata {
+        info!("Token ID: {}", token_metadata.identifier);
+        info!("Name: {}", token_metadata.name);
+        info!("Ticker: {}", token_metadata.ticker);
+        info!("Decimals: {}", token_metadata.decimals);
+        info!("Max Supply: {}", token_metadata.max_supply);
+        info!("Is Freezable: {}", token_metadata.is_freezable);
+    }
+    // ANCHOR_END: fetch-token-metadata
+    Ok(())
+}
+
 async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: send-token-payment
     let payment_request = "<spark address>".to_string();
