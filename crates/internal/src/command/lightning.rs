@@ -84,7 +84,7 @@ pub async fn handle_command(
             prefer_spark,
         } => {
             let payment = wallet
-                .pay_lightning_invoice(&invoice, max_fee_sat, amount_to_send, prefer_spark)
+                .pay_lightning_invoice(&invoice, max_fee_sat, amount_to_send, None, prefer_spark)
                 .await?;
             println!("{}", serde_json::to_string_pretty(&payment)?);
         }

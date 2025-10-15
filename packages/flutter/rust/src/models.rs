@@ -224,6 +224,7 @@ pub struct _PrepareSendPaymentRequest {
 
 #[frb(mirror(PrepareSendPaymentResponse))]
 pub struct _PrepareSendPaymentResponse {
+    pub payment_id: Option<String>,
     pub payment_method: SendPaymentMethod,
     pub amount: u128,
     pub token_identifier: Option<String>,

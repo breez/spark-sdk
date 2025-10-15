@@ -643,6 +643,7 @@ pub struct PrepareSendPaymentRequest {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
 pub struct PrepareSendPaymentResponse {
+    pub payment_id: Option<String>,
     pub payment_method: SendPaymentMethod,
     pub amount: u128,
     pub token_identifier: Option<String>,

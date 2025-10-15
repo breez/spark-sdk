@@ -354,6 +354,10 @@ pub(crate) async fn execute_command(
                 ));
             };
 
+            println!(
+                "Preparing payment with id: {:?}",
+                prepare_response.payment_id
+            );
             let payment_options =
                 read_payment_options(prepare_response.payment_method.clone(), rl)?;
 
