@@ -8,11 +8,16 @@ use axum::{
 use axum_extra::extract::Host;
 use bitcoin::{
     hashes::{Hash, sha256},
-    secp256k1::{PublicKey, XOnlyPublicKey, ecdsa::Signature},
+    secp256k1::{PublicKey, ecdsa::Signature},
 };
 use lnurl_models::{
-    CheckUsernameAvailableResponse, RecoverLnurlPayRequest, RecoverLnurlPayResponse,
-    RegisterLnurlPayRequest, RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
+    CheckUsernameAvailableResponse, ListInvoicesRequest, ListInvoicesResponse,
+    RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
+    RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
+};
+use nostr::{
+    event::{Event, TagStandard},
+    filter::Alphabet,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -20,14 +25,19 @@ use serde_json::{Value, json};
 use tracing::{debug, error, trace, warn};
 
 use crate::{
-    repository::{LnurlRepository, LnurlRepositoryError},
+    repository::{LnurlRepository, LnurlRepositoryError, LnurlSenderComment, ZapRequest},
     state::State,
     user::{USERNAME_VALIDATION_REGEX, User},
 };
 
+const DEFAULT_INVOICES_OFFSET: u32 = 0;
+const DEFAULT_INVOICES_LIMIT: u32 = 100;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LnurlPayCallbackParams {
     pub amount: Option<u64>,
+    pub comment: Option<String>,
+    pub nostr: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -72,7 +82,7 @@ pub struct PayResponse {
     /// Optional, if true, the nostr pubkey that will be used to sign zap events
     #[serde(rename = "nostrPubkey")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub nostr_pubkey: Option<XOnlyPublicKey>,
+    pub nostr_pubkey: Option<String>,
 }
 
 pub struct LnurlServer<DB> {
@@ -121,11 +131,14 @@ where
                 Json(Value::String("description too long".into())),
             ));
         }
+
+        // TODO: Validate nostr pubkey
         let user = User {
             domain: sanitize_domain(&state, &host)?,
             pubkey: pubkey.to_string(),
             name: username,
             description: payload.description,
+            nostr_pubkey: payload.nostr_pubkey,
         };
 
         if let Err(e) = state.db.upsert_user(&user).await {
@@ -204,6 +217,7 @@ where
                     lightning_address: format!("{}@{}", user.name, &user.domain),
                     username: user.name,
                     description: user.description,
+                    nostr_pubkey: user.nostr_pubkey,
                 }))
             }
             None => Err((
@@ -211,6 +225,28 @@ where
                 Json(Value::String("user not found".into())),
             )),
         }
+    }
+
+    pub async fn list_invoices(
+        Path(pubkey): Path<String>,
+        Query(params): Query<ListInvoicesRequest>,
+        Extension(state): Extension<State<DB>>,
+    ) -> Result<Json<ListInvoicesResponse>, (StatusCode, Json<Value>)> {
+        let pubkey = validate(&pubkey, &params.signature, &pubkey, &state).await?;
+        let offset = params.offset.unwrap_or(DEFAULT_INVOICES_OFFSET);
+        let limit = params.limit.unwrap_or(DEFAULT_INVOICES_LIMIT);
+        let invoices = state
+            .db
+            .get_invoices_by_pubkey(&pubkey.to_string(), offset, limit)
+            .await
+            .map_err(|e| {
+                error!("failed to execute query: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(Value::String("internal server error".into())),
+                )
+            })?;
+        Ok(Json(ListInvoicesResponse { invoices }))
     }
 
     pub async fn handle_lnurl_pay(
@@ -245,9 +281,9 @@ where
             min_sendable: state.min_sendable,
             tag: Tag::Pay,
             metadata: get_metadata(&user.domain, &user),
-            comment_allowed: None,
-            allows_nostr: None,
-            nostr_pubkey: None,
+            comment_allowed: Some(255),
+            allows_nostr: user.nostr_pubkey.as_ref().map(|_| true),
+            nostr_pubkey: user.nostr_pubkey,
         }))
     }
 
@@ -285,24 +321,66 @@ where
             return Err(lnurl_error("amount must be a whole sat amount"));
         }
 
-        let metadata = get_metadata(&user.domain, &user);
-        let desc_hash = sha256::Hash::hash(metadata.as_bytes());
         let pubkey = parse_pubkey(&user.pubkey)?;
-        let invoice = state
-            .wallet
-            .create_lightning_invoice(
-                amount_msat / 1000,
-                Some(spark_wallet::InvoiceDescription::DescriptionHash(
-                    desc_hash.to_byte_array(),
-                )),
-                Some(pubkey),
-                state.include_spark_address,
-            )
-            .await
-            .map_err(|e| {
-                error!("failed to create lightning invoice: {}", e);
-                lnurl_error("failed to create invoice")
-            })?;
+        let invoice_fn = async |desc_hash: sha256::Hash| {
+            state
+                .wallet
+                .create_lightning_invoice(
+                    amount_msat / 1000,
+                    Some(spark_wallet::InvoiceDescription::DescriptionHash(
+                        desc_hash.to_byte_array(),
+                    )),
+                    Some(pubkey),
+                    state.include_spark_address,
+                )
+                .await
+                .map_err(|e| {
+                    error!("failed to create lightning invoice: {}", e);
+                    lnurl_error("failed to create invoice")
+                })
+        };
+
+        let invoice = if let Some(nostr) = params.nostr {
+            validate_nostr_zap_request(&user, amount_msat, &nostr)?;
+
+            let desc_hash = sha256::Hash::hash(nostr.as_bytes());
+            let invoice = invoice_fn(desc_hash).await?;
+            if let Err(e) = state
+                .db
+                .insert_nostr_zap_request(&ZapRequest {
+                    invoice: invoice.invoice.clone(),
+                    user_pubkey: user.pubkey.clone(),
+                    zap_request: nostr,
+                })
+                .await
+            {
+                error!("Failed to insert nostr zap request: {:?}", e);
+                return Err(lnurl_error("internal server error"));
+            }
+
+            invoice
+        } else {
+            let metadata: String = get_metadata(&user.domain, &user);
+            let desc_hash = sha256::Hash::hash(metadata.as_bytes());
+            invoice_fn(desc_hash).await?
+        };
+
+        if let Some(comment) = params.comment {
+            let comment = comment.trim();
+            if !comment.is_empty()
+                && let Err(e) = state
+                    .db
+                    .insert_lnurl_sender_comment(&LnurlSenderComment {
+                        comment: comment.to_string(),
+                        invoice: invoice.invoice.clone(),
+                        user_pubkey: user.pubkey.clone(),
+                    })
+                    .await
+            {
+                error!("Failed to insert lnurl sender comment: {:?}", e);
+                return Err(lnurl_error("internal server error"));
+            }
+        }
 
         debug!("Created lightning invoice: {:?}", invoice);
 
@@ -315,6 +393,90 @@ where
             "routes": Vec::<String>::new(),
         })))
     }
+}
+
+fn validate_nostr_zap_request(
+    user: &User,
+    amount_msat: u64,
+    nostr: &str,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    if user.nostr_pubkey.is_none() {
+        trace!("nostr querystring added while nostr not supported");
+        return Err(lnurl_error("nostr not supported"));
+    }
+
+    let Ok(event): Result<Event, _> = serde_json::from_str(nostr) else {
+        trace!("invalid nostr event, could not parse");
+        return Err(lnurl_error("invalid nostr event"));
+    };
+
+    // 1. It MUST have a valid nostr signature
+    if event.verify().is_err() {
+        trace!("invalid nostr event, does not verify");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 2. It MUST have tags
+    if event.tags.is_empty() {
+        trace!("invalid nostr event, missing tags");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 3. It MUST have only one p tag
+    if event
+        .tags
+        .iter()
+        .filter_map(nostr::Tag::single_letter_tag)
+        .filter(|t| t.is_lowercase() && t.character == Alphabet::P)
+        .count()
+        != 1
+    {
+        trace!("invalid nostr event, missing or multiple 'p' tags");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 4. It MUST have 0 or 1 e tags
+    if event
+        .tags
+        .iter()
+        .filter_map(nostr::Tag::single_letter_tag)
+        .filter(|t| t.is_lowercase() && t.character == Alphabet::E)
+        .count()
+        > 1
+    {
+        trace!("invalid nostr event, multiple 'e' tags");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 5. There should be a relays tag with the relays to send the zap receipt to.
+    if !event
+        .tags
+        .iter()
+        .any(|t| matches!(t.as_standardized(), Some(TagStandard::Relay(_))))
+    {
+        trace!("invalid nostr event, missing relay tag");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 6. If there is an amount tag, it MUST be equal to the amount query parameter.
+    if let Some(millisats) = event.tags.iter().find_map(|t| {
+        if let Some(TagStandard::Amount { millisats, .. }) = t.as_standardized() {
+            Some(millisats)
+        } else {
+            None
+        }
+    }) && *millisats != amount_msat
+    {
+        trace!("invalid nostr event, amount does not match");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 7. If there is an a tag, it MUST be a valid event coordinate
+    // NOTE: Assuming the tag is well-formed and contains the necessary fields, because it's standard.
+
+    // 8. There MUST be 0 or 1 P tags. If there is one, it MUST be equal to the zap receipt's pubkey.
+    // TODO: Implement this check.
+    Ok(())
 }
 
 fn validate_username(username: &str) -> Result<(), (StatusCode, Json<Value>)> {

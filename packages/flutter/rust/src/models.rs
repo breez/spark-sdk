@@ -30,6 +30,7 @@ pub struct _Config {
     pub sync_interval_secs: u32,
     pub max_deposit_claim_fee: Option<Fee>,
     pub lnurl_domain: Option<String>,
+    pub nostr_pubkey: Option<String>,
     pub prefer_spark_over_lightning: bool,
 }
 
@@ -165,6 +166,12 @@ pub struct _LnurlPayInfo {
     pub metadata: Option<String>,
     pub processed_success_action: Option<SuccessActionProcessed>,
     pub raw_success_action: Option<SuccessAction>,
+}
+
+#[frb(mirror(LnurlReceiveInfo))]
+pub struct _LnurlReceiveInfo {
+    pub nostr_zap_request: Option<String>,
+    pub sender_comment: Option<String>,
 }
 
 #[frb(mirror(LnurlPayRequest))]
@@ -390,6 +397,7 @@ pub enum _PaymentDetails {
         payment_hash: String,
         destination_pubkey: String,
         lnurl_pay_info: Option<LnurlPayInfo>,
+        lnurl_receive_info: Option<LnurlReceiveInfo>,
     },
     Withdraw {
         tx_id: String,

@@ -8,12 +8,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    DepositClaimError, DepositInfo, LightningAddressInfo, LnurlPayInfo, TokenBalance,
-    TokenMetadata, models::Payment,
+    DepositClaimError, DepositInfo, LightningAddressInfo, LnurlInvoiceInfo, LnurlPayInfo,
+    TokenBalance, TokenMetadata, models::Payment,
 };
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
 const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
+const LNURL_INVOICES_OFFSET_KEY: &str = "lnurl_invoices_offset";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
 const TX_CACHE_KEY: &str = "tx_cache";
 const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
@@ -181,6 +182,9 @@ pub trait Storage: Send + Sync {
         vout: u32,
         payload: UpdateDepositPayload,
     ) -> Result<(), StorageError>;
+
+    async fn add_lnurl_invoices(&self, invoices: Vec<LnurlInvoiceInfo>)
+    -> Result<(), StorageError>;
 }
 
 pub(crate) struct ObjectCacheRepository {
@@ -339,6 +343,26 @@ impl ObjectCacheRepository {
             None => Ok(None),
         }
     }
+
+    pub(crate) async fn save_lnurl_invoices_offset(&self, offset: u32) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(LNURL_INVOICES_OFFSET_KEY.to_string(), offset.to_string())
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_lnurl_invoices_offset(&self) -> Result<u32, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(LNURL_INVOICES_OFFSET_KEY.to_string())
+            .await?;
+        match value {
+            Some(value) => Ok(value.parse().map_err(|_| {
+                StorageError::Serialization("invalid lnurl_invoices_offset".to_string())
+            })?),
+            None => Ok(0),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -441,6 +465,7 @@ pub mod tests {
                 payment_hash: "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321".to_string(),
                 destination_pubkey: "03123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01".to_string(),
                 lnurl_pay_info: metadata.lnurl_pay_info.clone(),
+                lnurl_receive_info: None,
             }),
         };
 
@@ -460,6 +485,7 @@ pub mod tests {
                 payment_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
                 destination_pubkey: "02987654321fedcba0987654321fedcba0987654321fedcba0987654321fedcba09".to_string(),
                 lnurl_pay_info: None,
+                lnurl_receive_info: None,
             }),
         };
 
@@ -582,6 +608,7 @@ pub mod tests {
                         payment_hash: r_hash,
                         destination_pubkey: r_dest_pubkey,
                         lnurl_pay_info: r_lnurl,
+                        lnurl_receive_info: None,
                     }),
                     Some(PaymentDetails::Lightning {
                         description: e_description,
@@ -590,6 +617,7 @@ pub mod tests {
                         payment_hash: e_hash,
                         destination_pubkey: e_dest_pubkey,
                         lnurl_pay_info: e_lnurl,
+                        lnurl_receive_info: None,
                     }),
                 ) => {
                     assert_eq!(r_description, e_description);
@@ -624,8 +652,8 @@ pub mod tests {
                     assert_eq!(r_tx_id, e_tx_id);
                 }
                 _ => panic!(
-                    "Payment details mismatch for payment {} (index {})",
-                    expected_payment.id, i
+                    "Payment details mismatch for payment {} (index {}) retrieved: {:?}, expected: {:?}",
+                    expected_payment.id, i, retrieved_payment.details, expected_payment.details
                 ),
             }
         }

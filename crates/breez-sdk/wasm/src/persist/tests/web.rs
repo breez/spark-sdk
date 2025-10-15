@@ -19,7 +19,7 @@ extern "C" {
 async fn create_test_storage(db_name: &str) -> WasmStorage {
     let storage = create_default_storage(db_name, None)
         .await
-        .expect("Failed to create node storage instance");
+        .expect("Failed to create web storage instance");
     WasmStorage { storage }
 }
 

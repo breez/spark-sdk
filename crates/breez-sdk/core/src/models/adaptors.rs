@@ -45,6 +45,7 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
                     payment_hash: request.invoice.payment_hash,
                     destination_pubkey: invoice_details.payee_pubkey,
                     lnurl_pay_info: None,
+                    lnurl_receive_info: None,
                 }
             }
             SspUserRequest::LightningSendRequest(request) => {
@@ -59,6 +60,7 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
                     payment_hash: invoice_details.payment_hash,
                     destination_pubkey: invoice_details.payee_pubkey,
                     lnurl_pay_info: None,
+                    lnurl_receive_info: None,
                 }
             }
             SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
@@ -178,6 +180,7 @@ impl Payment {
             payment_hash: invoice_details.payment_hash,
             destination_pubkey: invoice_details.payee_pubkey,
             lnurl_pay_info: None,
+            lnurl_receive_info: None,
         };
 
         Ok(Payment {
