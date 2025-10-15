@@ -48,11 +48,11 @@ pub enum Command {
         asset_filter: Option<AssetFilter>,
 
         /// Only include payments created after this timestamp (inclusive)
-        #[arg(short, long)]
+        #[arg(long)]
         from_timestamp: Option<u64>,
 
         /// Only include payments created before this timestamp (exclusive)
-        #[arg(short, long)]
+        #[arg(long)]
         to_timestamp: Option<u64>,
 
         /// Number of payments to show
@@ -64,7 +64,7 @@ pub enum Command {
         offset: Option<u32>,
 
         /// Sort payments in ascending order
-        #[arg(short, long)]
+        #[arg(long)]
         sort_ascending: Option<bool>,
     },
 
