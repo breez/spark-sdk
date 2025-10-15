@@ -19,7 +19,7 @@ use uuid::Uuid;
 pub struct Leaves {
     pub available: Vec<TreeNode>,
     pub not_available: Vec<TreeNode>,
-    pub missing_from_operators: Vec<TreeNode>,
+    pub available_missing_from_operators: Vec<TreeNode>,
     pub reserved: Vec<TreeNode>,
 }
 
@@ -28,7 +28,7 @@ impl Leaves {
         self.available.iter().map(|leaf| leaf.value).sum()
     }
     pub fn missing_operators_balance(&self) -> u64 {
-        self.missing_from_operators
+        self.available_missing_from_operators
             .iter()
             .map(|leaf| leaf.value)
             .sum()
