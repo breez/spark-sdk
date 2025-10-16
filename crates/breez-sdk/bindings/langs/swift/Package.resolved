@@ -2,12 +2,12 @@
   "object": {
     "pins": [
       {
-        "package": "BigInt",
-        "repositoryURL": "https://github.com/attaswift/BigInt.git",
+        "package": "BigNumber",
+        "repositoryURL": "https://github.com/mkrd/Swift-BigInt.git",
         "state": {
           "branch": null,
-          "revision": "e07e00fa1fd435143a2dcf8b7eec9a7710b2fdfe",
-          "version": "5.7.0"
+          "revision": "b07e961f4c999671cf8c2dc80e740899e8946013",
+          "version": "2.3.0"
         }
       }
     ]
