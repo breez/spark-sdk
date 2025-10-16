@@ -1,6 +1,7 @@
 use anyhow::Result;
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::SecretKey;
+use rcgen::{CertifiedKey, generate_simple_self_signed};
 use serde_json::json;
 use spark_wallet::Identifier;
 use std::fs;
@@ -64,25 +65,58 @@ pub struct SparkSoFixture {
     log_consumers: Vec<(usize, WaitForLogConsumer)>,
 }
 
+// Function to generate a self-signed certificate for all operator hostnames
+fn generate_self_signed_certificate(host_names: &[String]) -> Result<(String, String)> {
+    let CertifiedKey { cert, signing_key } = generate_simple_self_signed(host_names).unwrap();
+    Ok((signing_key.serialize_pem(), cert.pem()))
+}
+
 impl SparkSoFixture {
     pub async fn new(fixture_id: &FixtureId, bitcoind_fixture: &BitcoindFixture) -> Result<Self> {
         let config_dir = testdir::testdir!();
         let operators_json_path = config_dir.join("operators.json");
-        fs::create_dir_all(config_dir)?;
+
+        // Create a shared server certificate file
+        let key_path = config_dir.join("server.key");
+        let cert_path = config_dir.join("server.crt");
+
+        fs::create_dir_all(&config_dir)?;
         fs::write(&operators_json_path, "{}")?;
+
+        // Generate a list of operator host names before creating the operators
+        // These must match exactly what Docker uses internally for DNS resolution
+        let mut operator_host_names = Vec::with_capacity(NUM_OPERATORS);
+        for i in 0..NUM_OPERATORS {
+            let operator_host_name = format!(
+                "spark-so-{i}-{}",
+                fixture_id.to_network().replace("network-", "")
+            );
+            operator_host_names.push(operator_host_name);
+        }
+
+        // Generate a self-signed certificate valid for all operator host names
+        let (key_pem, cert_pem) = generate_self_signed_certificate(&operator_host_names)?;
+        fs::write(&key_path, key_pem)?;
+        fs::write(&cert_path, cert_pem)?;
 
         let secp = Secp256k1::new();
 
         // Create an array of futures for each operator
         let mut operator_futures = Vec::with_capacity(NUM_OPERATORS);
 
-        for i in 0..NUM_OPERATORS {
+        for (i, operator_host_name) in operator_host_names
+            .into_iter()
+            .enumerate()
+            .take(NUM_OPERATORS)
+        {
             // Clone references to data needed inside the async block
-            let operators_json_path = operators_json_path.clone();
             let internal_rpc_url = bitcoind_fixture.internal_rpc_url.clone();
             let internal_zmqpubrawblock_url = bitcoind_fixture.internal_zmqpubrawblock_url.clone();
             let secp = secp.clone();
             let fixture_id = fixture_id.clone();
+            let cert_path = cert_path.clone();
+            let key_path = key_path.clone();
+            let operators_json_path = operators_json_path.clone();
 
             // Create async task for each operator
             let operator_future = tokio::spawn(async move {
@@ -134,8 +168,7 @@ impl SparkSoFixture {
                 // Store a reference to the log consumer for later use
                 let log_consumer_ref = log_consumer.clone();
 
-                // Create container for this operator
-                let operator_host_name = format!("spark-so-{i}-{fixture_id}");
+                // Create container for this operator using the pre-generated host name
                 let container = GenericImage::new("spark-so", "latest")
                     .with_exposed_port(ContainerPort::Tcp(OPERATOR_PORT))
                     .with_wait_for(WaitFor::Log(LogWaitStrategy::stdout(
@@ -147,6 +180,14 @@ impl SparkSoFixture {
                     .with_mount(Mount::bind_mount(
                         operators_json_path.display().to_string(),
                         "/config/operators.json",
+                    ))
+                    .with_mount(Mount::bind_mount(
+                        cert_path.display().to_string(),
+                        "/data/server.crt",
+                    ))
+                    .with_mount(Mount::bind_mount(
+                        key_path.display().to_string(),
+                        "/data/server.key",
                     ))
                     // Basic configuration
                     .with_env_var("SPARK_OPERATOR_INDEX", i.to_string())
@@ -238,6 +279,7 @@ impl SparkSoFixture {
                 "address": format!("{}:{}", operator.host_name, operator.internal_port),
                 "external_address": format!("localhost:{}", operator.host_port),
                 "identity_public_key": operator.public_key.to_string(),
+                "cert_path": "/data/server.crt"   // Path to the mounted certificate inside container
             });
 
             operator_entries.push(operator_entry);

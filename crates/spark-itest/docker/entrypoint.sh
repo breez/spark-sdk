@@ -49,9 +49,6 @@ mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
 rm -f "/data/key.txt"
 echo $SPARK_OPERATOR_KEY > /data/key.txt
 
-openssl genrsa -out /data/server.key 2048
-openssl req -new -x509 -key /data/server.key -out /data/server.crt -days 365 -subj "/CN=localhost" -addext "subjectAltName = DNS:localhost"
-
 echo "Configuration updated, waiting for the operators.json file to be ready"
 
 # Start the frost signer in the background
