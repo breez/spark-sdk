@@ -156,7 +156,7 @@ pub async fn sign_refunds(
         };
 
         info!(
-            "sign_refunds for leaf {}: Current refund sequence: {old_sequence}, next sequence: {}",
+            "sign_refunds for leaf {}: Current sequence: {old_sequence}, next sequence: {}",
             leaf.node.id, cpfp_refund_tx.input[0].sequence
         );
 
@@ -481,7 +481,7 @@ where
         });
 
         info!(
-            "prepare_refund_so_signing_jobs_with_tx_constructor for leaf {}: Current refund sequence: {old_sequence}, next sequence: {}",
+            "prepare_refund_so_signing_jobs_with_tx_constructor for leaf {}: Current sequence: {old_sequence}, next sequence: {}",
             leaf.node.id, cpfp_refund_tx.input[0].sequence
         );
 

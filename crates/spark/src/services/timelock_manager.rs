@@ -1,6 +1,6 @@
 use std::{collections::HashMap, str::FromStr as _, sync::Arc};
 
-use tracing::trace;
+use tracing::{info, trace};
 
 use crate::{
     Network,
@@ -162,7 +162,7 @@ impl TimelockManager {
         node: &TreeNode,
         parent_node: &TreeNode,
     ) -> Result<TreeNode, ServiceError> {
-        trace!("Renewing node: {:?}", node.id);
+        info!("Renewing node: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
         let signing_key = PrivateKeySource::Derived(node.id.clone());
@@ -216,7 +216,7 @@ impl TimelockManager {
             job_type: SigningJobType::DirectNode,
             node_id: node.id.clone(),
             tx: direct_node_tx.clone(),
-            parent_tx_out: direct_split_node_tx.output[0].clone(),
+            parent_tx_out: cpfp_split_node_tx.output[0].clone(),
             signing_public_key,
             signing_commitments: self.signer.generate_frost_signing_commitments().await?,
             verifying_public_key: node.verifying_public_key,
@@ -356,7 +356,7 @@ impl TimelockManager {
         node: &TreeNode,
         parent_node: &TreeNode,
     ) -> Result<TreeNode, ServiceError> {
-        trace!("Renewing refund: {:?}", node.id);
+        info!("Renewing refund: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
         let signing_key = PrivateKeySource::Derived(node.id.clone());
@@ -513,7 +513,7 @@ impl TimelockManager {
     }
 
     pub async fn renew_zero_timelock(&self, node: &TreeNode) -> Result<TreeNode, ServiceError> {
-        trace!("Renewing zero timelock: {:?}", node.id);
+        info!("Renewing zero timelock: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
         let signing_key = PrivateKeySource::Derived(node.id.clone());

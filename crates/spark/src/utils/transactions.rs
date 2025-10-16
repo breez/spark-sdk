@@ -2,10 +2,14 @@ use bitcoin::{
     Address, Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, absolute::LockTime,
     key::Secp256k1, secp256k1::PublicKey, transaction::Version,
 };
+use tracing::info;
 
 use crate::{
     Network,
-    core::{initial_timelock_sequence, initial_zero_timelock_sequence, next_sequence},
+    core::{
+        initial_root_timelock_sequence, initial_timelock_sequence, initial_zero_timelock_sequence,
+        next_sequence,
+    },
     services::ServiceError,
 };
 
@@ -141,12 +145,18 @@ fn create_node_txs(
 }
 
 pub(crate) fn create_root_node_txs(parent_tx: &Transaction, vout: u32) -> NodeTransactions {
-    let (cpfp_sequence, direct_sequence) = initial_zero_timelock_sequence();
+    let (cpfp_sequence, direct_sequence) = initial_root_timelock_sequence();
+    info!(
+        "create_root_node_txs: cpfp sequence: {cpfp_sequence}, direct sequence: {direct_sequence}"
+    );
     create_node_txs(parent_tx, cpfp_sequence, direct_sequence, vout)
 }
 
 pub(crate) fn create_initial_timelock_node_txs(parent_tx: &Transaction) -> NodeTransactions {
     let (cpfp_sequence, direct_sequence) = initial_timelock_sequence();
+    info!(
+        "create_initial_timelock_node_txs: cpfp sequence: {cpfp_sequence}, direct sequence: {direct_sequence}"
+    );
     create_node_txs(parent_tx, cpfp_sequence, direct_sequence, 0)
 }
 
@@ -158,7 +168,9 @@ pub(crate) fn create_decremented_timelock_node_txs(
     let (cpfp_sequence, direct_sequence) = next_sequence(old_sequence).ok_or(
         ServiceError::Generic("Failed to get next sequence".to_string()),
     )?;
-
+    info!(
+        "create_decremented_timelock_node_txs: current sequence: {old_sequence}, next sequence: {cpfp_sequence}",
+    );
     Ok(create_node_txs(
         parent_tx,
         cpfp_sequence,
@@ -169,6 +181,9 @@ pub(crate) fn create_decremented_timelock_node_txs(
 
 pub(crate) fn create_zero_timelock_node_txs(parent_tx: &Transaction) -> NodeTransactions {
     let (cpfp_sequence, direct_sequence) = initial_zero_timelock_sequence();
+    info!(
+        "create_zero_timelock_node_txs: cpfp sequence: {cpfp_sequence}, direct sequence: {direct_sequence}"
+    );
     create_node_txs(parent_tx, cpfp_sequence, direct_sequence, 0)
 }
 
