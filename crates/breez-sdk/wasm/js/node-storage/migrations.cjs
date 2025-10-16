@@ -169,14 +169,48 @@ class MigrationManager {
                 json_extract(details, '$.Lightning.destination_pubkey'), json_extract(details, '$.Lightning.description'), 
                 json_extract(details, '$.Lightning.preimage') 
             FROM payments WHERE json_extract(details, '$.Lightning.invoice') IS NOT NULL`,
-            `UPDATE payments SET withdraw_tx_id = json_extract(details, '$.Withdraw.tx_id')
+          `UPDATE payments SET withdraw_tx_id = json_extract(details, '$.Withdraw.tx_id')
             WHERE json_extract(details, '$.Withdraw.tx_id') IS NOT NULL`,
-            `UPDATE payments SET deposit_tx_id = json_extract(details, '$.Deposit.tx_id')
+          `UPDATE payments SET deposit_tx_id = json_extract(details, '$.Deposit.tx_id')
             WHERE json_extract(details, '$.Deposit.tx_id') IS NOT NULL`,
-            `ALTER TABLE payments DROP COLUMN details`,
-            `CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice)`,
-        ]
-      }
+          `ALTER TABLE payments DROP COLUMN details`,
+          `CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice)`,
+        ],
+      },
+      {
+        name: "Create payment_details_token table",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS payment_details_token (
+              payment_id TEXT PRIMARY KEY,
+              metadata TEXT,
+              tx_hash TEXT,
+              FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+            )`,
+        ],
+      },
+      {
+        name: "Change payments amount and fees from INTEGER to TEXT",
+        sql: [
+          `CREATE TABLE payments_new (
+                        id TEXT PRIMARY KEY,
+                        payment_type TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        amount TEXT NOT NULL,
+                        fees TEXT NOT NULL,
+                        timestamp INTEGER NOT NULL,
+                        method TEXT,
+                        withdraw_tx_id TEXT,
+                        deposit_tx_id TEXT,
+                        spark INTEGER
+                    )`,
+          `INSERT INTO payments_new (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+           SELECT id, payment_type, status, CAST(amount AS TEXT), CAST(fees AS TEXT), timestamp, method, withdraw_tx_id, deposit_tx_id, spark
+           FROM payments`,
+          `DROP TABLE payments`,
+          `ALTER TABLE payments_new RENAME TO payments`,
+          `CREATE INDEX IF NOT EXISTS idx_payments_timestamp ON payments(timestamp DESC)`,
+        ],
+      },
     ];
   }
 }

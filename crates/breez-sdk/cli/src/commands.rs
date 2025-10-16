@@ -1,10 +1,11 @@
 use breez_sdk_spark::{
-    BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee, GetInfoRequest,
-    GetPaymentRequest, InputType, LightningAddressDetails, ListPaymentsRequest,
-    ListUnclaimedDepositsRequest, LnurlPayRequest, OnchainConfirmationSpeed,
-    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
-    SendPaymentRequest, SyncWalletRequest, parse,
+    AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee, GetInfoRequest,
+    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, OnchainConfirmationSpeed,
+    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
+    SyncWalletRequest, parse,
 };
 use clap::Parser;
 use rustyline::{
@@ -34,6 +35,26 @@ pub enum Command {
     Sync,
     /// Lists payments
     ListPayments {
+        /// Filter by payment type
+        #[arg(short, long)]
+        type_filter: Option<Vec<PaymentType>>,
+
+        /// Filter by payment status
+        #[arg(short, long)]
+        status_filter: Option<Vec<PaymentStatus>>,
+
+        /// Filter by payment details
+        #[arg(short, long)]
+        asset_filter: Option<AssetFilter>,
+
+        /// Only include payments created after this timestamp (inclusive)
+        #[arg(long)]
+        from_timestamp: Option<u64>,
+
+        /// Only include payments created before this timestamp (exclusive)
+        #[arg(long)]
+        to_timestamp: Option<u64>,
+
         /// Number of payments to show
         #[arg(short, long, default_value = "10")]
         limit: Option<u32>,
@@ -41,6 +62,10 @@ pub enum Command {
         /// Number of payments to skip
         #[arg(short, long, default_value = "0")]
         offset: Option<u32>,
+
+        /// Sort payments in ascending order
+        #[arg(long)]
+        sort_ascending: Option<bool>,
     },
 
     /// Receive
@@ -63,9 +88,14 @@ pub enum Command {
         #[arg(short = 'r', long)]
         payment_request: String,
 
-        /// Optional amount to pay in satoshis
+        /// Optional amount to pay. By default is denominated in sats.
+        /// If a token identifier is provided, the amount will be denominated in the token base units.
         #[arg(short = 'a', long)]
-        amount: Option<u64>,
+        amount: Option<u128>,
+
+        /// Optional token identifier. May only be provided if the payment request is a spark address.
+        #[arg(short = 't', long)]
+        token_identifier: Option<String>,
     },
 
     /// Pay using LNURL
@@ -136,6 +166,10 @@ pub enum Command {
     ListFiatCurrencies,
     /// List available fiat rates
     ListFiatRates,
+    GetTokensMetadata {
+        /// The token identifiers to get metadata for
+        token_identifiers: Vec<String>,
+    },
 }
 
 #[derive(Helper, Completer, Hinter, Validator)]
@@ -171,9 +205,27 @@ pub(crate) async fn execute_command(
             print_value(&value)?;
             Ok(true)
         }
-        Command::ListPayments { limit, offset } => {
+        Command::ListPayments {
+            limit,
+            offset,
+            type_filter,
+            status_filter,
+            asset_filter,
+            from_timestamp,
+            to_timestamp,
+            sort_ascending,
+        } => {
             let value = sdk
-                .list_payments(ListPaymentsRequest { limit, offset })
+                .list_payments(ListPaymentsRequest {
+                    limit,
+                    offset,
+                    type_filter,
+                    status_filter,
+                    asset_filter,
+                    from_timestamp,
+                    to_timestamp,
+                    sort_ascending,
+                })
                 .await?;
             print_value(&value)?;
             Ok(true)
@@ -285,11 +337,13 @@ pub(crate) async fn execute_command(
         Command::Pay {
             payment_request,
             amount,
+            token_identifier,
         } => {
             let prepared_payment = sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request,
-                    amount_sats: amount,
+                    amount,
+                    token_identifier,
                 })
                 .await;
 
@@ -303,12 +357,11 @@ pub(crate) async fn execute_command(
             let payment_options =
                 read_payment_options(prepare_response.payment_method.clone(), rl)?;
 
-            let send_payment_response = sdk
-                .send_payment(SendPaymentRequest {
-                    prepare_response,
-                    options: payment_options,
-                })
-                .await?;
+            let send_payment_response = Box::pin(sdk.send_payment(SendPaymentRequest {
+                prepare_response,
+                options: payment_options,
+            }))
+            .await?;
 
             print_value(&send_payment_response)?;
             Ok(true)
@@ -391,6 +444,13 @@ pub(crate) async fn execute_command(
         }
         Command::ListFiatRates => {
             let res = sdk.list_fiat_rates().await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::GetTokensMetadata { token_identifiers } => {
+            let res = sdk
+                .get_tokens_metadata(GetTokensMetadataRequest { token_identifiers })
+                .await?;
             print_value(&res)?;
             Ok(true)
         }

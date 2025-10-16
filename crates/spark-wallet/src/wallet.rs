@@ -19,12 +19,12 @@ use spark::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
         InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment,
         LightningService, QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager,
-        TokenService, TokenTransaction, Transfer, TransferService, TransferTokenOutput,
-        UnilateralExitService, Utxo,
+        TokenMetadata, TokenService, TokenTransaction, Transfer, TransferService,
+        TransferTokenOutput, UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
-    ssp::{ServiceProvider, SspTransfer},
+    ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     tree::{
         InMemoryTreeStore, LeavesReservation, SynchronousTreeService, TargetAmounts, TreeNode,
         TreeNodeId, TreeService, TreeStore, select_leaves_by_amounts, with_reserved_leaves,
@@ -214,6 +214,10 @@ impl SparkWallet {
 }
 
 impl SparkWallet {
+    pub fn get_identity_public_key(&self) -> PublicKey {
+        self.identity_public_key
+    }
+
     pub async fn list_leaves(&self) -> Result<WalletLeaves, SparkWalletError> {
         let leaves = self.tree_service.list_leaves().await?;
         Ok(leaves.into())
@@ -535,7 +539,7 @@ impl SparkWallet {
         }
     }
 
-    pub async fn get_spark_address(&self) -> Result<SparkAddress, SparkWalletError> {
+    pub fn get_spark_address(&self) -> Result<SparkAddress, SparkWalletError> {
         Ok(SparkAddress::new(
             self.identity_public_key,
             self.config.network,
@@ -567,6 +571,24 @@ impl SparkWallet {
             .query_pending_transfers(paging)
             .await?;
         create_transfers(transfers, &self.ssp_client, our_pubkey).await
+    }
+
+    /// Queries the SSP for user requests by their associated transfer IDs
+    /// and returns a map of transfer IDs to user requests
+    pub async fn query_ssp_user_requests(
+        &self,
+        transfer_ids: Vec<String>,
+    ) -> Result<HashMap<String, SspUserRequest>, SparkWalletError> {
+        let transfers = self.ssp_client.get_transfers(transfer_ids).await?;
+        Ok(transfers
+            .into_iter()
+            .filter_map(
+                |transfer| match (transfer.spark_id, transfer.user_request) {
+                    (Some(spark_id), Some(user_request)) => Some((spark_id, user_request)),
+                    _ => None,
+                },
+            )
+            .collect())
     }
 
     /// Signs a message with the identity key using ECDSA and returns the signature.
@@ -763,9 +785,9 @@ impl SparkWallet {
     pub async fn transfer_tokens(
         &self,
         outputs: Vec<TransferTokenOutput>,
-    ) -> Result<String, SparkWalletError> {
-        let tx_hash = self.token_service.transfer_tokens(outputs).await?;
-        Ok(tx_hash)
+    ) -> Result<TokenTransaction, SparkWalletError> {
+        let tx = self.token_service.transfer_tokens(outputs).await?;
+        Ok(tx)
     }
 
     pub async fn list_token_transactions(
@@ -796,6 +818,16 @@ impl SparkWallet {
             bitcoin::Network::from(self.config.network),
         )
         .to_string())
+    }
+
+    pub async fn get_tokens_metadata(
+        &self,
+        token_identifiers: &[&str],
+    ) -> Result<Vec<TokenMetadata>, SparkWalletError> {
+        self.token_service
+            .get_tokens_metadata(token_identifiers)
+            .await
+            .map_err(Into::into)
     }
 }
 

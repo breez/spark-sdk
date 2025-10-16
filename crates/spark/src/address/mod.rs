@@ -69,7 +69,7 @@ pub struct SatsPayment {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct TokensPayment {
     pub token_identifier: Option<AssetIdentifier>,
-    pub amount: Option<u64>,
+    pub amount: Option<u128>,
 }
 
 impl From<SparkAddressPaymentType> for ProtoPaymentType {
@@ -77,9 +77,7 @@ impl From<SparkAddressPaymentType> for ProtoPaymentType {
         match value {
             SparkAddressPaymentType::TokensPayment(tp) => {
                 ProtoPaymentType::TokensPayment(ProtoTokensPayment {
-                    amount: tp
-                        .amount
-                        .map(|amount| u128::to_be_bytes(amount as u128).to_vec()),
+                    amount: tp.amount.map(|amount| amount.to_be_bytes().to_vec()),
                     token_identifier: tp.token_identifier.map(|id| id.0.to_vec()),
                 })
             }
@@ -100,7 +98,7 @@ impl TryFrom<ProtoPaymentType> for SparkAddressPaymentType {
                         let amount_bytes: [u8; 16] = amount.try_into().map_err(|_| {
                             AddressError::InvalidPaymentIntent("Invalid amount".to_string())
                         })?;
-                        Some(u128::from_be_bytes(amount_bytes) as u64)
+                        Some(u128::from_be_bytes(amount_bytes))
                     }
                     None => None,
                 };
@@ -121,6 +119,7 @@ impl TryFrom<ProtoPaymentType> for SparkAddressPaymentType {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AssetIdentifier(Vec<u8>);
+
 impl std::fmt::Display for AssetIdentifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", hex::encode(&self.0))

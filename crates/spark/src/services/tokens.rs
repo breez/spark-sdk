@@ -116,16 +116,7 @@ impl TokenService {
 
         // Fetch metadata for owned tokens
         let token_identifiers = outputs_map.keys().cloned().collect();
-        let metadata = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .query_token_metadata(QueryTokenMetadataRequest {
-                token_identifiers,
-                ..Default::default()
-            })
-            .await?
-            .token_metadata;
+        let metadata = self.query_tokens_metadata_inner(token_identifiers).await?;
 
         if metadata.len() != outputs_map.keys().len() {
             return Err(ServiceError::Generic(
@@ -154,6 +145,76 @@ impl TokenService {
         Ok(())
     }
 
+    /// Returns the metadata for the given token identifiers.
+    ///
+    /// For token identifiers that are not found in the local cache, the metadata will be queried from the SE.
+    pub async fn get_tokens_metadata(
+        &self,
+        token_identifiers: &[&str],
+    ) -> Result<Vec<TokenMetadata>, ServiceError> {
+        let cached_outputs = { self.tokens_outputs.lock().await.clone() };
+
+        // Separate token identifiers into cached and uncached
+        let mut cached_metadata = Vec::new();
+        let mut uncached_identifiers = Vec::new();
+
+        for token_id in token_identifiers {
+            if let Some(outputs) = cached_outputs.get(*token_id) {
+                cached_metadata.push(outputs.metadata.clone());
+            } else {
+                uncached_identifiers.push(*token_id);
+            }
+        }
+
+        // Query metadata for uncached tokens
+        let mut queried_metadata = Vec::new();
+        if !uncached_identifiers.is_empty() {
+            queried_metadata = self.query_tokens_metadata(&uncached_identifiers).await?;
+        }
+
+        // Combine cached and queried metadata
+        let mut all_metadata = cached_metadata;
+        all_metadata.extend(queried_metadata);
+
+        Ok(all_metadata)
+    }
+
+    async fn query_tokens_metadata(
+        &self,
+        token_identifiers: &[&str],
+    ) -> Result<Vec<TokenMetadata>, ServiceError> {
+        let token_identifiers = token_identifiers
+            .iter()
+            .map(|id| {
+                bech32m_decode_token_id(id, Some(self.network))
+                    .map_err(|_| ServiceError::Generic("Invalid token id".to_string()))
+            })
+            .collect::<Result<Vec<Vec<u8>>, _>>()?;
+        let metadata = self.query_tokens_metadata_inner(token_identifiers).await?;
+        let metadata = metadata
+            .into_iter()
+            .map(|m| (m, self.network).try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(metadata)
+    }
+
+    async fn query_tokens_metadata_inner(
+        &self,
+        token_identifiers: Vec<Vec<u8>>,
+    ) -> Result<Vec<rpc::spark_token::TokenMetadata>, ServiceError> {
+        let metadata = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .query_token_metadata(QueryTokenMetadataRequest {
+                token_identifiers,
+                ..Default::default()
+            })
+            .await?
+            .token_metadata;
+        Ok(metadata)
+    }
+
     /// Returns owned token outputs from the local cache.
     pub async fn get_tokens_outputs(&self) -> HashMap<String, TokenOutputs> {
         self.tokens_outputs.lock().await.clone()
@@ -164,14 +225,16 @@ impl TokenService {
         filter: QueryTokenTransactionsFilter,
         paging: PagingFilter,
     ) -> Result<PagingResult<TokenTransaction>, ServiceError> {
-        let mut owner_public_keys = filter
-            .owner_public_keys
-            .iter()
-            .map(|k| k.serialize().to_vec())
-            .collect::<Vec<_>>();
-        if owner_public_keys.is_empty() {
-            owner_public_keys.push(self.signer.get_identity_public_key()?.serialize().to_vec());
-        }
+        let owner_public_keys = match filter.owner_public_keys {
+            Some(keys) => keys
+                .iter()
+                .map(|k| k.serialize().to_vec())
+                .collect::<Vec<_>>(),
+            None => vec![self.signer.get_identity_public_key()?.serialize().to_vec()],
+        };
+
+        // TODO: ask for ordering field to be added to QueryTokenTransactionsRequest
+        //  until then, PagingFilter's order is not being respected
         let response = self
             .operator_pool
             .get_coordinator()
@@ -237,7 +300,7 @@ impl TokenService {
     pub async fn transfer_tokens(
         &self,
         receiver_outputs: Vec<TransferTokenOutput>,
-    ) -> Result<String, ServiceError> {
+    ) -> Result<TokenTransaction, ServiceError> {
         // Validate parameters
         if receiver_outputs.is_empty() {
             return Err(ServiceError::Generic(
@@ -271,8 +334,11 @@ impl TokenService {
             )));
         }
 
+        // TODO: Support spark invoices (including updating compute_hash)
+        let spark_invoices = None;
+
         let partial_tx = self
-            .build_partial_tx(inputs.clone(), receiver_outputs)
+            .build_partial_tx(inputs.clone(), receiver_outputs, spark_invoices)
             .await?;
 
         let (txid, final_tx) = self
@@ -284,6 +350,7 @@ impl TokenService {
         let identity_public_key_bytes = self.signer.get_identity_public_key()?.serialize();
         final_tx
             .token_outputs
+            .clone()
             .into_iter()
             .enumerate()
             .filter(|(_, o)| o.owner_public_key == identity_public_key_bytes)
@@ -296,7 +363,7 @@ impl TokenService {
                 Ok(())
             })?;
 
-        Ok(txid)
+        (final_tx, self.network).try_into()
     }
 
     /// Selects tokens to match a given amount.
@@ -347,6 +414,7 @@ impl TokenService {
         &self,
         mut inputs: Vec<TokenOutputWithPrevOut>,
         mut receiver_outputs: Vec<TransferTokenOutput>,
+        spark_invoices: Option<Vec<SparkAddress>>,
     ) -> Result<rpc::spark_token::TokenTransaction, ServiceError> {
         // Ensure inputs are ordered by vout ascending so that the input indices
         // used for owner signatures match the order expected by the SO, which sorts
@@ -421,6 +489,13 @@ impl TokenService {
                 }
             }),
             token_inputs: Some(inputs),
+            invoice_attachments: spark_invoices
+                .unwrap_or_default()
+                .into_iter()
+                .map(|invoice| rpc::spark_token::InvoiceAttachment {
+                    spark_invoice: invoice.to_string(),
+                })
+                .collect(),
         };
 
         Ok(transaction)
@@ -768,7 +843,7 @@ pub(crate) fn bech32m_decode_token_id(
 
 const TOKEN_TRANSACTION_TRANSFER_TYPE: u32 = 3;
 
-trait HashableTokenTransaction {
+pub trait HashableTokenTransaction {
     fn compute_hash(&self, partial: bool) -> Result<Vec<u8>, ServiceError>;
 }
 
@@ -1029,6 +1104,7 @@ mod tests {
                         },
                     ],
                 })),
+                invoice_attachments: vec![],
             };
 
         let hash = tx.compute_hash(false).unwrap();
@@ -1133,6 +1209,7 @@ mod tests {
                         },
                     ],
                 })),
+                invoice_attachments: vec![],
             };
 
         let hash = tx.compute_hash(true).unwrap();

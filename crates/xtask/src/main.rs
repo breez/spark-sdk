@@ -1,3 +1,4 @@
+mod docs;
 mod package;
 
 use std::fs;
@@ -9,6 +10,7 @@ use cargo_metadata::{Metadata, MetadataCommand, Package};
 use clap::{Parser, Subcommand};
 use xshell::{Shell, cmd};
 
+use crate::docs::{DocSnippetsPackage, check_doc_snippets_cmd};
 use crate::package::{TargetPackage, package_cmd};
 
 const OUT_OF_WORKSPACE_PACKAGES: &[&str] = &["crates/breez-sdk/lnurl/Cargo.toml"];
@@ -99,6 +101,14 @@ enum Commands {
     /// Prepares packages
     Package { package: Option<TargetPackage> },
 
+    /// Check doc snippets
+    CheckDocSnippets {
+        #[arg(short = 'p', long = "package")]
+        package: Option<DocSnippetsPackage>,
+        #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+        skip_build: bool,
+    },
+
     /// Run integration tests (containers etc.)
     Itest {},
 }
@@ -122,6 +132,10 @@ fn main() -> Result<()> {
             package,
         } => build_cmd(release, target, package),
         Commands::Package { package } => package_cmd(package),
+        Commands::CheckDocSnippets {
+            package,
+            skip_build,
+        } => check_doc_snippets_cmd(package, skip_build),
         Commands::Itest {} => itest_cmd(),
     }
 }
@@ -142,6 +156,7 @@ fn test_cmd(package: Option<String>, doc: bool, rest: Vec<String>) -> Result<()>
     if package.is_none() {
         c.arg("--workspace");
         c.args(["--exclude", "spark-itest"]);
+        c.args(["--exclude", "breez-sdk-itest"]);
         c.args(workspace_exclude_wasm());
     }
     if let Some(pkg) = package {

@@ -106,6 +106,12 @@ message TokenTransaction {
     // determine which transaction should win in a race condition. Earlier
     // timestamps win over later ones.
     google.protobuf.Timestamp client_created_timestamp = 9;
+    // The spark invoices this transaction fulfills.
+    repeated InvoiceAttachment invoice_attachments = 10;
+}
+
+message InvoiceAttachment {
+    string spark_invoice = 1;
 }
 
 message SignatureWithIndex {
@@ -197,6 +203,8 @@ message QueryTokenOutputsRequest {
     repeated bytes issuer_public_keys = 2 [(validate.rules).repeated.items.bytes.len = 33];
     repeated bytes token_identifiers = 4 [(validate.rules).repeated.items.bytes.len = 32];
     spark.Network network = 3; // defaults to mainnet when no network is provided.
+    // For pagination
+    spark.PageRequest page_request = 5;
 }
 
 // Request constraints are combined using an AND relation.
@@ -228,6 +236,7 @@ message OutputWithPreviousTransactionData {
 
 message QueryTokenOutputsResponse {
     repeated OutputWithPreviousTransactionData outputs_with_previous_transaction_data = 1;
+    spark.PageResponse page_response = 2;
 }
 
 enum TokenTransactionStatus {

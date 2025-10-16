@@ -5,6 +5,7 @@ pub use breez_sdk_common::lnurl::pay::*;
 pub use breez_sdk_common::network::BitcoinNetwork;
 pub use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
+use std::collections::HashMap;
 
 #[frb(mirror(BitcoinAddressDetails))]
 pub struct _BitcoinAddressDetails {
@@ -90,6 +91,24 @@ pub struct _GetInfoRequest {
 #[frb(mirror(GetInfoResponse))]
 pub struct _GetInfoResponse {
     pub balance_sats: u64,
+    pub token_balances: HashMap<String, TokenBalance>,
+}
+
+#[frb(mirror(TokenBalance))]
+pub struct _TokenBalance {
+    pub balance: u128,
+    pub token_metadata: TokenMetadata,
+}
+
+#[frb(mirror(TokenMetadata))]
+pub struct _TokenMetadata {
+    pub identifier: String,
+    pub issuer_public_key: String,
+    pub name: String,
+    pub ticker: String,
+    pub decimals: u32,
+    pub max_supply: u128,
+    pub is_freezable: bool,
 }
 
 #[frb(mirror(GetPaymentRequest))]
@@ -121,8 +140,20 @@ pub enum _InputType {
 
 #[frb(mirror(ListPaymentsRequest))]
 pub struct _ListPaymentsRequest {
+    pub type_filter: Option<Vec<PaymentType>>,
+    pub status_filter: Option<Vec<PaymentStatus>>,
+    pub asset_filter: Option<AssetFilter>,
+    pub from_timestamp: Option<u64>,
+    pub to_timestamp: Option<u64>,
     pub offset: Option<u32>,
     pub limit: Option<u32>,
+    pub sort_ascending: Option<bool>,
+}
+
+#[frb(mirror(AssetFilter))]
+pub enum _AssetFilter {
+    Bitcoin,
+    Token { token_identifier: Option<String> },
 }
 
 #[frb(mirror(ListPaymentsResponse))]
@@ -187,13 +218,15 @@ pub struct _PrepareLnurlPayResponse {
 #[frb(mirror(PrepareSendPaymentRequest))]
 pub struct _PrepareSendPaymentRequest {
     pub payment_request: String,
-    pub amount_sats: Option<u64>,
+    pub amount: Option<u128>,
+    pub token_identifier: Option<String>,
 }
 
 #[frb(mirror(PrepareSendPaymentResponse))]
 pub struct _PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    pub amount_sats: u64,
+    pub amount: u128,
+    pub token_identifier: Option<String>,
 }
 
 #[frb(mirror(ReceivePaymentMethod))]
@@ -259,7 +292,8 @@ pub enum _SendPaymentMethod {
     },
     SparkAddress {
         address: String,
-        fee_sats: u64,
+        fee: u128,
+        token_identifier: Option<String>,
     },
 }
 
@@ -347,8 +381,8 @@ pub struct _Payment {
     pub id: String,
     pub payment_type: PaymentType,
     pub status: PaymentStatus,
-    pub amount: u64,
-    pub fees: u64,
+    pub amount: u128,
+    pub fees: u128,
     pub timestamp: u64,
     pub method: PaymentMethod,
     pub details: Option<PaymentDetails>,
@@ -357,6 +391,10 @@ pub struct _Payment {
 #[frb(mirror(PaymentDetails))]
 pub enum _PaymentDetails {
     Spark,
+    Token {
+        metadata: TokenMetadata,
+        tx_hash: String,
+    },
     Lightning {
         description: Option<String>,
         preimage: Option<String>,
@@ -383,6 +421,7 @@ pub struct _PaymentMetadata {
 pub enum _PaymentMethod {
     Lightning,
     Spark,
+    Token,
     Deposit,
     Withdraw,
     Unknown,
@@ -558,7 +597,7 @@ pub enum _SparkAddressPaymentType {
 #[frb(mirror(TokensPaymentDetails))]
 pub struct _TokensPaymentDetails {
     pub token_identifier: Option<String>,
-    pub amount: Option<u64>,
+    pub amount: Option<u128>,
 }
 
 #[frb(mirror(SatsPaymentDetails))]
@@ -706,4 +745,14 @@ pub enum _WaitForPaymentIdentifier {
 #[frb(mirror(WaitForPaymentResponse))]
 pub struct _WaitForPaymentResponse {
     pub payment: Payment,
+}
+
+#[frb(mirror(GetTokensMetadataRequest))]
+pub struct _GetTokensMetadataRequest {
+    pub token_identifiers: Vec<String>,
+}
+
+#[frb(mirror(GetTokensMetadataResponse))]
+pub struct _GetTokensMetadataResponse {
+    pub tokens_metadata: Vec<TokenMetadata>,
 }

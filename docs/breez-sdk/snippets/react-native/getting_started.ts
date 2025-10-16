@@ -4,10 +4,10 @@ import {
   Network,
   defaultStorage,
   SdkBuilder,
-  BreezSdk,
+  type BreezSdk,
   initLogging,
-  LogEntry,
-  SdkEvent,
+  type LogEntry,
+  type SdkEvent,
   Seed
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
@@ -19,7 +19,7 @@ const exampleGettingStarted = async () => {
   const seed = new Seed.Mnemonic({ mnemonic, passphrase: undefined })
 
   // Create the default config
-  let config = defaultConfig(Network.Mainnet)
+  const config = defaultConfig(Network.Mainnet)
   config.apiKey = '<breez api key>'
 
   const sdk = await connect({
@@ -37,11 +37,11 @@ const exampleGettingStartedAdvanced = async () => {
   const seed = new Seed.Mnemonic({ mnemonic, passphrase: undefined })
 
   // Create the default config
-  let config = defaultConfig(Network.Mainnet)
+  const config = defaultConfig(Network.Mainnet)
   config.apiKey = '<breez api key>'
 
   // Create the default storage
-  const storage = await defaultStorage(`${RNFS.DocumentDirectoryPath}/data`)
+  const storage = defaultStorage(`${RNFS.DocumentDirectoryPath}/data`)
 
   const builder = new SdkBuilder(config, seed, storage)
   // You can also pass your custom implementations:
@@ -58,7 +58,7 @@ const exampleFetchNodeInfo = async (sdk: BreezSdk) => {
   // ensureSynced: true will ensure the SDK is synced with the Spark network
   // before returning the balance
   const info = await sdk.getInfo({
-    ensureSynced: false,
+    ensureSynced: false
   })
   const balanceSats = info.balanceSats
   // ANCHOR_END: fetch-balance

@@ -119,13 +119,63 @@ class SqliteStorage {
 
   // ===== Payment Operations =====
 
-  listPayments(offset = null, limit = null) {
+  listPayments(request) {
     try {
-      // Handle null values by using default values
-      const actualOffset = offset !== null ? offset : 0;
-      const actualLimit = limit !== null ? limit : 4294967295; // u32::MAX
+      // Handle null/undefined values by using default values
+      const actualOffset = request.offset != null ? request.offset : 0;
+      const actualLimit = request.limit != null ? request.limit : 4294967295; // u32::MAX
 
-      const stmt = this.db.prepare(`
+      // Build WHERE clauses based on filters
+      const whereClauses = [];
+      const params = [];
+
+      // Filter by payment type
+      if (request.typeFilter && request.typeFilter.length > 0) {
+        const placeholders = request.typeFilter.map(() => "?").join(", ");
+        whereClauses.push(`p.payment_type IN (${placeholders})`);
+        params.push(...request.typeFilter);
+      }
+
+      // Filter by status
+      if (request.statusFilter && request.statusFilter.length > 0) {
+        const placeholders = request.statusFilter.map(() => "?").join(", ");
+        whereClauses.push(`p.status IN (${placeholders})`);
+        params.push(...request.statusFilter);
+      }
+
+      // Filter by timestamp range
+      if (request.fromTimestamp != null) {
+        whereClauses.push("p.timestamp >= ?");
+        params.push(request.fromTimestamp);
+      }
+
+      if (request.toTimestamp != null) {
+        whereClauses.push("p.timestamp < ?");
+        params.push(request.toTimestamp);
+      }
+
+      // Filter by payment details/method
+      if (request.assetFilter) {
+        const assetFilter = request.assetFilter;
+        if (assetFilter.type === "bitcoin") {
+          whereClauses.push("t.metadata IS NULL");
+        } else if (assetFilter.type === "token") {
+          whereClauses.push("t.metadata IS NOT NULL");
+          if (assetFilter.tokenIdentifier) {
+            whereClauses.push("json_extract(t.metadata, '$.identifier') = ?");
+            params.push(assetFilter.tokenIdentifier);
+          }
+        }
+      }
+
+      // Build the WHERE clause
+      const whereSql =
+        whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+
+      // Determine sort order
+      const orderDirection = request.sortAscending ? "ASC" : "DESC";
+
+      const query = `
             SELECT p.id
             ,       p.payment_type
             ,       p.status
@@ -142,19 +192,27 @@ class SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-             ORDER BY p.timestamp DESC 
+             ${whereSql}
+             ORDER BY p.timestamp ${orderDirection}
              LIMIT ? OFFSET ?
-            `);
+             `;
 
-      const rows = stmt.all(actualLimit, actualOffset);
+      params.push(actualLimit, actualOffset);
+      const stmt = this.db.prepare(query);
+      const rows = stmt.all(...params);
       return Promise.resolve(rows.map(this._rowToPayment.bind(this)));
     } catch (error) {
       return Promise.reject(
         new StorageError(
-          `Failed to list payments (offset: ${offset}, limit: ${limit}): ${error.message}`,
+          `Failed to list payments (request: ${JSON.stringify(request)}: ${
+            error.message
+          }`,
           error
         )
       );
@@ -178,21 +236,28 @@ class SqliteStorage {
           (payment_id, invoice, payment_hash, destination_pubkey, description, preimage) 
           VALUES (@id, @invoice, @paymentHash, @destinationPubkey, @description, @preimage)`
       );
+      const tokenInsert = this.db.prepare(
+        `INSERT OR REPLACE INTO payment_details_token 
+          (payment_id, metadata, tx_hash) 
+          VALUES (@id, @metadata, @txHash)`
+      );
       const transaction = this.db.transaction(() => {
         paymentInsert.run({
           id: payment.id,
           paymentType: payment.paymentType,
           status: payment.status,
-          amount: payment.amount,
-          fees: payment.fees,
+          amount: payment.amount.toString(),
+          fees: payment.fees.toString(),
           timestamp: payment.timestamp,
           method: payment.method ? JSON.stringify(payment.method) : null,
-          withdrawTxId: payment.details?.type === 'withdraw' ? payment.details.txId : null,
-          depositTxId: payment.details?.type === 'deposit' ? payment.details.txId : null,
-          spark: payment.details?.type === 'spark' ? 1 : null,
+          withdrawTxId:
+            payment.details?.type === "withdraw" ? payment.details.txId : null,
+          depositTxId:
+            payment.details?.type === "deposit" ? payment.details.txId : null,
+          spark: payment.details?.type === "spark" ? 1 : null,
         });
 
-        if (payment.details?.type === 'lightning') {
+        if (payment.details?.type === "lightning") {
           lightningInsert.run({
             id: payment.id,
             invoice: payment.details.invoice,
@@ -202,8 +267,16 @@ class SqliteStorage {
             preimage: payment.details.preimage,
           });
         }
+
+        if (payment.details?.type === "token") {
+          tokenInsert.run({
+            id: payment.id,
+            metadata: JSON.stringify(payment.details.metadata),
+            txHash: payment.details.txHash,
+          });
+        }
       });
-      
+
       transaction();
       return Promise.resolve();
     } catch (error) {
@@ -241,8 +314,11 @@ class SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              WHERE p.id = ?
             `);
@@ -292,8 +368,11 @@ class SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              WHERE l.invoice = ?
             `);
@@ -444,7 +523,7 @@ class SqliteStorage {
     let details = null;
     if (row.lightning_invoice) {
       details = {
-        type: 'lightning',
+        type: "lightning",
         invoice: row.lightning_invoice,
         paymentHash: row.lightning_payment_hash,
         destinationPubkey: row.lightning_destination_pubkey,
@@ -464,18 +543,24 @@ class SqliteStorage {
       }
     } else if (row.withdraw_tx_id) {
       details = {
-        type: 'withdraw',
+        type: "withdraw",
         txId: row.withdraw_tx_id,
       };
     } else if (row.deposit_tx_id) {
       details = {
-        type: 'deposit',
+        type: "deposit",
         txId: row.deposit_tx_id,
       };
     } else if (row.spark) {
       details = {
-        type: 'spark',
+        type: "spark",
         amount: row.spark,
+      };
+    } else if (row.token_metadata) {
+      details = {
+        type: "token",
+        metadata: JSON.parse(row.token_metadata),
+        txHash: row.token_tx_hash,
       };
     }
 
@@ -495,8 +580,8 @@ class SqliteStorage {
       id: row.id,
       paymentType: row.payment_type,
       status: row.status,
-      amount: row.amount,
-      fees: row.fees,
+      amount: BigInt(row.amount),
+      fees: BigInt(row.fees),
       timestamp: row.timestamp,
       method,
       details,

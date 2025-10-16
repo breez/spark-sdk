@@ -2,6 +2,7 @@ package example
 
 import (
 	"log"
+	"math/big"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
@@ -10,11 +11,11 @@ func PrepareSendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 	// ANCHOR: prepare-send-payment-lightning-bolt11
 	paymentRequest := "<bolt11 invoice>"
 	// Optionally set the amount you wish the pay the receiver
-	optionalAmountSats := uint64(5_000)
+	optionalAmountSats := new(big.Int).SetInt64(5_000)
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
 		PaymentRequest: paymentRequest,
-		AmountSats:     &optionalAmountSats,
+		Amount:         &optionalAmountSats,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
@@ -40,11 +41,11 @@ func PrepareSendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.
 	// ANCHOR: prepare-send-payment-onchain
 	paymentRequest := "<bitcoin address>"
 	// Set the amount you wish the pay the receiver
-	amountSats := uint64(50_000)
+	amountSats := new(big.Int).SetInt64(50_000)
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
 		PaymentRequest: paymentRequest,
-		AmountSats:     &amountSats,
+		Amount:         &amountSats,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
@@ -71,11 +72,11 @@ func PrepareSendPaymentSpark(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Pr
 	// ANCHOR: prepare-send-payment-spark
 	paymentRequest := "<spark address>"
 	// Set the amount you wish the pay the receiver
-	amountSats := uint64(50_000)
+	amountSats := new(big.Int).SetInt64(50_000)
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
 		PaymentRequest: paymentRequest,
-		AmountSats:     &amountSats,
+		Amount:         &amountSats,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
@@ -86,7 +87,7 @@ func PrepareSendPaymentSpark(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Pr
 	// If the fees are acceptable, continue to create the Send Payment
 	switch paymentMethod := response.PaymentMethod.(type) {
 	case breez_sdk_spark.SendPaymentMethodSparkAddress:
-		feeSats := paymentMethod.FeeSats
+		feeSats := paymentMethod.Fee
 		log.Printf("Fees: %v sats", feeSats)
 	}
 	// ANCHOR_END: prepare-send-payment-spark

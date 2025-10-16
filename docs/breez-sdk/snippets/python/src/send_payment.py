@@ -17,7 +17,7 @@ async def prepare_send_payment_lightning_bolt11(sdk: BreezSdk):
     optional_amount_sats = 5_000
     try:
         request = PrepareSendPaymentRequest(
-            payment_request=payment_request, amount_sats=optional_amount_sats
+            payment_request=payment_request, amount=optional_amount_sats
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
@@ -46,7 +46,7 @@ async def prepare_send_payment_onchain(sdk: BreezSdk):
     amount_sats = 50_000
     try:
         request = PrepareSendPaymentRequest(
-            payment_request=payment_request, amount_sats=amount_sats
+            payment_request=payment_request, amount=amount_sats
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
@@ -83,14 +83,14 @@ async def prepare_send_payment_spark(sdk: BreezSdk):
     amount_sats = 50_000
     try:
         request = PrepareSendPaymentRequest(
-            payment_request=payment_request, amount_sats=amount_sats
+            payment_request=payment_request, amount=amount_sats
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
         # If the fees are acceptable, continue to create the Send Payment
         if isinstance(prepare_response.payment_method, SendPaymentMethod.SPARK_ADDRESS):
-            fee_sats = prepare_response.payment_method.fee_sats
-            logging.debug(f"Fees: {fee_sats} sats")
+            fee = prepare_response.payment_method.fee
+            logging.debug(f"Fees: {fee} sats")
     except Exception as error:
         logging.error(error)
         raise

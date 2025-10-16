@@ -64,6 +64,23 @@ jobs:
 
       - name: Check git status
         uses: ./.github/actions/check-git-status
+  
+  breez-test:
+    name: Breez integration tests
+    runs-on: ubuntu-latest
+    env:
+      FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
+      FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Tests
+        run: make breez-itest
 
   wasm-clippy:
     name: Wasm clippy
@@ -117,8 +134,8 @@ jobs:
         working-directory: packages/flutter
         run: make generate-bindings-build-release
 
-  docs:
-    name: Docs
+  docs-rust:
+    name: Docs (rust)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -128,9 +145,145 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run Clippy
-        working-directory: docs/breez-sdk/snippets/rust
+      - name: Run Check doc snippets
         run: |
-          # Explicitly allow clippy::dead_code lint because the functions aren't called in the docs snippets
-          # Explicitly allow clippy::unused_variables because snippets might have to demonstrate how to get certain variables without using them afterward
-          cargo clippy -- --allow dead_code --allow unused_variables --deny warnings
+          cargo xtask check-doc-snippets -p rust
+
+  docs-wasm:
+    name: Docs (wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run Check doc snippets
+        run: |
+          cargo xtask check-doc-snippets -p wasm
+
+  docs-flutter:
+    name: Docs (flutter)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.29.0
+
+      - name: Run Check doc snippets
+        run: |
+          cargo xtask check-doc-snippets -p flutter
+
+  docs-go:
+    name: Docs (go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Check doc snippets
+        run: |
+          cargo xtask check-doc-snippets -p go
+
+  docs-python:
+    name: Docs (python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+
+      - name: Run Check doc snippets
+        run: |
+          cargo xtask check-doc-snippets -p python
+
+  docs-kotlin-mpp:
+    name: Docs (kotlin-mpp)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: "zulu"
+          java-version: "17"
+
+      - name: Run Check doc snippets
+        run: |
+          cargo xtask check-doc-snippets -p kotlin-mpp
+
+  docs-swift:
+    name: Docs (swift)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Check doc snippets
+        run: |
+          cargo xtask check-doc-snippets -p swift
+
+  docs-react-native:
+    name: Docs (react-native)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust targets (only iOS needed)
+        run: |
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run Check doc snippets
+        run: |
+          cargo xtask check-doc-snippets -p react-native

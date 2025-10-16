@@ -20,7 +20,7 @@ It’s a nodeless integration that offers a self-custodial, end-to-end solution 
 - [x] Send and receive via LNURL-pay & Lightning addresses 
 - [x] Send and receive Spark payments  
 - [x] On-chain interoperability
-- [x] Bindings to add popular languages & frameworks
+- [x] Bindings to all popular languages & frameworks
 - [x] Keys are only held by users
 - [x] Payments persistency including restore support
 - [x] Automatic claims

@@ -6,12 +6,16 @@ extension ConfigCopyWith on Config {
     Network? network,
     int? syncIntervalSecs,
     Fee? maxDepositClaimFee,
+    String? lnurlDomain,
+    bool? preferSparkOverLightning,
   }) {
     return Config(
       apiKey: apiKey ?? this.apiKey,
       network: network ?? this.network,
       syncIntervalSecs: syncIntervalSecs ?? this.syncIntervalSecs,
       maxDepositClaimFee: maxDepositClaimFee ?? this.maxDepositClaimFee,
+      lnurlDomain: lnurlDomain ?? this.lnurlDomain,
+      preferSparkOverLightning: preferSparkOverLightning ?? this.preferSparkOverLightning,
     );
   }
 }

@@ -1,13 +1,14 @@
+use std::path::{Path, PathBuf};
+
 use macros::async_trait;
 use rusqlite::{
     Connection, Row, ToSql, params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
 };
 use rusqlite_migration::{M, Migrations, SchemaVersion};
-use std::path::{Path, PathBuf};
 
 use crate::{
-    DepositInfo, LnurlPayInfo, PaymentDetails, PaymentMethod,
+    AssetFilter, DepositInfo, ListPaymentsRequest, LnurlPayInfo, PaymentDetails, PaymentMethod,
     error::DepositClaimError,
     persist::{PaymentMetadata, UpdateDepositPayload},
 };
@@ -162,6 +163,30 @@ impl SqliteStorage {
 
             CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice);
             ",
+            "CREATE TABLE payment_details_token (
+              payment_id TEXT PRIMARY KEY,
+              metadata TEXT NOT NULL,
+              tx_hash TEXT NOT NULL,
+              FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+            );",
+            // Migration to change payments amount and fees from INTEGER to TEXT
+            "CREATE TABLE payments_new (
+              id TEXT PRIMARY KEY,
+              payment_type TEXT NOT NULL,
+              status TEXT NOT NULL,
+              amount TEXT NOT NULL,
+              fees TEXT NOT NULL,
+              timestamp INTEGER NOT NULL,
+              method TEXT,
+              withdraw_tx_id TEXT,
+              deposit_tx_id TEXT,
+              spark INTEGER
+            );",
+            "INSERT INTO payments_new (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+             SELECT id, payment_type, status, CAST(amount AS TEXT), CAST(fees AS TEXT), timestamp, method, withdraw_tx_id, deposit_tx_id, spark
+             FROM payments;",
+            "DROP TABLE payments;",
+            "ALTER TABLE payments_new RENAME TO payments;",
         ]
     }
 }
@@ -180,12 +205,89 @@ impl From<rusqlite_migration::Error> for StorageError {
 
 #[async_trait]
 impl Storage for SqliteStorage {
+    #[allow(clippy::too_many_lines)]
     async fn list_payments(
         &self,
-        offset: Option<u32>,
-        limit: Option<u32>,
+        request: ListPaymentsRequest,
     ) -> Result<Vec<Payment>, StorageError> {
         let connection = self.get_connection()?;
+
+        // Build WHERE clauses based on filters
+        let mut where_clauses = Vec::new();
+        let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+
+        // Filter by payment type
+        if let Some(ref type_filter) = request.type_filter
+            && !type_filter.is_empty()
+        {
+            let placeholders = type_filter
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(", ");
+            where_clauses.push(format!("p.payment_type IN ({placeholders})"));
+            for payment_type in type_filter {
+                params.push(Box::new(payment_type.to_string()));
+            }
+        }
+
+        // Filter by status
+        if let Some(ref status_filter) = request.status_filter
+            && !status_filter.is_empty()
+        {
+            let placeholders = status_filter
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(", ");
+            where_clauses.push(format!("p.status IN ({placeholders})"));
+            for status in status_filter {
+                params.push(Box::new(status.to_string()));
+            }
+        }
+
+        // Filter by timestamp range
+        if let Some(from_timestamp) = request.from_timestamp {
+            where_clauses.push("p.timestamp >= ?".to_string());
+            params.push(Box::new(from_timestamp));
+        }
+
+        if let Some(to_timestamp) = request.to_timestamp {
+            where_clauses.push("p.timestamp < ?".to_string());
+            params.push(Box::new(to_timestamp));
+        }
+
+        // Filter by asset
+        if let Some(ref asset_filter) = request.asset_filter {
+            match asset_filter {
+                AssetFilter::Bitcoin => {
+                    where_clauses.push("t.metadata IS NULL".to_string());
+                }
+                AssetFilter::Token { token_identifier } => {
+                    where_clauses.push("t.metadata IS NOT NULL".to_string());
+                    if let Some(identifier) = token_identifier {
+                        // Filter by specific token identifier
+                        where_clauses
+                            .push("json_extract(t.metadata, '$.identifier') = ?".to_string());
+                        params.push(Box::new(identifier.clone()));
+                    }
+                }
+            }
+        }
+
+        // Build the WHERE clause
+        let where_sql = if where_clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", where_clauses.join(" AND "))
+        };
+
+        // Determine sort order
+        let order_direction = if request.sort_ascending.unwrap_or(false) {
+            "ASC"
+        } else {
+            "DESC"
+        };
 
         let query = format!(
             "SELECT p.id
@@ -204,18 +306,25 @@ impl Storage for SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-             ORDER BY p.timestamp DESC 
+             {}
+             ORDER BY p.timestamp {} 
              LIMIT {} OFFSET {}",
-            limit.unwrap_or(u32::MAX),
-            offset.unwrap_or(0)
+            where_sql,
+            order_direction,
+            request.limit.unwrap_or(u32::MAX),
+            request.offset.unwrap_or(0)
         );
 
         let mut stmt = connection.prepare(&query)?;
+        let param_refs: Vec<&dyn ToSql> = params.iter().map(std::convert::AsRef::as_ref).collect();
         let payments = stmt
-            .query_map(params![], map_payment)?
+            .query_map(param_refs.as_slice(), map_payment)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(payments)
     }
@@ -230,8 +339,8 @@ impl Storage for SqliteStorage {
                 payment.id,
                 payment.payment_type.to_string(),
                 payment.status.to_string(),
-                payment.amount,
-                payment.fees,
+                U128SqlWrapper(payment.amount),
+                U128SqlWrapper(payment.fees),
                 payment.timestamp,
                 payment.method,
             ],
@@ -254,6 +363,12 @@ impl Storage for SqliteStorage {
                 tx.execute(
                     "UPDATE payments SET spark = 1 WHERE id = ?",
                     params![payment.id],
+                )?;
+            }
+            Some(PaymentDetails::Token { metadata, tx_hash }) => {
+                tx.execute(
+                    "INSERT OR REPLACE INTO payment_details_token (payment_id, metadata, tx_hash) VALUES (?, ?, ?)",
+                    params![payment.id, serde_json::to_string(&metadata)?, tx_hash],
                 )?;
             }
             Some(PaymentDetails::Lightning {
@@ -355,8 +470,11 @@ impl Storage for SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              WHERE p.id = ?",
         )?;
@@ -388,8 +506,11 @@ impl Storage for SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              WHERE l.invoice = ?",
         )?;
@@ -480,8 +601,15 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
     let deposit_tx_id: Option<String> = row.get(8)?;
     let spark: Option<i32> = row.get(9)?;
     let lightning_invoice: Option<String> = row.get(10)?;
-    let details = match (lightning_invoice, withdraw_tx_id, deposit_tx_id, spark) {
-        (Some(invoice), _, _, _) => {
+    let token_metadata: Option<String> = row.get(16)?;
+    let details = match (
+        lightning_invoice,
+        withdraw_tx_id,
+        deposit_tx_id,
+        spark,
+        token_metadata,
+    ) {
+        (Some(invoice), _, _, _, _) => {
             let payment_hash: String = row.get(11)?;
             let destination_pubkey: String = row.get(12)?;
             let description: Option<String> = row.get(13)?;
@@ -497,9 +625,15 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 lnurl_pay_info,
             })
         }
-        (_, Some(tx_id), _, _) => Some(PaymentDetails::Withdraw { tx_id }),
-        (_, _, Some(tx_id), _) => Some(PaymentDetails::Deposit { tx_id }),
-        (_, _, _, Some(_)) => Some(PaymentDetails::Spark),
+        (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
+        (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
+        (_, _, _, Some(_), _) => Some(PaymentDetails::Spark),
+        (_, _, _, _, Some(metadata)) => Some(PaymentDetails::Token {
+            metadata: serde_json::from_str(&metadata).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(16, rusqlite::types::Type::Text, e.into())
+            })?,
+            tx_hash: row.get(17)?,
+        }),
         _ => None,
     };
     Ok(Payment {
@@ -510,8 +644,8 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         status: row.get::<_, String>(2)?.parse().map_err(|e: String| {
             rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, e.into())
         })?,
-        amount: row.get(3)?,
-        fees: row.get(4)?,
+        amount: row.get::<_, U128SqlWrapper>(3)?.0,
+        fees: row.get::<_, U128SqlWrapper>(4)?.0,
         timestamp: row.get(5)?,
         details,
         method: row.get(6)?,
@@ -608,6 +742,28 @@ impl FromSql for LnurlPayInfo {
     }
 }
 
+struct U128SqlWrapper(u128);
+
+impl ToSql for U128SqlWrapper {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        let string = self.0.to_string();
+        Ok(rusqlite::types::ToSqlOutput::from(string))
+    }
+}
+
+impl FromSql for U128SqlWrapper {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value {
+            ValueRef::Text(i) => {
+                let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
+                let integer = s.parse::<u128>().map_err(|_| FromSqlError::InvalidType)?;
+                Ok(U128SqlWrapper(integer))
+            }
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::SqliteStorage;
@@ -634,5 +790,53 @@ mod tests {
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
         crate::persist::tests::test_deposit_refunds(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_type_filtering() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_type_filter").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_payment_type_filtering(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_status_filtering() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_status_filter").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_payment_status_filtering(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_details_filtering() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_details_filter").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_asset_filtering(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_timestamp_filtering() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_timestamp_filter").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_timestamp_filtering(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_combined_filters() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_combined_filter").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_combined_filters(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_sort_order() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_sort_order").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_sort_order(Box::new(storage)).await;
     }
 }

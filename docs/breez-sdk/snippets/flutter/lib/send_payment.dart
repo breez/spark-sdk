@@ -8,7 +8,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentLightningBolt11(
   BigInt optionalAmountSats = BigInt.from(5000);
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest, amountSats: optionalAmountSats);
+      paymentRequest: paymentRequest, amount: optionalAmountSats);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -33,7 +33,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentOnchain(
   BigInt amountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest, amountSats: amountSats);
+      paymentRequest: paymentRequest, amount: amountSats);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -61,13 +61,13 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSpark(BreezSdk sdk) async {
   BigInt amountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest, amountSats: amountSats);
+      paymentRequest: paymentRequest, amount: amountSats);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
   final paymentMethod = response.paymentMethod;
   if (paymentMethod is SendPaymentMethod_SparkAddress) {
-    final feeSats = paymentMethod.feeSats;
+    final feeSats = paymentMethod.fee;
     print("Fees: $feeSats sats");
   }
   // ANCHOR_END: prepare-send-payment-spark

@@ -1,5 +1,5 @@
 import {
-  BreezSdk,
+  type BreezSdk,
   connect,
   defaultConfig,
   defaultStorage,
@@ -7,11 +7,11 @@ import {
   type LogEntry,
   type SdkEvent,
   SdkBuilder,
-  Seed
+  type Seed
 } from '@breeztech/breez-sdk-spark'
 
 // Init stub
-const init = async () => { }
+const init = async () => {}
 
 const exampleGettingStarted = async () => {
   // ANCHOR: init-sdk
@@ -26,7 +26,7 @@ const exampleGettingStarted = async () => {
   const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
 
   // Create the default config
-  let config = defaultConfig('mainnet')
+  const config = defaultConfig('mainnet')
   config.apiKey = '<breez api key>'
 
   // Connect to the SDK using the simplified connect method
@@ -49,7 +49,7 @@ const exampleGettingStartedAdvanced = async () => {
   const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
 
   // Create the default config
-  let config = defaultConfig('mainnet')
+  const config = defaultConfig('mainnet')
   config.apiKey = '<breez api key>'
 
   // Create the default storage
@@ -71,7 +71,7 @@ const exampleFetchNodeInfo = async (sdk: BreezSdk) => {
   const info = await sdk.getInfo({
     // ensureSynced: true will ensure the SDK is synced with the Spark network
     // before returning the balance
-    ensureSynced: false,
+    ensureSynced: false
   })
   const balanceSats = info.balanceSats
   // ANCHOR_END: fetch-balance
@@ -86,7 +86,7 @@ const exampleLogging = async () => {
   }
 
   const logger = new JsLogger()
-  initLogging(logger)
+  await initLogging(logger)
   // ANCHOR_END: logging
 }
 

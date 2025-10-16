@@ -5,7 +5,9 @@ use crate::Network;
 use crate::operator::OperatorPool;
 use crate::operator::rpc::spark::query_nodes_request::Source;
 use crate::operator::rpc::spark::transfer_filter::Participant;
-use crate::operator::rpc::spark::{QueryNodesRequest, TransferFilter, TreeNodeIds};
+use crate::operator::rpc::spark::{
+    QueryNodesRequest, StartTransferRequest, TransferFilter, TreeNodeIds,
+};
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{LeafKeyTweak, Transfer, map_signing_nonce_commitments};
 use crate::services::{ProofMap, TransferId, TransferStatus};
@@ -15,9 +17,10 @@ use crate::signer::{
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::paging::{PagingFilter, PagingResult, pager};
 use crate::utils::refund::{
-    RefundSignatures, SignedRefundTransactions, prepare_refund_so_signing_jobs,
+    RefundSignatures, SignRefundsParams, SignedRefundTransactions, prepare_refund_so_signing_jobs,
     sign_aggregate_refunds, sign_refunds,
 };
+use crate::utils::time::web_time_to_prost_timestamp;
 
 use bitcoin::Transaction;
 use bitcoin::hashes::{Hash, sha256};
@@ -29,6 +32,7 @@ use k256::Scalar;
 use prost::Message as ProstMessage;
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, trace};
+use web_time::SystemTime;
 
 use crate::{
     signer::Signer,
@@ -160,6 +164,7 @@ impl TransferService {
                 key_tweak_input_map,
                 leaf_key_tweaks,
                 receiver_id,
+                None,
             )
             .await?;
 
@@ -346,12 +351,13 @@ impl TransferService {
         Ok(leaf_tweaks_map)
     }
 
-    async fn prepare_transfer_package(
+    pub async fn prepare_transfer_package(
         &self,
         transfer_id: &TransferId,
         key_tweak_input_map: HashMap<Identifier, Vec<operator_rpc::spark::SendLeafKeyTweak>>,
         leaf_key_tweaks: &[LeafKeyTweak],
         receiver_public_key: &PublicKey,
+        payment_hash: Option<&sha256::Hash>,
     ) -> Result<operator_rpc::spark::TransferPackage, ServiceError> {
         let signing_commitments = self
             .operator_pool
@@ -388,15 +394,16 @@ impl TransferService {
             cpfp_signed_tx,
             direct_signed_tx,
             direct_from_cpfp_signed_tx,
-        } = sign_refunds(
-            &self.signer,
-            leaf_key_tweaks,
+        } = sign_refunds(SignRefundsParams {
+            signer: &self.signer,
+            leaves: leaf_key_tweaks,
             cpfp_signing_commitments,
             direct_signing_commitments,
             direct_from_cpfp_signing_commitments,
-            receiver_public_key,
-            self.network,
-        )
+            receiver_pubkey: receiver_public_key,
+            payment_hash,
+            network: self.network,
+        })
         .await?;
 
         let encrypted_key_tweaks = self.encrypt_key_tweaks(&key_tweak_input_map)?;
@@ -425,6 +432,47 @@ impl TransferService {
             self.sign_transfer_package(transfer_id, unsigned_transfer_package)?;
 
         Ok(signed_transfer_package)
+    }
+
+    pub async fn prepare_transfer_request(
+        &self,
+        transfer_id: &TransferId,
+        leaves: &[LeafKeyTweak],
+        receiver_public_key: &PublicKey,
+        refund_signatures: RefundSignatures,
+        payment_hash: Option<&sha256::Hash>,
+        expiry_time: Option<SystemTime>,
+    ) -> Result<StartTransferRequest, ServiceError> {
+        let key_tweak_input_map = self
+            .prepare_send_transfer_key_tweaks(
+                transfer_id,
+                receiver_public_key,
+                leaves,
+                refund_signatures,
+            )
+            .await?;
+
+        let transfer_package = self
+            .prepare_transfer_package(
+                transfer_id,
+                key_tweak_input_map,
+                leaves,
+                receiver_public_key,
+                payment_hash,
+            )
+            .await?;
+
+        Ok(StartTransferRequest {
+            transfer_id: transfer_id.to_string(),
+            owner_identity_public_key: self.signer.get_identity_public_key()?.serialize().to_vec(),
+            receiver_identity_public_key: receiver_public_key.serialize().to_vec(),
+            expiry_time: expiry_time
+                .map(|t| web_time_to_prost_timestamp(&t))
+                .transpose()
+                .map_err(|_| ServiceError::Generic("Invalid expiry time".to_string()))?,
+            transfer_package: Some(transfer_package),
+            ..Default::default()
+        })
     }
 
     /// Encrypts key tweaks for each signing operator using their identity public keys
@@ -604,7 +652,7 @@ impl TransferService {
             };
 
             leaves_to_claim.push(LeafKeyTweak {
-                node: leaf.leaf.clone(),
+                node: leaf.leaf_with_intermediate_txs(),
                 signing_key: leaf_key.clone(),
                 new_signing_key: PrivateKeySource::Derived(leaf.leaf.id.clone()),
             });
@@ -929,7 +977,7 @@ impl TransferService {
 
         // Prepare refund signing jobs for the coordinator
         let signing_jobs =
-            prepare_refund_so_signing_jobs(self.network, leaf_keys, &mut leaf_data_map)?;
+            prepare_refund_so_signing_jobs(self.network, leaf_keys, &mut leaf_data_map, true)?;
 
         // Call the coordinator to get signing results
         let result = self
@@ -1231,21 +1279,14 @@ impl TransferService {
         leaves: &[LeafKeyTweak],
         refund_signatures: RefundSignatures,
     ) -> Result<Transfer, ServiceError> {
-        let key_tweak_input_map = self
-            .prepare_send_transfer_key_tweaks(
+        let transfer_request = self
+            .prepare_transfer_request(
                 &transfer.id,
-                &transfer.receiver_identity_public_key,
                 leaves,
+                &transfer.receiver_identity_public_key,
                 refund_signatures,
-            )
-            .await?;
-
-        let transfer_package = self
-            .prepare_transfer_package(
-                &transfer.id,
-                key_tweak_input_map,
-                leaves,
-                &transfer.receiver_identity_public_key,
+                None,
+                None,
             )
             .await?;
 
@@ -1255,13 +1296,9 @@ impl TransferService {
             .client
             .finalize_transfer(
                 operator_rpc::spark::FinalizeTransferWithTransferPackageRequest {
-                    transfer_id: transfer.id.to_string(),
-                    owner_identity_public_key: self
-                        .signer
-                        .get_identity_public_key()?
-                        .serialize()
-                        .to_vec(),
-                    transfer_package: Some(transfer_package),
+                    transfer_id: transfer_request.transfer_id,
+                    owner_identity_public_key: transfer_request.owner_identity_public_key,
+                    transfer_package: transfer_request.transfer_package,
                 },
             )
             .await?;

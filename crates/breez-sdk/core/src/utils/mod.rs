@@ -1,4 +1,5 @@
 pub(crate) mod deposit_chain_syncer;
+pub(crate) mod token;
 pub(crate) mod utxo_fetcher;
 
 /// Runs a future until completion or until a shutdown signal is received.

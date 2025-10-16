@@ -127,15 +127,15 @@ impl From<TransferLeaf> for WalletTransferLeaf {
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct WalletLeaves {
     pub available: Vec<WalletLeaf>,
-    pub missing_from_operators: Vec<WalletLeaf>,
+    pub available_missing_from_operators: Vec<WalletLeaf>,
 }
 
 impl From<Leaves> for WalletLeaves {
     fn from(value: Leaves) -> Self {
         WalletLeaves {
             available: value.available.into_iter().map(Into::into).collect(),
-            missing_from_operators: value
-                .missing_from_operators
+            available_missing_from_operators: value
+                .available_missing_from_operators
                 .into_iter()
                 .map(Into::into)
                 .collect(),
@@ -148,7 +148,7 @@ impl WalletLeaves {
         self.available.iter().map(|leaf| leaf.value).sum()
     }
     pub fn missing_operators_balance(&self) -> u64 {
-        self.missing_from_operators
+        self.available_missing_from_operators
             .iter()
             .map(|leaf| leaf.value)
             .sum()
@@ -212,7 +212,8 @@ pub struct TokenBalance {
 #[derive(Default)]
 pub struct ListTokenTransactionsRequest {
     pub paging: Option<PagingFilter>,
-    pub owner_public_keys: Vec<PublicKey>,
+    /// If not provided, will use our own public key
+    pub owner_public_keys: Option<Vec<PublicKey>>,
     pub issuer_public_keys: Vec<PublicKey>,
     pub token_transaction_hashes: Vec<String>,
     pub token_ids: Vec<String>,

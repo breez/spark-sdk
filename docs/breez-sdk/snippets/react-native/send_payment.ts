@@ -14,7 +14,8 @@ const examplePrepareSendPaymentLightningBolt11 = async (sdk: BreezSdk) => {
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    amountSats: optionalAmountSats
+    amount: optionalAmountSats,
+    tokenIdentifier: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -37,7 +38,8 @@ const examplePrepareSendPaymentOnchain = async (sdk: BreezSdk) => {
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    amountSats
+    amount: amountSats,
+    tokenIdentifier: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -61,12 +63,13 @@ const examplePrepareSendPaymentSpark = async (sdk: BreezSdk) => {
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    amountSats
+    amount: amountSats,
+    tokenIdentifier: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
   if (prepareResponse.paymentMethod instanceof SendPaymentMethod.SparkAddress) {
-    const feeSats = prepareResponse.paymentMethod.inner.feeSats
+    const feeSats = prepareResponse.paymentMethod.inner.fee
     console.debug(`Fees: ${feeSats} sats`)
   }
   // ANCHOR_END: prepare-send-payment-spark
@@ -77,7 +80,7 @@ const exampleSendPaymentLightningBolt11 = async (
   prepareResponse: PrepareSendPaymentResponse
 ) => {
   // ANCHOR: send-payment-lightning-bolt11
-  const options = new SendPaymentOptions.Bolt11Invoice({ 
+  const options = new SendPaymentOptions.Bolt11Invoice({
     preferSpark: true,
     completionTimeoutSecs: 10
   })

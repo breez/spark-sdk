@@ -99,14 +99,19 @@ impl Swap {
             .collect::<Result<Vec<_>, ServiceError>>()?;
 
         let transfer_id = TransferId::generate();
+        let expiry_time = SystemTime::now() + SWAP_EXPIRY_DURATION;
         let receiver_public_key = self.ssp_client.identity_public_key();
         // Prepare leaf data map with refund signing information
         let mut leaf_data_map =
             prepare_leaf_refund_signing_data(&self.signer, &leaf_key_tweaks, receiver_public_key)
                 .await?;
 
-        let signing_jobs =
-            prepare_refund_so_signing_jobs(self.network, &leaf_key_tweaks, &mut leaf_data_map)?;
+        let signing_jobs = prepare_refund_so_signing_jobs(
+            self.network,
+            &leaf_key_tweaks,
+            &mut leaf_data_map,
+            false,
+        )?;
 
         // TODO: Migrate to new transfer package format. leaves_to_send is deprecated.
         let response = self
@@ -122,7 +127,7 @@ impl Swap {
                     .to_vec(),
                 receiver_identity_public_key: receiver_public_key.serialize().to_vec(),
                 expiry_time: Some(
-                    web_time_to_prost_timestamp(SystemTime::now() + SWAP_EXPIRY_DURATION)
+                    web_time_to_prost_timestamp(&expiry_time)
                         .map_err(|_| ServiceError::Generic("Invalid expiry time".to_string()))?,
                 ),
                 #[allow(deprecated)]

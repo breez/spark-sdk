@@ -1,5 +1,8 @@
 use core::fmt;
-use std::collections::HashMap;
+use std::{
+    collections::BTreeMap,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use serde::Serialize;
 use tokio::sync::RwLock;
@@ -59,14 +62,16 @@ pub trait EventListener: Send + Sync {
 
 /// Event publisher that manages event listeners
 pub struct EventEmitter {
-    listeners: RwLock<HashMap<String, Box<dyn EventListener>>>,
+    listener_index: AtomicU64,
+    listeners: RwLock<BTreeMap<String, Box<dyn EventListener>>>,
 }
 
 impl EventEmitter {
     /// Create a new event emitter
     pub fn new() -> Self {
         Self {
-            listeners: RwLock::new(HashMap::new()),
+            listener_index: AtomicU64::new(0),
+            listeners: RwLock::new(BTreeMap::new()),
         }
     }
 
@@ -80,7 +85,8 @@ impl EventEmitter {
     ///
     /// A unique identifier for the listener, which can be used to remove it later
     pub async fn add_listener(&self, listener: Box<dyn EventListener>) -> String {
-        let id = Uuid::new_v4().to_string();
+        let index = self.listener_index.fetch_add(1, Ordering::Relaxed);
+        let id = format!("listener_{}-{}", index, Uuid::new_v4());
         let mut listeners = self.listeners.write().await;
         listeners.insert(id.clone(), listener);
         id

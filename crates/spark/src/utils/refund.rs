@@ -2,18 +2,22 @@ use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use bitcoin::hashes::Hash;
+use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
-use bitcoin::{OutPoint, Sequence, Transaction};
+use bitcoin::{Sequence, Transaction};
 use frost_core::round2::SignatureShare;
 use frost_secp256k1_tr::round1::SigningCommitments;
 use frost_secp256k1_tr::{Identifier, Secp256K1Sha256TR};
-use tracing::trace;
+use tracing::{info, trace};
 
+use crate::core::{current_sequence, next_lightning_htlc_sequence};
 use crate::services::{LeafRefundSigningData, ServiceError};
 use crate::signer::{SignFrostRequest, Signer, SignerError};
 use crate::tree::{TreeNode, TreeNodeId};
 use crate::utils::frost::{SignAggregateFrostParams, sign_aggregate_frost};
+use crate::utils::htlc_transactions::{
+    CreateLightningHtlcRefundTxsParams, create_lightning_htlc_refund_txs,
+};
 use crate::utils::transactions::{RefundTransactions, create_refund_txs};
 use crate::{Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak};
 
@@ -30,8 +34,18 @@ pub struct RefundTxConstructor<'a> {
     pub refund_tx: Transaction,
     pub cpfp_sequence: Sequence,
     pub direct_sequence: Sequence,
-    pub direct_outpoint: Option<OutPoint>,
     pub receiving_pubkey: &'a PublicKey,
+}
+
+pub struct SignRefundsParams<'a> {
+    pub signer: &'a Arc<dyn Signer>,
+    pub leaves: &'a [LeafKeyTweak],
+    pub cpfp_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
+    pub direct_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
+    pub direct_from_cpfp_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
+    pub receiver_pubkey: &'a PublicKey,
+    pub payment_hash: Option<&'a sha256::Hash>,
+    pub network: Network,
 }
 
 pub struct SignedRefundTransactions {
@@ -86,21 +100,27 @@ pub async fn prepare_leaf_refund_signing_data(
 }
 
 pub async fn sign_refunds(
-    signer: &Arc<dyn Signer>,
-    leaves: &[LeafKeyTweak],
-    cpfp_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
-    direct_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
-    direct_from_cpfp_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
-    receiver_pubkey: &PublicKey,
-    network: Network,
+    params: SignRefundsParams<'_>,
 ) -> Result<SignedRefundTransactions, SignerError> {
+    let SignRefundsParams {
+        signer,
+        leaves,
+        cpfp_signing_commitments,
+        direct_signing_commitments,
+        direct_from_cpfp_signing_commitments,
+        receiver_pubkey,
+        payment_hash,
+        network,
+    } = params;
+    let identity_pubkey = signer.get_identity_public_key()?;
+
     let mut cpfp_signed_refunds = Vec::with_capacity(leaves.len());
     let mut direct_signed_refunds = Vec::with_capacity(leaves.len());
     let mut direct_from_cpfp_signed_refunds = Vec::with_capacity(leaves.len());
 
     for (i, leaf) in leaves.iter().enumerate() {
-        let node_tx = leaf.node.node_tx.clone();
-        let direct_tx = leaf.node.direct_tx.clone();
+        let node_tx = &leaf.node.node_tx;
+        let direct_tx = leaf.node.direct_tx.as_ref();
 
         let old_sequence = leaf
             .node
@@ -109,29 +129,46 @@ pub async fn sign_refunds(
             .ok_or(SignerError::Generic("No refund transaction".to_string()))?
             .input[0]
             .sequence;
-        let (cpfp_sequence, direct_sequence) = next_sequence(old_sequence).ok_or(
-            SignerError::Generic("Failed to get next sequence".to_string()),
-        )?;
-        let direct_outpoint = direct_tx.as_ref().map(|tx| OutPoint {
-            txid: tx.compute_txid(),
-            vout: 0,
-        });
 
         let RefundTransactions {
             cpfp_tx: cpfp_refund_tx,
             direct_tx: direct_refund_tx,
             direct_from_cpfp_tx: direct_from_cpfp_refund_tx,
-        } = create_refund_txs(
-            cpfp_sequence,
-            direct_sequence,
-            OutPoint {
-                txid: node_tx.compute_txid(),
-                vout: 0,
-            },
-            direct_outpoint,
-            leaf.node.value,
-            receiver_pubkey,
-            network,
+        } = match payment_hash {
+            Some(payment_hash) => {
+                let (cpfp_sequence, direct_sequence) = next_lightning_htlc_sequence(old_sequence)
+                    .ok_or(SignerError::Generic(
+                    "Failed to get next lightning HTLC sequences".to_string(),
+                ))?;
+                create_lightning_htlc_refund_txs(CreateLightningHtlcRefundTxsParams {
+                    node_tx,
+                    direct_tx,
+                    cpfp_sequence,
+                    direct_sequence,
+                    hash: payment_hash,
+                    hash_lock_pubkey: receiver_pubkey,
+                    sequence_lock_pubkey: &identity_pubkey,
+                    network,
+                })?
+            }
+            None => {
+                let (cpfp_sequence, direct_sequence) = next_sequence(old_sequence).ok_or(
+                    SignerError::Generic("Failed to get next sequence".to_string()),
+                )?;
+                create_refund_txs(
+                    node_tx,
+                    direct_tx,
+                    cpfp_sequence,
+                    direct_sequence,
+                    receiver_pubkey,
+                    network,
+                )
+            }
+        };
+
+        info!(
+            "sign_refunds for leaf {}: Current refund sequence: {old_sequence}, next sequence: {}",
+            leaf.node.id, cpfp_refund_tx.input[0].sequence
         );
 
         let signing_public_key =
@@ -140,7 +177,7 @@ pub async fn sign_refunds(
         let cpfp_signed_tx = sign_refund(
             signer,
             leaf,
-            &node_tx,
+            node_tx,
             cpfp_refund_tx,
             signing_public_key,
             cpfp_signing_commitments[i].clone(),
@@ -164,7 +201,7 @@ pub async fn sign_refunds(
             let direct_refund_tx = sign_refund(
                 signer,
                 leaf,
-                &direct_tx,
+                direct_tx,
                 direct_refund_tx,
                 signing_public_key,
                 direct_signing_commitments[i].clone(),
@@ -176,7 +213,7 @@ pub async fn sign_refunds(
             let direct_from_cpfp_signed_tx = sign_refund(
                 signer,
                 leaf,
-                &node_tx,
+                node_tx,
                 direct_from_cpfp_refund_tx,
                 signing_public_key,
                 direct_from_cpfp_signing_commitments[i].clone(),
@@ -383,20 +420,18 @@ pub fn prepare_refund_so_signing_jobs(
     network: Network,
     leaves: &[LeafKeyTweak],
     leaf_data_map: &mut HashMap<TreeNodeId, LeafRefundSigningData>,
+    is_for_claim: bool,
 ) -> Result<Vec<crate::operator::rpc::spark::LeafRefundTxSigningJob>, ServiceError> {
     prepare_refund_so_signing_jobs_with_tx_constructor(
         leaves,
         leaf_data_map,
+        is_for_claim,
         |refund_tx_constructor| {
             create_refund_txs(
+                &refund_tx_constructor.node.node_tx,
+                refund_tx_constructor.node.direct_tx.as_ref(),
                 refund_tx_constructor.cpfp_sequence,
                 refund_tx_constructor.direct_sequence,
-                OutPoint {
-                    txid: refund_tx_constructor.node.node_tx.compute_txid(),
-                    vout: 0,
-                },
-                refund_tx_constructor.direct_outpoint,
-                refund_tx_constructor.node.value,
                 refund_tx_constructor.receiving_pubkey,
                 network,
             )
@@ -408,6 +443,7 @@ pub fn prepare_refund_so_signing_jobs(
 pub fn prepare_refund_so_signing_jobs_with_tx_constructor<F>(
     leaves: &[LeafKeyTweak],
     leaf_data_map: &mut HashMap<TreeNodeId, LeafRefundSigningData>,
+    is_for_claim: bool,
     refund_tx_constructor: F,
 ) -> Result<Vec<crate::operator::rpc::spark::LeafRefundTxSigningJob>, ServiceError>
 where
@@ -426,13 +462,14 @@ where
             .refund_tx
             .clone()
             .ok_or(ServiceError::Generic("No refund tx".to_string()))?;
-        let (cpfp_sequence, direct_sequence) = next_sequence(refund_tx.input[0].sequence).ok_or(
-            ServiceError::Generic("Failed to get next sequence".to_string()),
-        )?;
-        let direct_outpoint = leaf.node.direct_tx.as_ref().map(|tx| OutPoint {
-            txid: tx.compute_txid(),
-            vout: 0,
-        });
+        let old_sequence = refund_tx.input[0].sequence;
+        let (cpfp_sequence, direct_sequence) = if is_for_claim {
+            current_sequence(old_sequence)
+        } else {
+            next_sequence(old_sequence).ok_or(ServiceError::Generic(
+                "Failed to get next sequence".to_string(),
+            ))?
+        };
 
         let RefundTransactions {
             cpfp_tx: cpfp_refund_tx,
@@ -444,9 +481,13 @@ where
             refund_tx,
             cpfp_sequence,
             direct_sequence,
-            direct_outpoint,
             receiving_pubkey: &refund_signing_data.receiving_public_key,
         });
+
+        info!(
+            "prepare_refund_so_signing_jobs_with_tx_constructor for leaf {}: Current refund sequence: {old_sequence}, next sequence: {}",
+            leaf.node.id, cpfp_refund_tx.input[0].sequence
+        );
 
         let direct_refund_tx_signing_job = if let Some(direct_refund_tx) = &direct_refund_tx {
             Some(crate::operator::rpc::spark::SigningJob {

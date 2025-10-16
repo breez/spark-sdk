@@ -109,8 +109,42 @@ class MigrationManager {
               unique: false,
             });
           }
-        }
-      }
+        },
+      },
+      {
+        name: "Convert amount and fees from Number to BigInt for u128 support",
+        upgrade: (db, transaction) => {
+          const store = transaction.objectStore("payments");
+          const getAllRequest = store.getAll();
+
+          getAllRequest.onsuccess = () => {
+            const payments = getAllRequest.result;
+            let updated = 0;
+
+            payments.forEach((payment) => {
+              // Convert amount and fees from Number to BigInt if they're numbers
+              let needsUpdate = false;
+
+              if (typeof payment.amount === "number") {
+                payment.amount = BigInt(Math.round(payment.amount));
+                needsUpdate = true;
+              }
+
+              if (typeof payment.fees === "number") {
+                payment.fees = BigInt(Math.round(payment.fees));
+                needsUpdate = true;
+              }
+
+              if (needsUpdate) {
+                store.put(payment);
+                updated++;
+              }
+            });
+
+            console.log(`Migrated ${updated} payment records to BigInt format`);
+          };
+        },
+      },
     ];
   }
 }
@@ -134,7 +168,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 1; // Current schema version
+    this.dbVersion = 3; // Current schema version
   }
 
   /**
@@ -292,14 +326,14 @@ class IndexedDBStorage {
 
   // ===== Payment Operations =====
 
-  async listPayments(offset = null, limit = null) {
+  async listPayments(request) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
 
     // Handle null values by using default values
-    const actualOffset = offset !== null ? offset : 0;
-    const actualLimit = limit !== null ? limit : 4294967295; // u32::MAX
+    const actualOffset = request.offset !== null ? request.offset : 0;
+    const actualLimit = request.limit !== null ? request.limit : 4294967295; // u32::MAX
 
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction(
@@ -313,14 +347,27 @@ class IndexedDBStorage {
       let count = 0;
       let skipped = 0;
 
-      // Use cursor to iterate through payments ordered by timestamp (descending)
-      const request = paymentStore.index("timestamp").openCursor(null, "prev");
+      // Determine sort order - "prev" for descending (default), "next" for ascending
+      const cursorDirection = request.sortAscending ? "next" : "prev";
 
-      request.onsuccess = (event) => {
+      // Use cursor to iterate through payments ordered by timestamp
+      const cursorRequest = paymentStore
+        .index("timestamp")
+        .openCursor(null, cursorDirection);
+
+      cursorRequest.onsuccess = (event) => {
         const cursor = event.target.result;
 
         if (!cursor || count >= actualLimit) {
           resolve(payments);
+          return;
+        }
+
+        const payment = cursor.value;
+
+        // Apply filters
+        if (!this._matchesFilters(payment, request)) {
+          cursor.continue();
           return;
         }
 
@@ -329,8 +376,6 @@ class IndexedDBStorage {
           cursor.continue();
           return;
         }
-
-        const payment = cursor.value;
 
         // Get metadata for this payment
         const metadataRequest = metadataStore.get(payment.id);
@@ -352,13 +397,13 @@ class IndexedDBStorage {
         };
       };
 
-      request.onerror = () => {
+      cursorRequest.onerror = () => {
         reject(
           new StorageError(
-            `Failed to list payments: ${
-              request.error?.message || "Unknown error"
+            `Failed to list payments (request: ${JSON.stringify(request)}: ${
+              cursorRequest.error?.message || "Unknown error"
             }`,
-            request.error
+            cursorRequest.error
           )
         );
       };
@@ -698,6 +743,79 @@ class IndexedDBStorage {
 
   // ===== Private Helper Methods =====
 
+  _matchesFilters(payment, request) {
+    // Filter by payment type
+    if (request.typeFilter && request.typeFilter.length > 0) {
+      if (!request.typeFilter.includes(payment.paymentType)) {
+        return false;
+      }
+    }
+
+    // Filter by status
+    if (request.statusFilter && request.statusFilter.length > 0) {
+      if (!request.statusFilter.includes(payment.status)) {
+        return false;
+      }
+    }
+
+    // Filter by timestamp range
+    if (request.fromTimestamp !== null && request.fromTimestamp !== undefined) {
+      if (payment.timestamp < request.fromTimestamp) {
+        return false;
+      }
+    }
+
+    if (request.toTimestamp !== null && request.toTimestamp !== undefined) {
+      if (payment.timestamp >= request.toTimestamp) {
+        return false;
+      }
+    }
+
+    // Filter by payment details/method
+    if (request.assetFilter) {
+      const assetFilter = request.assetFilter;
+      let details = null;
+
+      // Parse details if it's a string (stored in IndexedDB)
+      if (payment.details && typeof payment.details === "string") {
+        try {
+          details = JSON.parse(payment.details);
+        } catch (e) {
+          // If parsing fails, treat as no details
+          details = null;
+        }
+      } else {
+        details = payment.details;
+      }
+
+      if (!details) {
+        return false;
+      }
+
+      if (assetFilter.type === "bitcoin" && details.type === "token") {
+        return false;
+      }
+
+      if (assetFilter.type === "token") {
+        if (details.type !== "token") {
+          return false;
+        }
+
+        // Check token identifier if specified
+        if (assetFilter.tokenIdentifier) {
+          if (
+            !details.metadata ||
+            details.metadata.identifier !== assetFilter.tokenIdentifier
+          ) {
+            return false;
+          }
+        }
+      }
+    }
+
+    return true;
+  }
+
   _mergePaymentMetadata(payment, metadata) {
     let details = null;
     if (payment.details) {
@@ -724,7 +842,12 @@ class IndexedDBStorage {
     }
 
     // If this is a Lightning payment and we have lnurl_pay_info, add it to details
-    if (metadata && metadata.lnurlPayInfo && details && details.type == 'lightning') {
+    if (
+      metadata &&
+      metadata.lnurlPayInfo &&
+      details &&
+      details.type == "lightning"
+    ) {
       try {
         details.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
         if (metadata.lnurlDescription && !details.description) {
@@ -751,7 +874,10 @@ class IndexedDBStorage {
   }
 }
 
-export async function createDefaultStorage(dbName = "BreezSdkSpark", logger = null) {
+export async function createDefaultStorage(
+  dbName = "BreezSdkSpark",
+  logger = null
+) {
   const storage = new IndexedDBStorage(dbName, logger);
   await storage.initialize();
   return storage;

@@ -134,7 +134,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
         &self,
     ) -> Result<Option<RecoverLnurlPayResponse>, LnurlServerError> {
         // Get the pubkey from the wallet
-        let spark_address = self.wallet.get_spark_address().await.map_err(|e| {
+        let spark_address = self.wallet.get_spark_address().map_err(|e| {
             LnurlServerError::SigningError(format!("Failed to get spark address: {e}"))
         })?;
         let pubkey = spark_address.identity_public_key;
@@ -183,7 +183,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
         request: &RegisterLightningAddressRequest,
     ) -> Result<RegisterLnurlPayResponse, LnurlServerError> {
         // Get the pubkey from the wallet
-        let spark_address = self.wallet.get_spark_address().await.map_err(|e| {
+        let spark_address = self.wallet.get_spark_address().map_err(|e| {
             LnurlServerError::SigningError(format!("Failed to get spark address: {e}"))
         })?;
         let pubkey = spark_address.identity_public_key;
@@ -236,7 +236,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
         request: &UnregisterLightningAddressRequest,
     ) -> Result<(), LnurlServerError> {
         // Get the pubkey from the wallet
-        let spark_address = self.wallet.get_spark_address().await.map_err(|e| {
+        let spark_address = self.wallet.get_spark_address().map_err(|e| {
             LnurlServerError::SigningError(format!("Failed to get spark address: {e}"))
         })?;
         let pubkey = spark_address.identity_public_key;

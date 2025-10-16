@@ -642,6 +642,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "breez-sdk-itest"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bitcoin",
+ "breez-sdk-spark",
+ "dotenvy",
+ "hex",
+ "macros",
+ "rand 0.8.5",
+ "reqwest",
+ "rstest",
+ "rstest_reuse",
+ "serde",
+ "serde_json",
+ "tempdir",
+ "test-log",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "breez-sdk-spark"
 version = "0.1.0"
 dependencies = [
@@ -1736,19 +1760,6 @@ name = "glob"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
-
-[[package]]
-name = "gloo-utils"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b5555354113b18c547c1d3a98fbf7fb32a9ff4f6fa112ce823a21641a0ba3aa"
-dependencies = [
- "js-sys",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "web-sys",
-]
 
 [[package]]
 name = "goblin"
@@ -3733,6 +3744,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rstest_reuse"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3a8fb4672e840a587a66fc577a5491375df51ddb88f2a2c2a792598c326fe14"
+dependencies = [
+ "quote",
+ "rand 0.8.5",
+ "syn 2.0.105",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5203,9 +5225,8 @@ version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d0f2208feeb5f7a6edb15a2389c14cd42480ef6417318316bb866da5806a61d"
 dependencies = [
- "gloo-utils",
  "serde",
- "serde_json",
+ "serde-wasm-bindgen",
  "tsify-next-macros",
  "wasm-bindgen",
 ]

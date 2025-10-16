@@ -24,8 +24,7 @@ use tonic::metadata::Ascii;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
-use tracing::error;
-use tracing::trace;
+use tracing::{debug, error};
 
 pub struct QueryAllNodesRequest {
     pub include_parents: bool,
@@ -60,6 +59,10 @@ impl SparkRpcClient {
         &self,
         req: FinalizeNodeSignaturesRequest,
     ) -> Result<FinalizeNodeSignaturesResponse> {
+        debug!(
+            "Calling finalize_node_signatures_v2 with request: {:?}",
+            req
+        );
         Ok(self
             .spark_service_client()
             .await?
@@ -72,6 +75,7 @@ impl SparkRpcClient {
         &self,
         req: GenerateDepositAddressRequest,
     ) -> Result<GenerateDepositAddressResponse> {
+        debug!("Calling generate_deposit_address with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -84,6 +88,10 @@ impl SparkRpcClient {
         &self,
         req: QueryUnusedDepositAddressesRequest,
     ) -> Result<QueryUnusedDepositAddressesResponse> {
+        debug!(
+            "Calling query_unused_deposit_addresses with request: {:?}",
+            req
+        );
         Ok(self
             .spark_service_client()
             .await?
@@ -96,6 +104,10 @@ impl SparkRpcClient {
         &self,
         req: StartDepositTreeCreationRequest,
     ) -> Result<StartDepositTreeCreationResponse> {
+        debug!(
+            "Calling start_deposit_tree_creation with request: {:?}",
+            req
+        );
         Ok(self
             .spark_service_client()
             .await?
@@ -108,7 +120,7 @@ impl SparkRpcClient {
         &self,
         req: StartTransferRequest,
     ) -> Result<StartTransferResponse> {
-        trace!("Calling start_transfer with request: {:?}", req);
+        debug!("Calling start_transfer with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -121,6 +133,7 @@ impl SparkRpcClient {
         &self,
         req: FinalizeTransferWithTransferPackageRequest,
     ) -> Result<FinalizeTransferResponse> {
+        debug!("Calling finalize_transfer with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -133,6 +146,7 @@ impl SparkRpcClient {
         &self,
         req: CancelTransferRequest,
     ) -> Result<CancelTransferResponse> {
+        debug!("Calling cancel_transfer with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -145,7 +159,7 @@ impl SparkRpcClient {
         &self,
         req: TransferFilter,
     ) -> Result<QueryTransfersResponse> {
-        trace!("Querying pending transfers with filter: {:?}", req);
+        debug!("Querying pending transfers with filter: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -155,6 +169,7 @@ impl SparkRpcClient {
     }
 
     pub async fn query_all_transfers(&self, req: TransferFilter) -> Result<QueryTransfersResponse> {
+        debug!("Calling query_all_transfers with filter: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -167,6 +182,7 @@ impl SparkRpcClient {
         &self,
         req: ClaimTransferTweakKeysRequest,
     ) -> Result<()> {
+        debug!("Calling claim_transfer_tweak_keys with request: {:?}", req);
         self.spark_service_client()
             .await?
             .claim_transfer_tweak_keys(req)
@@ -179,6 +195,10 @@ impl SparkRpcClient {
         &self,
         req: ClaimTransferSignRefundsRequest,
     ) -> Result<ClaimTransferSignRefundsResponse> {
+        debug!(
+            "Calling claim_transfer_sign_refunds_v2 with request: {:?}",
+            req
+        );
         Ok(self
             .spark_service_client()
             .await?
@@ -188,6 +208,7 @@ impl SparkRpcClient {
     }
 
     pub async fn store_preimage_share(&self, req: StorePreimageShareRequest) -> Result<()> {
+        debug!("Calling store_preimage_share with request: {:?}", req);
         self.spark_service_client()
             .await?
             .store_preimage_share(req)
@@ -200,6 +221,7 @@ impl SparkRpcClient {
         &self,
         req: GetSigningCommitmentsRequest,
     ) -> Result<GetSigningCommitmentsResponse> {
+        debug!("Calling get_signing_commitments with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -212,6 +234,7 @@ impl SparkRpcClient {
         &self,
         req: CooperativeExitRequest,
     ) -> Result<CooperativeExitResponse> {
+        debug!("Calling cooperative_exit_v2 with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -224,6 +247,7 @@ impl SparkRpcClient {
         &self,
         req: InitiatePreimageSwapRequest,
     ) -> Result<InitiatePreimageSwapResponse> {
+        debug!("Calling initiate_preimage_swap_v2 with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -236,6 +260,7 @@ impl SparkRpcClient {
         &self,
         req: ProvidePreimageRequest,
     ) -> Result<ProvidePreimageResponse> {
+        debug!("Calling provide_preimage with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -248,6 +273,7 @@ impl SparkRpcClient {
         &self,
         req: StartTransferRequest,
     ) -> Result<StartTransferResponse> {
+        debug!("Calling start_leaf_swap_v2 with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -260,6 +286,7 @@ impl SparkRpcClient {
         &self,
         req: CounterLeafSwapRequest,
     ) -> Result<CounterLeafSwapResponse> {
+        debug!("Calling counter_leaf_swap_v2 with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -272,6 +299,7 @@ impl SparkRpcClient {
         &self,
         req: RefreshTimelockRequest,
     ) -> Result<RefreshTimelockResponse> {
+        debug!("Calling refresh_timelock_v2 with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -281,6 +309,7 @@ impl SparkRpcClient {
     }
 
     pub async fn extend_leaf_v2(&self, req: ExtendLeafRequest) -> Result<ExtendLeafResponse> {
+        debug!("Calling extend_leaf_v2 with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -290,6 +319,7 @@ impl SparkRpcClient {
     }
 
     pub async fn get_signing_operator_list(&self) -> Result<GetSigningOperatorListResponse> {
+        debug!("Calling get_signing_operator_list");
         Ok(self
             .spark_service_client()
             .await?
@@ -337,6 +367,7 @@ impl SparkRpcClient {
     }
 
     pub async fn query_nodes(&self, req: QueryNodesRequest) -> Result<QueryNodesResponse> {
+        debug!("Calling query_nodes with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -349,6 +380,7 @@ impl SparkRpcClient {
         &self,
         req: QueryNodesDistributionRequest,
     ) -> Result<QueryNodesDistributionResponse> {
+        debug!("Calling query_nodes_distribution with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -361,6 +393,7 @@ impl SparkRpcClient {
         &self,
         req: QueryNodesByValueRequest,
     ) -> Result<QueryNodesByValueResponse> {
+        debug!("Calling query_nodes_by_value with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -370,6 +403,7 @@ impl SparkRpcClient {
     }
 
     pub async fn query_balance(&self, req: QueryBalanceRequest) -> Result<QueryBalanceResponse> {
+        debug!("Calling query_balance with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -382,6 +416,7 @@ impl SparkRpcClient {
         &self,
         req: QueryUserSignedRefundsRequest,
     ) -> Result<QueryUserSignedRefundsResponse> {
+        debug!("Calling query_user_signed_refunds with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -394,6 +429,7 @@ impl SparkRpcClient {
         &self,
         req: StartTokenTransactionRequest,
     ) -> Result<StartTokenTransactionResponse> {
+        debug!("Calling start_token_transaction with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -406,6 +442,7 @@ impl SparkRpcClient {
         &self,
         req: SignTokenTransactionRequest,
     ) -> Result<SignTokenTransactionResponse> {
+        debug!("Calling sign_token_transaction with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -418,6 +455,7 @@ impl SparkRpcClient {
         &self,
         req: FinalizeTokenTransactionRequest,
     ) -> Result<()> {
+        debug!("Calling finalize_token_transaction with request: {:?}", req);
         self.spark_service_client()
             .await?
             .finalize_token_transaction(req)
@@ -430,6 +468,7 @@ impl SparkRpcClient {
         &self,
         req: spark_token::FreezeTokensRequest,
     ) -> Result<spark_token::FreezeTokensResponse> {
+        debug!("Calling freeze_tokens with request: {:?}", req);
         Ok(self
             .spark_token_service_client()
             .await?
@@ -442,6 +481,7 @@ impl SparkRpcClient {
         &self,
         req: spark_token::QueryTokenOutputsRequest,
     ) -> Result<spark_token::QueryTokenOutputsResponse> {
+        debug!("Calling query_token_outputs with request: {:?}", req);
         Ok(self
             .spark_token_service_client()
             .await?
@@ -454,6 +494,7 @@ impl SparkRpcClient {
         &self,
         req: spark_token::QueryTokenMetadataRequest,
     ) -> Result<spark_token::QueryTokenMetadataResponse> {
+        debug!("Calling query_token_metadata with request: {:?}", req);
         Ok(self
             .spark_token_service_client()
             .await?
@@ -466,6 +507,7 @@ impl SparkRpcClient {
         &self,
         req: spark_token::QueryTokenTransactionsRequest,
     ) -> Result<spark_token::QueryTokenTransactionsResponse> {
+        debug!("Calling query_token_transactions with request: {:?}", req);
         Ok(self
             .spark_token_service_client()
             .await?
@@ -478,6 +520,7 @@ impl SparkRpcClient {
         &self,
         req: StartTransactionRequest,
     ) -> Result<StartTransactionResponse> {
+        debug!("Calling start_transaction with request: {:?}", req);
         Ok(self
             .spark_token_service_client()
             .await?
@@ -490,6 +533,7 @@ impl SparkRpcClient {
         &self,
         req: CommitTransactionRequest,
     ) -> Result<CommitTransactionResponse> {
+        debug!("Calling commit_transaction with request: {:?}", req);
         Ok(self
             .spark_token_service_client()
             .await?
@@ -499,6 +543,7 @@ impl SparkRpcClient {
     }
 
     pub async fn return_lightning_payment(&self, req: ReturnLightningPaymentRequest) -> Result<()> {
+        debug!("Calling return_lightning_payment with request: {:?}", req);
         self.spark_service_client()
             .await?
             .return_lightning_payment(req)
@@ -511,6 +556,10 @@ impl SparkRpcClient {
         &self,
         req: QueryStaticDepositAddressesRequest,
     ) -> Result<QueryStaticDepositAddressesResponse> {
+        debug!(
+            "Calling query_static_deposit_addresses with request: {:?}",
+            req
+        );
         Ok(self
             .spark_service_client()
             .await?
@@ -523,6 +572,7 @@ impl SparkRpcClient {
         &self,
         req: GetUtxosForAddressRequest,
     ) -> Result<GetUtxosForAddressResponse> {
+        debug!("Calling get_utxos_for_address with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -535,6 +585,10 @@ impl SparkRpcClient {
         &self,
         req: InitiateStaticDepositUtxoRefundRequest,
     ) -> Result<InitiateStaticDepositUtxoRefundResponse> {
+        debug!(
+            "Calling initiate_static_deposit_utxo_refund with request: {:?}",
+            req
+        );
         Ok(self
             .spark_service_client()
             .await?
@@ -547,6 +601,7 @@ impl SparkRpcClient {
         &self,
         req: InitiateUtxoSwapRequest,
     ) -> Result<InitiateUtxoSwapResponse> {
+        debug!("Calling initiate_utxo_swap with request: {:?}", req);
         // TODO: update to drop use of deprecated initiate_utxo_swap call
         #[allow(deprecated)]
         Ok(self
@@ -561,6 +616,7 @@ impl SparkRpcClient {
         &self,
         req: ExitSingleNodeTreesRequest,
     ) -> Result<ExitSingleNodeTreesResponse> {
+        debug!("Calling exit_single_node_trees with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
@@ -573,6 +629,7 @@ impl SparkRpcClient {
         &self,
         req: SubscribeToEventsRequest,
     ) -> Result<tonic::codec::Streaming<SubscribeToEventsResponse>> {
+        debug!("Calling subscribe_to_events with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?

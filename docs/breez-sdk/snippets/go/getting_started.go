@@ -65,10 +65,11 @@ func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
 
 func FetchBalance(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: fetch-balance
+	ensureSynced := false
 	info, err := sdk.GetInfo(breez_sdk_spark.GetInfoRequest{
 		// EnsureSynced: true will ensure the SDK is synced with the Spark network
 		// before returning the balance
-		EnsureSynced: false,
+		EnsureSynced: &ensureSynced,
 	})
 
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {

@@ -1,6 +1,6 @@
 [versions]
 agp = "8.1.2"
-breez = "0.1.3"
+breez = "0.0.0-local-docs" # Change this line to use a published version
 kotlin = "1.9.20"
 coroutines = "1.7.3"
 compose = "1.5.4"

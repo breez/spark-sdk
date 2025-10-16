@@ -6,7 +6,9 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::js_sys::Promise;
 
-use crate::models::{DepositInfo, Payment, PaymentMetadata, UpdateDepositPayload};
+use crate::models::{
+    DepositInfo, ListPaymentsRequest, Payment, PaymentMetadata, UpdateDepositPayload,
+};
 
 pub struct WasmStorage {
     pub storage: Storage,
@@ -70,12 +72,11 @@ impl breez_sdk_spark::Storage for WasmStorage {
 
     async fn list_payments(
         &self,
-        offset: Option<u32>,
-        limit: Option<u32>,
+        request: breez_sdk_spark::ListPaymentsRequest,
     ) -> Result<Vec<breez_sdk_spark::Payment>, breez_sdk_spark::StorageError> {
         let promise = self
             .storage
-            .list_payments(offset, limit)
+            .list_payments(request.into())
             .map_err(js_error_to_storage_error)?;
         let future = JsFuture::from(promise);
         let result = future.await.map_err(js_error_to_storage_error)?;
@@ -210,7 +211,7 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     getCachedItem: (key: string) => Promise<string | null>;
     setCachedItem: (key: string, value: string) => Promise<void>;
     deleteCachedItem: (key: string) => Promise<void>;
-    listPayments: (offset?: number, limit?: number) => Promise<Payment[]>;
+    listPayments: (request: ListPaymentsRequest) => Promise<Payment[]>;
     insertPayment: (payment: Payment) => Promise<void>;
     setPaymentMetadata: (paymentId: string, metadata: PaymentMetadata) => Promise<void>;
     getPaymentById: (id: string) => Promise<Payment>;
@@ -236,11 +237,7 @@ extern "C" {
     pub fn delete_cached_item(this: &Storage, key: String) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = listPayments, catch)]
-    pub fn list_payments(
-        this: &Storage,
-        offset: Option<u32>,
-        limit: Option<u32>,
-    ) -> Result<Promise, JsValue>;
+    pub fn list_payments(this: &Storage, request: ListPaymentsRequest) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = insertPayment, catch)]
     pub fn insert_payment(this: &Storage, payment: Payment) -> Result<Promise, JsValue>;
