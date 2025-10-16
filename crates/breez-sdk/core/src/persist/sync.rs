@@ -1,9 +1,33 @@
-use std::sync::Arc;
+use std::{fmt::{Display, Formatter}, str::FromStr, sync::Arc};
 
-use breez_sdk_common::sync::{Record, RecordId, SyncService};
+use breez_sdk_common::sync::{OutgoingRecordRequest, RecordId, SyncService};
 use semver::Version;
 
 use crate::{DepositInfo, Payment, PaymentMetadata, Storage, StorageError, UpdateDepositPayload};
+
+enum RecordType {
+    PaymentMetadata
+}
+
+impl Display for RecordType {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let s = match self {
+            RecordType::PaymentMetadata => "PaymentMetadata",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl FromStr for RecordType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "PaymentMetadata" => Ok(RecordType::PaymentMetadata),
+            _ => Err(format!("Unknown record type: {}", s)),
+        }
+    }
+}
 
 pub struct SyncedStorage {
     inner: Arc<dyn Storage>,
@@ -46,12 +70,9 @@ impl Storage for SyncedStorage {
         metadata: PaymentMetadata,
     ) -> Result<(), StorageError> {
         // Set the outgoing record for sync before updating local storage.
-        self.sync_service.set_outgoing_record(&Record {
-            id: RecordId::new("payment_metadata", &payment_id),
-            // TODO: Who decides the revision number and how is it incremented? Can we put that logic inside the sync domain?
-            revision: 0,
-            schema_version: self.schema_version.clone(),
-            data: serde_json::to_vec(&metadata).map_err(|e| StorageError::Implementation(e.to_string()))?,
+        self.sync_service.set_outgoing_record(&OutgoingRecordRequest {
+            id: RecordId::new(RecordType::PaymentMetadata.to_string(), &payment_id),
+            updated_fields: serde_json::to_value(&metadata).map_err(|e| StorageError::Implementation(e.to_string()))?,
         }).await.map_err(|e| StorageError::Implementation(e.to_string()))?;
         self.inner.set_payment_metadata(payment_id, metadata).await
     }

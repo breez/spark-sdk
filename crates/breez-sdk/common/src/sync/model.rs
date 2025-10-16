@@ -4,6 +4,7 @@ use bitcoin::hashes::{sha256, Hash};
 use semver::Version;
 use serde_json::Value;
 
+const CURRENT_SCHEMA_VERSION: Version = Version::new(0, 2, 6);
 #[derive(Debug, Clone)]
 pub struct RecordId {
     pub r#type: String,
@@ -22,10 +23,32 @@ impl Display for RecordId {
     }
 }
 
+pub struct OutgoingRecordRequest {
+    pub id: RecordId,
+    pub updated_fields: Value,
+}
+
+impl From<&OutgoingRecordRequest> for UnversionedOutgoingRecord {
+    fn from(value: &OutgoingRecordRequest) -> Self {
+        UnversionedOutgoingRecord {
+            id: value.id.clone(),
+            schema_version: CURRENT_SCHEMA_VERSION,
+            updated_fields: value.updated_fields.clone(),
+        }
+    }
+}
+
+pub struct UnversionedOutgoingRecord {
+    pub id: RecordId,
+    pub schema_version: Version,
+    pub updated_fields: Value,
+}
+
 pub struct OutgoingRecord {
     pub id: RecordId,
     pub schema_version: Version,
     pub updated_fields: Value,
+    pub revision: u32,
 }
 
 pub struct Record {

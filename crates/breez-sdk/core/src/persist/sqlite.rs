@@ -1,11 +1,10 @@
-use breez_sdk_common::sync::{OutgoingRecord, Record, RecordId, SyncStorage};
+use breez_sdk_common::sync::{OutgoingRecord, RecordId, SyncStorage, UnversionedOutgoingRecord};
 use macros::async_trait;
 use rusqlite::{
-    Connection, Row, ToSql, params,
-    types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
+    params, types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef}, Connection, Row, ToSql, Transaction
 };
 use rusqlite_migration::{M, Migrations, SchemaVersion};
-use std::{path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
+use std::path::{Path, PathBuf};
 
 use crate::{
     DepositInfo, LnurlPayInfo, PaymentDetails, PaymentMethod,
@@ -163,12 +162,25 @@ impl SqliteStorage {
 
             CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice);
             ",
-            "CREATE TABLE sync_outgoing(
-                data_id TEXT NOT NULL PRIMARY KEY,
+            "CREATE TABLE sync_revision (
+                revision INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE sync_outgoing(
+                data_id TEXT NOT NULL,
                 record_type TEXT NOT NULL,
                 schema_version TEXT NOT NULL,
                 commit_time INTEGER NOT NULL,
                 updated_fields_json TEXT NOT NULL,
+                revision INTEGER NOT NULL
+            );
+            CREATE TABLE sync_state(
+                data_id TEXT NOT NULL,
+                record_type TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                commit_time INTEGER NOT NULL,
+                data TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                PRIMARY KEY(record_type, data_id)
             );",
         ]
     }
@@ -186,41 +198,71 @@ impl From<rusqlite_migration::Error> for StorageError {
     }
 }
 
+impl SqliteStorage {
+    /// Bumps the revision number, locking the revision number for updates for the duration of the transaction.
+    fn get_next_revision(&self, tx: &mut Transaction<'_>) -> Result<u32, breez_sdk_common::sync::StorageError> {
+        
+        let revision = tx.query_row(
+            "UPDATE sync_revision
+             SET revision = revision + 1
+             RETURNING revision",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(revision)
+    }
+}
+
 #[async_trait]
 impl SyncStorage for SqliteStorage {
-    async fn add_outgoing_record(&self, record: &OutgoingRecord) -> Result<(), breez_sdk_common::sync::StorageError> {
+    async fn add_outgoing_record(&self, record: &UnversionedOutgoingRecord) -> Result<u32, breez_sdk_common::sync::StorageError> {
         let connection = self.get_connection()?;
-
-        connection.execute(
-            "INSERT OR REPLACE INTO sync_outgoing (data_id, record_type, schema_version, commit_time, updated_fields_json) 
+        let mut tx = connection.transaction()?;
+        let revision = self.get_next_revision(&mut tx)?;
+ 
+        tx.execute(
+            "INSERT INTO sync_outgoing (
+                data_id
+            ,   record_type
+            ,   schema_version
+            ,   commit_time
+            ,   updated_fields_json
+            ,   revision
+            )
              VALUES (?, ?, ?, strftime('%s','now'), ?, ?)",
             params![
                 record.id.data_id,
                 record.id.r#type,
                 record.schema_version.to_string(),
                 serde_json::to_string(&record.updated_fields)?,
+                revision,
             ],
         )?;
 
-        Ok(())
+        tx.commit()?;
+        Ok(revision)
     }
 
     async fn get_pending_outgoing_records(&self, limit: usize) -> Result<Vec<OutgoingRecord>, breez_sdk_common::sync::StorageError> {
         let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare(
-            "SELECT data_id, record_type, schema_version, commit_time, updated_fields_json 
+            "SELECT data_id
+            ,       record_type
+            ,       schema_version
+            ,       commit_time
+            ,       updated_fields_json
+            ,       revision 
              FROM sync_outgoing 
-             ORDER BY commit_time ASC 
+             ORDER BY revision ASC 
              LIMIT ?",
         )?;
-        stmt.bind_param(1, limit as i64)?;
-        let rows = stmt.query_map(params![], |row| {
-            
+        let rows = stmt.query_map(params![limit], |row| {
             Ok(OutgoingRecord {
                 id: RecordId::new(row.get(1)?, row.get(0)?),
-                schema_version: row.get(2)?,
+                schema_version: row.get(2)?.parse()?,
                 updated_fields: serde_json::from_str(&row.get::<_, String>(4)?)?,
+                revision: row.get(5)?,
             })
         })?;
 

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{error, debug, info};
 
-use crate::sync::{model::{Record, RecordId}, signing_client::SigningClient, storage::SyncStorage};
+use crate::sync::{model::{Record, RecordId}, signing_client::SigningClient, storage::SyncStorage, OutgoingRecord};
 
 const SYNC_BATCH_SIZE: usize = 10;
 
@@ -50,21 +50,17 @@ impl SyncProcessor {
         Ok(())
     }
 
-    async fn push_sync_batch(&self, records: Vec<Record>) -> anyhow::Result<()> {
-        let mut tasks = Vec::new();
+    async fn push_sync_batch(&self, records: Vec<OutgoingRecord>) -> anyhow::Result<()> {
         for record in records {
-            tasks.push(self.push_sync_record(record));
+            self.push_sync_record(record).await?;
         }
 
-        let results = futures::future::join_all(tasks).await;
-        for result in results {
-            result?;
-        }
         Ok(())
     }
 
-    async fn push_sync_record(&self, record: Record) -> anyhow::Result<()> {
+    async fn push_sync_record(&self, record: OutgoingRecord) -> anyhow::Result<()> {
         self.client.set_record(record).await?;
+        self.storage.complete_outgoing_sync(&self, &record).await?;
         Ok(())
     }
 }
