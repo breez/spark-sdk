@@ -1,6 +1,6 @@
 # $USER name to be used in the `final` image
 ARG USER=so
-ARG VERSION=2d37cec3f3366fce9554d10fd4f1a43665861ba7
+ARG VERSION=003289e7c35982f589ea0e99e973abab1f2c3af3
 ARG REPOSITORY=https://github.com/buildonspark/spark.git
 
 FROM debian:bookworm-20250721-slim AS downloader
@@ -21,7 +21,7 @@ RUN git init && \
     git checkout FETCH_HEAD
 
 
-FROM golang:1.24.6-bookworm AS operator-builder
+FROM golang:1.25.1-bookworm AS operator-builder
 
 # Install required dependencies for building
 RUN apt-get update -qq && \
@@ -67,7 +67,8 @@ RUN apt-get update -qq && \
     apt-get install -qq -y --no-install-recommends \
         postgresql-client \
         libzmq3-dev \
-        sed && \
+        sed \
+        openssl && \
     rm -rf /var/lib/apt/lists/*
 
 COPY entrypoint.sh /
