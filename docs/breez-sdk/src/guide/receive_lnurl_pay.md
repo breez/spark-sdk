@@ -9,7 +9,7 @@
 A Lightning address is a human-readable identifier formatted like an email address (e.g., `user@domain.com`) that can be used to receive Bitcoin payments over the Lightning Network. Behind the scenes, it uses the LNURL-Pay protocol to dynamically generate invoices when someone wants to send a payment to this address.
 
 <h2 id="lnurl-server">
-    <a class="header" href="#lnurl-server">Configuring an LNURL server</a>
+    <a class="header" href="#lnurl-server">Configuring an custom domain</a>
 </h2>
 
 To use Lightning addresses with the Breez SDK, you first need to supply a domain. There are two options:
