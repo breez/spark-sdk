@@ -1,4 +1,4 @@
-import BigInt
+import BigNumber
 import BreezSdkSpark
 
 func fetchTokenBalances(sdk: BreezSdk) async throws {
@@ -46,8 +46,8 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
     let paymentRequest = "<spark address>"
     // The token identifier (e.g., asset ID or token contract)
     let tokenIdentifier = "<token identifier>"
-    // Set the amount of tokens you wish to send
-    let amount: BigUInt = 1_000
+    // Set the amount of tokens you wish to send (requires 'import BigNumber')
+    let amount = BInt(1_000)
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(

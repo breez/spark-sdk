@@ -10,13 +10,17 @@ let package = Package(
         .iOS(.v13),
     ],
     products: [
-        .library(name: "BreezSdkSpark", targets: ["breez_sdk_sparkFFI", "BreezSdkSpark"]),
+        .library(name: "BreezSdkSpark", targets: ["breez_sdk_sparkFFI", "BreezSdkSpark"])
     ],
     dependencies: [
-        .package(url: "https://github.com/attaswift/BigInt.git", from: "5.4.0")
+        .package(url: "https://github.com/mkrd/Swift-BigInt.git", from: "2.0.0")
     ],
     targets: [
         .binaryTarget(name: "breez_sdk_sparkFFI", path: "./breez_sdk_sparkFFI.xcframework"),
-        .target(name: "BreezSdkSpark", dependencies: ["breez_sdk_sparkFFI", "BigInt"]),
+        .target(
+            name: "BreezSdkSpark",
+            dependencies: [
+                "breez_sdk_sparkFFI", .product(name: "BigNumber", package: "Swift-BigInt"),
+            ]),
     ]
 )

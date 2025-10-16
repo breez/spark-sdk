@@ -202,13 +202,13 @@ class MigrationManager {
                         withdraw_tx_id TEXT,
                         deposit_tx_id TEXT,
                         spark INTEGER
-                        method TEXT
                     )`,
           `INSERT INTO payments_new (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
            SELECT id, payment_type, status, CAST(amount AS TEXT), CAST(fees AS TEXT), timestamp, method, withdraw_tx_id, deposit_tx_id, spark
            FROM payments`,
           `DROP TABLE payments`,
           `ALTER TABLE payments_new RENAME TO payments`,
+          `CREATE INDEX IF NOT EXISTS idx_payments_timestamp ON payments(timestamp DESC)`,
         ],
       },
     ];

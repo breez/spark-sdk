@@ -1,11 +1,11 @@
-import BigInt
+import BigNumber
 import BreezSdkSpark
 
 func prepareSendPaymentLightningBolt11(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-lightning-bolt11
     let paymentRequest = "<bolt11 invoice>"
-    // Optionally set the amount you wish the pay the receiver
-    let optionalAmountSats: BigUInt = 5_000
+    // Optionally set the amount you wish the pay the receiver (requires 'import BigNumber')
+    let optionalAmountSats = BInt(5_000)
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
@@ -29,8 +29,8 @@ func prepareSendPaymentLightningBolt11(sdk: BreezSdk) async throws {
 func prepareSendPaymentOnchain(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-onchain
     let paymentRequest = "<bitcoin address>"
-    // Set the amount you wish the pay the receiver
-    let amountSats: BigUInt = 50_000
+    // Set the amount you wish the pay the receiver (requires 'import BigNumber')
+    let amountSats = BInt(50_000)
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
@@ -52,8 +52,8 @@ func prepareSendPaymentOnchain(sdk: BreezSdk) async throws {
 func prepareSendPaymentSpark(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-spark
     let paymentRequest = "<spark address>"
-    // Set the amount you wish the pay the receiver
-    let amountSats: BigUInt = 50_000
+    // Set the amount you wish the pay the receiver (requires 'import BigNumber')
+    let amountSats = BInt(50_000)
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
