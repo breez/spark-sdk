@@ -7,8 +7,8 @@ The Breez SDK provides developers with an end-to-end solution for integrating se
 ## **What Is the Breez SDK - Nodeless *(Spark Implementation)*?**
 
 It’s a nodeless integration that offers a self-custodial, end-to-end solution for integrating Lightning payments, utilizing Spark with on-chain interoperability and third-party fiat on-ramps. Using the SDK you will able to:
-- **Send payments** via various protocols such as: Bolt11, LNURL-Pay, Lightning address, BTC address, Spark address
-- **Receive payments** via various protocols such as: Bolt11, BTC address, Spark address
+- **Send payments** via various protocols such as: Bolt11, LNURL-Pay, Lightning address, BTC address, Spark address, BTKN
+- **Receive payments** via various protocols such as: Bolt11, BTC address, Spark address, BTKN
   
 **Key Features**
 
