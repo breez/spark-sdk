@@ -1,6 +1,6 @@
-# Handling tokens
+# Sending and receiving tokens
 
-Spark supports tokens using the [BTKN protocol](https://docs.spark.money/lrc20/hello-btkn). Using the SDK you can send and receive these tokens using the same API used for Bitcoin payments.
+Spark supports tokens using the [BTKN protocol](https://docs.spark.money/lrc20/hello-btkn). The Breez SDK enables you to send and receive these tokens using the standard payments API.
 
 <h2 id="fetching-the-balance">
     <a class="header" href="#fetching-the-balance">Fetching token balances</a>
@@ -85,7 +85,7 @@ Once connected, the token balances and their metadata can be retrieved.
 
 <div class="warning">
 <h4>Developer note</h4>
-Token balances are cached for fast responses. For details on ensuring up-to-date balances, see the <a href="./get_info.md#fetching-the-balance">fetching the balance</a> section.
+Token balances are cached for fast responses. For details on ensuring up-to-date balances, see <a href="./get_info.md#fetching-the-balance">here</a> section.
 </div>
 
 <h2 id="fetching-token-metadata">
@@ -93,7 +93,7 @@ Token balances are cached for fast responses. For details on ensuring up-to-date
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_tokens_metadata">API docs</a>
 </h2>
 
-The metadata of any existing token can be fetched and will be cached for faster subsequent lookups.
+The metadata of existing tokens can be fetched and will be cached for faster subsequent lookups.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
@@ -174,14 +174,14 @@ The metadata of any existing token can be fetched and will be cached for faster 
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.receive_payment">API docs</a>
 </h2>
 
-A user just needs to share their spark address in order to receive tokens. The spark address can be fetched as described in [receiving spark payments](./receive_payment.md#spark).
+A user just needs to share their Spark address in order to receive tokens. The Spark address can be fetched as described [here](./receive_payment.md#spark).
 
 <h2 id="preparing-payments">
     <a class="header" href="#preparing-payments">Sending a token payment</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
 </h2>
 
-To send tokens, a spark address should be provided as the payment request. The address may contain an embedded token identifier and amount, in which case the SDK will process the payment accordingly, or a token identifier and amount have to be provided.
+To send tokens, a Spark address should be provided as the payment request. The address may contain an embedded token identifier and an amount, in which case the SDK will process the payment accordingly, or a token identifier and amount have to be provided.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
@@ -262,4 +262,4 @@ To send tokens, a spark address should be provided as the payment request. The a
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.list_payments">API docs</a>
 </h2>
 
-Token payments can be listed just like other payments as described in [listing payments](./list_payments.md)
+Token payments can be listed just like other payments as described [here](./list_payments.md).
