@@ -569,6 +569,9 @@ pub struct PrepareSendPaymentRequest {
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentResponse {
+    /// An optional payment ID that can be used to track the payment
+    pub payment_id: Option<String>,
+    /// The method that will be used to send the payment
     pub payment_method: SendPaymentMethod,
     /// Amount to send. By default is denominated in sats.
     /// If a token identifier is provided, the amount will be denominated in the token base units.

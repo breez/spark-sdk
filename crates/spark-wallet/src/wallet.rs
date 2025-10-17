@@ -16,10 +16,10 @@ use spark::{
         rpc::{ConnectionManager, DefaultConnectionManager},
     },
     services::{
-        CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
-        InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment,
+        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpUtxo, DepositService, ExitSpeed,
+        Fee, InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment,
         LightningService, QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager,
-        TokenMetadata, TokenService, TokenTransaction, Transfer, TransferService,
+        TokenMetadata, TokenService, TokenTransaction, Transfer, TransferId, TransferService,
         TransferTokenOutput, UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
@@ -42,6 +42,16 @@ use crate::{
 };
 
 use super::{SparkWalletConfig, SparkWalletError};
+
+struct WithdrawInnerParams<'a> {
+    pub address: Address,
+    pub exit_speed: ExitSpeed,
+    pub leaves_reservation: &'a LeavesReservation,
+    pub target_amounts: Option<&'a TargetAmounts>,
+    pub fee_sats: u64,
+    pub fee_quote_id: String,
+    pub transfer_id: Option<TransferId>,
+}
 
 pub struct SparkWallet {
     /// Cancellation token to stop background tasks. It is dropped when the wallet is dropped to stop background tasks.
@@ -228,6 +238,7 @@ impl SparkWallet {
         invoice: &str,
         amount_to_send: Option<u64>,
         max_fee_sat: Option<u64>,
+        transfer_id: Option<TransferId>,
         prefer_spark: bool,
     ) -> Result<PayLightningInvoiceResult, SparkWalletError> {
         let (total_amount_sat, receiver_spark_address) = self
@@ -239,7 +250,7 @@ impl SparkWallet {
         if let Some(receiver_spark_address) = receiver_spark_address {
             return Ok(PayLightningInvoiceResult {
                 transfer: self
-                    .transfer(total_amount_sat, &receiver_spark_address)
+                    .transfer(total_amount_sat, &receiver_spark_address, transfer_id)
                     .await?,
                 lightning_payment: None,
             });
@@ -257,6 +268,7 @@ impl SparkWallet {
                 invoice,
                 amount_to_send,
                 &leaves_reservation.leaves,
+                transfer_id,
             ),
             &leaves_reservation,
         )
@@ -489,6 +501,7 @@ impl SparkWallet {
         &self,
         amount_sat: u64,
         receiver_address: &SparkAddress,
+        transfer_id: Option<TransferId>,
     ) -> Result<WalletTransfer, SparkWalletError> {
         // validate receiver address and get its pubkey
         if self.config.network != receiver_address.network {
@@ -508,6 +521,7 @@ impl SparkWallet {
             self.transfer_service.transfer_leaves_to(
                 leaves_reservation.leaves.clone(),
                 &receiver_pubkey,
+                transfer_id,
                 None,
             ),
             &leaves_reservation,
@@ -628,6 +642,7 @@ impl SparkWallet {
         amount_sats: Option<u64>,
         exit_speed: ExitSpeed,
         fee_quote: CoopExitFeeQuote,
+        transfer_id: Option<TransferId>,
     ) -> Result<WalletTransfer, SparkWalletError> {
         // Validate withdrawal address
         let withdrawal_address = withdrawal_address
@@ -654,14 +669,15 @@ impl SparkWallet {
 
         let transfer = with_reserved_leaves(
             self.tree_service.as_ref(),
-            self.withdraw_inner(
-                withdrawal_address,
+            self.withdraw_inner(WithdrawInnerParams {
+                address: withdrawal_address,
                 exit_speed,
-                &leaves_reservation,
-                target_amounts.as_ref(),
+                leaves_reservation: &leaves_reservation,
+                target_amounts: target_amounts.as_ref(),
                 fee_sats,
-                fee_quote.id,
-            ),
+                fee_quote_id: fee_quote.id,
+                transfer_id,
+            }),
             &leaves_reservation,
         )
         .await?;
@@ -682,13 +698,17 @@ impl SparkWallet {
 
     async fn withdraw_inner(
         &self,
-        address: Address,
-        exit_speed: ExitSpeed,
-        leaves_reservation: &LeavesReservation,
-        target_amounts: Option<&TargetAmounts>,
-        fee_sats: u64,
-        fee_quote_id: String,
+        params: WithdrawInnerParams<'_>,
     ) -> Result<Transfer, SparkWalletError> {
+        let WithdrawInnerParams {
+            address,
+            exit_speed,
+            leaves_reservation,
+            target_amounts,
+            fee_sats,
+            fee_quote_id,
+            transfer_id,
+        } = params;
         let withdraw_all = target_amounts.is_none();
         let (withdraw_leaves, fee_leaves, fee_quote_id) = if withdraw_all {
             (leaves_reservation.leaves.clone(), None, None)
@@ -715,14 +735,15 @@ impl SparkWallet {
         // Perform the cooperative exit with the SSP
         let transfer = self
             .coop_exit_service
-            .coop_exit(
-                withdraw_leaves,
-                &address,
+            .coop_exit(CoopExitParams {
+                leaves: withdraw_leaves,
+                withdrawal_address: &address,
                 withdraw_all,
                 exit_speed,
                 fee_quote_id,
                 fee_leaves,
-            )
+                transfer_id,
+            })
             .await?;
 
         Ok(transfer)

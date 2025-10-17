@@ -20,8 +20,8 @@ use breez_sdk_common::{
     rest::RestClient,
 };
 use spark_wallet::{
-    ExitSpeed, InvoiceDescription, SparkAddress, SparkWallet, TransferTokenOutput, WalletEvent,
-    WalletTransfer,
+    ExitSpeed, InvoiceDescription, SparkAddress, SparkWallet, TransferId, TransferTokenOutput,
+    WalletEvent, WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
 use tracing::{error, info, trace};
@@ -718,6 +718,7 @@ impl BreezSdk {
         let mut payment = Box::pin(self.send_payment_internal(
             SendPaymentRequest {
                 prepare_response: PrepareSendPaymentResponse {
+                    payment_id: None,
                     payment_method: SendPaymentMethod::Bolt11Invoice {
                         invoice_details: request.prepare_response.invoice_details,
                         spark_transfer_fee_sats: None,
@@ -820,8 +821,13 @@ impl BreezSdk {
             } else {
                 None
             };
+            let payment_id = match request.token_identifier {
+                Some(_) => None,
+                None => Some(TransferId::generate().to_string()),
+            };
 
             return Ok(PrepareSendPaymentResponse {
+                payment_id,
                 payment_method: SendPaymentMethod::SparkAddress {
                     address: spark_address.to_string(),
                     fee: 0,
@@ -842,6 +848,7 @@ impl BreezSdk {
         }
 
         let amount_sats = request.amount;
+        let payment_id = Some(TransferId::generate().to_string());
 
         // Then check for other types of inputs
         let parsed_input = parse(&request.payment_request).await?;
@@ -868,6 +875,7 @@ impl BreezSdk {
                     .await?;
 
                 Ok(PrepareSendPaymentResponse {
+                    payment_id,
                     payment_method: SendPaymentMethod::Bolt11Invoice {
                         invoice_details: detailed_bolt11_invoice.clone(),
                         spark_transfer_fee_sats,
@@ -894,6 +902,7 @@ impl BreezSdk {
                     )
                     .await?;
                 Ok(PrepareSendPaymentResponse {
+                    payment_id,
                     payment_method: SendPaymentMethod::BitcoinAddress {
                         address: withdrawal_address.clone(),
                         fee_quote: fee_quote.into(),
@@ -1269,9 +1278,19 @@ impl BreezSdk {
             )
             .await?
         } else {
+            let transfer_id = request
+                .prepare_response
+                .payment_id
+                .as_ref()
+                .map(|id| id.parse())
+                .transpose()?;
             let transfer = self
                 .spark_wallet
-                .transfer(request.prepare_response.amount.try_into()?, &spark_address)
+                .transfer(
+                    request.prepare_response.amount.try_into()?,
+                    &spark_address,
+                    transfer_id,
+                )
                 .await?;
             transfer.try_into()?
         };
@@ -1303,6 +1322,12 @@ impl BreezSdk {
             (true, Some(fee), _) => fee,
             _ => lightning_fee_sats,
         };
+        let transfer_id = request
+            .prepare_response
+            .payment_id
+            .as_ref()
+            .map(|id| id.parse())
+            .transpose()?;
 
         let payment_response = self
             .spark_wallet
@@ -1312,6 +1337,7 @@ impl BreezSdk {
                     .map(|a| Ok::<u64, SdkError>(a.try_into()?))
                     .transpose()?,
                 Some(fee_sats),
+                transfer_id,
                 prefer_spark,
             )
             .await?;
@@ -1365,6 +1391,12 @@ impl BreezSdk {
                 return Err(SdkError::InvalidInput("Invalid options".to_string()));
             }
         };
+        let transfer_id = request
+            .prepare_response
+            .payment_id
+            .as_ref()
+            .map(|id| id.parse())
+            .transpose()?;
         let response = self
             .spark_wallet
             .withdraw(
@@ -1372,6 +1404,7 @@ impl BreezSdk {
                 Some(request.prepare_response.amount.try_into()?),
                 exit_speed,
                 fee_quote.clone().into(),
+                transfer_id,
             )
             .await?;
         Ok(SendPaymentResponse {

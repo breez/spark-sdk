@@ -338,10 +338,11 @@ impl LightningService {
         invoice: &str,
         amount_to_send: Option<u64>,
         leaves: &[TreeNode],
+        transfer_id: Option<TransferId>,
     ) -> Result<PayLightningResult, ServiceError> {
         let ssp_identity_public_key = self.ssp_client.identity_public_key();
         let expiry_time = SystemTime::now() + Duration::from_secs(2 * 60);
-        let transfer_id = TransferId::generate();
+        let transfer_id = transfer_id.unwrap_or_else(TransferId::generate);
 
         // Decode invoice and validate amount
         let decoded_invoice = Bolt11Invoice::from_str(invoice)

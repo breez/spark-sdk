@@ -133,6 +133,7 @@ async fn test_01_spark_transfer(
             token_identifier: None,
         })
         .await?;
+    let prepare_payment_id = prepare.payment_id.clone();
 
     info!("Sending 5 sats from Alice to Bob via Spark...");
 
@@ -165,6 +166,10 @@ async fn test_01_spark_transfer(
     assert!(
         received_payment.amount >= 5,
         "Bob should receive at least 5 sats"
+    );
+    assert!(
+        matches!(prepare_payment_id, Some(id) if id == received_payment.id),
+        "Payment IDs should match"
     );
 
     info!(
@@ -339,6 +344,7 @@ async fn test_03_lightning_invoice_payment(
             token_identifier: None,
         })
         .await?;
+    let prepare_payment_id = prepare.payment_id.clone();
 
     info!("Payment prepared - amount: {} sats", prepare.amount);
 
@@ -372,6 +378,10 @@ async fn test_03_lightning_invoice_payment(
             PaymentStatus::Completed | PaymentStatus::Pending
         ),
         "Payment should be completed or pending"
+    );
+    assert!(
+        matches!(prepare_payment_id, Some(id) if id == send_resp.payment.id),
+        "Payment IDs should match"
     );
 
     // Wait for Bob to receive the payment via event
