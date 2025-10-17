@@ -104,7 +104,7 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] WebAssembly support
 - [x] Flutter & React Native bindings 
 - [x] Receive via LNURL-Pay w/ offline & Lightning address support
-- [ ] Support Spark tokens
+- [x] Support Spark tokens (BTKN)
 - [ ] Real-time sync
 - [ ] C# language binding
 - [ ] LNURL-Withdraw
