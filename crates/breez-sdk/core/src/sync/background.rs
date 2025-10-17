@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use tokio::sync::{broadcast, watch};
+use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, info, warn};
 
 use crate::{Storage, persist::OutgoingRecordParent};

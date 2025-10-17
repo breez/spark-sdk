@@ -517,7 +517,7 @@ impl Storage for SqliteStorage {
     ) -> Result<u64, StorageError> {
         let mut connection = self.get_connection()?;
         let tx = connection.transaction()?;
-        let revision = self.get_next_revision(&tx)?;
+        let revision = get_next_revision(&tx)?;
 
         tx.execute(
             "INSERT INTO sync_outgoing (

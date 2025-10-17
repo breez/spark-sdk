@@ -161,6 +161,7 @@ impl SdkBuilder {
     }
 
     /// Builds the `BreezSdk` instance with the configured components.
+    #[allow(clippy::too_many_lines)]
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
         // Create the signer from seed
         let seed = match self.seed {
@@ -257,7 +258,6 @@ impl SdkBuilder {
         let shutdown_sender = watch::channel::<()>(()).0;
 
         let (storage, sync_processor) = if let Some(server_url) = &self.real_time_sync_server_url {
-            // TODO: wire up background sync processor
             debug!("Real-time sync is enabled.");
             let sync_service = Arc::new(SyncService::new(Arc::clone(&self.storage)));
             let storage: Arc<dyn Storage> = Arc::new(SyncedStorage::new(
