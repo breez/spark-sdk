@@ -182,6 +182,11 @@ When parsing an input that isn't recognized as one of the native input types, th
   - Regex: `(.*)(za.co.electrum.picknpay)(.*)`
   - URL: `https://cryptoqr.net/.well-known/lnurlp/<input>`
   - More info: [support+breezsdk@moneybadger.co.za](mailto:support+breezsdk@moneybadger.co.za)
+- [**Bootlegger QRs**](https://www.bootlegger.coffee/)
+  - Maintainer: [MoneyBadger](https://www.moneybadger.co.za/)
+  - Regex: `(.*)(wigroup\.co|yoyogroup\.co)(.*)`
+  - URL: `https://cryptoqr.net/.well-known/lnurlw/<input>`
+  - More info: [support+breezsdk@moneybadger.co.za](mailto:support+breezsdk@moneybadger.co.za)
 
 ### Default external parsers
 
