@@ -13,12 +13,13 @@ It eliminates the need for third parties, simplifies the complexities of Bitcoin
 It’s a nodeless integration that offers a self-custodial, end-to-end solution for integrating Lightning, utilizing the Bitcoin-native Layer 2 Spark with on-chain interoperability. Using the SDK you'll able to:
 
 - Send payments via various protocols such as: Bolt11, LNURL-Pay, Lightning address, BTC address, Spark address
-- Receive payments via various protocols such as: Bolt11, BTC address, Spark address
+- Receive payments via various protocols such as: Bolt11, BTC address, Spark address, BTKN
 
 **Key Features**
 - [x] Send and receive Lightning payments
 - [x] Send and receive via LNURL-pay & Lightning addresses 
-- [x] Send and receive Spark payments  
+- [x] Send and receive Spark payments (BTC)
+- [x] Send and receive Spark tokens (BTKN)
 - [x] On-chain interoperability
 - [x] Bindings to all popular languages & frameworks
 - [x] Keys are only held by users
