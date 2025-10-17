@@ -8,7 +8,7 @@ pub struct GrpcClient {
 }
 
 impl GrpcClient {
-    pub fn new(url: String) -> Result<Self, OperatorRpcError> {
+    pub fn new(url: String, _ca_cert: Option<Vec<u8>>) -> Result<Self, OperatorRpcError> {
         Ok(Self {
             inner: tonic_web_wasm_client::Client::new(url),
         })

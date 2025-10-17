@@ -13,9 +13,7 @@ type PatternSender = Arc<Mutex<Option<(String, oneshot::Sender<()>)>>>;
 pub struct WaitForLogConsumer {
     prefix: String,
     startup_complete_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
-    server_ready_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     startup_pattern: &'static str,
-    server_pattern: &'static str,
     log_buffer: Arc<Mutex<Vec<String>>>,
     // Add a channel for custom pattern matching
     custom_pattern_tx: PatternSender,
@@ -26,16 +24,12 @@ impl WaitForLogConsumer {
     pub fn new(
         prefix: impl Into<String>,
         startup_pattern: &'static str,
-        server_pattern: &'static str,
         startup_complete_tx: oneshot::Sender<()>,
-        server_ready_tx: oneshot::Sender<()>,
     ) -> Self {
         Self {
             prefix: prefix.into(),
             startup_complete_tx: Arc::new(Mutex::new(Some(startup_complete_tx))),
-            server_ready_tx: Arc::new(Mutex::new(Some(server_ready_tx))),
             startup_pattern,
-            server_pattern,
             log_buffer: Arc::new(Mutex::new(Vec::new())),
             custom_pattern_tx: Arc::new(Mutex::new(None)),
         }
@@ -68,15 +62,6 @@ impl WaitForLogConsumer {
         {
             let _ = tx.send(());
             tracing::info!("[{}] Detected startup complete", self.prefix);
-        }
-
-        // Check for server ready message
-        if message.contains(self.server_pattern)
-            && let Ok(mut tx_lock) = self.server_ready_tx.lock()
-            && let Some(tx) = tx_lock.take()
-        {
-            let _ = tx.send(());
-            tracing::info!("[{}] Detected server ready", self.prefix);
         }
 
         // Check for custom pattern

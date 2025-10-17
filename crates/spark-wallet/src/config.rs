@@ -69,6 +69,7 @@ impl SparkWalletConfig {
                 0,
                 "0000000000000000000000000000000000000000000000000000000000000001",
                 "https://0.spark.lightspark.com",
+                None,
                 "03dfbdff4b6332c220f8fa2ba8ed496c698ceada563fa01b67d9983bfc5c95e763",
             )
             .unwrap(),
@@ -76,6 +77,7 @@ impl SparkWalletConfig {
                 1,
                 "0000000000000000000000000000000000000000000000000000000000000002",
                 "https://1.spark.lightspark.com",
+                None,
                 "03e625e9768651c9be268e287245cc33f96a68ce9141b0b4769205db027ee8ed77",
             )
             .unwrap(),
@@ -83,6 +85,7 @@ impl SparkWalletConfig {
                 2,
                 "0000000000000000000000000000000000000000000000000000000000000003",
                 "https://2.spark.flashnet.xyz",
+                None,
                 "022eda13465a59205413086130a65dc0ed1b8f8e51937043161f8be0c369b1a410",
             )
             .unwrap(),
@@ -108,6 +111,7 @@ impl SparkWalletConfig {
         id: usize,
         identifier: &str,
         address: &str,
+        ca_cert: Option<&[u8]>,
         identity_public_key: &str,
     ) -> Result<OperatorConfig, SparkWalletError> {
         Ok(OperatorConfig {
@@ -121,6 +125,7 @@ impl SparkWalletConfig {
             address: address
                 .parse()
                 .map_err(|_| SparkWalletError::ValidationError("Invalid address".to_string()))?,
+            ca_cert: ca_cert.map(|cert| cert.to_vec()),
             identity_public_key: PublicKey::from_str(identity_public_key).map_err(|_| {
                 SparkWalletError::ValidationError("Invalid identity public key".to_string())
             })?,

@@ -98,6 +98,8 @@ operator \
     -config "$CONFIG_FILE" \
     -index ${SPARK_OPERATOR_INDEX} \
     -key /data/key.txt \
+    -server-cert "/data/server.crt" \
+    -server-key "/data/server.key" \
     -operators "/config/operators.json" \
     -threshold ${SPARK_THRESHOLD} \
     -signer "unix:///tmp/frost.sock" \

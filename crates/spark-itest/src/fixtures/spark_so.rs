@@ -1,6 +1,7 @@
 use anyhow::Result;
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::SecretKey;
+use rcgen::{CertifiedKey, generate_simple_self_signed};
 use serde_json::json;
 use spark_wallet::Identifier;
 use std::fs;
@@ -42,12 +43,12 @@ pub struct OperatorFixture {
     pub internal_port: u16,
     pub host_name: String,
     pub postgres_connectionstring: String,
+    pub ca_cert: String,
 }
 
 // Log patterns to wait for
 const STARTUP_COMPLETE_PATTERN: &str = "All startup tasks completed";
-const SERVER_READY_PATTERN: &str = "Serving on port";
-const LOG_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+const LOG_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Database query constants
 const KEYSHARE_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
@@ -59,30 +60,64 @@ pub struct SparkSoFixture {
     pub operators: Vec<OperatorFixture>,
     // Store receivers separately to avoid borrowing issues
     startup_receivers: Vec<(usize, oneshot::Receiver<()>)>,
-    server_receivers: Vec<(usize, oneshot::Receiver<()>)>,
     // Store references to log consumers for each operator
     log_consumers: Vec<(usize, WaitForLogConsumer)>,
+}
+
+// Function to generate a self-signed certificate for all operator hostnames
+fn generate_self_signed_certificate(host_names: &[String]) -> Result<(String, String)> {
+    let CertifiedKey { cert, signing_key } = generate_simple_self_signed(host_names).unwrap();
+    Ok((signing_key.serialize_pem(), cert.pem()))
 }
 
 impl SparkSoFixture {
     pub async fn new(fixture_id: &FixtureId, bitcoind_fixture: &BitcoindFixture) -> Result<Self> {
         let config_dir = testdir::testdir!();
         let operators_json_path = config_dir.join("operators.json");
-        fs::create_dir_all(config_dir)?;
+
+        // Create a shared server certificate file
+        let key_path = config_dir.join("server.key");
+        let cert_path = config_dir.join("server.crt");
+
+        fs::create_dir_all(&config_dir)?;
         fs::write(&operators_json_path, "{}")?;
+
+        // Generate a list of operator host names before creating the operators
+        // These must match exactly what Docker uses internally for DNS resolution
+        let mut operator_host_names = Vec::with_capacity(NUM_OPERATORS);
+        for i in 0..NUM_OPERATORS {
+            let operator_host_name = format!(
+                "spark-so-{i}-{}",
+                fixture_id.to_network().replace("network-", "")
+            );
+            operator_host_names.push(operator_host_name);
+        }
+
+        // Generate a self-signed certificate valid for all operator host names and localhost
+        let cert_host_names = [operator_host_names.clone(), vec!["127.0.0.1".to_string()]].concat();
+        let (key_pem, cert_pem) = generate_self_signed_certificate(&cert_host_names)?;
+        fs::write(&key_path, key_pem)?;
+        fs::write(&cert_path, cert_pem.clone())?;
 
         let secp = Secp256k1::new();
 
         // Create an array of futures for each operator
         let mut operator_futures = Vec::with_capacity(NUM_OPERATORS);
 
-        for i in 0..NUM_OPERATORS {
+        for (i, operator_host_name) in operator_host_names
+            .into_iter()
+            .enumerate()
+            .take(NUM_OPERATORS)
+        {
             // Clone references to data needed inside the async block
-            let operators_json_path = operators_json_path.clone();
             let internal_rpc_url = bitcoind_fixture.internal_rpc_url.clone();
             let internal_zmqpubrawblock_url = bitcoind_fixture.internal_zmqpubrawblock_url.clone();
             let secp = secp.clone();
             let fixture_id = fixture_id.clone();
+            let cert_path = cert_path.clone();
+            let key_path = key_path.clone();
+            let operators_json_path = operators_json_path.clone();
+            let cert_pem_clone = cert_pem.clone();
 
             // Create async task for each operator
             let operator_future = tokio::spawn(async move {
@@ -118,24 +153,20 @@ impl SparkSoFixture {
 
                 let secret_key = SecretKey::from_slice(&[i as u8 + 1; 32])?;
 
-                // Create channels for detecting log messages
+                // Create channel for detecting log messages
                 let (startup_complete_tx, startup_complete_rx) = oneshot::channel();
-                let (server_ready_tx, server_ready_rx) = oneshot::channel();
 
                 // Create a custom log consumer that will signal when specific log messages are seen
                 let log_consumer = WaitForLogConsumer::new(
                     format!("operator {i}"),
                     STARTUP_COMPLETE_PATTERN,
-                    SERVER_READY_PATTERN,
                     startup_complete_tx,
-                    server_ready_tx,
                 );
 
                 // Store a reference to the log consumer for later use
                 let log_consumer_ref = log_consumer.clone();
 
-                // Create container for this operator
-                let operator_host_name = format!("spark-so-{i}-{fixture_id}");
+                // Create container for this operator using the pre-generated host name
                 let container = GenericImage::new("spark-so", "latest")
                     .with_exposed_port(ContainerPort::Tcp(OPERATOR_PORT))
                     .with_wait_for(WaitFor::Log(LogWaitStrategy::stdout(
@@ -147,6 +178,14 @@ impl SparkSoFixture {
                     .with_mount(Mount::bind_mount(
                         operators_json_path.display().to_string(),
                         "/config/operators.json",
+                    ))
+                    .with_mount(Mount::bind_mount(
+                        cert_path.display().to_string(),
+                        "/data/server.crt",
+                    ))
+                    .with_mount(Mount::bind_mount(
+                        key_path.display().to_string(),
+                        "/data/server.key",
                     ))
                     // Basic configuration
                     .with_env_var("SPARK_OPERATOR_INDEX", i.to_string())
@@ -181,14 +220,10 @@ impl SparkSoFixture {
                     internal_port: OPERATOR_PORT,
                     host_name: operator_host_name,
                     postgres_connectionstring,
+                    ca_cert: cert_pem_clone,
                 };
 
-                Ok::<_, anyhow::Error>((
-                    operator,
-                    startup_complete_rx,
-                    server_ready_rx,
-                    log_consumer_ref,
-                ))
+                Ok::<_, anyhow::Error>((operator, startup_complete_rx, log_consumer_ref))
             });
 
             operator_futures.push(operator_future);
@@ -197,16 +232,14 @@ impl SparkSoFixture {
         // Await all operator futures simultaneously
         let mut operators = Vec::with_capacity(NUM_OPERATORS);
         let mut startup_receivers = Vec::with_capacity(NUM_OPERATORS);
-        let mut server_receivers = Vec::with_capacity(NUM_OPERATORS);
         let mut log_consumers = Vec::with_capacity(NUM_OPERATORS);
 
         for future in operator_futures {
             match future.await {
-                Ok(Ok((operator, startup_rx, server_rx, log_consumer))) => {
+                Ok(Ok((operator, startup_rx, log_consumer))) => {
                     let index = operator.index;
                     operators.push(operator);
                     startup_receivers.push((index, startup_rx));
-                    server_receivers.push((index, server_rx));
                     log_consumers.push((index, log_consumer));
                 }
                 Ok(Err(e)) => return Err(anyhow::anyhow!("Failed to create operator: {}", e)),
@@ -223,7 +256,6 @@ impl SparkSoFixture {
         Ok(Self {
             operators,
             startup_receivers,
-            server_receivers,
             log_consumers,
         })
     }
@@ -238,6 +270,7 @@ impl SparkSoFixture {
                 "address": format!("{}:{}", operator.host_name, operator.internal_port),
                 "external_address": format!("localhost:{}", operator.host_port),
                 "identity_public_key": operator.public_key.to_string(),
+                "cert_path": "/data/server.crt"   // Path to the mounted certificate inside container
             });
 
             operator_entries.push(operator_entry);
@@ -259,7 +292,6 @@ impl SparkSoFixture {
 
         // Take the receivers out of self to avoid borrowing issues
         let startup_receivers = std::mem::take(&mut self.startup_receivers);
-        let server_receivers = std::mem::take(&mut self.server_receivers);
 
         // Wait for all startup complete signals
         for (index, startup_rx) in startup_receivers {
@@ -269,19 +301,6 @@ impl SparkSoFixture {
                     "Timeout waiting for operator {} startup tasks to complete",
                     index
                 ),
-            }
-        }
-
-        // Wait for all server ready signals
-        for (index, server_rx) in server_receivers {
-            match timeout(LOG_WAIT_TIMEOUT, server_rx).await {
-                Ok(Ok(())) => info!("Operator {} server ready", index),
-                _ => {
-                    return Err(anyhow::anyhow!(
-                        "Timeout waiting for operator {} server to be ready",
-                        index
-                    ));
-                }
             }
         }
 

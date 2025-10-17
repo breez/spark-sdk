@@ -70,6 +70,7 @@ pub struct OperatorConfig {
     pub id: usize,
     pub identifier: Identifier,
     pub address: String,
+    pub ca_cert: Option<Vec<u8>>,
     #[serde_as(as = "DisplayFromStr")]
     pub identity_public_key: PublicKey,
 }
