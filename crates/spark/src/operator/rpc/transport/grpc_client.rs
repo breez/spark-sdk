@@ -12,9 +12,9 @@ pub struct GrpcClient {
 }
 
 impl GrpcClient {
-    pub fn new(url: String) -> Result<Self, OperatorRpcError> {
+    pub fn new(url: String, ca_cert: Option<Vec<u8>>) -> Result<Self, OperatorRpcError> {
         Ok(Self {
-            inner: RetryChannel::new(Self::create_endpoint(&url)?.connect_lazy()),
+            inner: RetryChannel::new(Self::create_endpoint(&url, ca_cert)?.connect_lazy()),
         })
     }
 
@@ -22,10 +22,18 @@ impl GrpcClient {
         self.inner
     }
 
-    fn create_endpoint(server_url: &str) -> Result<tonic::transport::Endpoint, OperatorRpcError> {
+    fn create_endpoint(
+        server_url: &str,
+        ca_cert: Option<Vec<u8>>,
+    ) -> Result<tonic::transport::Endpoint, OperatorRpcError> {
+        let client_tls_config = match ca_cert {
+            Some(ca_cert) => ClientTlsConfig::new()
+                .ca_certificate(tonic::transport::Certificate::from_pem(ca_cert)),
+            None => ClientTlsConfig::new().with_webpki_roots(),
+        };
         Ok(
             tonic::transport::Endpoint::from_shared(server_url.to_string())?
-                .tls_config(ClientTlsConfig::new().with_webpki_roots())?
+                .tls_config(client_tls_config)?
                 .http2_keep_alive_interval(Duration::new(5, 0))
                 .tcp_keepalive(Some(Duration::from_secs(5)))
                 .keep_alive_timeout(Duration::from_secs(5))

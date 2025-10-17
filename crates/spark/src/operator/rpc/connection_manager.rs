@@ -51,7 +51,9 @@ impl ConnectionManager for DefaultConnectionManager {
         match operator_connection {
             Some(operator_connection) => Ok(operator_connection.clone()),
             None => {
-                let transport = GrpcClient::new(operator.address.to_string())?.into_inner();
+                let transport =
+                    GrpcClient::new(operator.address.to_string(), operator.ca_cert.clone())?
+                        .into_inner();
 
                 map.insert(operator.address.to_string(), transport.clone());
                 debug!("Created new connection to operator: {}", operator.address);
