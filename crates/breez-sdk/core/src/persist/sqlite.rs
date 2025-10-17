@@ -203,18 +203,16 @@ impl From<rusqlite_migration::Error> for StorageError {
     }
 }
 
-impl SqliteStorage {
-    /// Bumps the revision number, locking the revision number for updates for the duration of the transaction.
-    fn get_next_revision(&self, tx: &Transaction<'_>) -> Result<u64, StorageError> {
-        let revision = tx.query_row(
-            "UPDATE sync_revision
-             SET revision = revision + 1
-             RETURNING revision",
-            [],
-            |row| row.get(0),
-        )?;
-        Ok(revision)
-    }
+/// Bumps the revision number, locking the revision number for updates for the duration of the transaction.
+fn get_next_revision(tx: &Transaction<'_>) -> Result<u64, StorageError> {
+    let revision = tx.query_row(
+        "UPDATE sync_revision
+            SET revision = revision + 1
+            RETURNING revision",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(revision)
 }
 
 #[async_trait]
