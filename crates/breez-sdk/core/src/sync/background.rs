@@ -24,8 +24,8 @@ impl SyncProcessor {
         storage: Arc<dyn Storage>,
     ) -> Self {
         SyncProcessor {
-            client,
             push_sync_trigger,
+            client,
             storage,
         }
     }

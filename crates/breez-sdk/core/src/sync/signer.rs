@@ -12,8 +12,8 @@ pub struct DefaultSyncSigner {
 impl DefaultSyncSigner {
     pub fn new(inner: Arc<dyn Signer>, derivation_path: DerivationPath) -> Self {
         DefaultSyncSigner {
-            inner,
             derivation_path,
+            inner,
         }
     }
 }

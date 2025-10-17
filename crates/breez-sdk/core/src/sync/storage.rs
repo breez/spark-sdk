@@ -18,7 +18,7 @@ impl Display for RecordType {
         let s = match self {
             RecordType::PaymentMetadata => "PaymentMetadata",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -28,7 +28,7 @@ impl FromStr for RecordType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "PaymentMetadata" => Ok(RecordType::PaymentMetadata),
-            _ => Err(format!("Unknown record type: {}", s)),
+            _ => Err(format!("Unknown record type: {s}")),
         }
     }
 }
