@@ -88,7 +88,7 @@ class SendPayment {
     suspend fun sendPaymentLightningBolt11(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) {
         // ANCHOR: send-payment-lightning-bolt11
         try {
-            val options = SendPaymentOptions.Bolt11Invoice(preferSpark = true, completionTimeoutSecs = 10u)
+            val options = SendPaymentOptions.Bolt11Invoice(preferSpark = false, completionTimeoutSecs = 10u)
             val sendResponse = sdk.sendPayment(SendPaymentRequest(prepareResponse, options))
             val payment = sendResponse.payment
         } catch (e: Exception) {

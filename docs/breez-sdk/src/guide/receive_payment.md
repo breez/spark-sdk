@@ -79,6 +79,11 @@ When receiving via Lightning, we can generate a BOLT11 invoice to be paid. Setti
 </section>
 </custom-tabs>
 
+#### LNURL-Pay & Lightning address 
+To receive via LNURL-Pay and/or a Lightning address, follow [these instructions](/guide/receive_lnurl_pay.md).
+
+> Note: Lightning payments work in Spark even if the receiver is offline. To understand how it works under the hood, read [this](https://docs.spark.money/spark/lightning).
+
 ### Bitcoin
 
 For onchain payments you can use the static Bitcoin address to receive payments.
