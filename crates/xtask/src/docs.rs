@@ -79,38 +79,38 @@ pub fn check_doc_snippets_cmd(
 }
 
 fn check_doc_snippets_wasm_cmd(skip_binding_gen: bool) -> Result<()> {
-    if !skip_binding_gen {
-        println!("Creating WASM package");
-        package_cmd(Some(TargetPackage::Wasm(WasmPackages::All)))?;
-    }
-
-    println!("Checking doc snippets WASM");
-
     let workspace_root = env::current_dir()?;
     let doc_snippets_dir = workspace_root.join("docs/breez-sdk/snippets/wasm");
 
-    // Run yarn cache clean
-    let status = Command::new("yarn")
-        .arg("cache")
-        .arg("clean")
-        .current_dir(&doc_snippets_dir)
-        .status()?;
-    if !status.success() {
-        anyhow::bail!("Doc snippet check failed: `yarn cache clean` failed");
+    if !skip_binding_gen {
+        println!("Creating WASM package");
+        package_cmd(Some(TargetPackage::Wasm(WasmPackages::All)))?;
+
+        // Run yarn cache clean
+        let status = Command::new("yarn")
+            .arg("cache")
+            .arg("clean")
+            .current_dir(&doc_snippets_dir)
+            .status()?;
+        if !status.success() {
+            anyhow::bail!("Doc snippet check failed: `yarn cache clean` failed");
+        }
+
+        // Remove node_modules directory if it exists
+        let node_modules_dir = doc_snippets_dir.join("node_modules");
+        if node_modules_dir.exists() {
+            println!("Removing node_modules");
+            std::fs::remove_dir_all(&node_modules_dir)?;
+        }
+        // Remove yarn.lock file if it exists
+        let yarn_lock_file = doc_snippets_dir.join("yarn.lock");
+        if yarn_lock_file.exists() {
+            println!("Removing yarn.lock");
+            std::fs::remove_file(&yarn_lock_file)?;
+        }
     }
 
-    // Remove node_modules directory if it exists
-    let node_modules_dir = doc_snippets_dir.join("node_modules");
-    if node_modules_dir.exists() {
-        println!("Removing node_modules");
-        std::fs::remove_dir_all(&node_modules_dir)?;
-    }
-    // Remove yarn.lock file if it exists
-    let yarn_lock_file = doc_snippets_dir.join("yarn.lock");
-    if yarn_lock_file.exists() {
-        println!("Removing yarn.lock");
-        std::fs::remove_file(&yarn_lock_file)?;
-    }
+    println!("Checking doc snippets WASM");
 
     // Run yarn install (yarn)
     let status = Command::new("yarn")
@@ -443,6 +443,7 @@ fn check_doc_snippets_python_cmd(skip_binding_gen: bool) -> Result<()> {
 
 fn check_doc_snippets_react_native_cmd(skip_binding_gen: bool) -> Result<()> {
     let workspace_root = env::current_dir()?;
+    let doc_snippets_dir = workspace_root.join("docs/breez-sdk/snippets/react-native");
 
     if !skip_binding_gen {
         println!("Building React Native bindings");
@@ -492,18 +493,16 @@ fn check_doc_snippets_react_native_cmd(skip_binding_gen: bool) -> Result<()> {
         if !status.success() {
             anyhow::bail!("`yarn prepare` failed in packages/react-native");
         }
+
+        // Remove node_modules in docs/breez-sdk/snippets/react-native if it exists
+        let node_modules_dir = doc_snippets_dir.join("node_modules");
+        if node_modules_dir.exists() {
+            std::fs::remove_dir_all(&node_modules_dir)
+                .with_context(|| format!("Failed to remove {:?}", node_modules_dir))?;
+        }
     }
 
     println!("Checking doc snippets React Native");
-
-    let doc_snippets_dir = workspace_root.join("docs/breez-sdk/snippets/react-native");
-
-    // Remove node_modules in docs/breez-sdk/snippets/react-native if it exists
-    let node_modules_dir = doc_snippets_dir.join("node_modules");
-    if node_modules_dir.exists() {
-        std::fs::remove_dir_all(&node_modules_dir)
-            .with_context(|| format!("Failed to remove {:?}", node_modules_dir))?;
-    }
 
     // Run yarn install (yarn)
     let status = Command::new("yarn")

@@ -35,6 +35,7 @@ lightning.workspace = true
 macros.workspace = true
 percent-encoding-rfc3986.workspace = true
 prost.workspace = true
+regex.workspace = true
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

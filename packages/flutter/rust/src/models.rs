@@ -31,6 +31,15 @@ pub struct _Config {
     pub max_deposit_claim_fee: Option<Fee>,
     pub lnurl_domain: Option<String>,
     pub prefer_spark_over_lightning: bool,
+    pub external_input_parsers: Option<Vec<ExternalInputParser>>,
+    pub use_default_external_input_parsers: bool,
+}
+
+#[frb(mirror(ExternalInputParser))]
+pub struct _ExternalInputParser {
+    pub provider_id: String,
+    pub input_regex: String,
+    pub parser_url: String,
 }
 
 #[frb(mirror(Seed))]

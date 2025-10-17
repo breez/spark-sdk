@@ -8,11 +8,11 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func ParseInput() (*breez_sdk_common.InputType, error) {
+func ParseInput(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_common.InputType, error) {
 	// ANCHOR: parse-inputs
 	inputStr := "an input to be parsed..."
 
-	input, err := breez_sdk_spark.Parse(inputStr)
+	input, err := sdk.Parse(inputStr)
 
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return nil, err
@@ -42,4 +42,29 @@ func ParseInput() (*breez_sdk_common.InputType, error) {
 	}
 	// ANCHOR_END: parse-inputs
 	return &input, nil
+}
+
+func SetExternalInputParsers() (*breez_sdk_spark.Config, error) {
+	// ANCHOR: set-external-input-parsers
+	// Create the default config
+	apiKey := "<breez api key>"
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	config.ApiKey = &apiKey
+
+	// Configure external parsers
+	parsers := []breez_sdk_common.ExternalInputParser{
+		{
+			ProviderId: "provider_a",
+			InputRegex: "^provider_a",
+			ParserUrl:  "https://parser-domain.com/parser?input=<input>",
+		},
+		{
+			ProviderId: "provider_b",
+			InputRegex: "^provider_b",
+			ParserUrl:  "https://parser-domain.com/parser?input=<input>",
+		},
+	}
+	config.ExternalInputParsers = &parsers
+	// ANCHOR_END: set-external-input-parsers
+	return &config, nil
 }

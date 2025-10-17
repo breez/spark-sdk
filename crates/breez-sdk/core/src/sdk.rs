@@ -7,7 +7,7 @@ use bitcoin::{
 pub use breez_sdk_common::input::parse as parse_input;
 use breez_sdk_common::{
     fiat::FiatService,
-    input::{BitcoinAddressDetails, Bolt11InvoiceDetails, InputType},
+    input::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType},
 };
 use breez_sdk_common::{
     lnurl::{
@@ -122,6 +122,7 @@ pub struct BreezSdk {
     shutdown_sender: watch::Sender<()>,
     sync_trigger: tokio::sync::broadcast::Sender<SyncRequest>,
     initial_synced_watcher: watch::Receiver<bool>,
+    external_input_parsers: Vec<ExternalInputParser>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -194,12 +195,9 @@ pub fn default_config(network: Network) -> Config {
         max_deposit_claim_fee: None,
         lnurl_domain: Some("breez.tips".to_string()),
         prefer_spark_over_lightning: false,
+        external_input_parsers: None,
+        use_default_external_input_parsers: true,
     }
-}
-
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-pub async fn parse(input: &str) -> Result<InputType, SdkError> {
-    Ok(parse_input(input).await?)
 }
 
 pub(crate) struct BreezSdkParams {
@@ -225,6 +223,7 @@ impl BreezSdk {
             }
         }
         let (initial_synced_sender, initial_synced_watcher) = watch::channel(false);
+        let external_input_parsers = params.config.get_all_external_input_parsers();
         let sdk = Self {
             config: params.config,
             spark_wallet: params.spark_wallet,
@@ -237,6 +236,7 @@ impl BreezSdk {
             shutdown_sender: params.shutdown_sender,
             sync_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
+            external_input_parsers,
         };
         sdk.start(initial_synced_sender);
         Ok(sdk)
@@ -572,6 +572,10 @@ impl BreezSdk {
         Ok(())
     }
 
+    pub async fn parse(&self, input: &str) -> Result<InputType, SdkError> {
+        Ok(parse_input(input, Some(self.external_input_parsers.clone())).await?)
+    }
+
     /// Returns the balance of the wallet in satoshis
     #[allow(unused_variables)]
     pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
@@ -844,7 +848,7 @@ impl BreezSdk {
         let amount_sats = request.amount;
 
         // Then check for other types of inputs
-        let parsed_input = parse(&request.payment_request).await?;
+        let parsed_input = self.parse(&request.payment_request).await?;
         match &parsed_input {
             InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
                 let spark_address = self

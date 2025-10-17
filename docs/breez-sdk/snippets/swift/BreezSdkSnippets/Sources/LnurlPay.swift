@@ -8,7 +8,7 @@ func preparePay(sdk: BreezSdk) async throws {
     // lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf
     let lnurlPayUrl = "lightning@address.com"
 
-    let inputType = try await parse(input: lnurlPayUrl) 
+    let inputType = try await sdk.parse(input: lnurlPayUrl)
     if case .lightningAddress(v1: let details) = inputType {
         let amountSats: UInt64 = 5_000
         let optionalComment = "<comment>"
@@ -27,7 +27,7 @@ func preparePay(sdk: BreezSdk) async throws {
         let feesSat = response.feeSats
         print("Fees: \(feesSat) sats")
     }
-    
+
     // ANCHOR_END: prepare-lnurl-pay
 }
 

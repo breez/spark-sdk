@@ -44,6 +44,8 @@ pub enum ParseError {
     LnurlError(LnurlError),
     #[error("Service connectivity error: {0}")]
     ServiceConnectivity(ServiceConnectivityError),
+    #[error("Invalid external input parser: {0}")]
+    InvalidExternalInputParser(String),
 }
 
 impl From<Bip21Error> for ParseError {
@@ -61,5 +63,11 @@ impl From<LnurlError> for ParseError {
 impl From<ServiceConnectivityError> for ParseError {
     fn from(value: ServiceConnectivityError) -> Self {
         Self::ServiceConnectivity(value)
+    }
+}
+
+impl From<regex::Error> for ParseError {
+    fn from(value: regex::Error) -> Self {
+        Self::InvalidExternalInputParser(format!("Couldn't parse regex: {value}"))
     }
 }
