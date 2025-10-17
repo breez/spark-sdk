@@ -29,7 +29,7 @@ pub struct BreezSyncerClient {
 
 impl BreezSyncerClient {
     #[allow(unused)]
-    pub fn new(server_url: &str, api_key: Option<String>) -> anyhow::Result<Self> {
+    pub fn new(server_url: &str, api_key: Option<&str>) -> anyhow::Result<Self> {
         let api_key_metadata = match &api_key {
             Some(key) => Some(
                 format!("Bearer {key}")

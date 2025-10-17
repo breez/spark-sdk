@@ -1,9 +1,9 @@
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub(crate) mod sqlite;
-mod sync;
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
+use breez_sdk_common::sync::model::RecordId;
 use macros::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -44,6 +44,12 @@ pub enum StorageError {
 
 impl From<serde_json::Error> for StorageError {
     fn from(e: serde_json::Error) -> Self {
+        StorageError::Serialization(e.to_string())
+    }
+}
+
+impl From<semver::Error> for StorageError {
+    fn from(e: semver::Error) -> Self {
         StorageError::Serialization(e.to_string())
     }
 }
@@ -178,6 +184,134 @@ pub trait Storage: Send + Sync {
         vout: u32,
         payload: UpdateDepositPayload,
     ) -> Result<(), StorageError>;
+
+    async fn sync_add_outgoing_record(
+        &self,
+        record: UnversionedOutgoingRecord,
+    ) -> Result<u64, StorageError>;
+    async fn sync_complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError>;
+    async fn sync_get_pending_outgoing_records(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<OutgoingRecordParent>, StorageError>;
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct OutgoingRecordParent {
+    pub record: OutgoingRecord,
+    pub parent: Option<Record>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UnversionedOutgoingRecord {
+    pub id: RecordId,
+    pub schema_version: String,
+    pub updated_fields: HashMap<String, String>,
+}
+
+impl TryFrom<UnversionedOutgoingRecord>
+    for breez_sdk_common::sync::model::UnversionedOutgoingRecord
+{
+    type Error = StorageError;
+
+    fn try_from(value: UnversionedOutgoingRecord) -> Result<Self, Self::Error> {
+        Ok(breez_sdk_common::sync::model::UnversionedOutgoingRecord {
+            id: value.id,
+            schema_version: value.schema_version.parse()?,
+            updated_fields: value
+                .updated_fields
+                .into_iter()
+                .map(|(k, v)| Ok((k, serde_json::from_str(&v)?)))
+                .collect::<Result<HashMap<String, serde_json::Value>, StorageError>>()?,
+        })
+    }
+}
+
+impl TryFrom<breez_sdk_common::sync::model::UnversionedOutgoingRecord>
+    for UnversionedOutgoingRecord
+{
+    type Error = StorageError;
+
+    fn try_from(
+        value: breez_sdk_common::sync::model::UnversionedOutgoingRecord,
+    ) -> Result<Self, Self::Error> {
+        Ok(UnversionedOutgoingRecord {
+            id: value.id,
+            schema_version: value.schema_version.to_string(),
+            updated_fields: value
+                .updated_fields
+                .into_iter()
+                .map(|(k, v)| Ok((k, serde_json::to_string(&v)?)))
+                .collect::<Result<HashMap<String, String>, StorageError>>()?,
+        })
+    }
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct OutgoingRecord {
+    pub id: RecordId,
+    pub schema_version: String,
+    pub updated_fields: HashMap<String, String>,
+    pub revision: u64,
+}
+
+impl TryFrom<OutgoingRecord> for breez_sdk_common::sync::model::OutgoingRecord {
+    type Error = StorageError;
+
+    fn try_from(value: OutgoingRecord) -> Result<Self, Self::Error> {
+        Ok(breez_sdk_common::sync::model::OutgoingRecord {
+            id: value.id,
+            schema_version: value.schema_version.parse()?,
+            updated_fields: value
+                .updated_fields
+                .into_iter()
+                .map(|(k, v)| Ok((k, serde_json::from_str(&v)?)))
+                .collect::<Result<HashMap<String, serde_json::Value>, StorageError>>()?,
+            revision: value.revision,
+        })
+    }
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct Record {
+    pub id: RecordId,
+    pub revision: u64,
+    pub schema_version: String,
+    pub data: HashMap<String, String>,
+}
+
+impl TryFrom<Record> for breez_sdk_common::sync::model::Record {
+    type Error = StorageError;
+
+    fn try_from(value: Record) -> Result<Self, Self::Error> {
+        Ok(breez_sdk_common::sync::model::Record {
+            id: value.id,
+            schema_version: value.schema_version.parse()?,
+            data: value
+                .data
+                .into_iter()
+                .map(|(k, v)| Ok((k, serde_json::from_str(&v)?)))
+                .collect::<Result<HashMap<String, serde_json::Value>, StorageError>>()?,
+            revision: value.revision,
+        })
+    }
+}
+
+impl TryFrom<breez_sdk_common::sync::model::Record> for Record {
+    type Error = StorageError;
+
+    fn try_from(value: breez_sdk_common::sync::model::Record) -> Result<Self, Self::Error> {
+        Ok(Record {
+            id: value.id,
+            schema_version: value.schema_version.to_string(),
+            data: value
+                .data
+                .into_iter()
+                .map(|(k, v)| Ok((k, serde_json::to_string(&v)?)))
+                .collect::<Result<HashMap<String, String>, StorageError>>()?,
+            revision: value.revision,
+        })
+    }
 }
 
 pub(crate) struct ObjectCacheRepository {

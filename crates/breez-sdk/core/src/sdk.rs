@@ -59,12 +59,15 @@ use crate::{
         CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, PaymentMetadata,
         StaticDepositAddress, Storage, UpdateDepositPayload,
     },
+    sync::SyncProcessor,
     utils::{
         deposit_chain_syncer::DepositChainSyncer,
         run_with_shutdown,
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
+
+pub const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology";
 
 #[derive(Clone, Debug)]
 enum SyncType {
@@ -169,6 +172,9 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
 
     let storage = default_storage(storage_dir.to_string_lossy().to_string())?;
     let builder = crate::SdkBuilder::new(request.config, request.seed, storage);
+    builder
+        .with_real_time_sync(BREEZ_SYNC_SERVICE_URL.to_string())
+        .await;
     let sdk = builder.build().await?;
     Ok(sdk)
 }
@@ -209,6 +215,7 @@ pub(crate) struct BreezSdkParams {
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub shutdown_sender: watch::Sender<()>,
     pub spark_wallet: Arc<SparkWallet>,
+    pub sync_processor: Option<Arc<SyncProcessor>>,
 }
 
 impl BreezSdk {
@@ -232,6 +239,11 @@ impl BreezSdk {
             sync_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
         };
+
+        if let Some(sync_processor) = params.sync_processor {
+            sync_processor.start(sdk.shutdown_sender.subscribe());
+        }
+
         sdk.start(initial_synced_sender);
         Ok(sdk)
     }

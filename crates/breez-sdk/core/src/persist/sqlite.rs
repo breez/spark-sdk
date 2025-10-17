@@ -1,7 +1,8 @@
-use breez_sdk_common::sync::{OutgoingRecord, RecordId, SyncStorage, UnversionedOutgoingRecord};
+use breez_sdk_common::sync::model::RecordId;
 use macros::async_trait;
 use rusqlite::{
-    params, types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef}, Connection, Row, ToSql, Transaction
+    Connection, Row, ToSql, Transaction, params,
+    types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
 };
 use rusqlite_migration::{M, Migrations, SchemaVersion};
 use std::path::{Path, PathBuf};
@@ -9,7 +10,10 @@ use std::path::{Path, PathBuf};
 use crate::{
     DepositInfo, LnurlPayInfo, PaymentDetails, PaymentMethod,
     error::DepositClaimError,
-    persist::{PaymentMetadata, UpdateDepositPayload},
+    persist::{
+        OutgoingRecord, OutgoingRecordParent, PaymentMetadata, Record, UnversionedOutgoingRecord,
+        UpdateDepositPayload,
+    },
 };
 
 use super::{Payment, Storage, StorageError};
@@ -166,16 +170,17 @@ impl SqliteStorage {
                 revision INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE sync_outgoing(
-                data_id TEXT NOT NULL,
                 record_type TEXT NOT NULL,
+                data_id TEXT NOT NULL,
                 schema_version TEXT NOT NULL,
                 commit_time INTEGER NOT NULL,
                 updated_fields_json TEXT NOT NULL,
                 revision INTEGER NOT NULL
             );
+            CREATE INDEX idx_sync_outgoing_data_id_record_type ON sync_outgoing(record_type, data_id);
             CREATE TABLE sync_state(
-                data_id TEXT NOT NULL,
                 record_type TEXT NOT NULL,
+                data_id TEXT NOT NULL,
                 schema_version TEXT NOT NULL,
                 commit_time INTEGER NOT NULL,
                 data TEXT NOT NULL,
@@ -200,8 +205,7 @@ impl From<rusqlite_migration::Error> for StorageError {
 
 impl SqliteStorage {
     /// Bumps the revision number, locking the revision number for updates for the duration of the transaction.
-    fn get_next_revision(&self, tx: &mut Transaction<'_>) -> Result<u32, breez_sdk_common::sync::StorageError> {
-        
+    fn get_next_revision(&self, tx: &Transaction<'_>) -> Result<u64, StorageError> {
         let revision = tx.query_row(
             "UPDATE sync_revision
              SET revision = revision + 1
@@ -213,63 +217,6 @@ impl SqliteStorage {
     }
 }
 
-#[async_trait]
-impl SyncStorage for SqliteStorage {
-    async fn add_outgoing_record(&self, record: &UnversionedOutgoingRecord) -> Result<u32, breez_sdk_common::sync::StorageError> {
-        let connection = self.get_connection()?;
-        let mut tx = connection.transaction()?;
-        let revision = self.get_next_revision(&mut tx)?;
- 
-        tx.execute(
-            "INSERT INTO sync_outgoing (
-                data_id
-            ,   record_type
-            ,   schema_version
-            ,   commit_time
-            ,   updated_fields_json
-            ,   revision
-            )
-             VALUES (?, ?, ?, strftime('%s','now'), ?, ?)",
-            params![
-                record.id.data_id,
-                record.id.r#type,
-                record.schema_version.to_string(),
-                serde_json::to_string(&record.updated_fields)?,
-                revision,
-            ],
-        )?;
-
-        tx.commit()?;
-        Ok(revision)
-    }
-
-    async fn get_pending_outgoing_records(&self, limit: usize) -> Result<Vec<OutgoingRecord>, breez_sdk_common::sync::StorageError> {
-        let connection = self.get_connection()?;
-
-        let mut stmt = connection.prepare(
-            "SELECT data_id
-            ,       record_type
-            ,       schema_version
-            ,       commit_time
-            ,       updated_fields_json
-            ,       revision 
-             FROM sync_outgoing 
-             ORDER BY revision ASC 
-             LIMIT ?",
-        )?;
-        let rows = stmt.query_map(params![limit], |row| {
-            Ok(OutgoingRecord {
-                id: RecordId::new(row.get(1)?, row.get(0)?),
-                schema_version: row.get(2)?.parse()?,
-                updated_fields: serde_json::from_str(&row.get::<_, String>(4)?)?,
-                revision: row.get(5)?,
-            })
-        })?;
-
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
-    }
-}
-                                                                                                                                                                                                                                                                                                                                                                                                              
 #[async_trait]
 impl Storage for SqliteStorage {
     async fn list_payments(
@@ -564,6 +511,116 @@ impl Storage for SqliteStorage {
             }
         }
         Ok(())
+    }
+
+    async fn sync_add_outgoing_record(
+        &self,
+        record: UnversionedOutgoingRecord,
+    ) -> Result<u64, StorageError> {
+        let mut connection = self.get_connection()?;
+        let tx = connection.transaction()?;
+        let revision = self.get_next_revision(&tx)?;
+
+        tx.execute(
+            "INSERT INTO sync_outgoing (
+                record_type
+            ,   data_id
+            ,   schema_version
+            ,   commit_time
+            ,   updated_fields_json
+            ,   revision
+            )
+             VALUES (?, ?, ?, strftime('%s','now'), ?, ?)",
+            params![
+                record.id.r#type,
+                record.id.data_id,
+                record.schema_version.to_string(),
+                serde_json::to_string(&record.updated_fields)?,
+                revision,
+            ],
+        )?;
+
+        tx.commit()?;
+        Ok(revision)
+    }
+
+    async fn sync_complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError> {
+        let mut connection = self.get_connection()?;
+        let tx = connection.transaction()?;
+
+        tx.execute(
+            "DELETE FROM sync_outgoing WHERE record_type = ? AND data_id = ? AND revision = ?",
+            params![record.id.r#type, record.id.data_id, record.revision],
+        )?;
+
+        tx.execute(
+            "INSERT OR REPLACE INTO sync_state (
+                record_type
+            ,   data_id
+            ,   schema_version
+            ,   commit_time
+            ,   data
+            ,   revision
+            )
+             VALUES (?, ?, ?, strftime('%s','now'), ?, ?)",
+            params![
+                record.id.r#type,
+                record.id.data_id,
+                record.schema_version.to_string(),
+                serde_json::to_string(&record.data)?,
+                record.revision,
+            ],
+        )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    async fn sync_get_pending_outgoing_records(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<OutgoingRecordParent>, StorageError> {
+        let connection = self.get_connection()?;
+
+        let mut stmt = connection.prepare(
+            "SELECT o.record_type
+            ,       o.data_id
+            ,       o.schema_version
+            ,       o.commit_time
+            ,       o.updated_fields_json
+            ,       o.revision
+            ,       e.schema_version AS existing_schema_version
+            ,       e.commit_time AS existing_commit_time
+            ,       e.data AS existing_data
+            ,       e.revision AS existing_revision
+             FROM sync_outgoing o
+             LEFT JOIN sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id
+             ORDER BY o.revision ASC
+             LIMIT ?",
+        )?;
+        let mut rows = stmt.query(params![limit])?;
+        let mut results = Vec::new();
+        while let Some(row) = rows.next()? {
+            let parent = if let Some(existing_data) = row.get::<_, Option<String>>(8)? {
+                Some(Record {
+                    id: RecordId::new(row.get::<_, String>(0)?, row.get::<_, String>(1)?),
+                    schema_version: row.get(6)?,
+                    revision: row.get(9)?,
+                    data: serde_json::from_str(&existing_data)?,
+                })
+            } else {
+                None
+            };
+            let record = OutgoingRecord {
+                id: RecordId::new(row.get::<_, String>(0)?, row.get::<_, String>(1)?),
+                schema_version: row.get(2)?,
+                updated_fields: serde_json::from_str(&row.get::<_, String>(4)?)?,
+                revision: row.get(5)?,
+            };
+            results.push(OutgoingRecordParent { record, parent });
+        }
+
+        Ok(results)
     }
 }
 

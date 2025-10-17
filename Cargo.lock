@@ -648,6 +648,7 @@ dependencies = [
 name = "breez-sdk-spark"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64 0.22.1",
  "bip39",
@@ -682,6 +683,7 @@ dependencies = [
  "wasm-bindgen-test",
  "web-time",
  "x509-parser",
+ "zbase32",
 ]
 
 [[package]]

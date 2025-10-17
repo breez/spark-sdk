@@ -1,12 +1,16 @@
-use std::{fmt::{Display, Formatter}, str::FromStr, sync::Arc};
+use std::{
+    fmt::{Display, Formatter},
+    str::FromStr,
+    sync::Arc,
+};
 
-use breez_sdk_common::sync::{OutgoingRecordRequest, RecordId, SyncService};
-use semver::Version;
+use crate::{persist::OutgoingRecordParent, sync::SyncService};
+use breez_sdk_common::sync::model::{OutgoingRecordRequest, RecordId};
 
 use crate::{DepositInfo, Payment, PaymentMetadata, Storage, StorageError, UpdateDepositPayload};
 
 enum RecordType {
-    PaymentMetadata
+    PaymentMetadata,
 }
 
 impl Display for RecordType {
@@ -31,13 +35,15 @@ impl FromStr for RecordType {
 
 pub struct SyncedStorage {
     inner: Arc<dyn Storage>,
-    schema_version: Version,
     sync_service: Arc<SyncService>,
 }
 
 impl SyncedStorage {
     pub fn new(inner: Arc<dyn Storage>, sync_service: Arc<SyncService>) -> Self {
-        SyncedStorage { inner, sync_service, schema_version: "0.2.6".parse().expect("Invalid sync schema version") }
+        SyncedStorage {
+            inner,
+            sync_service,
+        }
     }
 }
 
@@ -70,10 +76,17 @@ impl Storage for SyncedStorage {
         metadata: PaymentMetadata,
     ) -> Result<(), StorageError> {
         // Set the outgoing record for sync before updating local storage.
-        self.sync_service.set_outgoing_record(&OutgoingRecordRequest {
-            id: RecordId::new(RecordType::PaymentMetadata.to_string(), &payment_id),
-            updated_fields: serde_json::to_value(&metadata).map_err(|e| StorageError::Implementation(e.to_string()))?,
-        }).await.map_err(|e| StorageError::Implementation(e.to_string()))?;
+        self.sync_service
+            .set_outgoing_record(&OutgoingRecordRequest {
+                id: RecordId::new(RecordType::PaymentMetadata.to_string(), &payment_id),
+                updated_fields: serde_json::from_value(
+                    serde_json::to_value(&metadata)
+                        .map_err(|e| StorageError::Implementation(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Implementation(e.to_string()))?,
+            })
+            .await
+            .map_err(|e| StorageError::Implementation(e.to_string()))?;
         self.inner.set_payment_metadata(payment_id, metadata).await
     }
 
@@ -112,5 +125,24 @@ impl Storage for SyncedStorage {
         payload: UpdateDepositPayload,
     ) -> Result<(), StorageError> {
         self.inner.update_deposit(txid, vout, payload).await
+    }
+
+    async fn sync_add_outgoing_record(
+        &self,
+        record: crate::persist::UnversionedOutgoingRecord,
+    ) -> Result<u64, StorageError> {
+        self.inner.sync_add_outgoing_record(record).await
+    }
+    async fn sync_complete_outgoing_sync(
+        &self,
+        record: crate::persist::Record,
+    ) -> Result<(), StorageError> {
+        self.inner.sync_complete_outgoing_sync(record).await
+    }
+    async fn sync_get_pending_outgoing_records(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<OutgoingRecordParent>, StorageError> {
+        self.inner.sync_get_pending_outgoing_records(limit).await
     }
 }

@@ -1,9 +1,17 @@
 use std::{sync::Arc, time::SystemTime};
 
-use bitcoin::{hashes::{sha256d, Hash}, hex::DisplayHex};
+use bitcoin::{
+    hashes::{Hash, sha256d},
+    hex::DisplayHex,
+};
 use tracing::trace;
 
-use crate::sync::{client::SyncerClient, model::Record, proto::{SetRecordReply, SetRecordRequest}, signer::SyncSigner};
+use crate::sync::{
+    client::SyncerClient,
+    model::Record,
+    proto::{SetRecordReply, SetRecordRequest},
+    signer::SyncSigner,
+};
 
 const MESSAGE_PREFIX: &[u8; 13] = b"realtimesync:";
 
@@ -14,19 +22,29 @@ pub struct SigningClient {
 }
 
 impl SigningClient {
-    pub fn new(inner: Arc<dyn SyncerClient>, signer: Arc<dyn SyncSigner>, client_id: String) -> Self {
-        SigningClient { inner, signer, client_id }
+    pub fn new(
+        inner: Arc<dyn SyncerClient>,
+        signer: Arc<dyn SyncSigner>,
+        client_id: String,
+    ) -> Self {
+        SigningClient {
+            inner,
+            signer,
+            client_id,
+        }
     }
 
-    pub async fn set_record(&self, record: Record) -> anyhow::Result<SetRecordReply> {
-        let request_time = SystemTime::now()
+    pub async fn set_record(&self, record: &Record) -> anyhow::Result<SetRecordReply> {
+        let request_time: u32 = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .expect("Time went backwards")
-            .as_secs() as u32;
+            .as_secs()
+            .try_into()
+            .expect("Time has rolled over");
         let msg = format!(
             "{}-{}-{}-{}-{}",
             record.id,
-            record.data.to_lower_hex_string(),
+            serde_json::to_vec(&record.data)?.to_lower_hex_string(),
             record.revision,
             record.schema_version,
             request_time,
@@ -34,7 +52,7 @@ impl SigningClient {
         let signature = self.sign_message(msg.as_bytes()).await?;
         let req = SetRecordRequest {
             client_id: Some(self.client_id.clone()),
-            record: Some(record.into()),
+            record: Some(record.try_into()?),
             request_time,
             signature,
         };

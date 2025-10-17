@@ -1,10 +1,9 @@
-mod background;
-mod client;
-mod model;
-mod proto;
-mod signer;
-mod signing_client;
-mod storage;
-mod service;
+pub mod client;
+pub mod model;
+pub mod signer;
+pub mod signing_client;
 
-pub use {model::*, service::*, signer::*, storage::*, background::*};
+#[allow(clippy::doc_markdown)]
+pub mod proto {
+    tonic::include_proto!("sync");
+}

@@ -1,11 +1,12 @@
-use std::fmt::Display;
+use std::{collections::HashMap, fmt::Display};
 
-use bitcoin::hashes::{sha256, Hash};
+use bitcoin::hashes::{Hash, sha256};
 use semver::Version;
 use serde_json::Value;
 
 const CURRENT_SCHEMA_VERSION: Version = Version::new(0, 2, 6);
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RecordId {
     pub r#type: String,
     pub data_id: String,
@@ -13,19 +14,26 @@ pub struct RecordId {
 
 impl RecordId {
     pub fn new(r#type: impl Into<String>, data_id: impl Into<String>) -> Self {
-        RecordId { r#type: r#type.into(), data_id: data_id.into() }
+        RecordId {
+            r#type: r#type.into(),
+            data_id: data_id.into(),
+        }
     }
 }
 
 impl Display for RecordId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:x}", sha256::Hash::hash(format!("{}:{}", self.r#type, self.data_id).as_bytes()))
+        write!(
+            f,
+            "{:x}",
+            sha256::Hash::hash(format!("{}:{}", self.r#type, self.data_id).as_bytes())
+        )
     }
 }
 
 pub struct OutgoingRecordRequest {
     pub id: RecordId,
-    pub updated_fields: Value,
+    pub updated_fields: HashMap<String, Value>,
 }
 
 impl From<&OutgoingRecordRequest> for UnversionedOutgoingRecord {
@@ -41,31 +49,56 @@ impl From<&OutgoingRecordRequest> for UnversionedOutgoingRecord {
 pub struct UnversionedOutgoingRecord {
     pub id: RecordId,
     pub schema_version: Version,
-    pub updated_fields: Value,
+    pub updated_fields: HashMap<String, Value>,
 }
 
 pub struct OutgoingRecord {
     pub id: RecordId,
     pub schema_version: Version,
-    pub updated_fields: Value,
-    pub revision: u32,
+    pub updated_fields: HashMap<String, Value>,
+    pub revision: u64,
+}
+
+impl OutgoingRecord {
+    pub fn with_parent(&self, parent: Option<Record>) -> Record {
+        let mut record = Record {
+            id: self.id.clone(),
+            revision: self.revision,
+            schema_version: self.schema_version.clone(),
+            data: HashMap::new(),
+        };
+
+        if let Some(parent) = parent {
+            for (k, v) in parent.data {
+                record.data.insert(k, v);
+            }
+        }
+
+        for (k, v) in &self.updated_fields {
+            record.data.insert(k.clone(), v.clone());
+        }
+
+        record
+    }
 }
 
 pub struct Record {
     pub id: RecordId,
     pub revision: u64,
     pub schema_version: Version,
-    pub data: Vec<u8>,
+    pub data: HashMap<String, Value>,
 }
 
-impl From<Record> for crate::sync::proto::Record {
-    fn from(record: Record) -> Self {
-        crate::sync::proto::Record {
+impl TryFrom<&Record> for crate::sync::proto::Record {
+    type Error = anyhow::Error;
+
+    fn try_from(record: &Record) -> Result<Self, Self::Error> {
+        Ok(crate::sync::proto::Record {
             id: record.id.to_string(),
             revision: record.revision,
             schema_version: record.schema_version.to_string(),
-            data: record.data,
-        }
+            data: serde_json::to_vec(&record.data)?,
+        })
     }
 }
 

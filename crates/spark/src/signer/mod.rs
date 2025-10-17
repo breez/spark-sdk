@@ -4,6 +4,7 @@ mod models;
 mod secret_sharing;
 
 use crate::tree::TreeNodeId;
+use bitcoin::bip32::DerivationPath;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, SecretKey, schnorr};
 use frost_secp256k1_tr::round2::SignatureShare;
@@ -18,6 +19,12 @@ pub trait Signer: Send + Sync + 'static {
     fn sign_message_ecdsa_with_identity_key(
         &self,
         message: &[u8],
+    ) -> Result<Signature, SignerError>;
+
+    fn sign_message_ecdsa_from_path(
+        &self,
+        message: &[u8],
+        derivation_path: &DerivationPath,
     ) -> Result<Signature, SignerError>;
 
     fn sign_hash_schnorr_with_identity_key(
