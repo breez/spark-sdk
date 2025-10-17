@@ -1,24 +1,25 @@
-use std::{sync::Arc, time::SystemTime};
+use std::sync::Arc;
 
 use bitcoin::{
     hashes::{Hash, sha256d},
     hex::DisplayHex,
 };
+use tonic::Streaming;
 use tracing::trace;
 
-use crate::sync::{
+use crate::{sync::{
     client::SyncerClient,
     model::Record,
-    proto::{SetRecordReply, SetRecordRequest},
+    proto::{ListChangesReply, ListChangesRequest, ListenChangesRequest, Notification, SetRecordReply, SetRecordRequest},
     signer::SyncSigner,
-};
+}, utils::now};
 
 const MESSAGE_PREFIX: &[u8; 13] = b"realtimesync:";
 
 pub struct SigningClient {
     inner: Arc<dyn SyncerClient>,
     signer: Arc<dyn SyncSigner>,
-    client_id: String,
+    pub client_id: String,
 }
 
 impl SigningClient {
@@ -35,12 +36,7 @@ impl SigningClient {
     }
 
     pub async fn set_record(&self, record: &Record) -> anyhow::Result<SetRecordReply> {
-        let request_time: u32 = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_secs()
-            .try_into()
-            .expect("Time has rolled over");
+        let request_time: u32 = now();
         let msg = format!(
             "{}-{}-{}-{}-{}",
             record.id,
@@ -57,6 +53,33 @@ impl SigningClient {
             signature,
         };
         self.inner.set_record(req).await
+    }
+
+    pub async fn list_changes(&self, since_revision: u64) -> anyhow::Result<ListChangesReply> {
+        let request_time = now();
+        let msg = format!("{since_revision}-{request_time}");
+        let signature = self.sign_message(msg.as_bytes()).await?;
+        let request = ListChangesRequest {
+            since_revision,
+            request_time,
+            signature,
+        };
+
+        let reply = self.inner.list_changes(request).await?;
+        Ok(reply)
+    }
+
+    pub async fn listen_changes(&self) -> anyhow::Result<Streaming<Notification>>  {
+        let request_time = now();
+        let msg = format!("{request_time}");
+        let signature = self.sign_message(msg.as_bytes()).await?;
+        let request = ListenChangesRequest {
+            request_time,
+            signature,
+        };
+
+        let stream = self.inner.listen_changes(request).await?;
+        Ok(stream)
     }
 
     async fn sign_message(&self, msg: &[u8]) -> anyhow::Result<String> {

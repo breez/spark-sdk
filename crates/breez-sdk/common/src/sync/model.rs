@@ -2,10 +2,11 @@ use std::{collections::HashMap, fmt::Display};
 
 use bitcoin::hashes::{Hash, sha256};
 use semver::Version;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const CURRENT_SCHEMA_VERSION: Version = Version::new(0, 2, 6);
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RecordId {
     pub r#type: String,
@@ -82,6 +83,22 @@ impl OutgoingRecord {
     }
 }
 
+#[derive(Deserialize, Serialize)]
+struct SyncData {
+    id: RecordId,
+    data: HashMap<String, Value>,
+}
+
+impl SyncData {
+    pub fn new(record: Record) -> Self {
+        SyncData {
+            id: record.id,
+            data: record.data,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Record {
     pub id: RecordId,
     pub revision: u64,
@@ -97,7 +114,21 @@ impl TryFrom<&Record> for crate::sync::proto::Record {
             id: record.id.to_string(),
             revision: record.revision,
             schema_version: record.schema_version.to_string(),
-            data: serde_json::to_vec(&record.data)?,
+            data: serde_json::to_vec(&SyncData::new(record.clone()))?,
+        })
+    }
+}
+
+impl TryFrom<crate::sync::proto::Record> for Record {
+    type Error = anyhow::Error;
+
+    fn try_from(record: crate::sync::proto::Record) -> Result<Self, Self::Error> {
+        let sync_data: SyncData = serde_json::from_slice(&record.data)?;
+        Ok(Record {
+            id: sync_data.id,
+            revision: record.revision,
+            schema_version: Version::parse(&record.schema_version)?,
+            data: sync_data.data,
         })
     }
 }

@@ -297,17 +297,17 @@ impl TryFrom<Record> for breez_sdk_common::sync::model::Record {
     }
 }
 
-impl TryFrom<breez_sdk_common::sync::model::Record> for Record {
+impl TryFrom<&breez_sdk_common::sync::model::Record> for Record {
     type Error = StorageError;
 
-    fn try_from(value: breez_sdk_common::sync::model::Record) -> Result<Self, Self::Error> {
+    fn try_from(value: &breez_sdk_common::sync::model::Record) -> Result<Self, Self::Error> {
         Ok(Record {
-            id: value.id,
+            id: value.id.clone(),
             schema_version: value.schema_version.to_string(),
             data: value
                 .data
-                .into_iter()
-                .map(|(k, v)| Ok((k, serde_json::to_string(&v)?)))
+                .iter()
+                .map(|(k, v)| Ok((k.clone(), serde_json::to_string(&v)?)))
                 .collect::<Result<HashMap<String, String>, StorageError>>()?,
             revision: value.revision,
         })
