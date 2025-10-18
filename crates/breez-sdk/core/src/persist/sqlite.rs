@@ -194,7 +194,8 @@ impl SqliteStorage {
                 schema_version TEXT NOT NULL,
                 commit_time INTEGER NOT NULL,
                 data TEXT NOT NULL,
-                revision INTEGER NOT NULL
+                revision INTEGER NOT NULL,
+                PRIMARY KEY(record_type, data_id, revision)
             );
             CREATE INDEX idx_sync_incoming_revision ON sync_incoming(revision);",
         ]
@@ -652,7 +653,7 @@ impl Storage for SqliteStorage {
 
         for record in records {
             tx.execute(
-                "INSERT INTO sync_incoming (
+                "INSERT OR REPLACE INTO sync_incoming (
                     record_type
                 ,   data_id
                 ,   schema_version

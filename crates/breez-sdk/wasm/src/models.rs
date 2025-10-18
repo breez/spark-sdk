@@ -755,3 +755,45 @@ pub enum WaitForPaymentIdentifier {
 pub struct WaitForPaymentResponse {
     pub payment: Payment,
 }
+
+// Sync types
+#[macros::extern_wasm_bindgen(breez_sdk_common::sync::model::RecordId)]
+pub struct RecordId {
+    pub r#type: String,
+    pub data_id: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnversionedRecordChange)]
+pub struct UnversionedRecordChange {
+    pub id: RecordId,
+    pub schema_version: String,
+    pub updated_fields: JsValue,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecordChange)]
+pub struct RecordChange {
+    pub id: RecordId,
+    pub schema_version: String,
+    pub updated_fields: JsValue,
+    pub revision: u64,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Record)]
+pub struct Record {
+    pub id: RecordId,
+    pub revision: u64,
+    pub schema_version: String,
+    pub data: JsValue,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecordContext)]
+pub struct RecordContext {
+    pub record: Record,
+    pub parent: Option<Record>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecordChangeSet)]
+pub struct RecordChangeSet {
+    pub change: RecordChange,
+    pub parent: Option<Record>,
+}

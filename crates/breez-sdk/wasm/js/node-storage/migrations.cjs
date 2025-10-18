@@ -176,6 +176,39 @@ class MigrationManager {
             `ALTER TABLE payments DROP COLUMN details`,
             `CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice)`,
         ]
+      },
+      {
+        name: "Create sync tables",
+        sql: [
+          `CREATE TABLE sync_revision (
+            revision INTEGER NOT NULL
+          )`,
+          `INSERT INTO sync_revision (revision) VALUES (0)`,
+          `CREATE TABLE sync_outgoing (
+            record_type TEXT NOT NULL,
+            data_id TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            updated_fields TEXT NOT NULL,
+            revision INTEGER NOT NULL
+          )`,
+          `CREATE INDEX idx_sync_outgoing_revision ON sync_outgoing(revision)`,
+          `CREATE TABLE sync_incoming (
+            record_type TEXT NOT NULL,
+            data_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            schema_version TEXT NOT NULL,
+            data TEXT NOT NULL,
+            PRIMARY KEY (record_type, data_id, revision)
+          )`,
+          `CREATE TABLE sync_state (
+            record_type TEXT NOT NULL,
+            data_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            schema_version TEXT NOT NULL,
+            data TEXT NOT NULL,
+            PRIMARY KEY (record_type, data_id)
+          )`,
+        ]
       }
     ];
   }
