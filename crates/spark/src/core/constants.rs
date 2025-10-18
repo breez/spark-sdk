@@ -11,14 +11,27 @@ const DIRECT_TIME_LOCK_OFFSET: u16 = 50;
 const DIRECT_HTLC_TIME_LOCK_OFFSET: u16 = 85;
 const HTLC_TIME_LOCK_OFFSET: u16 = 70;
 
-pub fn initial_cpfp_sequence() -> Sequence {
-    to_sequence(INITIAL_TIME_LOCK, SPARK_SEQUENCE_FLAG)
+pub fn initial_timelock_sequence() -> (Sequence, Sequence) {
+    (
+        to_sequence(INITIAL_TIME_LOCK, SPARK_SEQUENCE_FLAG),
+        to_sequence(
+            INITIAL_TIME_LOCK + DIRECT_TIME_LOCK_OFFSET,
+            SPARK_SEQUENCE_FLAG,
+        ),
+    )
 }
 
-pub fn initial_direct_sequence() -> Sequence {
-    to_sequence(
-        INITIAL_TIME_LOCK + DIRECT_TIME_LOCK_OFFSET,
-        SPARK_SEQUENCE_FLAG,
+pub fn initial_root_timelock_sequence() -> (Sequence, Sequence) {
+    (
+        to_sequence(0, SPARK_SEQUENCE_FLAG),
+        to_sequence(DIRECT_TIME_LOCK_OFFSET, SPARK_SEQUENCE_FLAG),
+    )
+}
+
+pub fn initial_zero_timelock_sequence() -> (Sequence, Sequence) {
+    (
+        to_sequence(0, SPARK_SEQUENCE_FLAG),
+        to_sequence(DIRECT_TIME_LOCK_OFFSET, 0),
     )
 }
 
@@ -130,38 +143,41 @@ mod tests {
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
     #[test_all]
-    fn test_initial_sequence() {
-        let sequence = initial_cpfp_sequence();
-        assert!(sequence.is_height_locked());
-        assert!(sequence.is_relative_lock_time());
-        assert!(!sequence.is_time_locked());
-        let locktime = sequence.to_relative_lock_time().unwrap();
-        assert!(locktime.is_block_height());
-        let LockTime::Blocks(height) = locktime else {
-            panic!("Expected a block height locktime");
+    fn test_initial_timelock_sequence() {
+        let (cpfp_sequence, direct_sequence) = initial_timelock_sequence();
+
+        assert!(cpfp_sequence.is_height_locked());
+        assert!(direct_sequence.is_height_locked());
+
+        assert!(cpfp_sequence.is_relative_lock_time());
+        assert!(direct_sequence.is_relative_lock_time());
+
+        assert!(!cpfp_sequence.is_time_locked());
+        assert!(!direct_sequence.is_time_locked());
+
+        let cpfp_locktime = cpfp_sequence.to_relative_lock_time().unwrap();
+        let direct_locktime = direct_sequence.to_relative_lock_time().unwrap();
+
+        assert!(cpfp_locktime.is_block_height());
+        let LockTime::Blocks(cpfp_height) = cpfp_locktime else {
+            panic!("Expected a cpfp block height locktime");
         };
 
-        assert_eq!(height.value(), INITIAL_TIME_LOCK);
-    }
-
-    #[test_all]
-    fn test_initial_direct_sequence() {
-        let sequence = initial_direct_sequence();
-        assert!(sequence.is_height_locked());
-        assert!(sequence.is_relative_lock_time());
-        assert!(!sequence.is_time_locked());
-        let locktime = sequence.to_relative_lock_time().unwrap();
-        assert!(locktime.is_block_height());
-        let LockTime::Blocks(height) = locktime else {
-            panic!("Expected a block height locktime");
+        assert!(direct_locktime.is_block_height());
+        let LockTime::Blocks(direct_height) = direct_locktime else {
+            panic!("Expected a direct block height locktime");
         };
 
-        assert_eq!(height.value(), INITIAL_TIME_LOCK + DIRECT_TIME_LOCK_OFFSET);
+        assert_eq!(cpfp_height.value(), INITIAL_TIME_LOCK);
+        assert_eq!(
+            direct_height.value(),
+            INITIAL_TIME_LOCK + DIRECT_TIME_LOCK_OFFSET
+        );
     }
 
     #[test_all]
     fn test_with_spark_sequence_flag() {
-        let sequence = initial_cpfp_sequence();
+        let (sequence, _) = initial_timelock_sequence();
         let (next_cpfp, next_direct) = next_sequence(sequence).unwrap();
 
         assert_eq!(
@@ -185,8 +201,7 @@ mod tests {
 
     #[test_all]
     fn test_next_sequence() {
-        let mut cpfp_sequence = initial_cpfp_sequence();
-        let mut direct_sequence = initial_direct_sequence();
+        let (mut cpfp_sequence, mut direct_sequence) = initial_timelock_sequence();
 
         for i in 1u16..21 {
             let next_sequences = next_sequence(cpfp_sequence);

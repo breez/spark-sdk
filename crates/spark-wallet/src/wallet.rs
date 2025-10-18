@@ -125,7 +125,6 @@ impl SparkWallet {
             signer.clone(),
             config.network,
             operator_pool.clone(),
-            Arc::clone(&transfer_service),
         ));
 
         let deposit_service = Arc::new(DepositService::new(
@@ -135,8 +134,6 @@ impl SparkWallet {
             operator_pool.clone(),
             service_provider.clone(),
             Arc::clone(&signer),
-            timelock_manager.clone(),
-            transfer_service.clone(),
         ));
 
         let coop_exit_service = Arc::new(CoopExitService::new(
@@ -189,7 +186,6 @@ impl SparkWallet {
                 Arc::clone(&tree_service),
                 Arc::clone(&service_provider),
                 Arc::clone(&transfer_service),
-                Arc::clone(&deposit_service),
             ));
             background_processor
                 .run_background_tasks(cancellation_token.clone())
@@ -911,7 +907,6 @@ struct BackgroundProcessor {
     tree_service: Arc<dyn TreeService>,
     ssp_client: Arc<ServiceProvider>,
     transfer_service: Arc<TransferService>,
-    deposit_service: Arc<DepositService>,
 }
 
 impl BackgroundProcessor {
@@ -924,7 +919,6 @@ impl BackgroundProcessor {
         tree_service: Arc<dyn TreeService>,
         ssp_client: Arc<ServiceProvider>,
         transfer_service: Arc<TransferService>,
-        deposit_service: Arc<DepositService>,
     ) -> Self {
         Self {
             operator_pool,
@@ -934,7 +928,6 @@ impl BackgroundProcessor {
             tree_service,
             ssp_client,
             transfer_service,
-            deposit_service,
         }
     }
 
@@ -995,12 +988,10 @@ impl BackgroundProcessor {
 
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
         let id = deposit.id.clone();
-        let collected_leaves = self.deposit_service.collect_leaves(vec![deposit]).await?;
+        info!("Inserting deposit leaf: {:?}", deposit);
         self.tree_service
-            .insert_leaves(collected_leaves.clone(), false)
+            .insert_leaves(vec![deposit], false)
             .await?;
-
-        debug!("Collected deposit leaves: {:?}", collected_leaves);
         self.event_manager
             .notify_listeners(WalletEvent::DepositConfirmed(id));
         Ok(())

@@ -2,8 +2,16 @@ use bitcoin::{
     Address, Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, absolute::LockTime,
     key::Secp256k1, secp256k1::PublicKey, transaction::Version,
 };
+use tracing::info;
 
-use crate::Network;
+use crate::{
+    Network,
+    core::{
+        initial_root_timelock_sequence, initial_timelock_sequence, initial_zero_timelock_sequence,
+        next_sequence,
+    },
+    services::ServiceError,
+};
 
 const ESTIMATED_TX_SIZE: u64 = 191;
 const DEFAULT_FEE_RATE: u64 = 5;
@@ -11,7 +19,7 @@ const DEFAULT_FEE_SATS: u64 = ESTIMATED_TX_SIZE * DEFAULT_FEE_RATE;
 
 pub(crate) struct NodeTransactions {
     pub cpfp_tx: Transaction,
-    pub direct_tx: Option<Transaction>,
+    pub direct_tx: Transaction,
 }
 
 pub(crate) struct RefundTransactions {
@@ -84,7 +92,7 @@ pub(crate) fn create_spark_tx(
 ///
 /// This function generates two types of transactions:
 /// 1. A CPFP (Child Pays For Parent) transaction that always includes an anchor output for fee bumping
-/// 2. An optional direct transaction that can be used for direct spending (if `direct_outpoint` is provided)
+/// 2. A direct transaction that can be used for direct spending without an anchor output
 ///
 /// The CPFP transaction is to be broadcast by the user in case of a unilateral exit. The direct transaction
 /// is to be used by the watchtower to be broadcast on the user's behalf if in case of an attack while the
@@ -94,48 +102,94 @@ pub(crate) fn create_spark_tx(
 ///
 /// # Arguments
 ///
+/// * `parent_tx` - The current parent transaction
 /// * `cpfp_sequence` - The sequence number to use for the CPFP transaction's input
 /// * `direct_sequence` - The sequence number to use for the direct transaction's input (if created)
-/// * `cpfp_outpoint` - The outpoint to spend in the CPFP transaction
-/// * `direct_outpoint` - Optional outpoint to spend in the direct transaction
-/// * `value` - The amount to send in both transactions
-/// * `script_pubkey` - The output script to pay to in both transactions
-/// * `apply_fee` - Whether to subtract a fee from the direct transaction (fees are not applied to CPFP tx)
+/// * `vout` - The output index in the parent transaction to spend
 ///
 /// # Returns
 ///
 /// A `NodeTransactions` struct containing:
-/// - `cpfp_tx`: Always present, includes an anchor output
-/// - `direct_tx`: Only present if `direct_outpoint` is provided, has no anchor output
-pub(crate) fn create_node_txs(
+/// - `cpfp_tx`: A CPFP transaction that always includes an anchor output
+/// - `direct_tx`: A direct transaction without an anchor output
+fn create_node_txs(
+    parent_tx: &Transaction,
     cpfp_sequence: Sequence,
     direct_sequence: Sequence,
-    cpfp_outpoint: OutPoint,
-    direct_outpoint: Option<OutPoint>,
-    value: Amount,
-    script_pubkey: ScriptBuf,
-    apply_fee: bool,
-) -> NodeTransactions {
+    vout: u32,
+) -> Result<NodeTransactions, ServiceError> {
+    let parent_tx_out = parent_tx
+        .output
+        .get(vout as usize)
+        .ok_or(ServiceError::InvalidOutputIndex)?;
+    let parent_outpoint = OutPoint {
+        txid: parent_tx.compute_txid(),
+        vout,
+    };
+
     let cpfp_tx = create_spark_tx(
-        cpfp_outpoint,
+        parent_outpoint,
         cpfp_sequence,
-        value,
-        script_pubkey.clone(),
+        parent_tx_out.value,
+        parent_tx_out.script_pubkey.clone(),
         false,
         true,
     );
-    let direct_tx = direct_outpoint.map(|outpoint| {
-        create_spark_tx(
-            outpoint,
-            direct_sequence,
-            value,
-            script_pubkey,
-            apply_fee,
-            false,
-        )
-    });
+    let direct_tx = create_spark_tx(
+        parent_outpoint,
+        direct_sequence,
+        parent_tx_out.value,
+        parent_tx_out.script_pubkey.clone(),
+        true,
+        false,
+    );
 
-    NodeTransactions { cpfp_tx, direct_tx }
+    Ok(NodeTransactions { cpfp_tx, direct_tx })
+}
+
+pub(crate) fn create_root_node_txs(
+    parent_tx: &Transaction,
+    vout: u32,
+) -> Result<NodeTransactions, ServiceError> {
+    let (cpfp_sequence, direct_sequence) = initial_root_timelock_sequence();
+    info!(
+        "create_root_node_txs: cpfp sequence: {cpfp_sequence}, direct sequence: {direct_sequence}"
+    );
+    create_node_txs(parent_tx, cpfp_sequence, direct_sequence, vout)
+}
+
+pub(crate) fn create_initial_timelock_node_txs(
+    parent_tx: &Transaction,
+) -> Result<NodeTransactions, ServiceError> {
+    let (cpfp_sequence, direct_sequence) = initial_timelock_sequence();
+    info!(
+        "create_initial_timelock_node_txs: cpfp sequence: {cpfp_sequence}, direct sequence: {direct_sequence}"
+    );
+    create_node_txs(parent_tx, cpfp_sequence, direct_sequence, 0)
+}
+
+pub(crate) fn create_decremented_timelock_node_txs(
+    parent_tx: &Transaction,
+    node_tx: &Transaction,
+) -> Result<NodeTransactions, ServiceError> {
+    let old_sequence = node_tx.input[0].sequence;
+    let (cpfp_sequence, direct_sequence) = next_sequence(old_sequence).ok_or(
+        ServiceError::Generic("Failed to get next sequence".to_string()),
+    )?;
+    info!(
+        "create_decremented_timelock_node_txs: current sequence: {old_sequence}, next sequence: {cpfp_sequence}",
+    );
+    create_node_txs(parent_tx, cpfp_sequence, direct_sequence, 0)
+}
+
+pub(crate) fn create_zero_timelock_node_txs(
+    parent_tx: &Transaction,
+) -> Result<NodeTransactions, ServiceError> {
+    let (cpfp_sequence, direct_sequence) = initial_zero_timelock_sequence();
+    info!(
+        "create_zero_timelock_node_txs: cpfp sequence: {cpfp_sequence}, direct sequence: {direct_sequence}"
+    );
+    create_node_txs(parent_tx, cpfp_sequence, direct_sequence, 0)
 }
 
 /// Creates a set of refund transactions that can be used to claim funds in case of protocol failures.
@@ -180,13 +234,17 @@ pub(crate) fn create_refund_txs(
 ) -> RefundTransactions {
     // TODO: Isolate secp256k1 initialization to avoid multiple initializations
     let secp = Secp256k1::new();
-    let network: bitcoin::Network = network.into();
     let node_value = node_tx.output[0].value;
     let cpfp_outpoint = OutPoint {
         txid: node_tx.compute_txid(),
         vout: 0,
     };
-    let addr = Address::p2tr(&secp, receiving_pubkey.x_only_public_key().0, None, network);
+    let addr = Address::p2tr(
+        &secp,
+        receiving_pubkey.x_only_public_key().0,
+        None,
+        Into::<bitcoin::Network>::into(network),
+    );
 
     let cpfp_tx = create_spark_tx(
         cpfp_outpoint,
@@ -227,6 +285,23 @@ pub(crate) fn create_refund_txs(
         direct_tx,
         direct_from_cpfp_tx,
     }
+}
+
+pub(crate) fn create_initial_timelock_refund_txs(
+    node_tx: &Transaction,
+    direct_tx: Option<&Transaction>,
+    receiving_pubkey: &PublicKey,
+    network: Network,
+) -> RefundTransactions {
+    let (cpfp_sequence, direct_sequence) = initial_timelock_sequence();
+    create_refund_txs(
+        node_tx,
+        direct_tx,
+        cpfp_sequence,
+        direct_sequence,
+        receiving_pubkey,
+        network,
+    )
 }
 
 /// Creates a set of refund transactions for a connector in the Spark protocol.
