@@ -151,6 +151,9 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
             mnemonic,
             passphrase,
         } => {
+            // Ensure mnemonic is valid before proceeding
+            bip39::Mnemonic::parse(mnemonic)
+                .map_err(|e| SdkError::InvalidInput(format!("Invalid mnemonic: {e}")))?;
             let str = format!("{mnemonic}:{passphrase:?}");
             sha256::Hash::hash(str.as_bytes())
                 .to_string()
