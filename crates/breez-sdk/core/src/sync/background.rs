@@ -2,11 +2,11 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio_with_wasm::alias as tokio;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 use crate::Storage;
 use breez_sdk_common::sync::{
-    model::{Record, RecordChangeSet, RecordId},
+    model::{IncomingChange, OutgoingChange, Record, RecordId},
     signing_client::SigningClient,
 };
 
@@ -21,8 +21,8 @@ pub type CallbackReceiver<T> = mpsc::Receiver<Callback<T>>;
 
 pub struct SyncProcessor {
     push_sync_trigger: broadcast::Receiver<RecordId>,
-    incoming_record_callback: CallbackSender<RecordChangeSet>,
-    outgoing_record_callback: CallbackSender<RecordChangeSet>,
+    incoming_record_callback: CallbackSender<IncomingChange>,
+    outgoing_record_callback: CallbackSender<OutgoingChange>,
     client: SigningClient,
     storage: Arc<dyn Storage>,
 }
@@ -31,8 +31,8 @@ impl SyncProcessor {
     pub fn new(
         client: SigningClient,
         push_sync_trigger: broadcast::Receiver<RecordId>,
-        incoming_record_callback: CallbackSender<RecordChangeSet>,
-        outgoing_record_callback: CallbackSender<RecordChangeSet>,
+        incoming_record_callback: CallbackSender<IncomingChange>,
+        outgoing_record_callback: CallbackSender<OutgoingChange>,
         storage: Arc<dyn Storage>,
     ) -> Self {
         SyncProcessor {
@@ -48,21 +48,24 @@ impl SyncProcessor {
         self: &Arc<Self>,
         shutdown_receiver: watch::Receiver<()>,
     ) -> anyhow::Result<()> {
-        info!("Starting sync processor");
-
-        // NOTE: The order here is important. First handle any existing incoming records, because they are always handled immediately.
-        self.pull_sync_once_local().await?;
+        debug!("Starting sync processor");
 
         // Apply the LATEST outgoing record to the relational data store before starting the sync loops.
         // It's possible this outgoing record was inserted, while the database update after that was not completed yet.
+        // This goes first to ensure consistency.
         self.ensure_outgoing_record_committed().await?;
 
+        // Handle pending incoming records that were already fetched and stored locally.
+        self.pull_sync_once_local().await?;
+
+        // Now the storage is consistent. Background services can start.
         let (pull_trigger_tx, pull_trigger) = watch::channel(());
         self.start_subscribe_updates_task(shutdown_receiver.clone(), pull_trigger_tx);
         self.start_sync_loop_task(shutdown_receiver, pull_trigger);
         Ok(())
     }
 
+    /// Task that subscribes to remote updates and notifies the sync loop when remote changes are detected.
     fn start_subscribe_updates_task(
         self: &Arc<Self>,
         shutdown_receiver: watch::Receiver<()>,
@@ -76,11 +79,18 @@ impl SyncProcessor {
         });
     }
 
+    /// Apply the LATEST outgoing record to the relational data store before starting the sync loops.
+    /// It's possible this outgoing record was inserted, while the database update after that was not completed yet.
     async fn ensure_outgoing_record_committed(&self) -> anyhow::Result<()> {
         let Some(record) = self.storage.sync_get_latest_outgoing_change().await? else {
+            debug!("There is no pending outgoing change to commit");
             return Ok(());
         };
 
+        debug!(
+            "Committing latest pending outgoing change for record {:?}, revision {}",
+            record.change.id, record.change.revision
+        );
         let (tx, rx) = oneshot::channel();
         self.outgoing_record_callback
             .send(Callback {
@@ -150,6 +160,7 @@ impl SyncProcessor {
         }
     }
 
+    /// The main sync loop. Runs in an event loop to ensure no updates happen in parallel.
     fn start_sync_loop_task(
         self: &Arc<Self>,
         shutdown_receiver: watch::Receiver<()>,
@@ -211,7 +222,7 @@ impl SyncProcessor {
                 result = push_trigger.recv() => {
                     match result {
                         Ok(record_id) => {
-                            debug!("Received sync trigger for record id {}", record_id);
+                            debug!("Received sync trigger for record id {:?}", record_id);
                             // If there was also a pull trigger, handle that first, because the push wouldn't work.
                             if pull_trigger.has_changed().unwrap_or(false) &&
                                 let Err(e) = self.pull_sync_once().await {
@@ -255,8 +266,12 @@ impl SyncProcessor {
 
     async fn push_sync_batch(
         &self,
-        changes: Vec<crate::persist::RecordChangeSet>,
+        changes: Vec<crate::persist::OutgoingChange>,
     ) -> anyhow::Result<()> {
+        debug!(
+            "Processing sync batch of {} outgoing changes",
+            changes.len()
+        );
         for storage_change in changes {
             let change = storage_change.try_into()?;
             self.push_sync_record(change).await?;
@@ -265,15 +280,23 @@ impl SyncProcessor {
         Ok(())
     }
 
-    async fn push_sync_record(&self, change: RecordChangeSet) -> anyhow::Result<()> {
+    async fn push_sync_record(&self, change: OutgoingChange) -> anyhow::Result<()> {
         // Merges the updated fields with the existing record data in the local sync state to form the new record.
         let record = change.merge();
 
+        debug!(
+            "Pushing outgoing record {:?}, revision {} to remote",
+            record.id, record.revision
+        );
         // TODO: Encrypt.
         // Pushes the record to the remote server.
         // TODO: If the remote server already has this exact revision, check what happens. We should continue then for idempotency.
         self.client.set_record(&record).await?;
 
+        debug!(
+            "Completing outgoing record {:?}, revision {}",
+            record.id, record.revision
+        );
         // Removes the pending outgoing record and updates the existing record with the new one.
         self.storage
             .sync_complete_outgoing_sync((&record).try_into()?)
@@ -288,6 +311,10 @@ impl SyncProcessor {
 
         let reply = self.client.list_changes(since_revision).await?;
 
+        debug!(
+            "real-time sync list_changes yielded {} results.",
+            reply.changes.len()
+        );
         let mut records = reply
             .changes
             .into_iter()
@@ -298,9 +325,12 @@ impl SyncProcessor {
             .iter()
             .map(crate::persist::Record::try_from)
             .collect::<Result<Vec<_>, _>>()?;
-        self.storage
-            .sync_insert_incoming_records(db_records)
-            .await?;
+
+        if !records.is_empty() {
+            self.storage
+                .sync_insert_incoming_records(db_records)
+                .await?;
+        }
 
         self.pull_sync_once_local().await?;
 
@@ -317,42 +347,57 @@ impl SyncProcessor {
                 break;
             }
 
+            debug!("Processing {} incoming records", incoming_records.len());
             for incoming_record in incoming_records {
                 // TODO: Ensure the incoming change revision number is correct according to our assumptions. But also... allow replays.
 
-                let record: Record = incoming_record.record.clone().try_into()?;
-                let parent: Option<Record> = incoming_record
-                    .parent
-                    .map(std::convert::TryInto::try_into)
-                    .transpose()?;
-                let change_set = record.change_set(parent);
                 // NOTE: The incoming record will have the same revision number as a pending outgoing record (if any).
                 // A rebase now means just updating the pending outgoing records to have a higher revision number.
                 // If data becomes more complex, we might need to do a proper rebase with conflict resolution here.
+                debug!(
+                    "Rebasing pending outgoing records to above revision {}",
+                    incoming_record.new_state.revision
+                );
                 self.storage
-                    .sync_rebase_pending_outgoing_records(record.revision)
+                    .sync_rebase_pending_outgoing_records(incoming_record.new_state.revision)
                     .await?;
 
                 // First update the sync state from the incoming record. The sync state will have to change anyway,
                 // there is no going back if there is a remote change. We don't remove the incoming record yet,
                 // to ensure we'll update the relational database state if we turn off now.
+                debug!(
+                    "Updating sync state from incoming record {:?}, revision {}",
+                    incoming_record.new_state.id, incoming_record.new_state.revision
+                );
                 self.storage
-                    .sync_update_record_from_incoming((&record).try_into()?)
+                    .sync_update_record_from_incoming(incoming_record.new_state.clone())
                     .await?;
 
-                // Now notify the relational database to update. Wait for it to be done.
+                // Now notify the relational database to update. Wait for it to be done. Note that this could be improved
+                // in the future to also add actions to the pending outgoing changes for the same record. Like maybe delete
+                // an action, or change its field values. Now it is not necessary yet, because there are only immutable
+                // changes.
+                debug!(
+                    "Invoking relational database callback for incoming record {:?}, revision {}",
+                    incoming_record.new_state.id, incoming_record.new_state.revision
+                );
                 let (tx, rx) = oneshot::channel();
                 self.incoming_record_callback
                     .send(Callback {
-                        args: change_set,
+                        args: (&incoming_record).try_into()?,
                         responder: tx,
                     })
                     .await?;
                 rx.await??;
 
+                debug!(
+                    "Removing incoming record after processing completion {:?}, revision {}",
+                    incoming_record.new_state.id, incoming_record.new_state.revision
+                );
+
                 // Now it's safe to delete the incoming record.
                 self.storage
-                    .sync_delete_incoming_record(incoming_record.record)
+                    .sync_delete_incoming_record(incoming_record.new_state)
                     .await?;
             }
         }

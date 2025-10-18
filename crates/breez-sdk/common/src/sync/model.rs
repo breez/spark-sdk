@@ -53,12 +53,12 @@ pub struct UnversionedRecordChange {
     pub updated_fields: HashMap<String, Value>,
 }
 
-pub struct RecordChangeSet {
+pub struct OutgoingChange {
     pub change: RecordChange,
     pub parent: Option<Record>,
 }
 
-impl RecordChangeSet {
+impl OutgoingChange {
     pub fn merge(self) -> Record {
         let mut record = Record {
             id: self.change.id.clone(),
@@ -79,6 +79,19 @@ impl RecordChangeSet {
 
         record
     }
+}
+
+pub struct IncomingChange {
+    /// The incoming record from remote.
+    pub new_state: Record,
+
+    /// The current already existing sync state for this record.
+    pub old_state: Option<Record>,
+    // Pending outgoing changes are changes that have been applied to the relational data store already, but not to the parent.
+    // The incoming change will come _before_ these outgoing changes, so to do things perfectly these changes have to be rolled back
+    // in reverse order, then the incoming change applied, then the outgoing changes reapplied in forward order.
+    // commented out because unneeded at the moment.
+    // pub pending_outgoing_changes: Vec<RecordChange>,
 }
 
 pub struct RecordChange {
@@ -103,7 +116,7 @@ impl SyncData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Record {
     pub id: RecordId,
     pub revision: u64,
@@ -134,7 +147,7 @@ impl Record {
         record
     }
 
-    pub fn change_set(&self, parent: Option<Record>) -> RecordChangeSet {
+    pub fn change_set(&self, parent: Option<Record>) -> OutgoingChange {
         let mut updated_fields = HashMap::new();
 
         if let Some(parent) = &parent {
@@ -151,7 +164,7 @@ impl Record {
             updated_fields.clone_from(&self.data);
         }
 
-        RecordChangeSet {
+        OutgoingChange {
             change: RecordChange {
                 id: self.id.clone(),
                 schema_version: self.schema_version.clone(),

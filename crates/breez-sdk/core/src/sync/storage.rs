@@ -1,10 +1,14 @@
 use std::{
+    collections::HashMap,
     fmt::{Display, Formatter},
     str::FromStr,
     sync::Arc,
 };
 
-use breez_sdk_common::sync::model::{RecordChangeRequest, RecordChangeSet, RecordId};
+use breez_sdk_common::sync::model::{
+    IncomingChange, OutgoingChange, RecordChangeRequest, RecordId,
+};
+use serde_json::Value;
 use tracing::error;
 
 use crate::{
@@ -57,8 +61,8 @@ impl SyncedStorage {
 
     pub fn listen(
         self: &Arc<Self>,
-        incoming_callback: CallbackReceiver<RecordChangeSet>,
-        outgoing_callback: CallbackReceiver<RecordChangeSet>,
+        incoming_callback: CallbackReceiver<IncomingChange>,
+        outgoing_callback: CallbackReceiver<OutgoingChange>,
     ) {
         let clone = Arc::clone(self);
         tokio::spawn(async move {
@@ -126,8 +130,8 @@ impl SyncedStorage {
 
     async fn listen_inner(
         self: Arc<Self>,
-        mut incoming_callback: CallbackReceiver<RecordChangeSet>,
-        mut outgoing_callback: CallbackReceiver<RecordChangeSet>,
+        mut incoming_callback: CallbackReceiver<IncomingChange>,
+        mut outgoing_callback: CallbackReceiver<OutgoingChange>,
     ) {
         loop {
             tokio::select! {
@@ -150,37 +154,47 @@ impl SyncedStorage {
         }
     }
 
-    async fn handle_incoming_change(&self, change: RecordChangeSet) -> anyhow::Result<()> {
-        // Incoming and outgoing records are handled the same way at this level.
-        self.handle_change(change).await
+    async fn handle_incoming_change(&self, change: IncomingChange) -> anyhow::Result<()> {
+        let record_type =
+            RecordType::from_str(&change.new_state.id.r#type).map_err(|e| anyhow::anyhow!(e))?;
+        match record_type {
+            RecordType::PaymentMetadata => {
+                self.handle_payment_metadata_update(
+                    change.new_state.data,
+                    change.new_state.id.data_id,
+                )
+                .await
+            }
+        }
     }
 
-    async fn handle_outgoing_change(&self, change: RecordChangeSet) -> anyhow::Result<()> {
-        // Incoming and outgoing records are handled the same way at this level.
-        self.handle_change(change).await
-    }
-
-    async fn handle_change(&self, change: RecordChangeSet) -> anyhow::Result<()> {
+    /// Hook when an outgoing change is replayed, to ensure data consistency.
+    async fn handle_outgoing_change(&self, change: OutgoingChange) -> anyhow::Result<()> {
         let record_type =
             RecordType::from_str(&change.change.id.r#type).map_err(|e| anyhow::anyhow!(e))?;
         match record_type {
             RecordType::PaymentMetadata => {
-                self.handle_payment_metadata_update(change).await?;
+                self.handle_payment_metadata_update(
+                    change.change.updated_fields,
+                    change.change.id.data_id,
+                )
+                .await
             }
         }
-        Ok(())
     }
 
-    async fn handle_payment_metadata_update(&self, change: RecordChangeSet) -> anyhow::Result<()> {
+    async fn handle_payment_metadata_update(
+        &self,
+        updated_fields: HashMap<String, Value>,
+        data_id: String,
+    ) -> anyhow::Result<()> {
         let metadata: PaymentMetadata = serde_json::from_value(
-            serde_json::to_value(&change.change.updated_fields)
+            serde_json::to_value(&updated_fields)
                 .map_err(|e| StorageError::Serialization(e.to_string()))?,
         )
         .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
-        self.inner
-            .set_payment_metadata(change.change.id.data_id, metadata)
-            .await?;
+        self.inner.set_payment_metadata(data_id, metadata).await?;
         Ok(())
     }
 }
@@ -280,7 +294,7 @@ impl Storage for SyncedStorage {
     async fn sync_get_pending_outgoing_changes(
         &self,
         limit: u32,
-    ) -> Result<Vec<crate::persist::RecordChangeSet>, StorageError> {
+    ) -> Result<Vec<crate::persist::OutgoingChange>, StorageError> {
         self.inner.sync_get_pending_outgoing_changes(limit).await
     }
 
@@ -313,14 +327,14 @@ impl Storage for SyncedStorage {
     async fn sync_get_incoming_records(
         &self,
         limit: u32,
-    ) -> Result<Vec<crate::persist::RecordContext>, StorageError> {
+    ) -> Result<Vec<crate::persist::IncomingChange>, StorageError> {
         self.inner.sync_get_incoming_records(limit).await
     }
 
     /// Get the latest outgoing record if any exists
     async fn sync_get_latest_outgoing_change(
         &self,
-    ) -> Result<Option<crate::persist::RecordChangeSet>, StorageError> {
+    ) -> Result<Option<crate::persist::OutgoingChange>, StorageError> {
         self.inner.sync_get_latest_outgoing_change().await
     }
 

@@ -11,7 +11,7 @@ use crate::{
     DepositInfo, LnurlPayInfo, PaymentDetails, PaymentMethod,
     error::DepositClaimError,
     persist::{
-        PaymentMetadata, Record, RecordChange, RecordChangeSet, RecordContext,
+        IncomingChange, OutgoingChange, PaymentMetadata, Record, RecordChange,
         UnversionedRecordChange, UpdateDepositPayload,
     },
 };
@@ -588,7 +588,7 @@ impl Storage for SqliteStorage {
     async fn sync_get_pending_outgoing_changes(
         &self,
         limit: u32,
-    ) -> Result<Vec<RecordChangeSet>, StorageError> {
+    ) -> Result<Vec<OutgoingChange>, StorageError> {
         let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare(
@@ -626,7 +626,7 @@ impl Storage for SqliteStorage {
                 updated_fields: serde_json::from_str(&row.get::<_, String>(4)?)?,
                 revision: row.get(5)?,
             };
-            results.push(RecordChangeSet { change, parent });
+            results.push(OutgoingChange { change, parent });
         }
 
         Ok(results)
@@ -716,7 +716,7 @@ impl Storage for SqliteStorage {
     async fn sync_get_incoming_records(
         &self,
         limit: u32,
-    ) -> Result<Vec<RecordContext>, StorageError> {
+    ) -> Result<Vec<IncomingChange>, StorageError> {
         let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare(
@@ -755,7 +755,10 @@ impl Storage for SqliteStorage {
                 data: serde_json::from_str(&row.get::<_, String>(3)?)?,
                 revision: row.get(4)?,
             };
-            results.push(RecordContext { record, parent });
+            results.push(IncomingChange {
+                new_state: record,
+                old_state: parent,
+            });
         }
 
         Ok(results)
@@ -763,7 +766,7 @@ impl Storage for SqliteStorage {
 
     async fn sync_get_latest_outgoing_change(
         &self,
-    ) -> Result<Option<RecordChangeSet>, StorageError> {
+    ) -> Result<Option<OutgoingChange>, StorageError> {
         let connection = self.get_connection()?;
 
         let mut stmt = connection.prepare(
@@ -803,7 +806,7 @@ impl Storage for SqliteStorage {
                 revision: row.get(5)?,
             };
 
-            return Ok(Some(RecordChangeSet { change, parent }));
+            return Ok(Some(OutgoingChange { change, parent }));
         }
 
         Ok(None)

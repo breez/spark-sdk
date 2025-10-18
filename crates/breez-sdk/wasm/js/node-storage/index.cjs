@@ -614,7 +614,6 @@ class SqliteStorage {
       
       const rows = stmt.all(limit);
       
-      // Convert rows to RecordChangeSet objects
       const changes = rows.map(row => {
         const change = {
           id: {
@@ -776,44 +775,27 @@ class SqliteStorage {
       const transaction = this.db.transaction(() => {
         // Get records and then delete them (following the SQLite pattern)
         const stmt = this.db.prepare(`
-          SELECT 
-            record_type, 
-            data_id, 
-            revision,
-            schema_version, 
-            data
-          FROM sync_incoming
-          LIMIT ?
+          SELECT  i.record_type
+          ,       i.data_id
+          ,       i.schema_version
+          ,       i.data
+          ,       i.revision
+          ,       e.schema_version AS existing_schema_version
+          ,       e.commit_time AS existing_commit_time
+          ,       e.data AS existing_data
+          ,       e.revision AS existing_revision
+           FROM sync_incoming i
+           LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id
+           ORDER BY i.revision ASC
+           LIMIT ?
         `);
         
         const rows = stmt.all(limit);
         
-        // Delete the fetched records
-        if (rows.length > 0) {
-          const deleteStmt = this.db.prepare(`
-            DELETE FROM sync_incoming
-            WHERE rowid IN (
-              SELECT rowid FROM sync_incoming
-              LIMIT ?
-            )
-          `);
-          
-          deleteStmt.run(rows.length);
-        }
-        
         // Join with parent records from sync_state
         const results = rows.map(row => {
-          // Get parent record
-          const parentStmt = this.db.prepare(`
-            SELECT revision, schema_version, data
-            FROM sync_state
-            WHERE record_type = ? AND data_id = ?
-          `);
-          
-          const parentRow = parentStmt.get(row.record_type, row.data_id);
-          
           // Create the record
-          const record = {
+          const newState = {
             id: {
               type: row.record_type,
               data_id: row.data_id
@@ -824,22 +806,22 @@ class SqliteStorage {
           };
           
           // Create parent if exists
-          let parent = null;
-          if (parentRow) {
-            parent = {
+          let oldState = null;
+          if (row.existing_data) {
+            oldState = {
               id: {
                 type: row.record_type,
                 data_id: row.data_id
               },
-              revision: parentRow.revision,
-              schema_version: parentRow.schema_version,
-              data: JSON.parse(parentRow.data)
+              revision: row.existing_revision,
+              schema_version: row.existing_schema_version,
+              data: JSON.parse(row.existing_data)
             };
           }
           
           return {
-            record,
-            parent
+            newState,
+            oldState
           };
         });
         
@@ -884,7 +866,6 @@ class SqliteStorage {
         return Promise.resolve(null);
       }
       
-      // Convert to RecordChangeSet
       const change = {
         id: {
           type: row.record_type,
