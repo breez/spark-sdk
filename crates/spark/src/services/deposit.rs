@@ -9,7 +9,7 @@ use bitcoin::{
     secp256k1::{Message, PublicKey, ecdsa::Signature, schnorr},
 };
 use serde::Serialize;
-use tracing::{error, trace, warn};
+use tracing::{error, trace};
 
 use crate::{
     Network,
@@ -21,10 +21,10 @@ use crate::{
             spark::{GetUtxosForAddressRequest, TransferFilter, transfer_filter::Participant},
         },
     },
-    services::{TimelockManager, Transfer, TransferService, Utxo},
+    services::{Transfer, Utxo},
     signer::{PrivateKeySource, Signer},
     ssp::{ClaimStaticDepositInput, ClaimStaticDepositRequestType, ServiceProvider},
-    tree::{TreeNode, TreeNodeId, TreeNodeStatus},
+    tree::{TreeNode, TreeNodeId},
     utils::{
         frost::{SignAggregateFrostParams, sign_aggregate_frost},
         paging::{PagingFilter, PagingResult, pager},
@@ -131,8 +131,6 @@ pub struct DepositService {
     operator_pool: Arc<OperatorPool>,
     ssp_client: Arc<ServiceProvider>,
     signer: Arc<dyn Signer>,
-    timelock_manager: Arc<TimelockManager>,
-    transfer_service: Arc<TransferService>,
 }
 
 impl DepositService {
@@ -144,8 +142,6 @@ impl DepositService {
         operator_pool: Arc<OperatorPool>,
         ssp_client: Arc<ServiceProvider>,
         signer: Arc<dyn Signer>,
-        timelock_manager: Arc<TimelockManager>,
-        transfer_service: Arc<TransferService>,
     ) -> Self {
         DepositService {
             bitcoin_service,
@@ -154,8 +150,6 @@ impl DepositService {
             operator_pool,
             ssp_client,
             signer,
-            timelock_manager,
-            transfer_service,
         }
     }
 
@@ -196,54 +190,13 @@ impl DepositService {
             .get_unused_deposit_address(&address)
             .await?
             .ok_or(ServiceError::DepositAddressUsed)?;
-        let nodes = self
-            .create_tree_root(
-                &deposit_address.leaf_id,
-                &deposit_address.verifying_public_key,
-                deposit_tx,
-                vout,
-            )
-            .await?;
-        self.collect_leaves(nodes).await
-    }
-
-    pub async fn collect_leaves(
-        &self,
-        nodes: Vec<TreeNode>,
-    ) -> Result<Vec<TreeNode>, ServiceError> {
-        let mut resulting_nodes = Vec::new();
-        for node in nodes.into_iter() {
-            if node.status != TreeNodeStatus::Available {
-                warn!("Leaf is not available: {:?}", node.clone());
-                // TODO: Handle other statuses appropriately.
-                resulting_nodes.push(node.clone());
-                continue;
-            }
-
-            let new_node = self.timelock_manager.renew_zero_timelock(&node).await?;
-
-            if new_node.status != TreeNodeStatus::Available {
-                warn!("Leaf resulting from renew_zero_timelock is not available: {new_node:?}",);
-                // TODO: Handle other statuses appropriately.
-                resulting_nodes.push(node);
-                continue;
-            }
-
-            let transfer = self
-                .transfer_service
-                .transfer_leaves_to_self(
-                    vec![new_node],
-                    Some(PrivateKeySource::Derived(node.id.clone())),
-                )
-                .await
-                .map_err(|e| {
-                    ServiceError::Generic(format!("Failed to transfer leaves to self: {e:?}"))
-                })?;
-
-            resulting_nodes.extend(transfer.into_iter());
-        }
-
-        Ok(resulting_nodes)
+        self.create_tree_root(
+            &deposit_address.leaf_id,
+            &deposit_address.verifying_public_key,
+            deposit_tx,
+            vout,
+        )
+        .await
     }
 
     pub async fn claim_static_deposit(
@@ -548,7 +501,7 @@ impl DepositService {
         let NodeTransactions {
             cpfp_tx: cpfp_root_tx,
             direct_tx: direct_root_tx,
-        } = create_root_node_txs(&deposit_tx, vout);
+        } = create_root_node_txs(&deposit_tx, vout)?;
 
         let RefundTransactions {
             cpfp_tx: cpfp_refund_tx,

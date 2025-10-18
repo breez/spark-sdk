@@ -175,7 +175,7 @@ impl TimelockManager {
         let NodeTransactions {
             cpfp_tx: cpfp_split_node_tx,
             direct_tx: direct_split_node_tx,
-        } = create_zero_timelock_node_txs(parent_node_tx);
+        } = create_zero_timelock_node_txs(parent_node_tx)?;
 
         signing_jobs.push(SigningJob {
             job_type: SigningJobType::CpfpSplitNode,
@@ -200,7 +200,7 @@ impl TimelockManager {
         let NodeTransactions {
             cpfp_tx: cpfp_node_tx,
             direct_tx: direct_node_tx,
-        } = create_initial_timelock_node_txs(&cpfp_split_node_tx);
+        } = create_initial_timelock_node_txs(&cpfp_split_node_tx)?;
 
         signing_jobs.push(SigningJob {
             job_type: SigningJobType::CpfpNode,
@@ -526,7 +526,7 @@ impl TimelockManager {
         let NodeTransactions {
             cpfp_tx: cpfp_node_tx,
             direct_tx: direct_node_tx,
-        } = create_zero_timelock_node_txs(node_tx);
+        } = create_zero_timelock_node_txs(node_tx)?;
 
         signing_jobs.push(SigningJob {
             job_type: SigningJobType::CpfpNode,
