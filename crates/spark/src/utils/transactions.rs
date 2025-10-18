@@ -117,8 +117,11 @@ fn create_node_txs(
     cpfp_sequence: Sequence,
     direct_sequence: Sequence,
     vout: u32,
-) -> NodeTransactions {
-    let parent_tx_out = &parent_tx.output[0];
+) -> Result<NodeTransactions, ServiceError> {
+    let parent_tx_out = parent_tx
+        .output
+        .get(vout as usize)
+        .ok_or(ServiceError::InvalidOutputIndex)?;
     let parent_outpoint = OutPoint {
         txid: parent_tx.compute_txid(),
         vout,
@@ -141,10 +144,13 @@ fn create_node_txs(
         false,
     );
 
-    NodeTransactions { cpfp_tx, direct_tx }
+    Ok(NodeTransactions { cpfp_tx, direct_tx })
 }
 
-pub(crate) fn create_root_node_txs(parent_tx: &Transaction, vout: u32) -> NodeTransactions {
+pub(crate) fn create_root_node_txs(
+    parent_tx: &Transaction,
+    vout: u32,
+) -> Result<NodeTransactions, ServiceError> {
     let (cpfp_sequence, direct_sequence) = initial_root_timelock_sequence();
     info!(
         "create_root_node_txs: cpfp sequence: {cpfp_sequence}, direct sequence: {direct_sequence}"
@@ -152,7 +158,9 @@ pub(crate) fn create_root_node_txs(parent_tx: &Transaction, vout: u32) -> NodeTr
     create_node_txs(parent_tx, cpfp_sequence, direct_sequence, vout)
 }
 
-pub(crate) fn create_initial_timelock_node_txs(parent_tx: &Transaction) -> NodeTransactions {
+pub(crate) fn create_initial_timelock_node_txs(
+    parent_tx: &Transaction,
+) -> Result<NodeTransactions, ServiceError> {
     let (cpfp_sequence, direct_sequence) = initial_timelock_sequence();
     info!(
         "create_initial_timelock_node_txs: cpfp sequence: {cpfp_sequence}, direct sequence: {direct_sequence}"
@@ -171,15 +179,12 @@ pub(crate) fn create_decremented_timelock_node_txs(
     info!(
         "create_decremented_timelock_node_txs: current sequence: {old_sequence}, next sequence: {cpfp_sequence}",
     );
-    Ok(create_node_txs(
-        parent_tx,
-        cpfp_sequence,
-        direct_sequence,
-        0,
-    ))
+    create_node_txs(parent_tx, cpfp_sequence, direct_sequence, 0)
 }
 
-pub(crate) fn create_zero_timelock_node_txs(parent_tx: &Transaction) -> NodeTransactions {
+pub(crate) fn create_zero_timelock_node_txs(
+    parent_tx: &Transaction,
+) -> Result<NodeTransactions, ServiceError> {
     let (cpfp_sequence, direct_sequence) = initial_zero_timelock_sequence();
     info!(
         "create_zero_timelock_node_txs: cpfp sequence: {cpfp_sequence}, direct sequence: {direct_sequence}"
