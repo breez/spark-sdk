@@ -96,11 +96,6 @@ extern "C" {
     ) -> Result<crate::persist::Storage, JsValue>;
 }
 
-#[wasm_bindgen(js_name = "parse")]
-pub async fn parse(input: &str) -> WasmResult<InputType> {
-    Ok(breez_sdk_spark::parse(input).await?.into())
-}
-
 #[wasm_bindgen]
 impl BreezSdk {
     #[wasm_bindgen(js_name = "addEventListener")]
@@ -118,6 +113,11 @@ impl BreezSdk {
     #[wasm_bindgen(js_name = "disconnect")]
     pub async fn disconnect(&self) -> WasmResult<()> {
         Ok(self.sdk.disconnect().await?)
+    }
+
+    #[wasm_bindgen(js_name = "parse")]
+    pub async fn parse(&self, input: &str) -> WasmResult<InputType> {
+        Ok(self.sdk.parse(input).await?.into())
     }
 
     #[wasm_bindgen(js_name = "getInfo")]

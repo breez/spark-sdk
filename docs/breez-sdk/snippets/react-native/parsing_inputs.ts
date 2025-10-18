@@ -1,10 +1,15 @@
-import { InputType, parse } from '@breeztech/breez-sdk-spark-react-native'
+import {
+  InputType,
+  defaultConfig,
+  Network,
+  type BreezSdk
+} from '@breeztech/breez-sdk-spark-react-native'
 
-const parseInputs = async () => {
+const parseInputs = async (sdk: BreezSdk) => {
   // ANCHOR: parse-inputs
   const input = 'an input to be parsed...'
 
-  const parsed = await parse(input)
+  const parsed = await sdk.parse(input)
 
   if (parsed instanceof InputType.BitcoinAddress) {
     console.log(`Input is Bitcoin address ${parsed.inner[0].address}`)
@@ -28,4 +33,26 @@ const parseInputs = async () => {
     // Other input types are available
   }
   // ANCHOR_END: parse-inputs
+}
+
+const exampleSetExternalInputParsers = async () => {
+  // ANCHOR: set-external-input-parsers
+  // Create the default config
+  const config = defaultConfig(Network.Mainnet)
+  config.apiKey = '<breez api key>'
+
+  // Configure external parsers
+  config.externalInputParsers = [
+    {
+      providerId: 'provider_a',
+      inputRegex: '^provider_a',
+      parserUrl: 'https://parser-domain.com/parser?input=<input>'
+    },
+    {
+      providerId: 'provider_b',
+      inputRegex: '^provider_b',
+      parserUrl: 'https://parser-domain.com/parser?input=<input>'
+    }
+  ]
+  // ANCHOR_END: set-external-input-parsers
 }

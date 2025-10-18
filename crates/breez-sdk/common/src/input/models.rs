@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    lnurl::{auth::LnurlAuthRequestDetails, pay::LnurlPayRequestDetails},
+    lnurl::{
+        LnurlErrorDetails, auth::LnurlAuthRequestDetails, error::LnurlError,
+        pay::LnurlPayRequestDetails,
+    },
     network::BitcoinNetwork,
 };
 
@@ -161,6 +164,24 @@ pub enum InputType {
     SparkAddress(SparkAddressDetails),
 }
 
+impl TryFrom<LnurlRequestDetails> for InputType {
+    type Error = LnurlError;
+    fn try_from(lnurl_data: LnurlRequestDetails) -> Result<Self, Self::Error> {
+        match lnurl_data {
+            LnurlRequestDetails::PayRequest { pay_request } => Ok(InputType::LnurlPay(pay_request)),
+            LnurlRequestDetails::WithdrawRequest { withdraw_request } => {
+                Ok(InputType::LnurlWithdraw(withdraw_request))
+            }
+            LnurlRequestDetails::AuthRequest { auth_request } => {
+                Ok(InputType::LnurlAuth(auth_request))
+            }
+            LnurlRequestDetails::Error { error_details } => {
+                Err(LnurlError::EndpointError(error_details.reason))
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SparkAddressDetails {
@@ -306,6 +327,42 @@ pub struct SilentPaymentAddressDetails {
     pub address: String,
     pub network: BitcoinNetwork,
     pub source: PaymentRequestSource,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+#[serde(untagged)]
+pub enum LnurlRequestDetails {
+    PayRequest {
+        #[serde(flatten)]
+        pay_request: LnurlPayRequestDetails,
+    },
+    WithdrawRequest {
+        #[serde(flatten)]
+        withdraw_request: LnurlWithdrawRequestDetails,
+    },
+    #[serde(rename = "login")]
+    AuthRequest {
+        #[serde(flatten)]
+        auth_request: LnurlAuthRequestDetails,
+    },
+    Error {
+        #[serde(flatten)]
+        error_details: LnurlErrorDetails,
+    },
+}
+
+/// Configuration for an external input parser
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ExternalInputParser {
+    /// An arbitrary parser provider id
+    pub provider_id: String,
+    /// The external parser will be used when an input conforms to this regex
+    pub input_regex: String,
+    /// The URL of the parser containing a placeholder `<input>` that will be replaced with the
+    /// input to be parsed. The input is sanitized using percent encoding.
+    pub parser_url: String,
 }
 
 // Uniffi bindings have issues if multiple crates define the same custom type. This is a workaround.

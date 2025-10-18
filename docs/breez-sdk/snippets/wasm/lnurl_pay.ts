@@ -1,4 +1,4 @@
-import { type BreezSdk, parse, type PrepareLnurlPayResponse } from '@breeztech/breez-sdk-spark'
+import { type BreezSdk, type PrepareLnurlPayResponse } from '@breeztech/breez-sdk-spark'
 
 const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-lnurl-pay
@@ -7,7 +7,7 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
   // lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf
   const lnurlPayUrl = 'lightning@address.com'
 
-  const input = await parse(lnurlPayUrl)
+  const input = await sdk.parse(lnurlPayUrl)
   if (input.type === 'lightningAddress') {
     const amountSats = 5_000
     const optionalComment = '<comment>'

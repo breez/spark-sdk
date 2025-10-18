@@ -1,28 +1,28 @@
+use std::ops::Not;
+
 use bitcoin::{Address, Denomination, address::NetworkUnchecked};
 use lightning::bolt11_invoice::Bolt11InvoiceDescriptionRef;
-use percent_encoding_rfc3986::percent_decode_str;
-use serde::Deserialize;
+use percent_encoding_rfc3986::{NON_ALPHANUMERIC, percent_decode_str};
+use regex::Regex;
 use spark_wallet::SparkAddress;
 use tracing::{debug, error};
 
 use crate::{
     dns::{self, DnsResolver},
     error::ServiceConnectivityError,
-    input::{Bip21Extra, ParseError, PaymentRequestSource, SparkAddressDetails},
-    lnurl::{
-        LnurlErrorDetails,
-        auth::{self, LnurlAuthRequestDetails},
-        error::LnurlError,
-        pay::LnurlPayRequestDetails,
+    input::{
+        Bip21Extra, ExternalInputParser, LnurlRequestDetails, ParseError, PaymentRequestSource,
+        SparkAddressDetails,
     },
+    lnurl::{auth, error::LnurlError, pay::LnurlPayRequestDetails},
     rest::{ReqwestRestClient, RestClient, RestResponse},
 };
 
 use super::{
     Bip21Details, BitcoinAddressDetails, Bolt11InvoiceDetails, Bolt11RouteHint, Bolt11RouteHintHop,
     Bolt12InvoiceDetails, Bolt12InvoiceRequestDetails, Bolt12Offer, Bolt12OfferBlindedPath,
-    Bolt12OfferDetails, InputType, LightningAddressDetails, LnurlWithdrawRequestDetails,
-    SilentPaymentAddressDetails, error::Bip21Error,
+    Bolt12OfferDetails, InputType, LightningAddressDetails, SilentPaymentAddressDetails,
+    error::Bip21Error,
 };
 
 const BIP_21_PREFIX: &str = "bitcoin:";
@@ -31,10 +31,17 @@ const LIGHTNING_PREFIX: &str = "lightning:";
 const LIGHTNING_PREFIX_LEN: usize = LIGHTNING_PREFIX.len();
 const LNURL_HRP: &str = "lnurl";
 
-pub async fn parse(input: &str) -> Result<InputType, ParseError> {
-    InputParser::new(dns::Resolver::new(), ReqwestRestClient::new()?)
-        .parse(input)
-        .await
+pub async fn parse(
+    input: &str,
+    external_input_parsers: Option<Vec<ExternalInputParser>>,
+) -> Result<InputType, ParseError> {
+    InputParser::new(
+        dns::Resolver::new(),
+        ReqwestRestClient::new()?,
+        external_input_parsers,
+    )
+    .parse(input)
+    .await
 }
 
 pub fn parse_invoice(input: &str) -> Option<Bolt11InvoiceDetails> {
@@ -44,6 +51,7 @@ pub fn parse_invoice(input: &str) -> Option<Bolt11InvoiceDetails> {
 pub struct InputParser<C, D> {
     rest_client: C,
     dns_resolver: D,
+    external_input_parsers: Option<Vec<ExternalInputParser>>,
 }
 
 impl<C, D> InputParser<C, D>
@@ -51,10 +59,15 @@ where
     C: RestClient + Send + Sync,
     D: DnsResolver + Send + Sync,
 {
-    pub fn new(dns_resolver: D, rest_client: C) -> Self {
+    pub fn new(
+        dns_resolver: D,
+        rest_client: C,
+        external_input_parsers: Option<Vec<ExternalInputParser>>,
+    ) -> Self {
         InputParser {
             rest_client,
             dns_resolver,
+            external_input_parsers,
         }
     }
 
@@ -64,13 +77,25 @@ where
             return Err(ParseError::EmptyInput);
         }
 
+        if let Some(input_type) = self.parse_core(input).await? {
+            return Ok(input_type);
+        }
+
+        if let Some(input_type) = self.parse_external_input(input).await? {
+            return Ok(input_type);
+        }
+
+        Err(ParseError::InvalidInput)
+    }
+
+    pub async fn parse_core(&self, input: &str) -> Result<Option<InputType>, ParseError> {
         if input.contains('@') {
             if let Some(bip_21) = self.parse_bip_353(input).await? {
-                return Ok(InputType::Bip21(bip_21));
+                return Ok(Some(InputType::Bip21(bip_21)));
             }
 
             if let Some(lightning_address) = self.parse_lightning_address(input).await {
-                return Ok(InputType::LightningAddress(lightning_address));
+                return Ok(Some(InputType::LightningAddress(lightning_address)));
             }
         }
 
@@ -80,24 +105,24 @@ where
                 bip_353_address: None,
             };
             if let Some(bip_21) = parse_bip_21(input, &source)? {
-                return Ok(InputType::Bip21(bip_21));
+                return Ok(Some(InputType::Bip21(bip_21)));
             }
         }
 
         let source = PaymentRequestSource::default();
         if let Some(input_type) = self.parse_lightning(input, &source).await? {
-            return Ok(input_type);
+            return Ok(Some(input_type));
         }
 
         if let Some(input_type) = parse_spark_address(input, &source) {
-            return Ok(input_type);
+            return Ok(Some(input_type));
         }
 
         if let Some(input_type) = parse_bitcoin(input, &source) {
-            return Ok(input_type);
+            return Ok(Some(input_type));
         }
 
-        Err(ParseError::InvalidInput)
+        Ok(None)
     }
 
     async fn parse_bip_353(&self, input: &str) -> Result<Option<Bip21Details>, Bip21Error> {
@@ -321,6 +346,58 @@ where
                 return Err(LnurlError::EndpointError(error.reason));
             }
         })
+    }
+
+    async fn parse_external_input(&self, input: &str) -> Result<Option<InputType>, ParseError> {
+        let Some(external_input_parsers) = &self.external_input_parsers else {
+            return Ok(None);
+        };
+
+        for parser in external_input_parsers {
+            // Check regex
+            let re = Regex::new(&parser.input_regex)?;
+            if re.is_match(input).not() {
+                continue;
+            }
+
+            // Build URL
+            let urlsafe_input =
+                percent_encoding_rfc3986::utf8_percent_encode(input, NON_ALPHANUMERIC).to_string();
+            let parser_url = parser.parser_url.replacen("<input>", &urlsafe_input, 1);
+
+            // Make request
+            let RestResponse { body, .. } = self
+                .rest_client
+                .get_request(parser_url.clone(), None)
+                .await?;
+
+            // Try to parse as LnurlRequestDetails
+            if let Ok(lnurl_data) = serde_json::from_str::<LnurlRequestDetails>(&body) {
+                let domain = reqwest::Url::parse(&parser_url)
+                    .ok()
+                    .and_then(|url| url.host_str().map(ToString::to_string))
+                    .unwrap_or_default();
+                let input_type = lnurl_data.try_into()?;
+                let input_type = match input_type {
+                    // Modify the LnUrlPay payload by adding the domain of the LNURL endpoint
+                    InputType::LnurlPay(pay_request) => {
+                        InputType::LnurlPay(LnurlPayRequestDetails {
+                            domain,
+                            ..pay_request
+                        })
+                    }
+                    _ => input_type,
+                };
+                return Ok(Some(input_type));
+            }
+
+            // Check other input types
+            if let Ok(input_type) = self.parse_core(&body).await {
+                return Ok(input_type);
+            }
+        }
+
+        Ok(None)
     }
 }
 
@@ -755,29 +832,6 @@ fn parse_silent_payment_address(
     None
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-#[serde(untagged)]
-pub enum LnurlRequestDetails {
-    PayRequest {
-        #[serde(flatten)]
-        pay_request: LnurlPayRequestDetails,
-    },
-    WithdrawRequest {
-        #[serde(flatten)]
-        withdraw_request: LnurlWithdrawRequestDetails,
-    },
-    #[serde(rename = "login")]
-    AuthRequest {
-        #[serde(flatten)]
-        auth_request: LnurlAuthRequestDetails,
-    },
-    Error {
-        #[serde(flatten)]
-        error_details: LnurlErrorDetails,
-    },
-}
-
 #[cfg(test)]
 #[allow(clippy::similar_names)]
 mod tests {
@@ -786,7 +840,9 @@ mod tests {
 
     use crate::input::error::Bip21Error;
     use crate::input::parser::InputParser;
-    use crate::input::{Bip21Details, Bip21Extra, BitcoinAddressDetails, InputType, ParseError};
+    use crate::input::{
+        Bip21Details, Bip21Extra, BitcoinAddressDetails, ExternalInputParser, InputType, ParseError,
+    };
     use crate::test_utils::mock_dns_resolver::MockDnsResolver;
     use crate::test_utils::mock_rest_client::{MockResponse, MockRestClient};
 
@@ -858,7 +914,7 @@ mod tests {
     async fn test_bip21_multiple_params() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
 
@@ -882,7 +938,7 @@ mod tests {
     async fn test_bip21_required_parameter() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
 
@@ -907,7 +963,7 @@ mod tests {
     async fn test_bip21_url_encoded_values() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
 
@@ -927,7 +983,7 @@ mod tests {
     async fn test_bip21_with_extra_parameters() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
 
@@ -948,7 +1004,7 @@ mod tests {
     async fn test_bip21_with_invalid_amount() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
 
@@ -963,7 +1019,7 @@ mod tests {
     async fn test_bip21_with_invalid_lightning() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
 
@@ -978,7 +1034,7 @@ mod tests {
     async fn test_bip21_with_invalid_message_encoding() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
         // Invalid UTF-8 sequence in message
@@ -992,7 +1048,7 @@ mod tests {
     async fn test_bip21_with_invalid_silent_payment() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
 
@@ -1010,7 +1066,7 @@ mod tests {
     async fn test_bip21_with_missing_equals() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
 
@@ -1025,7 +1081,7 @@ mod tests {
     async fn test_bip21_without_payment_methods() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         // BIP21 without address or payment methods
         let bip21_no_methods = "bitcoin:?amount=0.001";
@@ -1041,7 +1097,7 @@ mod tests {
         mock_dns_resolver.add_response(vec![String::from("not-a-valid-bip21-uri")]);
 
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         let bip353_address = "test@example.com";
         let result = input_parser.parse(bip353_address).await;
@@ -1055,7 +1111,7 @@ mod tests {
         let mock_dns_resolver = MockDnsResolver::new();
         mock_dns_resolver.add_response(vec![String::from("bitcoin:?sp=sp1qqweplq6ylpfrzuq6hfznzmv28djsraupudz0s0dclyt8erh70pgwxqkz2ydatksrdzf770umsntsmcjp4kcz7jqu03jeszh0gdmpjzmrf5u4zh0c&lno=lno1pqps7sjqpgtyzm3qv4uxzmtsd3jjqer9wd3hy6tsw35k7msjzfpy7nz5yqcnygrfdej82um5wf5k2uckyypwa3eyt44h6txtxquqh7lz5djge4afgfjn7k4rgrkuag0jsd5vxg")]);
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         // Test with a BIP-353 address
         let bip353_address = "user@bitcoin-domain.com";
@@ -1076,7 +1132,7 @@ mod tests {
             "bitcoin:?spark=sparkrt1pgssyuuuhnrrdjswal5c3s3rafw9w3y5dd4cjy3duxlf7hjzkp0rqx6dc0nltx",
         )]);
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         // Test with a BIP-353 address
         let bip353_address = "user@bitcoin-domain.com";
@@ -1100,7 +1156,7 @@ mod tests {
     async fn test_bip353_address_too_long() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         // Local part longer than 63 chars
         let too_long_local = "a".repeat(64) + "@example.com";
@@ -1121,7 +1177,7 @@ mod tests {
     async fn test_bitcoin_address() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
         for address in [
             "1andreas3batLhQa2FawWjeyjCqyBzypd",
             "12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX",
@@ -1141,7 +1197,7 @@ mod tests {
     async fn test_bitcoin_address_bip21() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
         // Addresses from https://github.com/Kixunil/bip21/blob/master/src/lib.rs
 
         // Invalid address with the `bitcoin:` prefix
@@ -1215,7 +1271,7 @@ mod tests {
     async fn test_bitcoin_address_bip21_rounding() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
         for (amt, amount_btc) in get_bip21_rounding_test_vectors() {
             let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
 
@@ -1237,7 +1293,7 @@ mod tests {
     async fn test_bolt11() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
         let bolt11 = "lnbc110n1p38q3gtpp5ypz09jrd8p993snjwnm68cph4ftwp22le34xd4r8ftspwshxhmnsdqqxqyjw5qcqpxsp5htlg8ydpywvsa7h3u4hdn77ehs4z4e844em0apjyvmqfkzqhhd2q9qgsqqqyssqszpxzxt9uuqzymr7zxcdccj5g69s8q7zzjs7sgxn9ejhnvdh6gqjcy22mss2yexunagm5r2gqczh8k24cwrqml3njskm548aruhpwssq9nvrvz";
 
         // Invoice without prefix
@@ -1256,7 +1312,7 @@ mod tests {
     async fn test_bolt11_capitalized() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
         let bolt11 = "LNBC110N1P38Q3GTPP5YPZ09JRD8P993SNJWNM68CPH4FTWP22LE34XD4R8FTSPWSHXHMNSDQQXQYJW5QCQPXSP5HTLG8YDPYWVSA7H3U4HDN77EHS4Z4E844EM0APJYVMQFKZQHHD2Q9QGSQQQYSSQSZPXZXT9UUQZYMR7ZXCDCCJ5G69S8Q7ZZJS7SGXN9EJHNVDH6GQJCY22MSS2YEXUNAGM5R2GQCZH8K24CWRQML3NJSKM548ARUHPWSSQ9NVRVZ";
 
         // Invoice without prefix
@@ -1275,7 +1331,7 @@ mod tests {
     async fn test_bolt11_with_fallback_bitcoin_address() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
         let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
         let bolt11 = "lnbc110n1p38q3gtpp5ypz09jrd8p993snjwnm68cph4ftwp22le34xd4r8ftspwshxhmnsdqqxqyjw5qcqpxsp5htlg8ydpywvsa7h3u4hdn77ehs4z4e844em0apjyvmqfkzqhhd2q9qgsqqqyssqszpxzxt9uuqzymr7zxcdccj5g69s8q7zzjs7sgxn9ejhnvdh6gqjcy22mss2yexunagm5r2gqczh8k24cwrqml3njskm548aruhpwssq9nvrvz";
 
@@ -1304,7 +1360,7 @@ mod tests {
     async fn test_bolt12_invoice() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         // Note: This is a placeholder - you'd need a real Bolt12 invoice string
         let bolt12_invoice = "lni1zcss9mk8y3wkklfvevcrszlmu23kfrxh49px20665dqwmn4p72pksese";
@@ -1318,7 +1374,7 @@ mod tests {
     async fn test_bolt12_offer() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         // A valid Bolt12 offer string
         let bolt12_offer = "lno1zcss9mk8y3wkklfvevcrszlmu23kfrxh49px20665dqwmn4p72pksese";
@@ -1340,7 +1396,7 @@ mod tests {
     async fn test_bolt12_offer_in_bip21() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
         let bolt12_offer = "lno1zcss9mk8y3wkklfvevcrszlmu23kfrxh49px20665dqwmn4p72pksese";
@@ -1374,7 +1430,7 @@ mod tests {
     async fn test_empty_input() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         let result = input_parser.parse("").await;
         assert!(matches!(result, Err(ParseError::EmptyInput)));
@@ -1388,7 +1444,7 @@ mod tests {
     async fn test_generic_invalid_input() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         let result = input_parser.parse("invalid_input").await;
         println!("Debug - invalid input result: {result:?}");
@@ -1405,7 +1461,7 @@ mod tests {
         let mock_rest_client = MockRestClient::new();
         mock_lnurl_pay_endpoint(&mock_rest_client, None);
 
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
         let ln_address = "user@domain.net";
 
         // This should trigger parse_lightning_address method
@@ -1423,7 +1479,7 @@ mod tests {
         let mock_rest_client = MockRestClient::new();
         mock_lnurl_pay_endpoint(&mock_rest_client, None);
 
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
         let ln_address = "₿user@domain.net";
 
         // This should also be handled by parse_lightning_address after stripping the prefix
@@ -1441,7 +1497,7 @@ mod tests {
         mock_lnurl_pay_endpoint(&mock_rest_client, None);
         mock_lnurl_pay_endpoint(&mock_rest_client, None);
 
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
         let lnurl_pay_encoded = "lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf";
 
         // Should be handled by parse_lnurl method
@@ -1463,7 +1519,7 @@ mod tests {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
 
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
         let lnurl_auth_encoded = "lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttvdankjm3lw3skw0tvdankjm3xdvcn6vtp8q6n2dfsx5mrjwtrxdjnqvtzv56rzcnyv3jrxv3sxqmkyenrvv6kve3exv6nqdtyv43nqcmzvdsnvdrzx33rsenxx5unqc3cxgeqgntfgu";
 
         // Should be handled by parse_lnurl method, recognizing it as an auth request
@@ -1481,7 +1537,7 @@ mod tests {
         mock_lnurl_pay_endpoint(&mock_rest_client, None);
         mock_lnurl_withdraw_endpoint(&mock_rest_client, None);
 
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         // Test with lnurlp:// prefix
         let lnurlp_scheme = "lnurlp://domain.com/lnurl-pay?session=test";
@@ -1508,7 +1564,7 @@ mod tests {
         let mock_rest_client = MockRestClient::new();
         mock_lnurl_withdraw_endpoint(&mock_rest_client, None);
 
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
         let lnurl_withdraw_encoded = "lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4exctthd96xserjv9mn7um9wdekjmmw843xxwpexdnxzen9vgunsvfexq6rvdecx93rgdmyxcuxverrvcursenpxvukzv3c8qunsdecx33nzwpnvg6ryc3hv93nzvecxgcxgwp3h33lxk";
 
         // Should be handled by parse_lnurl method, recognizing it as a withdraw request
@@ -1523,7 +1579,7 @@ mod tests {
     async fn test_invalid_bitcoin_address() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
         // Modify valid address to make it invalid
         let invalid_addr = "1andreas3batLhQa2FawWjeyjCqyBzyp";
@@ -1535,7 +1591,7 @@ mod tests {
     async fn test_trim_input() {
         let mock_dns_resolver = MockDnsResolver::new();
         let mock_rest_client = MockRestClient::new();
-        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client);
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
         for address in [
             r"1andreas3batLhQa2FawWjeyjCqyBzypd",
             r"1andreas3batLhQa2FawWjeyjCqyBzypd ",
@@ -1554,5 +1610,126 @@ mod tests {
                 Ok(crate::input::InputType::BitcoinAddress(_))
             ));
         }
+    }
+
+    fn mock_external_parser(
+        mock_rest_client: &MockRestClient,
+        response_body: String,
+        status_code: u16,
+    ) {
+        mock_rest_client.add_response(MockResponse::new(status_code, response_body));
+    }
+
+    #[async_test_all]
+    async fn test_external_parsing_lnurlp_first_response() {
+        let mock_dns_resolver = MockDnsResolver::new();
+        let mock_rest_client = MockRestClient::new();
+        let input = "123provider.domain32/1";
+        let response = json!(
+        {
+            "callback": "callback_url",
+            "minSendable": 57000,
+            "maxSendable": 57000,
+            "metadata": "[[\"text/plain\", \"External payment\"]]",
+            "tag": "payRequest"
+        })
+        .to_string();
+        mock_external_parser(&mock_rest_client, response, 200);
+
+        let parsers = vec![ExternalInputParser {
+            provider_id: "id".to_string(),
+            input_regex: "(.*)(provider.domain)(.*)".to_string(),
+            parser_url: "http://127.0.0.1:8080/<input>".to_string(),
+        }];
+
+        let input_type = InputParser::new(mock_dns_resolver, mock_rest_client, Some(parsers))
+            .parse(input)
+            .await
+            .expect("Failed to parse input");
+        if let InputType::LnurlPay(data) = input_type {
+            assert_eq!(data.callback, "callback_url");
+            assert_eq!(data.max_sendable, 57000);
+            assert_eq!(data.min_sendable, 57000);
+            assert_eq!(data.comment_allowed, 0);
+
+            assert_eq!(
+                data.metadata_str,
+                "[[\"text/plain\", \"External payment\"]]"
+            );
+        } else {
+            panic!("Expected LnUrlPay, got {input_type:?}");
+        }
+    }
+
+    #[async_test_all]
+    async fn test_external_parsing_bitcoin_address_and_bolt11() {
+        let mock_dns_resolver = MockDnsResolver::new();
+        let mock_rest_client = MockRestClient::new();
+        // Bitcoin parsing endpoint
+        let bitcoin_input = "123bitcoin.address.provider32/1";
+        let bitcoin_address = "1andreas3batLhQa2FawWjeyjCqyBzypd".to_string();
+        mock_external_parser(&mock_rest_client, bitcoin_address.clone(), 200);
+
+        // Bolt11 parsing endpoint
+        let bolt11_input = "123bolt11.provider32/1";
+        let bolt11 = "lnbc110n1p38q3gtpp5ypz09jrd8p993snjwnm68cph4ftwp22le34xd4r8ftspwshxhmnsdqqxqyjw5qcqpxsp5htlg8ydpywvsa7h3u4hdn77ehs4z4e844em0apjyvmqfkzqhhd2q9qgsqqqyssqszpxzxt9uuqzymr7zxcdccj5g69s8q7zzjs7sgxn9ejhnvdh6gqjcy22mss2yexunagm5r2gqczh8k24cwrqml3njskm548aruhpwssq9nvrvz".to_string();
+        mock_external_parser(&mock_rest_client, bolt11.clone(), 200);
+
+        // Set parsers
+        let parsers = vec![
+            ExternalInputParser {
+                provider_id: "bitcoin".to_string(),
+                input_regex: "(.*)(bitcoin.address.provider)(.*)".to_string(),
+                parser_url: "http://127.0.0.1:8080/<input>".to_string(),
+            },
+            ExternalInputParser {
+                provider_id: "bolt11".to_string(),
+                input_regex: "(.*)(bolt11.provider)(.*)".to_string(),
+                parser_url: "http://127.0.0.1:8080/<input>".to_string(),
+            },
+        ];
+
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, Some(parsers));
+
+        // Parse and check results
+        let input_type = input_parser
+            .parse(bitcoin_input)
+            .await
+            .expect("Failed to parse input");
+        if let InputType::BitcoinAddress(details) = input_type {
+            assert_eq!(details.address, bitcoin_address);
+        } else {
+            panic!("Expected BitcoinAddress, got {input_type:?}");
+        }
+
+        let input_type = input_parser
+            .parse(bolt11_input)
+            .await
+            .expect("Failed to parse input");
+        if let InputType::Bolt11Invoice(details) = input_type {
+            assert_eq!(details.invoice.bolt11, bolt11);
+        } else {
+            panic!("Expected Bolt11Invoice, got {input_type:?}");
+        }
+    }
+
+    #[async_test_all]
+    async fn test_external_parsing_error() {
+        let mock_dns_resolver = MockDnsResolver::new();
+        let mock_rest_client = MockRestClient::new();
+        let input = "123provider.domain.error32/1";
+        let response = "Unrecognized input".to_string();
+        mock_external_parser(&mock_rest_client, response, 400);
+
+        let parsers = vec![ExternalInputParser {
+            provider_id: "id".to_string(),
+            input_regex: "(.*)(provider.domain)(.*)".to_string(),
+            parser_url: "http://127.0.0.1:8080/<input>".to_string(),
+        }];
+
+        let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, Some(parsers));
+        let result = input_parser.parse(input).await;
+
+        assert!(matches!(result, Err(ParseError::InvalidInput)));
     }
 }

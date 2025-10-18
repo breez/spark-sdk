@@ -2,7 +2,7 @@ pub(crate) mod adaptors;
 
 use breez_sdk_common::{
     fiat::{FiatCurrency, Rate},
-    input::{BitcoinAddressDetails, Bolt11InvoiceDetails},
+    input::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser},
     lnurl::pay::{LnurlPayRequestDetails, SuccessAction, SuccessActionProcessed},
     network::BitcoinNetwork,
 };
@@ -14,6 +14,21 @@ use std::{collections::HashMap, fmt::Display, str::FromStr};
 
 use crate::error::DepositClaimError;
 use crate::sdk_builder::Seed;
+
+/// A list of external input parsers that are used by default.
+/// To opt-out, set `use_default_external_input_parsers` in [Config] to false.
+pub const DEFAULT_EXTERNAL_INPUT_PARSERS: &[(&str, &str, &str)] = &[
+    (
+        "picknpay",
+        "(.*)(za.co.electrum.picknpay)(.*)",
+        "https://cryptoqr.net/.well-known/lnurlp/<input>",
+    ),
+    (
+        "bootleggers",
+        r"(.*)(wigroup\.co|yoyogroup\.co)(.*)",
+        "https://cryptoqr.net/.well-known/lnurlw/<input>",
+    ),
+];
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConnectRequest {
@@ -271,6 +286,35 @@ pub struct Config {
     /// lightning when sending and receiving. This has the benefit of lower fees
     /// but is at the cost of privacy.
     pub prefer_spark_over_lightning: bool,
+
+    /// A set of external input parsers that are used by [`BreezSdk::parse`](crate::sdk::BreezSdk::parse) when the input
+    /// is not recognized. See [`ExternalInputParser`] for more details on how to configure
+    /// external parsing.
+    pub external_input_parsers: Option<Vec<ExternalInputParser>>,
+    /// The SDK includes some default external input parsers
+    /// ([`DEFAULT_EXTERNAL_INPUT_PARSERS`]).
+    /// Set this to false in order to prevent their use.
+    pub use_default_external_input_parsers: bool,
+}
+
+impl Config {
+    pub(crate) fn get_all_external_input_parsers(&self) -> Vec<ExternalInputParser> {
+        let mut external_input_parsers = Vec::new();
+        if self.use_default_external_input_parsers {
+            let default_parsers = DEFAULT_EXTERNAL_INPUT_PARSERS
+                .iter()
+                .map(|(id, regex, url)| ExternalInputParser {
+                    provider_id: (*id).to_string(),
+                    input_regex: (*regex).to_string(),
+                    parser_url: (*url).to_string(),
+                })
+                .collect::<Vec<_>>();
+            external_input_parsers.extend(default_parsers);
+        }
+        external_input_parsers.extend(self.external_input_parsers.clone().unwrap_or_default());
+
+        external_input_parsers
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

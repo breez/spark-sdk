@@ -46,10 +46,6 @@ pub fn init_logging(
     breez_sdk_spark::init_logging(log_dir, Some(app_logger), log_filter)
 }
 
-pub async fn parse(input: &str) -> Result<InputType, SdkError> {
-    Ok(breez_sdk_spark::parse(input).await?)
-}
-
 pub struct BreezSdk {
     pub(crate) inner: Arc<breez_sdk_spark::BreezSdk>,
 }
@@ -67,6 +63,10 @@ impl BreezSdk {
 
     pub async fn disconnect(&self) -> Result<(), SdkError> {
         self.inner.disconnect().await
+    }
+
+    pub async fn parse(&self, input: &str) -> Result<InputType, SdkError> {
+        Ok(self.inner.parse(input).await?)
     }
 
     pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {

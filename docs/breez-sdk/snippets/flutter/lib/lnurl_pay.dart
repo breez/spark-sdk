@@ -7,7 +7,7 @@ Future<void> prepareLnurlPay(BreezSdk sdk) async {
   /// lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf
   String lnurlPayUrl = "lightning@address.com";
 
-  InputType inputType = await parse(input: lnurlPayUrl);
+  InputType inputType = await sdk.parse(input: lnurlPayUrl);
   if (inputType is InputType_LightningAddress) {
     BigInt amountSats = BigInt.from(5000);
     String optionalComment = "<comment>";

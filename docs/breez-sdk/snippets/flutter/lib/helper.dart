@@ -8,6 +8,8 @@ extension ConfigCopyWith on Config {
     Fee? maxDepositClaimFee,
     String? lnurlDomain,
     bool? preferSparkOverLightning,
+    List<ExternalInputParser>? externalInputParsers,
+    bool? useDefaultExternalInputParsers,
   }) {
     return Config(
       apiKey: apiKey ?? this.apiKey,
@@ -16,6 +18,8 @@ extension ConfigCopyWith on Config {
       maxDepositClaimFee: maxDepositClaimFee ?? this.maxDepositClaimFee,
       lnurlDomain: lnurlDomain ?? this.lnurlDomain,
       preferSparkOverLightning: preferSparkOverLightning ?? this.preferSparkOverLightning,
+      externalInputParsers: externalInputParsers ?? this.externalInputParsers,
+      useDefaultExternalInputParsers: useDefaultExternalInputParsers ?? this.useDefaultExternalInputParsers,
     );
   }
 }
