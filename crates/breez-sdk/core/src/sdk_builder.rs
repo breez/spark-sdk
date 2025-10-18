@@ -11,7 +11,7 @@ use breez_sdk_common::{
     sync::{client::BreezSyncerClient, signing_client::SigningClient},
 };
 use spark_wallet::{DefaultSigner, Signer, SparkWallet};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -260,11 +260,16 @@ impl SdkBuilder {
         let (storage, sync_processor) = if let Some(server_url) = &self.real_time_sync_server_url {
             debug!("Real-time sync is enabled.");
             let sync_service = Arc::new(SyncService::new(Arc::clone(&self.storage)));
-            let storage: Arc<dyn Storage> = Arc::new(SyncedStorage::new(
+            let synced_storage = Arc::new(SyncedStorage::new(
                 Arc::clone(&self.storage),
                 Arc::clone(&sync_service),
             ));
 
+            let (incoming_callback_sender, incoming_callback_receiver) = mpsc::channel(10);
+            let (outgoing_callback_sender, outgoing_callback_receiver) = mpsc::channel(10);
+
+            synced_storage.listen(incoming_callback_receiver, outgoing_callback_receiver);
+            let storage: Arc<dyn Storage> = synced_storage;
             let sync_client = BreezSyncerClient::new(server_url, self.config.api_key.as_deref())
                 .map_err(|e| SdkError::Generic(e.to_string()))?;
             let sync_signer = DefaultSyncSigner::new(
@@ -283,6 +288,8 @@ impl SdkBuilder {
             let sync_processor = Arc::new(SyncProcessor::new(
                 signing_sync_client,
                 sync_service.get_sync_trigger(),
+                incoming_callback_sender,
+                outgoing_callback_sender,
                 Arc::clone(&storage),
             ));
             (storage, Some(sync_processor))
@@ -301,7 +308,8 @@ impl SdkBuilder {
             shutdown_sender,
             spark_wallet,
             sync_processor,
-        })?;
+        })
+        .await?;
 
         debug!("Initialized and started breez sdk.");
 

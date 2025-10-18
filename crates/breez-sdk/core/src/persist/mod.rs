@@ -185,37 +185,82 @@ pub trait Storage: Send + Sync {
         payload: UpdateDepositPayload,
     ) -> Result<(), StorageError>;
 
-    async fn sync_add_outgoing_record(
+    async fn sync_add_outgoing_change(
         &self,
-        record: UnversionedOutgoingRecord,
+        record: UnversionedRecordChange,
     ) -> Result<u64, StorageError>;
     async fn sync_complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError>;
-    async fn sync_get_pending_outgoing_records(
+    async fn sync_get_pending_outgoing_changes(
         &self,
         limit: u32,
-    ) -> Result<Vec<OutgoingRecordParent>, StorageError>;
+    ) -> Result<Vec<RecordChangeSet>, StorageError>;
+
+    /// Get the revision number of the last synchronized record
+    async fn sync_get_last_revision(&self) -> Result<u64, StorageError>;
+
+    /// Insert incoming records from remote sync
+    async fn sync_insert_incoming_records(&self, records: Vec<Record>) -> Result<(), StorageError>;
+
+    /// Delete an incoming record after it has been processed
+    async fn sync_delete_incoming_record(&self, record: Record) -> Result<(), StorageError>;
+
+    /// Update revision numbers of pending outgoing records to be higher than the given revision
+    async fn sync_rebase_pending_outgoing_records(&self, revision: u64)
+    -> Result<(), StorageError>;
+
+    /// Get incoming records that need to be processed, up to the specified limit
+    async fn sync_get_incoming_records(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<RecordContext>, StorageError>;
+
+    /// Get the latest outgoing record if any exists
+    async fn sync_get_latest_outgoing_change(
+        &self,
+    ) -> Result<Option<RecordChangeSet>, StorageError>;
+
+    /// Update the sync state record from an incoming record
+    async fn sync_update_record_from_incoming(&self, record: Record) -> Result<(), StorageError>;
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct OutgoingRecordParent {
-    pub record: OutgoingRecord,
+pub struct RecordContext {
+    pub record: Record,
     pub parent: Option<Record>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct UnversionedOutgoingRecord {
+pub struct RecordChangeSet {
+    pub change: RecordChange,
+    pub parent: Option<Record>,
+}
+
+impl TryFrom<RecordChangeSet> for breez_sdk_common::sync::model::RecordChangeSet {
+    type Error = StorageError;
+
+    fn try_from(value: RecordChangeSet) -> Result<Self, Self::Error> {
+        Ok(breez_sdk_common::sync::model::RecordChangeSet {
+            change: value.change.try_into()?,
+            parent: match value.parent {
+                Some(parent) => Some(parent.try_into()?),
+                None => None,
+            },
+        })
+    }
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UnversionedRecordChange {
     pub id: RecordId,
     pub schema_version: String,
     pub updated_fields: HashMap<String, String>,
 }
 
-impl TryFrom<UnversionedOutgoingRecord>
-    for breez_sdk_common::sync::model::UnversionedOutgoingRecord
-{
+impl TryFrom<UnversionedRecordChange> for breez_sdk_common::sync::model::UnversionedRecordChange {
     type Error = StorageError;
 
-    fn try_from(value: UnversionedOutgoingRecord) -> Result<Self, Self::Error> {
-        Ok(breez_sdk_common::sync::model::UnversionedOutgoingRecord {
+    fn try_from(value: UnversionedRecordChange) -> Result<Self, Self::Error> {
+        Ok(breez_sdk_common::sync::model::UnversionedRecordChange {
             id: value.id,
             schema_version: value.schema_version.parse()?,
             updated_fields: value
@@ -227,15 +272,13 @@ impl TryFrom<UnversionedOutgoingRecord>
     }
 }
 
-impl TryFrom<breez_sdk_common::sync::model::UnversionedOutgoingRecord>
-    for UnversionedOutgoingRecord
-{
+impl TryFrom<breez_sdk_common::sync::model::UnversionedRecordChange> for UnversionedRecordChange {
     type Error = StorageError;
 
     fn try_from(
-        value: breez_sdk_common::sync::model::UnversionedOutgoingRecord,
+        value: breez_sdk_common::sync::model::UnversionedRecordChange,
     ) -> Result<Self, Self::Error> {
-        Ok(UnversionedOutgoingRecord {
+        Ok(UnversionedRecordChange {
             id: value.id,
             schema_version: value.schema_version.to_string(),
             updated_fields: value
@@ -248,18 +291,18 @@ impl TryFrom<breez_sdk_common::sync::model::UnversionedOutgoingRecord>
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct OutgoingRecord {
+pub struct RecordChange {
     pub id: RecordId,
     pub schema_version: String,
     pub updated_fields: HashMap<String, String>,
     pub revision: u64,
 }
 
-impl TryFrom<OutgoingRecord> for breez_sdk_common::sync::model::OutgoingRecord {
+impl TryFrom<RecordChange> for breez_sdk_common::sync::model::RecordChange {
     type Error = StorageError;
 
-    fn try_from(value: OutgoingRecord) -> Result<Self, Self::Error> {
-        Ok(breez_sdk_common::sync::model::OutgoingRecord {
+    fn try_from(value: RecordChange) -> Result<Self, Self::Error> {
+        Ok(breez_sdk_common::sync::model::RecordChange {
             id: value.id,
             schema_version: value.schema_version.parse()?,
             updated_fields: value
@@ -273,6 +316,7 @@ impl TryFrom<OutgoingRecord> for breez_sdk_common::sync::model::OutgoingRecord {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Clone)]
 pub struct Record {
     pub id: RecordId,
     pub revision: u64,

@@ -220,7 +220,7 @@ pub(crate) struct BreezSdkParams {
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
-    pub(crate) fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
+    pub(crate) async fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
         match &params.config.api_key {
             Some(api_key) => validate_breez_api_key(api_key)?,
             None => return Err(SdkError::Generic("Missing Breez API key".to_string())),
@@ -241,7 +241,13 @@ impl BreezSdk {
         };
 
         if let Some(sync_processor) = params.sync_processor {
-            sync_processor.start(sdk.shutdown_sender.subscribe());
+            // Failing to start sync will fail connect. Because it's important the initial database updates complete.
+            sync_processor
+                .start(sdk.shutdown_sender.subscribe())
+                .await
+                .map_err(|e| {
+                    SdkError::Generic(format!("Failed to start real-time sync processor: {e}"))
+                })?;
         }
 
         sdk.start(initial_synced_sender);

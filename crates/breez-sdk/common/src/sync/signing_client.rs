@@ -7,12 +7,18 @@ use bitcoin::{
 use tonic::Streaming;
 use tracing::trace;
 
-use crate::{sync::{
-    client::SyncerClient,
-    model::Record,
-    proto::{ListChangesReply, ListChangesRequest, ListenChangesRequest, Notification, SetRecordReply, SetRecordRequest},
-    signer::SyncSigner,
-}, utils::now};
+use crate::{
+    sync::{
+        client::SyncerClient,
+        model::Record,
+        proto::{
+            ListChangesReply, ListChangesRequest, ListenChangesRequest, Notification,
+            SetRecordReply, SetRecordRequest,
+        },
+        signer::SyncSigner,
+    },
+    utils::now,
+};
 
 const MESSAGE_PREFIX: &[u8; 13] = b"realtimesync:";
 
@@ -69,7 +75,7 @@ impl SigningClient {
         Ok(reply)
     }
 
-    pub async fn listen_changes(&self) -> anyhow::Result<Streaming<Notification>>  {
+    pub async fn listen_changes(&self) -> anyhow::Result<Streaming<Notification>> {
         let request_time = now();
         let msg = format!("{request_time}");
         let signature = self.sign_message(msg.as_bytes()).await?;

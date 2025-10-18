@@ -32,14 +32,14 @@ impl Display for RecordId {
     }
 }
 
-pub struct OutgoingRecordRequest {
+pub struct RecordChangeRequest {
     pub id: RecordId,
     pub updated_fields: HashMap<String, Value>,
 }
 
-impl From<&OutgoingRecordRequest> for UnversionedOutgoingRecord {
-    fn from(value: &OutgoingRecordRequest) -> Self {
-        UnversionedOutgoingRecord {
+impl From<&RecordChangeRequest> for UnversionedRecordChange {
+    fn from(value: &RecordChangeRequest) -> Self {
+        UnversionedRecordChange {
             id: value.id.clone(),
             schema_version: CURRENT_SCHEMA_VERSION,
             updated_fields: value.updated_fields.clone(),
@@ -47,40 +47,45 @@ impl From<&OutgoingRecordRequest> for UnversionedOutgoingRecord {
     }
 }
 
-pub struct UnversionedOutgoingRecord {
+pub struct UnversionedRecordChange {
     pub id: RecordId,
     pub schema_version: Version,
     pub updated_fields: HashMap<String, Value>,
 }
 
-pub struct OutgoingRecord {
-    pub id: RecordId,
-    pub schema_version: Version,
-    pub updated_fields: HashMap<String, Value>,
-    pub revision: u64,
+pub struct RecordChangeSet {
+    pub change: RecordChange,
+    pub parent: Option<Record>,
 }
 
-impl OutgoingRecord {
-    pub fn with_parent(&self, parent: Option<Record>) -> Record {
+impl RecordChangeSet {
+    pub fn merge(self) -> Record {
         let mut record = Record {
-            id: self.id.clone(),
-            revision: self.revision,
-            schema_version: self.schema_version.clone(),
+            id: self.change.id.clone(),
+            revision: self.change.revision,
+            schema_version: self.change.schema_version.clone(),
             data: HashMap::new(),
         };
 
-        if let Some(parent) = parent {
+        if let Some(parent) = self.parent {
             for (k, v) in parent.data {
                 record.data.insert(k, v);
             }
         }
 
-        for (k, v) in &self.updated_fields {
+        for (k, v) in &self.change.updated_fields {
             record.data.insert(k.clone(), v.clone());
         }
 
         record
     }
+}
+
+pub struct RecordChange {
+    pub id: RecordId,
+    pub schema_version: Version,
+    pub updated_fields: HashMap<String, Value>,
+    pub revision: u64,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -104,6 +109,58 @@ pub struct Record {
     pub revision: u64,
     pub schema_version: Version,
     pub data: HashMap<String, Value>,
+}
+
+impl Record {
+    #[must_use]
+    pub fn with_parent(&self, parent: Option<Record>) -> Record {
+        let mut record = Record {
+            id: self.id.clone(),
+            revision: self.revision,
+            schema_version: self.schema_version.clone(),
+            data: HashMap::new(),
+        };
+
+        if let Some(parent) = parent {
+            for (k, v) in parent.data {
+                record.data.insert(k, v);
+            }
+        }
+
+        for (k, v) in &self.data {
+            record.data.insert(k.clone(), v.clone());
+        }
+
+        record
+    }
+
+    pub fn change_set(&self, parent: Option<Record>) -> RecordChangeSet {
+        let mut updated_fields = HashMap::new();
+
+        if let Some(parent) = &parent {
+            for (k, v) in &self.data {
+                if let Some(parent_value) = parent.data.get(k) {
+                    if parent_value != v {
+                        updated_fields.insert(k.clone(), v.clone());
+                    }
+                } else {
+                    updated_fields.insert(k.clone(), v.clone());
+                }
+            }
+        } else {
+            updated_fields.clone_from(&self.data);
+        }
+
+        RecordChangeSet {
+            change: RecordChange {
+                id: self.id.clone(),
+                schema_version: self.schema_version.clone(),
+                updated_fields,
+                revision: self.revision,
+            },
+            parent,
+        }
+    }
 }
 
 impl TryFrom<&Record> for crate::sync::proto::Record {
