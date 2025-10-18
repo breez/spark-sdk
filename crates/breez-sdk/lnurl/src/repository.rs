@@ -1,4 +1,5 @@
 use crate::user::User;
+use crate::zap::Zap;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LnurlRepositoryError {
@@ -22,4 +23,11 @@ pub trait LnurlRepository {
         pubkey: &str,
     ) -> Result<Option<User>, LnurlRepositoryError>;
     async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError>;
+    async fn list_user_keys(&self) -> Result<Vec<String>, LnurlRepositoryError>;
+
+    async fn upsert_zap(&self, zap: &Zap) -> Result<(), LnurlRepositoryError>;
+    async fn get_zap_by_payment_hash(
+        &self,
+        payment_hash: &str,
+    ) -> Result<Option<Zap>, LnurlRepositoryError>;
 }
