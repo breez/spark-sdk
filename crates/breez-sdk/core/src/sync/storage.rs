@@ -5,14 +5,18 @@ use std::{
 };
 
 use breez_sdk_common::sync::model::{RecordChangeRequest, RecordChangeSet, RecordId};
+use tracing::error;
 
 use crate::{
+    PaymentDetails,
     persist::Record,
     sync::{CallbackReceiver, SyncService},
 };
 
 use crate::{DepositInfo, Payment, PaymentMetadata, Storage, StorageError, UpdateDepositPayload};
 use tokio_with_wasm::alias as tokio;
+
+const INITIAL_SYNC_CACHE_KEY: &str = "sync_initial_complete";
 
 enum RecordType {
     PaymentMetadata,
@@ -62,6 +66,62 @@ impl SyncedStorage {
                 .listen_inner(incoming_callback, outgoing_callback)
                 .await;
         });
+        let clone = Arc::clone(self);
+        tokio::spawn(async move {
+            if let Err(e) = clone.feed_existing_payment_metadata().await {
+                error!("Failed to feed existing payment metadata for sync: {}", e);
+            }
+        });
+    }
+
+    /// Feed existing payment metadata into sync storage. This is really only needed the first time sync is set up,
+    /// but there doesn't seem to be a good way to detect that, so we just do it every time.
+    async fn feed_existing_payment_metadata(&self) -> anyhow::Result<()> {
+        if self
+            .get_cached_item(INITIAL_SYNC_CACHE_KEY.to_string())
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
+
+        let payments = self.inner.list_payments(None, None).await?;
+        for payment in payments {
+            let Some(details) = payment.details else {
+                continue;
+            };
+            let PaymentDetails::Lightning {
+                description,
+                lnurl_pay_info,
+                ..
+            } = details
+            else {
+                continue;
+            };
+            let Some(lnurl_pay_info) = lnurl_pay_info else {
+                continue;
+            };
+            let metadata = PaymentMetadata {
+                lnurl_description: description,
+                lnurl_pay_info: Some(lnurl_pay_info),
+            };
+            let record_id = RecordId::new(RecordType::PaymentMetadata.to_string(), &payment.id);
+            let record_change_request = RecordChangeRequest {
+                id: record_id,
+                updated_fields: serde_json::from_value(
+                    serde_json::to_value(&metadata)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            };
+            self.sync_service
+                .set_outgoing_record(&record_change_request)
+                .await?;
+        }
+
+        self.set_cached_item(INITIAL_SYNC_CACHE_KEY.to_string(), "true".to_string())
+            .await?;
+        Ok(())
     }
 
     async fn listen_inner(
