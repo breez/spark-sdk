@@ -125,12 +125,15 @@ impl DerivedKeySet {
             identity_master_key.derive_priv(&secp, &[ChildNumber::from_hardened_idx(1)?])?;
         let static_deposit_master_key =
             identity_master_key.derive_priv(&secp, &[ChildNumber::from_hardened_idx(3)?])?;
+        let encryption_master_key = identity_master_key
+            .derive_priv(&secp, &[ChildNumber::from_hardened_idx(712532575)?])?;
         if let Some(child_number) = identity_child_number {
             identity_master_key =
                 identity_master_key.derive_priv(&secp, &DerivationPath::from(vec![child_number]))?
         }
         Ok(KeySet {
             identity_key_pair: identity_master_key.private_key.keypair(&secp),
+            encryption_master_key,
             signing_master_key,
             static_deposit_master_key,
         })
@@ -140,6 +143,7 @@ impl DerivedKeySet {
 #[derive(Clone)]
 pub struct KeySet {
     pub identity_key_pair: Keypair,
+    pub encryption_master_key: Xpriv,
     pub signing_master_key: Xpriv,
     pub static_deposit_master_key: Xpriv,
 }
@@ -743,6 +747,38 @@ impl Signer for DefaultSigner {
 
         tracing::debug!("signature: {:?}", signature);
         Ok(signature)
+    }
+
+    async fn ecies_encrypt(
+        &self,
+        msg: Vec<u8>,
+        path: DerivationPath,
+    ) -> Result<Vec<u8>, SignerError> {
+        let keypair = self
+            .key_set
+            .encryption_master_key
+            .derive_priv(&self.secp, &path)
+            .map_err(|e| SignerError::KeyDerivationError(e.to_string()))?
+            .to_keypair(&self.secp);
+        let rc_pub = keypair.public_key().serialize();
+        ecies::encrypt(&rc_pub, &msg)
+            .map_err(|err| SignerError::Generic(format!("Could not encrypt data: {err}")))
+    }
+
+    async fn ecies_decrypt(
+        &self,
+        msg: Vec<u8>,
+        path: DerivationPath,
+    ) -> Result<Vec<u8>, SignerError> {
+        let keypair = self
+            .key_set
+            .encryption_master_key
+            .derive_priv(&self.secp, &path)
+            .map_err(|e| SignerError::KeyDerivationError(e.to_string()))?
+            .to_keypair(&self.secp);
+        let rc_prv = keypair.secret_key().secret_bytes();
+        ecies::decrypt(&rc_prv, &msg)
+            .map_err(|err| SignerError::Generic(format!("Could not decrypt data: {err}")))
     }
 }
 
