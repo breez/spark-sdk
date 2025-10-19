@@ -133,4 +133,16 @@ pub trait Signer: Send + Sync + 'static {
         &self,
         request: AggregateFrostRequest<'a>,
     ) -> Result<frost_secp256k1_tr::Signature, SignerError>;
+
+    async fn ecies_encrypt(
+        &self,
+        msg: Vec<u8>,
+        path: DerivationPath,
+    ) -> Result<Vec<u8>, SignerError>;
+
+    async fn ecies_decrypt(
+        &self,
+        msg: Vec<u8>,
+        path: DerivationPath,
+    ) -> Result<Vec<u8>, SignerError>;
 }
