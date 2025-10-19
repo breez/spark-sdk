@@ -101,21 +101,6 @@ pub struct RecordChange {
     pub revision: u64,
 }
 
-#[derive(Deserialize, Serialize)]
-struct SyncData {
-    id: RecordId,
-    data: HashMap<String, Value>,
-}
-
-impl SyncData {
-    pub fn new(record: Record) -> Self {
-        SyncData {
-            id: record.id,
-            data: record.data,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct Record {
     pub id: RecordId,
@@ -173,33 +158,6 @@ impl Record {
             },
             parent,
         }
-    }
-}
-
-impl TryFrom<&Record> for crate::sync::proto::Record {
-    type Error = anyhow::Error;
-
-    fn try_from(record: &Record) -> Result<Self, Self::Error> {
-        Ok(crate::sync::proto::Record {
-            id: record.id.to_string(),
-            revision: record.revision,
-            schema_version: record.schema_version.to_string(),
-            data: serde_json::to_vec(&SyncData::new(record.clone()))?,
-        })
-    }
-}
-
-impl TryFrom<crate::sync::proto::Record> for Record {
-    type Error = anyhow::Error;
-
-    fn try_from(record: crate::sync::proto::Record) -> Result<Self, Self::Error> {
-        let sync_data: SyncData = serde_json::from_slice(&record.data)?;
-        Ok(Record {
-            id: sync_data.id,
-            revision: record.revision,
-            schema_version: Version::parse(&record.schema_version)?,
-            data: sync_data.data,
-        })
     }
 }
 
