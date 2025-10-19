@@ -6,7 +6,7 @@ use tracing::{debug, error, warn};
 
 use crate::Storage;
 use breez_sdk_common::sync::{
-    model::{IncomingChange, OutgoingChange, Record, RecordId},
+    model::{IncomingChange, OutgoingChange, RecordId},
     signing_client::SigningClient,
 };
 
@@ -309,17 +309,12 @@ impl SyncProcessor {
 
         let since_revision = self.storage.sync_get_last_revision().await?;
 
-        let reply = self.client.list_changes(since_revision).await?;
+        let mut records = self.client.list_changes(since_revision).await?;
 
         debug!(
             "real-time sync list_changes yielded {} results.",
-            reply.changes.len()
+            records.len()
         );
-        let mut records = reply
-            .changes
-            .into_iter()
-            .map(Record::try_from)
-            .collect::<Result<Vec<_>, _>>()?;
         records.sort_by(|a, b| a.revision.cmp(&b.revision));
         let db_records = records
             .iter()

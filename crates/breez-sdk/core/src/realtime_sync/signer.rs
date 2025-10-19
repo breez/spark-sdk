@@ -26,4 +26,18 @@ impl SyncSigner for DefaultSyncSigner {
             .serialize_compact()
             .to_vec())
     }
+
+    async fn ecies_encrypt(&self, msg: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+        Ok(self
+            .inner
+            .ecies_encrypt(msg, self.derivation_path.clone())
+            .await?)
+    }
+
+    async fn ecies_decrypt(&self, msg: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+        Ok(self
+            .inner
+            .ecies_decrypt(msg, self.derivation_path.clone())
+            .await?)
+    }
 }
