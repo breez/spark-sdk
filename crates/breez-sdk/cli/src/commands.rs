@@ -5,7 +5,7 @@ use breez_sdk_spark::{
     PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
     ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
     RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SyncWalletRequest, parse,
+    SyncWalletRequest,
 };
 use clap::Parser;
 use rustyline::{
@@ -269,7 +269,7 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::Parse { input } => {
-            let value = parse(&input).await?;
+            let value = sdk.parse(&input).await?;
             print_value(&value)?;
             Ok(true)
         }
@@ -371,7 +371,7 @@ pub(crate) async fn execute_command(
             comment,
             validate_success_url,
         } => {
-            let input = parse(&lnurl).await?;
+            let input = sdk.parse(&lnurl).await?;
             let res = match input {
                 InputType::LightningAddress(LightningAddressDetails { pay_request, .. })
                 | InputType::LnurlPay(pay_request) => {

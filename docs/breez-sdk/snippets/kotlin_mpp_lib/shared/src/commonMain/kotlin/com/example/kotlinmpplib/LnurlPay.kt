@@ -11,7 +11,7 @@ class LnurlPay {
         // lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf
         val lnurlPayUrl = "lightning@address.com"
         try {
-            val inputType = parse(lnurlPayUrl)
+            val inputType = sdk.parse(lnurlPayUrl)
             if (inputType is InputType.LightningAddress) {
                 val amountSats = 5_000.toULong()
                 val optionalComment = "<comment>"

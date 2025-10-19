@@ -3,7 +3,6 @@ from breez_sdk_spark import (
     BreezSdk,
     InputType,
     LnurlPayRequest,
-    parse,
     PrepareLnurlPayRequest,
     PrepareLnurlPayResponse,
 )
@@ -18,7 +17,7 @@ async def prepare_pay(sdk: BreezSdk):
     #     vdnxx5crxwpjvyunsephsz36jf
     lnurl_pay_url = "lightning@address.com"
     try:
-        parsed_input = await parse(lnurl_pay_url)
+        parsed_input = await sdk.parse(lnurl_pay_url)
         if isinstance(parsed_input, InputType.LIGHTNING_ADDRESS):
             details = parsed_input[0]
             amount_sats = 5_000

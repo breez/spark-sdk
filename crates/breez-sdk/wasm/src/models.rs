@@ -499,12 +499,21 @@ pub struct Config {
     pub max_deposit_claim_fee: Option<Fee>,
     pub lnurl_domain: Option<String>,
     pub prefer_spark_over_lightning: bool,
+    pub external_input_parsers: Option<Vec<ExternalInputParser>>,
+    pub use_default_external_input_parsers: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Fee)]
 pub enum Fee {
     Fixed { amount: u64 },
     Rate { sat_per_vbyte: u64 },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_common::input::ExternalInputParser)]
+pub struct ExternalInputParser {
+    pub provider_id: String,
+    pub input_regex: String,
+    pub parser_url: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Credentials)]

@@ -477,6 +477,7 @@ dependencies = [
  "macros",
  "percent-encoding-rfc3986",
  "prost",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

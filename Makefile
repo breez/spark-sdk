@@ -60,3 +60,6 @@ itest:
 
 breez-itest:
 	cargo xtask test --package breez-sdk-itest -- --test-threads=1 --no-capture
+
+open-core-rustdocs:
+	cd crates/breez-sdk/core && cargo doc --no-deps --open
