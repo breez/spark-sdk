@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bitcoin::{
-    hashes::{Hash, sha256d},
+    hashes::{Hash, sha256},
     hex::DisplayHex,
 };
 use serde::{Deserialize, Serialize};
@@ -119,7 +119,7 @@ impl SigningClient {
     async fn sign_message(&self, msg: &[u8]) -> anyhow::Result<String> {
         let msg = [MESSAGE_PREFIX, msg].concat();
         trace!("About to compute sha256 hash of msg: {msg:?}");
-        let digest = sha256d::Hash::hash(&msg);
+        let digest = sha256::Hash::hash(&msg);
         trace!("About to sign digest: {digest:?}");
         self.signer
             .sign_ecdsa_recoverable(digest.as_byte_array())
