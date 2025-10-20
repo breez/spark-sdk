@@ -7,6 +7,8 @@ use tokio_with_wasm::alias as tokio;
 
 #[derive(Debug, Error, Clone)]
 pub enum SessionManagerError {
+    #[error("Session not found")]
+    NotFound,
     #[error("Generic error: {0}")]
     Generic(String),
 }
@@ -55,9 +57,7 @@ impl SessionManager for InMemorySessionManager {
             .await
             .get(service_identity_key)
             .cloned()
-            .ok_or(SessionManagerError::Generic(
-                "Session not found".to_string(),
-            ))
+            .ok_or(SessionManagerError::NotFound)
     }
 
     async fn set_session(

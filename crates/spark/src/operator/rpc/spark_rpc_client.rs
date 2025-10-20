@@ -667,7 +667,14 @@ impl SparkRpcClient {
         let valid_session = match current_session {
             Ok(session) => self.auth.get_authenticated_session(Some(session)).await,
             Err(e) => {
-                error!("Failed to get operator session from session manager: {}", e);
+                match e {
+                    crate::session_manager::SessionManagerError::NotFound => {
+                        debug!("Operator session not found, authenticating")
+                    }
+                    crate::session_manager::SessionManagerError::Generic(e) => {
+                        error!("Failed to get operator session from session manager: {}", e)
+                    }
+                };
                 self.auth.get_authenticated_session(None).await
             }
         }?;
