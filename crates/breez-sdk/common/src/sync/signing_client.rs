@@ -65,7 +65,7 @@ impl SigningClient {
         let msg = format!(
             "{}-{}-{}-{}-{}",
             record.id,
-            serde_json::to_vec(&encrypted_data)?.to_lower_hex_string(),
+            encrypted_data.to_lower_hex_string(),
             record.revision,
             record.schema_version,
             request_time,
