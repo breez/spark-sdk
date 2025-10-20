@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use breez_sdk_common::sync::model::{RecordChangeRequest, RecordId, UnversionedRecordChange};
 use tokio::sync::{RwLock, broadcast};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::Storage;
 
@@ -27,6 +27,7 @@ impl SyncService {
     }
 
     pub async fn set_outgoing_record(&self, record: &RecordChangeRequest) -> anyhow::Result<()> {
+        debug!("Adding record for outgoing sync: {:?}", record);
         let _guard = self.mtx.write().await;
         let record: UnversionedRecordChange = record.into();
         let record_id = record.id.clone();
