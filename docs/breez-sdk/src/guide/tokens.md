@@ -178,7 +178,7 @@ Token payments can be received using either a Spark address or invoice. Using an
 
 ### Spark address
 
-Token payments use the same Spark address as Bitcoin payments—no separate address is required. Your application can retrieve the Spark address as described in the [Receiving a payment](./receive_payment.md#spark-address) guide. The payer can use this address to send tokens to the wallet.
+Token payments use the same spark address as Bitcoin payments - no separate address is required. Your application can retrieve the spark address as described in the [Receiving a payment](./receive_payment.md#spark) guide. The payer will use this address to send tokens to the wallet.
 
 ### Spark invoice
 
@@ -263,11 +263,14 @@ Spark token invoices can be created using the same API as Bitcoin Spark invoices
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
 </h2>
 
-To send tokens, provide a Spark address or invoice as the payment request. The token identifier must be provided in all cases. For Spark invoices, the token identifier must match the one specified by the invoice if it includes one. Spark invoices may also specify an amount and expiry.
+To send tokens, provide a spark address as the payment request. The token identifier must be specified in one of two ways:
 
-Your application can use the [parse](./parse.md) functionality to distinguish between Spark addresses and invoices before preparing the payment, and to determine invoice requirements.
+1. **Using a spark invoice**: If the payee provides a spark address with an embedded token identifier and amount (a spark invoice), the SDK automatically extracts and uses those values.
+2. **Manual specification**: For a plain spark address without embedded payment details, your application must provide both the token identifier and amount parameters when preparing the payment.
 
-Follow the standard prepare/send payment flow as described in the [Sending a payment](./send_payment.md) guide.
+Your application can use the [parse](./parse.md) functionality to determine if a spark address contains embedded token payment details before preparing the payment.
+
+The code example below demonstrates manual specification. Follow the standard prepare/send payment flow as described in the [Sending a payment](./send_payment.md) guide.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
@@ -348,4 +351,4 @@ Follow the standard prepare/send payment flow as described in the [Sending a pay
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.list_payments">API docs</a>
 </h2>
 
-Token payments are included in the regular payment history alongside Bitcoin payments. Your application can retrieve and distinguish token payments from other payment types using the standard payment listing functionality. See the [Listing payments](./list_payments.md) guide for more details.
+Token payments are included in the regular payment history alongside satoshi payments. Your application can retrieve and distinguish token payments from other payment types using the standard payment listing functionality. See the [Listing payments](./list_payments.md) guide for more details.
