@@ -322,7 +322,8 @@ impl SyncProcessor {
         let mut records = self.client.list_changes(since_revision).await?;
 
         debug!(
-            "real-time sync list_changes yielded {} results.",
+            "real-time sync list_changes since {} yielded {} results.",
+            since_revision,
             records.len()
         );
         records.sort_by(|a, b| a.revision.cmp(&b.revision));
