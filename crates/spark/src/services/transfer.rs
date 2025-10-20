@@ -10,7 +10,7 @@ use crate::operator::rpc::spark::{
 };
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{LeafKeyTweak, Transfer, map_signing_nonce_commitments};
-use crate::services::{ProofMap, TransferId, TransferStatus};
+use crate::services::{ProofMap, TransferId, TransferObserver, TransferStatus};
 use crate::signer::{
     FrostSigningCommitmentsWithNonces, PrivateKeySource, SecretToSplit, VerifiableSecretShare,
 };
@@ -80,6 +80,7 @@ pub struct TransferService {
     network: Network,
     split_secret_threshold: u32,
     operator_pool: Arc<OperatorPool>,
+    transfer_observer: Option<Arc<dyn TransferObserver>>,
 }
 
 impl TransferService {
@@ -88,12 +89,14 @@ impl TransferService {
         network: Network,
         split_secret_threshold: u32,
         operator_pool: Arc<OperatorPool>,
+        transfer_observer: Option<Arc<dyn TransferObserver>>,
     ) -> Self {
         Self {
             signer,
             network,
             split_secret_threshold,
             operator_pool,
+            transfer_observer,
         }
     }
 
@@ -107,11 +110,23 @@ impl TransferService {
         receiver_id: &PublicKey,
         signing_key_source: Option<PrivateKeySource>,
     ) -> Result<Transfer, ServiceError> {
+        let transfer_id = TransferId::generate();
+
+        if let Some(transfer_observer) = &self.transfer_observer {
+            let identity_public_key = &self.signer.get_identity_public_key()?;
+            if identity_public_key != receiver_id {
+                let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
+                transfer_observer
+                    .before_send_transfer(&transfer_id, identity_public_key, amount_sats)
+                    .await?;
+            }
+        }
+
         // build leaf key tweaks with new signing keys that we will send to the receiver
         let leaf_key_tweaks =
             prepare_leaf_key_tweaks_to_send(&self.signer, leaves, signing_key_source)?;
         let transfer = self
-            .send_transfer_with_key_tweaks(&leaf_key_tweaks, receiver_id)
+            .send_transfer_with_key_tweaks(&transfer_id, &leaf_key_tweaks, receiver_id)
             .await?;
 
         Ok(transfer)
@@ -144,14 +159,13 @@ impl TransferService {
 
     pub async fn send_transfer_with_key_tweaks(
         &self,
+        transfer_id: &TransferId,
         leaf_key_tweaks: &[LeafKeyTweak],
         receiver_id: &PublicKey,
     ) -> Result<Transfer, ServiceError> {
-        let transfer_id = TransferId::generate();
-
         let key_tweak_input_map = self
             .prepare_send_transfer_key_tweaks(
-                &transfer_id,
+                transfer_id,
                 receiver_id,
                 leaf_key_tweaks,
                 Default::default(),
@@ -160,7 +174,7 @@ impl TransferService {
 
         let transfer_package = self
             .prepare_transfer_package(
-                &transfer_id,
+                transfer_id,
                 key_tweak_input_map,
                 leaf_key_tweaks,
                 receiver_id,

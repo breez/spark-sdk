@@ -7,7 +7,7 @@ use crate::operator::rpc::spark::{
     InvoiceAmount, InvoiceAmountProof, SecretShare, StartTransferRequest,
     StartUserSignedTransferRequest, StorePreimageShareRequest,
 };
-use crate::services::{ServiceError, Transfer, TransferId, TransferService};
+use crate::services::{ServiceError, Transfer, TransferId, TransferObserver, TransferService};
 use crate::signer::SecretToSplit;
 use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
@@ -219,6 +219,7 @@ pub struct LightningService {
     signer: Arc<dyn Signer>,
     transfer_service: Arc<TransferService>,
     split_secret_threshold: u32,
+    transfer_observer: Option<Arc<dyn TransferObserver>>,
 }
 
 impl LightningService {
@@ -229,6 +230,7 @@ impl LightningService {
         signer: Arc<dyn Signer>,
         transfer_service: Arc<TransferService>,
         split_secret_threshold: u32,
+        transfer_observer: Option<Arc<dyn TransferObserver>>,
     ) -> Self {
         LightningService {
             operator_pool,
@@ -237,6 +239,7 @@ impl LightningService {
             signer,
             transfer_service,
             split_secret_threshold,
+            transfer_observer,
         }
     }
 
@@ -346,8 +349,14 @@ impl LightningService {
         // Decode invoice and validate amount
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
-        let amount_sats: u64 = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
+        let amount_sats = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
         let payment_hash = decoded_invoice.payment_hash();
+
+        if let Some(transfer_observer) = &self.transfer_observer {
+            transfer_observer
+                .before_send_lightning_payment(&transfer_id, invoice, amount_sats)
+                .await?;
+        }
 
         // Prepare leaf tweaks
         let leaf_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec(), None)?;

@@ -9,7 +9,7 @@ use breez_sdk_common::{
     fiat::FiatService,
     rest::{ReqwestRestClient as CommonRequestRestClient, RestClient},
 };
-use spark_wallet::{DefaultSigner, SparkWallet};
+use spark_wallet::DefaultSigner;
 use tokio::sync::watch;
 use tracing::debug;
 
@@ -22,6 +22,7 @@ use crate::{
     error::SdkError,
     lnurl::{LnurlServerClient, ReqwestLnurlServerClient},
     models::Config,
+    payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::Storage,
     sdk::{BreezSdk, BreezSdkParams},
 };
@@ -52,6 +53,7 @@ pub struct SdkBuilder {
     fiat_service: Option<Arc<dyn FiatService>>,
     lnurl_client: Option<Arc<dyn RestClient>>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
+    payment_observer: Option<Arc<dyn PaymentObserver>>,
     key_set_type: KeySetType,
     use_address_index: bool,
     account_number: Option<u32>,
@@ -72,6 +74,7 @@ impl SdkBuilder {
             fiat_service: None,
             lnurl_client: None,
             lnurl_server_client: None,
+            payment_observer: None,
             key_set_type: KeySetType::Default,
             use_address_index: false,
             account_number: None,
@@ -149,7 +152,19 @@ impl SdkBuilder {
         self
     }
 
+    /// Sets the payment observer to be used by the SDK.
+    /// This observer will receive callbacks before outgoing payments for Lightning, Spark and onchain Bitcoin.
+    /// Arguments:
+    /// - `payment_observer`: The payment observer to be used.
+    #[must_use]
+    #[allow(unused)]
+    pub fn with_payment_observer(mut self, payment_observer: Arc<dyn PaymentObserver>) -> Self {
+        self.payment_observer = Some(payment_observer);
+        self
+    }
+
     /// Builds the `BreezSdk` instance with the configured components.
+    #[allow(clippy::too_many_lines)]
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
         // Create the signer from seed
         let seed = match self.seed {
@@ -223,8 +238,15 @@ impl SdkBuilder {
         };
         let spark_wallet_config =
             spark_wallet::SparkWalletConfig::default_config(self.config.network.into());
-        let spark_wallet =
-            Arc::new(SparkWallet::connect(spark_wallet_config, Arc::new(signer)).await?);
+
+        let mut wallet_builder =
+            spark_wallet::WalletBuilder::new(spark_wallet_config, Arc::new(signer.clone()));
+        if let Some(observer) = self.payment_observer {
+            let observer: Arc<dyn spark_wallet::TransferObserver> =
+                Arc::new(SparkTransferObserver::new(observer));
+            wallet_builder = wallet_builder.with_transfer_observer(observer);
+        }
+        let spark_wallet = Arc::new(wallet_builder.build().await?);
 
         let lnurl_server_client: Option<Arc<dyn LnurlServerClient>> = match self.lnurl_server_client
         {

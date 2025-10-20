@@ -17,8 +17,9 @@ pub use spark::{
     services::TokensConfig,
     services::{
         CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee, InvoiceDescription,
-        LightningSendPayment, LightningSendStatus, TokenInputs, TokenMetadata, TokenTransaction,
-        TokenTransactionStatus, TransferStatus, TransferTokenOutput, TransferType, Utxo,
+        LightningSendPayment, LightningSendStatus, ReceiverTokenOutput, TokenInputs, TokenMetadata,
+        TokenTransaction, TokenTransactionStatus, TransferId, TransferObserver,
+        TransferObserverError, TransferStatus, TransferTokenOutput, TransferType, Utxo,
     },
     session_manager::*,
     signer::{DefaultSigner, DefaultSignerError, KeySet, KeySetType, Signer},

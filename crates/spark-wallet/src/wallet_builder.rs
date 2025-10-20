@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use spark::{
     operator::rpc::{ConnectionManager, DefaultConnectionManager},
+    services::TransferObserver,
     session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
     tree::{InMemoryTreeStore, TreeStore},
@@ -16,6 +17,7 @@ pub struct WalletBuilder {
     session_manager: Option<Arc<dyn SessionManager>>,
     tree_store: Option<Arc<dyn TreeStore>>,
     connection_manager: Option<Arc<dyn ConnectionManager>>,
+    transfer_observer: Option<Arc<dyn TransferObserver>>,
     with_background_processing: bool,
 }
 
@@ -27,6 +29,7 @@ impl WalletBuilder {
             session_manager: None,
             tree_store: None,
             connection_manager: None,
+            transfer_observer: None,
             with_background_processing: true,
         }
     }
@@ -49,6 +52,11 @@ impl WalletBuilder {
         self
     }
 
+    pub fn with_transfer_observer(mut self, transfer_observer: Arc<dyn TransferObserver>) -> Self {
+        self.transfer_observer = Some(transfer_observer);
+        self
+    }
+
     pub fn with_background_processing(mut self, with_background_processing: bool) -> Self {
         self.with_background_processing = with_background_processing;
         self
@@ -64,6 +72,7 @@ impl WalletBuilder {
                 .unwrap_or(Arc::new(InMemoryTreeStore::default())),
             self.connection_manager
                 .unwrap_or(Arc::new(DefaultConnectionManager::new())),
+            self.transfer_observer,
             self.with_background_processing,
         )
         .await

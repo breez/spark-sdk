@@ -4,7 +4,10 @@ use breez_sdk_common::{fiat::FiatService, rest::RestClient};
 use tokio::sync::Mutex;
 
 use crate::sdk_builder::Seed;
-use crate::{BitcoinChainService, BreezSdk, Config, Credentials, KeySetType, SdkError, Storage};
+use crate::{
+    BitcoinChainService, BreezSdk, Config, Credentials, KeySetType, PaymentObserver, SdkError,
+    Storage,
+};
 
 /// Builder for creating `BreezSdk` instances with customizable components.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
@@ -72,6 +75,14 @@ impl SdkBuilder {
     pub async fn with_lnurl_client(&self, lnurl_client: Arc<dyn RestClient>) {
         let mut builder = self.inner.lock().await;
         *builder = builder.clone().with_lnurl_client(lnurl_client);
+    }
+
+    /// Sets the payment observer to be used by the SDK.
+    /// Arguments:
+    /// - `payment_observer`: The payment observer to be used.
+    pub async fn with_payment_observer(&self, payment_observer: Arc<dyn PaymentObserver>) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_payment_observer(payment_observer);
     }
 
     /// Builds the `BreezSdk` instance with the configured components.

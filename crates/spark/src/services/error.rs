@@ -102,6 +102,8 @@ pub enum ServiceError {
     ServiceConnectionError(Box<OperatorRpcError>),
     #[error("tree service error: {0}")]
     TreeServiceError(Box<crate::tree::TreeServiceError>),
+    #[error("transfer observer error: {0}")]
+    TransferObserverError(#[from] crate::services::TransferObserverError),
     #[error("unknown status: {0}")]
     UnknownStatus(String),
     #[error("generic error: {0}")]

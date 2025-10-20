@@ -40,6 +40,8 @@ func initSdkAdvanced() async throws -> BreezSdk {
     // You can also pass your custom implementations:
     // builder = builder.withChainService(<your chain service implementation>)
     // builder = builder.withRestClient(<your rest client implementation>)
+    // builder = builder.withKeySet(<your key set type>, <use address index>, <account number>)
+    // builder = builder.withPaymentObserver(<your payment observer implementation>)
     let sdk = try await builder.build()
     // ANCHOR_END: init-sdk-advanced
 

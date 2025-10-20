@@ -840,3 +840,9 @@ pub struct GetTokensMetadataRequest {
 pub struct GetTokensMetadataResponse {
     pub tokens_metadata: Vec<TokenMetadata>,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ReceiverTokenOutput)]
+pub struct ReceiverTokenOutput {
+    pub receiver_address: String,
+    pub amount: u128,
+}

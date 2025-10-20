@@ -3,6 +3,7 @@ use std::{rc::Rc, sync::Arc};
 use crate::{
     error::WasmResult,
     models::{Config, Credentials, KeySetType, Seed},
+    payment_observer::{PaymentObserver, WasmPaymentObserver},
     persist::{Storage, WasmStorage},
     sdk::BreezSdk,
 };
@@ -48,6 +49,14 @@ impl SdkBuilder {
         self.builder =
             self.builder
                 .with_key_set(key_set_type.into(), use_address_index, account_number);
+        self
+    }
+
+    #[wasm_bindgen(js_name = "withPaymentObserver")]
+    pub fn with_payment_observer(mut self, payment_observer: PaymentObserver) -> Self {
+        self.builder = self
+            .builder
+            .with_payment_observer(Arc::new(WasmPaymentObserver { payment_observer }));
         self
     }
 

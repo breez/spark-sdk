@@ -54,6 +54,7 @@ async def init_sdk_advanced():
         # builder.with_chain_service(<your chain service implementation>)
         # builder.with_rest_client(<your rest client implementation>)
         # builder.with_key_set(<your key set type>, <use address index>, <account number>)
+        # builder.with_payment_observer(<your payment observer implementation>)
         sdk = await builder.build()
         return sdk
     except Exception as error:

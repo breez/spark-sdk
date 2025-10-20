@@ -19,7 +19,7 @@ use spark::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
         InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment,
         LightningService, QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager,
-        TokenMetadata, TokenService, TokenTransaction, Transfer, TransferService,
+        TokenMetadata, TokenService, TokenTransaction, Transfer, TransferObserver, TransferService,
         TransferTokenOutput, UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
@@ -72,6 +72,7 @@ impl SparkWallet {
             Arc::new(InMemorySessionManager::default()),
             Arc::new(InMemoryTreeStore::default()),
             Arc::new(DefaultConnectionManager::new()),
+            None,
             true,
         )
         .await
@@ -83,6 +84,7 @@ impl SparkWallet {
         session_manager: Arc<dyn SessionManager>,
         tree_store: Arc<dyn TreeStore>,
         connection_manager: Arc<dyn ConnectionManager>,
+        transfer_observer: Option<Arc<dyn TransferObserver>>,
         with_background_processing: bool,
     ) -> Result<Self, SparkWalletError> {
         config.validate()?;
@@ -110,6 +112,7 @@ impl SparkWallet {
             config.network,
             config.split_secret_threshold,
             operator_pool.clone(),
+            transfer_observer.clone(),
         ));
 
         let lightning_service = Arc::new(LightningService::new(
@@ -119,6 +122,7 @@ impl SparkWallet {
             Arc::clone(&signer),
             transfer_service.clone(),
             config.split_secret_threshold,
+            transfer_observer.clone(),
         ));
 
         let timelock_manager = Arc::new(TimelockManager::new(
@@ -145,6 +149,7 @@ impl SparkWallet {
             Arc::clone(&transfer_service),
             config.network,
             Arc::clone(&signer),
+            transfer_observer.clone(),
         ));
         let unilateral_exit_service = Arc::new(UnilateralExitService::new(
             operator_pool.clone(),
@@ -175,6 +180,7 @@ impl SparkWallet {
             config.network,
             config.split_secret_threshold,
             config.tokens_config.clone(),
+            transfer_observer,
         ));
 
         let event_manager = Arc::new(EventManager::new());

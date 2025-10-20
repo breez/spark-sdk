@@ -1,4 +1,6 @@
 pub(crate) mod adaptors;
+pub mod payment_observer;
+pub use payment_observer::*;
 
 use breez_sdk_common::{
     fiat::{FiatCurrency, Rate},
