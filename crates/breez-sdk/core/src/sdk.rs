@@ -1565,6 +1565,11 @@ async fn update_balances(
             token_balances,
         })
         .await?;
+    let identity_public_key = spark_wallet.get_identity_public_key();
+    info!(
+        "Balance updated successfully {} for identity {}",
+        balance_sats, identity_public_key
+    );
     Ok(())
 }
 

@@ -95,12 +95,9 @@ pub async fn wait_for_balance(
     timeout_secs: u64,
 ) -> Result<u64> {
     let start = std::time::Instant::now();
-    let poll_interval = std::time::Duration::from_secs(3);
+    let poll_interval = std::time::Duration::from_millis(100);
 
     loop {
-        // Sync wallet to get latest state
-        let _ = sdk.sync_wallet(SyncWalletRequest {}).await?;
-
         // Check current balance
         let info = sdk
             .get_info(GetInfoRequest {
