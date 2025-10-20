@@ -104,14 +104,21 @@ impl SyncProcessor {
 
     async fn subscribe_updates_forever(
         &self,
-        shutdown_receiver: watch::Receiver<()>,
+        mut shutdown_receiver: watch::Receiver<()>,
         pull_trigger_tx: watch::Sender<()>,
     ) {
         loop {
             self.subscribe_updates(shutdown_receiver.clone(), pull_trigger_tx.clone())
                 .await;
-            debug!("Re-establishing update subscription after disconnection");
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            tokio::select! {
+                () = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
+                    debug!("Re-establishing update subscription after disconnection");
+                }
+
+                _ = shutdown_receiver.changed() => {
+                    return;
+                }
+            }
         }
     }
 
