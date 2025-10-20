@@ -6,7 +6,7 @@ use reqwest::header::HeaderMap;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue};
 use serde::Serialize;
 use std::sync::Arc;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::session_manager::{Session, SessionManager};
 use crate::signer::Signer;
@@ -498,7 +498,14 @@ impl GraphQLClient {
                 }
             }
             Err(e) => {
-                error!("Failed to get ssp session from session manager: {}", e);
+                match e {
+                    crate::session_manager::SessionManagerError::NotFound => {
+                        debug!("Operator session not found, authenticating")
+                    }
+                    crate::session_manager::SessionManagerError::Generic(e) => {
+                        error!("Failed to get operator session from session manager: {}", e)
+                    }
+                };
                 self.authenticate().await?
             }
         };
