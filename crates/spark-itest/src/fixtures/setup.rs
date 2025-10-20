@@ -62,7 +62,8 @@ impl TestFixtures {
 
         for operator in &self.spark_so.operators {
             operator_configs.push(OperatorConfig {
-                address: format!("http://127.0.0.1:{}", operator.host_port).parse()?,
+                address: format!("https://127.0.0.1:{}", operator.host_port).parse()?,
+                ca_cert: Some(operator.ca_cert.as_bytes().to_vec()),
                 id: operator.index,
                 identifier: operator.identifier,
                 identity_public_key: operator.public_key,

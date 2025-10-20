@@ -87,6 +87,7 @@ qrcode-rs = { version = "0.1", default-features = false }
 quote = "1.0.40"
 rand = "0.8"
 rayon = "1.10"
+rcgen = "0.14.5"
 regex = "1.11.2"
 reqwest = { version = "0.12.23", default-features = false, features = ["json", "http2", "charset", "system-proxy"] }
 rstest = "0.26.1"
