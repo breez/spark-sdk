@@ -258,6 +258,7 @@ impl TreeService for SynchronousTreeService {
             .collect::<Vec<_>>();
         let missing_operator_leaves = missing_operator_leaves_map
             .values()
+            .filter(|leaf_id| !ignored_leaves_map.contains_key(&leaf_id.id))
             .cloned()
             .collect::<Vec<_>>();
         let refreshed_leaves = self
