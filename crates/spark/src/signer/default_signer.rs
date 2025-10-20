@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
 use bitcoin::key::{Parity, TapTweak};
-use bitcoin::secp256k1::ecdsa::Signature;
+use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::rand::thread_rng;
 use bitcoin::secp256k1::{self, All, Keypair, Message, PublicKey, SecretKey, schnorr};
 use bitcoin::{
@@ -390,11 +390,11 @@ impl Signer for DefaultSigner {
         Ok(sig)
     }
 
-    fn sign_message_ecdsa_from_path(
+    fn sign_message_ecdsa_recoverable_from_path(
         &self,
         message: &[u8],
         derivation_path: &DerivationPath,
-    ) -> Result<Signature, SignerError> {
+    ) -> Result<RecoverableSignature, SignerError> {
         let signing_key = self
             .key_set
             .signing_master_key
@@ -404,7 +404,7 @@ impl Signer for DefaultSigner {
         let digest = sha256::Hash::hash(message);
         let sig = self
             .secp
-            .sign_ecdsa(&Message::from_digest(digest.to_byte_array()), &signing_key);
+            .sign_ecdsa_recoverable(&Message::from_digest(digest.to_byte_array()), &signing_key);
         Ok(sig)
     }
 

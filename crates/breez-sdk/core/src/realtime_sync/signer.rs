@@ -20,11 +20,13 @@ impl DefaultSyncSigner {
 #[macros::async_trait]
 impl SyncSigner for DefaultSyncSigner {
     async fn sign_ecdsa_recoverable(&self, data: &[u8]) -> anyhow::Result<Vec<u8>> {
-        Ok(self
+        let (recovery_id, sig) = self
             .inner
-            .sign_message_ecdsa_from_path(data, &self.derivation_path)?
-            .serialize_compact()
-            .to_vec())
+            .sign_message_ecdsa_recoverable_from_path(data, &self.derivation_path)?
+            .serialize_compact();
+        let mut complete_signature = vec![31u8.saturating_add(u8::try_from(recovery_id.to_i32())?)];
+        complete_signature.extend_from_slice(&sig);
+        Ok(complete_signature)
     }
 
     async fn ecies_encrypt(&self, msg: Vec<u8>) -> anyhow::Result<Vec<u8>> {
