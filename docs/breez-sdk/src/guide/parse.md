@@ -2,7 +2,7 @@
 
 The SDK provides a versatile and extensible parsing module designed to process a wide range of input strings and return parsed data in various standardized formats.
 
-Natively supported formats include: BOLT11 invoices, LNURLs of different types, Bitcoin addresses, and others. For the complete list, consult the [API documentation](https://breez.github.io/spark-sdk/breez_sdk_spark/enum.InputType.html).
+Natively supported formats include: BOLT11 invoices, LNURLs of different types, Bitcoin addresses, Spark addresses, and others. For the complete list, consult the [API documentation](https://breez.github.io/spark-sdk/breez_sdk_spark/enum.InputType.html).
 
 <div class="warning">
 <h4>Developer note</h4>
