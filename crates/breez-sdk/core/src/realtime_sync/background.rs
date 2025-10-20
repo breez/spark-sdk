@@ -127,9 +127,12 @@ impl SyncProcessor {
         mut shutdown_receiver: watch::Receiver<()>,
         tx: watch::Sender<()>,
     ) {
-        let Ok(mut stream) = self.client.listen_changes().await else {
-            error!("Failed to establish update subscription");
-            return;
+        let mut stream = match self.client.listen_changes().await {
+            Ok(stream) => stream,
+            Err(e) => {
+                error!("Failed to establish update subscription: {e}");
+                return;
+            }
         };
 
         loop {
