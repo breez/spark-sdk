@@ -127,6 +127,7 @@ impl SyncProcessor {
         mut shutdown_receiver: watch::Receiver<()>,
         tx: watch::Sender<()>,
     ) {
+        debug!("Subscribing to real-time sync update subscription");
         let mut stream = match self.client.listen_changes().await {
             Ok(stream) => stream,
             Err(e) => {
@@ -298,7 +299,6 @@ impl SyncProcessor {
             "Pushing outgoing record {:?}, revision {} to remote",
             record.id, record.revision
         );
-        // TODO: Encrypt.
         // Pushes the record to the remote server.
         // TODO: If the remote server already has this exact revision, check what happens. We should continue then for idempotency.
         self.client.set_record(&record).await?;

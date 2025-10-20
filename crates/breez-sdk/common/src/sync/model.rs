@@ -32,6 +32,7 @@ impl Display for RecordId {
     }
 }
 
+#[derive(Debug)]
 pub struct RecordChangeRequest {
     pub id: RecordId,
     pub updated_fields: HashMap<String, Value>,
