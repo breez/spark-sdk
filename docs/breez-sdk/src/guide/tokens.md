@@ -178,7 +178,7 @@ Token payments can be received using either a Spark address or invoice. Using an
 
 ### Spark address
 
-Token payments use the same spark address as Bitcoin payments - no separate address is required. Your application can retrieve the spark address as described in the [Receiving a payment](./receive_payment.md#spark) guide. The payer will use this address to send tokens to the wallet.
+Token payments use the same Spark address as Bitcoin payments - no separate address is required. Your application can retrieve the Spark address as described in the [Receiving a payment](./receive_payment.md#spark) guide. The payer will use this address to send tokens to the wallet.
 
 ### Spark invoice
 
@@ -263,12 +263,12 @@ Spark token invoices can be created using the same API as Bitcoin Spark invoices
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
 </h2>
 
-To send tokens, provide a spark address as the payment request. The token identifier must be specified in one of two ways:
+To send tokens, provide a Spark address as the payment request. The token identifier must be specified in one of two ways:
 
-1. **Using a spark invoice**: If the payee provides a spark address with an embedded token identifier and amount (a spark invoice), the SDK automatically extracts and uses those values.
-2. **Manual specification**: For a plain spark address without embedded payment details, your application must provide both the token identifier and amount parameters when preparing the payment.
+1. **Using a Spark invoice**: If the payee provides a Spark address with an embedded token identifier and amount (a Spark invoice), the SDK automatically extracts and uses those values.
+2. **Manual specification**: For a plain Spark address without embedded payment details, your application must provide both the token identifier and amount parameters when preparing the payment.
 
-Your application can use the [parse](./parse.md) functionality to determine if a spark address contains embedded token payment details before preparing the payment.
+Your application can use the [parse](./parse.md) functionality to determine if a Spark address contains embedded token payment details before preparing the payment.
 
 The code example below demonstrates manual specification. Follow the standard prepare/send payment flow as described in the [Sending a payment](./send_payment.md) guide.
 
