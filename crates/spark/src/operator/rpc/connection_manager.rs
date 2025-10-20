@@ -33,7 +33,7 @@ impl DefaultConnectionManager {
                 .install_default()
                 .is_err()
             {
-                tracing::error!("Failed to install rustls crypto provider, ignoring error");
+                tracing::warn!("Failed to install rustls crypto provider, ignoring error");
             }
         }
         let connections_map = HashMap::new();
