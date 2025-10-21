@@ -4,12 +4,12 @@ use std::str::FromStr;
 use std::time::SystemTime;
 
 use bitcoin::secp256k1::ecdsa::Signature;
-use bitcoin::{Transaction, TxOut, Txid};
+use bitcoin::{Transaction, Txid};
 use bitcoin::{consensus::deserialize, secp256k1::PublicKey};
+use frost_secp256k1_tr::round2::SignatureShare;
 use frost_secp256k1_tr::{
     Identifier,
     round1::{NonceCommitment, SigningCommitments},
-    round2::SignatureShare,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -18,9 +18,9 @@ use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
 use crate::services::{HashableTokenTransaction, bech32m_encode_token_id};
-use crate::signer::{FrostSigningCommitmentsWithNonces, PrivateKeySource};
+use crate::signer::PrivateKeySource;
+use crate::ssp::BitcoinNetwork;
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
-use crate::{ssp::BitcoinNetwork, utils::refund::SignedTx};
 
 use super::ServiceError;
 
@@ -101,10 +101,26 @@ impl TryFrom<operator_rpc::common::SigningCommitment> for SigningCommitments {
     }
 }
 
-impl TryFrom<SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
+pub struct SignedTx {
+    pub node_id: TreeNodeId,
+    pub signing_public_key: PublicKey,
+    pub tx: Transaction,
+    pub user_signature: SignatureShare,
+    pub signing_commitments: BTreeMap<Identifier, SigningCommitments>,
+    pub user_signature_commitment: SigningCommitments,
+    pub network: Network,
+}
+
+impl AsRef<SignedTx> for SignedTx {
+    fn as_ref(&self) -> &SignedTx {
+        self
+    }
+}
+
+impl TryFrom<&SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
     type Error = ServiceError;
 
-    fn try_from(signed_tx: SignedTx) -> Result<Self, Self::Error> {
+    fn try_from(signed_tx: &SignedTx) -> Result<Self, Self::Error> {
         Ok(operator_rpc::spark::UserSignedTxSigningJob {
             leaf_id: signed_tx.node_id.to_string(),
             signing_public_key: signed_tx.signing_public_key.serialize().to_vec(),
@@ -114,42 +130,6 @@ impl TryFrom<SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
                 signing_commitments: to_proto_signing_commitments(&signed_tx.signing_commitments)?,
             }),
             user_signature: signed_tx.user_signature.serialize().to_vec(),
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub(crate) enum SigningJobTxType {
-    CpfpNode,
-    DirectNode,
-    CpfpRefund,
-    DirectRefund,
-    DirectFromCpfpRefund,
-}
-
-#[derive(Clone)]
-pub(crate) struct SigningJob {
-    pub tx_type: SigningJobTxType,
-    pub tx: Transaction,
-    pub parent_tx_out: TxOut,
-    pub signing_public_key: PublicKey,
-    pub signing_commitments: FrostSigningCommitmentsWithNonces,
-}
-
-impl AsRef<SigningJob> for SigningJob {
-    fn as_ref(&self) -> &SigningJob {
-        self
-    }
-}
-
-impl TryFrom<&SigningJob> for operator_rpc::spark::SigningJob {
-    type Error = ServiceError;
-
-    fn try_from(signing_job: &SigningJob) -> Result<Self, Self::Error> {
-        Ok(operator_rpc::spark::SigningJob {
-            raw_tx: bitcoin::consensus::serialize(&signing_job.tx),
-            signing_public_key: signing_job.signing_public_key.serialize().to_vec(),
-            signing_nonce_commitment: Some(signing_job.signing_commitments.commitments.try_into()?),
         })
     }
 }
@@ -170,29 +150,6 @@ impl TryFrom<&operator_rpc::spark::SigningResult> for SigningResult {
             )?,
             signature_shares: map_signature_shares(&signing_result.signature_shares)?,
             public_keys: map_public_keys(&signing_result.public_keys)?,
-        })
-    }
-}
-
-pub(crate) struct ExtendLeafSigningResult {
-    pub verifying_key: PublicKey,
-    pub signing_result: Option<SigningResult>,
-}
-
-impl TryFrom<&operator_rpc::spark::ExtendLeafSigningResult> for ExtendLeafSigningResult {
-    type Error = ServiceError;
-
-    fn try_from(
-        extend_leaf_signing_result: &operator_rpc::spark::ExtendLeafSigningResult,
-    ) -> Result<Self, Self::Error> {
-        Ok(ExtendLeafSigningResult {
-            verifying_key: PublicKey::from_slice(&extend_leaf_signing_result.verifying_key)
-                .map_err(|_| ServiceError::ValidationError("Invalid verifying key".to_string()))?,
-            signing_result: extend_leaf_signing_result
-                .signing_result
-                .as_ref()
-                .map(|sr| sr.try_into())
-                .transpose()?,
         })
     }
 }

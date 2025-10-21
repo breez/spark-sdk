@@ -8,7 +8,7 @@ use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, info, trace, warn};
 use web_time::Duration;
 
-use crate::tree::Leaves;
+use crate::tree::{Leaves, TreeNodeStatus};
 use crate::{
     Network,
     operator::{
@@ -61,7 +61,7 @@ impl TreeService for SynchronousTreeService {
         optimize: bool,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
         let result_nodes = self
-            .check_timelock_nodes(leaves, async |e| {
+            .check_renew_nodes(leaves, async |e| {
                 // If this is a partial check timelock error, the extend node timelock failed
                 // but we can still update the leaves that were refreshed
                 if let ServiceError::PartialCheckTimelockError(ref nodes) = e
@@ -190,7 +190,8 @@ impl TreeService for SynchronousTreeService {
             }
         }
 
-        let mut missing_operator_leaves: HashMap<TreeNodeId, TreeNode> = HashMap::new();
+        let mut missing_operator_leaves_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
+        let mut ignored_leaves_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
 
         // For each operator's leaves, compare against coordinator in the same way as before
         for (operator_id, operator_leaves) in
@@ -210,7 +211,7 @@ impl TreeService for SynchronousTreeService {
                                 "Ignoring leaf due to mismatch between coordinator and operator {}. Coordinator: {:?}, Operator: {:?}",
                                 operator_id.0, leaf, operator_leaf
                             );
-                            missing_operator_leaves.insert(leaf.id.clone(), leaf.clone());
+                            missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
                         }
                     }
                     None => {
@@ -218,13 +219,19 @@ impl TreeService for SynchronousTreeService {
                             "Ignoring leaf due to missing from operator {}: {:?}",
                             operator_id.0, leaf.id
                         );
-                        missing_operator_leaves.insert(leaf.id.clone(), leaf.clone());
+                        missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
                     }
                 }
             }
         }
 
         for leaf in &coordinator_leaves {
+            if leaf.status != TreeNodeStatus::Available {
+                info!("Ignoring leaf {} due to status: {:?}", leaf.id, leaf.status);
+                ignored_leaves_map.insert(leaf.id.clone(), leaf.clone());
+                continue;
+            }
+
             let our_node_pubkey = self.signer.get_public_key_for_node(&leaf.id)?;
             let other_node_pubkey = leaf.signing_keyshare.public_key;
             let verifying_pubkey = leaf.verifying_public_key;
@@ -238,25 +245,28 @@ impl TreeService for SynchronousTreeService {
                     "Leaf {}'s verifying public key does not match the expected value",
                     leaf.id
                 );
-                missing_operator_leaves.insert(leaf.id.clone(), leaf.clone());
+                ignored_leaves_map.insert(leaf.id.clone(), leaf.clone());
             }
         }
 
         let new_leaves = coordinator_leaves
             .into_iter()
-            .filter(|leaf| !missing_operator_leaves.contains_key(&leaf.id))
+            .filter(|leaf| {
+                !missing_operator_leaves_map.contains_key(&leaf.id)
+                    && !ignored_leaves_map.contains_key(&leaf.id)
+            })
             .collect::<Vec<_>>();
-
-        let ignored_leaves = missing_operator_leaves
+        let missing_operator_leaves = missing_operator_leaves_map
             .values()
+            .filter(|leaf_id| !ignored_leaves_map.contains_key(&leaf_id.id))
             .cloned()
             .collect::<Vec<_>>();
         let refreshed_leaves = self
-            .check_timelock_nodes(new_leaves, async |e| {
+            .check_renew_nodes(new_leaves, async |e| {
                 // If this is a partial check timelock error, the extend node timelock failed
                 // but we can still update the leaves that were refreshed
                 if let ServiceError::PartialCheckTimelockError(ref nodes) = e
-                    && let Err(e) = self.state.set_leaves(nodes, &ignored_leaves).await
+                    && let Err(e) = self.state.set_leaves(nodes, &missing_operator_leaves).await
                 {
                     error!("Failed to set leaves: {e:?}");
                 }
@@ -264,7 +274,7 @@ impl TreeService for SynchronousTreeService {
             .await?;
 
         self.state
-            .set_leaves(&refreshed_leaves, &ignored_leaves)
+            .set_leaves(&refreshed_leaves, &missing_operator_leaves)
             .await?;
 
         self.optimize_leaves().await?;
@@ -350,7 +360,7 @@ impl SynchronousTreeService {
         Ok(nodes.items)
     }
 
-    async fn check_timelock_nodes<F>(
+    async fn check_renew_nodes<F>(
         &self,
         nodes: Vec<TreeNode>,
         error_fn: impl FnOnce(ServiceError) -> F,
@@ -358,7 +368,7 @@ impl SynchronousTreeService {
     where
         F: Future<Output = ()>,
     {
-        match self.timelock_manager.check_timelock_nodes(nodes).await {
+        match self.timelock_manager.check_renew_nodes(nodes).await {
             Ok(nodes) => Ok(nodes),
             Err(e) => {
                 error_fn(e).await;
@@ -419,7 +429,7 @@ impl SynchronousTreeService {
             .await?;
 
         let new_leaves = self
-            .check_timelock_nodes(reservation.leaves, async |e| {
+            .check_renew_nodes(reservation.leaves, async |e| {
                 // Cancel the reservation if the timelock check fails
                 if let Err(e) = self.state.cancel_reservation(&reservation.id).await {
                     error!("Failed to cancel reservation: {e:?}");

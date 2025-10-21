@@ -95,12 +95,9 @@ pub async fn wait_for_balance(
     timeout_secs: u64,
 ) -> Result<u64> {
     let start = std::time::Instant::now();
-    let poll_interval = std::time::Duration::from_secs(3);
+    let poll_interval = std::time::Duration::from_millis(100);
 
     loop {
-        // Sync wallet to get latest state
-        let _ = sdk.sync_wallet(SyncWalletRequest {}).await?;
-
         // Check current balance
         let info = sdk
             .get_info(GetInfoRequest {
@@ -210,6 +207,8 @@ pub enum EventResult {
     ClaimSucceeded,
     /// Payment succeeded with details
     PaymentSucceeded(Box<Payment>),
+    /// Synced event occurred
+    Synced,
 }
 
 /// Generic event waiter with timeout
@@ -319,6 +318,7 @@ pub async fn wait_for_claim_event(
 /// The payment details from the PaymentSucceeded event
 pub async fn wait_for_payment_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
+    payment_type: PaymentType,
     timeout_secs: u64,
 ) -> Result<Payment> {
     wait_for_event(
@@ -326,7 +326,7 @@ pub async fn wait_for_payment_event(
         timeout_secs,
         "PaymentSucceeded",
         |event| match event {
-            SdkEvent::PaymentSucceeded { payment } => {
+            SdkEvent::PaymentSucceeded { payment } if payment.payment_type == payment_type => {
                 info!(
                     "Received PaymentSucceeded event: {} sats, type: {:?}",
                     payment.amount, payment.payment_type
@@ -344,4 +344,24 @@ pub async fn wait_for_payment_event(
         EventResult::PaymentSucceeded(payment) => Ok(*payment),
         _ => Err(anyhow::anyhow!("Unexpected event result")),
     })
+}
+
+/// Wait for a synced SDK events
+///
+/// # Arguments
+/// * `event_rx` - Event receiver channel from build_sdk
+/// * `timeout_secs` - Maximum time to wait in seconds
+pub async fn wait_for_synced_event(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    timeout_secs: u64,
+) -> Result<()> {
+    wait_for_event(event_rx, timeout_secs, "Synced", |event| match event {
+        SdkEvent::Synced => Ok(Some(EventResult::Synced)),
+        other => {
+            info!("Received SDK event: {:?}", other);
+            Ok(None)
+        }
+    })
+    .await
+    .map(|_| ())
 }

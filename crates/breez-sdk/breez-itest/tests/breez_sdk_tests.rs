@@ -155,7 +155,8 @@ async fn test_01_spark_transfer(
 
     // Wait for Bob to receive the payment via event
     info!("Waiting for Bob to receive payment event...");
-    let received_payment = wait_for_payment_event(&mut bob.events, 60).await?;
+    let received_payment =
+        wait_for_payment_event(&mut bob.events, PaymentType::Receive, 60).await?;
 
     assert_eq!(
         received_payment.payment_type,
@@ -376,7 +377,8 @@ async fn test_03_lightning_invoice_payment(
 
     // Wait for Bob to receive the payment via event
     info!("Waiting for Bob to receive payment event...");
-    let received_payment = wait_for_payment_event(&mut bob.events, 60).await?;
+    let received_payment =
+        wait_for_payment_event(&mut bob.events, PaymentType::Receive, 60).await?;
     wait_for_balance(
         &bob.sdk,
         Some(bob_initial_balance + expected_amount),
@@ -409,10 +411,7 @@ async fn test_03_lightning_invoice_payment(
     );
 
     // Verify Alice's balance decreased by amount + fees
-    let mut sent_payment = wait_for_payment_event(&mut alice.events, 60).await?;
-    if sent_payment.payment_type != PaymentType::Send {
-        sent_payment = wait_for_payment_event(&mut alice.events, 60).await?;
-    }
+    let sent_payment = wait_for_payment_event(&mut alice.events, PaymentType::Send, 60).await?;
     wait_for_balance(
         &alice.sdk,
         Some(alice_initial_balance - sent_payment.amount as u64 - sent_payment.fees as u64),
@@ -556,5 +555,112 @@ async fn test_03_lightning_invoice_payment(
         "=== Test test_03_lightning_invoice_payment ({}) PASSED ===",
         test_type
     );
+    Ok(())
+}
+
+/// Test 4: Send back and forth between Alice to Bob a Spark transfer to test renewing the node/refund timelocks
+#[rstest]
+#[test_log::test(tokio::test)]
+// #[ignore = "Requires sending approx 19 x 19 transfers to renew the node timelocks"]
+async fn test_04_renew_timelocks(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_04_renew_timelocks ===");
+
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
+
+    // Ensure Alice is funded (100 sats minimum for small test)
+    ensure_funded(&mut alice, 100).await?;
+    let received_payment =
+        wait_for_payment_event(&mut alice.events, PaymentType::Receive, 60).await?;
+
+    assert_eq!(
+        received_payment.payment_type,
+        PaymentType::Receive,
+        "Payment should be received"
+    );
+
+    assert_eq!(received_payment.method, PaymentMethod::Deposit);
+
+    let balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats as u128;
+
+    let send_sdk_payment =
+        async |from_sdk: &mut SdkInstance, to_sdk: &mut SdkInstance| -> Result<()> {
+            info!("Sending via Spark started...");
+            // Sync "from" SDK and wait for some balance
+            wait_for_balance(&from_sdk.sdk, Some(1), None, 60).await?;
+
+            // Get spark address of "to" SDK
+            let spark_address = to_sdk
+                .sdk
+                .receive_payment(ReceivePaymentRequest {
+                    payment_method: ReceivePaymentMethod::SparkAddress,
+                })
+                .await?
+                .payment_request;
+
+            info!("Sending {balance} sats to {spark_address}...");
+
+            // Send payment
+            let prepare = from_sdk
+                .sdk
+                .prepare_send_payment(PrepareSendPaymentRequest {
+                    payment_request: spark_address.to_string(),
+                    amount: Some(balance),
+                    token_identifier: None,
+                })
+                .await?;
+
+            info!("Sending via Spark before send payment");
+            let send_resp = from_sdk
+                .sdk
+                .send_payment(SendPaymentRequest {
+                    prepare_response: prepare,
+                    options: None,
+                })
+                .await?;
+
+            info!("Sending via Spark after send payment");
+            assert!(
+                matches!(
+                    send_resp.payment.status,
+                    PaymentStatus::Completed | PaymentStatus::Pending
+                ),
+                "Payment should be completed or pending"
+            );
+
+            info!("Sending via Spark Waiting for receive payment event...");
+            let received_payment =
+                wait_for_payment_event(&mut to_sdk.events, PaymentType::Receive, 60).await?;
+
+            assert_eq!(
+                received_payment.payment_type,
+                PaymentType::Receive,
+                "Payment should be received"
+            );
+
+            assert_eq!(received_payment.method, PaymentMethod::Spark);
+
+            info!("Sending via Spark after receive payment");
+            Ok(())
+        };
+
+    for n in 0..200 {
+        info!("Iteration {n}");
+        info!("Sending from Alice to Bob via Spark...");
+        send_sdk_payment(&mut alice, &mut bob).await?;
+        info!("Sending from Bob to Alice via Spark...");
+        send_sdk_payment(&mut bob, &mut alice).await?;
+    }
+
+    info!("=== Test test_04_renew_timelocks PASSED ===");
     Ok(())
 }

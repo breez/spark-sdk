@@ -723,7 +723,7 @@ impl Signer for DefaultSigner {
             ))
         })?;
 
-        tracing::info!("signature: {:?}", signature);
+        tracing::debug!("signature: {:?}", signature);
         Ok(signature)
     }
 }
