@@ -8,7 +8,7 @@ use thiserror::Error;
 pub struct ProvisionalPayment {
     /// Unique identifier for the payment
     pub payment_id: String,
-    /// Amount in satoshis
+    /// Amount in satoshis or token base units
     pub amount: u128,
     /// Details of the payment
     pub details: ProvisionalPaymentDetails,
