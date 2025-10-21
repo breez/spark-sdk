@@ -5,19 +5,16 @@ use std::{
     sync::Arc,
 };
 
-use breez_sdk_common::sync::model::{
-    IncomingChange, OutgoingChange, RecordChangeRequest, RecordId,
+use breez_sdk_common::sync::{
+    CallbackReceiver, IncomingChange, OutgoingChange, RecordChangeRequest, RecordId, SyncService,
 };
 use serde_json::Value;
 use tracing::error;
 
 use crate::{
-    ListPaymentsRequest, PaymentDetails,
-    persist::Record,
-    realtime_sync::{CallbackReceiver, SyncService},
+    DepositInfo, ListPaymentsRequest, Payment, PaymentDetails, PaymentMetadata, Storage,
+    StorageError, UpdateDepositPayload,
 };
-
-use crate::{DepositInfo, Payment, PaymentMetadata, Storage, StorageError, UpdateDepositPayload};
 use tokio_with_wasm::alias as tokio;
 
 const INITIAL_SYNC_CACHE_KEY: &str = "sync_initial_complete";
@@ -279,69 +276,5 @@ impl Storage for SyncedStorage {
         payload: UpdateDepositPayload,
     ) -> Result<(), StorageError> {
         self.inner.update_deposit(txid, vout, payload).await
-    }
-
-    async fn sync_add_outgoing_change(
-        &self,
-        record: crate::persist::UnversionedRecordChange,
-    ) -> Result<u64, StorageError> {
-        self.inner.sync_add_outgoing_change(record).await
-    }
-    async fn sync_complete_outgoing_sync(
-        &self,
-        record: crate::persist::Record,
-    ) -> Result<(), StorageError> {
-        self.inner.sync_complete_outgoing_sync(record).await
-    }
-    async fn sync_get_pending_outgoing_changes(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<crate::persist::OutgoingChange>, StorageError> {
-        self.inner.sync_get_pending_outgoing_changes(limit).await
-    }
-
-    /// Get the revision number of the last synchronized record
-    async fn sync_get_last_revision(&self) -> Result<u64, StorageError> {
-        self.inner.sync_get_last_revision().await
-    }
-
-    /// Insert incoming records from remote sync
-    async fn sync_insert_incoming_records(&self, records: Vec<Record>) -> Result<(), StorageError> {
-        self.inner.sync_insert_incoming_records(records).await
-    }
-
-    /// Delete an incoming record after it has been processed
-    async fn sync_delete_incoming_record(&self, record: Record) -> Result<(), StorageError> {
-        self.inner.sync_delete_incoming_record(record).await
-    }
-
-    /// Update revision numbers of pending outgoing records to be higher than the given revision
-    async fn sync_rebase_pending_outgoing_records(
-        &self,
-        revision: u64,
-    ) -> Result<(), StorageError> {
-        self.inner
-            .sync_rebase_pending_outgoing_records(revision)
-            .await
-    }
-
-    /// Get incoming records that need to be processed, up to the specified limit
-    async fn sync_get_incoming_records(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<crate::persist::IncomingChange>, StorageError> {
-        self.inner.sync_get_incoming_records(limit).await
-    }
-
-    /// Get the latest outgoing record if any exists
-    async fn sync_get_latest_outgoing_change(
-        &self,
-    ) -> Result<Option<crate::persist::OutgoingChange>, StorageError> {
-        self.inner.sync_get_latest_outgoing_change().await
-    }
-
-    /// Update the sync state record from an incoming record
-    async fn sync_update_record_from_incoming(&self, record: Record) -> Result<(), StorageError> {
-        self.inner.sync_update_record_from_incoming(record).await
     }
 }
