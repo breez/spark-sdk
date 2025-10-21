@@ -1,3 +1,9 @@
+pub mod chain_service;
+mod error;
+pub mod fiat_service;
+pub mod payment_observer;
+pub mod rest_client;
+
 use std::collections::HashMap;
 
 use wasm_bindgen::prelude::wasm_bindgen;
