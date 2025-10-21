@@ -1,4 +1,4 @@
-use bitcoin::{Address, Txid, secp256k1::PublicKey};
+use bitcoin::{Address, Txid};
 use thiserror::Error;
 
 use crate::{address::SparkAddress, services::TransferId};
@@ -39,7 +39,7 @@ pub trait TransferObserver: Send + Sync {
     async fn before_send_transfer(
         &self,
         transfer_id: &TransferId,
-        receiver_public_key: &PublicKey,
+        receiver_address: &SparkAddress,
         amount_sats: u64,
     ) -> Result<(), TransferObserverError>;
 }

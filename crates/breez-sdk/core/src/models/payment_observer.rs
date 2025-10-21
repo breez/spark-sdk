@@ -1,22 +1,40 @@
 use std::sync::Arc;
 
-use spark_wallet::{PublicKey, TransferId, TransferObserverError};
+use spark_wallet::{SparkAddress, TransferId, TransferObserverError};
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct ReceiverTokenOutput {
-    pub receiver_address: String,
+pub struct ProvisionalPayment {
+    /// Unique identifier for the payment
+    pub payment_id: String,
+    /// Amount in satoshis
     pub amount: u128,
+    /// Details of the payment
+    pub details: ProvisionalPaymentDetails,
 }
 
-impl From<spark_wallet::ReceiverTokenOutput> for ReceiverTokenOutput {
-    fn from(value: spark_wallet::ReceiverTokenOutput) -> Self {
-        ReceiverTokenOutput {
-            receiver_address: value.receiver_address.to_string(),
-            amount: value.amount,
-        }
-    }
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ProvisionalPaymentDetails {
+    Bitcoin {
+        /// Onchain Bitcoin address
+        withdrawal_address: String,
+    },
+    Lightning {
+        /// BOLT11 invoice
+        invoice: String,
+    },
+    Spark {
+        /// Spark receiver address
+        receiver_address: String,
+    },
+    Token {
+        /// Token identifier
+        token_id: String,
+        /// Spark receiver address
+        receiver_address: String,
+    },
 }
 
 #[derive(Debug, Error, Clone)]
@@ -44,33 +62,10 @@ impl From<PaymentObserverError> for TransferObserverError {
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
 pub trait PaymentObserver: Send + Sync {
-    /// Called before a cooperative exit is made
-    async fn before_send_bitcoin(
+    /// Called before Lightning, Spark or onchain Bitcoin payments are made
+    async fn before_send(
         &self,
-        payment_id: String,
-        withdrawal_address: String,
-        amount_sats: u64,
-    ) -> Result<(), PaymentObserverError>;
-    /// Called before a lightning payment is made
-    async fn before_send_lightning(
-        &self,
-        payment_id: String,
-        invoice: String,
-        amount_sats: u64,
-    ) -> Result<(), PaymentObserverError>;
-    /// Called before a spark transfer is made
-    async fn before_send_spark(
-        &self,
-        payment_id: String,
-        receiver_public_key: String,
-        amount_sats: u64,
-    ) -> Result<(), PaymentObserverError>;
-    /// Called before a spark token transaction is made
-    async fn before_send_token(
-        &self,
-        tx_id: String,
-        token_id: String,
-        receiver_outputs: Vec<ReceiverTokenOutput>,
+        payments: Vec<ProvisionalPayment>,
     ) -> Result<(), PaymentObserverError>;
 }
 
@@ -94,11 +89,13 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
     ) -> Result<(), TransferObserverError> {
         Ok(self
             .inner
-            .before_send_bitcoin(
-                transfer_id.to_string(),
-                withdrawal_address.to_string(),
-                amount_sats,
-            )
+            .before_send(vec![ProvisionalPayment {
+                payment_id: transfer_id.to_string(),
+                amount: u128::from(amount_sats),
+                details: ProvisionalPaymentDetails::Bitcoin {
+                    withdrawal_address: withdrawal_address.to_string(),
+                },
+            }])
             .await?)
     }
     async fn before_send_lightning_payment(
@@ -109,7 +106,13 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
     ) -> Result<(), TransferObserverError> {
         Ok(self
             .inner
-            .before_send_lightning(transfer_id.to_string(), invoice.to_string(), amount_sats)
+            .before_send(vec![ProvisionalPayment {
+                payment_id: transfer_id.to_string(),
+                amount: u128::from(amount_sats),
+                details: ProvisionalPaymentDetails::Lightning {
+                    invoice: invoice.to_string(),
+                },
+            }])
             .await?)
     }
 
@@ -121,10 +124,19 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
     ) -> Result<(), TransferObserverError> {
         Ok(self
             .inner
-            .before_send_token(
-                tx_id.to_string(),
-                token_id.to_string(),
-                receiver_outputs.into_iter().map(Into::into).collect(),
+            .before_send(
+                receiver_outputs
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, output)| ProvisionalPayment {
+                        payment_id: format!("{tx_id}:{index}"),
+                        amount: output.amount,
+                        details: ProvisionalPaymentDetails::Token {
+                            token_id: token_id.to_string(),
+                            receiver_address: output.receiver_address.to_string(),
+                        },
+                    })
+                    .collect(),
             )
             .await?)
     }
@@ -132,16 +144,18 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
     async fn before_send_transfer(
         &self,
         transfer_id: &TransferId,
-        receiver_public_key: &PublicKey,
+        receiver_address: &SparkAddress,
         amount_sats: u64,
     ) -> Result<(), TransferObserverError> {
         Ok(self
             .inner
-            .before_send_spark(
-                transfer_id.to_string(),
-                receiver_public_key.to_string(),
-                amount_sats,
-            )
+            .before_send(vec![ProvisionalPayment {
+                payment_id: transfer_id.to_string(),
+                amount: u128::from(amount_sats),
+                details: ProvisionalPaymentDetails::Spark {
+                    receiver_address: receiver_address.to_string(),
+                },
+            }])
             .await?)
     }
 }

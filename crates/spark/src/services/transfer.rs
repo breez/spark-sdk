@@ -2,6 +2,7 @@ use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::Network;
+use crate::address::SparkAddress;
 use crate::operator::OperatorPool;
 use crate::operator::rpc::spark::query_nodes_request::Source;
 use crate::operator::rpc::spark::transfer_filter::Participant;
@@ -115,9 +116,10 @@ impl TransferService {
         if let Some(transfer_observer) = &self.transfer_observer {
             let identity_public_key = &self.signer.get_identity_public_key()?;
             if identity_public_key != receiver_id {
+                let receiver_address = SparkAddress::new(*receiver_id, self.network, None, None);
                 let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
                 transfer_observer
-                    .before_send_transfer(&transfer_id, identity_public_key, amount_sats)
+                    .before_send_transfer(&transfer_id, &receiver_address, amount_sats)
                     .await?;
             }
         }
