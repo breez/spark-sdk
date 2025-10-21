@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use web_time::SystemTime;
 
 #[macro_export]
 macro_rules! ensure_sdk {
