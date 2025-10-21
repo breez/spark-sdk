@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use breez_sdk_common::sync::storage::SyncStorage;
 use breez_sdk_common::{fiat::FiatService, rest::RestClient};
 use tokio::sync::Mutex;
 
@@ -85,9 +86,9 @@ impl SdkBuilder {
         *builder = builder.clone().with_payment_observer(payment_observer);
     }
 
-    pub async fn with_real_time_sync(&self, server_url: String) {
+    pub async fn with_real_time_sync(&self, server_url: String, storage: Arc<dyn SyncStorage>) {
         let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_real_time_sync(server_url);
+        *builder = builder.clone().with_real_time_sync(server_url, storage);
     }
 
     /// Builds the `BreezSdk` instance with the configured components.

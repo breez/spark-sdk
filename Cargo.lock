@@ -635,6 +635,7 @@ dependencies = [
  "strum",
  "thiserror 2.0.14",
  "tokio",
+ "tokio_with_wasm",
  "tonic",
  "tonic-build",
  "tonic-web-wasm-client",

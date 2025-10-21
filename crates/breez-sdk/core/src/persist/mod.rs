@@ -3,7 +3,7 @@ pub(crate) mod sqlite;
 
 use std::{collections::HashMap, sync::Arc};
 
-use breez_sdk_common::{lnurl::withdraw::LnurlWithdrawRequestDetails, sync::model::RecordId};
+use breez_sdk_common::lnurl::withdraw::LnurlWithdrawRequestDetails;
 use macros::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -49,12 +49,6 @@ pub enum StorageError {
 
 impl From<serde_json::Error> for StorageError {
     fn from(e: serde_json::Error) -> Self {
-        StorageError::Serialization(e.to_string())
-    }
-}
-
-impl From<semver::Error> for StorageError {
-    fn from(e: semver::Error) -> Self {
         StorageError::Serialization(e.to_string())
     }
 }
@@ -188,192 +182,6 @@ pub trait Storage: Send + Sync {
         vout: u32,
         payload: UpdateDepositPayload,
     ) -> Result<(), StorageError>;
-
-    async fn sync_add_outgoing_change(
-        &self,
-        record: UnversionedRecordChange,
-    ) -> Result<u64, StorageError>;
-    async fn sync_complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError>;
-    async fn sync_get_pending_outgoing_changes(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<OutgoingChange>, StorageError>;
-
-    /// Get the revision number of the last synchronized record
-    async fn sync_get_last_revision(&self) -> Result<u64, StorageError>;
-
-    /// Insert incoming records from remote sync
-    async fn sync_insert_incoming_records(&self, records: Vec<Record>) -> Result<(), StorageError>;
-
-    /// Delete an incoming record after it has been processed
-    async fn sync_delete_incoming_record(&self, record: Record) -> Result<(), StorageError>;
-
-    /// Update revision numbers of pending outgoing records to be higher than the given revision
-    async fn sync_rebase_pending_outgoing_records(&self, revision: u64)
-    -> Result<(), StorageError>;
-
-    /// Get incoming records that need to be processed, up to the specified limit
-    async fn sync_get_incoming_records(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<IncomingChange>, StorageError>;
-
-    /// Get the latest outgoing record if any exists
-    async fn sync_get_latest_outgoing_change(&self)
-    -> Result<Option<OutgoingChange>, StorageError>;
-
-    /// Update the sync state record from an incoming record
-    async fn sync_update_record_from_incoming(&self, record: Record) -> Result<(), StorageError>;
-}
-
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct IncomingChange {
-    pub new_state: Record,
-    pub old_state: Option<Record>,
-    // pub pending_outgoing_changes: Vec<RecordChange>,
-}
-
-impl TryFrom<&IncomingChange> for breez_sdk_common::sync::model::IncomingChange {
-    type Error = StorageError;
-
-    fn try_from(value: &IncomingChange) -> Result<Self, Self::Error> {
-        Ok(breez_sdk_common::sync::model::IncomingChange {
-            new_state: (&value.new_state).try_into()?,
-            old_state: match &value.old_state {
-                Some(old_state) => Some(old_state.try_into()?),
-                None => None,
-            },
-        })
-    }
-}
-
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct OutgoingChange {
-    pub change: RecordChange,
-    pub parent: Option<Record>,
-}
-
-impl TryFrom<OutgoingChange> for breez_sdk_common::sync::model::OutgoingChange {
-    type Error = StorageError;
-
-    fn try_from(value: OutgoingChange) -> Result<Self, Self::Error> {
-        Ok(breez_sdk_common::sync::model::OutgoingChange {
-            change: value.change.try_into()?,
-            parent: match value.parent {
-                Some(parent) => Some((&parent).try_into()?),
-                None => None,
-            },
-        })
-    }
-}
-
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct UnversionedRecordChange {
-    pub id: RecordId,
-    pub schema_version: String,
-    pub updated_fields: HashMap<String, String>,
-}
-
-impl TryFrom<UnversionedRecordChange> for breez_sdk_common::sync::model::UnversionedRecordChange {
-    type Error = StorageError;
-
-    fn try_from(value: UnversionedRecordChange) -> Result<Self, Self::Error> {
-        Ok(breez_sdk_common::sync::model::UnversionedRecordChange {
-            id: value.id,
-            schema_version: value.schema_version.parse()?,
-            updated_fields: value
-                .updated_fields
-                .into_iter()
-                .map(|(k, v)| Ok((k, serde_json::from_str(&v)?)))
-                .collect::<Result<HashMap<String, serde_json::Value>, StorageError>>()?,
-        })
-    }
-}
-
-impl TryFrom<breez_sdk_common::sync::model::UnversionedRecordChange> for UnversionedRecordChange {
-    type Error = StorageError;
-
-    fn try_from(
-        value: breez_sdk_common::sync::model::UnversionedRecordChange,
-    ) -> Result<Self, Self::Error> {
-        Ok(UnversionedRecordChange {
-            id: value.id,
-            schema_version: value.schema_version.to_string(),
-            updated_fields: value
-                .updated_fields
-                .into_iter()
-                .map(|(k, v)| Ok((k, serde_json::to_string(&v)?)))
-                .collect::<Result<HashMap<String, String>, StorageError>>()?,
-        })
-    }
-}
-
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct RecordChange {
-    pub id: RecordId,
-    pub schema_version: String,
-    pub updated_fields: HashMap<String, String>,
-    pub revision: u64,
-}
-
-impl TryFrom<RecordChange> for breez_sdk_common::sync::model::RecordChange {
-    type Error = StorageError;
-
-    fn try_from(value: RecordChange) -> Result<Self, Self::Error> {
-        Ok(breez_sdk_common::sync::model::RecordChange {
-            id: value.id,
-            schema_version: value.schema_version.parse()?,
-            updated_fields: value
-                .updated_fields
-                .into_iter()
-                .map(|(k, v)| Ok((k, serde_json::from_str(&v)?)))
-                .collect::<Result<HashMap<String, serde_json::Value>, StorageError>>()?,
-            revision: value.revision,
-        })
-    }
-}
-
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Clone)]
-pub struct Record {
-    pub id: RecordId,
-    pub revision: u64,
-    pub schema_version: String,
-    pub data: HashMap<String, String>,
-}
-
-impl TryFrom<&Record> for breez_sdk_common::sync::model::Record {
-    type Error = StorageError;
-
-    fn try_from(value: &Record) -> Result<Self, Self::Error> {
-        Ok(breez_sdk_common::sync::model::Record {
-            id: value.id.clone(),
-            schema_version: value.schema_version.parse()?,
-            data: value
-                .data
-                .iter()
-                .map(|(k, v)| Ok((k.clone(), serde_json::from_str(v)?)))
-                .collect::<Result<HashMap<String, serde_json::Value>, StorageError>>()?,
-            revision: value.revision,
-        })
-    }
-}
-
-impl TryFrom<&breez_sdk_common::sync::model::Record> for Record {
-    type Error = StorageError;
-
-    fn try_from(value: &breez_sdk_common::sync::model::Record) -> Result<Self, Self::Error> {
-        Ok(Record {
-            id: value.id.clone(),
-            schema_version: value.schema_version.to_string(),
-            data: value
-                .data
-                .iter()
-                .map(|(k, v)| Ok((k.clone(), serde_json::to_string(&v)?)))
-                .collect::<Result<HashMap<String, String>, StorageError>>()?,
-            revision: value.revision,
-        })
-    }
 }
 
 pub(crate) struct ObjectCacheRepository {

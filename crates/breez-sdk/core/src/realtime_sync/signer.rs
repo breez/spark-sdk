@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bitcoin::bip32::DerivationPath;
-use breez_sdk_common::sync::signer::SyncSigner;
+use breez_sdk_common::sync::SyncSigner;
 use spark_wallet::Signer;
 
 pub struct DefaultSyncSigner {

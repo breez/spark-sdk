@@ -8,7 +8,7 @@ use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
     fiat::FiatService,
     rest::{ReqwestRestClient as CommonRequestRestClient, RestClient},
-    sync::{client::BreezSyncerClient, signing_client::SigningClient},
+    sync::{BreezSyncerClient, SigningClient, SyncProcessor, SyncService, storage::SyncStorage},
 };
 use spark_wallet::{DefaultSigner, Signer};
 use tokio::sync::{mpsc, watch};
@@ -26,7 +26,7 @@ use crate::{
     models::Config,
     payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::Storage,
-    realtime_sync::{DefaultSyncSigner, SyncProcessor, SyncService, SyncedStorage},
+    realtime_sync::{DefaultSyncSigner, SyncedStorage},
     sdk::{BreezSdk, BreezSdkParams},
 };
 
@@ -61,6 +61,7 @@ pub struct SdkBuilder {
     use_address_index: bool,
     account_number: Option<u32>,
     real_time_sync_server_url: Option<String>,
+    sync_storage: Option<Arc<dyn SyncStorage>>,
 }
 
 impl SdkBuilder {
@@ -83,6 +84,7 @@ impl SdkBuilder {
             use_address_index: false,
             account_number: None,
             real_time_sync_server_url: None,
+            sync_storage: None,
         }
     }
 
@@ -169,8 +171,13 @@ impl SdkBuilder {
     }
 
     #[must_use]
-    pub fn with_real_time_sync(mut self, server_url: String) -> Self {
+    pub fn with_real_time_sync(
+        mut self,
+        server_url: String,
+        storage: Arc<dyn SyncStorage>,
+    ) -> Self {
         self.real_time_sync_server_url = Some(server_url);
+        self.sync_storage = Some(storage);
         self
     }
 
@@ -280,7 +287,10 @@ impl SdkBuilder {
 
         let (storage, sync_processor) = if let Some(server_url) = &self.real_time_sync_server_url {
             debug!("Real-time sync is enabled.");
-            let sync_service = Arc::new(SyncService::new(Arc::clone(&self.storage)));
+            let Some(sync_storage) = self.sync_storage else {
+                return Err(SdkError::Generic("Sync storage is not available".into()));
+            };
+            let sync_service = Arc::new(SyncService::new(Arc::clone(&sync_storage)));
             let synced_storage = Arc::new(SyncedStorage::new(
                 Arc::clone(&self.storage),
                 Arc::clone(&sync_service),
@@ -311,7 +321,7 @@ impl SdkBuilder {
                 sync_service.get_sync_trigger(),
                 incoming_callback_sender,
                 outgoing_callback_sender,
-                Arc::clone(&storage),
+                Arc::clone(&sync_storage),
             ));
             (storage, Some(sync_processor))
         } else {
