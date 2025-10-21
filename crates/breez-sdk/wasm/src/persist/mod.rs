@@ -23,6 +23,16 @@ fn js_error_to_storage_error(js_error: JsValue) -> breez_sdk_spark::StorageError
     breez_sdk_spark::StorageError::Implementation(error_message)
 }
 
+/// Helper function to convert JS exceptions to StorageError
+fn js_error_to_sync_storage_error(
+    js_error: JsValue,
+) -> breez_sdk_spark::sync_storage::StorageError {
+    let error_message = js_error
+        .as_string()
+        .unwrap_or_else(|| "JavaScript storage operation failed".to_string());
+    breez_sdk_spark::sync_storage::StorageError::Implementation(error_message)
+}
+
 // This assumes that we'll always be running in a single thread (true for Wasm environments)
 unsafe impl Send for WasmStorage {}
 unsafe impl Sync for WasmStorage {}
@@ -205,150 +215,167 @@ impl breez_sdk_spark::Storage for WasmStorage {
         future.await.map_err(js_error_to_storage_error)?;
         Ok(())
     }
+}
 
-    async fn sync_add_outgoing_change(
+#[async_trait]
+impl breez_sdk_spark::sync_storage::SyncStorage for WasmStorage {
+    async fn add_outgoing_change(
         &self,
-        record: breez_sdk_spark::UnversionedRecordChange,
-    ) -> Result<u64, breez_sdk_spark::StorageError> {
+        record: breez_sdk_spark::sync_storage::UnversionedRecordChange,
+    ) -> Result<u64, breez_sdk_spark::sync_storage::StorageError> {
         let promise = self
             .storage
             .sync_add_outgoing_change(record.into())
-            .map_err(js_error_to_storage_error)?;
+            .map_err(js_error_to_sync_storage_error)?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_storage_error)?;
+        let result = future.await.map_err(js_error_to_sync_storage_error)?;
 
-        let revision: u64 = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| breez_sdk_spark::StorageError::Serialization(e.to_string()))?;
+        let revision: u64 = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            breez_sdk_spark::sync_storage::StorageError::Serialization(e.to_string())
+        })?;
         Ok(revision)
     }
 
-    async fn sync_complete_outgoing_sync(
+    async fn complete_outgoing_sync(
         &self,
-        record: breez_sdk_spark::Record,
-    ) -> Result<(), breez_sdk_spark::StorageError> {
+        record: breez_sdk_spark::sync_storage::Record,
+    ) -> Result<(), breez_sdk_spark::sync_storage::StorageError> {
         let promise = self
             .storage
             .sync_complete_outgoing_sync(record.into())
-            .map_err(js_error_to_storage_error)?;
+            .map_err(js_error_to_sync_storage_error)?;
         let future = JsFuture::from(promise);
-        future.await.map_err(js_error_to_storage_error)?;
+        future.await.map_err(js_error_to_sync_storage_error)?;
         Ok(())
     }
 
-    async fn sync_get_pending_outgoing_changes(
+    async fn get_pending_outgoing_changes(
         &self,
         limit: u32,
-    ) -> Result<Vec<breez_sdk_spark::OutgoingChange>, breez_sdk_spark::StorageError> {
+    ) -> Result<
+        Vec<breez_sdk_spark::sync_storage::OutgoingChange>,
+        breez_sdk_spark::sync_storage::StorageError,
+    > {
         let promise = self
             .storage
             .sync_get_pending_outgoing_changes(limit)
-            .map_err(js_error_to_storage_error)?;
+            .map_err(js_error_to_sync_storage_error)?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_storage_error)?;
+        let result = future.await.map_err(js_error_to_sync_storage_error)?;
 
-        let changes: Vec<OutgoingChange> = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| breez_sdk_spark::StorageError::Serialization(e.to_string()))?;
+        let changes: Vec<OutgoingChange> = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            breez_sdk_spark::sync_storage::StorageError::Serialization(e.to_string())
+        })?;
         Ok(changes.into_iter().map(|c| c.into()).collect())
     }
 
-    async fn sync_get_last_revision(&self) -> Result<u64, breez_sdk_spark::StorageError> {
+    async fn get_last_revision(&self) -> Result<u64, breez_sdk_spark::sync_storage::StorageError> {
         let promise = self
             .storage
             .sync_get_last_revision()
-            .map_err(js_error_to_storage_error)?;
+            .map_err(js_error_to_sync_storage_error)?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_storage_error)?;
+        let result = future.await.map_err(js_error_to_sync_storage_error)?;
 
-        let revision: u64 = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| breez_sdk_spark::StorageError::Serialization(e.to_string()))?;
+        let revision: u64 = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            breez_sdk_spark::sync_storage::StorageError::Serialization(e.to_string())
+        })?;
         Ok(revision)
     }
 
-    async fn sync_insert_incoming_records(
+    async fn insert_incoming_records(
         &self,
-        records: Vec<breez_sdk_spark::Record>,
-    ) -> Result<(), breez_sdk_spark::StorageError> {
+        records: Vec<breez_sdk_spark::sync_storage::Record>,
+    ) -> Result<(), breez_sdk_spark::sync_storage::StorageError> {
         let records: Vec<Record> = records.into_iter().map(|r| r.into()).collect();
         let promise = self
             .storage
             .sync_insert_incoming_records(records)
-            .map_err(js_error_to_storage_error)?;
+            .map_err(js_error_to_sync_storage_error)?;
         let future = JsFuture::from(promise);
-        future.await.map_err(js_error_to_storage_error)?;
+        future.await.map_err(js_error_to_sync_storage_error)?;
         Ok(())
     }
 
-    async fn sync_delete_incoming_record(
+    async fn delete_incoming_record(
         &self,
-        record: breez_sdk_spark::Record,
-    ) -> Result<(), breez_sdk_spark::StorageError> {
+        record: breez_sdk_spark::sync_storage::Record,
+    ) -> Result<(), breez_sdk_spark::sync_storage::StorageError> {
         let promise = self
             .storage
             .sync_delete_incoming_record(record.into())
-            .map_err(js_error_to_storage_error)?;
+            .map_err(js_error_to_sync_storage_error)?;
         let future = JsFuture::from(promise);
-        future.await.map_err(js_error_to_storage_error)?;
+        future.await.map_err(js_error_to_sync_storage_error)?;
         Ok(())
     }
 
-    async fn sync_rebase_pending_outgoing_records(
+    async fn rebase_pending_outgoing_records(
         &self,
         revision: u64,
-    ) -> Result<(), breez_sdk_spark::StorageError> {
+    ) -> Result<(), breez_sdk_spark::sync_storage::StorageError> {
         let promise = self
             .storage
             .sync_rebase_pending_outgoing_records(revision)
-            .map_err(js_error_to_storage_error)?;
+            .map_err(js_error_to_sync_storage_error)?;
         let future = JsFuture::from(promise);
-        future.await.map_err(js_error_to_storage_error)?;
+        future.await.map_err(js_error_to_sync_storage_error)?;
         Ok(())
     }
 
-    async fn sync_get_incoming_records(
+    async fn get_incoming_records(
         &self,
         limit: u32,
-    ) -> Result<Vec<breez_sdk_spark::IncomingChange>, breez_sdk_spark::StorageError> {
+    ) -> Result<
+        Vec<breez_sdk_spark::sync_storage::IncomingChange>,
+        breez_sdk_spark::sync_storage::StorageError,
+    > {
         let promise = self
             .storage
             .sync_get_incoming_records(limit)
-            .map_err(js_error_to_storage_error)?;
+            .map_err(js_error_to_sync_storage_error)?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_storage_error)?;
+        let result = future.await.map_err(js_error_to_sync_storage_error)?;
 
-        let records: Vec<IncomingChange> = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| breez_sdk_spark::StorageError::Serialization(e.to_string()))?;
+        let records: Vec<IncomingChange> = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            breez_sdk_spark::sync_storage::StorageError::Serialization(e.to_string())
+        })?;
         Ok(records.into_iter().map(|r| r.into()).collect())
     }
 
-    async fn sync_get_latest_outgoing_change(
+    async fn get_latest_outgoing_change(
         &self,
-    ) -> Result<Option<breez_sdk_spark::OutgoingChange>, breez_sdk_spark::StorageError> {
+    ) -> Result<
+        Option<breez_sdk_spark::sync_storage::OutgoingChange>,
+        breez_sdk_spark::sync_storage::StorageError,
+    > {
         let promise = self
             .storage
             .sync_get_latest_outgoing_change()
-            .map_err(js_error_to_storage_error)?;
+            .map_err(js_error_to_sync_storage_error)?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_storage_error)?;
+        let result = future.await.map_err(js_error_to_sync_storage_error)?;
 
         if result.is_null() || result.is_undefined() {
             return Ok(None);
         }
 
-        let change_set: OutgoingChange = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| breez_sdk_spark::StorageError::Serialization(e.to_string()))?;
+        let change_set: OutgoingChange = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            breez_sdk_spark::sync_storage::StorageError::Serialization(e.to_string())
+        })?;
         Ok(Some(change_set.into()))
     }
 
-    async fn sync_update_record_from_incoming(
+    async fn update_record_from_incoming(
         &self,
-        record: breez_sdk_spark::Record,
-    ) -> Result<(), breez_sdk_spark::StorageError> {
+        record: breez_sdk_spark::sync_storage::Record,
+    ) -> Result<(), breez_sdk_spark::sync_storage::StorageError> {
         let promise = self
             .storage
             .sync_update_record_from_incoming(record.into())
-            .map_err(js_error_to_storage_error)?;
+            .map_err(js_error_to_sync_storage_error)?;
         let future = JsFuture::from(promise);
-        future.await.map_err(js_error_to_storage_error)?;
+        future.await.map_err(js_error_to_sync_storage_error)?;
         Ok(())
     }
 }

@@ -1,20 +1,17 @@
 use std::sync::Arc;
 
-use breez_sdk_common::sync::model::{RecordChangeRequest, RecordId, UnversionedRecordChange};
+use crate::sync::{RecordChangeRequest, RecordId, UnversionedRecordChange, storage::SyncStorage};
 use tokio::sync::{RwLock, broadcast};
 use tracing::{debug, warn};
 
-use crate::Storage;
-
 pub struct SyncService {
-    storage: Arc<dyn Storage>,
+    storage: Arc<dyn SyncStorage>,
     sync_trigger: broadcast::Sender<RecordId>,
     mtx: RwLock<()>,
 }
 
-// TODO: Fix errors
 impl SyncService {
-    pub fn new(storage: Arc<dyn Storage>) -> Self {
+    pub fn new(storage: Arc<dyn SyncStorage>) -> Self {
         SyncService {
             storage,
             sync_trigger: broadcast::channel(16).0,
@@ -31,9 +28,7 @@ impl SyncService {
         let _guard = self.mtx.write().await;
         let record: UnversionedRecordChange = record.into();
         let record_id = record.id.clone();
-        self.storage
-            .sync_add_outgoing_change(record.try_into()?)
-            .await?;
+        self.storage.add_outgoing_change(record.try_into()?).await?;
         if self.sync_trigger.send(record_id.clone()).is_err() {
             warn!(
                 "Real-time sync failed to trigger for record id {}",

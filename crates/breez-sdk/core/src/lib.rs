@@ -15,17 +15,14 @@ mod utils;
 
 #[cfg(feature = "uniffi")]
 pub use bindings::*;
-pub use breez_sdk_common::input::*;
+pub use breez_sdk_common::{input::*, sync::storage as sync_storage};
 pub use chain::{
     BitcoinChainService, ChainServiceError, TxStatus, Utxo, rest_client::RestClientChainService,
 };
 pub use error::{DepositClaimError, SdkError};
 pub use events::{EventEmitter, EventListener, SdkEvent};
 pub use models::*;
-pub use persist::{
-    IncomingChange, OutgoingChange, PaymentMetadata, Record, RecordChange, Storage, StorageError,
-    UnversionedRecordChange, UpdateDepositPayload,
-};
+pub use persist::{PaymentMetadata, Storage, StorageError, UpdateDepositPayload};
 pub use sdk::{BREEZ_SYNC_SERVICE_URL, BreezSdk, default_config, init_logging, parse_input};
 #[cfg(not(feature = "uniffi"))]
 pub use sdk_builder::SdkBuilder;

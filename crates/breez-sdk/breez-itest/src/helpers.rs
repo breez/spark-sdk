@@ -41,7 +41,7 @@ pub async fn build_sdk_with_dir(
     let storage = default_storage(storage_dir)?;
     let seed = Seed::Entropy(seed_bytes.to_vec());
 
-    let builder = SdkBuilder::new(config, seed, storage);
+    let builder = SdkBuilder::new(config, seed, storage.storage);
     let sdk = builder.build().await?;
 
     // Set up event listener

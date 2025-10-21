@@ -1,6 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use breez_sdk_common::sync::model::RecordId;
+use breez_sdk_common::sync::{
+    RecordId,
+    storage::{
+        IncomingChange, OutgoingChange, Record, RecordChange, StorageError as SyncStorageError,
+        SyncStorage, UnversionedRecordChange,
+    },
+};
 use macros::async_trait;
 use rusqlite::{
     Connection, Row, ToSql, Transaction, params,
@@ -12,10 +18,7 @@ use crate::{
     AssetFilter, DepositInfo, ListPaymentsRequest, LnurlPayInfo, LnurlWithdrawInfo, PaymentDetails,
     PaymentMethod,
     error::DepositClaimError,
-    persist::{
-        IncomingChange, OutgoingChange, PaymentMetadata, Record, RecordChange,
-        UnversionedRecordChange, UpdateDepositPayload,
-    },
+    persist::{PaymentMetadata, UpdateDepositPayload},
 };
 
 use super::{Payment, Storage, StorageError};
@@ -246,18 +249,6 @@ impl From<rusqlite_migration::Error> for StorageError {
     fn from(value: rusqlite_migration::Error) -> Self {
         StorageError::Implementation(value.to_string())
     }
-}
-
-/// Bumps the revision number, locking the revision number for updates for the duration of the transaction.
-fn get_next_revision(tx: &Transaction<'_>) -> Result<u64, StorageError> {
-    let revision = tx.query_row(
-        "UPDATE sync_revision
-            SET revision = revision + 1
-            RETURNING revision",
-        [],
-        |row| row.get(0),
-    )?;
-    Ok(revision)
 }
 
 #[async_trait]
@@ -672,13 +663,40 @@ impl Storage for SqliteStorage {
         }
         Ok(())
     }
+}
 
-    async fn sync_add_outgoing_change(
+/// Bumps the revision number, locking the revision number for updates for the duration of the transaction.
+fn get_next_revision(tx: &Transaction<'_>) -> Result<u64, SyncStorageError> {
+    let revision = tx
+        .query_row(
+            "UPDATE sync_revision
+            SET revision = revision + 1
+            RETURNING revision",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(map_sqlite_error)?;
+    Ok(revision)
+}
+
+impl From<StorageError> for SyncStorageError {
+    fn from(value: StorageError) -> Self {
+        match value {
+            StorageError::Implementation(s) => SyncStorageError::Implementation(s),
+            StorageError::InitializationError(s) => SyncStorageError::InitializationError(s),
+            StorageError::Serialization(s) => SyncStorageError::Serialization(s),
+        }
+    }
+}
+
+#[macros::async_trait]
+impl SyncStorage for SqliteStorage {
+    async fn add_outgoing_change(
         &self,
         record: UnversionedRecordChange,
-    ) -> Result<u64, StorageError> {
+    ) -> Result<u64, SyncStorageError> {
         let mut connection = self.get_connection()?;
-        let tx = connection.transaction()?;
+        let tx = connection.transaction().map_err(map_sqlite_error)?;
         let revision = get_next_revision(&tx)?;
 
         tx.execute(
@@ -698,20 +716,22 @@ impl Storage for SqliteStorage {
                 serde_json::to_string(&record.updated_fields)?,
                 revision,
             ],
-        )?;
+        )
+        .map_err(map_sqlite_error)?;
 
-        tx.commit()?;
+        tx.commit().map_err(map_sqlite_error)?;
         Ok(revision)
     }
 
-    async fn sync_complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError> {
+    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), SyncStorageError> {
         let mut connection = self.get_connection()?;
-        let tx = connection.transaction()?;
+        let tx = connection.transaction().map_err(map_sqlite_error)?;
 
         tx.execute(
             "DELETE FROM sync_outgoing WHERE record_type = ? AND data_id = ? AND revision = ?",
             params![record.id.r#type, record.id.data_id, record.revision],
-        )?;
+        )
+        .map_err(map_sqlite_error)?;
 
         tx.execute(
             "INSERT OR REPLACE INTO sync_state (
@@ -730,20 +750,22 @@ impl Storage for SqliteStorage {
                 serde_json::to_string(&record.data)?,
                 record.revision,
             ],
-        )?;
+        )
+        .map_err(map_sqlite_error)?;
 
-        tx.commit()?;
+        tx.commit().map_err(map_sqlite_error)?;
         Ok(())
     }
 
-    async fn sync_get_pending_outgoing_changes(
+    async fn get_pending_outgoing_changes(
         &self,
         limit: u32,
-    ) -> Result<Vec<OutgoingChange>, StorageError> {
+    ) -> Result<Vec<OutgoingChange>, SyncStorageError> {
         let connection = self.get_connection()?;
 
-        let mut stmt = connection.prepare(
-            "SELECT o.record_type
+        let mut stmt = connection
+            .prepare(
+                "SELECT o.record_type
             ,       o.data_id
             ,       o.schema_version
             ,       o.commit_time
@@ -757,25 +779,36 @@ impl Storage for SqliteStorage {
              LEFT JOIN sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id
              ORDER BY o.revision ASC
              LIMIT ?",
-        )?;
-        let mut rows = stmt.query(params![limit])?;
+            )
+            .map_err(map_sqlite_error)?;
+        let mut rows = stmt.query(params![limit]).map_err(map_sqlite_error)?;
         let mut results = Vec::new();
-        while let Some(row) = rows.next()? {
-            let parent = if let Some(existing_data) = row.get::<_, Option<String>>(8)? {
+        while let Some(row) = rows.next().map_err(map_sqlite_error)? {
+            let parent = if let Some(existing_data) =
+                row.get::<_, Option<String>>(8).map_err(map_sqlite_error)?
+            {
                 Some(Record {
-                    id: RecordId::new(row.get::<_, String>(0)?, row.get::<_, String>(1)?),
-                    schema_version: row.get(6)?,
-                    revision: row.get(9)?,
+                    id: RecordId::new(
+                        row.get::<_, String>(0).map_err(map_sqlite_error)?,
+                        row.get::<_, String>(1).map_err(map_sqlite_error)?,
+                    ),
+                    schema_version: row.get(6).map_err(map_sqlite_error)?,
+                    revision: row.get(9).map_err(map_sqlite_error)?,
                     data: serde_json::from_str(&existing_data)?,
                 })
             } else {
                 None
             };
             let change = RecordChange {
-                id: RecordId::new(row.get::<_, String>(0)?, row.get::<_, String>(1)?),
-                schema_version: row.get(2)?,
-                updated_fields: serde_json::from_str(&row.get::<_, String>(4)?)?,
-                revision: row.get(5)?,
+                id: RecordId::new(
+                    row.get::<_, String>(0).map_err(map_sqlite_error)?,
+                    row.get::<_, String>(1).map_err(map_sqlite_error)?,
+                ),
+                schema_version: row.get(2).map_err(map_sqlite_error)?,
+                updated_fields: serde_json::from_str(
+                    &row.get::<_, String>(4).map_err(map_sqlite_error)?,
+                )?,
+                revision: row.get(5).map_err(map_sqlite_error)?,
             };
             results.push(OutgoingChange { change, parent });
         }
@@ -783,24 +816,28 @@ impl Storage for SqliteStorage {
         Ok(results)
     }
 
-    async fn sync_get_last_revision(&self) -> Result<u64, StorageError> {
+    async fn get_last_revision(&self) -> Result<u64, SyncStorageError> {
         let connection = self.get_connection()?;
 
         // Get the maximum revision from sync_state table
-        let mut stmt = connection.prepare("SELECT COALESCE(MAX(revision), 0) FROM sync_state")?;
+        let mut stmt = connection
+            .prepare("SELECT COALESCE(MAX(revision), 0) FROM sync_state")
+            .map_err(map_sqlite_error)?;
 
-        let revision: u64 = stmt.query_row([], |row| row.get(0))?;
+        let revision: u64 = stmt
+            .query_row([], |row| row.get(0))
+            .map_err(map_sqlite_error)?;
 
         Ok(revision)
     }
 
-    async fn sync_insert_incoming_records(&self, records: Vec<Record>) -> Result<(), StorageError> {
+    async fn insert_incoming_records(&self, records: Vec<Record>) -> Result<(), SyncStorageError> {
         if records.is_empty() {
             return Ok(());
         }
 
         let mut connection = self.get_connection()?;
-        let tx = connection.transaction()?;
+        let tx = connection.transaction().map_err(map_sqlite_error)?;
 
         for record in records {
             tx.execute(
@@ -820,36 +857,38 @@ impl Storage for SqliteStorage {
                     serde_json::to_string(&record.data)?,
                     record.revision,
                 ],
-            )?;
+            )
+            .map_err(map_sqlite_error)?;
         }
 
-        tx.commit()?;
+        tx.commit().map_err(map_sqlite_error)?;
         Ok(())
     }
 
-    async fn sync_delete_incoming_record(&self, record: Record) -> Result<(), StorageError> {
+    async fn delete_incoming_record(&self, record: Record) -> Result<(), SyncStorageError> {
         let connection = self.get_connection()?;
 
-        connection.execute(
-            "DELETE FROM sync_incoming WHERE record_type = ? AND data_id = ? AND revision = ?",
-            params![record.id.r#type, record.id.data_id, record.revision],
-        )?;
+        connection
+            .execute(
+                "DELETE FROM sync_incoming WHERE record_type = ? AND data_id = ? AND revision = ?",
+                params![record.id.r#type, record.id.data_id, record.revision],
+            )
+            .map_err(map_sqlite_error)?;
 
         Ok(())
     }
 
-    async fn sync_rebase_pending_outgoing_records(
-        &self,
-        revision: u64,
-    ) -> Result<(), StorageError> {
+    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), SyncStorageError> {
         let mut connection = self.get_connection()?;
-        let tx = connection.transaction()?;
+        let tx = connection.transaction().map_err(map_sqlite_error)?;
 
-        let last_revision = tx.query_row(
-            "SELECT COALESCE(MAX(revision), 0) FROM sync_state",
-            [],
-            |row| row.get(0),
-        )?;
+        let last_revision = tx
+            .query_row(
+                "SELECT COALESCE(MAX(revision), 0) FROM sync_state",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(map_sqlite_error)?;
 
         let diff = revision.saturating_sub(last_revision);
 
@@ -858,20 +897,22 @@ impl Storage for SqliteStorage {
             "UPDATE sync_outgoing 
              SET revision = revision + ?",
             params![diff],
-        )?;
+        )
+        .map_err(map_sqlite_error)?;
 
-        tx.commit()?;
+        tx.commit().map_err(map_sqlite_error)?;
         Ok(())
     }
 
-    async fn sync_get_incoming_records(
+    async fn get_incoming_records(
         &self,
         limit: u32,
-    ) -> Result<Vec<IncomingChange>, StorageError> {
+    ) -> Result<Vec<IncomingChange>, SyncStorageError> {
         let connection = self.get_connection()?;
 
-        let mut stmt = connection.prepare(
-            "SELECT i.record_type
+        let mut stmt = connection
+            .prepare(
+                "SELECT i.record_type
             ,       i.data_id
             ,       i.schema_version
             ,       i.data
@@ -884,27 +925,36 @@ impl Storage for SqliteStorage {
              LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id
              ORDER BY i.revision ASC
              LIMIT ?",
-        )?;
+            )
+            .map_err(map_sqlite_error)?;
 
-        let mut rows = stmt.query(params![limit])?;
+        let mut rows = stmt.query(params![limit]).map_err(map_sqlite_error)?;
         let mut results = Vec::new();
 
-        while let Some(row) = rows.next()? {
-            let parent = if let Some(existing_data) = row.get::<_, Option<String>>(7)? {
+        while let Some(row) = rows.next().map_err(map_sqlite_error)? {
+            let parent = if let Some(existing_data) =
+                row.get::<_, Option<String>>(7).map_err(map_sqlite_error)?
+            {
                 Some(Record {
-                    id: RecordId::new(row.get::<_, String>(0)?, row.get::<_, String>(1)?),
-                    schema_version: row.get(5)?,
-                    revision: row.get(8)?,
+                    id: RecordId::new(
+                        row.get::<_, String>(0).map_err(map_sqlite_error)?,
+                        row.get::<_, String>(1).map_err(map_sqlite_error)?,
+                    ),
+                    schema_version: row.get(5).map_err(map_sqlite_error)?,
+                    revision: row.get(8).map_err(map_sqlite_error)?,
                     data: serde_json::from_str(&existing_data)?,
                 })
             } else {
                 None
             };
             let record = Record {
-                id: RecordId::new(row.get::<_, String>(0)?, row.get::<_, String>(1)?),
-                schema_version: row.get(2)?,
-                data: serde_json::from_str(&row.get::<_, String>(3)?)?,
-                revision: row.get(4)?,
+                id: RecordId::new(
+                    row.get::<_, String>(0).map_err(map_sqlite_error)?,
+                    row.get::<_, String>(1).map_err(map_sqlite_error)?,
+                ),
+                schema_version: row.get(2).map_err(map_sqlite_error)?,
+                data: serde_json::from_str(&row.get::<_, String>(3).map_err(map_sqlite_error)?)?,
+                revision: row.get(4).map_err(map_sqlite_error)?,
             };
             results.push(IncomingChange {
                 new_state: record,
@@ -915,13 +965,12 @@ impl Storage for SqliteStorage {
         Ok(results)
     }
 
-    async fn sync_get_latest_outgoing_change(
-        &self,
-    ) -> Result<Option<OutgoingChange>, StorageError> {
+    async fn get_latest_outgoing_change(&self) -> Result<Option<OutgoingChange>, SyncStorageError> {
         let connection = self.get_connection()?;
 
-        let mut stmt = connection.prepare(
-            "SELECT o.record_type
+        let mut stmt = connection
+            .prepare(
+                "SELECT o.record_type
             ,       o.data_id
             ,       o.schema_version
             ,       o.commit_time
@@ -935,26 +984,37 @@ impl Storage for SqliteStorage {
              LEFT JOIN sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id
              ORDER BY o.revision DESC
              LIMIT 1",
-        )?;
+            )
+            .map_err(map_sqlite_error)?;
 
-        let mut rows = stmt.query([])?;
+        let mut rows = stmt.query([]).map_err(map_sqlite_error)?;
 
-        if let Some(row) = rows.next()? {
-            let parent = if let Some(existing_data) = row.get::<_, Option<String>>(8)? {
+        if let Some(row) = rows.next().map_err(map_sqlite_error)? {
+            let parent = if let Some(existing_data) =
+                row.get::<_, Option<String>>(8).map_err(map_sqlite_error)?
+            {
                 Some(Record {
-                    id: RecordId::new(row.get::<_, String>(0)?, row.get::<_, String>(1)?),
-                    schema_version: row.get(6)?,
-                    revision: row.get(9)?,
+                    id: RecordId::new(
+                        row.get::<_, String>(0).map_err(map_sqlite_error)?,
+                        row.get::<_, String>(1).map_err(map_sqlite_error)?,
+                    ),
+                    schema_version: row.get(6).map_err(map_sqlite_error)?,
+                    revision: row.get(9).map_err(map_sqlite_error)?,
                     data: serde_json::from_str(&existing_data)?,
                 })
             } else {
                 None
             };
             let change = RecordChange {
-                id: RecordId::new(row.get::<_, String>(0)?, row.get::<_, String>(1)?),
-                schema_version: row.get(2)?,
-                updated_fields: serde_json::from_str(&row.get::<_, String>(4)?)?,
-                revision: row.get(5)?,
+                id: RecordId::new(
+                    row.get::<_, String>(0).map_err(map_sqlite_error)?,
+                    row.get::<_, String>(1).map_err(map_sqlite_error)?,
+                ),
+                schema_version: row.get(2).map_err(map_sqlite_error)?,
+                updated_fields: serde_json::from_str(
+                    &row.get::<_, String>(4).map_err(map_sqlite_error)?,
+                )?,
+                revision: row.get(5).map_err(map_sqlite_error)?,
             };
 
             return Ok(Some(OutgoingChange { change, parent }));
@@ -963,11 +1023,12 @@ impl Storage for SqliteStorage {
         Ok(None)
     }
 
-    async fn sync_update_record_from_incoming(&self, record: Record) -> Result<(), StorageError> {
+    async fn update_record_from_incoming(&self, record: Record) -> Result<(), SyncStorageError> {
         let connection = self.get_connection()?;
 
-        connection.execute(
-            "INSERT OR REPLACE INTO sync_state (
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO sync_state (
                 record_type
             ,   data_id
             ,   schema_version
@@ -976,17 +1037,23 @@ impl Storage for SqliteStorage {
             ,   revision
             )
              VALUES (?, ?, ?, strftime('%s','now'), ?, ?)",
-            params![
-                record.id.r#type,
-                record.id.data_id,
-                record.schema_version.to_string(),
-                serde_json::to_string(&record.data)?,
-                record.revision,
-            ],
-        )?;
+                params![
+                    record.id.r#type,
+                    record.id.data_id,
+                    record.schema_version.to_string(),
+                    serde_json::to_string(&record.data)?,
+                    record.revision,
+                ],
+            )
+            .map_err(map_sqlite_error)?;
 
         Ok(())
     }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn map_sqlite_error(value: rusqlite::Error) -> SyncStorageError {
+    SyncStorageError::Implementation(value.to_string())
 }
 
 fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {

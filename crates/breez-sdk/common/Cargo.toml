@@ -50,6 +50,7 @@ uniffi = { workspace = true, optional = true }
 semver = "1.0.27"
 zbase32 = "0.1.2"
 futures.workspace = true
+tokio_with_wasm.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
