@@ -16,7 +16,7 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
   if (input instanceof InputType.LightningAddress) {
     const amountSats = BigInt(5_000)
     const optionalComment = '<comment>'
-    const payRequest = input.inner[0].payRequest
+    const payRequest = input.inner[0]
     const optionalValidateSuccessActionUrl = true
 
     const prepareResponse = await sdk.prepareLnurlPay({
