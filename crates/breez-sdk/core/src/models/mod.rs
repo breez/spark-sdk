@@ -1,4 +1,6 @@
 pub(crate) mod adaptors;
+pub mod payment_observer;
+pub use payment_observer::*;
 
 use breez_sdk_common::{
     fiat::{FiatCurrency, Rate},
@@ -160,9 +162,9 @@ pub struct Payment {
     pub payment_type: PaymentType,
     /// Status of the payment
     pub status: PaymentStatus,
-    /// Amount in satoshis
+    /// Amount in satoshis or token base units
     pub amount: u128,
-    /// Fee paid in satoshis
+    /// Fee paid in satoshis or token base units
     pub fees: u128,
     /// Timestamp of when the payment was created
     pub timestamp: u64,

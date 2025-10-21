@@ -7,6 +7,7 @@ mod swap;
 mod timelock_manager;
 mod tokens;
 mod transfer;
+mod transfer_observer;
 mod unilateral_exit;
 
 pub use coop_exit::*;
@@ -21,4 +22,5 @@ pub use swap::*;
 pub use timelock_manager::*;
 pub use tokens::*;
 pub use transfer::*;
+pub use transfer_observer::*;
 pub use unilateral_exit::*;

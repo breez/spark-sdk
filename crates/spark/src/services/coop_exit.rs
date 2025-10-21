@@ -11,10 +11,10 @@ use web_time::SystemTime;
 use crate::core::Network;
 use crate::operator::OperatorPool;
 use crate::operator::rpc as operator_rpc;
-use crate::services::ServiceError;
 use crate::services::{
     ExitSpeed, LeafKeyTweak, LeafRefundSigningData, Transfer, TransferId, TransferService,
 };
+use crate::services::{ServiceError, TransferObserver};
 use crate::ssp::RequestCoopExitInput;
 use crate::ssp::ServiceProvider;
 use crate::tree::TreeNodeId;
@@ -96,6 +96,7 @@ pub struct CoopExitService {
     transfer_service: Arc<TransferService>,
     network: Network,
     signer: Arc<dyn Signer>,
+    transfer_observer: Option<Arc<dyn TransferObserver>>,
 }
 
 impl CoopExitService {
@@ -105,6 +106,7 @@ impl CoopExitService {
         transfer_service: Arc<TransferService>,
         network: Network,
         signer: Arc<dyn Signer>,
+        transfer_observer: Option<Arc<dyn TransferObserver>>,
     ) -> Self {
         CoopExitService {
             operator_pool,
@@ -112,6 +114,7 @@ impl CoopExitService {
             transfer_service,
             network,
             signer,
+            transfer_observer,
         }
     }
 
@@ -149,13 +152,20 @@ impl CoopExitService {
         trace!("Leaf external IDs for cooperative exit: {leaf_external_ids:?}");
         trace!("Fee leaf external IDs for cooperative exit: {fee_leaf_external_ids:?}");
 
+        let transfer_id = TransferId::generate();
+        if let Some(transfer_observer) = &self.transfer_observer {
+            let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
+            transfer_observer
+                .before_coop_exit(&transfer_id, withdrawal_address, amount_sats)
+                .await?;
+        }
+
         // Build leaf key tweaks for all leaves with new signing keys
         let all_leaves = [leaves, fee_leaves.unwrap_or_default()].concat();
         let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, all_leaves, None)?;
 
         // Request cooperative exit from the SSP
         trace!("Requesting cooperative exit");
-        let transfer_id = TransferId::generate();
         let coop_exit_request = self
             .ssp_client
             .request_coop_exit(RequestCoopExitInput {

@@ -840,3 +840,27 @@ pub struct GetTokensMetadataRequest {
 pub struct GetTokensMetadataResponse {
     pub tokens_metadata: Vec<TokenMetadata>,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ProvisionalPayment)]
+pub struct ProvisionalPayment {
+    pub payment_id: String,
+    pub amount: u128,
+    pub details: ProvisionalPaymentDetails,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ProvisionalPaymentDetails)]
+pub enum ProvisionalPaymentDetails {
+    Bitcoin {
+        withdrawal_address: String,
+    },
+    Lightning {
+        invoice: String,
+    },
+    Spark {
+        receiver_address: String,
+    },
+    Token {
+        token_id: String,
+        receiver_address: String,
+    },
+}

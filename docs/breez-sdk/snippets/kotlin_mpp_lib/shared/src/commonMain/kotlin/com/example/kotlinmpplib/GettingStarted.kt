@@ -44,6 +44,7 @@ class GettingStarted {
             // builder.withChainService(<your chain service implementation>)
             // builder.withRestClient(<your rest client implementation>)
             // builder.withKeySet(<your key set type>, <use address index>, <account number>)
+            // builder.withPaymentObserver(<your payment observer implementation>)
             val sdk = builder.build()
         } catch (e: Exception) {
             // handle error

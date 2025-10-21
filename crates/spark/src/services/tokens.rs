@@ -1,6 +1,7 @@
 use std::{collections::HashMap, ops::Not, sync::Arc};
 
 use bitcoin::{
+    Txid,
     bech32::{self, Bech32m, Hrp},
     hashes::{Hash, HashEngine, sha256},
 };
@@ -24,8 +25,8 @@ use crate::{
         },
     },
     services::{
-        QueryTokenTransactionsFilter, ServiceError, TokenMetadata, TokenOutputWithPrevOut,
-        TokenTransaction, TransferTokenOutput,
+        QueryTokenTransactionsFilter, ReceiverTokenOutput, ServiceError, TokenMetadata,
+        TokenOutputWithPrevOut, TokenTransaction, TransferObserver, TransferTokenOutput,
     },
     signer::Signer,
     utils::paging::{PagingFilter, PagingResult, pager},
@@ -58,6 +59,7 @@ pub struct TokenService {
     network: Network,
     split_secret_threshold: u32,
     tokens_config: TokensConfig,
+    transfer_observer: Option<Arc<dyn TransferObserver>>,
 }
 
 impl TokenService {
@@ -67,6 +69,7 @@ impl TokenService {
         network: Network,
         split_secret_threshold: u32,
         tokens_config: TokensConfig,
+        transfer_observer: Option<Arc<dyn TransferObserver>>,
     ) -> Self {
         Self {
             tokens_outputs: Mutex::new(HashMap::new()),
@@ -75,6 +78,7 @@ impl TokenService {
             network,
             split_secret_threshold,
             tokens_config,
+            transfer_observer,
         }
     }
 
@@ -338,12 +342,32 @@ impl TokenService {
         let spark_invoices = None;
 
         let partial_tx = self
-            .build_partial_tx(inputs.clone(), receiver_outputs, spark_invoices)
+            .build_partial_tx(inputs.clone(), receiver_outputs.clone(), spark_invoices)
             .await?;
+        let final_tx = self.start_transaction(partial_tx).await?;
+        let txid = Txid::from_slice(&final_tx.compute_hash(false)?).map_err(|e| {
+            ServiceError::Generic(format!(
+                "Failed to compute txid from final transaction: {e}",
+            ))
+        })?;
 
-        let (txid, final_tx) = self
-            .finalize_broadcast_transaction(partial_tx.clone())
-            .await?;
+        if let Some(observer) = &self.transfer_observer {
+            observer
+                .before_send_token(
+                    &txid,
+                    &token_id,
+                    receiver_outputs
+                        .into_iter()
+                        .map(|o| ReceiverTokenOutput {
+                            receiver_address: o.receiver_address,
+                            amount: o.amount,
+                        })
+                        .collect(),
+                )
+                .await?;
+        }
+
+        self.commit_transaction(final_tx.clone()).await?;
 
         // Removed used outputs from local cache and add any change outputs
         this_token_outputs.outputs.retain(|o| !inputs.contains(o));
@@ -357,7 +381,7 @@ impl TokenService {
             .try_for_each(|(vout, o)| -> Result<(), ServiceError> {
                 this_token_outputs.outputs.push(TokenOutputWithPrevOut {
                     output: (o, self.network).try_into()?,
-                    prev_tx_hash: txid.clone(),
+                    prev_tx_hash: txid.to_string(),
                     prev_tx_vout: vout as u32,
                 });
                 Ok(())
@@ -509,10 +533,10 @@ impl TokenService {
         Ok(keys)
     }
 
-    async fn finalize_broadcast_transaction(
+    async fn start_transaction(
         &self,
         partial_tx: rpc::spark_token::TokenTransaction,
-    ) -> Result<(String, rpc::spark_token::TokenTransaction), ServiceError> {
+    ) -> Result<rpc::spark_token::TokenTransaction, ServiceError> {
         let partial_tx_hash = partial_tx.compute_hash(true)?;
 
         // Sign inputs
@@ -561,6 +585,13 @@ impl TokenService {
 
         self.validate_token_transaction(&partial_tx, &final_tx, &keyshare_info)?;
 
+        Ok(final_tx)
+    }
+
+    async fn commit_transaction(
+        &self,
+        final_tx: rpc::spark_token::TokenTransaction,
+    ) -> Result<(), ServiceError> {
         let final_tx_hash = final_tx.compute_hash(false)?;
 
         let per_operator_signatures =
@@ -581,7 +612,7 @@ impl TokenService {
             })
             .await?;
 
-        Ok((hex::encode(final_tx_hash), final_tx))
+        Ok(())
     }
 
     fn validate_token_transaction(
