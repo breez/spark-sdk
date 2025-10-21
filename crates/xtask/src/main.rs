@@ -607,8 +607,16 @@ fn itest_cmd() -> Result<()> {
     )?;
 
     // Pull base images used by tests
-    cmd!(sh, "docker image pull lncm/bitcoind:v28.0").run()?;
-    cmd!(sh, "docker image pull postgres:11-alpine").run()?;
+    if let Err(e) = cmd!(sh, "docker image pull lncm/bitcoind:v28.0").run() {
+        println!(
+            "Failed to pull lncm/bitcoind:v28.0, continuing anyway, it might exist locally already: {e}"
+        );
+    }
+    if let Err(e) = cmd!(sh, "docker image pull postgres:11-alpine").run() {
+        println!(
+            "Failed to pull postgres:11-alpine, continuing anyway, it might exist locally already: {e}"
+        );
+    }
 
     // Build local images from crates/spark-itest/docker
     let workspace_root = std::env::current_dir()?;
