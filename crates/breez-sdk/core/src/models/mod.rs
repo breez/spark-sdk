@@ -319,6 +319,9 @@ pub struct Config {
     /// ([`DEFAULT_EXTERNAL_INPUT_PARSERS`]).
     /// Set this to false in order to prevent their use.
     pub use_default_external_input_parsers: bool,
+
+    /// Url to use for the real-time sync server. Defaults to the Breez real-time sync server.
+    pub real_time_sync_server_url: Option<String>,
 }
 
 impl Config {

@@ -180,9 +180,14 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
         .join(path_suffix);
 
     let storage = default_storage(storage_dir.to_string_lossy().to_string())?;
+    let real_time_sync_server_url = request
+        .config
+        .real_time_sync_server_url
+        .clone()
+        .unwrap_or(BREEZ_SYNC_SERVICE_URL.to_string());
     let mut builder =
         super::sdk_builder::SdkBuilder::new(request.config, request.seed, storage.storage);
-    builder = builder.with_real_time_sync(BREEZ_SYNC_SERVICE_URL.to_string(), storage.sync_storage);
+    builder = builder.with_real_time_sync(real_time_sync_server_url, storage.sync_storage);
     let sdk = builder.build().await?;
     Ok(sdk)
 }
@@ -211,6 +216,7 @@ pub fn default_config(network: Network) -> Config {
         prefer_spark_over_lightning: false,
         external_input_parsers: None,
         use_default_external_input_parsers: true,
+        real_time_sync_server_url: None,
     }
 }
 

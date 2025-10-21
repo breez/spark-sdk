@@ -528,6 +528,7 @@ pub struct Config {
     pub prefer_spark_over_lightning: bool,
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
     pub use_default_external_input_parsers: bool,
+    pub real_time_sync_server_url: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Fee)]
