@@ -303,13 +303,19 @@ impl SdkBuilder {
             let storage: Arc<dyn Storage> = synced_storage;
             let sync_client = BreezSyncerClient::new(server_url, self.config.api_key.as_deref())
                 .map_err(|e| SdkError::Generic(e.to_string()))?;
+
+            let sync_coin_type = match self.config.network {
+                Network::Mainnet => "0",
+                Network::Regtest => "1",
+            };
             let sync_signer = DefaultSyncSigner::new(
                 Arc::clone(&signer),
-                "m/448201320'/0'/0'/0/0".parse().map_err(|_| {
-                    SdkError::Generic(
-                        "Someone put an invalid static derivation path here".to_string(),
-                    )
-                })?,
+                // This derivation path ensures no other software uses the same key for our storage with the same mnemonic.
+                format!("m/448201320'/{sync_coin_type}'/0'/0/0")
+                    .parse()
+                    .map_err(|_| {
+                        SdkError::Generic("Invalid sync signer derivation path".to_string())
+                    })?,
             );
             let signing_sync_client = SigningClient::new(
                 Arc::new(sync_client),
