@@ -216,8 +216,8 @@ where
                 Arc::new(DefaultConnectionManager::new());
             let coordinator = spark_config.operator_pool.get_coordinator().clone();
 
-            // start bg task to subscribe to existing user events
-            for user in repository.list_user_keys().await? {
+            // start bg task to subscribe to users with unexpired invoices
+            for user in repository.get_users_with_unexpired_invoices().await? {
                 let user_pubkey = bitcoin::secp256k1::PublicKey::from_str(&user)
                     .map_err(|e| anyhow!("failed to parse user pubkey: {e:?}"))?;
 

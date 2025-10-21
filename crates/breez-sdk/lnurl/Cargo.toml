@@ -15,7 +15,7 @@ bitcoin = { version = "0.32.6", features = ["serde"] }
 clap = { version = "4.5.40", features = ["derive"] }
 figment = { version = "0.10.19", features = ["env", "toml"] }
 hex = "0.4.3"
-lightning-invoice = "0.33.2"
+lightning-invoice = { version = "0.33.2", features = ["std"] }
 lnurl-models = { path = "../lnurl-models" }
 nostr = { version = "0.43.1", default-features = false, features = ["std", "nip57"] }
 nostr-sdk = { version = "0.43.0", default-features = false, features = ["nip57"] }

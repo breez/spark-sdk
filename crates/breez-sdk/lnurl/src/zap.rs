@@ -17,6 +17,8 @@ pub struct Zap {
     pub payment_hash: String,
     pub zap_request: String,
     pub zap_event: Option<String>,
+    pub user_pubkey: String,
+    pub invoice_expiry: i64,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -151,6 +153,27 @@ pub fn subscribe_to_user_for_zaps<DB>(
                                     }
 
                                     nostr_client.disconnect().await; // safely cleanup
+
+                                    // Check if user still has unexpired invoices
+                                    match db.user_has_unexpired_invoices(&user_pk.to_string()).await
+                                    {
+                                        Ok(has_unexpired) => {
+                                            if !has_unexpired {
+                                                debug!(
+                                                    "User {user_pk} has no more unexpired invoices, unsubscribing"
+                                                );
+                                                let mut subscribed = subscribed_keys.lock().await;
+                                                subscribed.remove(&user_pk.to_string());
+                                                drop(subscribed);
+                                                break; // Exit subscription loop
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                "Failed to check unexpired invoices for user {user_pk}: {e}"
+                                            );
+                                        }
+                                    }
                                 }
                             }
                         }

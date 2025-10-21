@@ -150,50 +150,6 @@ where
             ));
         }
 
-        // subscribe to new user for zap events if nostr is enabled
-        if let (
-            Some(nostr_keys),
-            Some(connection_manager),
-            Some(coordinator),
-            Some(signer),
-            Some(session_manager),
-            Some(service_provider),
-        ) = (
-            &state.nostr_keys,
-            &state.connection_manager,
-            &state.coordinator,
-            &state.signer,
-            &state.session_manager,
-            &state.service_provider,
-        ) {
-            let transport = connection_manager
-                .get_transport(coordinator)
-                .await
-                .map_err(|e| {
-                    error!("failed to get transport for new user subscription: {}", e);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(Value::String("internal server error".into())),
-                    )
-                })?;
-
-            let rpc_client = spark::operator::rpc::SparkRpcClient::new(
-                transport,
-                signer.clone(),
-                pubkey,
-                session_manager.clone(),
-            );
-
-            crate::zap::subscribe_to_user_for_zaps(
-                state.db.clone(),
-                pubkey,
-                rpc_client,
-                service_provider.clone(),
-                nostr_keys.clone(),
-                Arc::clone(&state.subscribed_keys),
-            );
-        }
-
         debug!("registered user '{}' for pubkey {}", user.name, pubkey);
         let lnurl = format!("lnurlp://{}/lnurlp/{}", user.domain, user.name);
         Ok(Json(RegisterLnurlPayResponse {
@@ -305,6 +261,7 @@ where
         }))
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn handle_invoice(
         Host(host): Host,
         Path(identifier): Path<String>,
@@ -380,14 +337,74 @@ where
 
         // save to zap event to db
         if let Some(zap_request) = params.nostr {
+            // Calculate expiry timestamp: current time + expiry duration from invoice
+            let expiry_timestamp = invoice.expires_at().ok_or({
+                error!("invoice has invalid expiry");
+                lnurl_error("internal server error")
+            })?;
+
+            let invoice_expiry: i64 = i64::try_from(expiry_timestamp.as_secs()).map_err(|e| {
+                error!("invoice has invalid expiry: {e}");
+                lnurl_error("internal server error")
+            })?;
+
             let zap = Zap {
                 payment_hash: invoice.payment_hash().to_string(),
                 zap_request: zap_request.as_json(),
                 zap_event: None,
+                user_pubkey: user.pubkey.clone(),
+                invoice_expiry,
             };
             if let Err(e) = state.db.upsert_zap(&zap).await {
                 error!("failed to save zap event: {}", e);
                 return Err(lnurl_error("internal server error"));
+            }
+
+            // Subscribe to user if not already subscribed
+            if let (
+                Some(nostr_keys),
+                Some(connection_manager),
+                Some(coordinator),
+                Some(signer),
+                Some(session_manager),
+                Some(service_provider),
+            ) = (
+                &state.nostr_keys,
+                &state.connection_manager,
+                &state.coordinator,
+                &state.signer,
+                &state.session_manager,
+                &state.service_provider,
+            ) {
+                let subscribed = state.subscribed_keys.lock().await;
+                let is_subscribed = subscribed.contains(&user.pubkey);
+                drop(subscribed);
+
+                if !is_subscribed {
+                    let transport = connection_manager
+                        .get_transport(coordinator)
+                        .await
+                        .map_err(|e| {
+                            error!("failed to get transport for user subscription: {}", e);
+                            lnurl_error("internal server error")
+                        })?;
+
+                    let rpc_client = spark::operator::rpc::SparkRpcClient::new(
+                        transport,
+                        signer.clone(),
+                        pubkey,
+                        session_manager.clone(),
+                    );
+
+                    crate::zap::subscribe_to_user_for_zaps(
+                        state.db.clone(),
+                        pubkey,
+                        rpc_client,
+                        service_provider.clone(),
+                        nostr_keys.clone(),
+                        Arc::clone(&state.subscribed_keys),
+                    );
+                }
             }
         }
 
