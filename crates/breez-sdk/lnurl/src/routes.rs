@@ -14,7 +14,7 @@ use lnurl_models::{
     RegisterLnurlPayRequest, RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
     sanitize_username,
 };
-use nostr::{Event, JsonUtil};
+use nostr::{Alphabet, Event, JsonUtil, TagStandard};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -337,6 +337,8 @@ where
 
         // save to zap event to db
         if let Some(zap_request) = params.nostr {
+            validate_nostr_zap_request(amount_msat, &zap_request)?;
+
             // Calculate expiry timestamp: current time + expiry duration from invoice
             let expiry_timestamp = invoice.expires_at().ok_or({
                 error!("invoice has invalid expiry");
@@ -417,6 +419,79 @@ where
             "routes": Vec::<String>::new(),
         })))
     }
+}
+
+fn validate_nostr_zap_request(
+    amount_msat: u64,
+    event: &Event,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    // 1. It MUST have a valid nostr signature
+    if event.verify().is_err() {
+        trace!("invalid nostr event, does not verify");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 2. It MUST have tags
+    if event.tags.is_empty() {
+        trace!("invalid nostr event, missing tags");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 3. It MUST have only one p tag
+    if event
+        .tags
+        .iter()
+        .filter_map(nostr::Tag::single_letter_tag)
+        .filter(|t| t.is_lowercase() && t.character == Alphabet::P)
+        .count()
+        != 1
+    {
+        trace!("invalid nostr event, missing or multiple 'p' tags");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 4. It MUST have 0 or 1 e tags
+    if event
+        .tags
+        .iter()
+        .filter_map(nostr::Tag::single_letter_tag)
+        .filter(|t| t.is_lowercase() && t.character == Alphabet::E)
+        .count()
+        > 1
+    {
+        trace!("invalid nostr event, multiple 'e' tags");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 5. There should be a relays tag with the relays to send the zap receipt to.
+    if !event
+        .tags
+        .iter()
+        .any(|t| matches!(t.as_standardized(), Some(TagStandard::Relay(_))))
+    {
+        trace!("invalid nostr event, missing relay tag");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 6. If there is an amount tag, it MUST be equal to the amount query parameter.
+    if let Some(millisats) = event.tags.iter().find_map(|t| {
+        if let Some(TagStandard::Amount { millisats, .. }) = t.as_standardized() {
+            Some(millisats)
+        } else {
+            None
+        }
+    }) && *millisats != amount_msat
+    {
+        trace!("invalid nostr event, amount does not match");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 7. If there is an 'a' tag, it MUST be a valid event coordinate
+    // NOTE: Assuming the tag is well-formed and contains the necessary fields, because it's standard.
+
+    // 8. There MUST be 0 or 1 P tags. If there is one, it MUST be equal to the zap receipt's pubkey.
+    // TODO: Implement this check.
+    Ok(())
 }
 
 fn validate_username(username: &str) -> Result<(), (StatusCode, Json<Value>)> {
