@@ -88,25 +88,19 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(())
     }
 
-    async fn list_user_keys(&self) -> Result<Vec<String>, LnurlRepositoryError> {
-        // use DISTINCT to avoid duplicates in case of multiple users with same pubkey
-        let rows = sqlx::query("SELECT DISTINCT pubkey FROM users")
-            .fetch_all(&self.pool)
-            .await?;
-        let keys = rows.into_iter().map(|row| row.get(0)).collect();
-        Ok(keys)
-    }
-
     async fn upsert_zap(&self, zap: &Zap) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "INSERT INTO zaps (payment_hash, zap_request, zap_event)
-             VALUES ($1, $2, $3)
+            "INSERT INTO zaps (payment_hash, zap_request, zap_event, user_pubkey, invoice_expiry)
+             VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT(payment_hash) DO UPDATE
-             SET zap_request = excluded.zap_request, zap_event = excluded.zap_event",
+             SET zap_request = excluded.zap_request, zap_event = excluded.zap_event,
+                 user_pubkey = excluded.user_pubkey, invoice_expiry = excluded.invoice_expiry",
         )
         .bind(&zap.payment_hash)
         .bind(&zap.zap_request)
         .bind(&zap.zap_event)
+        .bind(&zap.user_pubkey)
+        .bind(zap.invoice_expiry)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -117,7 +111,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         payment_hash: &str,
     ) -> Result<Option<Zap>, LnurlRepositoryError> {
         let maybe_zap = sqlx::query(
-            "SELECT payment_hash, zap_request, zap_event
+            "SELECT payment_hash, zap_request, zap_event, user_pubkey, invoice_expiry
              FROM zaps
              WHERE payment_hash = $1",
         )
@@ -128,7 +122,40 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             payment_hash: row.get(0),
             zap_request: row.get(1),
             zap_event: row.get(2),
+            user_pubkey: row.get(3),
+            invoice_expiry: row.get(4),
         });
         Ok(maybe_zap)
+    }
+
+    async fn get_users_with_unexpired_invoices(&self) -> Result<Vec<String>, LnurlRepositoryError> {
+        let now = now();
+        let rows = sqlx::query(
+            "SELECT DISTINCT user_pubkey
+             FROM zaps
+             WHERE invoice_expiry > $1 AND zap_event IS NULL",
+        )
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await?;
+        let keys = rows.into_iter().map(|row| row.get(0)).collect();
+        Ok(keys)
+    }
+
+    async fn user_has_unexpired_invoices(
+        &self,
+        user_pubkey: &str,
+    ) -> Result<bool, LnurlRepositoryError> {
+        let now = now();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM zaps
+             WHERE user_pubkey = $1 AND invoice_expiry > $2 AND zap_event IS NULL",
+        )
+        .bind(user_pubkey)
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count > 0)
     }
 }

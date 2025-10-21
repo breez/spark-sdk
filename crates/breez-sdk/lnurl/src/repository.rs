@@ -23,11 +23,17 @@ pub trait LnurlRepository {
         pubkey: &str,
     ) -> Result<Option<User>, LnurlRepositoryError>;
     async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError>;
-    async fn list_user_keys(&self) -> Result<Vec<String>, LnurlRepositoryError>;
 
     async fn upsert_zap(&self, zap: &Zap) -> Result<(), LnurlRepositoryError>;
     async fn get_zap_by_payment_hash(
         &self,
         payment_hash: &str,
     ) -> Result<Option<Zap>, LnurlRepositoryError>;
+    /// Get list of user pubkeys that have unexpired invoices
+    async fn get_users_with_unexpired_invoices(&self) -> Result<Vec<String>, LnurlRepositoryError>;
+    /// Check if a specific user has any unexpired invoices
+    async fn user_has_unexpired_invoices(
+        &self,
+        user_pubkey: &str,
+    ) -> Result<bool, LnurlRepositoryError>;
 }
