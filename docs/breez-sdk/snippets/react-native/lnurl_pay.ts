@@ -1,6 +1,6 @@
 import {
   type BreezSdk,
-  InputType,
+  InputType_Tags,
   type PrepareLnurlPayResponse
 } from '@breeztech/breez-sdk-spark-react-native'
 
@@ -12,10 +12,10 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
   const lnurlPayUrl = 'lightning@address.com'
 
   const input = await sdk.parse(lnurlPayUrl)
-  if (input instanceof InputType.LightningAddress) {
+  if (input.tag === InputType_Tags.LightningAddress) {
     const amountSats = BigInt(5_000)
     const optionalComment = '<comment>'
-    const payRequest = input.inner[0]
+    const payRequest = input.inner[0].payRequest
     const optionalValidateSuccessActionUrl = true
 
     const prepareResponse = await sdk.prepareLnurlPay({
