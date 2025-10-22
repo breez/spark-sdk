@@ -1120,6 +1120,7 @@ pub struct TransferTokenOutput {
     pub token_id: String,
     pub amount: u128,
     pub receiver_address: SparkAddress,
+    pub spark_invoice: Option<String>,
 }
 
 #[cfg(test)]

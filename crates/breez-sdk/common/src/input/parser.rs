@@ -4,15 +4,16 @@ use bitcoin::{Address, Denomination, address::NetworkUnchecked};
 use lightning::bolt11_invoice::Bolt11InvoiceDescriptionRef;
 use percent_encoding_rfc3986::{NON_ALPHANUMERIC, percent_decode_str};
 use regex::Regex;
-use spark_wallet::SparkAddress;
+use spark_wallet::{SparkAddress, SparkAddressPaymentType};
 use tracing::{debug, error};
+use web_time::UNIX_EPOCH;
 
 use crate::{
     dns::{self, DnsResolver},
     error::ServiceConnectivityError,
     input::{
         Bip21Extra, ExternalInputParser, LnurlRequestDetails, ParseError, PaymentRequestSource,
-        SparkAddressDetails,
+        SparkAddressDetails, SparkInvoiceDetails,
     },
     lnurl::{auth, error::LnurlError, pay::LnurlPayRequestDetails},
     rest::{ReqwestRestClient, RestClient, RestResponse},
@@ -628,9 +629,45 @@ fn parse_bip21_key(
 
 fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option<InputType> {
     if let Ok(spark_address) = input.parse::<SparkAddress>() {
+        let identity_public_key = spark_address.identity_public_key.to_string();
+        let network = spark_address.network.into();
+
+        if spark_address.is_invoice() {
+            let invoice_fields = spark_address.spark_invoice_fields?;
+
+            let payment_type = invoice_fields.payment_type?;
+
+            let amount = match &payment_type {
+                SparkAddressPaymentType::TokensPayment(tp) => tp.amount,
+                SparkAddressPaymentType::SatsPayment(sp) => sp.amount.map(Into::into),
+            };
+
+            let Ok(expiry_time_duration) = invoice_fields
+                .expiry_time
+                .map(|e| e.duration_since(UNIX_EPOCH))
+                .transpose()
+            else {
+                return None;
+            };
+            let expiry_time = expiry_time_duration.map(|e| e.as_secs());
+
+            return Some(InputType::SparkInvoice(SparkInvoiceDetails {
+                invoice: input.to_string(),
+                identity_public_key,
+                network,
+                amount,
+                payment_type: payment_type.into(),
+                expiry_time,
+                description: invoice_fields.memo,
+                sender_public_key: invoice_fields.sender_public_key.map(|e| e.to_string()),
+                source: source.clone(),
+            }));
+        }
+
         return Some(InputType::SparkAddress(SparkAddressDetails {
             address: input.to_string(),
-            decoded_address: spark_address.into(),
+            identity_public_key,
+            network,
             source: source.clone(),
         }));
     }

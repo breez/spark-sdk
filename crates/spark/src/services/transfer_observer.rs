@@ -1,10 +1,10 @@
-use bitcoin::{Address, Txid};
+use bitcoin::{Address, Txid, secp256k1::PublicKey};
 use thiserror::Error;
 
 use crate::{address::SparkAddress, services::TransferId};
 
 pub struct ReceiverTokenOutput {
-    pub receiver_address: SparkAddress,
+    pub receiver_address: PublicKey,
     pub amount: u128,
 }
 

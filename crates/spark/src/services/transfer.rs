@@ -110,13 +110,14 @@ impl TransferService {
         leaves: Vec<TreeNode>,
         receiver_id: &PublicKey,
         signing_key_source: Option<PrivateKeySource>,
+        spark_invoice: Option<String>,
     ) -> Result<Transfer, ServiceError> {
         let transfer_id = TransferId::generate();
 
         if let Some(transfer_observer) = &self.transfer_observer {
             let identity_public_key = &self.signer.get_identity_public_key()?;
             if identity_public_key != receiver_id {
-                let receiver_address = SparkAddress::new(*receiver_id, self.network, None, None);
+                let receiver_address = SparkAddress::new(*receiver_id, self.network, None);
                 let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
                 transfer_observer
                     .before_send_transfer(&transfer_id, &receiver_address, amount_sats)
@@ -128,7 +129,12 @@ impl TransferService {
         let leaf_key_tweaks =
             prepare_leaf_key_tweaks_to_send(&self.signer, leaves, signing_key_source)?;
         let transfer = self
-            .send_transfer_with_key_tweaks(&transfer_id, &leaf_key_tweaks, receiver_id)
+            .send_transfer_with_key_tweaks(
+                &transfer_id,
+                &leaf_key_tweaks,
+                receiver_id,
+                spark_invoice,
+            )
             .await?;
 
         Ok(transfer)
@@ -144,6 +150,7 @@ impl TransferService {
                 leaves,
                 &self.signer.get_identity_public_key()?,
                 signing_key_source,
+                None,
             )
             .await?;
 
@@ -164,6 +171,7 @@ impl TransferService {
         transfer_id: &TransferId,
         leaf_key_tweaks: &[LeafKeyTweak],
         receiver_id: &PublicKey,
+        spark_invoice: Option<String>,
     ) -> Result<Transfer, ServiceError> {
         let key_tweak_input_map = self
             .prepare_send_transfer_key_tweaks(
@@ -190,6 +198,7 @@ impl TransferService {
             owner_identity_public_key: self.signer.get_identity_public_key()?.serialize().to_vec(),
             receiver_identity_public_key: receiver_id.serialize().to_vec(),
             transfer_package: Some(transfer_package),
+            spark_invoice: spark_invoice.unwrap_or_default(),
             ..Default::default()
         };
         trace!(

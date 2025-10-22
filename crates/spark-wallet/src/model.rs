@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use spark::{
     Network,
     services::{
-        LightningSendPayment, TokenMetadata, Transfer, TransferId, TransferLeaf, TransferStatus,
-        TransferType,
+        LightningSendPayment, TokenMetadata, TokenTransaction, Transfer, TransferId, TransferLeaf,
+        TransferStatus, TransferType,
     },
     ssp::{SspTransfer, SspUserRequest},
     tree::{Leaves, SigningKeyshare, TreeNode, TreeNodeId},
@@ -218,4 +218,9 @@ pub struct ListTokenTransactionsRequest {
     pub token_transaction_hashes: Vec<String>,
     pub token_ids: Vec<String>,
     pub output_ids: Vec<String>,
+}
+
+pub enum FulfillSparkInvoiceResult {
+    Transfer(Box<WalletTransfer>),
+    TokenTransaction(Box<TokenTransaction>),
 }

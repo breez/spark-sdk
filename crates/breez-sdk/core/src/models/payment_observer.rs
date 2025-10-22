@@ -26,14 +26,14 @@ pub enum ProvisionalPaymentDetails {
         invoice: String,
     },
     Spark {
-        /// Spark receiver address
-        receiver_address: String,
+        /// Spark receiver public key
+        receiver_public_key: String,
     },
     Token {
         /// Token identifier
         token_id: String,
-        /// Spark receiver address
-        receiver_address: String,
+        /// Spark receiver public key
+        receiver_public_key: String,
     },
 }
 
@@ -133,7 +133,7 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
                         amount: output.amount,
                         details: ProvisionalPaymentDetails::Token {
                             token_id: token_id.to_string(),
-                            receiver_address: output.receiver_address.to_string(),
+                            receiver_public_key: output.receiver_address.to_string(),
                         },
                     })
                     .collect(),
@@ -153,7 +153,7 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
                 payment_id: transfer_id.to_string(),
                 amount: u128::from(amount_sats),
                 details: ProvisionalPaymentDetails::Spark {
-                    receiver_address: receiver_address.to_string(),
+                    receiver_public_key: receiver_address.identity_public_key.to_string(),
                 },
             }])
             .await?)

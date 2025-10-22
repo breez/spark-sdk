@@ -48,6 +48,7 @@ impl TryFrom<TransferTokenOutputArg> for TransferTokenOutput {
             token_id: arg.token_id,
             amount: arg.amount,
             receiver_address: SparkAddress::from_str(&arg.receiver_address)?,
+            spark_invoice: None,
         })
     }
 }

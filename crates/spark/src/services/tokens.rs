@@ -338,11 +338,8 @@ impl TokenService {
             )));
         }
 
-        // TODO: Support spark invoices (including updating compute_hash)
-        let spark_invoices = None;
-
         let partial_tx = self
-            .build_partial_tx(inputs.clone(), receiver_outputs.clone(), spark_invoices)
+            .build_partial_tx(inputs.clone(), receiver_outputs.clone())
             .await?;
         let final_tx = self.start_transaction(partial_tx).await?;
         let txid = Txid::from_slice(&final_tx.compute_hash(false)?).map_err(|e| {
@@ -359,7 +356,7 @@ impl TokenService {
                     receiver_outputs
                         .into_iter()
                         .map(|o| ReceiverTokenOutput {
-                            receiver_address: o.receiver_address,
+                            receiver_address: o.receiver_address.identity_public_key,
                             amount: o.amount,
                         })
                         .collect(),
@@ -438,7 +435,6 @@ impl TokenService {
         &self,
         mut inputs: Vec<TokenOutputWithPrevOut>,
         mut receiver_outputs: Vec<TransferTokenOutput>,
-        spark_invoices: Option<Vec<SparkAddress>>,
     ) -> Result<rpc::spark_token::TokenTransaction, ServiceError> {
         // Ensure inputs are ordered by vout ascending so that the input indices
         // used for owner signatures match the order expected by the SO, which sorts
@@ -456,8 +452,8 @@ impl TokenService {
                     self.signer.get_identity_public_key()?,
                     self.network,
                     None,
-                    None,
                 ),
+                spark_invoice: None,
             });
         }
 
@@ -492,9 +488,18 @@ impl TokenService {
             })
             .collect::<Result<Vec<_>, ServiceError>>()?;
 
+        // Spark invoices this tx fulfills
+        let invoice_attachments = receiver_outputs
+            .into_iter()
+            .filter_map(|o| {
+                o.spark_invoice
+                    .map(|i| rpc::spark_token::InvoiceAttachment { spark_invoice: i })
+            })
+            .collect::<Vec<_>>();
+
         // Build transaction
         let transaction = rpc::spark_token::TokenTransaction {
-            version: 1,
+            version: 2,
             token_outputs,
             spark_operator_identity_public_keys: self.get_operator_identity_public_keys()?,
             expiry_time: None,
@@ -513,13 +518,7 @@ impl TokenService {
                 }
             }),
             token_inputs: Some(inputs),
-            invoice_attachments: spark_invoices
-                .unwrap_or_default()
-                .into_iter()
-                .map(|invoice| rpc::spark_token::InvoiceAttachment {
-                    spark_invoice: invoice.to_string(),
-                })
-                .collect(),
+            invoice_attachments,
         };
 
         Ok(transaction)
@@ -880,148 +879,247 @@ pub trait HashableTokenTransaction {
 
 impl HashableTokenTransaction for rpc::spark_token::TokenTransaction {
     fn compute_hash(&self, partial: bool) -> Result<Vec<u8>, ServiceError> {
-        let mut all_hashes = Vec::new();
-
-        let version_hash = sha256::Hash::hash(&self.version.to_be_bytes())
-            .to_byte_array()
-            .to_vec();
-        all_hashes.push(version_hash);
-
-        // We only support transfer transactions
-        let tx_type_hash = sha256::Hash::hash(&TOKEN_TRANSACTION_TRANSFER_TYPE.to_be_bytes())
-            .to_byte_array()
-            .to_vec();
-        all_hashes.push(tx_type_hash);
-
-        let rpc::spark_token::token_transaction::TokenInputs::TransferInput(input) =
-            self.token_inputs.as_ref().ok_or(ServiceError::Generic(
-                "Token inputs are required".to_string(),
-            ))?
-        else {
-            return Err(ServiceError::Generic(
-                "Token transfer inputs are required".to_string(),
-            ));
-        };
-        let inputs = &input.outputs_to_spend;
-        let inputs_len = inputs.len() as u32;
-        let inputs_len_hash = sha256::Hash::hash(&inputs_len.to_be_bytes())
-            .to_byte_array()
-            .to_vec();
-        all_hashes.push(inputs_len_hash);
-
-        for input in inputs {
-            let mut engine = sha256::Hash::engine();
-            engine.input(&input.prev_token_transaction_hash);
-            engine.input(&input.prev_token_transaction_vout.to_be_bytes());
-            all_hashes.push(sha256::Hash::from_engine(engine).to_byte_array().to_vec());
+        match self.version {
+            1 => compute_hash_v1(self, partial),
+            2 => compute_hash_v2(self, partial),
+            _ => Err(ServiceError::Generic(
+                "Unsupported token transaction version".to_string(),
+            )),
         }
+    }
+}
 
-        let outputs_len = self.token_outputs.len() as u32;
-        let outputs_len_hash = sha256::Hash::hash(&outputs_len.to_be_bytes())
-            .to_byte_array()
-            .to_vec();
-        all_hashes.push(outputs_len_hash);
+/// Computes the common hash components shared between V1 and V2 token transactions.
+/// Returns a vector of hashes that can be extended with version-specific hashes.
+fn compute_common_hash_components(
+    transaction: &rpc::spark_token::TokenTransaction,
+    partial: bool,
+) -> Result<Vec<Vec<u8>>, ServiceError> {
+    let mut all_hashes = Vec::new();
 
-        for output in &self.token_outputs {
-            let mut engine = sha256::Hash::engine();
-            if !partial && let Some(id) = &output.id {
-                engine.input(id.as_bytes());
-            }
-            engine.input(&output.owner_public_key);
+    let version_hash = sha256::Hash::hash(&transaction.version.to_be_bytes())
+        .to_byte_array()
+        .to_vec();
+    all_hashes.push(version_hash);
 
-            if !partial {
-                let revocation_commitment =
-                    output
-                        .revocation_commitment
-                        .as_ref()
-                        .ok_or(ServiceError::Generic(
-                            "Revocation commitment is required".to_string(),
-                        ))?;
-                engine.input(revocation_commitment);
+    // We only support transfer transactions
+    let tx_type_hash = sha256::Hash::hash(&TOKEN_TRANSACTION_TRANSFER_TYPE.to_be_bytes())
+        .to_byte_array()
+        .to_vec();
+    all_hashes.push(tx_type_hash);
 
-                let withdraw_bond_sats = output.withdraw_bond_sats.ok_or(ServiceError::Generic(
-                    "Withdraw bond sats is required".to_string(),
-                ))?;
-                engine.input(&withdraw_bond_sats.to_be_bytes());
+    let rpc::spark_token::token_transaction::TokenInputs::TransferInput(input) = transaction
+        .token_inputs
+        .as_ref()
+        .ok_or(ServiceError::Generic(
+            "Token inputs are required".to_string(),
+        ))?
+    else {
+        return Err(ServiceError::Generic(
+            "Token transfer inputs are required".to_string(),
+        ));
+    };
+    let inputs = &input.outputs_to_spend;
+    let inputs_len = inputs.len() as u32;
+    let inputs_len_hash = sha256::Hash::hash(&inputs_len.to_be_bytes())
+        .to_byte_array()
+        .to_vec();
+    all_hashes.push(inputs_len_hash);
 
-                let withdraw_relative_block_locktime = output
+    for input in inputs {
+        let mut engine = sha256::Hash::engine();
+        engine.input(&input.prev_token_transaction_hash);
+        engine.input(&input.prev_token_transaction_vout.to_be_bytes());
+        all_hashes.push(sha256::Hash::from_engine(engine).to_byte_array().to_vec());
+    }
+
+    let outputs_len = transaction.token_outputs.len() as u32;
+    let outputs_len_hash = sha256::Hash::hash(&outputs_len.to_be_bytes())
+        .to_byte_array()
+        .to_vec();
+    all_hashes.push(outputs_len_hash);
+
+    for output in &transaction.token_outputs {
+        let mut engine = sha256::Hash::engine();
+        if !partial && let Some(id) = &output.id {
+            engine.input(id.as_bytes());
+        }
+        engine.input(&output.owner_public_key);
+
+        if !partial {
+            let revocation_commitment =
+                output
+                    .revocation_commitment
+                    .as_ref()
+                    .ok_or(ServiceError::Generic(
+                        "Revocation commitment is required".to_string(),
+                    ))?;
+            engine.input(revocation_commitment);
+
+            let withdraw_bond_sats = output.withdraw_bond_sats.ok_or(ServiceError::Generic(
+                "Withdraw bond sats is required".to_string(),
+            ))?;
+            engine.input(&withdraw_bond_sats.to_be_bytes());
+
+            let withdraw_relative_block_locktime =
+                output
                     .withdraw_relative_block_locktime
                     .ok_or(ServiceError::Generic(
                         "Withdraw relative block locktime is required".to_string(),
                     ))?;
-                engine.input(&withdraw_relative_block_locktime.to_be_bytes());
-            }
-
-            let zeroed_pubkey = vec![0; 33];
-            let token_pubkey = output.token_public_key.as_ref().unwrap_or(&zeroed_pubkey);
-            engine.input(token_pubkey);
-
-            let token_identifier =
-                output
-                    .token_identifier
-                    .as_ref()
-                    .ok_or(ServiceError::Generic(
-                        "Token identifier is required".to_string(),
-                    ))?;
-            engine.input(token_identifier);
-
-            engine.input(&output.token_amount);
-
-            all_hashes.push(sha256::Hash::from_engine(engine).to_byte_array().to_vec());
+            engine.input(&withdraw_relative_block_locktime.to_be_bytes());
         }
 
-        // Sort operator public keys before hashing
-        let mut operator_public_keys = self.spark_operator_identity_public_keys.clone();
-        operator_public_keys.sort_by(|a, b| {
-            // Compare bytes one by one
-            for (a_byte, b_byte) in a.iter().zip(b.iter()) {
-                if a_byte != b_byte {
-                    return a_byte.cmp(b_byte);
-                }
+        let zeroed_pubkey = vec![0; 33];
+        let token_pubkey = output.token_public_key.as_ref().unwrap_or(&zeroed_pubkey);
+        engine.input(token_pubkey);
+
+        let token_identifier = output
+            .token_identifier
+            .as_ref()
+            .ok_or(ServiceError::Generic(
+                "Token identifier is required".to_string(),
+            ))?;
+        engine.input(token_identifier);
+
+        engine.input(&output.token_amount);
+
+        all_hashes.push(sha256::Hash::from_engine(engine).to_byte_array().to_vec());
+    }
+
+    // Sort operator public keys before hashing
+    let mut operator_public_keys = transaction.spark_operator_identity_public_keys.clone();
+    operator_public_keys.sort_by(|a, b| {
+        // Compare bytes one by one
+        for (a_byte, b_byte) in a.iter().zip(b.iter()) {
+            if a_byte != b_byte {
+                return a_byte.cmp(b_byte);
             }
-            // If all bytes match up to the shorter length, compare lengths
-            a.len().cmp(&b.len())
-        });
-
-        let operator_pubkeys_len = operator_public_keys.len() as u32;
-        let operator_pubkeys_len_hash = sha256::Hash::hash(&operator_pubkeys_len.to_be_bytes())
-            .to_byte_array()
-            .to_vec();
-        all_hashes.push(operator_pubkeys_len_hash);
-
-        for pubkey in operator_public_keys {
-            all_hashes.push(sha256::Hash::hash(&pubkey).to_byte_array().to_vec());
         }
+        // If all bytes match up to the shorter length, compare lengths
+        a.len().cmp(&b.len())
+    });
 
-        let network_hash = sha256::Hash::hash(&self.network.to_be_bytes())
-            .to_byte_array()
-            .to_vec();
-        all_hashes.push(network_hash);
+    let operator_pubkeys_len = operator_public_keys.len() as u32;
+    let operator_pubkeys_len_hash = sha256::Hash::hash(&operator_pubkeys_len.to_be_bytes())
+        .to_byte_array()
+        .to_vec();
+    all_hashes.push(operator_pubkeys_len_hash);
 
-        let unix_timestamp = self.client_created_timestamp.ok_or(ServiceError::Generic(
+    for pubkey in operator_public_keys {
+        all_hashes.push(sha256::Hash::hash(&pubkey).to_byte_array().to_vec());
+    }
+
+    let network_hash = sha256::Hash::hash(&transaction.network.to_be_bytes())
+        .to_byte_array()
+        .to_vec();
+    all_hashes.push(network_hash);
+
+    let unix_timestamp = transaction
+        .client_created_timestamp
+        .ok_or(ServiceError::Generic(
             "Client created timestamp is required".to_string(),
         ))?;
-        let unix_timestamp_ms =
-            unix_timestamp.seconds as u64 * 1000 + unix_timestamp.nanos as u64 / 1_000_000;
-        let client_created_timestamp_hash = sha256::Hash::hash(&unix_timestamp_ms.to_be_bytes())
+    let unix_timestamp_ms =
+        unix_timestamp.seconds as u64 * 1000 + unix_timestamp.nanos as u64 / 1_000_000;
+    let client_created_timestamp_hash = sha256::Hash::hash(&unix_timestamp_ms.to_be_bytes())
+        .to_byte_array()
+        .to_vec();
+    all_hashes.push(client_created_timestamp_hash);
+
+    if !partial {
+        let expiry_time = transaction
+            .expiry_time
+            .map(|t| t.seconds as u64)
+            .unwrap_or(0);
+        let expiry_time_hash = sha256::Hash::hash(&expiry_time.to_be_bytes())
             .to_byte_array()
             .to_vec();
-        all_hashes.push(client_created_timestamp_hash);
+        all_hashes.push(expiry_time_hash);
+    }
 
-        if !partial {
-            let expiry_time = self.expiry_time.map(|t| t.seconds as u64).unwrap_or(0);
-            let expiry_time_hash = sha256::Hash::hash(&expiry_time.to_be_bytes())
-                .to_byte_array()
-                .to_vec();
-            all_hashes.push(expiry_time_hash);
+    Ok(all_hashes)
+}
+
+fn compute_hash_v1(
+    transaction: &rpc::spark_token::TokenTransaction,
+    partial: bool,
+) -> Result<Vec<u8>, ServiceError> {
+    let all_hashes = compute_common_hash_components(transaction, partial)?;
+
+    let final_hash = sha256::Hash::hash(&all_hashes.concat())
+        .to_byte_array()
+        .to_vec();
+
+    Ok(final_hash)
+}
+
+fn compute_hash_v2(
+    transaction: &rpc::spark_token::TokenTransaction,
+    partial: bool,
+) -> Result<Vec<u8>, ServiceError> {
+    let mut all_hashes = compute_common_hash_components(transaction, partial)?;
+
+    // V2 adds invoice attachment hashing
+    let attachments_len = transaction.invoice_attachments.len() as u32;
+    let attachments_len_hash = sha256::Hash::hash(&attachments_len.to_be_bytes())
+        .to_byte_array()
+        .to_vec();
+    all_hashes.push(attachments_len_hash);
+
+    // Collect and sort invoice attachments by their ID
+    let mut sorted_invoices: Vec<(Vec<u8>, String)> = Vec::new();
+
+    for (i, attachment) in transaction.invoice_attachments.iter().enumerate() {
+        let invoice = &attachment.spark_invoice;
+
+        // Parse the SparkAddress from the invoice string
+        let address = invoice
+            .parse::<SparkAddress>()
+            .map_err(|e| ServiceError::Generic(format!("Invalid invoice at index {i}: {e}")))?;
+
+        // Extract the invoice ID
+        let invoice_fields = address
+            .spark_invoice_fields
+            .as_ref()
+            .ok_or_else(|| ServiceError::Generic(format!("Missing invoice fields at index {i}")))?;
+
+        let id_bytes = invoice_fields.id.as_bytes().to_vec();
+
+        if id_bytes.len() != 16 {
+            return Err(ServiceError::Generic(format!(
+                "Invalid invoice ID length at index {i}: expected 16 bytes, got {}",
+                id_bytes.len()
+            )));
         }
 
-        let final_hash = sha256::Hash::hash(&all_hashes.concat())
-            .to_byte_array()
-            .to_vec();
-
-        Ok(final_hash)
+        sorted_invoices.push((id_bytes, invoice.clone()));
     }
+
+    // Sort by ID bytes lexicographically
+    sorted_invoices.sort_by(|a, b| {
+        for (a_byte, b_byte) in a.0.iter().zip(b.0.iter()) {
+            if a_byte != b_byte {
+                return a_byte.cmp(b_byte);
+            }
+        }
+        a.0.len().cmp(&b.0.len())
+    });
+
+    // Hash each sorted invoice's raw string (UTF-8)
+    for (_id, invoice) in sorted_invoices {
+        all_hashes.push(
+            sha256::Hash::hash(invoice.as_bytes())
+                .to_byte_array()
+                .to_vec(),
+        );
+    }
+
+    let final_hash = sha256::Hash::hash(&all_hashes.concat())
+        .to_byte_array()
+        .to_vec();
+
+    Ok(final_hash)
 }
 
 #[cfg(test)]
@@ -1042,101 +1140,108 @@ mod tests {
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-    #[test_all]
-    fn test_compute_token_transaction_hash_non_partial() {
-        let tx =
-            rpc::spark_token::TokenTransaction {
-                version: 1,
-                token_outputs: vec![TokenOutput {
-                id: Some("660e8400-e29b-41d4-a716-446655440001".to_string()),
-                owner_public_key: hex::decode(
-                    "02c0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247c9",
+    fn create_test_token_transaction(version: u32) -> rpc::spark_token::TokenTransaction {
+        rpc::spark_token::TokenTransaction {
+            version,
+            token_outputs: vec![TokenOutput {
+            id: Some("660e8400-e29b-41d4-a716-446655440001".to_string()),
+            owner_public_key: hex::decode(
+                "02c0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247c9",
+            )
+            .unwrap(),
+            revocation_commitment: Some(
+                hex::decode(
+                    "03d0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247ca",
                 )
                 .unwrap(),
-                revocation_commitment: Some(
-                    hex::decode(
-                        "03d0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247ca",
-                    )
+            ),
+            withdraw_bond_sats: Some(500),
+            withdraw_relative_block_locktime: Some(50),
+            token_public_key: Some(
+                hex::decode(
+                    "02e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
+                )
+                .unwrap(),
+            ),
+            token_identifier: Some(
+                hex::decode("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
                     .unwrap(),
-                ),
-                withdraw_bond_sats: Some(500),
-                withdraw_relative_block_locktime: Some(50),
-                token_public_key: Some(
-                    hex::decode(
-                        "02e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
-                    )
-                    .unwrap(),
-                ),
-                token_identifier: Some(
-                    hex::decode("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
-                        .unwrap(),
-                ),
-                token_amount: 50_u128.to_be_bytes().to_vec(),
-            }, TokenOutput {
-                id: Some("660e8400-e29b-41d4-a716-446655440002".to_string()),
-                owner_public_key: hex::decode(
+            ),
+            token_amount: 50_u128.to_be_bytes().to_vec(),
+        }, TokenOutput {
+            id: Some("660e8400-e29b-41d4-a716-446655440002".to_string()),
+            owner_public_key: hex::decode(
+                "02f0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cc",
+            )
+            .unwrap(),
+            revocation_commitment: Some(
+                hex::decode(
+                    "03e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
+                )
+                .unwrap(),
+            ),
+            withdraw_bond_sats: Some(300),
+            withdraw_relative_block_locktime: Some(30),
+            token_public_key: Some(
+                hex::decode(
                     "02f0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cc",
                 )
                 .unwrap(),
-                revocation_commitment: Some(
-                    hex::decode(
-                        "03e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
-                    )
+            ),
+            token_identifier: Some(
+                hex::decode("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
                     .unwrap(),
-                ),
-                withdraw_bond_sats: Some(300),
-                withdraw_relative_block_locktime: Some(30),
-                token_public_key: Some(
-                    hex::decode(
-                        "02f0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cc",
-                    )
-                    .unwrap(),
-                ),
-                token_identifier: Some(
-                    hex::decode("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+            ),
+            token_amount: 100_u128.to_be_bytes().to_vec(),
+        }],
+            spark_operator_identity_public_keys: vec![
+                hex::decode(
+                    "02e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
+                )
+                .unwrap(),
+                hex::decode(
+                    "02f0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cc",
+                )
+                .unwrap(),
+            ],
+            expiry_time: Some(Timestamp {
+                seconds: 2103123456,
+                nanos: 321000000,
+            }),
+            network: rpc::spark::Network::Mainnet as i32,
+            client_created_timestamp: Some(Timestamp {
+                seconds: 1703123456,
+                nanos: 123000000,
+            }),
+            token_inputs: Some(TokenInputs::TransferInput(TokenTransferInput {
+                outputs_to_spend: vec![
+                    TokenOutputToSpend {
+                        prev_token_transaction_hash: hex::decode(
+                            "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                        )
                         .unwrap(),
-                ),
-                token_amount: 100_u128.to_be_bytes().to_vec(),
-            }],
-                spark_operator_identity_public_keys: vec![
-                    hex::decode(
-                        "02e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
-                    )
-                    .unwrap(),
-                    hex::decode(
-                        "02f0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cc",
-                    )
-                    .unwrap(),
+                        prev_token_transaction_vout: 0,
+                    },
+                    TokenOutputToSpend {
+                        prev_token_transaction_hash: hex::decode(
+                            "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                        )
+                        .unwrap(),
+                        prev_token_transaction_vout: 1,
+                    },
                 ],
-                expiry_time: Some(Timestamp {
-                    seconds: 2103123456,
-                    nanos: 321000000,
-                }),
-                network: rpc::spark::Network::Mainnet as i32,
-                client_created_timestamp: Some(Timestamp {
-                    seconds: 1703123456,
-                    nanos: 123000000,
-                }),
-                token_inputs: Some(TokenInputs::TransferInput(TokenTransferInput {
-                    outputs_to_spend: vec![
-                        TokenOutputToSpend {
-                            prev_token_transaction_hash: hex::decode(
-                                "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-                            )
-                            .unwrap(),
-                            prev_token_transaction_vout: 0,
-                        },
-                        TokenOutputToSpend {
-                            prev_token_transaction_hash: hex::decode(
-                                "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
-                            )
-                            .unwrap(),
-                            prev_token_transaction_vout: 1,
-                        },
-                    ],
-                })),
-                invoice_attachments: vec![],
-            };
+            })),
+            invoice_attachments: vec![rpc::spark_token::InvoiceAttachment {
+                spark_invoice: "sparkrt1pgss8cf4gru7ece2ryn8ym3vm3yz8leeend2589m7svq2mgv0xncfyx8zgvssqgjzqqe5p0mj9v8j69ygjsh67m8t2jjyqcgaqr35sx0qparn2k6s24kgnzh3v2mqapzryhgfy27ye9c58mlz2lggmenf8tae4323jgv7s2ldglsu990t8fugefeqk4rzstc98rly7yt0gmnq95dwk2".to_string(),
+            }, rpc::spark_token::InvoiceAttachment {
+                spark_invoice: "sparkrt1pgss8cf4gru7ece2ryn8ym3vm3yz8leeend2589m7svq2mgv0xncfyx8zg7qsqgjzqqe5p0arydhhu5utuc4zzm732h35fs2yzsc3gs6v8hzpgnaaax0kgcn7r7gq53lnxq0gqnuscptu60nvu02yyszq05p5syke4wzv7gn76gt3r30c90qt8u5nfec4vl60nrxphjgzqm4hgze4xrxejmu2vqlj8sxp4mzux2dlq7fpq9akl0tufcpqd25tcpljc407uexx26".to_string(),
+            }],
+        }
+    }
+
+    #[test_all]
+    fn test_compute_token_transaction_hash_v1_non_partial() {
+        let tx = create_test_token_transaction(1);
 
         let hash = tx.compute_hash(false).unwrap();
         // Value taken from JS implementation
@@ -1148,106 +1253,40 @@ mod tests {
     }
 
     #[test_all]
-    fn test_compute_token_transaction_hash_partial() {
-        let tx =
-            rpc::spark_token::TokenTransaction {
-                version: 1,
-                token_outputs: vec![TokenOutput {
-                id: Some("660e8400-e29b-41d4-a716-446655440001".to_string()),
-                owner_public_key: hex::decode(
-                    "02c0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247c9",
-                )
-                .unwrap(),
-                revocation_commitment: Some(
-                    hex::decode(
-                        "03d0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247ca",
-                    )
-                    .unwrap(),
-                ),
-                withdraw_bond_sats: Some(500),
-                withdraw_relative_block_locktime: Some(50),
-                token_public_key: Some(
-                    hex::decode(
-                        "02e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
-                    )
-                    .unwrap(),
-                ),
-                token_identifier: Some(
-                    hex::decode("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
-                        .unwrap(),
-                ),
-                token_amount: 50_u128.to_be_bytes().to_vec(),
-            }, TokenOutput {
-                id: Some("660e8400-e29b-41d4-a716-446655440002".to_string()),
-                owner_public_key: hex::decode(
-                    "02f0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cc",
-                )
-                .unwrap(),
-                revocation_commitment: Some(
-                    hex::decode(
-                        "03e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
-                    )
-                    .unwrap(),
-                ),
-                withdraw_bond_sats: Some(300),
-                withdraw_relative_block_locktime: Some(30),
-                token_public_key: Some(
-                    hex::decode(
-                        "02f0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cc",
-                    )
-                    .unwrap(),
-                ),
-                token_identifier: Some(
-                    hex::decode("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
-                        .unwrap(),
-                ),
-                token_amount: 100_u128.to_be_bytes().to_vec(),
-            }],
-                spark_operator_identity_public_keys: vec![
-                    hex::decode(
-                        "02e0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cb",
-                    )
-                    .unwrap(),
-                    hex::decode(
-                        "02f0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247cc",
-                    )
-                    .unwrap(),
-                ],
-                expiry_time: Some(Timestamp {
-                    seconds: 2103123456,
-                    nanos: 321000000,
-                }),
-                network: rpc::spark::Network::Mainnet as i32,
-                client_created_timestamp: Some(Timestamp {
-                    seconds: 1703123456,
-                    nanos: 123000000,
-                }),
-                token_inputs: Some(TokenInputs::TransferInput(TokenTransferInput {
-                    outputs_to_spend: vec![
-                        TokenOutputToSpend {
-                            prev_token_transaction_hash: hex::decode(
-                                "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-                            )
-                            .unwrap(),
-                            prev_token_transaction_vout: 0,
-                        },
-                        TokenOutputToSpend {
-                            prev_token_transaction_hash: hex::decode(
-                                "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
-                            )
-                            .unwrap(),
-                            prev_token_transaction_vout: 1,
-                        },
-                    ],
-                })),
-                invoice_attachments: vec![],
-            };
+    fn test_compute_token_transaction_hash_v1_partial() {
+        let tx = create_test_token_transaction(1);
 
         let hash = tx.compute_hash(true).unwrap();
         // Value taken from JS implementation
         assert_eq!(
             hash,
             hex::decode("2fb877692e90822551c7cfd522139a4119f2395c6c96677e41f5a1c68c872af0")
+                .unwrap()
+        );
+    }
+
+    #[test_all]
+    fn test_compute_token_transaction_hash_v2_non_partial() {
+        let tx = create_test_token_transaction(2);
+
+        let hash = tx.compute_hash(false).unwrap();
+        // Value taken from JS implementation
+        assert_eq!(
+            hash,
+            hex::decode("34d11f87a2621b5598ee874d2965b6e6aa2610d368d435a790343363cd6f292d")
+                .unwrap()
+        );
+    }
+
+    #[test_all]
+    fn test_compute_token_transaction_hash_v2_partial() {
+        let tx = create_test_token_transaction(2);
+
+        let hash = tx.compute_hash(true).unwrap();
+        // Value taken from JS implementation
+        assert_eq!(
+            hash,
+            hex::decode("cd2ad2481353728dc82c7d80565fb5e66e67a5d98deb338740786a052177ffbe")
                 .unwrap()
         );
     }

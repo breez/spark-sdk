@@ -77,9 +77,13 @@ pub enum Command {
         #[clap(short = 'd', long = "description")]
         description: Option<String>,
 
-        /// The amount the payer should send, in satoshi.
-        #[arg(long)]
-        amount_sat: Option<u64>,
+        /// The amount the payer should send, in sats or token base units.
+        #[arg(short = 'a', long)]
+        amount: Option<u128>,
+
+        /// Optional token identifier. Only used if the payment method is a spark invoice. Absence indicates sats payment.
+        #[arg(short = 't', long)]
+        token_identifier: Option<String>,
     },
 
     /// Pay the given payment request
@@ -308,14 +312,22 @@ pub(crate) async fn execute_command(
         Command::Receive {
             payment_method,
             description,
-            amount_sat,
+            amount,
+            token_identifier,
         } => {
             let payment_method = match payment_method.as_str() {
-                "spark" => ReceivePaymentMethod::SparkAddress,
+                "sparkaddress" => ReceivePaymentMethod::SparkAddress,
+                "sparkinvoice" => ReceivePaymentMethod::SparkInvoice {
+                    amount,
+                    token_identifier,
+                    expiry_time: None,
+                    description,
+                    sender_public_key: None,
+                },
                 "bitcoin" => ReceivePaymentMethod::BitcoinAddress,
                 "bolt11" => ReceivePaymentMethod::Bolt11Invoice {
                     description: description.unwrap_or_default(),
-                    amount_sats: amount_sat,
+                    amount_sats: amount.map(TryInto::try_into).transpose()?,
                 },
                 _ => return Err(anyhow::anyhow!("Invalid payment method")),
             };
@@ -501,7 +513,7 @@ fn read_payment_options(
                 completion_timeout_secs: Some(0),
             }))
         }
-        SendPaymentMethod::SparkAddress { .. } => Ok(None),
+        SendPaymentMethod::SparkAddress { .. } | SendPaymentMethod::SparkInvoice { .. } => Ok(None),
     }
 }
 

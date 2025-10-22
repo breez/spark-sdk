@@ -22,4 +22,12 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }
 tokio_with_wasm.workspace = true
 tracing.workspace = true
+web-time.workspace = true
+
+# Non-Wasm dependencies
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 uuid.workspace = true
+
+# WASM dependencies
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+uuid = { workspace = true, features = ["js"] }
