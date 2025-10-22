@@ -1,8 +1,12 @@
-const { initLogging, defaultConfig, SdkBuilder, parse, defaultStorage } = require('@breeztech/breez-sdk-spark/nodejs')
+const { initLogging, defaultConfig, SdkBuilder, defaultStorage } = require('@breeztech/breez-sdk-spark/nodejs')
 const fs = require('fs')
 const qrcode = require('qrcode')
 const { question, confirm } = require('./prompt.js')
 require('dotenv').config()
+
+BigInt.prototype.toJSON = function () {
+  return Number(this);
+};
 
 const logFile = fs.createWriteStream(__dirname + '/../sdk.log', { flags: 'a' })
 
@@ -44,11 +48,12 @@ const initSdk = async () => {
     const storage = await defaultStorage('./.data')
 
     let sdkBuilder = SdkBuilder.new(config, { type: 'mnemonic', mnemonic: mnemonic }, storage)
-    sdkBuilder = sdkBuilder.withRestChainService('https://regtest-mempool.us-west-2.sparkinfra.net/api', {
-        username: process.env.CHAIN_SERVICE_USERNAME,
-        password: process.env.CHAIN_SERVICE_PASSWORD
-    })
-
+    if (process.env.CHAIN_SERVICE_USERNAME && process.env.CHAIN_SERVICE_PASSWORD) {
+        sdkBuilder = sdkBuilder.withRestChainService('https://regtest-mempool.us-west-2.sparkinfra.net/api', {
+            username: process.env.CHAIN_SERVICE_USERNAME,
+            password: process.env.CHAIN_SERVICE_PASSWORD
+        })
+    }
     sdk = await sdkBuilder.build()
 
     await sdk.addEventListener(eventListener)
@@ -118,24 +123,32 @@ const sendPayment = async (options) => {
 
     const prepareResponse = await sdk.prepareSendPayment({
         paymentRequest: options.paymentRequest,
-        amountSats: options.amountSats
+        amount: options.amount
     })
 
     const paymentMethod = prepareResponse.paymentMethod
     if (paymentMethod.type == 'bolt11Invoice') {
-        console.error('prefer spark fees', paymentMethod.sparkTransferFeeSats)
-
         const fees =
             paymentMethod.sparkTransferFeeSats != null
                 ? paymentMethod.sparkTransferFeeSats
                 : paymentMethod.lightningFeeSats
-        const amount = prepareResponse.amountSats
+        const amount = prepareResponse.amount
 
         const message = `Amount: ${amount} sat. Fees: ${fees} sat. Are the fees acceptable?`
         if (await confirm(message)) {
             const res = await sdk.sendPayment({
-                prepareResponse,
-                options: { type: 'bolt11Invoice', preferSpark: paymentMethod.sparkTransferFeeSats != null }
+                prepareResponse
+            })
+            console.log(JSON.stringify(res, null, 2))
+        }
+    } else if (paymentMethod.type == 'sparkAddress') {
+        const fees = paymentMethod.fee
+        const amount = prepareResponse.amount
+
+        const message = `Amount: ${amount} sat. Fees: ${fees} sat. Are the fees acceptable?`
+        if (await confirm(message)) {
+            const res = await sdk.sendPayment({
+                prepareResponse
             })
             console.log(JSON.stringify(res, null, 2))
         }
@@ -144,7 +157,7 @@ const sendPayment = async (options) => {
 
 const lnurlPay = async (options) => {
     const sdk = await initSdk()
-    const input = await parse(options.lnurl)
+    const input = await sdk.parse(options.lnurl)
 
     if (input.type !== 'lnurlPay') {
         throw new Error('Invalid input: expected LNURL pay request')
