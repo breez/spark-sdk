@@ -604,6 +604,7 @@ pub enum SendPaymentMethod {
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
+        #[serde(with = "serde_u128_as_string")]
         fee: u128,
         token_identifier: Option<String>,
     },
@@ -659,6 +660,7 @@ pub struct PrepareSendPaymentRequest {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
+    #[serde(with = "serde_u128_as_string")]
     pub amount: u128,
     pub token_identifier: Option<String>,
 }
