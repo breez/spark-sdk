@@ -740,7 +740,7 @@ impl PrivateKeySource {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use bitcoin::secp256k1::rand::thread_rng;
     use bitcoin::secp256k1::{self, PublicKey, Secp256k1, SecretKey};
     use macros::{async_test_all, test_all};
@@ -754,7 +754,7 @@ mod tests {
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-    fn create_test_signer() -> DefaultSigner {
+    pub(crate) fn create_test_signer() -> DefaultSigner {
         let test_seed = [42u8; 32]; // Deterministic seed for testing
         DefaultSigner::new(&test_seed, Network::Regtest).expect("Failed to create test signer")
     }

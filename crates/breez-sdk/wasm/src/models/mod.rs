@@ -151,48 +151,34 @@ pub enum InputType {
     Bolt12InvoiceRequest(Bolt12InvoiceRequestDetails),
     LnurlWithdraw(LnurlWithdrawRequestDetails),
     SparkAddress(SparkAddressDetails),
+    SparkInvoice(SparkInvoiceDetails),
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_common::input::SparkAddressDetails)]
 pub struct SparkAddressDetails {
     pub address: String,
-    pub decoded_address: SparkAddress,
+    pub identity_public_key: String,
+    pub network: BitcoinNetwork,
     pub source: PaymentRequestSource,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::SparkAddress)]
-pub struct SparkAddress {
+#[macros::extern_wasm_bindgen(breez_sdk_common::input::SparkInvoiceDetails)]
+pub struct SparkInvoiceDetails {
+    pub invoice: String,
     pub identity_public_key: String,
     pub network: BitcoinNetwork,
-    pub spark_invoice_fields: Option<SparkInvoiceFields>,
-    pub signature: Option<String>,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::SparkInvoiceFields)]
-pub struct SparkInvoiceFields {
-    pub id: String,
-    pub version: u32,
-    pub memo: Option<String>,
-    pub sender_public_key: Option<String>,
-    pub expiry_time: Option<u64>,
-    pub payment_type: Option<SparkAddressPaymentType>,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::SparkAddressPaymentType)]
-pub enum SparkAddressPaymentType {
-    TokensPayment(TokensPaymentDetails),
-    SatsPayment(SatsPaymentDetails),
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::TokensPaymentDetails)]
-pub struct TokensPaymentDetails {
-    pub token_identifier: Option<String>,
     pub amount: Option<u128>,
+    pub payment_type: SparkInvoicePaymentType,
+    pub expiry_time: Option<u64>,
+    pub description: Option<String>,
+    pub sender_public_key: Option<String>,
+    pub source: PaymentRequestSource,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::SatsPaymentDetails)]
-pub struct SatsPaymentDetails {
-    pub amount: Option<u64>,
+#[macros::extern_wasm_bindgen(breez_sdk_common::input::SparkInvoicePaymentType)]
+pub enum SparkInvoicePaymentType {
+    Sats,
+    Tokens { token_identifier: Option<String> },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_common::input::BitcoinAddressDetails)]
@@ -569,6 +555,13 @@ pub struct SyncWalletResponse {}
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ReceivePaymentMethod)]
 pub enum ReceivePaymentMethod {
     SparkAddress,
+    SparkInvoice {
+        amount: Option<u128>,
+        token_identifier: Option<String>,
+        expiry_time: Option<u64>,
+        description: Option<String>,
+        sender_public_key: Option<String>,
+    },
     BitcoinAddress,
     Bolt11Invoice {
         description: String,
@@ -607,6 +600,12 @@ pub enum SendPaymentMethod {
         #[serde(with = "serde_u128_as_string")]
         fee: u128,
         token_identifier: Option<String>,
+    },
+    SparkInvoice {
+        invoice: String,
+        fee: u128,
+        token_identifier: Option<String>,
+        spark_invoice_details: SparkInvoiceDetails,
     },
 }
 
@@ -864,10 +863,10 @@ pub enum ProvisionalPaymentDetails {
         invoice: String,
     },
     Spark {
-        receiver_address: String,
+        receiver_public_key: String,
     },
     Token {
         token_id: String,
-        receiver_address: String,
+        receiver_public_key: String,
     },
 }

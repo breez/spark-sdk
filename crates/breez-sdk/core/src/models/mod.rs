@@ -4,7 +4,9 @@ pub use payment_observer::*;
 
 use breez_sdk_common::{
     fiat::{FiatCurrency, Rate},
-    input::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser},
+    input::{
+        BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, SparkInvoiceDetails,
+    },
     lnurl::pay::{LnurlPayRequestDetails, SuccessAction, SuccessActionProcessed},
     network::BitcoinNetwork,
 };
@@ -456,6 +458,19 @@ pub struct SyncWalletResponse {}
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ReceivePaymentMethod {
     SparkAddress,
+    SparkInvoice {
+        /// Amount to receive. Denominated in sats if token identifier is empty, otherwise in the token base units
+        amount: Option<u128>,
+        /// The presence of this field indicates that the payment is for a token
+        /// If empty, it is a Bitcoin payment
+        token_identifier: Option<String>,
+        /// The expiry time of the invoice in seconds since the Unix epoch
+        expiry_time: Option<u64>,
+        /// A description to embed in the invoice.
+        description: Option<String>,
+        /// If set, the invoice may only be fulfilled by a payer with this public key
+        sender_public_key: Option<String>, // TODO: do we want to expose this?
+    },
     BitcoinAddress,
     Bolt11Invoice {
         description: String,
@@ -483,6 +498,16 @@ pub enum SendPaymentMethod {
         /// The presence of this field indicates that the payment is for a token
         /// If empty, it is a Bitcoin payment
         token_identifier: Option<String>,
+    },
+    SparkInvoice {
+        invoice: String,
+        /// Fee to pay for the transaction
+        /// Denominated in sats if token identifier is empty, otherwise in the token base units
+        fee: u128,
+        /// The presence of this field indicates that the payment is for a token
+        /// If empty, it is a Bitcoin payment
+        token_identifier: Option<String>,
+        spark_invoice_details: SparkInvoiceDetails,
     },
 }
 
