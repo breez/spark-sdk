@@ -660,7 +660,6 @@ pub struct PrepareSendPaymentRequest {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    #[serde(with = "serde_u128_as_string")]
     pub amount: u128,
     pub token_identifier: Option<String>,
 }

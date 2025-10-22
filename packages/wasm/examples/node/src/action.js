@@ -5,8 +5,8 @@ const { question, confirm } = require('./prompt.js')
 require('dotenv').config()
 
 BigInt.prototype.toJSON = function () {
-  return Number(this);
-};
+    return this.toString()
+}
 
 const logFile = fs.createWriteStream(__dirname + '/../sdk.log', { flags: 'a' })
 
@@ -30,6 +30,17 @@ class JsEventListener {
 
 const eventListener = new JsEventListener()
 
+class JsPaymentObserver {
+    beforeSend = async (payments) => {
+        fileLogger.log({
+            level: 'INFO',
+            line: `Before send payments: ${JSON.stringify(payments)}`
+        })
+    }
+}
+
+const paymentObserver = new JsPaymentObserver()
+
 let sdk = null
 
 const initSdk = async () => {
@@ -48,6 +59,7 @@ const initSdk = async () => {
     const storage = await defaultStorage('./.data')
 
     let sdkBuilder = SdkBuilder.new(config, { type: 'mnemonic', mnemonic: mnemonic }, storage)
+    sdkBuilder = sdkBuilder.withPaymentObserver(paymentObserver)
     if (process.env.CHAIN_SERVICE_USERNAME && process.env.CHAIN_SERVICE_PASSWORD) {
         sdkBuilder = sdkBuilder.withRestChainService('https://regtest-mempool.us-west-2.sparkinfra.net/api', {
             username: process.env.CHAIN_SERVICE_USERNAME,
