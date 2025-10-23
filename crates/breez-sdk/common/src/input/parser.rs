@@ -627,7 +627,7 @@ fn parse_bip21_key(
     Ok(())
 }
 
-fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option<InputType> {
+pub fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option<InputType> {
     if let Ok(spark_address) = input.parse::<SparkAddress>() {
         let identity_public_key = spark_address.identity_public_key.to_string();
         let network = spark_address.network.into();
@@ -660,7 +660,6 @@ fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option<Inp
                 expiry_time,
                 description: invoice_fields.memo,
                 sender_public_key: invoice_fields.sender_public_key.map(|e| e.to_string()),
-                source: source.clone(),
             }));
         }
 
