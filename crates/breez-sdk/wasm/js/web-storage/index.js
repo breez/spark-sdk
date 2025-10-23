@@ -198,7 +198,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 3; // Current schema version
+    this.dbVersion = 4; // Current schema version
   }
 
   /**
@@ -801,8 +801,8 @@ class IndexedDBStorage {
           const recordChange = {
             id: `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
             record_id: record.id,
-            schema_version: record.schema_version,
-            updated_fields: record.updated_fields,
+            schema_version: record.schemaVersion,
+            updated_fields: record.updatedFields,
             revision: nextRevision,
             synced: false
           };
@@ -900,8 +900,8 @@ class IndexedDBStorage {
             // Create a change set
             const change = {
               id: record.record_id,
-              schema_version: record.schema_version,
-              updated_fields: record.updated_fields,
+              schemaVersion: record.schema_version,
+              updatedFields: record.updated_fields,
               revision: record.revision
             };
             
@@ -918,8 +918,8 @@ class IndexedDBStorage {
             // Continue even if parent lookup fails
             const change = {
               id: record.record_id,
-              schema_version: record.schema_version,
-              updated_fields: record.updated_fields,
+              schemaVersion: record.schema_version,
+              updatedFields: record.updated_fields,
               revision: record.revision
             };
             
@@ -1209,8 +1209,8 @@ class IndexedDBStorage {
             // Create a change set
             const change = {
               id: record.record_id,
-              schema_version: record.schema_version,
-              updated_fields: record.updated_fields,
+              schemaVersion: record.schema_version,
+              updatedFields: record.updated_fields,
               revision: record.revision
             };
             
@@ -1224,8 +1224,8 @@ class IndexedDBStorage {
             // Return without parent if lookup fails
             const change = {
               id: record.record_id,
-              schema_version: record.schema_version,
-              updated_fields: record.updated_fields,
+              schemaVersion: record.schema_version,
+              updatedFields: record.updated_fields,
               revision: record.revision
             };
             

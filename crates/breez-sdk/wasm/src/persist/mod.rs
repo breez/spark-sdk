@@ -15,22 +15,65 @@ pub struct WasmStorage {
     pub storage: Storage,
 }
 
-/// Helper function to convert JS exceptions to StorageError
+/// Helper function to convert JS exceptions to StorageError with detailed error logging
 fn js_error_to_storage_error(js_error: JsValue) -> breez_sdk_spark::StorageError {
-    let error_message = js_error
-        .as_string()
-        .unwrap_or_else(|| "JavaScript storage operation failed".to_string());
+    let error_message = get_detailed_js_error(&js_error);
     breez_sdk_spark::StorageError::Implementation(error_message)
 }
 
-/// Helper function to convert JS exceptions to StorageError
+/// Helper function to convert JS exceptions to StorageError with detailed error logging
 fn js_error_to_sync_storage_error(
     js_error: JsValue,
 ) -> breez_sdk_spark::sync_storage::StorageError {
-    let error_message = js_error
-        .as_string()
-        .unwrap_or_else(|| "JavaScript storage operation failed".to_string());
+    let error_message = get_detailed_js_error(&js_error);
     breez_sdk_spark::sync_storage::StorageError::Implementation(error_message)
+}
+
+/// Extract detailed error information from a JavaScript error value
+fn get_detailed_js_error(js_error: &JsValue) -> String {
+    // Check for DomException which is common for IndexedDB errors
+    if js_error.is_instance_of::<web_sys::DomException>() {
+        let dom_exception = web_sys::DomException::from(js_error.clone());
+        let name = dom_exception.name();
+        let message = dom_exception.message();
+        let code = dom_exception.code();
+
+        return format!("IndexedDB error: {} - {} (code: {})", name, message, code);
+    }
+
+    // Try to extract error as a JavaScript Error object
+    if js_error.is_instance_of::<js_sys::Error>() {
+        let error = js_sys::Error::from(js_error.clone());
+        let message = error.message();
+        let name = error.name();
+
+        // Attempt to get the stack trace via toString() which often includes it
+        let error_str = js_error
+            .clone()
+            .dyn_into::<js_sys::Object>()
+            .map(|obj| obj.to_string().as_string().unwrap_or_default())
+            .unwrap_or_default();
+
+        return format!(
+            "JavaScript error: {} - {} (Details: {})",
+            name, message, error_str
+        );
+    }
+
+    // If it's a string, use that directly
+    if let Some(error_str) = js_error.as_string() {
+        return format!("JavaScript error: {}", error_str);
+    }
+
+    // For any other type of error value, try to stringify it
+    if let Ok(json_str) = js_sys::JSON::stringify(js_error)
+        && let Some(json) = json_str.as_string()
+    {
+        return format!("JavaScript error object: {}", json);
+    }
+
+    // Fallback for when nothing else works
+    "JavaScript storage operation failed (Unknown error type)".to_string()
 }
 
 // This assumes that we'll always be running in a single thread (true for Wasm environments)
