@@ -12,11 +12,17 @@ use crate::sync::{
 
 const SYNC_BATCH_SIZE: u32 = 10;
 
+#[allow(clippy::ref_option)]
 #[cfg_attr(test, mockall::automock)]
 #[macros::async_trait]
 pub trait NewRecordHandler: Send + Sync {
     async fn on_incoming_change(&self, change: IncomingChange) -> anyhow::Result<()>;
     async fn on_replay_outgoing_change(&self, change: OutgoingChange) -> anyhow::Result<()>;
+    async fn on_sync_completed(
+        &self,
+        incoming_count: Option<u32>,
+        outgoing_count: Option<u32>,
+    ) -> anyhow::Result<()>;
 }
 
 pub struct SyncProcessor {
@@ -194,7 +200,7 @@ impl SyncProcessor {
         };
 
         loop {
-            tokio::select! {
+            let (incoming_count, outgoing_count) = tokio::select! {
                 _ = shutdown_receiver.changed() => {
                     debug!("Shutdown signal received, stopping push sync loop");
                     break;
@@ -202,24 +208,37 @@ impl SyncProcessor {
 
                 _ = pull_trigger.changed() => {
                     debug!("Received incoming sync notification");
-                    if let Err(e) = self.pull_sync_once().await {
-                        error!("Failed to sync once: {}", e);
-                    }
+                    let count = match self.pull_sync_once().await {
+                        Ok(count) => count,
+                        Err(e) => {
+                            error!("Failed to sync once: {}", e);
+                            continue;
+                        }
+                    };
+                    (count, None)
                 }
 
                 Some(last_backoff) = backoff_trigger_rx.recv() => {
                     debug!("Backoff trigger received, waiting before next sync attempt");
-                    if let Err(e) = self.pull_sync_once().await {
-                        error!("Failed to sync once: {}", e);
-                        send_backoff_trigger(last_backoff.mul_f32(1.5));
-                        continue;
-                    }
-                    if let Err(e) = self.push_sync_once().await {
-                        error!("Failed to sync once: {}", e);
-                        send_backoff_trigger(last_backoff.mul_f32(1.5));
-                        continue;
-                    }
+                    let incoming_count = match self.pull_sync_once().await {
+                        Ok(count) => count,
+                        Err(e) => {
+                            error!("Failed to sync once: {}", e);
+                            send_backoff_trigger(last_backoff.mul_f32(1.5));
+                            None
+                        }
+                    };
+                    let outgoing_count = match self.push_sync_once().await {
+                        Ok(count) => count,
+                        Err(e) => {
+                            error!("Failed to sync once: {}", e);
+                            send_backoff_trigger(last_backoff.mul_f32(1.5));
+                            continue;
+                        }
+                    };
+
                     debug!("Backoff sync attempt succeeded, resuming normal operation");
+                    (incoming_count, outgoing_count)
                 }
 
                 result = push_trigger.recv() => {
@@ -227,17 +246,29 @@ impl SyncProcessor {
                         Ok(record_id) => {
                             debug!("Received sync trigger for record id {:?}", record_id);
                             // If there was also a pull trigger, handle that first, because the push wouldn't work.
-                            if pull_trigger.has_changed().unwrap_or(false) &&
-                                let Err(e) = self.pull_sync_once().await {
-                                    error!("Failed to sync once: {}", e);
-                            }
+                            let incoming_count = if pull_trigger.has_changed().unwrap_or(false) {
+                                match self.pull_sync_once().await {
+                                    Ok(count) => count,
+                                    Err(e) => {
+                                        error!("Failed to sync once: {}", e);
+                                        None
+                                    }
+                                }
+                            } else {
+                                None
+                            };
 
-                            if let Err(e) = self.push_sync_once().await {
-                                error!("Failed to sync once: {}", e);
-                                send_backoff_trigger(Duration::from_secs(1));
-                                continue;
-                            }
+                            let outgoing_count = match self.push_sync_once().await {
+                                Ok(count) => count,
+                                Err(e) => {
+                                    error!("Failed to sync once: {}", e);
+                                    send_backoff_trigger(Duration::from_secs(1));
+                                    continue;
+                                }
+                            };
                             debug!("Push sync attempt succeeded");
+
+                            (incoming_count, outgoing_count)
                         }
                         Err(broadcast::error::RecvError::Closed) => {
                             debug!("Push sync trigger channel closed, stopping push sync loop");
@@ -245,42 +276,60 @@ impl SyncProcessor {
                         }
                         Err(broadcast::error::RecvError::Lagged(count)) => {
                             warn!("Lagged {} messages in push sync trigger channel", count);
+                            (None, None)
                         }
                     }
                 }
+            };
+
+            if (incoming_count.is_some() || outgoing_count.is_some())
+                && let Err(e) = self
+                    .new_record_handler
+                    .on_sync_completed(incoming_count, outgoing_count)
+                    .await
+            {
+                error!("Failed to notify of real-time sync completion: {e:?}");
             }
         }
     }
 
-    async fn push_sync_once(&self) -> anyhow::Result<()> {
+    async fn push_sync_once(&self) -> anyhow::Result<Option<u32>> {
         debug!("Syncing once");
 
+        let mut count: u32 = 0;
         while let changes = self
             .storage
             .get_pending_outgoing_changes(SYNC_BATCH_SIZE)
             .await?
             && !changes.is_empty()
         {
-            self.push_sync_batch(changes).await?;
+            let current_count = self.push_sync_batch(changes).await?;
+            count = count.saturating_add(current_count);
         }
 
-        Ok(())
+        Ok(match count {
+            0 => None,
+            other => Some(other),
+        })
     }
 
     async fn push_sync_batch(
         &self,
         changes: Vec<crate::sync::storage::OutgoingChange>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<u32> {
         debug!(
             "Processing sync batch of {} outgoing changes",
             changes.len()
         );
+
+        let mut count: u32 = 0;
         for storage_change in changes {
             let change = storage_change.try_into()?;
             self.push_sync_record(change).await?;
+            count = count.saturating_add(1);
         }
 
-        Ok(())
+        Ok(count)
     }
 
     async fn push_sync_record(&self, change: OutgoingChange) -> anyhow::Result<()> {
@@ -306,7 +355,7 @@ impl SyncProcessor {
         Ok(())
     }
 
-    async fn pull_sync_once(&self) -> anyhow::Result<()> {
+    async fn pull_sync_once(&self) -> anyhow::Result<Option<u32>> {
         debug!("Pull syncing once");
 
         let since_revision = self.storage.get_last_revision().await?;
@@ -328,19 +377,25 @@ impl SyncProcessor {
             self.storage.insert_incoming_records(db_records).await?;
         }
 
-        self.pull_sync_once_local().await?;
+        let count = self.pull_sync_once_local().await?;
 
-        Ok(())
+        Ok(match count {
+            0 => None,
+            other => Some(other),
+        })
     }
 
-    async fn pull_sync_once_local(&self) -> anyhow::Result<()> {
+    async fn pull_sync_once_local(&self) -> anyhow::Result<u32> {
+        let mut count: u32 = 0;
+
         loop {
             let incoming_records = self.storage.get_incoming_records(SYNC_BATCH_SIZE).await?;
             if incoming_records.is_empty() {
                 break;
             }
 
-            debug!("Processing {} incoming records", incoming_records.len());
+            let current_count = u32::try_from(incoming_records.len())?;
+            debug!("Processing {} incoming records", current_count);
             for incoming_record in incoming_records {
                 // TODO: Ensure the incoming change revision number is correct according to our assumptions. But also... allow replays.
 
@@ -388,9 +443,11 @@ impl SyncProcessor {
                     .delete_incoming_record(incoming_record.new_state)
                     .await?;
             }
+
+            count = count.saturating_add(current_count);
         }
 
-        Ok(())
+        Ok(count)
     }
 }
 

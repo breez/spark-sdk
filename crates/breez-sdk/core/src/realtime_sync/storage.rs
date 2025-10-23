@@ -9,11 +9,11 @@ use breez_sdk_common::sync::{
     IncomingChange, NewRecordHandler, OutgoingChange, RecordChangeRequest, RecordId, SyncService,
 };
 use serde_json::Value;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::{
-    DepositInfo, ListPaymentsRequest, Payment, PaymentDetails, PaymentMetadata, Storage,
-    StorageError, UpdateDepositPayload,
+    DepositInfo, EventEmitter, ListPaymentsRequest, Payment, PaymentDetails, PaymentMetadata,
+    SdkEvent, Storage, StorageError, UpdateDepositPayload,
 };
 use tokio_with_wasm::alias as tokio;
 
@@ -46,6 +46,7 @@ impl FromStr for RecordType {
 pub struct SyncedStorage {
     inner: Arc<dyn Storage>,
     sync_service: Arc<SyncService>,
+    event_emitter: Arc<EventEmitter>,
 }
 
 #[macros::async_trait]
@@ -57,13 +58,36 @@ impl NewRecordHandler for SyncedStorage {
     async fn on_replay_outgoing_change(&self, change: OutgoingChange) -> anyhow::Result<()> {
         self.handle_outgoing_change(change).await
     }
+
+    async fn on_sync_completed(
+        &self,
+        incoming_count: Option<u32>,
+        outgoing_count: Option<u32>,
+    ) -> anyhow::Result<()> {
+        debug!(
+            "real-time sync completed for {:?} incoming, {:?} outgoing records",
+            incoming_count, outgoing_count
+        );
+        let did_pull_new_records = incoming_count.is_some();
+        self.event_emitter
+            .emit(&SdkEvent::DataSynced {
+                did_pull_new_records,
+            })
+            .await;
+        Ok(())
+    }
 }
 
 impl SyncedStorage {
-    pub fn new(inner: Arc<dyn Storage>, sync_service: Arc<SyncService>) -> Self {
+    pub fn new(
+        inner: Arc<dyn Storage>,
+        sync_service: Arc<SyncService>,
+        event_emitter: Arc<EventEmitter>,
+    ) -> Self {
         SyncedStorage {
             inner,
             sync_service,
+            event_emitter,
         }
     }
 
