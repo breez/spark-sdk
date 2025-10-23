@@ -1,18 +1,7 @@
 use std::sync::Arc;
 
 use breez_sdk_common::input::InputType;
-use breez_sdk_spark::{
-    CheckLightningAddressRequest, ClaimDepositRequest, ClaimDepositResponse, Config,
-    ConnectRequest, GetInfoRequest, GetInfoResponse, GetPaymentRequest, GetPaymentResponse,
-    GetTokensMetadataRequest, GetTokensMetadataResponse, LightningAddressInfo,
-    ListFiatCurrenciesResponse, ListFiatRatesResponse, ListPaymentsRequest, ListPaymentsResponse,
-    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayRequest, LnurlPayResponse,
-    LogEntry, Logger, Network, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentRequest,
-    ReceivePaymentResponse, RefundDepositRequest, RefundDepositResponse,
-    RegisterLightningAddressRequest, SdkError, SdkEvent, SendPaymentRequest, SendPaymentResponse,
-    Storage, SyncWalletRequest, SyncWalletResponse, WaitForPaymentRequest, WaitForPaymentResponse,
-};
+use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
 
 use crate::events::BindingEventListener;
@@ -32,7 +21,7 @@ pub fn default_config(network: Network) -> Config {
 }
 
 #[frb(sync)]
-pub fn default_storage(data_dir: String) -> Result<Arc<dyn Storage>, SdkError> {
+pub fn default_storage(data_dir: String) -> Result<StorageImplementations, SdkError> {
     breez_sdk_spark::default_storage(data_dir)
 }
 
@@ -66,7 +55,7 @@ impl BreezSdk {
     }
 
     pub async fn parse(&self, input: &str) -> Result<InputType, SdkError> {
-        Ok(self.inner.parse(input).await?)
+        self.inner.parse(input).await
     }
 
     pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
