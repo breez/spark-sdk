@@ -197,6 +197,7 @@ impl UnilateralExitService {
                 offset: paging.offset as i64,
                 network: self.network.to_proto_network().into(),
                 source: Some(source),
+                statuses: vec![],
             })
             .await?;
         Ok(PagingResult {
