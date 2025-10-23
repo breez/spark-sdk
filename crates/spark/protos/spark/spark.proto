@@ -110,6 +110,7 @@ service SparkService {
     rpc claim_transfer_sign_refunds_v2(ClaimTransferSignRefundsRequest) returns (ClaimTransferSignRefundsResponse) {}
     rpc finalize_node_signatures_v2(FinalizeNodeSignaturesRequest) returns (FinalizeNodeSignaturesResponse) {}
     rpc initiate_preimage_swap_v2(InitiatePreimageSwapRequest) returns (InitiatePreimageSwapResponse) {}
+    rpc initiate_preimage_swap_v3(InitiatePreimageSwapRequest) returns (InitiatePreimageSwapResponse) {}
     rpc start_leaf_swap_v2(StartTransferRequest) returns (StartTransferResponse) {}
     rpc counter_leaf_swap_v2(CounterLeafSwapRequest) returns (CounterLeafSwapResponse) {}
     rpc start_transfer_v2(StartTransferRequest) returns (StartTransferResponse) {}
@@ -118,6 +119,11 @@ service SparkService {
     rpc get_utxos_for_address(GetUtxosForAddressRequest) returns (GetUtxosForAddressResponse) {}
 
     rpc query_spark_invoices(QuerySparkInvoicesRequest) returns (QuerySparkInvoicesResponse) {}
+
+    // Inititiates a primary transfer in a Swap V3 protocol. The sender submits the
+    // transfer package, but the SOs will not tweak the keys at this stage of the flow.
+    // It will be done later, when the SSP initiates a counter swap.
+    rpc initiate_swap_primary_transfer(InitiateSwapPrimaryTransferRequest) returns (InitiateSwapPrimaryTransferResponse) {}
 }
 
 message SubscribeToEventsRequest {
@@ -259,7 +265,8 @@ message UTXO {
     uint32 vout = 2;
     // The network of the bitcoin network. Required.
     Network network = 3 [(validate.rules).enum = {not_in: [0]}];
-    // Transaction ID. Required, but older code may not provide it.
+    // Transaction Id string, produced from transaction hash by reversing the bytes,
+    // converted to bytes. Required, but older code may not provide it.
     bytes txid = 4;
 }
 
@@ -834,6 +841,8 @@ message LeafRefundTxSigningJob {
 message UserSignedTxSigningJob {
     string leaf_id = 1;
     bytes signing_public_key = 2;
+    // CPFP Refund Tx that is created when the User signs refunds. It spends the
+    // node transaction to the receiver.
     bytes raw_tx = 3;
     common.SigningCommitment signing_nonce_commitment = 4;
     bytes user_signature = 5;
@@ -1322,6 +1331,7 @@ message QueryNodesRequest {
     int64 limit = 4;
     int64 offset = 5;
     Network network = 6; // defaults to mainnet when no network is provided. Does not check network when querying by node_ids
+    repeated TreeNodeStatus statuses = 7;
 }
 
 message QueryNodesResponse {
@@ -1576,3 +1586,38 @@ enum InvoiceStatus {
     RETURNED = 4;
 }
 
+message InitiateSwapPrimaryTransferRequest {
+    // Transfer with refunds and key tweaks signed
+    StartTransferRequest transfer = 1;
+    // Adaptor public keys to verify the signatures of refunds for the primary
+    // transfer in the swap
+    AdaptorPublicKeyPackage adaptor_public_keys = 2;
+}
+
+message InitiateSwapPrimaryTransferResponse {
+    Transfer transfer = 1;
+    repeated LeafRefundTxSigningResult signing_results = 2;
+}
+
+// Adaptor public key is derived from the secret `t` using formula:
+// ```ignored
+// T = t * G
+// ```
+message AdaptorPublicKeyPackage {
+    bytes adaptor_public_key = 1;
+    bytes direct_adaptor_public_key = 2;
+    bytes direct_from_cpfp_adaptor_public_key = 3;
+}
+
+enum TreeNodeStatus {
+    TREE_NODE_STATUS_CREATING = 0;
+    TREE_NODE_STATUS_AVAILABLE = 1;
+    TREE_NODE_STATUS_FROZEN_BY_ISSUER = 2;
+    TREE_NODE_STATUS_TRANSFER_LOCKED = 3;
+    TREE_NODE_STATUS_SPLIT_LOCKED = 4;
+    TREE_NODE_STATUS_SPLITTED = 5;
+    TREE_NODE_STATUS_AGGREGATED = 6;
+    TREE_NODE_STATUS_ON_CHAIN = 7;
+    TREE_NODE_STATUS_AGGREGATE_LOCK = 8;
+    TREE_NODE_STATUS_EXITED = 9;
+}

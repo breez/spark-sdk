@@ -31,7 +31,8 @@ use web_time::SystemTime;
 use super::LeafKeyTweak;
 use super::models::{LightningSendRequestStatus, map_signing_nonce_commitments};
 
-const DEFAULT_EXPIRY_SECS: u32 = 60 * 60 * 24 * 30;
+const DEFAULT_RECEIVE_EXPIRY_SECS: u32 = 60 * 60 * 24 * 30; // 30 days
+const DEFAULT_SEND_EXPIRY_SECS: u64 = 60 * 60 * 24 * 16; // 16 days
 const RECEIVER_IDENTITY_PUBLIC_KEY_SHORT_CHANNEL_ID: u64 = 17592187092992000001;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -261,7 +262,7 @@ impl LightningService {
                 .secret_bytes()
                 .to_vec()
         });
-        let expiry = expiry_secs.unwrap_or(DEFAULT_EXPIRY_SECS);
+        let expiry = expiry_secs.unwrap_or(DEFAULT_RECEIVE_EXPIRY_SECS);
         let payment_hash = sha256::Hash::hash(&preimage);
 
         let (memo, description_hash) = match description {
@@ -343,7 +344,7 @@ impl LightningService {
         leaves: &[TreeNode],
     ) -> Result<PayLightningResult, ServiceError> {
         let ssp_identity_public_key = self.ssp_client.identity_public_key();
-        let expiry_time = SystemTime::now() + Duration::from_secs(2 * 60);
+        let expiry_time = SystemTime::now() + Duration::from_secs(DEFAULT_SEND_EXPIRY_SECS);
         let transfer_id = TransferId::generate();
 
         // Decode invoice and validate amount
@@ -637,7 +638,7 @@ impl LightningService {
             .operator_pool
             .get_coordinator()
             .client
-            .initiate_preimage_swap_v2(request_data)
+            .initiate_preimage_swap_v3(request_data)
             .await?;
         Ok(response)
     }

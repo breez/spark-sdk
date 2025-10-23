@@ -243,15 +243,15 @@ impl SparkRpcClient {
             .into_inner())
     }
 
-    pub async fn initiate_preimage_swap_v2(
+    pub async fn initiate_preimage_swap_v3(
         &self,
         req: InitiatePreimageSwapRequest,
     ) -> Result<InitiatePreimageSwapResponse> {
-        debug!("Calling initiate_preimage_swap_v2 with request: {:?}", req);
+        debug!("Calling initiate_preimage_swap_v3 with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
-            .initiate_preimage_swap_v2(req)
+            .initiate_preimage_swap_v3(req)
             .await?
             .into_inner())
     }
@@ -354,6 +354,7 @@ impl SparkRpcClient {
                 limit: page_size,
                 offset,
                 network: req.network as i32,
+                statuses: vec![],
             };
 
             let response = self.query_nodes(query_request).await?;
