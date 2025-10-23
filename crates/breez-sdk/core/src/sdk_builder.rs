@@ -8,12 +8,11 @@ use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
     fiat::FiatService,
     rest::{ReqwestRestClient as CommonRequestRestClient, RestClient},
-    sync::{BreezSyncerClient, SigningClient, SyncProcessor, SyncService, storage::SyncStorage},
+    sync::storage::SyncStorage,
 };
 use spark_wallet::{DefaultSigner, Signer};
 use tokio::sync::watch;
 use tracing::debug;
-use uuid::Uuid;
 
 use crate::{
     Credentials, KeySetType, Network,
@@ -26,7 +25,7 @@ use crate::{
     models::Config,
     payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::Storage,
-    realtime_sync::{DefaultSyncSigner, SyncedStorage},
+    realtime_sync::init_and_start_real_time_sync,
     sdk::{BreezSdk, BreezSdkParams},
 };
 
@@ -285,49 +284,23 @@ impl SdkBuilder {
         };
         let shutdown_sender = watch::channel::<()>(()).0;
 
-        let (storage, sync_processor) = if let Some(server_url) = &self.real_time_sync_server_url {
-            debug!("Real-time sync is enabled.");
+        let storage = if let Some(server_url) = &self.real_time_sync_server_url {
             let Some(sync_storage) = self.sync_storage else {
                 return Err(SdkError::Generic("Sync storage is not available".into()));
             };
-            let sync_service = Arc::new(SyncService::new(Arc::clone(&sync_storage)));
-            let synced_storage = Arc::new(SyncedStorage::new(
-                Arc::clone(&self.storage),
-                Arc::clone(&sync_service),
-            ));
 
-            synced_storage.start();
-            let storage: Arc<dyn Storage> = synced_storage.clone();
-            let sync_client = BreezSyncerClient::new(server_url, self.config.api_key.as_deref())
-                .map_err(|e| SdkError::Generic(e.to_string()))?;
-
-            let sync_coin_type = match self.config.network {
-                Network::Mainnet => "0",
-                Network::Regtest => "1",
-            };
-            let sync_signer = DefaultSyncSigner::new(
+            init_and_start_real_time_sync(
+                server_url,
+                self.config.api_key.as_deref(),
+                self.config.network,
                 Arc::clone(&signer),
-                // This derivation path ensures no other software uses the same key for our storage with the same mnemonic.
-                format!("m/448201320'/{sync_coin_type}'/0'/0/0")
-                    .parse()
-                    .map_err(|_| {
-                        SdkError::Generic("Invalid sync signer derivation path".to_string())
-                    })?,
-            );
-            let signing_sync_client = SigningClient::new(
-                Arc::new(sync_client),
-                Arc::new(sync_signer),
-                Uuid::now_v7().to_string(),
-            );
-            let sync_processor = Arc::new(SyncProcessor::new(
-                signing_sync_client,
-                sync_service.get_sync_trigger(),
-                synced_storage,
+                Arc::clone(&self.storage),
                 Arc::clone(&sync_storage),
-            ));
-            (storage, Some(sync_processor))
+                shutdown_sender.subscribe(),
+            )
+            .await?
         } else {
-            (Arc::clone(&self.storage), None)
+            Arc::clone(&self.storage)
         };
 
         // Create the SDK instance
@@ -340,9 +313,7 @@ impl SdkBuilder {
             lnurl_server_client,
             shutdown_sender,
             spark_wallet,
-            sync_processor,
-        })
-        .await?;
+        })?;
 
         debug!("Initialized and started breez sdk.");
 
