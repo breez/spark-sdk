@@ -23,7 +23,7 @@ pub use error::{DepositClaimError, SdkError};
 pub use events::{EventEmitter, EventListener, SdkEvent};
 pub use models::*;
 pub use persist::{PaymentMetadata, Storage, StorageError, UpdateDepositPayload};
-pub use sdk::{BREEZ_SYNC_SERVICE_URL, BreezSdk, default_config, init_logging, parse_input};
+pub use sdk::{BreezSdk, default_config, init_logging, parse_input};
 #[cfg(not(feature = "uniffi"))]
 pub use sdk_builder::SdkBuilder;
 pub use sdk_builder::Seed;
