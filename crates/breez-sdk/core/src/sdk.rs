@@ -229,12 +229,11 @@ pub(crate) struct BreezSdkParams {
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub shutdown_sender: watch::Sender<()>,
     pub spark_wallet: Arc<SparkWallet>,
-    pub sync_processor: Option<Arc<SyncProcessor>>,
 }
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
-    pub(crate) async fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
+    pub(crate) fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
         // In Regtest we allow running without a Breez API key to facilitate local
         // integration tests. For non-regtest networks, a valid API key is required.
         if !matches!(params.config.network, Network::Regtest) {
@@ -259,16 +258,6 @@ impl BreezSdk {
             initial_synced_watcher,
             external_input_parsers,
         };
-
-        if let Some(sync_processor) = params.sync_processor {
-            // Failing to start sync will fail connect. Because it's important the initial database updates complete.
-            sync_processor
-                .start(sdk.shutdown_sender.subscribe())
-                .await
-                .map_err(|e| {
-                    SdkError::Generic(format!("Failed to start real-time sync processor: {e}"))
-                })?;
-        }
 
         sdk.start(initial_synced_sender);
         Ok(sdk)
