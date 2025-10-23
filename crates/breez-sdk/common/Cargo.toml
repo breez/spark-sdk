@@ -79,6 +79,7 @@ getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 rand.workspace = true
+mockall = "0.12.1"
 
 [build-dependencies]
 tonic-build = { workspace = true }

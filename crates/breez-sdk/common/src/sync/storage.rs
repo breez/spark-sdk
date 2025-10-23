@@ -32,6 +32,7 @@ impl From<serde_json::Error> for StorageError {
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
+#[cfg_attr(test, mockall::automock)]
 #[macros::async_trait]
 pub trait SyncStorage: Send + Sync {
     async fn add_outgoing_change(
@@ -67,6 +68,7 @@ pub trait SyncStorage: Send + Sync {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Clone, Debug)]
 pub struct IncomingChange {
     pub new_state: Record,
     pub old_state: Option<Record>,
@@ -88,6 +90,7 @@ impl TryFrom<&IncomingChange> for crate::sync::model::IncomingChange {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Clone, Debug)]
 pub struct OutgoingChange {
     pub change: RecordChange,
     pub parent: Option<Record>,
@@ -147,6 +150,7 @@ impl TryFrom<crate::sync::model::UnversionedRecordChange> for UnversionedRecordC
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Clone, Debug)]
 pub struct RecordChange {
     pub id: RecordId,
     pub schema_version: String,
@@ -172,7 +176,7 @@ impl TryFrom<RecordChange> for crate::sync::model::RecordChange {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Record {
     pub id: RecordId,
     pub revision: u64,
