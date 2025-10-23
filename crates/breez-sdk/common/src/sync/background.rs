@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, warn};
 
@@ -12,17 +12,15 @@ use crate::sync::{
 
 const SYNC_BATCH_SIZE: u32 = 10;
 
-pub struct Callback<T> {
-    pub args: T,
-    pub responder: oneshot::Sender<anyhow::Result<()>>,
+#[macros::async_trait]
+pub trait NewRecordHandler: Send + Sync {
+    async fn on_incoming_change(&self, change: IncomingChange) -> anyhow::Result<()>;
+    async fn on_replay_outgoing_change(&self, change: OutgoingChange) -> anyhow::Result<()>;
 }
-pub type CallbackSender<T> = mpsc::Sender<Callback<T>>;
-pub type CallbackReceiver<T> = mpsc::Receiver<Callback<T>>;
 
 pub struct SyncProcessor {
     push_sync_trigger: broadcast::Receiver<RecordId>,
-    incoming_record_callback: CallbackSender<IncomingChange>,
-    outgoing_record_callback: CallbackSender<OutgoingChange>,
+    new_record_handler: Arc<dyn NewRecordHandler>,
     client: SigningClient,
     storage: Arc<dyn SyncStorage>,
 }
@@ -31,14 +29,12 @@ impl SyncProcessor {
     pub fn new(
         client: SigningClient,
         push_sync_trigger: broadcast::Receiver<RecordId>,
-        incoming_record_callback: CallbackSender<IncomingChange>,
-        outgoing_record_callback: CallbackSender<OutgoingChange>,
+        new_record_handler: Arc<dyn NewRecordHandler>,
         storage: Arc<dyn SyncStorage>,
     ) -> Self {
         SyncProcessor {
             push_sync_trigger,
-            incoming_record_callback,
-            outgoing_record_callback,
+            new_record_handler,
             client,
             storage,
         }
@@ -91,14 +87,9 @@ impl SyncProcessor {
             "Committing latest pending outgoing change for record {:?}, revision {}",
             record.change.id, record.change.revision
         );
-        let (tx, rx) = oneshot::channel();
-        self.outgoing_record_callback
-            .send(Callback {
-                args: record.try_into()?,
-                responder: tx,
-            })
+        self.new_record_handler
+            .on_replay_outgoing_change(record.try_into()?)
             .await?;
-        rx.await??;
         Ok(())
     }
 
@@ -382,14 +373,9 @@ impl SyncProcessor {
                     "Invoking relational database callback for incoming record {:?}, revision {}",
                     incoming_record.new_state.id, incoming_record.new_state.revision
                 );
-                let (tx, rx) = oneshot::channel();
-                self.incoming_record_callback
-                    .send(Callback {
-                        args: (&incoming_record).try_into()?,
-                        responder: tx,
-                    })
+                self.new_record_handler
+                    .on_incoming_change((&incoming_record).try_into()?)
                     .await?;
-                rx.await??;
 
                 debug!(
                     "Removing incoming record after processing completion {:?}, revision {}",

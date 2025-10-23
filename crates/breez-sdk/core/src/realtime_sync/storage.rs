@@ -6,7 +6,7 @@ use std::{
 };
 
 use breez_sdk_common::sync::{
-    CallbackReceiver, IncomingChange, OutgoingChange, RecordChangeRequest, RecordId, SyncService,
+    IncomingChange, NewRecordHandler, OutgoingChange, RecordChangeRequest, RecordId, SyncService,
 };
 use serde_json::Value;
 use tracing::error;
@@ -48,6 +48,17 @@ pub struct SyncedStorage {
     sync_service: Arc<SyncService>,
 }
 
+#[macros::async_trait]
+impl NewRecordHandler for SyncedStorage {
+    async fn on_incoming_change(&self, change: IncomingChange) -> anyhow::Result<()> {
+        self.handle_incoming_change(change).await
+    }
+
+    async fn on_replay_outgoing_change(&self, change: OutgoingChange) -> anyhow::Result<()> {
+        self.handle_outgoing_change(change).await
+    }
+}
+
 impl SyncedStorage {
     pub fn new(inner: Arc<dyn Storage>, sync_service: Arc<SyncService>) -> Self {
         SyncedStorage {
@@ -56,17 +67,7 @@ impl SyncedStorage {
         }
     }
 
-    pub fn listen(
-        self: &Arc<Self>,
-        incoming_callback: CallbackReceiver<IncomingChange>,
-        outgoing_callback: CallbackReceiver<OutgoingChange>,
-    ) {
-        let clone = Arc::clone(self);
-        tokio::spawn(async move {
-            clone
-                .listen_inner(incoming_callback, outgoing_callback)
-                .await;
-        });
+    pub fn start(self: &Arc<Self>) {
         let clone = Arc::clone(self);
         tokio::spawn(async move {
             if let Err(e) = clone.feed_existing_payment_metadata().await {
@@ -126,32 +127,6 @@ impl SyncedStorage {
         self.set_cached_item(INITIAL_SYNC_CACHE_KEY.to_string(), "true".to_string())
             .await?;
         Ok(())
-    }
-
-    async fn listen_inner(
-        self: Arc<Self>,
-        mut incoming_callback: CallbackReceiver<IncomingChange>,
-        mut outgoing_callback: CallbackReceiver<OutgoingChange>,
-    ) {
-        loop {
-            tokio::select! {
-                incoming = incoming_callback.recv() => {
-                    let Some(callback) = incoming else {
-                        break;
-                    };
-                    let result = self.handle_incoming_change(callback.args).await;
-                    let _ = callback.responder.send(result);
-                }
-
-                outgoing = outgoing_callback.recv() => {
-                    let Some(callback) = outgoing else {
-                        break;
-                    };
-                    let result = self.handle_outgoing_change(callback.args).await;
-                    let _ = callback.responder.send(result);
-                }
-            }
-        }
     }
 
     async fn handle_incoming_change(&self, change: IncomingChange) -> anyhow::Result<()> {
