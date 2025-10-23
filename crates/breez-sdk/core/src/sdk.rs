@@ -71,7 +71,8 @@ use crate::{
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 use crate::models::StorageImplementations;
 
-pub const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology";
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology";
 
 #[derive(Clone, Debug)]
 enum SyncType {
