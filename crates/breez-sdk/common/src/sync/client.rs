@@ -14,7 +14,7 @@ use crate::{
     },
 };
 
-#[allow(unused)]
+#[cfg_attr(test, mockall::automock)]
 #[macros::async_trait]
 pub trait SyncerClient: Send + Sync {
     async fn set_record(&self, req: SetRecordRequest) -> Result<SetRecordReply>;
