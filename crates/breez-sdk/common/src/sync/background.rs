@@ -12,6 +12,7 @@ use crate::sync::{
 
 const SYNC_BATCH_SIZE: u32 = 10;
 
+#[cfg_attr(test, mockall::automock)]
 #[macros::async_trait]
 pub trait NewRecordHandler: Send + Sync {
     async fn on_incoming_change(&self, change: IncomingChange) -> anyhow::Result<()>;
@@ -390,5 +391,843 @@ impl SyncProcessor {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::sync::background::SYNC_BATCH_SIZE;
+    use crate::sync::proto::SetRecordReply;
+    use crate::sync::storage::{self, MockSyncStorage};
+    use crate::sync::{
+        MockNewRecordHandler, MockSyncSigner, MockSyncerClient, RecordId, SigningClient,
+        SyncProcessor,
+    };
+
+    use anyhow::anyhow;
+    use mockall::predicate::eq;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+    use tokio::sync::{broadcast, watch};
+    use tokio_with_wasm::alias as tokio;
+
+    // Helper function to create test records
+    fn create_record(id_type: &str, id_data: &str, revision: u64) -> crate::sync::storage::Record {
+        crate::sync::storage::Record {
+            id: RecordId::new(id_type, id_data),
+            revision,
+            schema_version: "0.2.6".to_string(),
+            data: HashMap::new(),
+        }
+    }
+
+    // Helper function to create test outgoing changes
+    fn create_outgoing_change(
+        id_type: &str,
+        id_data: &str,
+        revision: u64,
+    ) -> crate::sync::storage::OutgoingChange {
+        let change = crate::sync::storage::RecordChange {
+            id: RecordId::new(id_type, id_data),
+            schema_version: "0.2.6".to_string(),
+            updated_fields: HashMap::new(),
+            revision,
+        };
+
+        crate::sync::storage::OutgoingChange {
+            change,
+            parent: None,
+        }
+    }
+
+    // Helper to create a SigningClient with mocks
+    fn create_signing_client(
+        client: MockSyncerClient,
+        mut signer: MockSyncSigner,
+    ) -> SigningClient {
+        // Setup default expectations for the signer methods with .returning() to handle any number of calls
+
+        // For sign_ecdsa_recoverable, which is used in sign_message for all client requests
+        // The method needs to return a byte array that will be zbase32 encoded
+        signer
+            .expect_sign_ecdsa_recoverable()
+            .returning(|_| Ok(vec![0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f])); // Return dummy signature
+
+        // For ecies_encrypt, which is used when encrypting record data in set_record
+        // This should take the input data and return an "encrypted" version
+        signer.expect_ecies_encrypt().returning(|data| {
+            // In a real implementation, this would encrypt the data
+            // For testing, we'll just prepend a marker to simulate encryption
+            let mut encrypted = vec![0xE5, 0xE5]; // "Encryption" marker
+            encrypted.extend_from_slice(&data);
+            Ok(encrypted)
+        });
+
+        // For ecies_decrypt, which is used when decrypting record data in map_record
+        // This needs to return a valid SyncData JSON that can be deserialized
+        signer.expect_ecies_decrypt().returning(|data| {
+            // In tests with empty data or if it starts with our marker
+            if data.is_empty() || (data.len() >= 2 && data[0] == 0xE5 && data[1] == 0xE5) {
+                // Return a valid SyncData JSON that can be parsed
+                let sync_data = r#"{"id":{"type":"test","data_id":"123"},"data":{}}"#;
+                Ok(sync_data.as_bytes().to_vec())
+            } else {
+                // For other data, just pass through (assume it's already valid JSON)
+                Ok(data)
+            }
+        });
+
+        SigningClient::new(
+            Arc::new(client),
+            Arc::new(signer),
+            "test-client-id".to_string(),
+        )
+    }
+
+    #[macros::async_test_all]
+    async fn test_ensure_outgoing_record_committed_no_record() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+        mock_storage
+            .expect_get_latest_outgoing_change()
+            .times(1)
+            .returning(|| Ok(None));
+
+        let (_tx, rx) = broadcast::channel(10);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
+        let client = create_signing_client(MockSyncerClient::new(), MockSyncSigner::new());
+
+        let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
+
+        // Execute
+        let result = sync_processor.ensure_outgoing_record_committed().await;
+
+        // Verify
+        assert!(result.is_ok());
+    }
+
+    #[macros::async_test_all]
+    async fn test_ensure_outgoing_record_committed_with_record() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+        let test_change = create_outgoing_change("test", "123", 1);
+
+        mock_storage
+            .expect_get_latest_outgoing_change()
+            .times(1)
+            .returning(move || Ok(Some(test_change.clone())));
+
+        let mut mock_handler = MockNewRecordHandler::new();
+        mock_handler
+            .expect_on_replay_outgoing_change()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let (_tx, rx) = broadcast::channel(10);
+        let client = create_signing_client(MockSyncerClient::new(), MockSyncSigner::new());
+
+        let sync_processor =
+            SyncProcessor::new(client, rx, Arc::new(mock_handler), Arc::new(mock_storage));
+
+        // Execute
+        let result = sync_processor.ensure_outgoing_record_committed().await;
+
+        // Verify
+        assert!(result.is_ok());
+    }
+
+    #[macros::async_test_all]
+    async fn test_ensure_outgoing_record_committed_handler_failure() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+        let test_change = create_outgoing_change("test", "123", 1);
+
+        mock_storage
+            .expect_get_latest_outgoing_change()
+            .times(1)
+            .returning(move || Ok(Some(test_change.clone())));
+
+        let mut mock_handler = MockNewRecordHandler::new();
+        mock_handler
+            .expect_on_replay_outgoing_change()
+            .times(1)
+            .returning(|_| Err(anyhow!("Handler error")));
+
+        let (_tx, rx) = broadcast::channel(10);
+        let client = create_signing_client(MockSyncerClient::new(), MockSyncSigner::new());
+
+        let sync_processor =
+            SyncProcessor::new(client, rx, Arc::new(mock_handler), Arc::new(mock_storage));
+
+        // Execute
+        let result = sync_processor.ensure_outgoing_record_committed().await;
+
+        // Verify
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Handler error");
+    }
+
+    #[macros::async_test_all]
+    async fn test_push_sync_once_no_pending_changes() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+        mock_storage
+            .expect_get_pending_outgoing_changes()
+            .times(1)
+            .with(eq(SYNC_BATCH_SIZE))
+            .returning(|_| Ok(Vec::new()));
+
+        let (_tx, rx) = broadcast::channel(10);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
+        let client = create_signing_client(MockSyncerClient::new(), MockSyncSigner::new());
+
+        let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
+
+        // Execute
+        let result = sync_processor.push_sync_once().await;
+
+        // Verify
+        assert!(result.is_ok());
+    }
+
+    #[macros::async_test_all]
+    async fn test_push_sync_once_with_pending_changes() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+        let test_change = create_outgoing_change("test", "123", 1);
+
+        // First call returns one change, second call returns empty
+        mock_storage
+            .expect_get_pending_outgoing_changes()
+            .times(2)
+            .with(eq(SYNC_BATCH_SIZE))
+            .returning(move |_| {
+                static COUNTER: AtomicU64 = AtomicU64::new(0);
+                if COUNTER.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Ok(vec![test_change.clone()])
+                } else {
+                    Ok(Vec::new())
+                }
+            });
+
+        let mut mock_client = MockSyncerClient::new();
+        mock_client.expect_set_record().times(1).returning(|_| {
+            Ok(crate::sync::proto::SetRecordReply {
+                status: crate::sync::proto::SetRecordStatus::Success as i32,
+                new_revision: 1,
+            })
+        });
+
+        mock_storage
+            .expect_complete_outgoing_sync()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let (_tx, rx) = broadcast::channel(10);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
+        let client = create_signing_client(mock_client, MockSyncSigner::new());
+
+        let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
+
+        // Execute
+        let result = sync_processor.push_sync_once().await;
+
+        // Verify
+        assert!(result.is_ok());
+    }
+
+    #[macros::async_test_all]
+    async fn test_push_sync_once_client_failure() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+        let test_change = create_outgoing_change("test", "123", 1);
+
+        mock_storage
+            .expect_get_pending_outgoing_changes()
+            .times(1)
+            .with(eq(SYNC_BATCH_SIZE))
+            .returning(move |_| Ok(vec![test_change.clone()]));
+
+        let mut mock_client = MockSyncerClient::new();
+        mock_client
+            .expect_set_record()
+            .times(1)
+            .returning(|_| Err(anyhow!("Network error")));
+
+        let (_tx, rx) = broadcast::channel(10);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
+        let client = create_signing_client(mock_client, MockSyncSigner::new());
+
+        let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
+
+        // Execute
+        let result = sync_processor.push_sync_once().await;
+
+        // Verify
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Network error");
+    }
+
+    #[macros::async_test_all]
+    async fn test_pull_sync_once_no_changes() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+        mock_storage
+            .expect_get_last_revision()
+            .times(1)
+            .returning(|| Ok(5));
+
+        let mut mock_client = MockSyncerClient::new();
+        mock_client.expect_list_changes().times(1).returning(|_| {
+            Ok(crate::sync::proto::ListChangesReply {
+                changes: Vec::new(),
+            })
+        });
+
+        mock_storage
+            .expect_get_incoming_records()
+            .times(1)
+            .with(eq(SYNC_BATCH_SIZE))
+            .returning(|_| Ok(Vec::new()));
+
+        let (_tx, rx) = broadcast::channel(10);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
+        let client = create_signing_client(mock_client, MockSyncSigner::new());
+
+        let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
+
+        // Execute
+        let result = sync_processor.pull_sync_once().await;
+
+        // Verify
+        assert!(result.is_ok());
+    }
+
+    #[macros::async_test_all]
+    async fn test_pull_sync_once_with_changes() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+        mock_storage
+            .expect_get_last_revision()
+            .times(1)
+            .returning(|| Ok(5));
+
+        // Create a dummy proto record
+        let proto_record = crate::sync::proto::Record {
+            id: "test:123".to_string(),
+            revision: 6,
+            schema_version: "0.2.6".to_string(),
+            data: Vec::new(),
+        };
+
+        let mut mock_client = MockSyncerClient::new();
+        mock_client
+            .expect_list_changes()
+            .times(1)
+            .returning(move |_| {
+                Ok(crate::sync::proto::ListChangesReply {
+                    changes: vec![proto_record.clone()],
+                })
+            });
+
+        // Simulate successful decryption in the signer - explicitly setting expectation
+        let mut mock_signer = MockSyncSigner::new();
+        mock_signer
+            .expect_sign_ecdsa_recoverable()
+            .returning(|_| Ok(vec![0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f]));
+
+        mock_signer
+            .expect_ecies_decrypt()
+            .times(1) // Exactly one call expected for this test
+            .returning(|_| {
+                // Create a valid JSON for SyncData
+                let sync_data = r#"{"id":{"type":"test","data_id":"123"},"data":{}}"#;
+                Ok(sync_data.as_bytes().to_vec())
+            });
+
+        mock_storage
+            .expect_insert_incoming_records()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        mock_storage
+            .expect_get_incoming_records()
+            .times(1)
+            .with(eq(SYNC_BATCH_SIZE))
+            .returning(|_| Ok(Vec::new()));
+
+        let (_tx, rx) = broadcast::channel(10);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
+        let client = create_signing_client(mock_client, mock_signer);
+
+        let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
+
+        // Execute
+        let result = sync_processor.pull_sync_once().await;
+
+        // Verify
+        assert!(result.is_ok());
+    }
+
+    #[macros::async_test_all]
+    async fn test_pull_sync_once_local_with_incoming_changes() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+
+        // Create test records
+        let incoming_record = crate::sync::storage::IncomingChange {
+            new_state: create_record("test", "123", 6),
+            old_state: Some(create_record("test", "123", 5)),
+        };
+
+        // First call returns record, second returns empty
+        mock_storage
+            .expect_get_incoming_records()
+            .times(2)
+            .with(eq(SYNC_BATCH_SIZE))
+            .returning(move |_| {
+                static COUNTER: AtomicU64 = AtomicU64::new(0);
+                if COUNTER.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Ok(vec![incoming_record.clone()])
+                } else {
+                    Ok(Vec::new())
+                }
+            });
+
+        mock_storage
+            .expect_rebase_pending_outgoing_records()
+            .times(1)
+            .with(eq(6))
+            .returning(|_| Ok(()));
+
+        mock_storage
+            .expect_update_record_from_incoming()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let mut mock_handler = MockNewRecordHandler::new();
+        mock_handler
+            .expect_on_incoming_change()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        mock_storage
+            .expect_delete_incoming_record()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let (_tx, rx) = broadcast::channel(10);
+        let client = create_signing_client(MockSyncerClient::new(), MockSyncSigner::new());
+
+        let sync_processor =
+            SyncProcessor::new(client, rx, Arc::new(mock_handler), Arc::new(mock_storage));
+
+        // Execute
+        let result = sync_processor.pull_sync_once_local().await;
+
+        // Verify
+        assert!(result.is_ok());
+    }
+
+    #[macros::async_test_all]
+    async fn test_pull_sync_once_local_handler_error() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+
+        // Create test records
+        let incoming_record = crate::sync::storage::IncomingChange {
+            new_state: create_record("test", "123", 6),
+            old_state: Some(create_record("test", "123", 5)),
+        };
+
+        mock_storage
+            .expect_get_incoming_records()
+            .times(1)
+            .with(eq(SYNC_BATCH_SIZE))
+            .returning(move |_| Ok(vec![incoming_record.clone()]));
+
+        mock_storage
+            .expect_rebase_pending_outgoing_records()
+            .times(1)
+            .with(eq(6))
+            .returning(|_| Ok(()));
+
+        mock_storage
+            .expect_update_record_from_incoming()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let mut mock_handler = MockNewRecordHandler::new();
+        mock_handler
+            .expect_on_incoming_change()
+            .times(1)
+            .returning(|_| Err(anyhow!("Handler error")));
+
+        // No delete call because the handler failed
+
+        let (_tx, rx) = broadcast::channel(10);
+        let client = create_signing_client(MockSyncerClient::new(), MockSyncSigner::new());
+
+        let sync_processor =
+            SyncProcessor::new(client, rx, Arc::new(mock_handler), Arc::new(mock_storage));
+
+        // Execute
+        let result = sync_processor.pull_sync_once_local().await;
+
+        // Verify
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Handler error");
+    }
+
+    #[macros::async_test_all]
+    async fn test_start_includes_all_initialization_steps() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+
+        // For ensure_outgoing_record_committed
+        mock_storage
+            .expect_get_latest_outgoing_change()
+            .times(1)
+            .returning(|| Ok(None));
+
+        // For pull_sync_once_local
+        mock_storage
+            .expect_get_incoming_records()
+            .times(1)
+            .with(eq(SYNC_BATCH_SIZE))
+            .returning(|_| Ok(Vec::new()));
+
+        let (_tx, rx) = broadcast::channel::<RecordId>(10);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
+        let client = create_signing_client(MockSyncerClient::new(), MockSyncSigner::new());
+
+        let sync_processor = Arc::new(SyncProcessor::new(
+            client,
+            rx,
+            mock_handler,
+            Arc::new(mock_storage),
+        ));
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(());
+
+        // Execute
+        let result = sync_processor.start(shutdown_rx).await;
+
+        // Verify
+        assert!(result.is_ok());
+
+        // Allow background tasks to run briefly
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Send shutdown signal to clean up
+        let _ = shutdown_tx.send(());
+    }
+
+    #[macros::async_test_all]
+    async fn test_sync_loop_handles_push_trigger() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+
+        // For push_sync_once
+        mock_storage
+            .expect_get_pending_outgoing_changes()
+            .times(1)
+            .returning(|_| {
+                Ok(vec![storage::OutgoingChange {
+                    parent: None,
+                    change: storage::RecordChange {
+                        id: RecordId {
+                            r#type: "test".to_string(),
+                            data_id: "123".to_string(),
+                        },
+                        schema_version: "1.0.0".to_string(),
+                        updated_fields: [("field".to_string(), "\"value\"".to_string())].into(),
+                        revision: 1,
+                    },
+                }])
+            });
+
+        let (tx, rx) = broadcast::channel::<RecordId>(10);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
+        let mut syncer_client = MockSyncerClient::new();
+        syncer_client.expect_set_record().times(1).returning(|_| {
+            Ok(SetRecordReply {
+                ..Default::default()
+            })
+        });
+        let client = create_signing_client(syncer_client, MockSyncSigner::new());
+
+        let sync_processor = Arc::new(SyncProcessor::new(
+            client,
+            rx,
+            mock_handler,
+            Arc::new(mock_storage),
+        ));
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(());
+        let (_pull_trigger_sender, pull_trigger) = watch::channel(());
+
+        // Start the sync loop in a separate task
+        let sync_processor_clone = sync_processor.clone();
+        let task_handle = tokio::spawn(async move {
+            sync_processor_clone
+                .sync_loop(shutdown_rx, pull_trigger)
+                .await;
+        });
+
+        // Wait a bit to ensure the loop is listening to changes
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Send a push trigger
+        tx.send(RecordId::new("test", "123")).unwrap();
+
+        // Allow time for processing
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Shutdown and cleanup
+        let _ = shutdown_tx.send(());
+        let _ = tokio::time::timeout(Duration::from_millis(500), task_handle).await;
+    }
+
+    #[macros::async_test_all]
+    async fn test_sync_loop_handles_pull_trigger() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+
+        // For pull_sync_once
+        mock_storage
+            .expect_get_last_revision()
+            .times(1)
+            .returning(|| Ok(5));
+
+        let mut mock_client = MockSyncerClient::new();
+        mock_client.expect_list_changes().times(1).returning(|_| {
+            Ok(crate::sync::proto::ListChangesReply {
+                changes: Vec::new(),
+            })
+        });
+
+        mock_storage
+            .expect_get_incoming_records()
+            .times(1)
+            .returning(|_| Ok(Vec::new()));
+
+        let (_tx, rx) = broadcast::channel::<RecordId>(10);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
+        let client = create_signing_client(mock_client, MockSyncSigner::new());
+
+        let sync_processor = Arc::new(SyncProcessor::new(
+            client,
+            rx,
+            mock_handler,
+            Arc::new(mock_storage),
+        ));
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(());
+        let (pull_tx, pull_trigger) = watch::channel(());
+
+        // Start the sync loop in a separate task
+        let sync_processor_clone = sync_processor.clone();
+        let task_handle = tokio::spawn(async move {
+            sync_processor_clone
+                .sync_loop(shutdown_rx, pull_trigger)
+                .await;
+        });
+
+        // Send a pull trigger
+        let _ = pull_tx.send(());
+
+        // Allow time for processing
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Shutdown and cleanup
+        let _ = shutdown_tx.send(());
+        let _ = tokio::time::timeout(Duration::from_millis(500), task_handle).await;
+    }
+
+    #[macros::async_test_all]
+    async fn test_sync_signer_encryption_failure() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+        let test_change = create_outgoing_change("test", "123", 1);
+
+        mock_storage
+            .expect_get_pending_outgoing_changes()
+            .times(1)
+            .returning(move |_| Ok(vec![test_change.clone()]));
+
+        let mock_client = MockSyncerClient::new();
+
+        // Create mock signer that fails on encryption
+        let mut mock_signer = MockSyncSigner::new();
+        mock_signer
+            .expect_ecies_encrypt()
+            .times(1)
+            .returning(|_| Err(anyhow!("Encryption failure")));
+
+        mock_signer
+            .expect_sign_ecdsa_recoverable()
+            .returning(|_| Ok(vec![0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f]));
+
+        let client = create_signing_client(mock_client, mock_signer);
+
+        let (_tx, rx) = broadcast::channel(10);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
+
+        let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
+
+        // Execute
+        let result = sync_processor.push_sync_once().await;
+
+        // Verify
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Encryption failure");
+    }
+
+    #[macros::async_test_all]
+    async fn test_sync_signer_decryption_failure() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+        mock_storage
+            .expect_get_last_revision()
+            .times(1)
+            .returning(|| Ok(5));
+
+        // Create a dummy proto record
+        let proto_record = crate::sync::proto::Record {
+            id: "test:123".to_string(),
+            revision: 6,
+            schema_version: "0.2.6".to_string(),
+            data: vec![1, 2, 3, 4], // Some non-empty data
+        };
+
+        let mut mock_client = MockSyncerClient::new();
+        mock_client
+            .expect_list_changes()
+            .times(1)
+            .returning(move |_| {
+                Ok(crate::sync::proto::ListChangesReply {
+                    changes: vec![proto_record.clone()],
+                })
+            });
+
+        // Simulate decryption failure in the signer
+        let mut mock_signer = MockSyncSigner::new();
+        mock_signer
+            .expect_sign_ecdsa_recoverable()
+            .returning(|_| Ok(vec![0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f]));
+
+        mock_signer
+            .expect_ecies_decrypt()
+            .times(1)
+            .returning(|_| Err(anyhow!("Decryption failure")));
+
+        let client = create_signing_client(mock_client, mock_signer);
+
+        let (_tx, rx) = broadcast::channel(10);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
+
+        let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
+
+        // Execute
+        let result = sync_processor.pull_sync_once().await;
+
+        // Verify
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Decryption failure");
+    }
+
+    #[macros::async_test_all]
+    async fn test_sync_signer_invalid_json_after_decryption() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+        mock_storage
+            .expect_get_last_revision()
+            .times(1)
+            .returning(|| Ok(5));
+
+        // Create a dummy proto record
+        let proto_record = crate::sync::proto::Record {
+            id: "test:123".to_string(),
+            revision: 6,
+            schema_version: "0.2.6".to_string(),
+            data: vec![1, 2, 3, 4], // Some non-empty data
+        };
+
+        let mut mock_client = MockSyncerClient::new();
+        mock_client
+            .expect_list_changes()
+            .times(1)
+            .returning(move |_| {
+                Ok(crate::sync::proto::ListChangesReply {
+                    changes: vec![proto_record.clone()],
+                })
+            });
+
+        // Simulate successful decryption but with invalid JSON
+        let mut mock_signer = MockSyncSigner::new();
+        mock_signer
+            .expect_sign_ecdsa_recoverable()
+            .returning(|_| Ok(vec![0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f]));
+
+        mock_signer.expect_ecies_decrypt().times(1).returning(|_| {
+            // Return invalid JSON that will fail to parse as SyncData
+            let invalid_json = r#"{"not_valid_sync_data": true}"#;
+            Ok(invalid_json.as_bytes().to_vec())
+        });
+
+        let client = create_signing_client(mock_client, mock_signer);
+
+        let (_tx, rx) = broadcast::channel(10);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
+
+        let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
+
+        // Execute
+        let result = sync_processor.pull_sync_once().await;
+
+        // Verify
+        assert!(result.is_err());
+        // The error should be related to JSON deserialization
+        assert!(result.unwrap_err().to_string().contains("missing field"));
+    }
+
+    #[macros::async_test_all]
+    async fn test_signing_failure() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+        let test_change = create_outgoing_change("test", "123", 1);
+
+        mock_storage
+            .expect_get_pending_outgoing_changes()
+            .times(1)
+            .returning(move |_| Ok(vec![test_change.clone()]));
+
+        let mock_client = MockSyncerClient::new();
+
+        // Create mock signer that fails on signing
+        let mut mock_signer = MockSyncSigner::new();
+        mock_signer.expect_ecies_encrypt().times(1).returning(Ok);
+
+        mock_signer
+            .expect_sign_ecdsa_recoverable()
+            .times(1)
+            .returning(|_| Err(anyhow!("Signing failure")));
+
+        let client = create_signing_client(mock_client, mock_signer);
+
+        let (_tx, rx) = broadcast::channel(10);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
+
+        let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
+
+        // Execute
+        let result = sync_processor.push_sync_once().await;
+
+        // Verify
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Signing failure");
     }
 }
