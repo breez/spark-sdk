@@ -59,6 +59,9 @@ mod serde_option_u128_as_string {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SdkEvent)]
 pub enum SdkEvent {
     Synced,
+    DataSynced {
+        did_pull_new_records: bool,
+    },
     ClaimDepositsFailed {
         unclaimed_deposits: Vec<DepositInfo>,
     },

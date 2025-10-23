@@ -229,6 +229,7 @@ pub(crate) struct BreezSdkParams {
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub shutdown_sender: watch::Sender<()>,
     pub spark_wallet: Arc<SparkWallet>,
+    pub event_emitter: Arc<EventEmitter>,
 }
 
 impl BreezSdk {
@@ -252,7 +253,7 @@ impl BreezSdk {
             fiat_service: params.fiat_service,
             lnurl_client: params.lnurl_client,
             lnurl_server_client: params.lnurl_server_client,
-            event_emitter: Arc::new(EventEmitter::new()),
+            event_emitter: params.event_emitter,
             shutdown_sender: params.shutdown_sender,
             sync_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,

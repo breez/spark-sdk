@@ -15,7 +15,7 @@ use tokio::sync::watch;
 use tracing::debug;
 
 use crate::{
-    Credentials, KeySetType, Network,
+    Credentials, EventEmitter, KeySetType, Network,
     chain::{
         BitcoinChainService,
         rest_client::{BasicAuth, RestClientChainService},
@@ -25,7 +25,7 @@ use crate::{
     models::Config,
     payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::Storage,
-    realtime_sync::init_and_start_real_time_sync,
+    realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams},
 };
 
@@ -284,20 +284,22 @@ impl SdkBuilder {
         };
         let shutdown_sender = watch::channel::<()>(()).0;
 
+        let event_emitter = Arc::new(EventEmitter::new());
         let storage = if let Some(server_url) = &self.real_time_sync_server_url {
             let Some(sync_storage) = self.sync_storage else {
                 return Err(SdkError::Generic("Sync storage is not available".into()));
             };
 
-            init_and_start_real_time_sync(
-                server_url,
-                self.config.api_key.as_deref(),
-                self.config.network,
-                Arc::clone(&signer),
-                Arc::clone(&self.storage),
-                Arc::clone(&sync_storage),
-                shutdown_sender.subscribe(),
-            )
+            init_and_start_real_time_sync(RealTimeSyncParams {
+                server_url: server_url.clone(),
+                api_key: self.config.api_key.clone(),
+                network: self.config.network,
+                signer: Arc::clone(&signer),
+                storage: Arc::clone(&self.storage),
+                sync_storage: Arc::clone(&sync_storage),
+                shutdown_receiver: shutdown_sender.subscribe(),
+                event_emitter: Arc::clone(&event_emitter),
+            })
             .await?
         } else {
             Arc::clone(&self.storage)
@@ -313,6 +315,7 @@ impl SdkBuilder {
             lnurl_server_client,
             shutdown_sender,
             spark_wallet,
+            event_emitter,
         })?;
 
         debug!("Initialized and started breez sdk.");
