@@ -195,7 +195,7 @@ pub struct SparkAddressDetails {
     pub source: PaymentRequestSource,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SparkInvoiceDetails {
     /// The raw invoice string
@@ -212,10 +212,9 @@ pub struct SparkInvoiceDetails {
     pub description: Option<String>,
     /// If set, the invoice may only be fulfilled by a payer with this public key.
     pub sender_public_key: Option<String>,
-    pub source: PaymentRequestSource,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SparkInvoicePaymentType {
     Sats,

@@ -61,6 +61,7 @@ pub struct WalletTransfer {
     pub transfer_type: TransferType,
     pub direction: TransferDirection,
     pub user_request: Option<SspUserRequest>,
+    pub spark_invoice: Option<String>,
 }
 
 impl WalletTransfer {
@@ -93,6 +94,7 @@ impl WalletTransfer {
             transfer_type: value.transfer_type,
             direction,
             user_request: ssp_transfer.and_then(|t| t.user_request),
+            spark_invoice: value.spark_invoice,
         }
     }
 }

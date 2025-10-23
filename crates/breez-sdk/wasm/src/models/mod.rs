@@ -28,6 +28,33 @@ mod serde_u128_as_string {
     }
 }
 
+mod serde_option_u128_as_string {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &Option<u128>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if let Some(value) = value {
+            serializer.serialize_str(&value.to_string())
+        } else {
+            serializer.serialize_none()
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<u128>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = <Option<String>>::deserialize(deserializer)?;
+        if let Some(s) = s {
+            s.parse().map_err(serde::de::Error::custom).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SdkEvent)]
 pub enum SdkEvent {
@@ -167,12 +194,12 @@ pub struct SparkInvoiceDetails {
     pub invoice: String,
     pub identity_public_key: String,
     pub network: BitcoinNetwork,
+    #[serde(with = "serde_option_u128_as_string")]
     pub amount: Option<u128>,
     pub payment_type: SparkInvoicePaymentType,
     pub expiry_time: Option<u64>,
     pub description: Option<String>,
     pub sender_public_key: Option<String>,
-    pub source: PaymentRequestSource,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_common::input::SparkInvoicePaymentType)]
@@ -382,10 +409,13 @@ pub struct Payment {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentDetails)]
 pub enum PaymentDetails {
-    Spark,
+    Spark {
+        invoice_details: Option<SparkInvoiceDetails>,
+    },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
+        invoice_details: Option<SparkInvoiceDetails>,
     },
     Lightning {
         description: Option<String>,

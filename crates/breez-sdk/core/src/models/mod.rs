@@ -203,10 +203,15 @@ impl crate::UniffiCustomTypeConverter for u128 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum PaymentDetails {
-    Spark,
+    Spark {
+        /// The invoice details if the payment fulfilled a spark invoice
+        invoice_details: Option<SparkInvoiceDetails>,
+    },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
+        /// The invoice details if the payment fulfilled a spark invoice
+        invoice_details: Option<SparkInvoiceDetails>,
     },
     Lightning {
         /// Represents the invoice description

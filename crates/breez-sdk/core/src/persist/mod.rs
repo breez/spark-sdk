@@ -364,6 +364,10 @@ pub(crate) struct StaticDepositAddress {
 
 #[cfg(feature = "test-utils")]
 pub mod tests {
+    use breez_sdk_common::{
+        input::{SparkInvoiceDetails, SparkInvoicePaymentType},
+        network::BitcoinNetwork,
+    };
     use chrono::Utc;
 
     use crate::{
@@ -384,7 +388,18 @@ pub mod tests {
             fees: 1000,
             timestamp: 5000,
             method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark),
+            details: Some(PaymentDetails::Spark {
+                invoice_details: Some(SparkInvoiceDetails {
+                    invoice: "invoice_string".to_string(),
+                    identity_public_key: "identity_public_key".to_string(),
+                    network: BitcoinNetwork::Regtest,
+                    amount: Some(100_000),
+                    payment_type: SparkInvoicePaymentType::Sats,
+                    expiry_time: Some(1000),
+                    description: Some("description".to_string()),
+                    sender_public_key: Some("sender_public_key".to_string()),
+                }),
+            }),
         };
 
         // Test 2: Token payment
@@ -409,6 +424,18 @@ pub mod tests {
             details: Some(PaymentDetails::Token {
                 metadata: token_metadata.clone(),
                 tx_hash: "tx_hash".to_string(),
+                invoice_details: Some(SparkInvoiceDetails {
+                    invoice: "invoice_string_2".to_string(),
+                    identity_public_key: "identity_public_key_2".to_string(),
+                    network: BitcoinNetwork::Regtest,
+                    amount: Some(200_000),
+                    payment_type: SparkInvoicePaymentType::Tokens {
+                        token_identifier: Some("token123".to_string()),
+                    },
+                    expiry_time: Some(1000),
+                    description: Some("description_2".to_string()),
+                    sender_public_key: Some("sender_public_key_2".to_string()),
+                }),
             }),
         };
 
@@ -553,31 +580,38 @@ pub mod tests {
 
             // Test payment details persistence
             match (&retrieved_payment.details, &expected_payment.details) {
-                (Some(PaymentDetails::Spark), Some(PaymentDetails::Spark)) | (None, None) => {}
+                (None, None) => {}
                 (
-                    Some(PaymentDetails::Token {
-                        metadata: retrieved_metadata,
-                        tx_hash: retrieved_tx_hash,
+                    Some(PaymentDetails::Spark {
+                        invoice_details: r_invoice,
                     }),
-                    Some(PaymentDetails::Token {
-                        metadata: expected_metadata,
-                        tx_hash: expected_tx_hash,
+                    Some(PaymentDetails::Spark {
+                        invoice_details: e_invoice,
                     }),
                 ) => {
-                    assert_eq!(retrieved_metadata.identifier, expected_metadata.identifier);
-                    assert_eq!(
-                        retrieved_metadata.issuer_public_key,
-                        expected_metadata.issuer_public_key
-                    );
-                    assert_eq!(retrieved_metadata.name, expected_metadata.name);
-                    assert_eq!(retrieved_metadata.ticker, expected_metadata.ticker);
-                    assert_eq!(retrieved_metadata.decimals, expected_metadata.decimals);
-                    assert_eq!(retrieved_metadata.max_supply, expected_metadata.max_supply);
-                    assert_eq!(
-                        retrieved_metadata.is_freezable,
-                        expected_metadata.is_freezable
-                    );
-                    assert_eq!(retrieved_tx_hash, expected_tx_hash);
+                    assert_eq!(r_invoice, e_invoice);
+                }
+                (
+                    Some(PaymentDetails::Token {
+                        metadata: r_metadata,
+                        tx_hash: r_tx_hash,
+                        invoice_details: r_invoice,
+                    }),
+                    Some(PaymentDetails::Token {
+                        metadata: e_metadata,
+                        tx_hash: e_tx_hash,
+                        invoice_details: e_invoice,
+                    }),
+                ) => {
+                    assert_eq!(r_metadata.identifier, e_metadata.identifier);
+                    assert_eq!(r_metadata.issuer_public_key, e_metadata.issuer_public_key);
+                    assert_eq!(r_metadata.name, e_metadata.name);
+                    assert_eq!(r_metadata.ticker, e_metadata.ticker);
+                    assert_eq!(r_metadata.decimals, e_metadata.decimals);
+                    assert_eq!(r_metadata.max_supply, e_metadata.max_supply);
+                    assert_eq!(r_metadata.is_freezable, e_metadata.is_freezable);
+                    assert_eq!(r_tx_hash, e_tx_hash);
+                    assert_eq!(r_invoice, e_invoice);
                 }
                 (
                     Some(PaymentDetails::Lightning {
@@ -867,7 +901,9 @@ pub mod tests {
             fees: 100,
             timestamp: 1000,
             method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark),
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+            }),
         };
 
         let pending_payment = Payment {
@@ -878,7 +914,9 @@ pub mod tests {
             fees: 200,
             timestamp: 2000,
             method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark),
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+            }),
         };
 
         let failed_payment = Payment {
@@ -889,7 +927,9 @@ pub mod tests {
             fees: 300,
             timestamp: 3000,
             method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark),
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+            }),
         };
 
         storage.insert_payment(completed_payment).await.unwrap();
@@ -942,7 +982,9 @@ pub mod tests {
             fees: 100,
             timestamp: 1000,
             method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark),
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+            }),
         };
 
         let lightning_payment = Payment {
@@ -982,6 +1024,7 @@ pub mod tests {
                     is_freezable: false,
                 },
                 tx_hash: "tx_hash_1".to_string(),
+                invoice_details: None,
             }),
         };
 
@@ -1076,7 +1119,9 @@ pub mod tests {
             fees: 100,
             timestamp: 1000,
             method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark),
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+            }),
         };
 
         let payment2 = Payment {
@@ -1087,7 +1132,9 @@ pub mod tests {
             fees: 200,
             timestamp: 2000,
             method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark),
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+            }),
         };
 
         let payment3 = Payment {
@@ -1098,7 +1145,9 @@ pub mod tests {
             fees: 300,
             timestamp: 3000,
             method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark),
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+            }),
         };
 
         storage.insert_payment(payment1).await.unwrap();
@@ -1151,7 +1200,9 @@ pub mod tests {
             fees: 100,
             timestamp: 1000,
             method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark),
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+            }),
         };
 
         let payment2 = Payment {
@@ -1242,7 +1293,9 @@ pub mod tests {
             fees: 100,
             timestamp: 1000,
             method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark),
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+            }),
         };
 
         let payment2 = Payment {
@@ -1253,7 +1306,9 @@ pub mod tests {
             fees: 200,
             timestamp: 2000,
             method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark),
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+            }),
         };
 
         let payment3 = Payment {
@@ -1264,7 +1319,9 @@ pub mod tests {
             fees: 300,
             timestamp: 3000,
             method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark),
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+            }),
         };
 
         storage.insert_payment(payment1).await.unwrap();

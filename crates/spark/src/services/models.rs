@@ -229,6 +229,7 @@ pub struct Transfer {
     pub created_time: Option<u64>,
     pub updated_time: Option<u64>,
     pub transfer_type: TransferType,
+    pub spark_invoice: Option<String>,
 }
 
 impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
@@ -264,6 +265,12 @@ impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
 
         let updated_time = transfer.updated_time.map(|ts| ts.seconds as u64);
 
+        let spark_invoice = if transfer.spark_invoice.is_empty() {
+            None
+        } else {
+            Some(transfer.spark_invoice)
+        };
+
         Ok(Transfer {
             id,
             sender_identity_public_key,
@@ -275,6 +282,7 @@ impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
             created_time,
             updated_time,
             transfer_type,
+            spark_invoice,
         })
     }
 }
@@ -798,6 +806,7 @@ pub struct TokenTransaction {
     pub outputs: Vec<TokenOutput>,
     pub status: TokenTransactionStatus,
     pub created_timestamp: SystemTime,
+    pub fulfilled_invoices: Vec<String>,
 }
 
 impl TryFrom<(operator_rpc::spark_token::TokenTransaction, Network)> for TokenTransaction {
@@ -833,12 +842,19 @@ impl TryFrom<(operator_rpc::spark_token::TokenTransaction, Network)> for TokenTr
                 "Missing client created timestamp. Could this be a V1 transaction?".to_string(),
             ))?;
 
+        let invoice_attachments = token_transaction
+            .invoice_attachments
+            .into_iter()
+            .map(|attachment| attachment.spark_invoice)
+            .collect();
+
         Ok(TokenTransaction {
             hash,
             inputs,
             outputs,
             status,
             created_timestamp,
+            fulfilled_invoices: invoice_attachments,
         })
     }
 }
@@ -891,12 +907,19 @@ impl
                 "Missing client created timestamp. Could this be a V1 transaction?".to_string(),
             ))?;
 
+        let invoice_attachments = token_transaction
+            .invoice_attachments
+            .into_iter()
+            .map(|attachment| attachment.spark_invoice)
+            .collect();
+
         Ok(TokenTransaction {
             hash,
             inputs,
             outputs,
             status,
             created_timestamp,
+            fulfilled_invoices: invoice_attachments,
         })
     }
 }

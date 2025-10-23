@@ -187,6 +187,12 @@ impl SqliteStorage {
              FROM payments;",
             "DROP TABLE payments;",
             "ALTER TABLE payments_new RENAME TO payments;",
+            "CREATE TABLE payment_details_spark (
+              payment_id TEXT PRIMARY KEY,
+              invoice_details TEXT,
+              FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+            );
+            ALTER TABLE payment_details_token ADD COLUMN invoice_details TEXT;",
         ]
     }
 }
@@ -308,9 +314,12 @@ impl Storage for SqliteStorage {
             ,       pm.lnurl_pay_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
+            ,       t.invoice_details AS token_invoice_details
+            ,       s.invoice_details AS spark_invoice_details
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
+             LEFT JOIN payment_details_spark s ON p.id = s.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              {}
              ORDER BY p.timestamp {} 
@@ -359,16 +368,23 @@ impl Storage for SqliteStorage {
                     params![tx_id, payment.id],
                 )?;
             }
-            Some(PaymentDetails::Spark) => {
+            Some(PaymentDetails::Spark { invoice_details }) => {
                 tx.execute(
                     "UPDATE payments SET spark = 1 WHERE id = ?",
                     params![payment.id],
                 )?;
+                tx.execute("INSERT OR REPLACE INTO payment_details_spark (payment_id, invoice_details) VALUES (?, ?)",
+                    params![payment.id, invoice_details.map(|d| serde_json::to_string(&d)).transpose()?],
+                )?;
             }
-            Some(PaymentDetails::Token { metadata, tx_hash }) => {
+            Some(PaymentDetails::Token {
+                metadata,
+                tx_hash,
+                invoice_details,
+            }) => {
                 tx.execute(
-                    "INSERT OR REPLACE INTO payment_details_token (payment_id, metadata, tx_hash) VALUES (?, ?, ?)",
-                    params![payment.id, serde_json::to_string(&metadata)?, tx_hash],
+                    "INSERT OR REPLACE INTO payment_details_token (payment_id, metadata, tx_hash, invoice_details) VALUES (?, ?, ?, ?)",
+                    params![payment.id, serde_json::to_string(&metadata)?, tx_hash, invoice_details.map(|d| serde_json::to_string(&d)).transpose()?],
                 )?;
             }
             Some(PaymentDetails::Lightning {
@@ -472,9 +488,12 @@ impl Storage for SqliteStorage {
             ,       pm.lnurl_pay_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
+            ,       t.invoice_details AS token_invoice_details
+            ,       s.invoice_details AS spark_invoice_details
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
+             LEFT JOIN payment_details_spark s ON p.id = s.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              WHERE p.id = ?",
         )?;
@@ -508,9 +527,12 @@ impl Storage for SqliteStorage {
             ,       pm.lnurl_pay_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
+            ,       t.invoice_details AS token_invoice_details
+            ,       s.invoice_details AS spark_invoice_details
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
+             LEFT JOIN payment_details_spark s ON p.id = s.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              WHERE l.invoice = ?",
         )?;
@@ -627,13 +649,46 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
         (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
-        (_, _, _, Some(_), _) => Some(PaymentDetails::Spark),
-        (_, _, _, _, Some(metadata)) => Some(PaymentDetails::Token {
-            metadata: serde_json::from_str(&metadata).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(16, rusqlite::types::Type::Text, e.into())
-            })?,
-            tx_hash: row.get(17)?,
-        }),
+        (_, _, _, Some(_), _) => {
+            let invoice_details_str: Option<String> = row.get(19)?;
+            let invoice_details = invoice_details_str
+                .map(|s| {
+                    serde_json::from_str(&s).map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            16,
+                            rusqlite::types::Type::Text,
+                            e.into(),
+                        )
+                    })
+                })
+                .transpose()?;
+            Some(PaymentDetails::Spark { invoice_details })
+        }
+        (_, _, _, _, Some(metadata)) => {
+            let invoice_details_str: Option<String> = row.get(18)?;
+            let invoice_details = invoice_details_str
+                .map(|s| {
+                    serde_json::from_str(&s).map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            16,
+                            rusqlite::types::Type::Text,
+                            e.into(),
+                        )
+                    })
+                })
+                .transpose()?;
+            Some(PaymentDetails::Token {
+                metadata: serde_json::from_str(&metadata).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        16,
+                        rusqlite::types::Type::Text,
+                        e.into(),
+                    )
+                })?,
+                tx_hash: row.get(17)?,
+                invoice_details,
+            })
+        }
         _ => None,
     };
     Ok(Payment {

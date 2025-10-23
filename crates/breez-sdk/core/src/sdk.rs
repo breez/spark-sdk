@@ -1615,9 +1615,20 @@ fn is_payment_match(payment: &Payment, request: &WaitForPaymentRequest) -> bool 
                     PaymentDetails::Lightning { invoice, .. } => {
                         invoice.to_lowercase() == payment_request.to_lowercase()
                     }
-                    PaymentDetails::Spark
-                    | PaymentDetails::Token { .. }
-                    | PaymentDetails::Withdraw { tx_id: _ }
+                    PaymentDetails::Spark {
+                        invoice_details: invoice,
+                    }
+                    | PaymentDetails::Token {
+                        invoice_details: invoice,
+                        ..
+                    } => {
+                        if let Some(invoice) = invoice {
+                            invoice.invoice.to_lowercase() == payment_request.to_lowercase()
+                        } else {
+                            false
+                        }
+                    }
+                    PaymentDetails::Withdraw { tx_id: _ }
                     | PaymentDetails::Deposit { tx_id: _ } => false,
                 }
             } else {
