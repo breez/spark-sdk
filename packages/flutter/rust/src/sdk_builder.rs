@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use breez_sdk_spark::{Config, Credentials, SdkError};
-pub use breez_sdk_spark::{Seed, Storage};
+pub use breez_sdk_spark::{Seed, Storage, sync_storage::SyncStorage};
 use flutter_rust_bridge::frb;
 
 use crate::{models::KeySetType, sdk::BreezSdk};
@@ -45,9 +45,9 @@ impl SdkBuilder {
     }
 
     #[frb(sync)]
-    pub fn with_real_time_sync(self, server_url: String) -> Self {
+    pub fn with_real_time_sync(self, server_url: String, storage: Arc<dyn SyncStorage>) -> Self {
         let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
-            .with_real_time_sync(server_url);
+            .with_real_time_sync(server_url, storage);
         Self {
             inner: Arc::new(builder),
         }
