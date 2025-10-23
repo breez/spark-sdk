@@ -486,6 +486,10 @@ impl TransferId {
     pub fn to_bytes(&self) -> [u8; 16] {
         self.0.to_bytes_le()
     }
+
+    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+        TransferId(Uuid::from_bytes(bytes))
+    }
 }
 
 impl std::fmt::Display for TransferId {
