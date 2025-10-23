@@ -666,8 +666,8 @@ class SqliteStorage {
         stmt.run(
           record.id.type,
           record.id.data_id,
-          record.schema_version,
-          JSON.stringify(record.updated_fields),
+          record.schemaVersion,
+          JSON.stringify(record.updatedFields),
           revision
         );
 
@@ -756,8 +756,8 @@ class SqliteStorage {
             type: row.record_type,
             data_id: row.data_id
           },
-          schema_version: row.schema_version,
-          updated_fields: JSON.parse(row.updated_fields),
+          schemaVersion: row.schema_version,
+          updatedFields: JSON.parse(row.updated_fields),
           revision: row.revision
         };
         
@@ -1007,8 +1007,8 @@ class SqliteStorage {
           type: row.record_type,
           data_id: row.data_id
         },
-        schema_version: row.schema_version,
-        updated_fields: JSON.parse(row.updated_fields),
+        schemaVersion: row.schema_version,
+        updatedFields: JSON.parse(row.updated_fields),
         revision: row.revision
       };
       
