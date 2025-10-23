@@ -1,8 +1,8 @@
 use std::{sync::Arc, time::Duration};
-
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{Mutex, broadcast, mpsc, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, warn};
+use web_time::SystemTime;
 
 use crate::sync::{
     model::{IncomingChange, OutgoingChange, RecordId},
@@ -187,17 +187,8 @@ impl SyncProcessor {
         let mut push_trigger = self.push_sync_trigger.resubscribe();
         let (backoff_trigger_tx, mut backoff_trigger_rx) = mpsc::channel::<Duration>(10);
 
-        let send_backoff_trigger = |duration: Duration| {
-            tokio::spawn({
-                let backoff_trigger_tx = backoff_trigger_tx.clone();
-                async move {
-                    tokio::time::sleep(duration).await;
-                    if let Err(e) = backoff_trigger_tx.send(duration).await {
-                        error!("Failed to send backoff trigger: {}", e);
-                    }
-                }
-            });
-        };
+        // Mutex to ensure there is only one backoff running at a time.
+        let backoff_handle: Mutex<Option<BackoffHandle>> = Mutex::new(None);
 
         loop {
             let (incoming_count, outgoing_count) = tokio::select! {
@@ -205,80 +196,31 @@ impl SyncProcessor {
                     debug!("Shutdown signal received, stopping push sync loop");
                     break;
                 }
-
                 _ = pull_trigger.changed() => {
                     debug!("Received incoming sync notification");
-                    let count = match self.pull_sync_once().await {
-                        Ok(count) => count,
+                    match self.pull_sync_once().await {
+                        Ok(count) => (count, None),
                         Err(e) => {
                             error!("Failed to sync once: {}", e);
-                            continue;
-                        }
-                    };
-                    (count, None)
-                }
-
-                Some(last_backoff) = backoff_trigger_rx.recv() => {
-                    debug!("Backoff trigger received, waiting before next sync attempt");
-                    let incoming_count = match self.pull_sync_once().await {
-                        Ok(count) => count,
-                        Err(e) => {
-                            error!("Failed to sync once: {}", e);
-                            send_backoff_trigger(last_backoff.mul_f32(1.5));
-                            None
-                        }
-                    };
-                    let outgoing_count = match self.push_sync_once().await {
-                        Ok(count) => count,
-                        Err(e) => {
-                            error!("Failed to sync once: {}", e);
-                            send_backoff_trigger(last_backoff.mul_f32(1.5));
-                            continue;
-                        }
-                    };
-
-                    debug!("Backoff sync attempt succeeded, resuming normal operation");
-                    (incoming_count, outgoing_count)
-                }
-
-                result = push_trigger.recv() => {
-                    match result {
-                        Ok(record_id) => {
-                            debug!("Received sync trigger for record id {:?}", record_id);
-                            // If there was also a pull trigger, handle that first, because the push wouldn't work.
-                            let incoming_count = if pull_trigger.has_changed().unwrap_or(false) {
-                                match self.pull_sync_once().await {
-                                    Ok(count) => count,
-                                    Err(e) => {
-                                        error!("Failed to sync once: {}", e);
-                                        None
-                                    }
-                                }
-                            } else {
-                                None
-                            };
-
-                            let outgoing_count = match self.push_sync_once().await {
-                                Ok(count) => count,
-                                Err(e) => {
-                                    error!("Failed to sync once: {}", e);
-                                    send_backoff_trigger(Duration::from_secs(1));
-                                    continue;
-                                }
-                            };
-                            debug!("Push sync attempt succeeded");
-
-                            (incoming_count, outgoing_count)
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            debug!("Push sync trigger channel closed, stopping push sync loop");
-                            break;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(count)) => {
-                            warn!("Lagged {} messages in push sync trigger channel", count);
                             (None, None)
                         }
                     }
+                }
+                Some(last_backoff) = backoff_trigger_rx.recv() => {
+                    self.handle_backoff(
+                        &backoff_handle,
+                        &mut backoff_trigger_rx,
+                        &backoff_trigger_tx,
+                        last_backoff
+                    ).await
+                }
+                result = push_trigger.recv() => {
+                    self.handle_push(
+                        result,
+                        &pull_trigger,
+                        &backoff_handle,
+                        &backoff_trigger_tx
+                    ).await
                 }
             };
 
@@ -291,6 +233,132 @@ impl SyncProcessor {
                 error!("Failed to notify of real-time sync completion: {e:?}");
             }
         }
+    }
+
+    async fn handle_backoff(
+        &self,
+        backoff_handle: &Mutex<Option<BackoffHandle>>,
+        backoff_trigger_rx: &mut mpsc::Receiver<Duration>,
+        backoff_trigger_tx: &mpsc::Sender<Duration>,
+        mut last_backoff: Duration,
+    ) -> (Option<u32>, Option<u32>) {
+        // Clear the backoff queue to avoid piling up requests.
+        while let Ok(new_last_backoff) = backoff_trigger_rx.try_recv() {
+            last_backoff = last_backoff.min(new_last_backoff);
+        }
+        debug!("Backoff trigger received, waiting before next sync attempt");
+        let incoming_count = match self.pull_sync_once().await {
+            Ok(count) => count,
+            Err(e) => {
+                error!("Failed to pull sync once in backoff mode: {}", e);
+                None
+            }
+        };
+        let outgoing_count = match self.push_sync_once().await {
+            Ok(count) => count,
+            Err(e) => {
+                error!("Failed to push sync once in backoff mode: {}", e);
+                self.schedule_backoff(
+                    backoff_handle,
+                    backoff_trigger_tx,
+                    last_backoff.mul_f32(1.5),
+                )
+                .await;
+                return (None, None);
+            }
+        };
+        debug!("Backoff sync attempt succeeded, resuming normal operation");
+        (incoming_count, outgoing_count)
+    }
+
+    async fn handle_push(
+        &self,
+        result: Result<RecordId, broadcast::error::RecvError>,
+        pull_trigger: &watch::Receiver<()>,
+        backoff_handle: &Mutex<Option<BackoffHandle>>,
+        backoff_trigger_tx: &mpsc::Sender<Duration>,
+    ) -> (Option<u32>, Option<u32>) {
+        match result {
+            Ok(record_id) => {
+                debug!("Received sync trigger for record id {:?}", record_id);
+                let incoming_count = if pull_trigger.has_changed().unwrap_or(false) {
+                    match self.pull_sync_once().await {
+                        Ok(count) => count,
+                        Err(e) => {
+                            error!("Failed to sync once: {}", e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                let outgoing_count = match self.push_sync_once().await {
+                    Ok(count) => count,
+                    Err(e) => {
+                        error!("Failed to sync once: {}", e);
+                        self.schedule_backoff(
+                            backoff_handle,
+                            backoff_trigger_tx,
+                            Duration::from_secs(1),
+                        )
+                        .await;
+                        return (None, None);
+                    }
+                };
+                debug!("Push sync attempt succeeded");
+                (incoming_count, outgoing_count)
+            }
+            Err(broadcast::error::RecvError::Closed) => {
+                debug!("Push sync trigger channel closed, stopping push sync loop");
+                (None, None)
+            }
+            Err(broadcast::error::RecvError::Lagged(count)) => {
+                warn!("Lagged {} messages in push sync trigger channel", count);
+                (None, None)
+            }
+        }
+    }
+
+    async fn schedule_backoff(
+        &self,
+        backoff_handle: &Mutex<Option<BackoffHandle>>,
+        backoff_trigger_tx: &mpsc::Sender<Duration>,
+        duration: Duration,
+    ) {
+        let now = SystemTime::now();
+        let mut backoff_handle = backoff_handle.lock().await;
+        if let Some(existing) = &*backoff_handle {
+            let elapsed = now.duration_since(existing.started_at).unwrap_or_default();
+            let remaining = existing.duration.saturating_sub(elapsed);
+            if remaining < duration {
+                debug!(
+                    "Existing backoff of {:?} still in effect (remaining {:?}), not scheduling new backoff of {:?}",
+                    existing.duration, remaining, duration
+                );
+                return;
+            }
+            existing.handle.abort();
+            debug!(
+                "New backoff of {:?} is shorter than existing backoff of {:?} (remaining {:?}), replacing it",
+                duration, existing.duration, remaining
+            );
+        }
+
+        debug!("Scheduling backoff trigger in {:?}", duration);
+        let new_handle = tokio::spawn({
+            let backoff_trigger_tx = backoff_trigger_tx.clone();
+            async move {
+                tokio::time::sleep(duration).await;
+                if let Err(e) = backoff_trigger_tx.send(duration).await {
+                    error!("Failed to send backoff trigger: {}", e);
+                }
+            }
+        });
+        *backoff_handle = Some(BackoffHandle {
+            started_at: now,
+            duration,
+            handle: new_handle,
+        });
     }
 
     async fn push_sync_once(&self) -> anyhow::Result<Option<u32>> {
@@ -449,6 +517,13 @@ impl SyncProcessor {
 
         Ok(count)
     }
+}
+
+/// Used for sync backoff timer management
+struct BackoffHandle {
+    started_at: SystemTime,
+    duration: Duration,
+    handle: tokio::task::JoinHandle<()>,
 }
 
 #[cfg(test)]
