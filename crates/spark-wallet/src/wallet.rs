@@ -15,7 +15,7 @@ use spark::{
     events::{SparkEvent, subscribe_server_events},
     operator::{
         OperatorPool,
-        rpc::{ConnectionManager, DefaultConnectionManager},
+        rpc::{ConnectionManager, DefaultConnectionManager, spark::QuerySparkInvoicesRequest},
     },
     services::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
@@ -39,8 +39,8 @@ use tracing::{debug, error, info, trace};
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    FulfillSparkInvoiceResult, ListTokenTransactionsRequest, TokenBalance, WalletEvent,
-    WalletLeaves,
+    FulfillSparkInvoiceResult, ListTokenTransactionsRequest, QuerySparkInvoiceResult, TokenBalance,
+    WalletEvent, WalletLeaves,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
@@ -63,6 +63,7 @@ pub struct SparkWallet {
     lightning_service: Arc<LightningService>,
     ssp_client: Arc<ServiceProvider>,
     token_service: Arc<TokenService>,
+    operator_pool: Arc<OperatorPool>,
 }
 
 impl SparkWallet {
@@ -215,6 +216,7 @@ impl SparkWallet {
             lightning_service,
             ssp_client: service_provider.clone(),
             token_service,
+            operator_pool,
         })
     }
 }
@@ -974,6 +976,28 @@ impl SparkWallet {
                 "Invoice does not include payment type".to_string(),
             )),
         }
+    }
+
+    pub async fn query_spark_invoices(
+        &self,
+        invoices: Vec<String>,
+    ) -> Result<Vec<QuerySparkInvoiceResult>, SparkWalletError> {
+        let response = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .query_spark_invoices(QuerySparkInvoicesRequest {
+                invoice: invoices,
+                limit: 0,
+                offset: 0,
+            })
+            .await?;
+
+        response
+            .invoice_statuses
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect()
     }
 }
 
