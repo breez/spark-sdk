@@ -1,7 +1,7 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 
-use crate::models::ProvisionalPayment;
+use crate::models::{ProvisionalPayment, error::js_error_to_payment_observer_error};
 
 pub struct WasmPaymentObserver {
     pub payment_observer: PaymentObserver,
@@ -42,11 +42,4 @@ extern "C" {
         this: &PaymentObserver,
         payments: Vec<ProvisionalPayment>,
     ) -> Result<Promise, JsValue>;
-}
-
-fn js_error_to_payment_observer_error(js_error: JsValue) -> breez_sdk_spark::PaymentObserverError {
-    let error_message = js_error
-        .as_string()
-        .unwrap_or_else(|| "Payment observer error occurred".to_string());
-    breez_sdk_spark::PaymentObserverError::Generic(error_message)
 }

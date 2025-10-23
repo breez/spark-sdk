@@ -3,6 +3,7 @@
       "module": "CommonJS",
       "target": "ES6",
       "checkJs": true,
+      "typeRoots": ["./node_modules/@types", "./src"]
     },
     "exclude": ["node_modules", "**/node_modules/*"]
   }

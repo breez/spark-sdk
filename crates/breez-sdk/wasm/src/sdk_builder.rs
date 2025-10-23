@@ -2,8 +2,13 @@ use std::{rc::Rc, sync::Arc};
 
 use crate::{
     error::WasmResult,
-    models::{Config, Credentials, KeySetType, Seed},
-    payment_observer::{PaymentObserver, WasmPaymentObserver},
+    models::{
+        Config, Credentials, KeySetType, Seed,
+        chain_service::{BitcoinChainService, WasmBitcoinChainService},
+        fiat_service::{FiatService, WasmFiatService},
+        payment_observer::{PaymentObserver, WasmPaymentObserver},
+        rest_client::{RestClient, WasmRestClient},
+    },
     persist::{Storage, WasmStorage},
     sdk::BreezSdk,
 };
@@ -27,6 +32,29 @@ impl SdkBuilder {
         })
     }
 
+    #[wasm_bindgen(js_name = "withKeySet")]
+    pub fn with_key_set(
+        mut self,
+        key_set_type: KeySetType,
+        use_address_index: bool,
+        account_number: Option<u32>,
+    ) -> Self {
+        self.builder =
+            self.builder
+                .with_key_set(key_set_type.into(), use_address_index, account_number);
+        self
+    }
+
+    #[wasm_bindgen(js_name = "withChainService")]
+    pub fn with_chain_service(mut self, chain_service: BitcoinChainService) -> Self {
+        self.builder = self
+            .builder
+            .with_chain_service(Arc::new(WasmBitcoinChainService {
+                inner: chain_service,
+            }));
+        self
+    }
+
     #[wasm_bindgen(js_name = "withRestChainService")]
     pub fn with_rest_chain_service(
         mut self,
@@ -39,16 +67,19 @@ impl SdkBuilder {
         self
     }
 
-    #[wasm_bindgen(js_name = "withKeySet")]
-    pub fn with_key_set(
-        mut self,
-        key_set_type: KeySetType,
-        use_address_index: bool,
-        account_number: Option<u32>,
-    ) -> Self {
-        self.builder =
-            self.builder
-                .with_key_set(key_set_type.into(), use_address_index, account_number);
+    #[wasm_bindgen(js_name = "withFiatService")]
+    pub fn with_fiat_service(mut self, fiat_service: FiatService) -> Self {
+        self.builder = self.builder.with_fiat_service(Arc::new(WasmFiatService {
+            inner: fiat_service,
+        }));
+        self
+    }
+
+    #[wasm_bindgen(js_name = "withLnurlClient")]
+    pub fn with_lnurl_client(mut self, lnurl_client: RestClient) -> Self {
+        self.builder = self.builder.with_lnurl_client(Arc::new(WasmRestClient {
+            inner: lnurl_client,
+        }));
         self
     }
 

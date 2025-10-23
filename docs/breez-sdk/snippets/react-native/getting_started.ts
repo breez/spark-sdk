@@ -45,10 +45,10 @@ const exampleGettingStartedAdvanced = async () => {
 
   const builder = new SdkBuilder(config, seed, storage)
   // You can also pass your custom implementations:
-  // builder.withChainService(<your chain service implementation>)
-  // builder.withRestClient(<your rest client implementation>)
-  // builder.withKeySet(<your key set type>, <use address index>, <account number>)
-  // builder.withPaymentObserver(<your payment observer implementation>)
+  // await builder.withChainService(<your chain service implementation>)
+  // await builder.withRestClient(<your rest client implementation>)
+  // await builder.withKeySet(<your key set type>, <use address index>, <account number>)
+  // await builder.withPaymentObserver(<your payment observer implementation>)
   const sdk = await builder.build()
   // ANCHOR_END: init-sdk-advanced
 }

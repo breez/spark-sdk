@@ -1,4 +1,5 @@
 .env
 node_modules/
 sdk.log
+package-lock.json
 .data/

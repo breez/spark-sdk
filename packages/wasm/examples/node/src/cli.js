@@ -36,8 +36,8 @@ const initCommand = () => {
             new Option('-p, --payment-request <text>', 'Payment request string').makeOptionMandatory(true)
         )
         .addOption(
-            new Option('-a, --amount-sats <number>', 'Amount in satoshis for when the payment request doesn\'t specify it')
-                .argParser(parseInt)
+            new Option('-a, --amount <number>', 'Amount in satoshis for when the payment request doesn\'t specify it')
+                .argParser(BigInt)
         )
         .action(sendPayment)
 

@@ -1,3 +1,9 @@
+pub mod chain_service;
+mod error;
+pub mod fiat_service;
+pub mod payment_observer;
+pub mod rest_client;
+
 use std::collections::HashMap;
 
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -598,6 +604,7 @@ pub enum SendPaymentMethod {
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
+        #[serde(with = "serde_u128_as_string")]
         fee: u128,
         token_identifier: Option<String>,
     },

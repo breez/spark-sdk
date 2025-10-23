@@ -4,7 +4,6 @@ import init, {
   initLogging,
   defaultConfig,
   SdkBuilder,
-  parse,
   defaultStorage,
 } from "@breeztech/breez-sdk-spark";
 
@@ -394,7 +393,7 @@ async function prepareSend() {
   try {
     const paymentRequest = elements.paymentRequestInput.value.trim();
     const amountStr = elements.sendAmount.value;
-    const amountSats = amountStr ? parseInt(amountStr) : undefined;
+    const amount = amountStr ? BigInt(amountStr) : undefined;
 
     if (!paymentRequest) {
       alert("Payment request is required");
@@ -405,7 +404,7 @@ async function prepareSend() {
 
     prepareSendResponse = await sdk.prepareSendPayment({
       paymentRequest: paymentRequest,
-      amountSats: amountSats,
+      amount: amount,
     });
 
     const paymentMethod = prepareSendResponse.paymentMethod;
@@ -474,7 +473,7 @@ async function prepareLnurlPay() {
     showLoading("Parsing LNURL...");
 
     // Parse the LNURL
-    const input = await parse(lnurlInput);
+    const input = await sdk.parse(lnurlInput);
 
     if (input.type !== "lnurlPay") {
       hideLoading();

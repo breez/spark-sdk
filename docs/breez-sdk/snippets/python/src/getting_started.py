@@ -51,10 +51,10 @@ async def init_sdk_advanced():
         # Build the SDK using the config, seed and storage
         builder = SdkBuilder(config=config, seed=seed, storage=storage)
         # You can also pass your custom implementations:
-        # builder.with_chain_service(<your chain service implementation>)
-        # builder.with_rest_client(<your rest client implementation>)
-        # builder.with_key_set(<your key set type>, <use address index>, <account number>)
-        # builder.with_payment_observer(<your payment observer implementation>)
+        # await builder.with_chain_service(<your chain service implementation>)
+        # await builder.with_rest_client(<your rest client implementation>)
+        # await builder.with_key_set(<your key set type>, <use address index>, <account number>)
+        # await builder.with_payment_observer(<your payment observer implementation>)
         sdk = await builder.build()
         return sdk
     except Exception as error:
