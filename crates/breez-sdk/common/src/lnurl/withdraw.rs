@@ -30,7 +30,7 @@ pub async fn validate_lnurl_withdraw<C: RestClient + ?Sized>(
 
     if !withdraw_request.is_msat_amount_valid(amount_msat) {
         return Err(LnurlError::InvalidInvoice(
-            "Amount must within min/max LNURL withdrawable limits".to_string(),
+            "Amount must be within min/max LNURL withdrawable limits".to_string(),
         ));
     }
 

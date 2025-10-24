@@ -835,7 +835,7 @@ impl BreezSdk {
 
         if !withdraw_request.is_sat_amount_valid(amount_sats) {
             return Err(SdkError::InvalidInput(
-                "Amount must within min/max LNURL withdrawable limits".to_string(),
+                "Amount must be within min/max LNURL withdrawable limits".to_string(),
             ));
         }
 
