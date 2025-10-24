@@ -19,6 +19,7 @@ use breez_sdk_common::{
     },
     rest::RestClient,
 };
+use lnurl_models::sanitize_username;
 use spark_wallet::{
     ExitSpeed, InvoiceDescription, SparkAddress, SparkWallet, TransferTokenOutput, WalletEvent,
     WalletTransfer,
@@ -1069,7 +1070,8 @@ impl BreezSdk {
             ));
         };
 
-        let available = client.check_username_available(&req.username).await?;
+        let username = sanitize_username(&req.username);
+        let available = client.check_username_available(&username).await?;
         Ok(available)
     }
 
@@ -1089,12 +1091,14 @@ impl BreezSdk {
             ));
         };
 
+        let username = sanitize_username(&request.username);
+
         let description = match request.description {
             Some(description) => description,
-            None => format!("Pay to {}@{}", request.username, client.domain()),
+            None => format!("Pay to {}@{}", username, client.domain()),
         };
         let params = crate::lnurl::RegisterLightningAddressRequest {
-            username: request.username.clone(),
+            username: username.clone(),
             description: description.clone(),
         };
 
@@ -1103,7 +1107,7 @@ impl BreezSdk {
             lightning_address: response.lightning_address,
             description,
             lnurl: response.lnurl,
-            username: request.username,
+            username,
         };
         cache.save_lightning_address(&address_info).await?;
         Ok(address_info)

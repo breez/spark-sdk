@@ -36,3 +36,7 @@ pub struct RegisterLnurlPayResponse {
     pub lnurl: String,
     pub lightning_address: String,
 }
+
+pub fn sanitize_username(username: &str) -> String {
+    username.trim().to_lowercase()
+}

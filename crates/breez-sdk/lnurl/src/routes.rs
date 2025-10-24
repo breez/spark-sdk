@@ -13,6 +13,7 @@ use bitcoin::{
 use lnurl_models::{
     CheckUsernameAvailableResponse, RecoverLnurlPayRequest, RecoverLnurlPayResponse,
     RegisterLnurlPayRequest, RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
+    sanitize_username,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -431,8 +432,4 @@ fn sanitize_domain<DB>(
         return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
     }
     Ok(domain)
-}
-
-fn sanitize_username(username: &str) -> String {
-    username.trim().to_lowercase()
 }
