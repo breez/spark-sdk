@@ -7,7 +7,7 @@ use crate::sync::RecordId;
 /// Errors that can occur during storage operations
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
-pub enum StorageError {
+pub enum SyncStorageError {
     #[error("Underline implementation error: {0}")]
     Implementation(String),
 
@@ -19,15 +19,15 @@ pub enum StorageError {
     Serialization(String),
 }
 
-impl From<semver::Error> for StorageError {
+impl From<semver::Error> for SyncStorageError {
     fn from(e: semver::Error) -> Self {
-        StorageError::Serialization(e.to_string())
+        SyncStorageError::Serialization(e.to_string())
     }
 }
 
-impl From<serde_json::Error> for StorageError {
+impl From<serde_json::Error> for SyncStorageError {
     fn from(e: serde_json::Error) -> Self {
-        StorageError::Serialization(e.to_string())
+        SyncStorageError::Serialization(e.to_string())
     }
 }
 
@@ -38,33 +38,36 @@ pub trait SyncStorage: Send + Sync {
     async fn add_outgoing_change(
         &self,
         record: UnversionedRecordChange,
-    ) -> Result<u64, StorageError>;
-    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError>;
+    ) -> Result<u64, SyncStorageError>;
+    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), SyncStorageError>;
     async fn get_pending_outgoing_changes(
         &self,
         limit: u32,
-    ) -> Result<Vec<OutgoingChange>, StorageError>;
+    ) -> Result<Vec<OutgoingChange>, SyncStorageError>;
 
     /// Get the revision number of the last synchronized record
-    async fn get_last_revision(&self) -> Result<u64, StorageError>;
+    async fn get_last_revision(&self) -> Result<u64, SyncStorageError>;
 
     /// Insert incoming records from remote sync
-    async fn insert_incoming_records(&self, records: Vec<Record>) -> Result<(), StorageError>;
+    async fn insert_incoming_records(&self, records: Vec<Record>) -> Result<(), SyncStorageError>;
 
     /// Delete an incoming record after it has been processed
-    async fn delete_incoming_record(&self, record: Record) -> Result<(), StorageError>;
+    async fn delete_incoming_record(&self, record: Record) -> Result<(), SyncStorageError>;
 
     /// Update revision numbers of pending outgoing records to be higher than the given revision
-    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), StorageError>;
+    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), SyncStorageError>;
 
     /// Get incoming records that need to be processed, up to the specified limit
-    async fn get_incoming_records(&self, limit: u32) -> Result<Vec<IncomingChange>, StorageError>;
+    async fn get_incoming_records(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<IncomingChange>, SyncStorageError>;
 
     /// Get the latest outgoing record if any exists
-    async fn get_latest_outgoing_change(&self) -> Result<Option<OutgoingChange>, StorageError>;
+    async fn get_latest_outgoing_change(&self) -> Result<Option<OutgoingChange>, SyncStorageError>;
 
     /// Update the sync state record from an incoming record
-    async fn update_record_from_incoming(&self, record: Record) -> Result<(), StorageError>;
+    async fn update_record_from_incoming(&self, record: Record) -> Result<(), SyncStorageError>;
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -76,7 +79,7 @@ pub struct IncomingChange {
 }
 
 impl TryFrom<&IncomingChange> for crate::sync::model::IncomingChange {
-    type Error = StorageError;
+    type Error = SyncStorageError;
 
     fn try_from(value: &IncomingChange) -> Result<Self, Self::Error> {
         Ok(crate::sync::model::IncomingChange {
@@ -97,7 +100,7 @@ pub struct OutgoingChange {
 }
 
 impl TryFrom<OutgoingChange> for crate::sync::model::OutgoingChange {
-    type Error = StorageError;
+    type Error = SyncStorageError;
 
     fn try_from(value: OutgoingChange) -> Result<Self, Self::Error> {
         Ok(crate::sync::model::OutgoingChange {
@@ -118,7 +121,7 @@ pub struct UnversionedRecordChange {
 }
 
 impl TryFrom<UnversionedRecordChange> for crate::sync::model::UnversionedRecordChange {
-    type Error = StorageError;
+    type Error = SyncStorageError;
 
     fn try_from(value: UnversionedRecordChange) -> Result<Self, Self::Error> {
         Ok(crate::sync::model::UnversionedRecordChange {
@@ -128,13 +131,13 @@ impl TryFrom<UnversionedRecordChange> for crate::sync::model::UnversionedRecordC
                 .updated_fields
                 .into_iter()
                 .map(|(k, v)| Ok((k, serde_json::from_str(&v)?)))
-                .collect::<Result<HashMap<String, serde_json::Value>, StorageError>>()?,
+                .collect::<Result<HashMap<String, serde_json::Value>, SyncStorageError>>()?,
         })
     }
 }
 
 impl TryFrom<crate::sync::model::UnversionedRecordChange> for UnversionedRecordChange {
-    type Error = StorageError;
+    type Error = SyncStorageError;
 
     fn try_from(value: crate::sync::model::UnversionedRecordChange) -> Result<Self, Self::Error> {
         Ok(UnversionedRecordChange {
@@ -144,7 +147,7 @@ impl TryFrom<crate::sync::model::UnversionedRecordChange> for UnversionedRecordC
                 .updated_fields
                 .into_iter()
                 .map(|(k, v)| Ok((k, serde_json::to_string(&v)?)))
-                .collect::<Result<HashMap<String, String>, StorageError>>()?,
+                .collect::<Result<HashMap<String, String>, SyncStorageError>>()?,
         })
     }
 }
@@ -159,7 +162,7 @@ pub struct RecordChange {
 }
 
 impl TryFrom<RecordChange> for crate::sync::model::RecordChange {
-    type Error = StorageError;
+    type Error = SyncStorageError;
 
     fn try_from(value: RecordChange) -> Result<Self, Self::Error> {
         Ok(crate::sync::model::RecordChange {
@@ -169,7 +172,7 @@ impl TryFrom<RecordChange> for crate::sync::model::RecordChange {
                 .updated_fields
                 .into_iter()
                 .map(|(k, v)| Ok((k, serde_json::from_str(&v)?)))
-                .collect::<Result<HashMap<String, serde_json::Value>, StorageError>>()?,
+                .collect::<Result<HashMap<String, serde_json::Value>, SyncStorageError>>()?,
             revision: value.revision,
         })
     }
@@ -185,7 +188,7 @@ pub struct Record {
 }
 
 impl TryFrom<&Record> for crate::sync::model::Record {
-    type Error = StorageError;
+    type Error = SyncStorageError;
 
     fn try_from(value: &Record) -> Result<Self, Self::Error> {
         Ok(crate::sync::model::Record {
@@ -195,14 +198,14 @@ impl TryFrom<&Record> for crate::sync::model::Record {
                 .data
                 .iter()
                 .map(|(k, v)| Ok((k.clone(), serde_json::from_str(v)?)))
-                .collect::<Result<HashMap<String, serde_json::Value>, StorageError>>()?,
+                .collect::<Result<HashMap<String, serde_json::Value>, SyncStorageError>>()?,
             revision: value.revision,
         })
     }
 }
 
 impl TryFrom<&crate::sync::model::Record> for Record {
-    type Error = StorageError;
+    type Error = SyncStorageError;
 
     fn try_from(value: &crate::sync::model::Record) -> Result<Self, Self::Error> {
         Ok(Record {
@@ -212,7 +215,7 @@ impl TryFrom<&crate::sync::model::Record> for Record {
                 .data
                 .iter()
                 .map(|(k, v)| Ok((k.clone(), serde_json::to_string(&v)?)))
-                .collect::<Result<HashMap<String, String>, StorageError>>()?,
+                .collect::<Result<HashMap<String, String>, SyncStorageError>>()?,
             revision: value.revision,
         })
     }
