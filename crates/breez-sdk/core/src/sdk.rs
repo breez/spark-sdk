@@ -610,7 +610,8 @@ impl BreezSdk {
     ) -> Result<ReceivePaymentResponse, SdkError> {
         match request.payment_method {
             ReceivePaymentMethod::SparkAddress => Ok(ReceivePaymentResponse {
-                fee_sats: 0,
+                fee: 0,
+                token_identifier: None,
                 payment_request: self
                     .spark_wallet
                     .get_spark_address()?
@@ -628,7 +629,7 @@ impl BreezSdk {
             } => {
                 let invoice = self.spark_wallet.create_spark_invoice(
                     amount,
-                    token_identifier,
+                    token_identifier.clone(),
                     expiry_time
                         .map(|time| {
                             SystemTime::UNIX_EPOCH
@@ -640,7 +641,8 @@ impl BreezSdk {
                     sender_public_key.map(|key| PublicKey::from_str(&key).unwrap()),
                 )?;
                 Ok(ReceivePaymentResponse {
-                    fee_sats: 0,
+                    fee: 0,
+                    token_identifier,
                     payment_request: invoice,
                 })
             }
@@ -655,7 +657,8 @@ impl BreezSdk {
                 if let Some(static_deposit_address) = static_deposit_address {
                     return Ok(ReceivePaymentResponse {
                         payment_request: static_deposit_address.address.to_string(),
-                        fee_sats: 0,
+                        fee: 0,
+                        token_identifier: None,
                     });
                 }
 
@@ -683,7 +686,8 @@ impl BreezSdk {
 
                 Ok(ReceivePaymentResponse {
                     payment_request: address,
-                    fee_sats: 0,
+                    fee: 0,
+                    token_identifier: None,
                 })
             }
             ReceivePaymentMethod::Bolt11Invoice {
@@ -700,7 +704,8 @@ impl BreezSdk {
                     )
                     .await?
                     .invoice,
-                fee_sats: 0,
+                fee: 0,
+                token_identifier: None,
             }),
         }
     }

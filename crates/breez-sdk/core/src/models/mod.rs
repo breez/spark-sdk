@@ -556,7 +556,12 @@ pub struct ReceivePaymentRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ReceivePaymentResponse {
     pub payment_request: String,
-    pub fee_sats: u64,
+    /// Fee to pay to receive the payment
+    /// Denominated in sats if token identifier is empty, otherwise in the token base units
+    pub fee: u128,
+    /// The presence of this field indicates that the payment is for a token
+    /// If empty, it is a Bitcoin payment
+    pub token_identifier: Option<String>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
