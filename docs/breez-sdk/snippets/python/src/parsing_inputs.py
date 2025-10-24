@@ -1,3 +1,4 @@
+# pylint: disable=too-many-branches
 import logging
 from breez_sdk_spark import BreezSdk, InputType, default_config, ExternalInputParser, Network
 
@@ -29,6 +30,26 @@ async def parse_input(sdk: BreezSdk):
                 f"Input is LNURL-Withdraw for min/max "
                 f"{details.min_withdrawable}/{details.max_withdrawable} msats"
             )
+        elif isinstance(parsed_input, InputType.SPARK_ADDRESS):
+            details = parsed_input[0]
+            logging.debug(f"Input is Spark address {details.address}")
+        elif isinstance(parsed_input, InputType.SPARK_INVOICE):
+            invoice = parsed_input[0]
+            logging.debug("Input is Spark invoice:")
+            if invoice.token_identifier:
+                logging.debug(f"  Amount: {invoice.amount} base units of "
+                f"token with id {invoice.token_identifier}")
+            else:
+                logging.debug(f"  Amount: {invoice.amount} sats")
+
+            if invoice.description:
+                logging.debug(f"  Description: {invoice.description}")
+
+            if invoice.expiry_time:
+                logging.debug(f"  Expiry time: {invoice.expiry_time}")
+
+            if invoice.sender_public_key:
+                logging.debug(f"  Sender public key: {invoice.sender_public_key}")
         # Other input types are available
     except Exception as error:
         logging.error(error)

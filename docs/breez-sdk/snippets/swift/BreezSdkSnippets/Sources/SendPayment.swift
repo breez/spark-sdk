@@ -49,8 +49,8 @@ func prepareSendPaymentOnchain(sdk: BreezSdk) async throws {
     // ANCHOR_END: prepare-send-payment-onchain
 }
 
-func prepareSendPaymentSpark(sdk: BreezSdk) async throws {
-    // ANCHOR: prepare-send-payment-spark
+func prepareSendPaymentSparkAddress(sdk: BreezSdk) async throws {
+    // ANCHOR: prepare-send-payment-spark-address
     let paymentRequest = "<spark address>"
     // Set the amount you wish the pay the receiver (requires 'import BigNumber')
     let amountSats = BInt(50_000)
@@ -64,7 +64,25 @@ func prepareSendPaymentSpark(sdk: BreezSdk) async throws {
     if case let .sparkAddress(_, feeSats, _) = prepareResponse.paymentMethod {
         print("Fees: \(feeSats) sats")
     }
-    // ANCHOR_END: prepare-send-payment-spark
+    // ANCHOR_END: prepare-send-payment-spark-address
+}
+
+func prepareSendPaymentSparkInvoice(sdk: BreezSdk) async throws {
+    // ANCHOR: prepare-send-payment-spark-invoice
+    let paymentRequest = "<spark invoice>"
+    // Optionally set the amount you wish the pay the receiver (requires 'import BigNumber')
+    let optionalAmountSats = BInt(50_000)
+
+    let prepareResponse = try await sdk.prepareSendPayment(
+        request: PrepareSendPaymentRequest(
+            paymentRequest: paymentRequest,
+            amount: optionalAmountSats
+        ))
+
+    if case let .sparkInvoice(_, feeSats, _) = prepareResponse.paymentMethod {
+        print("Fees: \(feeSats) sats")
+    }
+    // ANCHOR_END: prepare-send-payment-spark-invoice
 }
 
 func sendPaymentLightningBolt11(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse)

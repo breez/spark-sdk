@@ -61,8 +61,8 @@ class SendPayment {
         // ANCHOR_END: prepare-send-payment-onchain
     }
 
-    suspend fun prepareSendPaymentSpark(sdk: BreezSdk) {
-        // ANCHOR: prepare-send-payment-spark
+    suspend fun prepareSendPaymentSparkAddress(sdk: BreezSdk) {
+        // ANCHOR: prepare-send-payment-spark-address
         val paymentRequest = "<spark address>"
         // Set the amount you wish the pay the receiver
         // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
@@ -82,13 +82,44 @@ class SendPayment {
         } catch (e: Exception) {
             // handle error
         }
-        // ANCHOR_END: prepare-send-payment-spark
+        // ANCHOR_END: prepare-send-payment-spark-address
     }
 
-    suspend fun sendPaymentLightningBolt11(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) {
+    suspend fun prepareSendPaymentSparkInvoice(sdk: BreezSdk) {
+        // ANCHOR: prepare-send-payment-spark-invoice
+        val paymentRequest = "<spark invoice>"
+        // Optionally set the amount you wish the pay the receiver
+        // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
+        // package)
+        val optionalAmountSats = BigInteger.fromLong(50_000L)
+        // Android (BigInteger from java.math)
+        // val optionalAmountSats = BigInteger.valueOf(50_000L)
+        try {
+            val req = PrepareSendPaymentRequest(paymentRequest, optionalAmountSats)
+            val prepareResponse = sdk.prepareSendPayment(req)
+
+            // If the fees are acceptable, continue to create the Send Payment
+            val paymentMethod = prepareResponse.paymentMethod
+            if (paymentMethod is SendPaymentMethod.SparkInvoice) {
+                val feeSats = paymentMethod.fee
+                // Log.v("Breez", "Fees: ${feeSats} sats")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: prepare-send-payment-spark-invoice
+    }
+
+    suspend fun sendPaymentLightningBolt11(
+            sdk: BreezSdk,
+            prepareResponse: PrepareSendPaymentResponse
+    ) {
         // ANCHOR: send-payment-lightning-bolt11
         try {
-            val options = SendPaymentOptions.Bolt11Invoice(preferSpark = false, completionTimeoutSecs = 10u)
+            val options = SendPaymentOptions.Bolt11Invoice(
+                preferSpark = false, 
+                completionTimeoutSecs = 10u
+            )
             val sendResponse = sdk.sendPayment(SendPaymentRequest(prepareResponse, options))
             val payment = sendResponse.payment
         } catch (e: Exception) {

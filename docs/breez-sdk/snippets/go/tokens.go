@@ -57,16 +57,49 @@ func FetchTokenMetadata(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
+func ReceiveTokenPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.ReceivePaymentResponse, error) {
+	// ANCHOR: receive-token-payment-spark-invoice
+	tokenIdentifier := "<token identifier>"
+	optionalDescription := "<invoice description>"
+	optionalAmount := new(big.Int).SetInt64(5_000)
+	optionalExpiryTimeSeconds := uint64(1716691200)
+	optionalSenderPublicKey := "<sender public key>"
+
+	request := breez_sdk_spark.ReceivePaymentRequest{
+		PaymentMethod: breez_sdk_spark.ReceivePaymentMethodSparkInvoice{
+			TokenIdentifier: &tokenIdentifier,
+			Description:     &optionalDescription,
+			Amount:          &optionalAmount,
+			ExpiryTime:      &optionalExpiryTimeSeconds,
+			SenderPublicKey: &optionalSenderPublicKey,
+		},
+	}
+
+	response, err := sdk.ReceivePayment(request)
+
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return nil, err
+	}
+
+	paymentRequest := response.PaymentRequest
+	log.Printf("Payment Request: %v", paymentRequest)
+	receiveFees := response.Fee
+	log.Printf("Fees: %v token base units", receiveFees)
+	// ANCHOR_END: receive-token-payment-spark-invoice
+	return &response, nil
+}
+
 func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: send-token-payment
-	paymentRequest := "<spark address>"
+	paymentRequest := "<spark address or invoice>"
+	// Token identifier must match the invoice in case it specifies one.
 	tokenIdentifier := "<token identifier>"
-	// Set the amount of tokens you wish to send
-	amount := new(big.Int).SetInt64(1_000)
+	// Set the amount of tokens you wish to send.
+	optionalAmount := new(big.Int).SetInt64(1_000)
 
 	prepareResponse, err := sdk.PrepareSendPayment(breez_sdk_spark.PrepareSendPaymentRequest{
 		PaymentRequest:  paymentRequest,
-		Amount:          &amount,
+		Amount:          &optionalAmount,
 		TokenIdentifier: &tokenIdentifier,
 	})
 
@@ -78,7 +111,10 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	switch method := prepareResponse.PaymentMethod.(type) {
 	case breez_sdk_spark.SendPaymentMethodSparkAddress:
 		log.Printf("Token ID: %v", method.TokenIdentifier)
-		log.Printf("Fees: %v sats", method.Fee)
+		log.Printf("Fees: %v token base units", method.Fee)
+	case breez_sdk_spark.SendPaymentMethodSparkInvoice:
+		log.Printf("Token ID: %v", method.TokenIdentifier)
+		log.Printf("Fees: %v token base units", method.Fee)
 	}
 
 	// Send the token payment

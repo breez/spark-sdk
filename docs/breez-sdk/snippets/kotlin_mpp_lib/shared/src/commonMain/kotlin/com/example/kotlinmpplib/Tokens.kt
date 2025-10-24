@@ -51,23 +51,54 @@ class Tokens {
         // ANCHOR_END: fetch-token-metadata
     }
 
+    suspend fun receiveTokenPaymentSparkInvoice(sdk: BreezSdk) {
+        // ANCHOR: receive-token-payment-spark-invoice
+        try {
+            val tokenIdentifier = "<token identifier>"
+            val optionalDescription = "<invoice description>"
+            val optionalAmount = BigInteger.fromLong(5_000L)
+            val optionalExpiryTimeSeconds = 1716691200.toULong()
+            val optionalSenderPublicKey = "<sender public key>"
+
+            val request = ReceivePaymentRequest(
+                ReceivePaymentMethod.SparkInvoice(
+                    tokenIdentifier = tokenIdentifier,
+                    description = optionalDescription,
+                    amount = optionalAmount,
+                    expiryTime = optionalExpiryTimeSeconds,
+                    senderPublicKey = optionalSenderPublicKey
+                )
+            )
+            val response = sdk.receivePayment(request)
+
+            val paymentRequest = response.paymentRequest
+            println("Payment request: $paymentRequest")
+            val receiveFee = response.fee
+            println("Fees: $receiveFee token base units")
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: receive-token-payment-spark-invoice
+    }
+
     suspend fun sendTokenPayment(sdk: BreezSdk) {
         // ANCHOR: send-token-payment
         try {
-            val paymentRequest = "<spark address>"
-            // The token identifier (e.g., asset ID or token contract)
+            val paymentRequest = "<spark address or invoice>"
+            // Token identifier must match the invoice in case it specifies one.
             val tokenIdentifier = "<token identifier>"
-            // Set the amount of tokens you wish to send
-            // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
-            val amount = BigInteger.fromLong(1_000L)
+            // Set the amount of tokens you wish to send.
+            // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
+            // package)
+            val optionalAmount = BigInteger.fromLong(1_000L)
             // Android (BigInteger from java.math)
-            // val amount = BigInteger.valueOf(1_000L) // Android (BigInteger from java.math)
+            // val optionalAmount = BigInteger.valueOf(1_000L)
 
             val prepareResponse =
                 sdk.prepareSendPayment(
                     PrepareSendPaymentRequest(
                         paymentRequest = paymentRequest,
-                        amount = amount,
+                        amount = optionalAmount,
                         tokenIdentifier = tokenIdentifier
                     )
                 )
@@ -76,7 +107,11 @@ class Tokens {
             when (val method = prepareResponse.paymentMethod) {
                 is SendPaymentMethod.SparkAddress -> {
                     println("Token ID: ${method.tokenIdentifier}")
-                    println("Fees: ${method.fee} sats")
+                    println("Fees: ${method.fee} token base units")
+                }
+                is SendPaymentMethod.SparkInvoice -> {
+                    println("Token ID: ${method.tokenIdentifier}")
+                    println("Fees: ${method.fee} token base units")
                 }
                 else -> {}
             }

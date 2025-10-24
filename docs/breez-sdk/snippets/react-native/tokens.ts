@@ -1,4 +1,8 @@
-import { SendPaymentMethod, type BreezSdk } from '@breeztech/breez-sdk-spark-react-native'
+import {
+  ReceivePaymentMethod,
+  SendPaymentMethod,
+  type BreezSdk
+} from '@breeztech/breez-sdk-spark-react-native'
 
 const exampleFetchTokenBalances = async (sdk: BreezSdk) => {
   // ANCHOR: fetch-token-balances
@@ -38,24 +42,53 @@ const exampleFetchTokenMetadata = async (sdk: BreezSdk) => {
   // ANCHOR_END: fetch-token-metadata
 }
 
+const exampleReceiveTokenPaymentSparkInvoice = async (sdk: BreezSdk) => {
+  // ANCHOR: receive-token-payment-spark-invoice
+  const tokenIdentifier = '<token identifier>'
+  const optionalDescription = '<invoice description>'
+  const optionalAmount = BigInt(5_000)
+  const optionalExpiryTimeSeconds = BigInt(1716691200)
+  const optionalSenderPublicKey = '<sender public key>'
+
+  const response = await sdk.receivePayment({
+    paymentMethod: new ReceivePaymentMethod.SparkInvoice({
+      tokenIdentifier,
+      description: optionalDescription,
+      amount: optionalAmount,
+      expiryTime: optionalExpiryTimeSeconds,
+      senderPublicKey: optionalSenderPublicKey
+    })
+  })
+
+  const paymentRequest = response.paymentRequest
+  console.log(`Payment request: ${paymentRequest}`)
+  const receiveFee = response.fee
+  console.log(`Fees: ${receiveFee} token base units`)
+  // ANCHOR_END: receive-token-payment-spark-invoice
+}
+
 const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   // ANCHOR: send-token-payment
-  const paymentRequest = '<spark address>'
-  // The token identifier (e.g., asset ID or token contract)
+  const paymentRequest = '<spark address or invoice>'
+  // Token identifier must match the invoice in case it specifies one.
   const tokenIdentifier = '<token identifier>'
-  // Set the amount of tokens you wish to send
-  const amount = BigInt(1_000)
+  // Set the amount of tokens you wish to send.
+  const optionalAmount = BigInt(1_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    amount,
+    amount: optionalAmount,
     tokenIdentifier
   })
 
   // If the fees are acceptable, continue to send the token payment
   if (prepareResponse.paymentMethod instanceof SendPaymentMethod.SparkAddress) {
     console.log(`Token ID: ${prepareResponse.paymentMethod.inner.tokenIdentifier}`)
-    console.log(`Fees: ${prepareResponse.paymentMethod.inner.fee} sats`)
+    console.log(`Fees: ${prepareResponse.paymentMethod.inner.fee} token base units`)
+  }
+  if (prepareResponse.paymentMethod instanceof SendPaymentMethod.SparkInvoice) {
+    console.log(`Token ID: ${prepareResponse.paymentMethod.inner.tokenIdentifier}`)
+    console.log(`Fees: ${prepareResponse.paymentMethod.inner.fee} token base units`)
   }
 
   // Send the token payment
