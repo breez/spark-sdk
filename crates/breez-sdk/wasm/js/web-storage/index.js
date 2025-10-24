@@ -558,6 +558,9 @@ class IndexedDBStorage {
         lnurlPayInfo: metadata.lnurlPayInfo
           ? JSON.stringify(metadata.lnurlPayInfo)
           : null,
+        lnurlWithdrawInfo: metadata.lnurlWithdrawInfo
+          ? JSON.stringify(metadata.lnurlWithdrawInfo)
+          : null,
         lnurlDescription: metadata.lnurlDescription,
       };
 
@@ -841,23 +844,32 @@ class IndexedDBStorage {
       }
     }
 
-    // If this is a Lightning payment and we have lnurl_pay_info, add it to details
-    if (
-      metadata &&
-      metadata.lnurlPayInfo &&
-      details &&
-      details.type == "lightning"
-    ) {
-      try {
-        details.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
-        if (metadata.lnurlDescription && !details.description) {
-          details.description = metadata.lnurlDescription;
+    // If this is a Lightning payment and we have metadata
+    if (metadata && details && details.type == "lightning") {
+      if (metadata.lnurlDescription && !details.description) {
+        details.description = metadata.lnurlDescription;
+      }
+      // If lnurlPayInfo exists, parse and add to details
+      if (metadata.lnurlPayInfo) {
+        try {
+          details.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
+        } catch (e) {
+          throw new StorageError(
+            `Failed to parse lnurlPayInfo JSON for payment ${payment.id}: ${e.message}`,
+            e
+          );
         }
-      } catch (e) {
-        throw new StorageError(
-          `Failed to parse lnurl_pay_info JSON for payment ${payment.id}: ${e.message}`,
-          e
-        );
+      }
+      // If lnurlWithdrawInfo exists, parse and add to details
+      if (metadata.lnurlWithdrawInfo) {
+        try {
+          details.lnurlWithdrawInfo = JSON.parse(metadata.lnurlWithdrawInfo);
+        } catch (e) {
+          throw new StorageError(
+            `Failed to parse lnurlWithdrawInfo JSON for payment ${payment.id}: ${e.message}`,
+            e
+          );
+        }
       }
     }
 

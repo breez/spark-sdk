@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod error;
 pub mod pay;
+pub mod withdraw;
 
 use serde::{Deserialize, Serialize};
 
