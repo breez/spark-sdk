@@ -18,7 +18,8 @@ use bitcoin::{
     secp256k1::{Message, PublicKey, schnorr::Signature},
 };
 
-use prost::Message as ProstMessage;
+use bytes::BytesMut;
+use prost::{Message as ProstMessage, encoding};
 
 use error::AddressError;
 use uuid::Uuid;
@@ -262,7 +263,7 @@ impl SparkAddress {
             signature: None,
         };
 
-        let payload_bytes = proto_address.encode_to_vec();
+        let payload_bytes = encode_spark_address_canonical(&proto_address);
 
         let hrp = Self::network_to_hrp(&self.network);
 
@@ -306,7 +307,8 @@ impl SparkAddress {
             signature: Some(signature.serialize().to_vec()),
         };
 
-        let payload_bytes = proto_address.encode_to_vec();
+        // Use canonical encoding for server compatibility
+        let payload_bytes = encode_spark_address_canonical(&proto_address);
 
         let hrp = Self::network_to_hrp(&self.network);
 
@@ -513,6 +515,72 @@ fn from_variable_length_be_bytes(bytes: &[u8]) -> Result<u128, AddressError> {
     arr[offset..].copy_from_slice(bytes);
     let amount_bytes = arr;
     Ok(u128::from_be_bytes(amount_bytes))
+}
+
+/// Encodes SparkInvoiceFields in canonical field order for server compatibility.
+/// Canonical order: version(1), id(2), memo(5), sender_public_key(6), expiry_time(7), payment_type(3 or 4) last
+fn encode_spark_invoice_fields_canonical(fields: &ProtoSparkInvoiceFields) -> Vec<u8> {
+    let mut buf = BytesMut::new();
+
+    // version (field 1)
+    if fields.version != 0 {
+        encoding::uint32::encode(1, &fields.version, &mut buf);
+    }
+
+    // id (field 2)
+    if !fields.id.is_empty() {
+        encoding::bytes::encode(2, &fields.id, &mut buf);
+    }
+
+    // memo (field 5)
+    if let Some(memo) = &fields.memo {
+        encoding::string::encode(5, memo, &mut buf);
+    }
+
+    // sender_public_key (field 6)
+    if let Some(sender_key) = &fields.sender_public_key {
+        encoding::bytes::encode(6, sender_key, &mut buf);
+    }
+
+    // expiry_time (field 7)
+    if let Some(expiry) = &fields.expiry_time {
+        encoding::message::encode(7, expiry, &mut buf);
+    }
+
+    // payment_type oneof: tokens (3) or sats (4) - encoded last
+    if let Some(payment_type) = &fields.payment_type {
+        match payment_type {
+            ProtoPaymentType::TokensPayment(tokens) => {
+                encoding::message::encode(3, tokens, &mut buf);
+            }
+            ProtoPaymentType::SatsPayment(sats) => {
+                encoding::message::encode(4, sats, &mut buf);
+            }
+        }
+    }
+
+    buf.to_vec()
+}
+
+/// Encodes SparkAddress with canonical inner SparkInvoiceFields encoding.
+fn encode_spark_address_canonical(address: &ProtoSparkAddress) -> Vec<u8> {
+    let mut buf = BytesMut::new();
+
+    // identity_public_key (field 1)
+    encoding::bytes::encode(1, &address.identity_public_key, &mut buf);
+
+    // spark_invoice_fields (field 2) with canonical inner order
+    if let Some(invoice_fields) = &address.spark_invoice_fields {
+        let inner = encode_spark_invoice_fields_canonical(invoice_fields);
+        encoding::bytes::encode(2, &inner, &mut buf);
+    }
+
+    // signature (field 3)
+    if let Some(signature) = &address.signature {
+        encoding::bytes::encode(3, signature, &mut buf);
+    }
+
+    buf.to_vec()
 }
 
 #[cfg(test)]
