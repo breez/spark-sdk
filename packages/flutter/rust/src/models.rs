@@ -313,10 +313,9 @@ pub enum _SendPaymentMethod {
         token_identifier: Option<String>,
     },
     SparkInvoice {
-        invoice: String,
+        spark_invoice_details: SparkInvoiceDetails,
         fee: u128,
         token_identifier: Option<String>,
-        spark_invoice_details: SparkInvoiceDetails,
     },
 }
 
@@ -413,10 +412,13 @@ pub struct _Payment {
 
 #[frb(mirror(PaymentDetails))]
 pub enum _PaymentDetails {
-    Spark,
+    Spark {
+        invoice_details: Option<SparkInvoicePaymentDetails>,
+    },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
+        invoice_details: Option<SparkInvoicePaymentDetails>,
     },
     Lightning {
         description: Option<String>,
@@ -432,6 +434,12 @@ pub enum _PaymentDetails {
     Deposit {
         tx_id: String,
     },
+}
+
+#[frb(mirror(SparkInvoicePaymentDetails))]
+pub struct _SparkInvoicePaymentDetails {
+    pub description: Option<String>,
+    pub invoice: String,
 }
 
 #[frb(mirror(PaymentMetadata))]
@@ -600,11 +608,10 @@ pub struct _SparkInvoiceDetails {
     pub identity_public_key: String,
     pub network: BitcoinNetwork,
     pub amount: Option<u128>,
-    pub payment_type: SparkInvoicePaymentType,
+    pub token_identifier: Option<String>,
     pub expiry_time: Option<u64>,
     pub description: Option<String>,
     pub sender_public_key: Option<String>,
-    pub source: PaymentRequestSource,
 }
 
 #[frb(mirror(SparkInvoicePaymentType))]

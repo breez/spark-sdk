@@ -1,6 +1,8 @@
 use std::time::UNIX_EPOCH;
 
-use breez_sdk_common::input::{self, InputType, PaymentRequestSource, parse_spark_address};
+use breez_sdk_common::input::{
+    self, InputType, PaymentRequestSource, SparkInvoiceDetails, parse_spark_address,
+};
 use spark_wallet::{
     CoopExitFeeQuote, CoopExitSpeedFeeQuote, ExitSpeed, LightningSendPayment, LightningSendStatus,
     Network as SparkNetwork, SspUserRequest, TokenTransactionStatus, TransferDirection,
@@ -9,8 +11,8 @@ use spark_wallet::{
 
 use crate::{
     Fee, Network, OnchainConfirmationSpeed, Payment, PaymentDetails, PaymentMethod, PaymentStatus,
-    PaymentType, SdkError, SendOnchainFeeQuote, SendOnchainSpeedFeeQuote, TokenBalance,
-    TokenMetadata,
+    PaymentType, SdkError, SendOnchainFeeQuote, SendOnchainSpeedFeeQuote,
+    SparkInvoicePaymentDetails, TokenBalance, TokenMetadata,
 };
 
 impl From<TransferType> for PaymentMethod {
@@ -35,7 +37,7 @@ impl PaymentDetails {
             };
 
             return Ok(Some(PaymentDetails::Spark {
-                invoice_details: Some(invoice_details),
+                invoice_details: Some(invoice_details.into()),
             }));
         }
 
@@ -83,6 +85,15 @@ impl PaymentDetails {
             },
         };
         Ok(Some(details))
+    }
+}
+
+impl From<SparkInvoiceDetails> for SparkInvoicePaymentDetails {
+    fn from(value: SparkInvoiceDetails) -> Self {
+        Self {
+            description: value.description,
+            invoice: value.invoice,
+        }
     }
 }
 

@@ -120,7 +120,16 @@ impl TransferService {
                 let receiver_address = SparkAddress::new(*receiver_id, self.network, None);
                 let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
                 transfer_observer
-                    .before_send_transfer(&transfer_id, &receiver_address, amount_sats)
+                    .before_send_transfer(
+                        &transfer_id,
+                        &spark_invoice
+                            .clone()
+                            .or(receiver_address.to_address_string().ok())
+                            .ok_or(ServiceError::Generic(
+                                "No pay request available".to_string(),
+                            ))?,
+                        amount_sats,
+                    )
                     .await?;
             }
         }

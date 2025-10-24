@@ -196,16 +196,10 @@ pub struct SparkInvoiceDetails {
     pub network: BitcoinNetwork,
     #[serde(with = "serde_option_u128_as_string")]
     pub amount: Option<u128>,
-    pub payment_type: SparkInvoicePaymentType,
+    pub token_identifier: Option<String>,
     pub expiry_time: Option<u64>,
     pub description: Option<String>,
     pub sender_public_key: Option<String>,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::SparkInvoicePaymentType)]
-pub enum SparkInvoicePaymentType {
-    Sats,
-    Tokens { token_identifier: Option<String> },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_common::input::BitcoinAddressDetails)]
@@ -410,12 +404,12 @@ pub struct Payment {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentDetails)]
 pub enum PaymentDetails {
     Spark {
-        invoice_details: Option<SparkInvoiceDetails>,
+        invoice_details: Option<SparkInvoicePaymentDetails>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
-        invoice_details: Option<SparkInvoiceDetails>,
+        invoice_details: Option<SparkInvoicePaymentDetails>,
     },
     Lightning {
         description: Option<String>,
@@ -431,6 +425,12 @@ pub enum PaymentDetails {
     Deposit {
         tx_id: String,
     },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkInvoicePaymentDetails)]
+pub struct SparkInvoicePaymentDetails {
+    pub description: Option<String>,
+    pub invoice: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentMethod)]
@@ -632,10 +632,10 @@ pub enum SendPaymentMethod {
         token_identifier: Option<String>,
     },
     SparkInvoice {
-        invoice: String,
+        spark_invoice_details: SparkInvoiceDetails,
+        #[serde(with = "serde_u128_as_string")]
         fee: u128,
         token_identifier: Option<String>,
-        spark_invoice_details: SparkInvoiceDetails,
     },
 }
 
@@ -893,10 +893,10 @@ pub enum ProvisionalPaymentDetails {
         invoice: String,
     },
     Spark {
-        receiver_public_key: String,
+        pay_request: String,
     },
     Token {
         token_id: String,
-        receiver_public_key: String,
+        pay_request: String,
     },
 }

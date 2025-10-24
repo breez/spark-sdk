@@ -5,7 +5,7 @@ use lightning::bolt11_invoice::Bolt11InvoiceDescriptionRef;
 use percent_encoding_rfc3986::{NON_ALPHANUMERIC, percent_decode_str};
 use regex::Regex;
 use spark_wallet::{SparkAddress, SparkAddressPaymentType};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use web_time::UNIX_EPOCH;
 
 use crate::{
@@ -642,6 +642,19 @@ pub fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option
                 SparkAddressPaymentType::SatsPayment(sp) => sp.amount.map(Into::into),
             };
 
+            let token_identifier = match &payment_type {
+                SparkAddressPaymentType::TokensPayment(tp) => {
+                    let Some(token_identifier) = &tp.token_identifier else {
+                        warn!(
+                            "Tried parsing Spark token invoice without token identifier: {input}"
+                        );
+                        return None;
+                    };
+                    Some(token_identifier.to_string())
+                }
+                SparkAddressPaymentType::SatsPayment(_) => None,
+            };
+
             let Ok(expiry_time_duration) = invoice_fields
                 .expiry_time
                 .map(|e| e.duration_since(UNIX_EPOCH))
@@ -656,7 +669,7 @@ pub fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option
                 identity_public_key,
                 network,
                 amount,
-                payment_type: payment_type.into(),
+                token_identifier,
                 expiry_time,
                 description: invoice_fields.memo,
                 sender_public_key: invoice_fields.sender_public_key.map(|e| e.to_string()),

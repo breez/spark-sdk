@@ -364,10 +364,6 @@ pub(crate) struct StaticDepositAddress {
 
 #[cfg(feature = "test-utils")]
 pub mod tests {
-    use breez_sdk_common::{
-        input::{SparkInvoiceDetails, SparkInvoicePaymentType},
-        network::BitcoinNetwork,
-    };
     use chrono::Utc;
 
     use crate::{
@@ -389,15 +385,9 @@ pub mod tests {
             timestamp: 5000,
             method: PaymentMethod::Spark,
             details: Some(PaymentDetails::Spark {
-                invoice_details: Some(SparkInvoiceDetails {
-                    invoice: "invoice_string".to_string(),
-                    identity_public_key: "identity_public_key".to_string(),
-                    network: BitcoinNetwork::Regtest,
-                    amount: Some(100_000),
-                    payment_type: SparkInvoicePaymentType::Sats,
-                    expiry_time: Some(1000),
+                invoice_details: Some(crate::SparkInvoicePaymentDetails {
                     description: Some("description".to_string()),
-                    sender_public_key: Some("sender_public_key".to_string()),
+                    invoice: "invoice_string".to_string(),
                 }),
             }),
         };
@@ -424,17 +414,9 @@ pub mod tests {
             details: Some(PaymentDetails::Token {
                 metadata: token_metadata.clone(),
                 tx_hash: "tx_hash".to_string(),
-                invoice_details: Some(SparkInvoiceDetails {
-                    invoice: "invoice_string_2".to_string(),
-                    identity_public_key: "identity_public_key_2".to_string(),
-                    network: BitcoinNetwork::Regtest,
-                    amount: Some(200_000),
-                    payment_type: SparkInvoicePaymentType::Tokens {
-                        token_identifier: Some("token123".to_string()),
-                    },
-                    expiry_time: Some(1000),
+                invoice_details: Some(crate::SparkInvoicePaymentDetails {
                     description: Some("description_2".to_string()),
-                    sender_public_key: Some("sender_public_key_2".to_string()),
+                    invoice: "invoice_string_2".to_string(),
                 }),
             }),
         };

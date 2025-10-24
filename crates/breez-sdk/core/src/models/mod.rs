@@ -205,13 +205,13 @@ impl crate::UniffiCustomTypeConverter for u128 {
 pub enum PaymentDetails {
     Spark {
         /// The invoice details if the payment fulfilled a spark invoice
-        invoice_details: Option<SparkInvoiceDetails>,
+        invoice_details: Option<SparkInvoicePaymentDetails>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         /// The invoice details if the payment fulfilled a spark invoice
-        invoice_details: Option<SparkInvoiceDetails>,
+        invoice_details: Option<SparkInvoicePaymentDetails>,
     },
     Lightning {
         /// Represents the invoice description
@@ -238,6 +238,15 @@ pub enum PaymentDetails {
     Deposit {
         tx_id: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkInvoicePaymentDetails {
+    /// Represents the spark invoice description
+    pub description: Option<String>,
+    /// The raw spark invoice string
+    pub invoice: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -505,14 +514,13 @@ pub enum SendPaymentMethod {
         token_identifier: Option<String>,
     },
     SparkInvoice {
-        invoice: String,
+        spark_invoice_details: SparkInvoiceDetails,
         /// Fee to pay for the transaction
         /// Denominated in sats if token identifier is empty, otherwise in the token base units
         fee: u128,
         /// The presence of this field indicates that the payment is for a token
         /// If empty, it is a Bitcoin payment
         token_identifier: Option<String>,
-        spark_invoice_details: SparkInvoiceDetails,
     },
 }
 
