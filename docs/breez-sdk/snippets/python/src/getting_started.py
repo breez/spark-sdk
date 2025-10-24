@@ -49,7 +49,7 @@ async def init_sdk_advanced():
         # Create the default storage
         storage = default_storage(data_dir="./.data")
         # Build the SDK using the config, seed and storage
-        builder = SdkBuilder(config=config, seed=seed, storage=storage)
+        builder = SdkBuilder(config=config, seed=seed, storage=storage.storage)
         # You can also pass your custom implementations:
         # await builder.with_chain_service(<your chain service implementation>)
         # await builder.with_rest_client(<your rest client implementation>)
