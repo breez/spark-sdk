@@ -12,7 +12,10 @@ use rustyline::{
     Completer, Editor, Helper, Hinter, Validator, highlight::Highlighter, hint::HistoryHinter,
     history::DefaultHistory,
 };
-use std::borrow::Cow::{self, Owned};
+use std::{
+    borrow::Cow::{self, Owned},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[derive(Clone, Parser)]
 pub enum Command {
@@ -84,6 +87,14 @@ pub enum Command {
         /// Optional token identifier. Only used if the payment method is a spark invoice. Absence indicates sats payment.
         #[arg(short = 't', long)]
         token_identifier: Option<String>,
+
+        /// Optional expiry time for the invoice in seconds from now. Only used if the payment method is a spark invoice.
+        #[arg(short = 'e', long)]
+        expiry_secs: Option<u64>,
+
+        /// Optional sender public key. Only used if the payment method is a spark invoice.
+        #[arg(short = 's', long)]
+        sender_public_key: Option<String>,
     },
 
     /// Pay the given payment request
@@ -314,15 +325,25 @@ pub(crate) async fn execute_command(
             description,
             amount,
             token_identifier,
+            expiry_secs,
+            sender_public_key,
         } => {
             let payment_method = match payment_method.as_str() {
                 "sparkaddress" => ReceivePaymentMethod::SparkAddress,
                 "sparkinvoice" => ReceivePaymentMethod::SparkInvoice {
                     amount,
                     token_identifier,
-                    expiry_time: None,
+                    expiry_time: expiry_secs
+                        .map(|secs| {
+                            SystemTime::now()
+                                .duration_since(UNIX_EPOCH)?
+                                .as_secs()
+                                .checked_add(secs)
+                                .ok_or(anyhow::anyhow!("Invalid expiry time"))
+                        })
+                        .transpose()?,
                     description,
-                    sender_public_key: None,
+                    sender_public_key,
                 },
                 "bitcoin" => ReceivePaymentMethod::BitcoinAddress,
                 "bolt11" => ReceivePaymentMethod::Bolt11Invoice {

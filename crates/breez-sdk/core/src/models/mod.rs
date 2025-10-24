@@ -483,7 +483,7 @@ pub enum ReceivePaymentMethod {
         /// A description to embed in the invoice.
         description: Option<String>,
         /// If set, the invoice may only be fulfilled by a payer with this public key
-        sender_public_key: Option<String>, // TODO: do we want to expose this?
+        sender_public_key: Option<String>,
     },
     BitcoinAddress,
     Bolt11Invoice {
