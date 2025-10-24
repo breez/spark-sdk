@@ -39,7 +39,7 @@ Future<void> initSdkAdvanced() async {
   final storage = defaultStorage(dataDir: "./.data");
 
   final builder =
-      SdkBuilder(config: config, seed: seed, storage: storage);
+      SdkBuilder(config: config, seed: seed, storage: storage.storage);
   // You can also pass your custom implementations:
   // builder.withRestChainService(
   //     url: "https://custom.chain.service",
