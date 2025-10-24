@@ -264,7 +264,8 @@ pub struct _ReceivePaymentRequest {
 #[frb(mirror(ReceivePaymentResponse))]
 pub struct _ReceivePaymentResponse {
     pub payment_request: String,
-    pub fee_sats: u64,
+    pub fee: u128,
+    pub token_identifier: Option<String>,
 }
 
 #[frb(mirror(RefundDepositRequest))]

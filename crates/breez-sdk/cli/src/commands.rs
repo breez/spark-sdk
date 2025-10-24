@@ -357,10 +357,10 @@ pub(crate) async fn execute_command(
                 .receive_payment(ReceivePaymentRequest { payment_method })
                 .await?;
 
-            if receive_result.fee_sats > 0 {
+            if receive_result.fee > 0 {
                 println!(
-                    "Prepared payment requires fee of {} sats\n ",
-                    receive_result.fee_sats
+                    "Prepared payment requires fee of {} sats/token base units\n ",
+                    receive_result.fee
                 );
             }
 

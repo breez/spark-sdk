@@ -647,7 +647,8 @@ pub struct ReceivePaymentRequest {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ReceivePaymentResponse)]
 pub struct ReceivePaymentResponse {
     pub payment_request: String,
-    pub fee_sats: u64,
+    pub fee: u128,
+    pub token_identifier: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareLnurlPayRequest)]
