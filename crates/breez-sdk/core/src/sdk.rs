@@ -9,7 +9,7 @@ pub use breez_sdk_common::input::parse as parse_input;
 use breez_sdk_common::{
     fiat::FiatService,
     input::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType},
-    lnurl::{self, withdraw::validate_lnurl_withdraw},
+    lnurl::{self, withdraw::execute_lnurl_withdraw},
 };
 use breez_sdk_common::{
     lnurl::{
@@ -833,7 +833,7 @@ impl BreezSdk {
             withdraw_request,
         } = request;
 
-        if !withdraw_request.is_sat_amount_valid(amount_sats) {
+        if !withdraw_request.is_amount_valid(amount_sats) {
             return Err(SdkError::InvalidInput(
                 "Amount must be within min/max LNURL withdrawable limits".to_string(),
             ));
@@ -848,19 +848,12 @@ impl BreezSdk {
                 },
             })
             .await?;
-        let InputType::Bolt11Invoice(bolt11_invoice_details) =
-            self.parse(&receive_response.payment_request).await?
-        else {
-            return Err(SdkError::Generic(
-                "Failed to parse generated invoice".to_string(),
-            ));
-        };
 
-        // Validate the withdraw request against the generated invoice and perform the LNURL withdraw
-        let withdraw_response = validate_lnurl_withdraw(
+        // Perform the LNURL withdraw using the generated invoice
+        let withdraw_response = execute_lnurl_withdraw(
             self.lnurl_client.as_ref(),
             &withdraw_request,
-            &bolt11_invoice_details,
+            &receive_response.payment_request,
         )
         .await?;
         if let lnurl::withdraw::ValidatedCallbackResponse::EndpointError { data } =
