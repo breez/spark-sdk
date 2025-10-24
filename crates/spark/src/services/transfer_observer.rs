@@ -1,10 +1,10 @@
-use bitcoin::{Address, Txid, secp256k1::PublicKey};
+use bitcoin::{Address, Txid};
 use thiserror::Error;
 
-use crate::{address::SparkAddress, services::TransferId};
+use crate::services::TransferId;
 
 pub struct ReceiverTokenOutput {
-    pub receiver_address: PublicKey,
+    pub pay_request: String,
     pub amount: u128,
 }
 
@@ -39,7 +39,7 @@ pub trait TransferObserver: Send + Sync {
     async fn before_send_transfer(
         &self,
         transfer_id: &TransferId,
-        receiver_address: &SparkAddress,
+        pay_request: &str,
         amount_sats: u64,
     ) -> Result<(), TransferObserverError>;
 }

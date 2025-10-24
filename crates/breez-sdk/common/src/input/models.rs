@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use spark_wallet::SparkAddressPaymentType;
 
 use crate::{
     lnurl::{
@@ -203,33 +202,16 @@ pub struct SparkInvoiceDetails {
     /// The identity public key of the invoice issuer
     pub identity_public_key: String,
     pub network: BitcoinNetwork,
-    /// Optional amount denominated in sats or token base units (determined by the payment type)
+    /// Optional amount denominated in sats if `token_identifier` is absent, otherwise in the token base units
     pub amount: Option<u128>,
-    pub payment_type: SparkInvoicePaymentType,
+    /// The token identifier of the token payment. Absence indicates a Bitcoin payment.
+    pub token_identifier: Option<String>,
     /// Optional expiry time. If not provided, the invoice will never expire.
     pub expiry_time: Option<u64>,
     /// Optional description.
     pub description: Option<String>,
     /// If set, the invoice may only be fulfilled by a payer with this public key.
     pub sender_public_key: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum SparkInvoicePaymentType {
-    Sats,
-    Tokens { token_identifier: Option<String> },
-}
-
-impl From<SparkAddressPaymentType> for SparkInvoicePaymentType {
-    fn from(payment_type: SparkAddressPaymentType) -> Self {
-        match payment_type {
-            SparkAddressPaymentType::SatsPayment(_) => Self::Sats,
-            SparkAddressPaymentType::TokensPayment(tp) => Self::Tokens {
-                token_identifier: tp.token_identifier,
-            },
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

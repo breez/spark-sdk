@@ -146,7 +146,7 @@ pub async fn token_transaction_to_payments(
             details: Some(PaymentDetails::Token {
                 metadata: metadata.clone(),
                 tx_hash: transaction.hash.clone(),
-                invoice_details: invoice,
+                invoice_details: invoice.map(Into::into),
             }),
         };
         payments.push(payment);

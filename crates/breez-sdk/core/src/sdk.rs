@@ -8,10 +8,7 @@ use bitcoin::{
 pub use breez_sdk_common::input::parse as parse_input;
 use breez_sdk_common::{
     fiat::FiatService,
-    input::{
-        BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType,
-        SparkInvoicePaymentType,
-    },
+    input::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType},
 };
 use breez_sdk_common::{
     lnurl::{
@@ -632,11 +629,13 @@ impl BreezSdk {
                 let invoice = self.spark_wallet.create_spark_invoice(
                     amount,
                     token_identifier,
-                    expiry_time.map(|time| {
-                        SystemTime::UNIX_EPOCH
-                            .checked_add(Duration::from_secs(time))
-                            .expect("Invalid expiry time")
-                    }),
+                    expiry_time
+                        .map(|time| {
+                            SystemTime::UNIX_EPOCH
+                                .checked_add(Duration::from_secs(time))
+                                .ok_or(SdkError::Generic("Invalid expiry time".to_string()))
+                        })
+                        .transpose()?,
                     description,
                     sender_public_key.map(|key| PublicKey::from_str(&key).unwrap()),
                 )?;
@@ -836,25 +835,18 @@ impl BreezSdk {
                 token_identifier: request.token_identifier,
             }),
             InputType::SparkInvoice(spark_invoice_details) => {
-                if let SparkInvoicePaymentType::Tokens {
-                    token_identifier: invoice_token_identifier,
-                } = &spark_invoice_details.payment_type
-                {
-                    // If the invoice is for tokens, a token identifier must be provided
-                    let Some(requested_token_identifier) = &request.token_identifier else {
-                        return Err(SdkError::InvalidInput(
-                            "Token identifier is required for this payment request: spark tokens invoice".to_string(),
-                        ));
-                    };
-                    // If the invoice speficies a token, the provided token identifier must match
-                    if let Some(invoice_token_identifier) = invoice_token_identifier
-                        && invoice_token_identifier != requested_token_identifier
+                if let Some(token_identifier) = &spark_invoice_details.token_identifier {
+                    if let Some(requested_token_identifier) = &request.token_identifier
+                        && requested_token_identifier != token_identifier
                     {
                         return Err(SdkError::InvalidInput(
                             "Requested token identifier does not match invoice token identifier"
                                 .to_string(),
                         ));
                     }
+                    return Err(SdkError::InvalidInput(
+                        "Token identifier is required for tokens invoice".to_string(),
+                    ));
                 } else if request.token_identifier.is_some() {
                     return Err(SdkError::InvalidInput(
                             "Token identifier can't be provided for this payment request: non-tokens invoice".to_string(),
@@ -892,10 +884,9 @@ impl BreezSdk {
 
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkInvoice {
-                        invoice: request.payment_request,
+                        spark_invoice_details: spark_invoice_details.clone(),
                         fee: 0,
                         token_identifier: request.token_identifier.clone(),
-                        spark_invoice_details: spark_invoice_details.clone(),
                     },
                     amount: spark_invoice_details
                         .amount
@@ -1299,11 +1290,10 @@ impl BreezSdk {
                     .await
             }
             SendPaymentMethod::SparkInvoice {
-                invoice,
-                token_identifier,
+                spark_invoice_details,
                 ..
             } => {
-                self.send_spark_invoice(invoice, token_identifier.clone(), &request)
+                self.send_spark_invoice(&spark_invoice_details.invoice, &request)
                     .await
             }
             SendPaymentMethod::Bolt11Invoice {
@@ -1389,7 +1379,6 @@ impl BreezSdk {
     async fn send_spark_invoice(
         &self,
         invoice: &str,
-        _token_identifier: Option<String>,
         request: &SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
         let payment = match self

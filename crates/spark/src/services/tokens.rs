@@ -355,11 +355,18 @@ impl TokenService {
                     &token_id,
                     receiver_outputs
                         .into_iter()
-                        .map(|o| ReceiverTokenOutput {
-                            receiver_address: o.receiver_address.identity_public_key,
-                            amount: o.amount,
+                        .map(|o| {
+                            Ok(ReceiverTokenOutput {
+                                pay_request: o
+                                    .spark_invoice
+                                    .or(o.receiver_address.to_address_string().ok())
+                                    .ok_or(ServiceError::Generic(
+                                        "No pay request available".to_string(),
+                                    ))?,
+                                amount: o.amount,
+                            })
                         })
-                        .collect(),
+                        .collect::<Result<Vec<ReceiverTokenOutput>, ServiceError>>()?,
                 )
                 .await?;
         }

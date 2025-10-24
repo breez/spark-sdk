@@ -500,7 +500,7 @@ impl SparkWallet {
     ) -> Result<WalletTransfer, SparkWalletError> {
         if receiver_address.is_invoice() {
             return Err(SparkWalletError::Generic(
-                "Receiver address is a Spark invoice. Use fulfill_spark_invoice instead."
+                "Receiver address is a Spark invoice. Use `fulfill_spark_invoice` instead."
                     .to_string(),
             ));
         }
