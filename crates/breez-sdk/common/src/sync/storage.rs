@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use thiserror::Error;
 
-use crate::sync::RecordId;
+pub use crate::sync::RecordId;
 
 /// Errors that can occur during storage operations
 #[derive(Debug, Error, Clone)]
