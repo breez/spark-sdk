@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use breez_sdk_common::sync::{
     RecordId,
     storage::{
-        IncomingChange, OutgoingChange, Record, RecordChange, StorageError as SyncStorageError,
-        SyncStorage, UnversionedRecordChange,
+        IncomingChange, OutgoingChange, Record, RecordChange, SyncStorage, SyncStorageError,
+        UnversionedRecordChange,
     },
 };
 use macros::async_trait;
