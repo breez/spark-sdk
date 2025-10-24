@@ -41,25 +41,59 @@ func fetchTokenMetadata(sdk: BreezSdk) async throws {
     // ANCHOR_END: fetch-token-metadata
 }
 
+func receiveTokenPaymentSparkInvoice(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
+    // ANCHOR: receive-token-payment-spark-invoice
+    let tokenIdentifier = "<token identifier>"
+    let optionalDescription = "<invoice description>"
+    let optionalAmount = BInt(5_000)
+    let optionalExpiryTimeSeconds: UInt64 = 1_716_691_200
+    let optionalSenderPublicKey = "<sender public key>"
+
+    let response =
+        try await sdk
+        .receivePayment(
+            request: ReceivePaymentRequest(
+                paymentMethod: ReceivePaymentMethod.sparkInvoice(
+                    amount: optionalAmount,
+                    tokenIdentifier: tokenIdentifier,
+                    expiryTime: optionalExpiryTimeSeconds,
+                    description: optionalDescription,
+                    senderPublicKey: optionalSenderPublicKey
+                )
+            ))
+
+    let paymentRequest = response.paymentRequest
+    print("Payment request: \(paymentRequest)")
+    let receiveFeeSats = response.fee
+    print("Fees: \(receiveFeeSats) token base units")
+    // ANCHOR_END: receive-token-payment-spark-invoice
+
+    return response
+}
+
 func sendTokenPayment(sdk: BreezSdk) async throws {
     // ANCHOR: send-token-payment
-    let paymentRequest = "<spark address>"
-    // The token identifier (e.g., asset ID or token contract)
+    let paymentRequest = "<spark address or invoice>"
+    // Token identifier must match the invoice in case it specifies one.
     let tokenIdentifier = "<token identifier>"
-    // Set the amount of tokens you wish to send (requires 'import BigNumber')
-    let amount = BInt(1_000)
+    // Set the amount of tokens you wish to send. (requires 'import BigNumber')
+    let optionalAmount = BInt(1_000)
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            amount: amount,
+            amount: optionalAmount,
             tokenIdentifier: tokenIdentifier
         ))
 
     // If the fees are acceptable, continue to send the token payment
     if case let .sparkAddress(address, fee, tokenId) = prepareResponse.paymentMethod {
         print("Token ID: \(String(describing: tokenId))")
-        print("Fees: \(fee) sats")
+        print("Fees: \(fee) token base units")
+    }
+    if case let .sparkInvoice(invoice, fee, tokenId) = prepareResponse.paymentMethod {
+        print("Token ID: \(String(describing: tokenId))")
+        print("Fees: \(fee) token base units")
     }
 
     // Send the token payment

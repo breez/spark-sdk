@@ -51,8 +51,8 @@ const examplePrepareSendPaymentOnchain = async (sdk: BreezSdk) => {
   // ANCHOR_END: prepare-send-payment-onchain
 }
 
-const examplePrepareSendPaymentSpark = async (sdk: BreezSdk) => {
-  // ANCHOR: prepare-send-payment-spark
+const examplePrepareSendPaymentSparkAddress = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-send-payment-spark-address
   const paymentRequest = '<spark address>'
   // Set the amount you wish the pay the receiver
   const amountSats = BigInt(50_000)
@@ -67,7 +67,26 @@ const examplePrepareSendPaymentSpark = async (sdk: BreezSdk) => {
     const feeSats = prepareResponse.paymentMethod.fee
     console.debug(`Fees: ${feeSats} sats`)
   }
-  // ANCHOR_END: prepare-send-payment-spark
+  // ANCHOR_END: prepare-send-payment-spark-address
+}
+
+const examplePrepareSendPaymentSparkInvoice = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-send-payment-spark-invoice
+  const paymentRequest = '<spark invoice>'
+  // Optionally set the amount you wish the pay the receiver
+  const optionalAmountSats = BigInt(50_000)
+
+  const prepareResponse = await sdk.prepareSendPayment({
+    paymentRequest,
+    amount: optionalAmountSats
+  })
+
+  // If the fees are acceptable, continue to create the Send Payment
+  if (prepareResponse.paymentMethod.type === 'sparkInvoice') {
+    const feeSats = prepareResponse.paymentMethod.fee
+    console.debug(`Fees: ${feeSats} sats`)
+  }
+  // ANCHOR_END: prepare-send-payment-spark-invoice
 }
 
 const exampleSendPaymentLightningBolt11 = async (

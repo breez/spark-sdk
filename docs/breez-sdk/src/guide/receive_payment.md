@@ -20,6 +20,7 @@ When receiving via Lightning, we can generate a BOLT11 invoice to be paid. Setti
 ```rust,ignore
 {{#include ../../snippets/rust/src/receive_payment.rs:receive-payment-lightning-bolt11}}
 ```
+
 </section>
 
 <div slot="title">Swift</div>
@@ -28,6 +29,7 @@ When receiving via Lightning, we can generate a BOLT11 invoice to be paid. Setti
 ```swift,ignore
 {{#include ../../snippets/swift/BreezSdkSnippets/Sources/ReceivePayment.swift:receive-payment-lightning-bolt11}}
 ```
+
 </section>
 
 <div slot="title">Kotlin</div>
@@ -36,6 +38,7 @@ When receiving via Lightning, we can generate a BOLT11 invoice to be paid. Setti
 ```kotlin,ignore
 {{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/ReceivePayment.kt:receive-payment-lightning-bolt11}}
 ```
+
 </section>
 
 <div slot="title">Javascript</div>
@@ -44,6 +47,7 @@ When receiving via Lightning, we can generate a BOLT11 invoice to be paid. Setti
 ```typescript
 {{#include ../../snippets/wasm/receive_payment.ts:receive-payment-lightning-bolt11}}
 ```
+
 </section>
 
 <div slot="title">React Native</div>
@@ -52,6 +56,7 @@ When receiving via Lightning, we can generate a BOLT11 invoice to be paid. Setti
 ```typescript
 {{#include ../../snippets/react-native/receive_payment.ts:receive-payment-lightning-bolt11}}
 ```
+
 </section>
 
 <div slot="title">Flutter</div>
@@ -60,14 +65,16 @@ When receiving via Lightning, we can generate a BOLT11 invoice to be paid. Setti
 ```dart,ignore
 {{#include ../../snippets/flutter/lib/receive_payment.dart:receive-payment-lightning-bolt11}}
 ```
+
 </section>
 
 <div slot="title">Python</div>
 <section>
 
-```python,ignore 
+```python,ignore
 {{#include ../../snippets/python/src/receive_payment.py:receive-payment-lightning-bolt11}}
 ```
+
 </section>
 
 <div slot="title">Go</div>
@@ -76,10 +83,12 @@ When receiving via Lightning, we can generate a BOLT11 invoice to be paid. Setti
 ```go,ignore
 {{#include ../../snippets/go/receive_payment.go:receive-payment-lightning-bolt11}}
 ```
+
 </section>
 </custom-tabs>
 
-#### LNURL-Pay & Lightning address 
+#### LNURL-Pay & Lightning address
+
 To receive via LNURL-Pay and/or a Lightning address, follow [these instructions](/guide/receive_lnurl_pay.md).
 
 > Note: Lightning payments work in Spark even if the receiver is offline. To understand how it works under the hood, read [this](https://docs.spark.money/spark/lightning).
@@ -96,6 +105,7 @@ The SDK monitors the specified address for new UTXOs and automatically initiates
 ```rust,ignore
 {{#include ../../snippets/rust/src/receive_payment.rs:receive-payment-onchain}}
 ```
+
 </section>
 
 <div slot="title">Swift</div>
@@ -104,6 +114,7 @@ The SDK monitors the specified address for new UTXOs and automatically initiates
 ```swift,ignore
 {{#include ../../snippets/swift/BreezSdkSnippets/Sources/ReceivePayment.swift:receive-payment-onchain}}
 ```
+
 </section>
 
 <div slot="title">Kotlin</div>
@@ -112,6 +123,7 @@ The SDK monitors the specified address for new UTXOs and automatically initiates
 ```kotlin,ignore
 {{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/ReceivePayment.kt:receive-payment-onchain}}
 ```
+
 </section>
 
 <div slot="title">Javascript</div>
@@ -120,6 +132,7 @@ The SDK monitors the specified address for new UTXOs and automatically initiates
 ```typescript
 {{#include ../../snippets/wasm/receive_payment.ts:receive-payment-onchain}}
 ```
+
 </section>
 
 <div slot="title">React Native</div>
@@ -128,6 +141,7 @@ The SDK monitors the specified address for new UTXOs and automatically initiates
 ```typescript
 {{#include ../../snippets/react-native/receive_payment.ts:receive-payment-onchain}}
 ```
+
 </section>
 
 <div slot="title">Flutter</div>
@@ -136,14 +150,16 @@ The SDK monitors the specified address for new UTXOs and automatically initiates
 ```dart,ignore
 {{#include ../../snippets/flutter/lib/receive_payment.dart:receive-payment-onchain}}
 ```
+
 </section>
 
 <div slot="title">Python</div>
 <section>
 
-```python,ignore 
+```python,ignore
 {{#include ../../snippets/python/src/receive_payment.py:receive-payment-onchain}}
 ```
+
 </section>
 
 <div slot="title">Go</div>
@@ -152,81 +168,173 @@ The SDK monitors the specified address for new UTXOs and automatically initiates
 ```go,ignore
 {{#include ../../snippets/go/receive_payment.go:receive-payment-onchain}}
 ```
+
 </section>
 </custom-tabs>
 
 ### Spark
 
-For payments between Spark users, you can use the static Spark address to receive payments.
+For payments between Spark users, you can use a Spark address or generate a Spark invoice to receive payments.
+
+#### Spark address
+
+Spark addresses are static.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
 <section>
 
 ```rust,ignore
-{{#include ../../snippets/rust/src/receive_payment.rs:receive-payment-spark}}
+{{#include ../../snippets/rust/src/receive_payment.rs:receive-payment-spark-address}}
 ```
+
 </section>
 
 <div slot="title">Swift</div>
 <section>
 
 ```swift,ignore
-{{#include ../../snippets/swift/BreezSdkSnippets/Sources/ReceivePayment.swift:receive-payment-spark}}
+{{#include ../../snippets/swift/BreezSdkSnippets/Sources/ReceivePayment.swift:receive-payment-spark-address}}
 ```
+
 </section>
 
 <div slot="title">Kotlin</div>
 <section>
 
 ```kotlin,ignore
-{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/ReceivePayment.kt:receive-payment-spark}}
+{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/ReceivePayment.kt:receive-payment-spark-address}}
 ```
+
 </section>
 
 <div slot="title">Javascript</div>
 <section>
 
 ```typescript
-{{#include ../../snippets/wasm/receive_payment.ts:receive-payment-spark}}
+{{#include ../../snippets/wasm/receive_payment.ts:receive-payment-spark-address}}
 ```
+
 </section>
 
 <div slot="title">React Native</div>
 <section>
 
 ```typescript
-{{#include ../../snippets/react-native/receive_payment.ts:receive-payment-spark}}
+{{#include ../../snippets/react-native/receive_payment.ts:receive-payment-spark-address}}
 ```
+
 </section>
 
 <div slot="title">Flutter</div>
 <section>
 
 ```dart,ignore
-{{#include ../../snippets/flutter/lib/receive_payment.dart:receive-payment-spark}}
+{{#include ../../snippets/flutter/lib/receive_payment.dart:receive-payment-spark-address}}
 ```
+
 </section>
 
 <div slot="title">Python</div>
 <section>
 
-```python,ignore 
-{{#include ../../snippets/python/src/receive_payment.py:receive-payment-spark}}
+```python,ignore
+{{#include ../../snippets/python/src/receive_payment.py:receive-payment-spark-address}}
 ```
+
 </section>
 
 <div slot="title">Go</div>
 <section>
 
 ```go,ignore
-{{#include ../../snippets/go/receive_payment.go:receive-payment-spark}}
+{{#include ../../snippets/go/receive_payment.go:receive-payment-spark-address}}
 ```
+
 </section>
 </custom-tabs>
 
-## Waiting for a lightning payment
-Generally it is recommended to use [event flows] to react to payment completion. There is a convenience function to wait for a lightning payment to be paid.
+#### Spark invoice
+
+Spark invoices are single-use and may impose restrictions on the payment, such as amount, expiry, and who is able to pay it.
+
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+
+```rust,ignore
+{{#include ../../snippets/rust/src/receive_payment.rs:receive-payment-spark-invoice}}
+```
+
+</section>
+
+<div slot="title">Swift</div>
+<section>
+
+```swift,ignore
+{{#include ../../snippets/swift/BreezSdkSnippets/Sources/ReceivePayment.swift:receive-payment-spark-invoice}}
+```
+
+</section>
+
+<div slot="title">Kotlin</div>
+<section>
+
+```kotlin,ignore
+{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/ReceivePayment.kt:receive-payment-spark-invoice}}
+```
+
+</section>
+
+<div slot="title">Javascript</div>
+<section>
+
+```typescript
+{{#include ../../snippets/wasm/receive_payment.ts:receive-payment-spark-invoice}}
+```
+
+</section>
+
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/receive_payment.ts:receive-payment-spark-invoice}}
+```
+
+</section>
+
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/receive_payment.dart:receive-payment-spark-invoice}}
+```
+
+</section>
+
+<div slot="title">Python</div>
+<section>
+
+```python,ignore
+{{#include ../../snippets/python/src/receive_payment.py:receive-payment-spark-invoice}}
+```
+
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/receive_payment.go:receive-payment-spark-invoice}}
+```
+
+</section>
+</custom-tabs>
+
+## Waiting for a payment
+
+It is generally recommended to use [event flows] to react to payment completion. However, there is a convenience function to wait for payment completion.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
@@ -235,6 +343,7 @@ Generally it is recommended to use [event flows] to react to payment completion.
 ```rust,ignore
 {{#include ../../snippets/rust/src/receive_payment.rs:wait-for-payment}}
 ```
+
 </section>
 
 <div slot="title">Swift</div>
@@ -243,6 +352,7 @@ Generally it is recommended to use [event flows] to react to payment completion.
 ```swift,ignore
 {{#include ../../snippets/swift/BreezSdkSnippets/Sources/ReceivePayment.swift:wait-for-payment}}
 ```
+
 </section>
 
 <div slot="title">Kotlin</div>
@@ -251,6 +361,7 @@ Generally it is recommended to use [event flows] to react to payment completion.
 ```kotlin,ignore
 {{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/ReceivePayment.kt:wait-for-payment}}
 ```
+
 </section>
 
 <div slot="title">Javascript</div>
@@ -259,6 +370,7 @@ Generally it is recommended to use [event flows] to react to payment completion.
 ```typescript
 {{#include ../../snippets/wasm/receive_payment.ts:wait-for-payment}}
 ```
+
 </section>
 
 <div slot="title">React Native</div>
@@ -267,6 +379,7 @@ Generally it is recommended to use [event flows] to react to payment completion.
 ```typescript
 {{#include ../../snippets/react-native/receive_payment.ts:wait-for-payment}}
 ```
+
 </section>
 
 <div slot="title">Flutter</div>
@@ -275,14 +388,16 @@ Generally it is recommended to use [event flows] to react to payment completion.
 ```dart,ignore
 {{#include ../../snippets/flutter/lib/receive_payment.dart:wait-for-payment}}
 ```
+
 </section>
 
 <div slot="title">Python</div>
 <section>
 
-```python,ignore 
+```python,ignore
 {{#include ../../snippets/python/src/receive_payment.py:wait-for-payment}}
 ```
+
 </section>
 
 <div slot="title">Go</div>
@@ -291,31 +406,36 @@ Generally it is recommended to use [event flows] to react to payment completion.
 ```go,ignore
 {{#include ../../snippets/go/receive_payment.go:wait-for-payment}}
 ```
+
 </section>
 </custom-tabs>
 
 [event flows]: #event-flows
 
 ## Event Flows
+
 Once a receive payment is initiated, you can follow and react to the different payment events using the guide below for each payment method. See [Listening to events](/guide/events.md) for how to subscribe to events.
 
-| Event | Description | UX Suggestion |
-| --- | --- | --- |
-| **Synced** | The SDK has synced payments in the background.  | Update the payments list and balance. See [listing payments](/guide/list_payments.md) and [fetching the balance](/guide/get_info.md). |
+| Event      | Description                                    | UX Suggestion                                                                                                                         |
+| ---------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **Synced** | The SDK has synced payments in the background. | Update the payments list and balance. See [listing payments](/guide/list_payments.md) and [fetching the balance](/guide/get_info.md). |
 
 ### Lightning
-| Event | Description | UX Suggestion |
-| --- | --- | --- |
+
+| Event                | Description                                                | UX Suggestion                                    |
+| -------------------- | ---------------------------------------------------------- | ------------------------------------------------ |
 | **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete. | Update the balance and show payment as complete. |
 
 ### Bitcoin
-| Event | Description | UX Suggestion |
-| --- | --- | --- |
-| **ClaimDepositsFailed** | The SDK attempted to claim static address deposits but they failed from one of several reasons. Either the claim fee exceeded the maximum allowed limit or there was an issue finding the available UTXO. | Allow the user to refund these failed deposits. See [Refunding payments](/guide/refunding_payments.md). |
-| **ClaimDepositsSucceeded** | The SDK successfully claimed static address deposits. |  |
-| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete. | Update the balance and show payment as complete. |
+
+| Event                      | Description                                                                                                                                                                                               | UX Suggestion                                                                                           |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| **ClaimDepositsFailed**    | The SDK attempted to claim static address deposits but they failed from one of several reasons. Either the claim fee exceeded the maximum allowed limit or there was an issue finding the available UTXO. | Allow the user to refund these failed deposits. See [Refunding payments](/guide/refunding_payments.md). |
+| **ClaimDepositsSucceeded** | The SDK successfully claimed static address deposits.                                                                                                                                                     |                                                                                                         |
+| **PaymentSucceeded**       | The Spark transfer is claimed and the payment is complete.                                                                                                                                                | Update the balance and show payment as complete.                                                        |
 
 ### Spark
-| Event | Description | UX Suggestion |
-| --- | --- | --- |
+
+| Event                | Description                                                | UX Suggestion                                    |
+| -------------------- | ---------------------------------------------------------- | ------------------------------------------------ |
 | **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete. | Update the balance and show payment as complete. |

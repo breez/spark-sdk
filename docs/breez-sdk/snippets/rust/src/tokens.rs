@@ -42,29 +42,69 @@ async fn fetch_token_metadata(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+async fn receive_token_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: receive-token-payment-spark-invoice
+    let token_identifier = Some("<token identifier>".to_string());
+    let optional_description = Some("<invoice description>".to_string());
+    let optional_amount = Some(5_000);
+    let optional_expiry_time_seconds = Some(1716691200);
+    let optional_sender_public_key = Some("<sender public key>".to_string());
+
+    let response = sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkInvoice {
+                token_identifier,
+                description: optional_description,
+                amount: optional_amount,
+                expiry_time: optional_expiry_time_seconds,
+                sender_public_key: optional_sender_public_key,
+            },
+        })
+        .await?;
+
+    let payment_request = response.payment_request;
+    info!("Payment request: {payment_request}");
+    let receive_fee = response.fee;
+    info!("Fees: {receive_fee} token base units");
+    // ANCHOR_END: receive-token-payment-spark-invoice
+    Ok(())
+}
+
 async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: send-token-payment
-    let payment_request = "<spark address>".to_string();
+    let payment_request = "<spark address or invoice>".to_string();
+    // Token identifier must match the invoice in case it specifies one.
     let token_identifier = Some("<token identifier>".to_string());
-    // Set the amount of tokens you wish to send
-    let amount = Some(1_000);
+    // Set the amount of tokens you wish to send.
+    let optional_amount = Some(1_000);
     
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            amount,
+            amount: optional_amount,
             token_identifier,
         })
         .await?;
 
     // If the fees are acceptable, continue to send the token payment
-    if let SendPaymentMethod::SparkAddress { 
-        fee,
-        token_identifier: token_id,
-        .. 
-    } = &prepare_response.payment_method {
-        info!("Token ID: {:?}", token_id);
-        info!("Fees: {} token units", fee);
+    match &prepare_response.payment_method {
+        SendPaymentMethod::SparkAddress { 
+            fee,
+            token_identifier: token_id,
+            .. 
+        } => {
+            info!("Token ID: {:?}", token_id);
+            info!("Fees: {} token base units", fee);
+        }
+        SendPaymentMethod::SparkInvoice { 
+            fee,
+            token_identifier: token_id,
+            .. 
+        } => {
+            info!("Token ID: {:?}", token_id);
+            info!("Fees: {} token base units", fee);
+        }
+        _ => {}
     }
 
     // Send the token payment

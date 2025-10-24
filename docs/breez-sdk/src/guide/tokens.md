@@ -174,21 +174,100 @@ Token metadata can be fetched for specific tokens by providing their identifiers
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.receive_payment">API docs</a>
 </h2>
 
-Token payments use the same Spark address as Bitcoin payments - no separate address is required. Your application can retrieve the Spark address as described in the [Receiving a payment](./receive_payment.md#spark) guide. The payer will use this address to send tokens to the wallet.
+Token payments can be received using either a Spark address or invoice. Using an invoice is useful to impose restrictions on the payment, such as the token to receive, amount, expiry, and who can pay it.
+
+### Spark address
+
+Token payments use the same Spark address as Bitcoin payments—no separate address is required. Your application can retrieve the Spark address as described in the [Receiving a payment](./receive_payment.md#spark-address) guide. The payer can use this address to send tokens to the wallet.
+
+### Spark invoice
+
+Spark token invoices can be created using the same API as Bitcoin Spark invoices. The only difference is that a token identifier is provided.
+
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+
+```rust,ignore
+{{#include ../../snippets/rust/src/tokens.rs:receive-token-payment-spark-invoice}}
+```
+
+</section>
+
+<div slot="title">Swift</div>
+<section>
+
+```swift,ignore
+{{#include ../../snippets/swift/BreezSdkSnippets/Sources/Tokens.swift:receive-token-payment-spark-invoice}}
+```
+
+</section>
+
+<div slot="title">Kotlin</div>
+<section>
+
+```kotlin,ignore
+{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/Tokens.kt:receive-token-payment-spark-invoice}}
+```
+
+</section>
+
+<div slot="title">Javascript</div>
+<section>
+
+```typescript
+{{#include ../../snippets/wasm/tokens.ts:receive-token-payment-spark-invoice}}
+```
+
+</section>
+
+<div slot="title">React Native</div>
+<section>
+
+```typescript
+{{#include ../../snippets/react-native/tokens.ts:receive-token-payment-spark-invoice}}
+```
+
+</section>
+
+<div slot="title">Flutter</div>
+<section>
+
+```dart,ignore
+{{#include ../../snippets/flutter/lib/tokens.dart:receive-token-payment-spark-invoice}}
+```
+
+</section>
+
+<div slot="title">Python</div>
+<section>
+
+```python,ignore
+{{#include ../../snippets/python/src/tokens.py:receive-token-payment-spark-invoice}}
+```
+
+</section>
+
+<div slot="title">Go</div>
+<section>
+
+```go,ignore
+{{#include ../../snippets/go/tokens.go:receive-token-payment-spark-invoice}}
+```
+
+</section>
+</custom-tabs>
 
 <h2 id="preparing-payments">
     <a class="header" href="#preparing-payments">Sending a token payment</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
 </h2>
 
-To send tokens, provide a Spark address as the payment request. The token identifier must be specified in one of two ways:
+To send tokens, provide a Spark address or invoice as the payment request. The token identifier must be provided in all cases. For Spark invoices, the token identifier must match the one specified by the invoice if it includes one. Spark invoices may also specify an amount and expiry.
 
-1. **Using a Spark invoice**: If the payee provides a Spark address with an embedded token identifier and amount (a Spark invoice), the SDK automatically extracts and uses those values.
-2. **Manual specification**: For a plain Spark address without embedded payment details, your application must provide both the token identifier and amount parameters when preparing the payment.
+Your application can use the [parse](./parse.md) functionality to distinguish between Spark addresses and invoices before preparing the payment, and to determine invoice requirements.
 
-Your application can use the [parse](./parse.md) functionality to determine if a Spark address contains embedded token payment details before preparing the payment.
-
-The code example below demonstrates manual specification. Follow the standard prepare/send payment flow as described in the [Sending a payment](./send_payment.md) guide.
+Follow the standard prepare/send payment flow as described in the [Sending a payment](./send_payment.md) guide.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>

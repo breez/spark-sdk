@@ -29,6 +29,30 @@ const parseInputs = async (sdk: BreezSdk) => {
       'Input is LNURL-Withdraw for min/max ' +
         `${input.inner[0].minWithdrawable}/${input.inner[0].maxWithdrawable} msats`
     )
+  } else if (input.tag === InputType_Tags.SparkAddress) {
+    console.log(`Input is Spark address ${input.inner[0].address}`)
+  } else if (input.tag === InputType_Tags.SparkInvoice) {
+    const invoice = input.inner[0]
+    console.log('Input is Spark invoice:')
+    if (invoice.tokenIdentifier != null) {
+      console.log(
+        `  Amount: ${invoice.amount} base units of token with id ${invoice.tokenIdentifier}`
+      )
+    } else {
+      console.log(`  Amount: ${invoice.amount} sats`)
+    }
+
+    if (invoice.description != null) {
+      console.log(`  Description: ${invoice.description}`)
+    }
+
+    if (invoice.expiryTime != null) {
+      console.log(`  Expiry time: ${new Date(Number(invoice.expiryTime) * 1000).toISOString()}`)
+    }
+
+    if (invoice.senderPublicKey != null) {
+      console.log(`  Sender public key: ${invoice.senderPublicKey}`)
+    }
   } else {
     // Other input types are available
   }

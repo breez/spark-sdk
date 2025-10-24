@@ -24,6 +24,29 @@ func parseInput(sdk: BreezSdk) async throws {
                 "Input is LNURL-Withdraw for min/max \(details.minWithdrawable)/\(details.maxWithdrawable) msats"
             )
 
+        case .sparkAddress(v1: let details):
+            print("Input is Spark address \(details.address)")
+
+        case .sparkInvoice(v1: let invoice):
+            print("Input is Spark invoice:")
+            if let tokenIdentifier = invoice.tokenIdentifier {
+                print("  Amount: \(invoice.amount) base units of token with id \(tokenIdentifier)")
+            } else {
+                print("  Amount: \(invoice.amount) sats")
+            }
+
+            if let description = invoice.description {
+                print("  Description: \(description)")
+            }
+
+            if let expiryTime = invoice.expiryTime {
+                print("  Expiry time: \(Date(timeIntervalSince1970: TimeInterval(expiryTime)))")
+            }
+
+            if let senderPublicKey = invoice.senderPublicKey {
+                print("  Sender public key: \(senderPublicKey)")
+            }
+
         default:
             break  // Other input types are available
         }

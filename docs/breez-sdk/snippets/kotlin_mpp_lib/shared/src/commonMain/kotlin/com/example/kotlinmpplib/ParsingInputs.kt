@@ -19,16 +19,46 @@ class ParsingInputs {
                     println("Input is BOLT11 invoice for $amountStr msats")
                 }
                 is InputType.LnurlPay -> {
-                    println("Input is LNURL-Pay/Lightning address accepting min/max " +
-                           "${inputType.v1.minSendable}/${inputType.v1.maxSendable} msats}")
+                    println(
+                            "Input is LNURL-Pay/Lightning address accepting min/max " +
+                                    "${inputType.v1.minSendable}/${inputType.v1.maxSendable} msats}"
+                    )
                 }
                 is InputType.LnurlWithdraw -> {
-                    println("Input is LNURL-Withdraw for min/max " +
-                           "${inputType.v1.minWithdrawable}/${inputType.v1.maxWithdrawable} msats")
+                    println(
+                            "Input is LNURL-Withdraw for min/max " +
+                                    "${inputType.v1.minWithdrawable}/${inputType.v1.maxWithdrawable} msats"
+                    )
+                }
+                is InputType.SparkAddress -> {
+                    println("Input is Spark address ${inputType.v1.address}")
+                }
+                is InputType.SparkInvoice -> {
+                    val invoice = inputType.v1
+                    println("Input is Spark invoice:")
+                    if (invoice.tokenIdentifier != null) {
+                        println(
+                                "  Amount: ${invoice.amount} base units of token with id ${invoice.tokenIdentifier}"
+                        )
+                    } else {
+                        println("  Amount: ${invoice.amount} sats")
+                    }
+
+                    if (invoice.description != null) {
+                        println("  Description: ${invoice.description}")
+                    }
+
+                    if (invoice.expiryTime != null) {
+                        println("  Expiry time: ${invoice.expiryTime}")
+                    }
+
+                    if (invoice.senderPublicKey != null) {
+                        println("  Sender public key: ${invoice.senderPublicKey}")
+                    }
                 }
                 else -> {
                     // Handle other input types
-                } 
+                }
             }
         } catch (e: Exception) {
             // handle error
@@ -50,7 +80,7 @@ class ParsingInputs {
                 parserUrl = "https://parser-domain.com/parser?input=<input>"
             ),
             ExternalInputParser(
-                providerId = "provider_b", 
+                providerId = "provider_b",
                 inputRegex = "^provider_b",
                 parserUrl = "https://parser-domain.com/parser?input=<input>"
             )
