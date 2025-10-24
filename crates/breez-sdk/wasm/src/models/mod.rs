@@ -366,8 +366,7 @@ pub struct Bolt12InvoiceRequestDetails {
     // TODO: Fill fields
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::LnurlWithdrawRequestDetails)]
-
+#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::withdraw::LnurlWithdrawRequestDetails)]
 pub struct LnurlWithdrawRequestDetails {
     pub callback: String,
     pub k1: String,
@@ -418,6 +417,7 @@ pub enum PaymentDetails {
         payment_hash: String,
         destination_pubkey: String,
         lnurl_pay_info: Option<LnurlPayInfo>,
+        lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     },
     Withdraw {
         tx_id: String,
@@ -496,6 +496,11 @@ pub struct AesSuccessActionData {
     pub description: String,
     pub ciphertext: String,
     pub iv: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlWithdrawInfo)]
+pub struct LnurlWithdrawInfo {
+    pub withdraw_url: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Network)]
@@ -764,6 +769,7 @@ pub struct LogEntry {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentMetadata)]
 pub struct PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
+    pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
 }
 

@@ -8,7 +8,8 @@ use rusqlite::{
 use rusqlite_migration::{M, Migrations, SchemaVersion};
 
 use crate::{
-    AssetFilter, DepositInfo, ListPaymentsRequest, LnurlPayInfo, PaymentDetails, PaymentMethod,
+    AssetFilter, DepositInfo, ListPaymentsRequest, LnurlPayInfo, LnurlWithdrawInfo, PaymentDetails,
+    PaymentMethod,
     error::DepositClaimError,
     persist::{PaymentMetadata, UpdateDepositPayload},
 };
@@ -193,6 +194,7 @@ impl SqliteStorage {
               FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
             );
             ALTER TABLE payment_details_token ADD COLUMN invoice_details TEXT;",
+            "ALTER TABLE payment_metadata ADD COLUMN lnurl_withdraw_info TEXT;",
         ]
     }
 }
@@ -312,6 +314,7 @@ impl Storage for SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       pm.lnurl_withdraw_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -395,7 +398,7 @@ impl Storage for SqliteStorage {
                 destination_pubkey,
                 description,
                 preimage,
-                lnurl_pay_info: _,
+                ..
             }) => {
                 tx.execute(
                     "INSERT OR REPLACE INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage) 
@@ -425,8 +428,8 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         connection.execute(
-            "INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_description) VALUES (?, ?, ?)",
-            params![payment_id, metadata.lnurl_pay_info, metadata.lnurl_description],
+            "INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description) VALUES (?, ?, ?, ?)",
+            params![payment_id, metadata.lnurl_pay_info, metadata.lnurl_withdraw_info, metadata.lnurl_description],
         )?;
 
         Ok(())
@@ -488,6 +491,7 @@ impl Storage for SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       pm.lnurl_withdraw_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -527,6 +531,7 @@ impl Storage for SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       pm.lnurl_withdraw_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -625,7 +630,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
     let deposit_tx_id: Option<String> = row.get(8)?;
     let spark: Option<i32> = row.get(9)?;
     let lightning_invoice: Option<String> = row.get(10)?;
-    let token_metadata: Option<String> = row.get(16)?;
+    let token_metadata: Option<String> = row.get(17)?;
     let details = match (
         lightning_invoice,
         withdraw_tx_id,
@@ -639,6 +644,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             let description: Option<String> = row.get(13)?;
             let preimage: Option<String> = row.get(14)?;
             let lnurl_pay_info: Option<LnurlPayInfo> = row.get(15)?;
+            let lnurl_withdraw_info: Option<LnurlWithdrawInfo> = row.get(16)?;
 
             Some(PaymentDetails::Lightning {
                 invoice,
@@ -647,17 +653,18 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 description,
                 preimage,
                 lnurl_pay_info,
+                lnurl_withdraw_info,
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
         (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
         (_, _, _, Some(_), _) => {
-            let invoice_details_str: Option<String> = row.get(19)?;
+            let invoice_details_str: Option<String> = row.get(20)?;
             let invoice_details = invoice_details_str
                 .map(|s| {
                     serde_json::from_str(&s).map_err(|e| {
                         rusqlite::Error::FromSqlConversionFailure(
-                            16,
+                            20,
                             rusqlite::types::Type::Text,
                             e.into(),
                         )
@@ -667,12 +674,12 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             Some(PaymentDetails::Spark { invoice_details })
         }
         (_, _, _, _, Some(metadata)) => {
-            let invoice_details_str: Option<String> = row.get(18)?;
+            let invoice_details_str: Option<String> = row.get(19)?;
             let invoice_details = invoice_details_str
                 .map(|s| {
                     serde_json::from_str(&s).map_err(|e| {
                         rusqlite::Error::FromSqlConversionFailure(
-                            16,
+                            19,
                             rusqlite::types::Type::Text,
                             e.into(),
                         )
@@ -682,12 +689,12 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             Some(PaymentDetails::Token {
                 metadata: serde_json::from_str(&metadata).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        16,
+                        17,
                         rusqlite::types::Type::Text,
                         e.into(),
                     )
                 })?,
-                tx_hash: row.get(17)?,
+                tx_hash: row.get(18)?,
                 invoice_details,
             })
         }
@@ -711,23 +718,13 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
 
 impl ToSql for PaymentDetails {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        let json = serde_json::to_string(self)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        Ok(rusqlite::types::ToSqlOutput::from(json))
+        to_sql_json(self)
     }
 }
 
 impl FromSql for PaymentDetails {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value {
-            ValueRef::Text(i) => {
-                let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
-                let payment_details: PaymentDetails =
-                    serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
-                Ok(payment_details)
-            }
-            _ => Err(FromSqlError::InvalidType),
-        }
+        from_sql_json(value)
     }
 }
 
@@ -757,45 +754,60 @@ impl FromSql for PaymentMethod {
 
 impl ToSql for DepositClaimError {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        let json = serde_json::to_string(self)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        Ok(rusqlite::types::ToSqlOutput::from(json))
-    }
-}
-
-impl ToSql for LnurlPayInfo {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        let json = serde_json::to_string(self)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        Ok(rusqlite::types::ToSqlOutput::from(json))
+        to_sql_json(self)
     }
 }
 
 impl FromSql for DepositClaimError {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value {
-            ValueRef::Text(i) => {
-                let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
-                let deposit_claim_error: DepositClaimError =
-                    serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
-                Ok(deposit_claim_error)
-            }
-            _ => Err(FromSqlError::InvalidType),
-        }
+        from_sql_json(value)
+    }
+}
+
+impl ToSql for LnurlPayInfo {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        to_sql_json(self)
     }
 }
 
 impl FromSql for LnurlPayInfo {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value {
-            ValueRef::Text(i) => {
-                let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
-                let lnurl_pay_info: LnurlPayInfo =
-                    serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
-                Ok(lnurl_pay_info)
-            }
-            _ => Err(FromSqlError::InvalidType),
+        from_sql_json(value)
+    }
+}
+
+impl ToSql for LnurlWithdrawInfo {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        to_sql_json(self)
+    }
+}
+
+impl FromSql for LnurlWithdrawInfo {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        from_sql_json(value)
+    }
+}
+
+fn to_sql_json<T>(value: T) -> rusqlite::Result<ToSqlOutput<'static>>
+where
+    T: serde::Serialize,
+{
+    let json = serde_json::to_string(&value)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    Ok(rusqlite::types::ToSqlOutput::from(json))
+}
+
+fn from_sql_json<T>(value: ValueRef<'_>) -> FromSqlResult<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    match value {
+        ValueRef::Text(i) => {
+            let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
+            let deserialized: T = serde_json::from_str(s).map_err(|_| FromSqlError::InvalidType)?;
+            Ok(deserialized)
         }
+        _ => Err(FromSqlError::InvalidType),
     }
 }
 

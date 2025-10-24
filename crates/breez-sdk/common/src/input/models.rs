@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     lnurl::{
         LnurlErrorDetails, auth::LnurlAuthRequestDetails, error::LnurlError,
-        pay::LnurlPayRequestDetails,
+        pay::LnurlPayRequestDetails, withdraw::LnurlWithdrawRequestDetails,
     },
     network::BitcoinNetwork,
 };
@@ -50,7 +50,7 @@ pub struct BitcoinAddressDetails {
     pub source: PaymentRequestSource,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Bolt11Invoice {
     pub bolt11: String,
@@ -101,7 +101,7 @@ pub struct Bolt12OfferBlindedPath {
     pub blinded_hops: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Bolt11InvoiceDetails {
     pub amount_msat: Option<u64>,
@@ -221,20 +221,7 @@ pub struct LightningAddressDetails {
     pub pay_request: LnurlPayRequestDetails,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct LnurlWithdrawRequestDetails {
-    pub callback: String,
-    pub k1: String,
-    pub default_description: String,
-    /// The minimum amount, in millisats, that this LNURL-withdraw endpoint accepts
-    pub min_withdrawable: u64,
-    /// The maximum amount, in millisats, that this LNURL-withdraw endpoint accepts
-    pub max_withdrawable: u64,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PaymentRequestSource {
     pub bip_21_uri: Option<String>,

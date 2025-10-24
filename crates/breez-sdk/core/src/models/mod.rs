@@ -7,7 +7,10 @@ use breez_sdk_common::{
     input::{
         BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, SparkInvoiceDetails,
     },
-    lnurl::pay::{LnurlPayRequestDetails, SuccessAction, SuccessActionProcessed},
+    lnurl::{
+        pay::{LnurlPayRequestDetails, SuccessAction, SuccessActionProcessed},
+        withdraw::LnurlWithdrawRequestDetails,
+    },
     network::BitcoinNetwork,
 };
 use core::fmt;
@@ -231,6 +234,9 @@ pub enum PaymentDetails {
 
         /// Lnurl payment information if this was an lnurl payment.
         lnurl_pay_info: Option<LnurlPayInfo>,
+
+        /// Lnurl withdrawal information if this was an lnurl payment.
+        lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     },
     Withdraw {
         tx_id: String,
@@ -594,6 +600,20 @@ pub struct LnurlPayResponse {
     pub success_action: Option<SuccessActionProcessed>,
 }
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct LnurlWithdrawRequest {
+    /// The amount to withdraw in satoshis
+    /// Must be within the min and max withdrawable limits
+    pub amount_sats: u64,
+    pub withdraw_request: LnurlWithdrawRequestDetails,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct LnurlWithdrawResponse {
+    pub payment: Payment,
+}
+
 /// Represents the payment LNURL info
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -604,6 +624,13 @@ pub struct LnurlPayInfo {
     pub metadata: Option<String>,
     pub processed_success_action: Option<SuccessActionProcessed>,
     pub raw_success_action: Option<SuccessAction>,
+}
+
+/// Represents the withdraw LNURL info
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct LnurlWithdrawInfo {
+    pub withdraw_url: String,
 }
 
 impl LnurlPayInfo {

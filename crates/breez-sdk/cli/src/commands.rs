@@ -1,9 +1,9 @@
 use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee, GetInfoRequest,
     GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
-    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, OnchainConfirmationSpeed,
-    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
+    OnchainConfirmationSpeed, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
+    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
     RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
     SyncWalletRequest,
 };
@@ -125,6 +125,12 @@ pub enum Command {
         /// Validates the success action URL
         #[clap(name = "validate_success_url", short = 'v', long = "validate")]
         validate_success_url: Option<bool>,
+    },
+
+    /// Withdraw using LNURL
+    LnurlWithdraw {
+        /// LNURL-withdraw endpoint
+        lnurl: String,
     },
 
     ClaimDeposit {
@@ -434,6 +440,31 @@ pub(crate) async fn execute_command(
                     let pay_res =
                         Box::pin(sdk.lnurl_pay(LnurlPayRequest { prepare_response })).await?;
                     Ok(pay_res)
+                }
+                _ => Err(anyhow::anyhow!("Invalid input")),
+            }?;
+
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::LnurlWithdraw { lnurl } => {
+            let input = sdk.parse(&lnurl).await?;
+            let res = match input {
+                InputType::LnurlWithdraw(withdraw_request) => {
+                    let min_withdrawable = withdraw_request.min_withdrawable.div_ceil(1000);
+                    let max_withdrawable = withdraw_request.max_withdrawable / 1000;
+                    let prompt = format!(
+                        "Amount to withdraw (min {min_withdrawable} sat, max {max_withdrawable} sat): "
+                    );
+                    let amount_sats = rl.readline(&prompt)?.parse::<u64>()?;
+
+                    let withdraw_res = sdk
+                        .lnurl_withdraw(LnurlWithdrawRequest {
+                            amount_sats,
+                            withdraw_request,
+                        })
+                        .await?;
+                    Ok(withdraw_res)
                 }
                 _ => Err(anyhow::anyhow!("Invalid input")),
             }?;
