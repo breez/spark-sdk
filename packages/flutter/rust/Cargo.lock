@@ -3603,6 +3603,7 @@ dependencies = [
  "tokio_with_wasm",
  "tracing",
  "uuid",
+ "web-time",
 ]
 
 [[package]]

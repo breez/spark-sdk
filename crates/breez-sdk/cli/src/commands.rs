@@ -12,7 +12,10 @@ use rustyline::{
     Completer, Editor, Helper, Hinter, Validator, highlight::Highlighter, hint::HistoryHinter,
     history::DefaultHistory,
 };
-use std::borrow::Cow::{self, Owned};
+use std::{
+    borrow::Cow::{self, Owned},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[derive(Clone, Parser)]
 pub enum Command {
@@ -77,9 +80,21 @@ pub enum Command {
         #[clap(short = 'd', long = "description")]
         description: Option<String>,
 
-        /// The amount the payer should send, in satoshi.
-        #[arg(long)]
-        amount_sat: Option<u64>,
+        /// The amount the payer should send, in sats or token base units.
+        #[arg(short = 'a', long)]
+        amount: Option<u128>,
+
+        /// Optional token identifier. Only used if the payment method is a spark invoice. Absence indicates sats payment.
+        #[arg(short = 't', long)]
+        token_identifier: Option<String>,
+
+        /// Optional expiry time for the invoice in seconds from now. Only used if the payment method is a spark invoice.
+        #[arg(short = 'e', long)]
+        expiry_secs: Option<u64>,
+
+        /// Optional sender public key. Only used if the payment method is a spark invoice.
+        #[arg(short = 's', long)]
+        sender_public_key: Option<String>,
     },
 
     /// Pay the given payment request
@@ -308,14 +323,32 @@ pub(crate) async fn execute_command(
         Command::Receive {
             payment_method,
             description,
-            amount_sat,
+            amount,
+            token_identifier,
+            expiry_secs,
+            sender_public_key,
         } => {
             let payment_method = match payment_method.as_str() {
-                "spark" => ReceivePaymentMethod::SparkAddress,
+                "sparkaddress" => ReceivePaymentMethod::SparkAddress,
+                "sparkinvoice" => ReceivePaymentMethod::SparkInvoice {
+                    amount,
+                    token_identifier,
+                    expiry_time: expiry_secs
+                        .map(|secs| {
+                            SystemTime::now()
+                                .duration_since(UNIX_EPOCH)?
+                                .as_secs()
+                                .checked_add(secs)
+                                .ok_or(anyhow::anyhow!("Invalid expiry time"))
+                        })
+                        .transpose()?,
+                    description,
+                    sender_public_key,
+                },
                 "bitcoin" => ReceivePaymentMethod::BitcoinAddress,
                 "bolt11" => ReceivePaymentMethod::Bolt11Invoice {
                     description: description.unwrap_or_default(),
-                    amount_sats: amount_sat,
+                    amount_sats: amount.map(TryInto::try_into).transpose()?,
                 },
                 _ => return Err(anyhow::anyhow!("Invalid payment method")),
             };
@@ -324,10 +357,10 @@ pub(crate) async fn execute_command(
                 .receive_payment(ReceivePaymentRequest { payment_method })
                 .await?;
 
-            if receive_result.fee_sats > 0 {
+            if receive_result.fee > 0 {
                 println!(
-                    "Prepared payment requires fee of {} sats\n ",
-                    receive_result.fee_sats
+                    "Prepared payment requires fee of {} sats/token base units\n ",
+                    receive_result.fee
                 );
             }
 
@@ -501,7 +534,7 @@ fn read_payment_options(
                 completion_timeout_secs: Some(0),
             }))
         }
-        SendPaymentMethod::SparkAddress { .. } => Ok(None),
+        SendPaymentMethod::SparkAddress { .. } | SendPaymentMethod::SparkInvoice { .. } => Ok(None),
     }
 }
 

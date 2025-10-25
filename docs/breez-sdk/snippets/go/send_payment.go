@@ -68,8 +68,8 @@ func PrepareSendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.
 	return &response, nil
 }
 
-func PrepareSendPaymentSpark(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
-	// ANCHOR: prepare-send-payment-spark
+func PrepareSendPaymentSparkAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
+	// ANCHOR: prepare-send-payment-spark-address
 	paymentRequest := "<spark address>"
 	// Set the amount you wish the pay the receiver
 	amountSats := new(big.Int).SetInt64(50_000)
@@ -90,7 +90,33 @@ func PrepareSendPaymentSpark(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Pr
 		feeSats := paymentMethod.Fee
 		log.Printf("Fees: %v sats", feeSats)
 	}
-	// ANCHOR_END: prepare-send-payment-spark
+	// ANCHOR_END: prepare-send-payment-spark-address
+	return &response, nil
+}
+
+func PrepareSendPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
+	// ANCHOR: prepare-send-payment-spark-invoice
+	paymentRequest := "<spark invoice>"
+	// Optionally set the amount you wish the pay the receiver
+	optionalAmountSats := new(big.Int).SetInt64(50_000)
+
+	request := breez_sdk_spark.PrepareSendPaymentRequest{
+		PaymentRequest: paymentRequest,
+		Amount:         &optionalAmountSats,
+	}
+	response, err := sdk.PrepareSendPayment(request)
+
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return nil, err
+	}
+
+	// If the fees are acceptable, continue to create the Send Payment
+	switch paymentMethod := response.PaymentMethod.(type) {
+	case breez_sdk_spark.SendPaymentMethodSparkInvoice:
+		feeSats := paymentMethod.Fee
+		log.Printf("Fees: %v sats", feeSats)
+	}
+	// ANCHOR_END: prepare-send-payment-spark-invoice
 	return &response, nil
 }
 

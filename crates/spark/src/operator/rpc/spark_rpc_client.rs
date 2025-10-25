@@ -527,6 +527,19 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    pub async fn query_spark_invoices(
+        &self,
+        req: QuerySparkInvoicesRequest,
+    ) -> Result<QuerySparkInvoicesResponse> {
+        debug!("Calling query_spark_invoices with request: {:?}", req);
+        Ok(self
+            .spark_service_client()
+            .await?
+            .query_spark_invoices(req)
+            .await?
+            .into_inner())
+    }
+
     pub async fn start_transaction(
         &self,
         req: StartTransactionRequest,

@@ -1,3 +1,4 @@
+# pylint: disable=duplicate-code
 import logging
 from breez_sdk_spark import (
     BreezSdk,
@@ -76,8 +77,8 @@ async def prepare_send_payment_onchain(sdk: BreezSdk):
     # ANCHOR_END: prepare-send-payment-onchain
 
 
-async def prepare_send_payment_spark(sdk: BreezSdk):
-    # ANCHOR: prepare-send-payment-spark
+async def prepare_send_payment_spark_address(sdk: BreezSdk):
+    # ANCHOR: prepare-send-payment-spark-address
     payment_request = "<spark address>"
     # Set the amount you wish the pay the receiver
     amount_sats = 50_000
@@ -94,7 +95,28 @@ async def prepare_send_payment_spark(sdk: BreezSdk):
     except Exception as error:
         logging.error(error)
         raise
-    # ANCHOR_END: prepare-send-payment-spark
+    # ANCHOR_END: prepare-send-payment-spark-address
+
+
+async def prepare_send_payment_spark_invoice(sdk: BreezSdk):
+    # ANCHOR: prepare-send-payment-spark-invoice
+    payment_request = "<spark invoice>"
+    # Optionally set the amount you wish the pay the receiver
+    optional_amount_sats = 50_000
+    try:
+        request = PrepareSendPaymentRequest(
+            payment_request=payment_request, amount=optional_amount_sats
+        )
+        prepare_response = await sdk.prepare_send_payment(request=request)
+
+        # If the fees are acceptable, continue to create the Send Payment
+        if isinstance(prepare_response.payment_method, SendPaymentMethod.SPARK_INVOICE):
+            fee = prepare_response.payment_method.fee
+            logging.debug(f"Fees: {fee} sats")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: prepare-send-payment-spark-invoice
 
 
 async def send_payment_lightning_bolt11(

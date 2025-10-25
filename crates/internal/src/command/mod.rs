@@ -6,13 +6,15 @@ use spark_wallet::SparkWallet;
 use crate::{
     CliHelper,
     command::{
-        deposit::DepositCommand, leaves::LeavesCommand, lightning::LightningCommand,
-        tokens::TokensCommand, transfer::TransferCommand, withdraw::WithdrawCommand,
+        deposit::DepositCommand, invoices::InvoicesCommand, leaves::LeavesCommand,
+        lightning::LightningCommand, tokens::TokensCommand, transfer::TransferCommand,
+        withdraw::WithdrawCommand,
     },
     config::Config,
 };
 
 pub mod deposit;
+pub mod invoices;
 pub mod leaves;
 pub mod lightning;
 pub mod tokens;
@@ -52,6 +54,9 @@ pub enum Command {
     /// Token commands.
     #[command(subcommand)]
     Tokens(TokensCommand),
+    /// Invoices commands.
+    #[command(subcommand)]
+    Invoices(InvoicesCommand),
 }
 
 pub(crate) async fn handle_command(
@@ -88,7 +93,7 @@ pub(crate) async fn handle_command(
             println!("Signature: {signature}");
         }
         Command::SparkAddress => {
-            let spark_address = wallet.get_spark_address()?;
+            let spark_address = wallet.get_spark_address()?.to_address_string()?;
             println!("{spark_address}")
         }
         Command::Sync => {
@@ -111,6 +116,9 @@ pub(crate) async fn handle_command(
         }
         Command::Withdraw(withdraw_command) => {
             withdraw::handle_command(config, wallet, withdraw_command).await?
+        }
+        Command::Invoices(invoices_command) => {
+            invoices::handle_command(config, wallet, invoices_command).await?
         }
     }
 

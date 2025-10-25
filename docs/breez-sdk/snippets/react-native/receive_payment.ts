@@ -1,4 +1,8 @@
-import { ReceivePaymentMethod, WaitForPaymentIdentifier, type BreezSdk } from '@breeztech/breez-sdk-spark-react-native'
+import {
+  ReceivePaymentMethod,
+  WaitForPaymentIdentifier,
+  type BreezSdk
+} from '@breeztech/breez-sdk-spark-react-native'
 
 const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
   // ANCHOR: receive-payment-lightning-bolt11
@@ -15,7 +19,7 @@ const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
 
   const paymentRequest = response.paymentRequest
   console.log(`Payment Request: ${paymentRequest}`)
-  const receiveFeeSats = response.feeSats
+  const receiveFeeSats = response.fee
   console.log(`Fees: ${receiveFeeSats} sats`)
   // ANCHOR_END: receive-payment-lightning-bolt11
 }
@@ -28,31 +32,68 @@ const exampleReceiveOnchainPayment = async (sdk: BreezSdk) => {
 
   const paymentRequest = response.paymentRequest
   console.log(`Payment Request: ${paymentRequest}`)
-  const receiveFeeSats = response.feeSats
+  const receiveFeeSats = response.fee
   console.log(`Fees: ${receiveFeeSats} sats`)
   // ANCHOR_END: receive-payment-onchain
 }
 
-const exampleReceiveSparkPayment = async (sdk: BreezSdk) => {
-  // ANCHOR: receive-payment-spark
+const exampleReceiveSparkAddress = async (sdk: BreezSdk) => {
+  // ANCHOR: receive-payment-spark-address
   const response = await sdk.receivePayment({
     paymentMethod: new ReceivePaymentMethod.SparkAddress()
   })
 
   const paymentRequest = response.paymentRequest
   console.log(`Payment Request: ${paymentRequest}`)
-  const receiveFeeSats = response.feeSats
+  const receiveFeeSats = response.fee
   console.log(`Fees: ${receiveFeeSats} sats`)
-  // ANCHOR_END: receive-payment-spark
+  // ANCHOR_END: receive-payment-spark-address
 }
 
-const exampleWaitForPayment = async (sdk: BreezSdk, paymentRequest: string) => {
+const exampleReceiveSparkInvoice = async (sdk: BreezSdk) => {
+  // ANCHOR: receive-payment-spark-invoice
+  const optionalDescription = '<invoice description>'
+  const optionalAmountSats = BigInt(5_000)
+  const optionalExpiryTimeSeconds = BigInt(1716691200)
+  const optionalSenderPublicKey = '<sender public key>'
+
+  const response = await sdk.receivePayment({
+    paymentMethod: new ReceivePaymentMethod.SparkInvoice({
+      description: optionalDescription,
+      amount: optionalAmountSats,
+      expiryTime: optionalExpiryTimeSeconds,
+      senderPublicKey: optionalSenderPublicKey,
+      tokenIdentifier: undefined
+    })
+  })
+
+  const paymentRequest = response.paymentRequest
+  console.log(`Payment Request: ${paymentRequest}`)
+  const receiveFeeSats = response.fee
+  console.log(`Fees: ${receiveFeeSats} sats`)
+  // ANCHOR_END: receive-payment-spark-invoice
+}
+
+const exampleWaitForPayment = async (sdk: BreezSdk) => {
   // ANCHOR: wait-for-payment
+  // Waiting for a payment given its payment request (Bolt11 or Spark invoice)
+  const paymentRequest = '<Bolt11 or Spark invoice>'
+
   // Wait for a payment to be completed using a payment request
-  const response = await sdk.waitForPayment({
+  const paymentRequestResponse = await sdk.waitForPayment({
     identifier: new WaitForPaymentIdentifier.PaymentRequest(paymentRequest)
   })
 
-  console.log(`Payment received with ID: ${response.payment.id}`)
+  console.log(`Payment received with ID: ${paymentRequestResponse.payment.id}`)
+
+  // Waiting for a payment given its payment id
+  const paymentId = '<payment id>'
+
+  // Wait for a payment to be completed using a payment id
+  const paymentIdResponse = await sdk.waitForPayment({
+    identifier: new WaitForPaymentIdentifier.PaymentId(paymentId)
+  })
+
+  console.log(`Payment received with ID: ${paymentIdResponse.payment.id}`)
   // ANCHOR_END: wait-for-payment
 }

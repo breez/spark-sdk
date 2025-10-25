@@ -6,6 +6,8 @@ pub enum AddressError {
     UnknownHrp(String),
     #[error("Failed to encode bech32: {0}")]
     Bech32EncodeError(String),
+    #[error("Failed to decode bech32m: {0}")]
+    Bech32mDecodeError(String),
     #[error("Failed to decode protobuf: {0}")]
     ProtobufDecodeError(String),
     #[error("Invalid public key: {0}")]

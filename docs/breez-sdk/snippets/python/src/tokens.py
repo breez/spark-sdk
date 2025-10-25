@@ -1,8 +1,11 @@
+# pylint: disable=duplicate-code
 import logging
 from breez_sdk_spark import (
     BreezSdk,
     GetInfoRequest,
     PrepareSendPaymentRequest,
+    ReceivePaymentMethod,
+    ReceivePaymentRequest,
     SendPaymentRequest,
     SendPaymentMethod,
     GetTokensMetadataRequest,
@@ -52,19 +55,50 @@ async def fetch_token_metadata(sdk: BreezSdk):
     # ANCHOR_END: fetch-token-metadata
 
 
+async def receive_token_payment_spark_invoice(sdk: BreezSdk):
+    # ANCHOR: receive-token-payment-spark-invoice
+    try:
+        token_identifier = "<token identifier>"
+        optional_description = "<invoice description>"
+        optional_amount = 5_000
+        optional_expiry_time_seconds = 1716691200
+        optional_sender_public_key = "<sender public key>"
+
+        request = ReceivePaymentRequest(
+            payment_method=ReceivePaymentMethod.SPARK_INVOICE(
+                token_identifier=token_identifier,
+                description=optional_description,
+                amount=optional_amount,
+                expiry_time=optional_expiry_time_seconds,
+                sender_public_key=optional_sender_public_key,
+            )
+        )
+        response = await sdk.receive_payment(request=request)
+
+        payment_request = response.payment_request
+        print(f"Payment request: {payment_request}")
+        receive_fee = response.fee
+        print(f"Fees: {receive_fee} token base units")
+        return response
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: receive-token-payment-spark-invoice
+
+
 async def send_token_payment(sdk: BreezSdk):
     # ANCHOR: send-token-payment
     try:
-        payment_request = "<spark address>"
-        # The token identifier (e.g., asset ID or token contract)
+        payment_request = "<spark address or invoice>"
+        # Token identifier must match the invoice in case it specifies one.
         token_identifier = "<token identifier>"
-        # Set the amount of tokens you wish to send
-        amount = 1_000
+        # Set the amount of tokens you wish to send.
+        optional_amount = 1_000
 
         prepare_response = await sdk.prepare_send_payment(
             request=PrepareSendPaymentRequest(
                 payment_request=payment_request,
-                amount=amount,
+                amount=optional_amount,
                 token_identifier=token_identifier,
             )
         )
@@ -72,7 +106,10 @@ async def send_token_payment(sdk: BreezSdk):
         # If the fees are acceptable, continue to send the token payment
         if isinstance(prepare_response.payment_method, SendPaymentMethod.SPARK_ADDRESS):
             print(f"Token ID: {prepare_response.payment_method.token_identifier}")
-            print(f"Fees: {prepare_response.payment_method.fee} sats")
+            print(f"Fees: {prepare_response.payment_method.fee} token base units")
+        if isinstance(prepare_response.payment_method, SendPaymentMethod.SPARK_INVOICE):
+            print(f"Token ID: {prepare_response.payment_method.token_identifier}")
+            print(f"Fees: {prepare_response.payment_method.fee} token base units")
 
         # Send the token payment
         send_response = await sdk.send_payment(

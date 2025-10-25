@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use spark::Network;
 use strum::Display;
 
 #[derive(Clone, Copy, Debug, Display, Eq, PartialEq, Serialize, Deserialize)]
@@ -32,6 +33,17 @@ impl From<BitcoinNetwork> for bitcoin::Network {
             BitcoinNetwork::Testnet4 => bitcoin::Network::Testnet4,
             BitcoinNetwork::Signet => bitcoin::Network::Signet,
             BitcoinNetwork::Regtest => bitcoin::Network::Regtest,
+        }
+    }
+}
+
+impl From<Network> for BitcoinNetwork {
+    fn from(network: Network) -> Self {
+        match network {
+            spark_wallet::Network::Mainnet => BitcoinNetwork::Bitcoin,
+            spark_wallet::Network::Testnet => BitcoinNetwork::Testnet3,
+            spark_wallet::Network::Regtest => BitcoinNetwork::Regtest,
+            spark_wallet::Network::Signet => BitcoinNetwork::Signet,
         }
     }
 }

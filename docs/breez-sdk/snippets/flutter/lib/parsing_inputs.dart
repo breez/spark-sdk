@@ -19,6 +19,28 @@ Future<void> parseInput(BreezSdk sdk) async {
   } else if (inputType is InputType_LnurlWithdraw) {
     print(
         "Input is LNURL-Withdraw for min/max ${inputType.field0.minWithdrawable}/${inputType.field0.maxWithdrawable} msats");
+  } else if (inputType is InputType_SparkAddress) {
+    print("Input is Spark address ${inputType.field0.address}");
+  } else if (inputType is InputType_SparkInvoice) {
+    var invoice = inputType.field0;
+    print("Input is Spark invoice:");
+    if (invoice.tokenIdentifier != null) {
+      print("  Amount: ${invoice.amount} base units of token with id ${invoice.tokenIdentifier}");
+    } else {
+      print("  Amount: ${invoice.amount} sats");
+    }
+    
+    if (invoice.description != null) {
+      print("  Description: ${invoice.description}");
+    }
+    
+    if (invoice.expiryTime != null) {
+      print("  Expiry time: ${DateTime.fromMillisecondsSinceEpoch(invoice.expiryTime!.toInt() * 1000)}");
+    }
+    
+    if (invoice.senderPublicKey != null) {
+      print("  Sender public key: ${invoice.senderPublicKey}");
+    }
   } else {
     // Other input types are available
   }

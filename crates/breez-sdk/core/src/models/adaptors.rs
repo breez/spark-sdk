@@ -1,6 +1,8 @@
 use std::time::UNIX_EPOCH;
 
-use breez_sdk_common::input;
+use breez_sdk_common::input::{
+    self, InputType, PaymentRequestSource, SparkInvoiceDetails, parse_spark_address,
+};
 use spark_wallet::{
     CoopExitFeeQuote, CoopExitSpeedFeeQuote, ExitSpeed, LightningSendPayment, LightningSendStatus,
     Network as SparkNetwork, SspUserRequest, TokenTransactionStatus, TransferDirection,
@@ -9,8 +11,8 @@ use spark_wallet::{
 
 use crate::{
     Fee, Network, OnchainConfirmationSpeed, Payment, PaymentDetails, PaymentMethod, PaymentStatus,
-    PaymentType, SdkError, SendOnchainFeeQuote, SendOnchainSpeedFeeQuote, TokenBalance,
-    TokenMetadata,
+    PaymentType, SdkError, SendOnchainFeeQuote, SendOnchainSpeedFeeQuote,
+    SparkInvoicePaymentDetails, TokenBalance, TokenMetadata,
 };
 
 impl From<TransferType> for PaymentMethod {
@@ -25,14 +27,31 @@ impl From<TransferType> for PaymentMethod {
     }
 }
 
-impl TryFrom<SspUserRequest> for PaymentDetails {
-    type Error = SdkError;
-    fn try_from(user_request: SspUserRequest) -> Result<Self, Self::Error> {
+impl PaymentDetails {
+    fn from_transfer(transfer: &WalletTransfer) -> Result<Option<Self>, SdkError> {
+        if let Some(spark_invoice) = &transfer.spark_invoice {
+            let Some(InputType::SparkInvoice(invoice_details)) =
+                parse_spark_address(spark_invoice, &PaymentRequestSource::default())
+            else {
+                return Err(SdkError::Generic("Invalid spark invoice".to_string()));
+            };
+
+            return Ok(Some(PaymentDetails::Spark {
+                invoice_details: Some(invoice_details.into()),
+            }));
+        }
+
+        let Some(user_request) = &transfer.user_request else {
+            return Ok(None);
+        };
+
         let details = match user_request {
             SspUserRequest::CoopExitRequest(request) => PaymentDetails::Withdraw {
-                tx_id: request.coop_exit_txid,
+                tx_id: request.coop_exit_txid.clone(),
             },
-            SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark,
+            SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark {
+                invoice_details: None,
+            },
             SspUserRequest::LightningReceiveRequest(request) => {
                 let invoice_details = input::parse_invoice(&request.invoice.encoded_invoice)
                     .ok_or(SdkError::Generic(
@@ -40,9 +59,9 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
                     ))?;
                 PaymentDetails::Lightning {
                     description: invoice_details.description,
-                    preimage: request.lightning_receive_payment_preimage,
-                    invoice: request.invoice.encoded_invoice,
-                    payment_hash: request.invoice.payment_hash,
+                    preimage: request.lightning_receive_payment_preimage.clone(),
+                    invoice: request.invoice.encoded_invoice.clone(),
+                    payment_hash: request.invoice.payment_hash.clone(),
                     destination_pubkey: invoice_details.payee_pubkey,
                     lnurl_pay_info: None,
                 }
@@ -54,18 +73,27 @@ impl TryFrom<SspUserRequest> for PaymentDetails {
                     ))?;
                 PaymentDetails::Lightning {
                     description: invoice_details.description,
-                    preimage: request.lightning_send_payment_preimage,
-                    invoice: request.encoded_invoice,
+                    preimage: request.lightning_send_payment_preimage.clone(),
+                    invoice: request.encoded_invoice.clone(),
                     payment_hash: invoice_details.payment_hash,
                     destination_pubkey: invoice_details.payee_pubkey,
                     lnurl_pay_info: None,
                 }
             }
             SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
-                tx_id: request.transaction_id,
+                tx_id: request.transaction_id.clone(),
             },
         };
-        Ok(details)
+        Ok(Some(details))
+    }
+}
+
+impl From<SparkInvoiceDetails> for SparkInvoicePaymentDetails {
+    fn from(value: SparkInvoiceDetails) -> Self {
+        Self {
+            description: value.description,
+            invoice: value.invoice,
+        }
     }
 }
 
@@ -114,9 +142,8 @@ impl TryFrom<WalletTransfer> for Payment {
             None => (0, transfer.total_value_sat),
         };
 
-        let details: Option<PaymentDetails> = if let Some(user_request) = transfer.user_request {
-            Some(user_request.try_into()?)
-        } else {
+        let details = PaymentDetails::from_transfer(&transfer)?;
+        if details.is_none() {
             // in case we have a completed status without user object we want
             // to keep syncing this payment
             if status == PaymentStatus::Completed
@@ -130,8 +157,7 @@ impl TryFrom<WalletTransfer> for Payment {
                 status = PaymentStatus::Pending;
             }
             amount_sat = transfer.total_value_sat;
-            None
-        };
+        }
 
         Ok(Payment {
             id: transfer.id.to_string(),

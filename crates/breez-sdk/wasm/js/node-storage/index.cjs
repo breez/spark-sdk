@@ -194,9 +194,12 @@ class SqliteStorage {
             ,       pm.lnurl_pay_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
+            ,       t.invoice_details AS token_invoice_details
+            ,       s.invoice_details AS spark_invoice_details
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
+             LEFT JOIN payment_details_spark s ON p.id = s.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              ${whereSql}
              ORDER BY p.timestamp ${orderDirection}
@@ -238,8 +241,13 @@ class SqliteStorage {
       );
       const tokenInsert = this.db.prepare(
         `INSERT OR REPLACE INTO payment_details_token 
-          (payment_id, metadata, tx_hash) 
-          VALUES (@id, @metadata, @txHash)`
+          (payment_id, metadata, tx_hash, invoice_details) 
+          VALUES (@id, @metadata, @txHash, @invoiceDetails)`
+      );
+      const sparkInsert = this.db.prepare(
+        `INSERT OR REPLACE INTO payment_details_spark 
+          (payment_id, invoice_details) 
+          VALUES (@id, @invoiceDetails)`
       );
       const transaction = this.db.transaction(() => {
         paymentInsert.run({
@@ -257,6 +265,15 @@ class SqliteStorage {
           spark: payment.details?.type === "spark" ? 1 : null,
         });
 
+        if (payment.details?.type === "spark") {
+          sparkInsert.run({
+            id: payment.id,
+            invoiceDetails: payment.details.invoiceDetails
+              ? JSON.stringify(payment.details.invoiceDetails)
+              : null,
+          });
+        }
+
         if (payment.details?.type === "lightning") {
           lightningInsert.run({
             id: payment.id,
@@ -273,6 +290,9 @@ class SqliteStorage {
             id: payment.id,
             metadata: JSON.stringify(payment.details.metadata),
             txHash: payment.details.txHash,
+            invoiceDetails: payment.details.invoiceDetails
+              ? JSON.stringify(payment.details.invoiceDetails)
+              : null,
           });
         }
       });
@@ -316,9 +336,12 @@ class SqliteStorage {
             ,       pm.lnurl_pay_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
+            ,       t.invoice_details AS token_invoice_details
+            ,       s.invoice_details AS spark_invoice_details
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
+             LEFT JOIN payment_details_spark s ON p.id = s.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              WHERE p.id = ?
             `);
@@ -370,9 +393,12 @@ class SqliteStorage {
             ,       pm.lnurl_pay_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
+            ,       t.invoice_details AS token_invoice_details
+            ,       s.invoice_details AS spark_invoice_details
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
+             LEFT JOIN payment_details_spark s ON p.id = s.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
              WHERE l.invoice = ?
             `);
@@ -554,13 +580,18 @@ class SqliteStorage {
     } else if (row.spark) {
       details = {
         type: "spark",
-        amount: row.spark,
+        invoiceDetails: row.spark_invoice_details
+          ? JSON.parse(row.spark_invoice_details)
+          : null,
       };
     } else if (row.token_metadata) {
       details = {
         type: "token",
         metadata: JSON.parse(row.token_metadata),
         txHash: row.token_tx_hash,
+        invoiceDetails: row.token_invoice_details
+          ? JSON.parse(row.token_invoice_details)
+          : null,
       };
     }
 

@@ -1,6 +1,8 @@
 use std::time::UNIX_EPOCH;
 
+use breez_sdk_common::input::{InputType, PaymentRequestSource, parse_spark_address};
 use spark_wallet::SparkWallet;
+use tracing::warn;
 
 use crate::{
     Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError, TokenMetadata,
@@ -94,6 +96,15 @@ pub async fn token_transaction_to_payments(
 
     let mut payments = Vec::new();
 
+    let mut invoices = Vec::new();
+    for invoice_str in &transaction.fulfilled_invoices {
+        if let Some(InputType::SparkInvoice(invoice)) =
+            parse_spark_address(invoice_str, &PaymentRequestSource::default())
+        {
+            invoices.push(invoice);
+        }
+    }
+
     for (vout, output) in transaction.outputs.iter().enumerate() {
         let payment_type = if tx_inputs_are_ours && output.owner_public_key != identity_public_key {
             // If inputs are ours and outputs are not ours, add an outgoing payment
@@ -106,6 +117,20 @@ pub async fn token_transaction_to_payments(
         };
 
         let id = format!("{}:{}", transaction.hash, vout);
+
+        // TODO:The following breaks if there are multiple invoices/outputs with the same owner public key but is the best we can do for now
+        // Should be an edge case given that the Spark SDK only supports one invoice per transaction
+        let invoices = invoices
+            .iter()
+            .filter(|i| i.identity_public_key == output.owner_public_key.to_string())
+            .collect::<Vec<_>>();
+        if invoices.len() > 1 {
+            warn!(
+                "Multiple invoices found for output owner public key: {}. Using the first one",
+                output.owner_public_key
+            );
+        }
+        let invoice = invoices.first().map(|&inv| inv.clone());
 
         let payment = Payment {
             id,
@@ -121,6 +146,7 @@ pub async fn token_transaction_to_payments(
             details: Some(PaymentDetails::Token {
                 metadata: metadata.clone(),
                 tx_hash: transaction.hash.clone(),
+                invoice_details: invoice.map(Into::into),
             }),
         };
         payments.push(payment);

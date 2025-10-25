@@ -162,6 +162,7 @@ pub enum InputType {
     Bolt12InvoiceRequest(Bolt12InvoiceRequestDetails),
     LnurlWithdraw(LnurlWithdrawRequestDetails),
     SparkAddress(SparkAddressDetails),
+    SparkInvoice(SparkInvoiceDetails),
 }
 
 impl TryFrom<LnurlRequestDetails> for InputType {
@@ -185,113 +186,32 @@ impl TryFrom<LnurlRequestDetails> for InputType {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SparkAddressDetails {
+    /// The raw address string
     pub address: String,
-    pub decoded_address: SparkAddress,
+    /// The identity public key of the address owner
+    pub identity_public_key: String,
+    pub network: BitcoinNetwork,
     pub source: PaymentRequestSource,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct SparkAddress {
+pub struct SparkInvoiceDetails {
+    /// The raw invoice string
+    pub invoice: String,
+    /// The identity public key of the invoice issuer
     pub identity_public_key: String,
     pub network: BitcoinNetwork,
-    pub spark_invoice_fields: Option<SparkInvoiceFields>,
-    pub signature: Option<String>,
-}
-
-impl From<spark_wallet::SparkAddress> for SparkAddress {
-    fn from(spark_address: spark_wallet::SparkAddress) -> Self {
-        SparkAddress {
-            identity_public_key: spark_address.identity_public_key.to_string(),
-            network: match spark_address.network {
-                spark_wallet::Network::Mainnet => BitcoinNetwork::Bitcoin,
-                spark_wallet::Network::Testnet => BitcoinNetwork::Testnet3,
-                spark_wallet::Network::Regtest => BitcoinNetwork::Regtest,
-                spark_wallet::Network::Signet => BitcoinNetwork::Signet,
-            },
-            spark_invoice_fields: spark_address.spark_invoice_fields.map(Into::into),
-            signature: spark_address.signature.map(|sig| sig.to_string()),
-        }
-    }
-}
-
-impl From<spark::address::SparkInvoiceFields> for SparkInvoiceFields {
-    fn from(fields: spark::address::SparkInvoiceFields) -> Self {
-        SparkInvoiceFields {
-            id: fields.id.to_string(),
-            version: fields.version,
-            memo: fields.memo,
-            sender_public_key: fields.sender_public_key.map(|pk| pk.to_string()),
-            expiry_time: fields.expiry_time.map(|time| {
-                time.duration_since(web_time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            }),
-            payment_type: fields.payment_type.map(Into::into),
-        }
-    }
-}
-
-impl From<spark::address::SparkAddressPaymentType> for SparkAddressPaymentType {
-    fn from(payment_type: spark::address::SparkAddressPaymentType) -> Self {
-        match payment_type {
-            spark::address::SparkAddressPaymentType::TokensPayment(tp) => {
-                SparkAddressPaymentType::TokensPayment(TokensPaymentDetails {
-                    token_identifier: tp.token_identifier.map(|id| id.to_string()),
-                    amount: tp.amount,
-                })
-            }
-            spark::address::SparkAddressPaymentType::SatsPayment(sp) => {
-                SparkAddressPaymentType::SatsPayment(SatsPaymentDetails { amount: sp.amount })
-            }
-        }
-    }
-}
-
-impl From<spark::address::TokensPayment> for TokensPaymentDetails {
-    fn from(tp: spark::address::TokensPayment) -> Self {
-        TokensPaymentDetails {
-            token_identifier: tp.token_identifier.map(|id| id.to_string()),
-            amount: tp.amount,
-        }
-    }
-}
-
-impl From<spark::address::SatsPayment> for SatsPaymentDetails {
-    fn from(sp: spark::address::SatsPayment) -> Self {
-        SatsPaymentDetails { amount: sp.amount }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct SparkInvoiceFields {
-    pub id: String,
-    pub version: u32,
-    pub memo: Option<String>,
-    pub sender_public_key: Option<String>,
-    pub expiry_time: Option<u64>,
-    pub payment_type: Option<SparkAddressPaymentType>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum SparkAddressPaymentType {
-    TokensPayment(TokensPaymentDetails),
-    SatsPayment(SatsPaymentDetails),
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct TokensPaymentDetails {
-    pub token_identifier: Option<String>,
+    /// Optional amount denominated in sats if `token_identifier` is absent, otherwise in the token base units
     pub amount: Option<u128>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct SatsPaymentDetails {
-    pub amount: Option<u64>,
+    /// The token identifier of the token payment. Absence indicates a Bitcoin payment.
+    pub token_identifier: Option<String>,
+    /// Optional expiry time. If not provided, the invoice will never expire.
+    pub expiry_time: Option<u64>,
+    /// Optional description.
+    pub description: Option<String>,
+    /// If set, the invoice may only be fulfilled by a payer with this public key.
+    pub sender_public_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
