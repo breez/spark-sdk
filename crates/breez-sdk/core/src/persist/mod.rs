@@ -52,7 +52,7 @@ impl From<serde_json::Error> for StorageError {
 }
 
 /// Metadata associated with a payment that cannot be extracted from the Spark operator.
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,

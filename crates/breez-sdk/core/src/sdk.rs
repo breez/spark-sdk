@@ -69,6 +69,12 @@ use crate::{
     },
 };
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use crate::models::StorageImplementations;
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology";
+
 #[derive(Clone, Debug)]
 enum SyncType {
     Full,
@@ -175,7 +181,14 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
         .join(path_suffix);
 
     let storage = default_storage(storage_dir.to_string_lossy().to_string())?;
-    let builder = crate::SdkBuilder::new(request.config, request.seed, storage);
+    let real_time_sync_server_url = request
+        .config
+        .real_time_sync_server_url
+        .clone()
+        .unwrap_or(BREEZ_SYNC_SERVICE_URL.to_string());
+    let mut builder =
+        super::sdk_builder::SdkBuilder::new(request.config, request.seed, storage.storage);
+    builder = builder.with_real_time_sync(real_time_sync_server_url, storage.sync_storage);
     let sdk = builder.build().await?;
     Ok(sdk)
 }
@@ -183,11 +196,14 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::needless_pass_by_value)]
-pub fn default_storage(data_dir: String) -> Result<Arc<dyn Storage>, SdkError> {
+pub fn default_storage(data_dir: String) -> Result<StorageImplementations, SdkError> {
     let db_path = std::path::PathBuf::from_str(&data_dir)?;
 
-    let storage = crate::SqliteStorage::new(&db_path)?;
-    Ok(Arc::new(storage))
+    let storage = Arc::new(crate::SqliteStorage::new(&db_path)?);
+    Ok(StorageImplementations {
+        storage: storage.clone(),
+        sync_storage: storage,
+    })
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -201,6 +217,7 @@ pub fn default_config(network: Network) -> Config {
         prefer_spark_over_lightning: false,
         external_input_parsers: None,
         use_default_external_input_parsers: true,
+        real_time_sync_server_url: None,
     }
 }
 
@@ -213,6 +230,7 @@ pub(crate) struct BreezSdkParams {
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub shutdown_sender: watch::Sender<()>,
     pub spark_wallet: Arc<SparkWallet>,
+    pub event_emitter: Arc<EventEmitter>,
 }
 
 impl BreezSdk {
@@ -236,12 +254,13 @@ impl BreezSdk {
             fiat_service: params.fiat_service,
             lnurl_client: params.lnurl_client,
             lnurl_server_client: params.lnurl_server_client,
-            event_emitter: Arc::new(EventEmitter::new()),
+            event_emitter: params.event_emitter,
             shutdown_sender: params.shutdown_sender,
             sync_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
             external_input_parsers,
         };
+
         sdk.start(initial_synced_sender);
         Ok(sdk)
     }
@@ -252,6 +271,8 @@ impl BreezSdk {
     /// 1. `periodic_sync`: the wallet with the Spark network    
     /// 2. `monitor_deposits`: monitors for new deposits
     fn start(&self, initial_synced_sender: watch::Sender<bool>) {
+        // TODO: update the local database from outgoing sync records.
+        // ensure there will be no races. (if we would just take the pending outgoing records, it's possible the remote update happens before the local update. Then we have an issue at startup, because the update would no longer be 'pending', while the local data model hasn't been updated yet.)
         self.periodic_sync(initial_synced_sender);
         self.try_recover_lightning_address();
     }

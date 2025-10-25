@@ -7,15 +7,16 @@ use breez_sdk_common::{
     input::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser},
     lnurl::pay::{LnurlPayRequestDetails, SuccessAction, SuccessActionProcessed},
     network::BitcoinNetwork,
+    sync::storage::SyncStorage,
 };
 use core::fmt;
 use lnurl_models::RecoverLnurlPayResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, fmt::Display, str::FromStr};
+use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
 
-use crate::error::DepositClaimError;
 use crate::sdk_builder::Seed;
+use crate::{Storage, error::DepositClaimError};
 
 /// A list of external input parsers that are used by default.
 /// To opt-out, set `use_default_external_input_parsers` in [Config] to false.
@@ -297,6 +298,9 @@ pub struct Config {
     /// ([`DEFAULT_EXTERNAL_INPUT_PARSERS`]).
     /// Set this to false in order to prevent their use.
     pub use_default_external_input_parsers: bool,
+
+    /// Url to use for the real-time sync server. Defaults to the Breez real-time sync server.
+    pub real_time_sync_server_url: Option<String>,
 }
 
 impl Config {
@@ -851,4 +855,10 @@ pub struct GetTokensMetadataRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct GetTokensMetadataResponse {
     pub tokens_metadata: Vec<TokenMetadata>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct StorageImplementations {
+    pub storage: Arc<dyn Storage>,
+    pub sync_storage: Arc<dyn SyncStorage>,
 }

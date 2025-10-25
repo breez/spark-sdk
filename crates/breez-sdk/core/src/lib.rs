@@ -7,6 +7,7 @@ mod lnurl;
 mod logger;
 mod models;
 mod persist;
+mod realtime_sync;
 mod sdk;
 mod sdk_builder;
 mod sync;
@@ -14,7 +15,7 @@ mod utils;
 
 #[cfg(feature = "uniffi")]
 pub use bindings::*;
-pub use breez_sdk_common::input::*;
+pub use breez_sdk_common::{input::*, sync::storage as sync_storage};
 pub use chain::{
     BitcoinChainService, ChainServiceError, TxStatus, Utxo, rest_client::RestClientChainService,
 };

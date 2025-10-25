@@ -17,18 +17,17 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 pub struct SdkBuilder {
     builder: breez_sdk_spark::SdkBuilder,
+    storage: Arc<WasmStorage>,
 }
 
 #[wasm_bindgen]
 impl SdkBuilder {
     #[wasm_bindgen(js_name = "new")]
     pub fn new(config: Config, seed: Seed, storage: Storage) -> WasmResult<Self> {
+        let storage = Arc::new(WasmStorage { storage });
         Ok(Self {
-            builder: breez_sdk_spark::SdkBuilder::new(
-                config.into(),
-                seed.into(),
-                Arc::new(WasmStorage { storage }),
-            ),
+            builder: breez_sdk_spark::SdkBuilder::new(config.into(), seed.into(), storage.clone()),
+            storage,
         })
     }
 
@@ -88,6 +87,12 @@ impl SdkBuilder {
         self.builder = self
             .builder
             .with_payment_observer(Arc::new(WasmPaymentObserver { payment_observer }));
+        self
+    }
+
+    #[wasm_bindgen(js_name = "withRealTimeSync")]
+    pub fn with_real_time_sync(mut self, url: String) -> Self {
+        self.builder = self.builder.with_real_time_sync(url, self.storage.clone());
         self
     }
 

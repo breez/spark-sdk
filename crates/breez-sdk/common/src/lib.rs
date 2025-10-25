@@ -9,6 +9,7 @@ pub mod invoice;
 pub mod lnurl;
 pub mod network;
 pub mod rest;
+pub mod sync;
 pub mod tonic_wrap;
 pub mod utils;
 

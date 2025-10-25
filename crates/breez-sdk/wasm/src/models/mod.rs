@@ -32,6 +32,9 @@ mod serde_u128_as_string {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SdkEvent)]
 pub enum SdkEvent {
     Synced,
+    DataSynced {
+        did_pull_new_records: bool,
+    },
     ClaimDepositsFailed {
         unclaimed_deposits: Vec<DepositInfo>,
     },
@@ -507,6 +510,7 @@ pub struct Config {
     pub prefer_spark_over_lightning: bool,
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
     pub use_default_external_input_parsers: bool,
+    pub real_time_sync_server_url: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Fee)]
@@ -870,4 +874,46 @@ pub enum ProvisionalPaymentDetails {
         token_id: String,
         receiver_address: String,
     },
+}
+
+// Sync types
+#[macros::extern_wasm_bindgen(breez_sdk_common::sync::RecordId)]
+pub struct RecordId {
+    pub r#type: String,
+    pub data_id: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::sync_storage::UnversionedRecordChange)]
+pub struct UnversionedRecordChange {
+    pub id: RecordId,
+    pub schema_version: String,
+    pub updated_fields: HashMap<String, String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::sync_storage::RecordChange)]
+pub struct RecordChange {
+    pub id: RecordId,
+    pub schema_version: String,
+    pub updated_fields: HashMap<String, String>,
+    pub revision: u64,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::sync_storage::Record)]
+pub struct Record {
+    pub id: RecordId,
+    pub revision: u64,
+    pub schema_version: String,
+    pub data: HashMap<String, String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::sync_storage::IncomingChange)]
+pub struct IncomingChange {
+    pub new_state: Record,
+    pub old_state: Option<Record>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::sync_storage::OutgoingChange)]
+pub struct OutgoingChange {
+    pub change: RecordChange,
+    pub parent: Option<Record>,
 }
