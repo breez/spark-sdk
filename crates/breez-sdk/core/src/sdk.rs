@@ -25,7 +25,7 @@ use spark_wallet::{
     WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
-use tracing::{error, info, trace};
+use tracing::{debug, error, info, trace};
 use web_time::{Duration, SystemTime};
 
 use tokio::{
@@ -154,8 +154,7 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
             passphrase,
         } => {
             // Ensure mnemonic is valid before proceeding
-            bip39::Mnemonic::parse(mnemonic)
-                .map_err(|e| SdkError::InvalidInput(format!("Invalid mnemonic: {e}")))?;
+            bip39::Mnemonic::parse(mnemonic)?;
             let str = format!("{mnemonic}:{passphrase:?}");
             sha256::Hash::hash(str.as_bytes())
                 .to_string()
@@ -223,7 +222,7 @@ impl BreezSdk {
         if !matches!(params.config.network, Network::Regtest) {
             match &params.config.api_key {
                 Some(api_key) => validate_breez_api_key(api_key)?,
-                None => return Err(SdkError::Generic("Missing Breez API key".to_string())),
+                None => return Err(SdkError::generic("Missing Breez API key")),
             }
         }
         let (initial_synced_sender, initial_synced_watcher) = watch::channel(false);
@@ -569,7 +568,7 @@ impl BreezSdk {
         info!("Disconnecting Breez SDK");
         self.shutdown_sender
             .send(())
-            .map_err(|_| SdkError::Generic("Failed to send shutdown signal".to_string()))?;
+            .map_err(|_| SdkError::generic("Failed to send shutdown signal"))?;
 
         self.shutdown_sender.closed().await;
         info!("Breez SDK disconnected");
@@ -588,9 +587,7 @@ impl BreezSdk {
                 .clone()
                 .changed()
                 .await
-                .map_err(|_| {
-                    SdkError::Generic("Failed to receive initial synced signal".to_string())
-                })?;
+                .map_err(|_| SdkError::generic("Failed to receive initial synced signal"))?;
         }
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
         let account_info = object_repository
@@ -649,6 +646,7 @@ impl BreezSdk {
                     })
                     .await?;
 
+                debug!("Generated static deposit address: {address}");
                 Ok(ReceivePaymentResponse {
                     payment_request: address,
                     fee_sats: 0,
@@ -657,8 +655,8 @@ impl BreezSdk {
             ReceivePaymentMethod::Bolt11Invoice {
                 description,
                 amount_sats,
-            } => Ok(ReceivePaymentResponse {
-                payment_request: self
+            } => {
+                let invoice = self
                     .spark_wallet
                     .create_lightning_invoice(
                         amount_sats.unwrap_or_default(),
@@ -666,10 +664,17 @@ impl BreezSdk {
                         None,
                         self.config.prefer_spark_over_lightning,
                     )
-                    .await?
-                    .invoice,
-                fee_sats: 0,
-            }),
+                    .await?;
+                debug!(
+                    "Generated Bolt11 invoice: {}, amount_sats: {}",
+                    invoice.invoice,
+                    amount_sats.unwrap_or_default()
+                );
+                Ok(ReceivePaymentResponse {
+                    payment_request: invoice.invoice,
+                    fee_sats: 0,
+                })
+            }
         }
     }
 
@@ -798,13 +803,13 @@ impl BreezSdk {
                 match payment_type {
                     spark_wallet::SparkAddressPaymentType::SatsPayment(sats_payment_details) => {
                         if request.token_identifier.is_some() {
-                            return Err(SdkError::InvalidInput(
-                                "Token identifier can't be provided for this payment request: spark sats payment".to_string(),
+                            return Err(SdkError::invalid_input(
+                                "Token identifier can't be provided for this payment request: spark sats payment",
                             ));
                         }
                         if sats_payment_details.amount.is_some() && request.amount.is_some() {
-                            return Err(SdkError::InvalidInput(
-                                "Amount can't be provided for this payment request: spark invoice defines amount".to_string(),
+                            return Err(SdkError::invalid_input(
+                                "Amount can't be provided for this payment request: spark invoice defines amount",
                             ));
                         }
                         sats_payment_details.amount.map(Into::into)
@@ -813,13 +818,13 @@ impl BreezSdk {
                         tokens_payment_details,
                     ) => {
                         if request.token_identifier.is_none() {
-                            return Err(SdkError::InvalidInput(
-                                "Token identifier is required for this payment request: spark tokens payment".to_string(),
+                            return Err(SdkError::invalid_input(
+                                "Token identifier is required for this payment request: spark tokens payment",
                             ));
                         }
                         if tokens_payment_details.amount.is_some() && request.amount.is_some() {
-                            return Err(SdkError::InvalidInput(
-                                "Amount can't be provided for this payment request: spark invoice defines amount".to_string(),
+                            return Err(SdkError::invalid_input(
+                                "Amount can't be provided for this payment request: spark invoice defines amount",
                             ));
                         }
                         tokens_payment_details.amount
@@ -837,15 +842,14 @@ impl BreezSdk {
                 },
                 amount: payment_request_amount
                     .or(request.amount)
-                    .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                    .ok_or(SdkError::invalid_input("Amount is required"))?,
                 token_identifier: request.token_identifier,
             });
         }
 
         if request.token_identifier.is_some() {
-            return Err(SdkError::InvalidInput(
-                "Token identifier can't be provided for this payment request: non-spark address"
-                    .to_string(),
+            return Err(SdkError::invalid_input(
+                "Token identifier can't be provided for this payment request: non-spark address",
             ));
         }
 
@@ -885,7 +889,7 @@ impl BreezSdk {
                         .or(detailed_bolt11_invoice
                             .amount_msat
                             .map(|msat| u128::from(msat) / 1000))
-                        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                        .ok_or(SdkError::invalid_input("Amount is required"))?,
                     token_identifier: None,
                 })
             }
@@ -896,7 +900,7 @@ impl BreezSdk {
                         &withdrawal_address.address,
                         Some(
                             amount_sats
-                                .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?
+                                .ok_or(SdkError::invalid_input("Amount is required"))?
                                 .try_into()?,
                         ),
                     )
@@ -906,14 +910,11 @@ impl BreezSdk {
                         address: withdrawal_address.clone(),
                         fee_quote: fee_quote.into(),
                     },
-                    amount: amount_sats
-                        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                    amount: amount_sats.ok_or(SdkError::invalid_input("Amount is required"))?,
                     token_identifier: None,
                 })
             }
-            _ => Err(SdkError::InvalidInput(
-                "Unsupported payment method".to_string(),
-            )),
+            _ => Err(SdkError::invalid_input("Unsupported payment method")),
         }
     }
 
@@ -1065,9 +1066,7 @@ impl BreezSdk {
         req: CheckLightningAddressRequest,
     ) -> Result<bool, SdkError> {
         let Some(client) = &self.lnurl_server_client else {
-            return Err(SdkError::Generic(
-                "LNURL server is not configured".to_string(),
-            ));
+            return Err(SdkError::generic("LNURL server is not configured"));
         };
 
         let username = sanitize_username(&req.username);
@@ -1086,9 +1085,7 @@ impl BreezSdk {
     ) -> Result<LightningAddressInfo, SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
         let Some(client) = &self.lnurl_server_client else {
-            return Err(SdkError::Generic(
-                "LNURL server is not configured".to_string(),
-            ));
+            return Err(SdkError::generic("LNURL server is not configured"));
         };
 
         let username = sanitize_username(&request.username);
@@ -1120,9 +1117,7 @@ impl BreezSdk {
         };
 
         let Some(client) = &self.lnurl_server_client else {
-            return Err(SdkError::Generic(
-                "LNURL server is not configured".to_string(),
-            ));
+            return Err(SdkError::generic("LNURL server is not configured"));
         };
 
         let params = crate::lnurl::UnregisterLightningAddressRequest {
@@ -1170,7 +1165,7 @@ impl BreezSdk {
         // Otherwise, we wait for a matching payment event
         let payment_result = loop {
             let Some(event) = rx.recv().await else {
-                break Err(SdkError::Generic("Event channel closed".to_string()));
+                break Err(SdkError::generic("Event channel closed"));
             };
 
             let SdkEvent::PaymentSucceeded { payment } = event else {
@@ -1270,7 +1265,7 @@ impl BreezSdk {
     ) -> Result<SendPaymentResponse, SdkError> {
         let spark_address = address
             .parse::<SparkAddress>()
-            .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
+            .map_err(|_| SdkError::invalid_input("Invalid spark address"))?;
 
         let payment = if let Some(identifier) = token_identifier {
             self.send_spark_token_payment(
@@ -1373,7 +1368,7 @@ impl BreezSdk {
             }
             None => ExitSpeed::Fast,
             _ => {
-                return Err(SdkError::InvalidInput("Invalid options".to_string()));
+                return Err(SdkError::invalid_input("Invalid options"));
             }
         };
         let response = self
@@ -1444,9 +1439,7 @@ impl BreezSdk {
         let cache = ObjectCacheRepository::new(self.storage.clone());
 
         let Some(client) = &self.lnurl_server_client else {
-            return Err(SdkError::Generic(
-                "LNURL server is not configured".to_string(),
-            ));
+            return Err(SdkError::generic("LNURL server is not configured"));
         };
         let resp = client.recover_lightning_address().await?;
 
@@ -1493,9 +1486,7 @@ impl BreezSdk {
 
         payments
             .first()
-            .ok_or(SdkError::Generic(
-                "No payment created from token transfer".to_string(),
-            ))
+            .ok_or(SdkError::generic("No payment created from token transfer"))
             .cloned()
     }
 }
@@ -1657,12 +1648,12 @@ fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
     let api_key_decoded = base64::engine::general_purpose::STANDARD
         .decode(api_key.as_bytes())
         .map_err(|err| {
-            SdkError::Generic(format!(
+            SdkError::generic(format!(
                 "Could not base64 decode the Breez API key: {err:?}"
             ))
         })?;
     let (_rem, cert) = parse_x509_certificate(&api_key_decoded).map_err(|err| {
-        SdkError::Generic(format!("Invalid certificate for Breez API key: {err:?}"))
+        SdkError::generic(format!("Invalid certificate for Breez API key: {err:?}"))
     })?;
 
     let issuer = cert
@@ -1673,16 +1664,14 @@ fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
     match issuer {
         Some(common_name) => {
             if !common_name.starts_with("Breez") {
-                return Err(SdkError::Generic(
-                    "Invalid certificate found for Breez API key: issuer mismatch. Please confirm that the certificate's origin is trusted"
-                        .to_string()
+                return Err(SdkError::generic(
+                    "Invalid certificate found for Breez API key: issuer mismatch. Please confirm that the certificate's origin is trusted",
                 ));
             }
         }
         _ => {
-            return Err(SdkError::Generic(
-                "Could not parse Breez API key certificate: issuer is invalid or not found."
-                    .to_string(),
+            return Err(SdkError::generic(
+                "Could not parse Breez API key certificate: issuer is invalid or not found.",
             ));
         }
     }

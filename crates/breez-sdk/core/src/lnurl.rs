@@ -8,6 +8,7 @@ use reqwest::{
     header::{AUTHORIZATION, HeaderMap, InvalidHeaderValue},
 };
 
+#[derive(Debug)]
 pub enum LnurlServerError {
     InvalidApiKey,
     Network {
