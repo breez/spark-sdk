@@ -6,6 +6,7 @@ use std::{
 
 use serde::Serialize;
 use tokio::sync::RwLock;
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::{DepositInfo, Payment};
@@ -87,6 +88,7 @@ impl EventEmitter {
     pub async fn add_listener(&self, listener: Box<dyn EventListener>) -> String {
         let index = self.listener_index.fetch_add(1, Ordering::Relaxed);
         let id = format!("listener_{}-{}", index, Uuid::new_v4());
+        debug!("Adding event listener with id: {}", id);
         let mut listeners = self.listeners.write().await;
         listeners.insert(id.clone(), listener);
         id
@@ -102,6 +104,7 @@ impl EventEmitter {
     ///
     /// `true` if the listener was found and removed, `false` otherwise
     pub async fn remove_listener(&self, id: &str) -> bool {
+        debug!("Removing event listener with id: {}", id);
         let mut listeners = self.listeners.write().await;
         listeners.remove(id).is_some()
     }
