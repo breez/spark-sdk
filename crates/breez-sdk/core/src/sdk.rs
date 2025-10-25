@@ -8,13 +8,13 @@ pub use breez_sdk_common::input::parse as parse_input;
 use breez_sdk_common::{
     fiat::FiatService,
     input::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType},
+    lnurl::{self, withdraw::execute_lnurl_withdraw},
 };
 use breez_sdk_common::{
     lnurl::{
         error::LnurlError,
         pay::{
-            AesSuccessActionDataResult, SuccessAction, SuccessActionProcessed,
-            ValidatedCallbackResponse, validate_lnurl_pay,
+            AesSuccessActionDataResult, SuccessAction, SuccessActionProcessed, validate_lnurl_pay,
         },
     },
     rest::RestClient,
@@ -42,10 +42,11 @@ use crate::{
     DepositInfo, Fee, GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest,
     GetTokensMetadataResponse, LightningAddressInfo, ListFiatCurrenciesResponse,
     ListFiatRatesResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
-    LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger, Network, PaymentDetails,
-    PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse, RefundDepositRequest,
-    RefundDepositResponse, RegisterLightningAddressRequest, SendOnchainFeeQuote,
-    SendPaymentOptions, WaitForPaymentIdentifier, WaitForPaymentRequest, WaitForPaymentResponse,
+    LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawInfo, LnurlWithdrawRequest,
+    LnurlWithdrawResponse, Logger, Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest,
+    PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
+    RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions,
+    WaitForPaymentIdentifier, WaitForPaymentRequest, WaitForPaymentResponse,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     lnurl::LnurlServerClient,
@@ -68,6 +69,8 @@ use crate::{
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
+
+const DEFAULT_LNURL_WITHDRAW_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Clone, Debug)]
 enum SyncType {
@@ -687,10 +690,10 @@ impl BreezSdk {
         )
         .await?
         {
-            ValidatedCallbackResponse::EndpointError { data } => {
+            lnurl::pay::ValidatedCallbackResponse::EndpointError { data } => {
                 return Err(LnurlError::EndpointError(data.reason).into());
             }
-            ValidatedCallbackResponse::EndpointSuccess { data } => data,
+            lnurl::pay::ValidatedCallbackResponse::EndpointSuccess { data } => data,
         };
 
         let prepare_response = self
@@ -773,6 +776,7 @@ impl BreezSdk {
                 PaymentMetadata {
                     lnurl_pay_info: Some(lnurl_info),
                     lnurl_description,
+                    ..Default::default()
                 },
             )
             .await?;
@@ -782,6 +786,92 @@ impl BreezSdk {
             payment,
             success_action,
         })
+    }
+
+    /// Performs an LNURL withdraw operation for the amount of satoshis to
+    /// withdraw and the LNURL withdraw request details. The LNURL withdraw request
+    /// details can be obtained from calling [`BreezSdk::parse`].
+    pub async fn lnurl_withdraw(
+        &self,
+        request: LnurlWithdrawRequest,
+    ) -> Result<LnurlWithdrawResponse, SdkError> {
+        let LnurlWithdrawRequest {
+            amount_sats,
+            withdraw_request,
+        } = request;
+
+        if !withdraw_request.is_amount_valid(amount_sats) {
+            return Err(SdkError::InvalidInput(
+                "Amount must be within min/max LNURL withdrawable limits".to_string(),
+            ));
+        }
+
+        // Generate a Lightning invoice for the withdraw
+        let receive_response = self
+            .receive_payment(ReceivePaymentRequest {
+                payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                    description: withdraw_request.default_description.clone(),
+                    amount_sats: Some(amount_sats),
+                },
+            })
+            .await?;
+
+        // Perform the LNURL withdraw using the generated invoice
+        let withdraw_response = execute_lnurl_withdraw(
+            self.lnurl_client.as_ref(),
+            &withdraw_request,
+            &receive_response.payment_request,
+        )
+        .await?;
+        if let lnurl::withdraw::ValidatedCallbackResponse::EndpointError { data } =
+            withdraw_response
+        {
+            return Err(LnurlError::EndpointError(data.reason).into());
+        }
+
+        // Wait for the payment to be completed
+        let fut = self.wait_for_payment(WaitForPaymentRequest {
+            identifier: WaitForPaymentIdentifier::PaymentRequest(receive_response.payment_request),
+        });
+        let mut payment = timeout(
+            Duration::from_secs(DEFAULT_LNURL_WITHDRAW_TIMEOUT_SECS),
+            fut,
+        )
+        .await
+        .map_err(|_| SdkError::Generic("Timeout waiting for payment".to_string()))?
+        .map_err(|e| SdkError::Generic(format!("Error waiting for payment: {e}")))?
+        .payment;
+
+        // Update payment details with LNURL withdraw info
+        let Some(PaymentDetails::Lightning {
+            lnurl_withdraw_info,
+            description,
+            ..
+        }) = &mut payment.details
+        else {
+            return Err(SdkError::Generic(
+                "Expected Lightning payment details".to_string(),
+            ));
+        };
+        let withdraw_info = LnurlWithdrawInfo {
+            withdraw_url: withdraw_request.callback.clone(),
+        };
+        *lnurl_withdraw_info = Some(withdraw_info.clone());
+        let lnurl_description = Some(withdraw_request.default_description.clone());
+        description.clone_from(&lnurl_description);
+
+        self.storage
+            .set_payment_metadata(
+                payment.id.clone(),
+                PaymentMetadata {
+                    lnurl_withdraw_info: Some(withdraw_info),
+                    lnurl_description,
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        Ok(LnurlWithdrawResponse { payment })
     }
 
     #[allow(clippy::too_many_lines)]

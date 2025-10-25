@@ -211,6 +211,10 @@ class MigrationManager {
           `CREATE INDEX IF NOT EXISTS idx_payments_timestamp ON payments(timestamp DESC)`,
         ],
       },
+      {
+        name: "Add lnurl_withdraw_info column to payment_metadata",
+        sql: `ALTER TABLE payment_metadata ADD COLUMN lnurl_withdraw_info TEXT`,
+      },
     ];
   }
 }

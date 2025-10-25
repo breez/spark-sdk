@@ -2,6 +2,7 @@ pub use breez_sdk_common::fiat::*;
 pub use breez_sdk_common::input::*;
 pub use breez_sdk_common::lnurl::auth::*;
 pub use breez_sdk_common::lnurl::pay::*;
+pub use breez_sdk_common::lnurl::withdraw::LnurlWithdrawRequestDetails;
 pub use breez_sdk_common::network::BitcoinNetwork;
 pub use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
@@ -197,6 +198,11 @@ pub struct _LnurlPayRequest {
 pub struct _LnurlPayResponse {
     pub payment: Payment,
     pub success_action: Option<SuccessActionProcessed>,
+}
+
+#[frb(mirror(LnurlWithdrawInfo))]
+pub struct _LnurlWithdrawInfo {
+    pub withdraw_url: String,
 }
 
 #[frb(mirror(OnchainConfirmationSpeed))]
@@ -411,6 +417,7 @@ pub enum _PaymentDetails {
         payment_hash: String,
         destination_pubkey: String,
         lnurl_pay_info: Option<LnurlPayInfo>,
+        lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     },
     Withdraw {
         tx_id: String,
@@ -423,6 +430,7 @@ pub enum _PaymentDetails {
 #[frb(mirror(PaymentMetadata))]
 pub struct _PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
+    pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
 }
 
