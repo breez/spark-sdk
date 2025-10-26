@@ -15,6 +15,9 @@ endif
 BIN_PATH := $(RELEASE_DIR)/$(BIN_NAME).$(BIN_EXT)
 INSTALL_PREFIX := CARGO_TARGET_DIR="$(TARGET_DIR)"
 
+bindings-csharp: build-release install-uniffi-bindgen-cs
+	uniffi-bindgen-cs --library $(BIN_PATH) --no-format -o $(FFI_DIR)csharp -c ./uniffi.toml
+
 bindings-kotlin: build-release install-uniffi-bindgen-gobley
 	gobley-uniffi-bindgen --library -o $(FFI_DIR)kotlin \
 		--crate-configs breez_sdk_spark_bindings=./uniffi.toml \
@@ -36,6 +39,9 @@ build-release:
 
 build-release-target-%: install-target-%
 	cargo build --release --target $*
+
+install-uniffi-bindgen-cs:
+	$(INSTALL_PREFIX) cargo install uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.9.2+v0.28.3
 
 install-uniffi-bindgen-gobley:
 	$(INSTALL_PREFIX) cargo install gobley-uniffi-bindgen --git https://github.com/breez/gobley --rev 72753910f54a157de2f84b78dc6f78415e28d4f2
@@ -80,12 +86,16 @@ build-ios-universal: build-release-target-aarch64-apple-ios build-release-target
 	# build universal lib for arm sim and x86 sim
 	lipo -create -output $(TARGET_DIR)ios-universal-sim/release/$(BIN_NAME).a $(TARGET_DIR)aarch64-apple-ios-sim/release/$(BIN_NAME).a $(TARGET_DIR)x86_64-apple-ios/release/$(BIN_NAME).a
 
-build-darwin-universal: install-target-aarch64-apple-darwin install-target-x86_64-apple-darwin
+build-darwin-universal: build-aarch64-apple-darwin build-x86_64-apple-darwin
 	mkdir -p $(TARGET_DIR)darwin-universal/release
-	cargo lipo --release --targets aarch64-apple-darwin
-	cargo lipo --release --targets x86_64-apple-darwin
 	lipo -create -output $(TARGET_DIR)darwin-universal/release/$(BIN_NAME).dylib $(TARGET_DIR)aarch64-apple-darwin/release/$(BIN_NAME).dylib $(TARGET_DIR)x86_64-apple-darwin/release/$(BIN_NAME).dylib
 	lipo -create -output $(TARGET_DIR)darwin-universal/release/$(BIN_NAME).a $(TARGET_DIR)aarch64-apple-darwin/release/$(BIN_NAME).a $(TARGET_DIR)x86_64-apple-darwin/release/$(BIN_NAME).a
+
+build-aarch64-apple-darwin: install-target-aarch64-apple-darwin
+	cargo lipo --release --targets aarch64-apple-darwin
+
+build-x86_64-apple-darwin: install-target-x86_64-apple-darwin
+	cargo lipo --release --targets x86_64-apple-darwin
 
 package-xcframework-no-binaries: bindings-swift
 	mkdir -p langs/swift/Sources/BreezSdkSpark
@@ -142,3 +152,19 @@ package-kotlin-multiplatform: build-kotlin-multiplatform
 	cp $(TARGET_DIR)aarch64-apple-ios-sim/release/$(BIN_NAME).a $(KMP_BASE)/lib/ios-simulator-arm64/
 	cp $(TARGET_DIR)x86_64-apple-ios/release/$(BIN_NAME).a $(KMP_BASE)/lib/ios-simulator-x64/
 	cd langs/kotlin-multiplatform && ./gradlew :breez-sdk-spark-kmp:assemble
+
+package-nuget: bindings-csharp build-aarch64-apple-darwin build-x86_64-apple-darwin build-release-target-aarch64-unknown-linux-gnu build-release-target-x86_64-unknown-linux-gnu build-release-target-i686-pc-windows-msvc build-release-target-x86_64-pc-windows-msvc
+	mkdir -p langs/csharp/src/runtimes/osx-arm64/native
+	mkdir -p langs/csharp/src/runtimes/osx-x64/native
+	mkdir -p langs/csharp/src/runtimes/linux-x64/native
+	mkdir -p langs/csharp/src/runtimes/linux-arm64/native
+	mkdir -p langs/csharp/src/runtimes/win-x86/native
+	mkdir -p langs/csharp/src/runtimes/win-x64/native
+	cp $(TARGET_DIR)aarch64-apple-darwin/release/$(BIN_NAME).dylib langs/csharp/src/runtimes/osx-arm64/native/$(BIN_NAME).dylib
+	cp $(TARGET_DIR)x86_64-apple-darwin/release/$(BIN_NAME).dylib langs/csharp/src/runtimes/osx-x64/native/$(BIN_NAME).dylib
+	cp $(TARGET_DIR)x86_64-unknown-linux-gnu/release/$(BIN_NAME).so langs/csharp/src/runtimes/linux-x64/native/$(BIN_NAME).so
+	cp $(TARGET_DIR)aarch64-unknown-linux-gnu/release/$(BIN_NAME).so langs/csharp/src/runtimes/linux-arm64/native/$(BIN_NAME).so
+	cp $(TARGET_DIR)i686-pc-windows-msvc/release/$(BIN_NAME).dll langs/csharp/src/runtimes/win-x86/native/$(BIN_NAME).dll
+	cp $(TARGET_DIR)x86_64-pc-windows-msvc/release/$(BIN_NAME).dll langs/csharp/src/runtimes/win-x64/native/$(BIN_NAME).dll
+	cp -r $(FFI_DIR)csharp/*.cs langs/csharp/src/
+	cd langs/csharp/src && dotnet pack -c Release

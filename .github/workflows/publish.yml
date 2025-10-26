@@ -14,7 +14,7 @@ on:
         description: 'Array of packages to publish (remove what you do not want)'
         required: true
         type: string
-        default: '["android", "flutter", "golang", "kotlin-multiplatform", "python", "react-native", "swift", "wasm"]'
+        default: '["android", "csharp", "flutter", "golang", "kotlin-multiplatform", "python", "react-native", "swift", "wasm"]'
       use-dummy-binaries:
         description: 'Should use dummies for the SDK binaries. Default = false.'
         required: false
@@ -43,7 +43,7 @@ on:
         description: 'Array of packages to publish (remove what you do not want)'
         required: true
         type: string
-        default: '["android", "flutter", "golang", "kotlin-multiplatform", "python","react-native", "swift", "wasm"]'
+        default: '["android", "csharp", "flutter", "golang", "kotlin-multiplatform", "python","react-native", "swift", "wasm"]'
       use-dummy-binaries:
         description: 'Should use dummies for the SDK binaries. Default = false.'
         required: false
@@ -63,6 +63,7 @@ jobs:
       repository: ${{ inputs.repository || github.repository }}
       ref: ${{ inputs.ref || github.sha }}
       android-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'android') && inputs.package-version) || ''}}
+      csharp-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'csharp') && inputs.package-version) || '' }}
       flutter-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'flutter') && inputs.package-version) || '' }}
       golang-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'golang') && inputs.package-version) || '' }}
       kotlin-multiplatform-package-version: ${{ (contains(fromJSON(inputs.packages-to-publish), 'kotlin-multiplatform') && inputs.package-version) || '' }}
@@ -87,12 +88,13 @@ jobs:
       # (e.g. bindings-windows: true) if you want to test something.
       repository: ${{ needs.pre-setup.outputs.repository }}
       bindings-android: ${{ !!needs.pre-setup.outputs.android-package-version || !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.kotlin-multiplatform-package-version || !!needs.pre-setup.outputs.react-native-package-version }}
-      bindings-darwin: ${{ !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version || !!needs.pre-setup.outputs.swift-package-version }}
+      bindings-darwin: ${{  !!needs.pre-setup.outputs.csharp-package-version || !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version || !!needs.pre-setup.outputs.swift-package-version }}
       bindings-ios: ${{ !!needs.pre-setup.outputs.kotlin-multiplatform-package-version || !!needs.pre-setup.outputs.swift-package-version || !!needs.pre-setup.outputs.react-native-package-version }}
-      bindings-linux: ${{ !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version }}
+      bindings-linux: ${{ !!needs.pre-setup.outputs.csharp-package-version || !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version }}
       bindings-wasm: ${{ !!needs.pre-setup.outputs.wasm-package-version }}
-      bindings-windows: ${{ !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version }}
+      bindings-windows: ${{ !!needs.pre-setup.outputs.csharp-package-version || !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version }}
       android: ${{ !!needs.pre-setup.outputs.android-package-version }}
+      csharp: ${{ !!needs.pre-setup.outputs.csharp-package-version }}
       flutter: ${{ !!needs.pre-setup.outputs.flutter-package-version }}
       golang: ${{ !!needs.pre-setup.outputs.golang-package-version }}
       kotlin-multiplatform: ${{ !!needs.pre-setup.outputs.kotlin-multiplatform-package-version }}
@@ -102,6 +104,7 @@ jobs:
       wasm: ${{ !!needs.pre-setup.outputs.wasm-package-version }}
       ref: ${{ needs.pre-setup.outputs.ref }}
       android-package-version: ${{ needs.pre-setup.outputs.android-package-version || '0.0.2' }}
+      csharp-package-version: ${{ needs.pre-setup.outputs.csharp-package-version || '0.0.2' }}
       flutter-package-version: ${{ needs.pre-setup.outputs.flutter-package-version || '0.0.2' }}
       golang-package-version: ${{ needs.pre-setup.outputs.golang-package-version || '0.0.2' }}
       kotlin-multiplatform-package-version: ${{ needs.pre-setup.outputs.kotlin-multiplatform-package-version || '0.0.2' }}
@@ -182,6 +185,22 @@ jobs:
     secrets:
       BREEZ_MVN_USERNAME: ${{ secrets.BREEZ_MVN_USERNAME }}
       BREEZ_MVN_PASSWORD: ${{ secrets.BREEZ_MVN_PASSWORD }}
+
+  publish-csharp:
+    needs:
+      - setup
+      - build-bindings-darwin
+      - build-bindings-linux
+      - build-bindings-windows
+    if: ${{ needs.setup.outputs.csharp == 'true' }}
+    uses: ./.github/workflows/publish-csharp.yml
+    with:
+      repository: ${{ needs.setup.outputs.repository }}
+      ref: ${{ needs.setup.outputs.ref }}
+      package-version: ${{ needs.setup.outputs.csharp-package-version }}
+      publish: ${{ needs.setup.outputs.publish == 'true' }}
+    secrets:
+      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
 
   publish-flutter:
     needs:
