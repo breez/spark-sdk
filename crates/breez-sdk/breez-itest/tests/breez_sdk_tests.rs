@@ -560,7 +560,6 @@ async fn test_03_lightning_invoice_payment(
 
 /// Test 4: Send back and forth between Alice to Bob a Spark transfer to test renewing the node/refund timelocks
 #[rstest]
-#[ignore]
 #[test_log::test(tokio::test)]
 // #[ignore = "Requires sending approx 19 x 19 transfers to renew the node timelocks"]
 async fn test_04_renew_timelocks(

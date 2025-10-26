@@ -4,7 +4,7 @@ use breez_sdk_spark::*;
 use rand::RngCore;
 use rstest::*;
 use tempdir::TempDir;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{info, warn};
 
 // ---------------------
@@ -61,7 +61,10 @@ async fn ensure_funded(sdk_instance: &mut SdkInstance, min_balance: u64) -> Resu
     Ok(())
 }
 
-async fn wait_for_claim_failed(event_rx: &mut tokio::sync::mpsc::Receiver<SdkEvent>, timeout: u64) -> Result<Vec<DepositInfo>> {
+async fn wait_for_claim_failed(
+    event_rx: &mut tokio::sync::mpsc::Receiver<SdkEvent>,
+    timeout: u64,
+) -> Result<Vec<DepositInfo>> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -73,7 +76,10 @@ async fn wait_for_claim_failed(event_rx: &mut tokio::sync::mpsc::Receiver<SdkEve
                 return Ok(unclaimed_deposits);
             }
             Ok(Some(other)) => {
-                warn!("Received other SDK event while waiting for failure: {:?}", other);
+                warn!(
+                    "Received other SDK event while waiting for failure: {:?}",
+                    other
+                );
                 continue;
             }
             Ok(None) => anyhow::bail!("Event channel closed"),
@@ -103,14 +109,18 @@ async fn test_onchain_withdraw_to_static_address(
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_initial = bob
         .sdk
-        .get_info(GetInfoRequest { ensure_synced: Some(false) })
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
         .await?
         .balance_sats;
 
     // Bob exposes a static deposit address
     let bob_address = bob
         .sdk
-        .receive_payment(ReceivePaymentRequest { payment_method: ReceivePaymentMethod::BitcoinAddress })
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress,
+        })
         .await?
         .payment_request;
     info!("Bob deposit address: {}", bob_address);
@@ -130,7 +140,9 @@ async fn test_onchain_withdraw_to_static_address(
         .sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
-            options: Some(SendPaymentOptions::BitcoinAddress { confirmation_speed: OnchainConfirmationSpeed::Medium }),
+            options: Some(SendPaymentOptions::BitcoinAddress {
+                confirmation_speed: OnchainConfirmationSpeed::Medium,
+            }),
         })
         .await?;
 
@@ -147,7 +159,9 @@ async fn test_onchain_withdraw_to_static_address(
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_final = bob
         .sdk
-        .get_info(GetInfoRequest { ensure_synced: Some(false) })
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
         .await?
         .balance_sats;
     assert!(bob_final > bob_initial, "Bob's balance should increase");
@@ -157,7 +171,10 @@ async fn test_onchain_withdraw_to_static_address(
         .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
         .await?
         .deposits;
-    assert!(unclaimed.is_empty(), "Unclaimed deposits should be empty after auto-claim");
+    assert!(
+        unclaimed.is_empty(),
+        "Unclaimed deposits should be empty after auto-claim"
+    );
 
     Ok(())
 }
@@ -174,7 +191,9 @@ async fn test_deposit_fee_claim_and_refund(
     // Acquire a static deposit address
     let addr = bob
         .sdk
-        .receive_payment(ReceivePaymentRequest { payment_method: ReceivePaymentMethod::BitcoinAddress })
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress,
+        })
         .await?
         .payment_request;
 
@@ -189,7 +208,10 @@ async fn test_deposit_fee_claim_and_refund(
     let failed = wait_for_claim_failed(&mut bob.events, 180).await?;
     assert!(!failed.is_empty());
     let (txid_found, vout) = {
-        let d = failed.iter().find(|d| d.txid == txid).expect("deposit should appear in failed list");
+        let d = failed
+            .iter()
+            .find(|d| d.txid == txid)
+            .expect("deposit should appear in failed list");
         (d.txid.clone(), d.vout)
     };
 
@@ -199,15 +221,25 @@ async fn test_deposit_fee_claim_and_refund(
         .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
         .await?
         .deposits;
-    let dep = deposits.iter().find(|d| d.txid == txid_found && d.vout == vout).expect("unclaimed deposit not found");
+    let dep = deposits
+        .iter()
+        .find(|d| d.txid == txid_found && d.vout == vout)
+        .expect("unclaimed deposit not found");
     assert!(dep.claim_error.is_some(), "Expected claim_error to be set");
 
     // Manually claim with permissive fee
     let claim_resp = bob
         .sdk
-        .claim_deposit(ClaimDepositRequest { txid: txid_found.clone(), vout, max_fee: Some(Fee::Fixed { amount: 100_000 }) })
+        .claim_deposit(ClaimDepositRequest {
+            txid: txid_found.clone(),
+            vout,
+            max_fee: Some(Fee::Fixed { amount: 100_000 }),
+        })
         .await?;
-    assert!(matches!(claim_resp.payment.payment_type, PaymentType::Receive));
+    assert!(matches!(
+        claim_resp.payment.payment_type,
+        PaymentType::Receive
+    ));
     assert!(matches!(claim_resp.payment.method, PaymentMethod::Deposit));
 
     // After manual claim, deposit should be removed from unclaimed list
@@ -218,7 +250,9 @@ async fn test_deposit_fee_claim_and_refund(
         .await?
         .deposits;
     assert!(
-        deposits_after_claim.iter().find(|d| d.txid == txid_found && d.vout == vout).is_none(),
+        !deposits_after_claim
+            .iter()
+            .any(|d| d.txid == txid_found && d.vout == vout),
         "Deposit should be removed after successful claim"
     );
 
@@ -262,7 +296,10 @@ async fn test_deposit_fee_claim_and_refund(
         .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
         .await?
         .deposits;
-    if let Some(updated) = deposits_after_refund.iter().find(|d| d.txid == dep2.txid && d.vout == dep2.vout) {
+    if let Some(updated) = deposits_after_refund
+        .iter()
+        .find(|d| d.txid == dep2.txid && d.vout == dep2.vout)
+    {
         assert_eq!(updated.refund_tx_id.as_deref(), Some(refund.tx_id.as_str()));
     } else {
         // already removed (confirmed); acceptable
