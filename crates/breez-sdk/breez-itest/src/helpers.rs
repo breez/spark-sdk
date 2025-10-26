@@ -75,6 +75,55 @@ pub async fn build_sdk(storage_dir: String, seed_bytes: [u8; 32]) -> Result<SdkI
     build_sdk_with_dir(storage_dir, seed_bytes, None).await
 }
 
+/// Build and initialize a BreezSDK instance with a custom config override
+///
+/// Allows tests to tweak configuration fields (e.g., `max_deposit_claim_fee`).
+/// Common test defaults (no API key, no lnurl, faster sync, prefer spark) are applied
+/// on top unless explicitly set in the provided config.
+pub async fn build_sdk_with_custom_config(
+    storage_dir: String,
+    seed_bytes: [u8; 32],
+    mut config: Config,
+    temp_dir: Option<tempdir::TempDir>,
+) -> Result<SdkInstance> {
+    // Apply sensible test defaults if not already configured
+    if config.api_key.is_some() && matches!(config.network, Network::Regtest) {
+        // In regtest we don't need an API key; drop it if present to avoid network calls
+        config.api_key = None;
+    }
+    if config.lnurl_domain.is_some() {
+        // Avoid lnurl server interactions in tests unless explicitly required
+        config.lnurl_domain = None;
+    }
+    // Speed up tests and prefer spark routing
+    config.prefer_spark_over_lightning = true;
+    config.sync_interval_secs = 5;
+
+    let storage = default_storage(storage_dir)?;
+    let seed = Seed::Entropy(seed_bytes.to_vec());
+
+    let builder = SdkBuilder::new(config, seed, storage);
+    let sdk = builder.build().await?;
+
+    // Set up event listener
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    // Ensure initial sync completes
+    let _ = sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?;
+
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        temp_dir,
+    })
+}
+
 /// Wait for SDK wallet balance to reach at least the specified amount
 ///
 /// This helper polls the wallet balance periodically until it reaches the minimum
