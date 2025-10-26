@@ -5,7 +5,7 @@
     <Version>0.0.1</Version>
     <Company>Breez</Company>
     <Description>C# Breez Spark SDK</Description>
-    <TargetFramework>net6.0;netstandard2.0</TargetFramework>
+    <TargetFrameworks>net8.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

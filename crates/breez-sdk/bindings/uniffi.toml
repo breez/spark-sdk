@@ -20,7 +20,7 @@ cdylib_name = "breez_sdk_spark_bindings"
 [bindings.csharp]
 package_name = "breez_sdk_spark"
 cdylib_name = "breez_sdk_spark_bindings"
-namespace = "Breez.Sdk.Spark"
+namespace = "Breez.Sdk.Spark.Bindings"
 access_modifier = "public"
 
 # https://github.com/NordSecurity/uniffi-bindgen-go/blob/main/docs/CONFIGURATION.md
