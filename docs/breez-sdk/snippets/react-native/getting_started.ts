@@ -43,7 +43,7 @@ const exampleGettingStartedAdvanced = async () => {
   // Create the default storage
   const storage = defaultStorage(`${RNFS.DocumentDirectoryPath}/data`)
 
-  const builder = new SdkBuilder(config, seed, storage.storage)
+  const builder = new SdkBuilder(config, seed, storage)
   // You can also pass your custom implementations:
   // await builder.withChainService(<your chain service implementation>)
   // await builder.withRestClient(<your rest client implementation>)

@@ -35,7 +35,7 @@ func initSdkAdvanced() async throws -> BreezSdk {
     let storage = try defaultStorage(dataDir: "./.data")
 
     // Build the SDK using the config, seed and storage
-    let builder = SdkBuilder(config: config, seed: seed, storage: storage.storage)
+    let builder = SdkBuilder(config: config, seed: seed, storage: storage)
 
     // You can also pass your custom implementations:
     // await builder.withChainService(<your chain service implementation>)

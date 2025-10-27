@@ -19,8 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, fmt::Display, str::FromStr};
 
-use crate::sdk_builder::Seed;
-use crate::error::DepositClaimError;
+use crate::{error::DepositClaimError, sdk_builder::Seed};
 
 /// A list of external input parsers that are used by default.
 /// To opt-out, set `use_default_external_input_parsers` in [Config] to false.

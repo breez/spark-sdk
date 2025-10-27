@@ -52,7 +52,7 @@ func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
 		return nil, err
 	}
 
-	builder := breez_sdk_spark.NewSdkBuilder(config, seed, storage.Storage)
+	builder := breez_sdk_spark.NewSdkBuilder(config, seed, storage)
 	// You can also pass your custom implementations:
 	// builder.WithChainService(<your chain service implementation>)
 	// builder.WithRestClient(<your rest client implementation>)
