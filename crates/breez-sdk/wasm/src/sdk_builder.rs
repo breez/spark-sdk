@@ -91,8 +91,8 @@ impl SdkBuilder {
     }
 
     #[wasm_bindgen(js_name = "withRealTimeSync")]
-    pub fn with_real_time_sync(mut self, url: String) -> Self {
-        self.builder = self.builder.with_real_time_sync(url, self.storage.clone());
+    pub fn with_real_time_sync(mut self) -> Self {
+        self.builder = self.builder.with_real_time_sync(self.storage.clone());
         self
     }
 

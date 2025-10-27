@@ -77,6 +77,9 @@ use crate::{
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology";
 
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology:442";
+
 #[derive(Clone, Debug)]
 enum SyncType {
     Full,
@@ -183,14 +186,12 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
         .join(path_suffix);
 
     let storage = default_storage(storage_dir.to_string_lossy().to_string())?;
-    let sync_storage = default_sync_storage(storage_dir.to_string_lossy().to_string())?;
-    let real_time_sync_server_url = request
-        .config
-        .real_time_sync_server_url
-        .clone()
-        .unwrap_or(BREEZ_SYNC_SERVICE_URL.to_string());
+    let with_real_time_sync = request.config.real_time_sync_server_url.is_some();
     let mut builder = super::sdk_builder::SdkBuilder::new(request.config, request.seed, storage);
-    builder = builder.with_real_time_sync(real_time_sync_server_url, sync_storage);
+    if with_real_time_sync {
+        let sync_storage = default_sync_storage(storage_dir.to_string_lossy().to_string())?;
+        builder = builder.with_real_time_sync(sync_storage);
+    }
     let sdk = builder.build().await?;
     Ok(sdk)
 }
@@ -226,7 +227,7 @@ pub fn default_config(network: Network) -> Config {
         prefer_spark_over_lightning: false,
         external_input_parsers: None,
         use_default_external_input_parsers: true,
-        real_time_sync_server_url: None,
+        real_time_sync_server_url: Some(BREEZ_SYNC_SERVICE_URL.to_string()),
     }
 }
 
