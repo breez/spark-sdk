@@ -16,11 +16,11 @@ pub struct State<DB> {
     pub domains: HashSet<String>,
     pub nostr_keys: Option<nostr::Keys>,
     pub ca_cert: Option<Vec<u8>>,
-    pub connection_manager: Option<Arc<dyn ConnectionManager>>,
-    pub coordinator: Option<OperatorConfig>,
-    pub signer: Option<Arc<DefaultSigner>>,
-    pub session_manager: Option<Arc<InMemorySessionManager>>,
-    pub service_provider: Option<Arc<ServiceProvider>>,
+    pub connection_manager: Arc<dyn ConnectionManager>,
+    pub coordinator: OperatorConfig,
+    pub signer: Arc<DefaultSigner>,
+    pub session_manager: Arc<InMemorySessionManager>,
+    pub service_provider: Arc<ServiceProvider>,
     pub subscribed_keys: Arc<Mutex<HashSet<String>>>,
 }
 

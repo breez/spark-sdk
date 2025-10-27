@@ -78,7 +78,7 @@ impl SparkWallet {
         .await
     }
 
-    pub(crate) async fn new(
+    pub async fn new(
         config: SparkWalletConfig,
         signer: Arc<dyn Signer>,
         session_manager: Arc<dyn SessionManager>,

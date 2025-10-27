@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use spark::operator::rpc::{DefaultConnectionManager, SparkRpcClient};
 use spark::session_manager::InMemorySessionManager;
 use spark::ssp::ServiceProvider;
+use spark::tree::InMemoryTreeStore;
 use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
 use sqlx::{PgPool, SqlitePool};
 use std::collections::HashSet;
@@ -165,13 +166,32 @@ where
 
     let spark_config = SparkWalletConfig::default_config(args.network);
 
+    // Create shared infrastructure components
+    let signer = Arc::new(DefaultSigner::new(&auth_seed, args.network)?);
+    let session_manager = Arc::new(InMemorySessionManager::default());
+    let connection_manager: Arc<dyn spark::operator::rpc::ConnectionManager> =
+        Arc::new(DefaultConnectionManager::new());
+    let coordinator = spark_config.operator_pool.get_coordinator().clone();
+    let service_provider = Arc::new(ServiceProvider::new(
+        spark_config.service_provider_config.clone(),
+        signer.clone(),
+        session_manager.clone(),
+    ));
+
+    // Create wallet using shared signer
     let wallet = Arc::new(
-        spark_wallet::SparkWallet::connect(
+        spark_wallet::SparkWallet::new(
             spark_config.clone(),
-            Arc::new(DefaultSigner::new(&auth_seed, args.network)?),
+            signer.clone(),
+            session_manager.clone(),
+            Arc::new(InMemoryTreeStore::default()),
+            Arc::clone(&connection_manager),
+            None,
+            true,
         )
         .await?,
     );
+
     let domains = args
         .domains
         .split(',')
@@ -201,54 +221,31 @@ where
 
     let subscribed_keys = Arc::new(Mutex::new(HashSet::new()));
 
-    // initialize zap components if nostr keys are provided
-    let (connection_manager, coordinator, signer, session_manager, service_provider) =
-        if let Some(nostr_keys) = &nostr_keys {
-            let session_manager = Arc::new(InMemorySessionManager::default());
-            let signer = Arc::new(DefaultSigner::new(&auth_seed, args.network)?);
-            let service_provider = Arc::new(ServiceProvider::new(
-                spark_config.service_provider_config.clone(),
+    // Initialize zap subscriptions if nostr keys are provided
+    if let Some(nostr_keys) = &nostr_keys {
+        // start bg task to subscribe to users with unexpired invoices
+        for user in repository.get_users_with_unexpired_invoices().await? {
+            let user_pubkey = bitcoin::secp256k1::PublicKey::from_str(&user)
+                .map_err(|e| anyhow!("failed to parse user pubkey: {e:?}"))?;
+
+            let transport = connection_manager.get_transport(&coordinator).await?;
+            let rpc_client = SparkRpcClient::new(
+                transport,
                 signer.clone(),
+                user_pubkey,
                 session_manager.clone(),
-            ));
+            );
 
-            let connection_manager: Arc<dyn spark::operator::rpc::ConnectionManager> =
-                Arc::new(DefaultConnectionManager::new());
-            let coordinator = spark_config.operator_pool.get_coordinator().clone();
-
-            // start bg task to subscribe to users with unexpired invoices
-            for user in repository.get_users_with_unexpired_invoices().await? {
-                let user_pubkey = bitcoin::secp256k1::PublicKey::from_str(&user)
-                    .map_err(|e| anyhow!("failed to parse user pubkey: {e:?}"))?;
-
-                let transport = connection_manager.get_transport(&coordinator).await?;
-                let rpc_client = SparkRpcClient::new(
-                    transport,
-                    signer.clone(),
-                    user_pubkey,
-                    session_manager.clone(),
-                );
-
-                zap::subscribe_to_user_for_zaps(
-                    repository.clone(),
-                    user_pubkey,
-                    rpc_client,
-                    Arc::clone(&service_provider),
-                    nostr_keys.clone(),
-                    Arc::clone(&subscribed_keys),
-                );
-            }
-
-            (
-                Some(connection_manager),
-                Some(coordinator),
-                Some(signer),
-                Some(session_manager),
-                Some(service_provider),
-            )
-        } else {
-            (None, None, None, None, None)
-        };
+            zap::subscribe_to_user_for_zaps(
+                repository.clone(),
+                user_pubkey,
+                rpc_client,
+                Arc::clone(&service_provider),
+                nostr_keys.clone(),
+                Arc::clone(&subscribed_keys),
+            );
+        }
+    }
 
     let state = State {
         db: repository,
