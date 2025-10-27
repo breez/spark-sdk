@@ -774,7 +774,7 @@ class IndexedDBStorage {
     });
   }
 
-  async sync_add_outgoing_change(record) {
+  async syncAddOutgoingChange(record) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
@@ -833,7 +833,7 @@ class IndexedDBStorage {
     });
   }
 
-  async sync_complete_outgoing_sync(record) {
+  async syncCompleteOutgoingSync(record) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
@@ -872,7 +872,7 @@ class IndexedDBStorage {
     });
   }
 
-  async sync_get_pending_outgoing_changes(limit) {
+  async syncGetPendingOutgoingChanges(limit) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
@@ -942,7 +942,7 @@ class IndexedDBStorage {
     });
   }
 
-  async sync_get_last_revision() {
+  async syncGetLastRevision() {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
@@ -963,7 +963,7 @@ class IndexedDBStorage {
     });
   }
 
-  async sync_insert_incoming_records(records) {
+  async syncInsertIncomingRecords(records) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
@@ -1002,7 +1002,7 @@ class IndexedDBStorage {
     });
   }
 
-  async sync_delete_incoming_record(record) {
+  async syncDeleteIncomingRecord(record) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
@@ -1049,7 +1049,7 @@ class IndexedDBStorage {
     });
   }
 
-  async sync_rebase_pending_outgoing_records(revision) {
+  async syncRebasePendingOutgoingRecords(revision) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
@@ -1116,7 +1116,7 @@ class IndexedDBStorage {
     });
   }
 
-  async sync_get_incoming_records(limit) {
+  async syncGetIncomingRecords(limit) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
@@ -1181,7 +1181,7 @@ class IndexedDBStorage {
     });
   }
 
-  async sync_get_latest_outgoing_change() {
+  async syncGetLatestOutgoingChange() {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
@@ -1246,7 +1246,7 @@ class IndexedDBStorage {
     });
   }
 
-  async sync_update_record_from_incoming(record) {
+  async syncUpdateRecordFromIncoming(record) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
