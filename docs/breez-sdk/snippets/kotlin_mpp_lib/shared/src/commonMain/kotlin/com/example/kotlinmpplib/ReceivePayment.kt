@@ -64,7 +64,11 @@ class ReceivePayment {
         // ANCHOR: receive-payment-spark-invoice
         try {
             val optionalDescription = "<invoice description>"
+            // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
+            // package)
             val optionalAmountSats = BigInteger.fromLong(5_000L)
+            // Android (BigInteger from java.math)
+            // val optionalAmountSats = BigInteger.valueOf(5_000L)
             val optionalExpiryTimeSeconds = 1716691200.toULong()
             val optionalSenderPublicKey = "<sender public key>"
 

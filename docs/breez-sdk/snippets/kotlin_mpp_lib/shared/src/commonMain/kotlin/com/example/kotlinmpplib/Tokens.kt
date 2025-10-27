@@ -56,7 +56,11 @@ class Tokens {
         try {
             val tokenIdentifier = "<token identifier>"
             val optionalDescription = "<invoice description>"
+            // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
+            // package)
             val optionalAmount = BigInteger.fromLong(5_000L)
+            // Android (BigInteger from java.math)
+            // val optionalAmount = BigInteger.valueOf(5_000L)
             val optionalExpiryTimeSeconds = 1716691200.toULong()
             val optionalSenderPublicKey = "<sender public key>"
 

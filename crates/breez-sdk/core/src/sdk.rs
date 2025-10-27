@@ -828,9 +828,9 @@ impl BreezSdk {
     ) -> Result<PrepareSendPaymentResponse, SdkError> {
         let parsed_input = self.parse(&request.payment_request).await?;
         match &parsed_input {
-            InputType::SparkAddress(_) => Ok(PrepareSendPaymentResponse {
+            InputType::SparkAddress(spark_address_details) => Ok(PrepareSendPaymentResponse {
                 payment_method: SendPaymentMethod::SparkAddress {
-                    address: request.payment_request,
+                    address: spark_address_details.address.clone(),
                     fee: 0,
                     token_identifier: request.token_identifier.clone(),
                 },
