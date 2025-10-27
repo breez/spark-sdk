@@ -403,16 +403,16 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     deleteDeposit: (txid: string, vout: number) => Promise<void>;
     listDeposits: () => Promise<DepositInfo[]>;
     updateDeposit: (txid: string, vout: number, payload: UpdateDepositPayload) => Promise<void>;
-    sync_add_outgoing_change: (record: UnversionedRecordChange) => Promise<number>;
-    sync_complete_outgoing_sync: (record: Record) => Promise<void>;
-    sync_get_pending_outgoing_changes: (limit: number) => Promise<OutgoingChange[]>;
-    sync_get_last_revision: () => Promise<number>;
-    sync_insert_incoming_records: (records: Record[]) => Promise<void>;
-    sync_delete_incoming_record: (record: Record) => Promise<void>;
-    sync_rebase_pending_outgoing_records: (revision: number) => Promise<void>;
-    sync_get_incoming_records: (limit: number) => Promise<IncomingChange[]>;
-    sync_get_latest_outgoing_change: () => Promise<OutgoingChange | null>;
-    sync_update_record_from_incoming: (record: Record) => Promise<void>;
+    syncAddOutgoingChange: (record: UnversionedRecordChange) => Promise<number>;
+    syncCompleteOutgoingSync: (record: Record) => Promise<void>;
+    syncGetPendingOutgoingChanges: (limit: number) => Promise<OutgoingChange[]>;
+    syncGetLastRevision: () => Promise<number>;
+    syncInsertIncomingRecords: (records: Record[]) => Promise<void>;
+    syncDeleteIncomingRecord: (record: Record) => Promise<void>;
+    syncRebasePendingOutgoingRecords: (revision: number) => Promise<void>;
+    syncGetIncomingRecords: (limit: number) => Promise<IncomingChange[]>;
+    syncGetLatestOutgoingChange: () => Promise<OutgoingChange | null>;
+    syncUpdateRecordFromIncoming: (record: Record) => Promise<void>;
 }"#;
 
 #[wasm_bindgen]
@@ -470,46 +470,46 @@ extern "C" {
         payload: UpdateDepositPayload,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = sync_add_outgoing_change, catch)]
+    #[wasm_bindgen(structural, method, js_name = syncAddOutgoingChange, catch)]
     pub fn sync_add_outgoing_change(
         this: &Storage,
         record: UnversionedRecordChange,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = sync_complete_outgoing_sync, catch)]
+    #[wasm_bindgen(structural, method, js_name = syncCompleteOutgoingSync, catch)]
     pub fn sync_complete_outgoing_sync(this: &Storage, record: Record) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = sync_get_pending_outgoing_changes, catch)]
+    #[wasm_bindgen(structural, method, js_name = syncGetPendingOutgoingChanges, catch)]
     pub fn sync_get_pending_outgoing_changes(
         this: &Storage,
         limit: u32,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = sync_get_last_revision, catch)]
+    #[wasm_bindgen(structural, method, js_name = syncGetLastRevision, catch)]
     pub fn sync_get_last_revision(this: &Storage) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = sync_insert_incoming_records, catch)]
+    #[wasm_bindgen(structural, method, js_name = syncInsertIncomingRecords, catch)]
     pub fn sync_insert_incoming_records(
         this: &Storage,
         records: Vec<Record>,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = sync_delete_incoming_record, catch)]
+    #[wasm_bindgen(structural, method, js_name = syncDeleteIncomingRecord, catch)]
     pub fn sync_delete_incoming_record(this: &Storage, record: Record) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = sync_rebase_pending_outgoing_records, catch)]
+    #[wasm_bindgen(structural, method, js_name = syncRebasePendingOutgoingRecords, catch)]
     pub fn sync_rebase_pending_outgoing_records(
         this: &Storage,
         revision: u64,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = sync_get_incoming_records, catch)]
+    #[wasm_bindgen(structural, method, js_name = syncGetIncomingRecords, catch)]
     pub fn sync_get_incoming_records(this: &Storage, limit: u32) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = sync_get_latest_outgoing_change, catch)]
+    #[wasm_bindgen(structural, method, js_name = syncGetLatestOutgoingChange, catch)]
     pub fn sync_get_latest_outgoing_change(this: &Storage) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = sync_update_record_from_incoming, catch)]
+    #[wasm_bindgen(structural, method, js_name = syncUpdateRecordFromIncoming, catch)]
     pub fn sync_update_record_from_incoming(
         this: &Storage,
         record: Record,

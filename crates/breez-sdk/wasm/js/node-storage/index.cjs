@@ -641,7 +641,7 @@ class SqliteStorage {
 
   // ===== Sync Operations =====
 
-  sync_add_outgoing_change(record) {
+  syncAddOutgoingChange(record) {
     try {
       const transaction = this.db.transaction(() => {
         // Get the next revision
@@ -685,7 +685,7 @@ class SqliteStorage {
     }
   }
 
-  sync_complete_outgoing_sync(record) {
+  syncCompleteOutgoingSync(record) {
     try {
       const transaction = this.db.transaction(() => {
         // Delete records that have been synced
@@ -728,7 +728,7 @@ class SqliteStorage {
     }
   }
 
-  sync_get_pending_outgoing_changes(limit) {
+  syncGetPendingOutgoingChanges(limit) {
     try {
       const stmt = this.db.prepare(`
         SELECT 
@@ -791,7 +791,7 @@ class SqliteStorage {
     }
   }
 
-  sync_get_last_revision() {
+  syncGetLastRevision() {
     try {
       const stmt = this.db.prepare(`SELECT revision FROM sync_revision LIMIT 1`);
       const row = stmt.get();
@@ -807,7 +807,7 @@ class SqliteStorage {
     }
   }
 
-  sync_insert_incoming_records(records) {
+  syncInsertIncomingRecords(records) {
     try {
       if (!records || records.length === 0) {
         return Promise.resolve();
@@ -847,7 +847,7 @@ class SqliteStorage {
     }
   }
 
-  sync_delete_incoming_record(record) {
+  syncDeleteIncomingRecord(record) {
     try {
       const stmt = this.db.prepare(`
         DELETE FROM sync_incoming
@@ -868,7 +868,7 @@ class SqliteStorage {
     }
   }
 
-  sync_rebase_pending_outgoing_records(revision) {
+  syncRebasePendingOutgoingRecords(revision) {
     try {
       const transaction = this.db.transaction(() => {
         // Get current revision
@@ -906,7 +906,7 @@ class SqliteStorage {
     }
   }
 
-  sync_get_incoming_records(limit) {
+  syncGetIncomingRecords(limit) {
     try {
       const transaction = this.db.transaction(() => {
         // Get records and then delete them (following the SQLite pattern)
@@ -975,7 +975,7 @@ class SqliteStorage {
     }
   }
 
-  sync_get_latest_outgoing_change() {
+  syncGetLatestOutgoingChange() {
     try {
       // Get the latest outgoing change
       const stmt = this.db.prepare(`
@@ -1039,7 +1039,7 @@ class SqliteStorage {
     }
   }
 
-  sync_update_record_from_incoming(record) {
+  syncUpdateRecordFromIncoming(record) {
     try {
       const stmt = this.db.prepare(`
         INSERT OR REPLACE INTO sync_state (
