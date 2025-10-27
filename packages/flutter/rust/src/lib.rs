@@ -5,6 +5,5 @@ pub mod logger;
 pub mod models;
 pub mod sdk;
 pub mod sdk_builder;
-pub mod storage;
 
 pub use sdk::BreezSdk;

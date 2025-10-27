@@ -39,7 +39,7 @@ class GettingStarted {
             // Create the default storage
             val storage = defaultStorage("./.data")
 
-            val builder = SdkBuilder(config, seed, storage.storage)
+            val builder = SdkBuilder(config, seed, storage)
             // You can also pass your custom implementations:
             // builder.withChainService(<your chain service implementation>)
             // builder.withRestClient(<your rest client implementation>)

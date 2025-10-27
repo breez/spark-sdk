@@ -21,7 +21,7 @@ pub fn default_config(network: Network) -> Config {
 }
 
 #[frb(sync)]
-pub fn default_storage(data_dir: String) -> Result<StorageImplementations, SdkError> {
+pub fn default_storage(data_dir: String) -> Result<Arc<dyn Storage>, SdkError> {
     breez_sdk_spark::default_storage(data_dir)
 }
 

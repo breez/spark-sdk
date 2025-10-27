@@ -47,7 +47,7 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     let storage = default_storage("./.data".to_string())?;
 
     // Build the SDK using the config, seed and storage
-    let builder = SdkBuilder::new(config, seed, storage.storage);
+    let builder = SdkBuilder::new(config, seed, storage);
 
     // You can also pass your custom implementations:
     // let builder = builder.with_chain_service(<your chain service implementation>)
