@@ -611,7 +611,6 @@ impl BreezSdk {
         match request.payment_method {
             ReceivePaymentMethod::SparkAddress => Ok(ReceivePaymentResponse {
                 fee: 0,
-                token_identifier: None,
                 payment_request: self
                     .spark_wallet
                     .get_spark_address()?
@@ -642,7 +641,6 @@ impl BreezSdk {
                 )?;
                 Ok(ReceivePaymentResponse {
                     fee: 0,
-                    token_identifier,
                     payment_request: invoice,
                 })
             }
@@ -658,7 +656,6 @@ impl BreezSdk {
                     return Ok(ReceivePaymentResponse {
                         payment_request: static_deposit_address.address.to_string(),
                         fee: 0,
-                        token_identifier: None,
                     });
                 }
 
@@ -687,7 +684,6 @@ impl BreezSdk {
                 Ok(ReceivePaymentResponse {
                     payment_request: address,
                     fee: 0,
-                    token_identifier: None,
                 })
             }
             ReceivePaymentMethod::Bolt11Invoice {
@@ -705,7 +701,6 @@ impl BreezSdk {
                     .await?
                     .invoice,
                 fee: 0,
-                token_identifier: None,
             }),
         }
     }
