@@ -20,6 +20,15 @@ When implementing the Breez SDK, we recommend reading through our [UX Guidelines
 
 Many of the guidelines are implemented in [Misty Breez](https://github.com/breez/misty-breez/), which you can use as the primary UX reference during SDK implementation.
 
+## WebAssembly (WASM) Demo
+
+Looking for a quick way to try the SDK in your browser? Check out the WebAssembly (WASM) demo app:
+
+- **Repo:** [breez/breez-sdk-spark-example](https://github.com/breez/breez-sdk-spark-example)  
+- **Live demo:** https://breez-sdk-spark-example.vercel.app  
+
+> **Note:** The demo is for demonstration purposes only and not intended for production use.
+
 ## Support
 
 Have a question for the team? Join us on [Telegram](https://t.me/breezsdk) or email us at [contact@breez.technology](mailto:contact@breez.technology).
