@@ -86,9 +86,9 @@ impl SdkBuilder {
         *builder = builder.clone().with_payment_observer(payment_observer);
     }
 
-    pub async fn with_real_time_sync(&self, server_url: String, storage: Arc<dyn SyncStorage>) {
+    pub async fn with_real_time_sync(&self, storage: Arc<dyn SyncStorage>) {
         let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_real_time_sync(server_url, storage);
+        *builder = builder.clone().with_real_time_sync(storage);
     }
 
     /// Builds the `BreezSdk` instance with the configured components.

@@ -12,7 +12,6 @@ use crate::{
     persist::Storage,
     sdk_builder::SdkBuilder,
 };
-const BREEZ_WASM_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology:442";
 
 #[wasm_bindgen]
 pub struct BreezSdk {
@@ -62,13 +61,11 @@ pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
         .join(path_suffix);
 
     let storage = default_storage(storage_dir.to_string_lossy().as_ref()).await?;
-    let real_time_sync_server_url = request
-        .config
-        .real_time_sync_server_url
-        .clone()
-        .unwrap_or(BREEZ_WASM_SYNC_SERVICE_URL.to_string());
+    let with_real_time_sync = request.config.real_time_sync_server_url.is_some();
     let mut builder = SdkBuilder::new(request.config, request.seed, storage)?;
-    builder = builder.with_real_time_sync(real_time_sync_server_url);
+    if with_real_time_sync {
+        builder = builder.with_real_time_sync();
+    }
     let sdk = builder.build().await?;
     Ok(sdk)
 }
