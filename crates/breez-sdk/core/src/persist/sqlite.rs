@@ -188,8 +188,8 @@ impl SqliteStorage {
             "DROP TABLE payments;",
             "ALTER TABLE payments_new RENAME TO payments;",
             "CREATE TABLE payment_details_spark (
-              payment_id TEXT PRIMARY KEY,
-              invoice_details TEXT,
+              payment_id TEXT NOT NULL PRIMARY KEY,
+              invoice_details TEXT NOT NULL,
               FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
             );
             ALTER TABLE payment_details_token ADD COLUMN invoice_details TEXT;",
@@ -373,9 +373,11 @@ impl Storage for SqliteStorage {
                     "UPDATE payments SET spark = 1 WHERE id = ?",
                     params![payment.id],
                 )?;
-                tx.execute("INSERT OR REPLACE INTO payment_details_spark (payment_id, invoice_details) VALUES (?, ?)",
-                    params![payment.id, invoice_details.map(|d| serde_json::to_string(&d)).transpose()?],
-                )?;
+                if let Some(invoice_details) = invoice_details {
+                    tx.execute("INSERT OR REPLACE INTO payment_details_spark (payment_id, invoice_details) VALUES (?, ?)",
+                        params![payment.id, serde_json::to_string(&invoice_details)?],
+                    )?;
+                }
             }
             Some(PaymentDetails::Token {
                 metadata,

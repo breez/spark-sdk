@@ -215,8 +215,8 @@ class MigrationManager {
         name: "Add spark invoice details",
         sql: [
           `CREATE TABLE payment_details_spark (
-              payment_id TEXT PRIMARY KEY,
-              invoice_details TEXT,
+              payment_id TEXT NOT NULL PRIMARY KEY,
+              invoice_details TEXT NOT NULL,
               FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
             )`,
           `ALTER TABLE payment_details_token ADD COLUMN invoice_details TEXT`,

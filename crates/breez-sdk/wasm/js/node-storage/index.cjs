@@ -265,7 +265,10 @@ class SqliteStorage {
           spark: payment.details?.type === "spark" ? 1 : null,
         });
 
-        if (payment.details?.type === "spark") {
+        if (
+          payment.details?.type === "spark" &&
+          payment.details.invoiceDetails != null
+        ) {
           sparkInsert.run({
             id: payment.id,
             invoiceDetails: payment.details.invoiceDetails
