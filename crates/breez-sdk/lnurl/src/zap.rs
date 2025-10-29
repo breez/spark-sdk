@@ -103,11 +103,12 @@ pub fn subscribe_to_user_for_zaps<DB>(
                     message = stream.message() => message,
                     () = tokio::time::sleep(tokio::time::Duration::from_secs(60)) => {
                         // Periodically check if user still has unexpired invoices
+                        // Hold the lock while checking to prevent race condition with new subscriptions
+                        let mut subscribed = subscribed_keys.lock().await;
                         match db.user_has_unexpired_invoices(&user_pk.to_string()).await {
                             Ok(has_unexpired) => {
                                 if !has_unexpired {
                                     debug!("User {user_pk} has no more unexpired invoices (timeout check), unsubscribing");
-                                    let mut subscribed = subscribed_keys.lock().await;
                                     subscribed.remove(&user_pk.to_string());
                                     drop(subscribed);
                                     return; // Exit subscription completely
@@ -117,6 +118,7 @@ pub fn subscribe_to_user_for_zaps<DB>(
                                 error!("Failed to check unexpired invoices for user {user_pk}: {e}");
                             }
                         }
+                        drop(subscribed);
                         continue; // Continue to next iteration
                     }
                 };
@@ -219,6 +221,8 @@ pub fn subscribe_to_user_for_zaps<DB>(
                                         nostr_client.disconnect().await; // safely cleanup
 
                                         // Check if user still has unexpired invoices
+                                        // Hold the lock while checking to prevent race condition with new subscriptions
+                                        let mut subscribed = subscribed_keys.lock().await;
                                         match db
                                             .user_has_unexpired_invoices(&user_pk.to_string())
                                             .await
@@ -228,8 +232,6 @@ pub fn subscribe_to_user_for_zaps<DB>(
                                                     debug!(
                                                         "User {user_pk} has no more unexpired invoices, unsubscribing"
                                                     );
-                                                    let mut subscribed =
-                                                        subscribed_keys.lock().await;
                                                     subscribed.remove(&user_pk.to_string());
                                                     drop(subscribed);
                                                     break; // Exit subscription loop
@@ -241,6 +243,7 @@ pub fn subscribe_to_user_for_zaps<DB>(
                                                 );
                                             }
                                         }
+                                        drop(subscribed);
                                     }
                                 }
                             }
