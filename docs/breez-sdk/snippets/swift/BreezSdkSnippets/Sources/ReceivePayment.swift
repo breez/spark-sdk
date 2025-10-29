@@ -77,7 +77,7 @@ func receiveSparkInvoice(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
                     tokenIdentifier: nil,
                     expiryTime: optionalExpiryTimeSeconds,
                     description: optionalDescription,
-                    senderPublicKey: optionalSenderPublicKey,
+                    senderPublicKey: optionalSenderPublicKey
                 )
             ))
 
