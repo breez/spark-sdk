@@ -664,3 +664,151 @@ async fn test_04_renew_timelocks(
     info!("=== Test test_04_renew_timelocks PASSED ===");
     Ok(())
 }
+
+/// Test 5: Lightning invoice with prefer_spark true should use spark fee path
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_05_lightning_invoice_prefer_spark_fee_path(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_05_lightning_invoice_prefer_spark_fee_path ===");
+
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
+
+    // Ensure Alice is funded (cover amount + any fees)
+    ensure_funded(&mut alice, 50_000).await?;
+
+    // Bob creates a Lightning invoice with a fixed amount
+    let invoice_amount_sats = 2_000u64;
+    let bob_invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "Prefer spark test".to_string(),
+                amount_sats: Some(invoice_amount_sats),
+            },
+        })
+        .await?
+        .payment_request;
+
+    // Prepare payment; expect spark_transfer_fee_sats is Some (likely 0) when invoice contains spark route hint
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_invoice.clone(),
+            amount: None,
+            token_identifier: None,
+        })
+        .await?;
+
+    // Validate preparation outputs
+    if let SendPaymentMethod::Bolt11Invoice {
+        spark_transfer_fee_sats,
+        lightning_fee_sats,
+        ..
+    } = &prepare.payment_method
+    {
+        info!(
+            "Prepared fees: spark={:?}, lightning={}",
+            spark_transfer_fee_sats, lightning_fee_sats
+        );
+        // If spark hint exists, spark fee should be defined (0 expected in current setup)
+        assert!(
+            spark_transfer_fee_sats.is_some(),
+            "Expected spark_transfer_fee_sats to be present"
+        );
+    } else {
+        anyhow::bail!("Expected Bolt11Invoice payment method in prepare response");
+    }
+
+    // Send with prefer_spark = true and wait for completion
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare.clone(),
+            options: Some(SendPaymentOptions::Bolt11Invoice {
+                prefer_spark: true,
+                completion_timeout_secs: Some(10),
+            }),
+        })
+        .await?;
+
+    info!(
+        "Alice send status: {:?}, method: {:?}, fees: {}",
+        send_resp.payment.status, send_resp.payment.method, send_resp.payment.fees
+    );
+    // Prefer spark should route via spark path with zero fees; method may be Spark depending on path
+    assert_eq!(
+        send_resp.payment.fees, 0,
+        "Expect zero fee when using prefer_spark"
+    );
+    assert!(matches!(send_resp.payment.payment_type, PaymentType::Send));
+
+    // Bob should receive the amount
+    let received = wait_for_payment_event(&mut bob.events, PaymentType::Receive, 60).await?;
+    assert_eq!(received.amount, invoice_amount_sats as u128);
+    // Receiver should see Spark method when routed via prefer_spark
+    assert!(matches!(received.method, PaymentMethod::Spark));
+
+    info!("=== Test test_05_lightning_invoice_prefer_spark_fee_path PASSED ===");
+    Ok(())
+}
+
+/// Test 6: Lightning payment with short completion timeout returns quickly, then completes
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_06_lightning_timeout_and_wait(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_06_lightning_timeout_and_wait ===");
+
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
+
+    ensure_funded(&mut alice, 60_000).await?;
+
+    // Bob creates a zero-amount invoice
+    let expected_amount = 7_000u64;
+    let bob_invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "Timeout test".to_string(),
+                amount_sats: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_invoice.clone(),
+            amount: Some(expected_amount as u128),
+            token_identifier: None,
+        })
+        .await?;
+
+    // Send with a very short completion timeout to force an early return if still pending
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare.clone(),
+            options: Some(SendPaymentOptions::Bolt11Invoice {
+                prefer_spark: false,
+                completion_timeout_secs: Some(1),
+            }),
+        })
+        .await?;
+    info!("Immediate return status: {:?}", send_resp.payment.status);
+    assert!(matches!(send_resp.payment.status, PaymentStatus::Pending));
+    // Bob should have received the exact amount
+    let received = wait_for_payment_event(&mut bob.events, PaymentType::Receive, 60).await?;
+    assert_eq!(received.amount, expected_amount as u128);
+
+    info!("=== Test test_06_lightning_timeout_and_wait PASSED ===");
+    Ok(())
+}
