@@ -5,6 +5,7 @@ mod parsing_inputs;
 mod receive_payment;
 mod send_payment;
 mod tokens;
+mod messages;
 
 use anyhow::Result;
 
