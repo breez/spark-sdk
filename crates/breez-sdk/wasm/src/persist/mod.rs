@@ -7,7 +7,8 @@ use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::js_sys::Promise;
 
 use crate::models::{
-    DepositInfo, ListPaymentsRequest, Payment, PaymentMetadata, UpdateDepositPayload,
+    DepositInfo, ListPaymentsRequest, Payment, PaymentMetadata, PaymentRequestMetadata,
+    UpdateDepositPayload,
 };
 
 pub struct WasmStorage {
@@ -114,6 +115,66 @@ impl breez_sdk_spark::Storage for WasmStorage {
         Ok(())
     }
 
+    async fn get_payment_request_metadata(
+        &self,
+        payment_request: String,
+    ) -> Result<Option<breez_sdk_spark::PaymentRequestMetadata>, breez_sdk_spark::StorageError>
+    {
+        let promise = self
+            .storage
+            .get_payment_request_metadata(payment_request)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_storage_error)?;
+
+        if result.is_null() || result.is_undefined() {
+            Ok(None)
+        } else {
+            let metadata: PaymentRequestMetadata = serde_wasm_bindgen::from_value(result)
+                .map_err(|e| breez_sdk_spark::StorageError::Serialization(e.to_string()))?;
+            Ok(Some(metadata.into()))
+        }
+    }
+
+    async fn set_payment_request_metadata(
+        &self,
+        metadata: breez_sdk_spark::PaymentRequestMetadata,
+    ) -> Result<(), breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .set_payment_request_metadata(metadata.into())
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
+    async fn delete_payment_request_metadata(
+        &self,
+        payment_request: String,
+    ) -> Result<(), breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .delete_payment_request_metadata(payment_request)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
+    async fn delete_expired_payment_request_metadata(
+        &self,
+        now_secs: u64,
+    ) -> Result<(), breez_sdk_spark::StorageError> {
+        let promise = self
+            .storage
+            .delete_expired_payment_request_metadata(now_secs)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
     async fn get_payment_by_id(
         &self,
         id: String,
@@ -214,6 +275,10 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     listPayments: (request: ListPaymentsRequest) => Promise<Payment[]>;
     insertPayment: (payment: Payment) => Promise<void>;
     setPaymentMetadata: (paymentId: string, metadata: PaymentMetadata) => Promise<void>;
+    getPaymentRequestMetadata: (paymentRequest: string) => Promise<PaymentRequestMetadata | null>;
+    setPaymentRequestMetadata: (metadata: PaymentRequestMetadata) => Promise<void>;
+    deletePaymentRequestMetadata: (paymentRequest: string) => Promise<void>;
+    deleteExpiredPaymentRequestMetadata: (nowSecs: number) => Promise<void>;
     getPaymentById: (id: string) => Promise<Payment>;
     getPaymentByInvoice: (invoice: string) => Promise<Payment>;
     addDeposit: (txid: string, vout: number, amount_sats: number) => Promise<void>;
@@ -247,6 +312,30 @@ extern "C" {
         this: &Storage,
         payment_id: String,
         metadata: PaymentMetadata,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getPaymentRequestMetadata, catch)]
+    pub fn get_payment_request_metadata(
+        this: &Storage,
+        payment_request: String,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = setPaymentRequestMetadata, catch)]
+    pub fn set_payment_request_metadata(
+        this: &Storage,
+        metadata: PaymentRequestMetadata,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = deletePaymentRequestMetadata, catch)]
+    pub fn delete_payment_request_metadata(
+        this: &Storage,
+        payment_request: String,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = deleteExpiredPaymentRequestMetadata, catch)]
+    pub fn delete_expired_payment_request_metadata(
+        this: &Storage,
+        now_secs: u64,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = getPaymentById, catch)]

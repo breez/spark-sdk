@@ -226,6 +226,16 @@ class MigrationManager {
         name: "Add lnurl_withdraw_info column to payment_metadata",
         sql: `ALTER TABLE payment_metadata ADD COLUMN lnurl_withdraw_info TEXT`,
       },
+      {
+        name: "Create payment request metadata table",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS payment_request_metadata (
+                        payment_request TEXT PRIMARY KEY,
+                        lnurl_withdraw_request_details TEXT,
+                        expires INTEGER NOT NULL
+                    )`,
+        ],
+      },
     ];
   }
 }

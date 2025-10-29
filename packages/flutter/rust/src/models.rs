@@ -218,6 +218,18 @@ pub struct _LnurlWithdrawInfo {
     pub withdraw_url: String,
 }
 
+#[frb(mirror(LnurlWithdrawRequest))]
+pub struct _LnurlWithdrawRequest {
+    pub amount_sats: u64,
+    pub withdraw_request: LnurlWithdrawRequestDetails,
+    pub completion_timeout_secs: Option<u32>,
+}
+
+#[frb(mirror(LnurlWithdrawResponse))]
+pub struct _LnurlWithdrawResponse {
+    pub payment: Option<Payment>,
+}
+
 #[frb(mirror(OnchainConfirmationSpeed))]
 pub enum _OnchainConfirmationSpeed {
     Fast,

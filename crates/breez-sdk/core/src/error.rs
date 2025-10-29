@@ -10,6 +10,7 @@ use spark_wallet::SparkWalletError;
 use std::{convert::Infallible, num::TryFromIntError};
 use thiserror::Error;
 use tracing_subscriber::util::TryInitError;
+use web_time::SystemTimeError;
 
 /// Error type for the `BreezSdk`
 #[derive(Debug, Error, Clone)]
@@ -101,6 +102,12 @@ impl From<String> for SdkError {
 impl From<&str> for SdkError {
     fn from(s: &str) -> Self {
         Self::Generic(s.to_string())
+    }
+}
+
+impl From<SystemTimeError> for SdkError {
+    fn from(e: SystemTimeError) -> Self {
+        SdkError::Generic(e.to_string())
     }
 }
 

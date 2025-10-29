@@ -8,7 +8,9 @@ use bitcoin::{
 pub use breez_sdk_common::input::parse as parse_input;
 use breez_sdk_common::{
     fiat::FiatService,
-    input::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType},
+    input::{
+        BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType, parse_invoice,
+    },
     lnurl::{self, withdraw::execute_lnurl_withdraw},
 };
 use breez_sdk_common::{
@@ -44,11 +46,10 @@ use crate::{
     GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse, LightningAddressInfo,
     ListFiatCurrenciesResponse, ListFiatRatesResponse, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse,
-    LnurlWithdrawInfo, LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, Network,
-    PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
-    SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest, SignMessageResponse,
-    WaitForPaymentIdentifier, WaitForPaymentRequest, WaitForPaymentResponse,
+    LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, Network, PaymentDetails, PaymentStatus,
+    PrepareLnurlPayRequest, PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
+    RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest,
+    SignMessageResponse, WaitForPaymentIdentifier, WaitForPaymentRequest, WaitForPaymentResponse,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     lnurl::LnurlServerClient,
@@ -60,8 +61,8 @@ use crate::{
         SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
     persist::{
-        CachedAccountInfo, ObjectCacheRepository, PaymentMetadata, StaticDepositAddress, Storage,
-        UpdateDepositPayload,
+        CachedAccountInfo, ObjectCacheRepository, PaymentMetadata, PaymentRequestMetadata,
+        StaticDepositAddress, Storage, UpdateDepositPayload,
     },
     sync::SparkSyncService,
     utils::{
@@ -71,8 +72,6 @@ use crate::{
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
-
-const DEFAULT_LNURL_WITHDRAW_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Clone, Debug)]
 enum SyncType {
@@ -395,6 +394,11 @@ impl BreezSdk {
         if let Err(e) = self.check_and_claim_static_deposits().await {
             error!("sync_wallet_internal: Failed to check and claim static deposits: {e:?}");
         }
+        if let Err(e) = self.delete_expired_payment_request_metadata().await {
+            error!(
+                "sync_wallet_internal: Failed to delete expired payment request metadata: {e:?}"
+            );
+        }
         let elapsed = start_time.elapsed();
         info!("sync_wallet_internal: Wallet sync completed in {elapsed:?}");
         self.event_emitter.emit(&SdkEvent::Synced {}).await;
@@ -467,6 +471,15 @@ impl BreezSdk {
                 .emit(&SdkEvent::ClaimDepositsSucceeded { claimed_deposits })
                 .await;
         }
+        Ok(())
+    }
+
+    async fn delete_expired_payment_request_metadata(&self) -> Result<(), SdkError> {
+        let now_secs = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        self.storage
+            .delete_expired_payment_request_metadata(now_secs)
+            .await?;
+
         Ok(())
     }
 
@@ -824,6 +837,28 @@ impl BreezSdk {
     /// Performs an LNURL withdraw operation for the amount of satoshis to
     /// withdraw and the LNURL withdraw request details. The LNURL withdraw request
     /// details can be obtained from calling [`BreezSdk::parse`].
+    ///
+    /// The method generates a Lightning invoice for the withdraw amount, stores
+    /// the LNURL withdraw metadata, and performs the LNURL withdraw using  the generated
+    /// invoice.
+    ///
+    /// If the `completion_timeout_secs` parameter is provided and greater than 0, the
+    /// method will wait for the payment to be completed within that period. If the
+    /// withdraw is completed within the timeout, the `payment` field in the response
+    /// will be set with the payment details. If the `completion_timeout_secs`
+    /// parameter is not provided or set to 0, the method will not wait for the payment
+    /// to be completed. If the withdraw is not completed within the
+    /// timeout, the `payment` field will be empty.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The LNURL withdraw request
+    ///
+    /// # Returns
+    ///
+    /// Result containing either:
+    /// * `LnurlWithdrawResponse` - The payment details if the withdraw request was successful
+    /// * `SdkError` - If there was an error during the withdraw process
     pub async fn lnurl_withdraw(
         &self,
         request: LnurlWithdrawRequest,
@@ -831,6 +866,7 @@ impl BreezSdk {
         let LnurlWithdrawRequest {
             amount_sats,
             withdraw_request,
+            completion_timeout_secs,
         } = request;
 
         if !withdraw_request.is_amount_valid(amount_sats) {
@@ -848,6 +884,22 @@ impl BreezSdk {
                 },
             })
             .await?;
+        let invoice = parse_invoice(&receive_response.payment_request)
+            .ok_or(SdkError::Generic("Failed to parse invoice".to_string()))?;
+        let expires = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_secs()
+            .checked_add(invoice.expiry)
+            .ok_or(SdkError::Generic("Invalid expiry time".to_string()))?;
+
+        // Store the LNURL withdraw metadata before executing the withdraw
+        self.storage
+            .set_payment_request_metadata(PaymentRequestMetadata {
+                payment_request: receive_response.payment_request.clone(),
+                lnurl_withdraw_request_details: Some(withdraw_request.clone()),
+                expires,
+            })
+            .await?;
 
         // Perform the LNURL withdraw using the generated invoice
         let withdraw_response = execute_lnurl_withdraw(
@@ -862,47 +914,25 @@ impl BreezSdk {
             return Err(LnurlError::EndpointError(data.reason).into());
         }
 
+        let completion_timeout_secs = match completion_timeout_secs {
+            Some(secs) if secs > 0 => secs,
+            _ => return Ok(LnurlWithdrawResponse { payment: None }),
+        };
+
         // Wait for the payment to be completed
         let fut = self.wait_for_payment(WaitForPaymentRequest {
             identifier: WaitForPaymentIdentifier::PaymentRequest(receive_response.payment_request),
         });
-        let mut payment = timeout(
-            Duration::from_secs(DEFAULT_LNURL_WITHDRAW_TIMEOUT_SECS),
-            fut,
-        )
-        .await
-        .map_err(|_| SdkError::Generic("Timeout waiting for payment".to_string()))?
-        .map_err(|e| SdkError::Generic(format!("Error waiting for payment: {e}")))?
-        .payment;
 
-        // Update payment details with LNURL withdraw info
-        let Some(PaymentDetails::Lightning {
-            lnurl_withdraw_info,
-            description,
-            ..
-        }) = &mut payment.details
-        else {
-            return Err(SdkError::Generic(
-                "Expected Lightning payment details".to_string(),
-            ));
+        let payment = match timeout(Duration::from_secs(completion_timeout_secs.into()), fut).await
+        {
+            // Payment completed successfully
+            Ok(Ok(res)) => Some(res.payment),
+            // Error occurred while waiting for payment
+            Ok(Err(e)) => return Err(SdkError::Generic(format!("Error waiting for payment: {e}"))),
+            // Timeout occurred
+            Err(_) => None,
         };
-        let withdraw_info = LnurlWithdrawInfo {
-            withdraw_url: withdraw_request.callback.clone(),
-        };
-        *lnurl_withdraw_info = Some(withdraw_info.clone());
-        let lnurl_description = Some(withdraw_request.default_description.clone());
-        description.clone_from(&lnurl_description);
-
-        self.storage
-            .set_payment_metadata(
-                payment.id.clone(),
-                PaymentMetadata {
-                    lnurl_withdraw_info: Some(withdraw_info),
-                    lnurl_description,
-                    ..Default::default()
-                },
-            )
-            .await?;
 
         Ok(LnurlWithdrawResponse { payment })
     }

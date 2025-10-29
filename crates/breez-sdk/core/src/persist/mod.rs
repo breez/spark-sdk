@@ -3,6 +3,7 @@ pub(crate) mod sqlite;
 
 use std::{collections::HashMap, sync::Arc};
 
+use breez_sdk_common::lnurl::withdraw::LnurlWithdrawRequestDetails;
 use macros::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -60,6 +61,14 @@ pub struct PaymentMetadata {
     pub lnurl_description: Option<String>,
 }
 
+#[derive(Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PaymentRequestMetadata {
+    pub payment_request: String,
+    pub lnurl_withdraw_request_details: Option<LnurlWithdrawRequestDetails>,
+    pub expires: u64,
+}
+
 /// Trait for persistent storage
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[async_trait]
@@ -106,6 +115,57 @@ pub trait Storage: Send + Sync {
         &self,
         payment_id: String,
         metadata: PaymentMetadata,
+    ) -> Result<(), StorageError>;
+
+    /// Get payment request metadata from storage
+    /// # Arguments
+    ///
+    /// * `payment_request` - The payment request string
+    ///
+    /// # Returns
+    ///
+    /// The payment request metadata if found or None if not found
+    async fn get_payment_request_metadata(
+        &self,
+        payment_request: String,
+    ) -> Result<Option<PaymentRequestMetadata>, StorageError>;
+
+    /// Set payment request metadata into storage
+    /// # Arguments
+    ///
+    /// * `metadata` - The payment request metadata to insert
+    ///
+    /// # Returns
+    ///
+    /// Success or a `StorageError`
+    async fn set_payment_request_metadata(
+        &self,
+        metadata: PaymentRequestMetadata,
+    ) -> Result<(), StorageError>;
+
+    /// Delete payment request metadata from storage
+    /// # Arguments
+    ///
+    /// * `payment_request` - The payment request string
+    ///
+    /// # Returns
+    ///
+    /// Success or a `StorageError`
+    async fn delete_payment_request_metadata(
+        &self,
+        payment_request: String,
+    ) -> Result<(), StorageError>;
+
+    /// Deletes expired payment request metadata from storage
+    /// # Arguments
+    ///
+    /// * `now_secs` - The current timestamp in seconds
+    /// # Returns
+    ///
+    /// Success or a `StorageError`
+    async fn delete_expired_payment_request_metadata(
+        &self,
+        now_secs: u64,
     ) -> Result<(), StorageError>;
 
     /// Gets a payment by its ID
@@ -365,6 +425,8 @@ pub(crate) struct StaticDepositAddress {
 
 #[cfg(feature = "test-utils")]
 pub mod tests {
+    use web_time::SystemTime;
+
     use chrono::Utc;
 
     use crate::{
@@ -1403,5 +1465,111 @@ pub mod tests {
         assert_eq!(desc_explicit[0].id, "sort_3");
         assert_eq!(desc_explicit[1].id, "sort_2");
         assert_eq!(desc_explicit[2].id, "sort_1");
+    }
+
+    pub async fn test_payment_request_metadata(storage: Box<dyn Storage>) {
+        use crate::PaymentRequestMetadata;
+
+        // Prepare test data
+        let payment_request1 = "pr1".to_string();
+        let payment_request2 = "pr2".to_string();
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let expired = now.saturating_sub(1000);
+        let not_expired = now.saturating_add(1000);
+
+        // Add a valid LnurlWithdrawRequestDetails
+        let lnurl_withdraw_details = Some(
+            breez_sdk_common::lnurl::withdraw::LnurlWithdrawRequestDetails {
+                callback: "https://callback.url".to_string(),
+                k1: "k1value".to_string(),
+                default_description: "desc1".to_string(),
+                min_withdrawable: 1000,
+                max_withdrawable: 2000,
+            },
+        );
+
+        let metadata1 = PaymentRequestMetadata {
+            payment_request: payment_request1.clone(),
+            lnurl_withdraw_request_details: lnurl_withdraw_details.clone(),
+            expires: expired,
+        };
+        let metadata2 = PaymentRequestMetadata {
+            payment_request: payment_request2.clone(),
+            lnurl_withdraw_request_details: None,
+            expires: not_expired,
+        };
+
+        // set_payment_request_metadata
+        storage
+            .set_payment_request_metadata(metadata1.clone())
+            .await
+            .unwrap();
+        storage
+            .set_payment_request_metadata(metadata2.clone())
+            .await
+            .unwrap();
+
+        // get_payment_request_metadata
+        let fetched1 = storage
+            .get_payment_request_metadata(payment_request1.clone())
+            .await
+            .unwrap();
+        assert!(fetched1.is_some());
+        let fetched1 = fetched1.unwrap();
+        assert_eq!(fetched1.payment_request, payment_request1);
+        assert_eq!(fetched1.expires, expired);
+        // Check lnurl_withdraw_request_details is present and correct
+        let details = fetched1
+            .lnurl_withdraw_request_details
+            .as_ref()
+            .expect("Should have lnurl_withdraw_request_details");
+        assert_eq!(details.k1, "k1value");
+        assert_eq!(details.default_description, "desc1");
+        assert_eq!(details.min_withdrawable, 1000);
+        assert_eq!(details.max_withdrawable, 2000);
+        assert_eq!(details.callback, "https://callback.url");
+
+        let fetched2 = storage
+            .get_payment_request_metadata(payment_request2.clone())
+            .await
+            .unwrap();
+        assert!(fetched2.is_some());
+        assert_eq!(fetched2.as_ref().unwrap().payment_request, payment_request2);
+        assert_eq!(fetched2.as_ref().unwrap().expires, not_expired);
+
+        // delete_payment_request_metadata
+        storage
+            .delete_payment_request_metadata(payment_request1.clone())
+            .await
+            .unwrap();
+        let deleted = storage
+            .get_payment_request_metadata(payment_request1.clone())
+            .await
+            .unwrap();
+        assert!(deleted.is_none());
+
+        // delete_expired_payment_request_metadata (should delete only expired)
+        storage
+            .delete_expired_payment_request_metadata(now)
+            .await
+            .unwrap();
+        let still_exists = storage
+            .get_payment_request_metadata(payment_request2.clone())
+            .await
+            .unwrap();
+        assert!(still_exists.is_some());
+        // Now delete with a future timestamp (should delete all)
+        storage
+            .delete_expired_payment_request_metadata(now.saturating_add(2000))
+            .await
+            .unwrap();
+        let should_be_gone = storage
+            .get_payment_request_metadata(payment_request2.clone())
+            .await
+            .unwrap();
+        assert!(should_be_gone.is_none());
     }
 }

@@ -11,7 +11,7 @@ use crate::{
     AssetFilter, DepositInfo, ListPaymentsRequest, LnurlPayInfo, LnurlWithdrawInfo, PaymentDetails,
     PaymentMethod,
     error::DepositClaimError,
-    persist::{PaymentMetadata, UpdateDepositPayload},
+    persist::{PaymentMetadata, PaymentRequestMetadata, UpdateDepositPayload},
 };
 
 use super::{Payment, Storage, StorageError};
@@ -195,6 +195,11 @@ impl SqliteStorage {
             );
             ALTER TABLE payment_details_token ADD COLUMN invoice_details TEXT;",
             "ALTER TABLE payment_metadata ADD COLUMN lnurl_withdraw_info TEXT;",
+            "CREATE TABLE IF NOT EXISTS payment_request_metadata (
+              payment_request TEXT PRIMARY KEY,
+              lnurl_withdraw_request_details TEXT,
+              expires INTEGER NOT NULL
+            );"
         ]
     }
 }
@@ -430,6 +435,90 @@ impl Storage for SqliteStorage {
         connection.execute(
             "INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description) VALUES (?, ?, ?, ?)",
             params![payment_id, metadata.lnurl_pay_info, metadata.lnurl_withdraw_info, metadata.lnurl_description],
+        )?;
+
+        Ok(())
+    }
+
+    async fn get_payment_request_metadata(
+        &self,
+        payment_request: String,
+    ) -> Result<Option<PaymentRequestMetadata>, StorageError> {
+        let connection = self.get_connection()?;
+
+        let mut stmt = connection.prepare(
+            "SELECT lnurl_withdraw_request_details, expires FROM payment_request_metadata WHERE payment_request = ?",
+        )?;
+
+        let result = stmt.query_row(params![payment_request], |row| {
+            let lnurl_withdraw_request_details: Option<String> = row.get(0)?;
+            let expires: u64 = row.get(1)?;
+            Ok(PaymentRequestMetadata {
+                payment_request: payment_request.clone(),
+                lnurl_withdraw_request_details: lnurl_withdraw_request_details
+                    .map(|s| serde_json::from_str(&s))
+                    .transpose()
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            0,
+                            rusqlite::types::Type::Text,
+                            e.into(),
+                        )
+                    })?,
+                expires,
+            })
+        });
+
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn set_payment_request_metadata(
+        &self,
+        metadata: PaymentRequestMetadata,
+    ) -> Result<(), StorageError> {
+        let connection = self.get_connection()?;
+
+        connection.execute(
+            "INSERT OR REPLACE INTO payment_request_metadata (payment_request, lnurl_withdraw_request_details, expires) VALUES (?, ?, ?)",
+            params![
+                metadata.payment_request,
+                metadata.lnurl_withdraw_request_details
+                    .map(|info| serde_json::to_string(&info))
+                    .transpose()?,
+                metadata.expires,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    async fn delete_payment_request_metadata(
+        &self,
+        payment_request: String,
+    ) -> Result<(), StorageError> {
+        let connection = self.get_connection()?;
+
+        connection.execute(
+            "DELETE FROM payment_request_metadata WHERE payment_request = ?",
+            params![payment_request],
+        )?;
+
+        Ok(())
+    }
+
+    async fn delete_expired_payment_request_metadata(
+        &self,
+        now_secs: u64,
+    ) -> Result<(), StorageError> {
+        let connection = self.get_connection()?;
+
+        connection.execute(
+            "DELETE FROM payment_request_metadata WHERE expires < ?",
+            params![now_secs],
         )?;
 
         Ok(())
@@ -907,5 +996,13 @@ mod tests {
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
         crate::persist::tests::test_sort_order(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_request_metadata() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_payment_request_metadata").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_payment_request_metadata(Box::new(storage)).await;
     }
 }

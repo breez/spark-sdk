@@ -606,12 +606,16 @@ pub struct LnurlWithdrawRequest {
     /// Must be within the min and max withdrawable limits
     pub amount_sats: u64,
     pub withdraw_request: LnurlWithdrawRequestDetails,
+    /// If set, the function will return the payment if it is still pending after this
+    /// number of seconds. If unset, the function will return immediately after
+    /// initiating the LNURL withdraw.
+    pub completion_timeout_secs: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LnurlWithdrawResponse {
-    pub payment: Payment,
+    pub payment: Option<Payment>,
 }
 
 /// Represents the payment LNURL info

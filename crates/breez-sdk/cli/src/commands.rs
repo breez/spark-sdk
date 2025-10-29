@@ -131,6 +131,10 @@ pub enum Command {
     LnurlWithdraw {
         /// LNURL-withdraw endpoint
         lnurl: String,
+
+        /// Optional completion timeout in seconds
+        #[clap(short = 't', long = "timeout")]
+        completion_timeout_secs: Option<u32>,
     },
 
     ClaimDeposit {
@@ -447,7 +451,10 @@ pub(crate) async fn execute_command(
             print_value(&res)?;
             Ok(true)
         }
-        Command::LnurlWithdraw { lnurl } => {
+        Command::LnurlWithdraw {
+            lnurl,
+            completion_timeout_secs,
+        } => {
             let input = sdk.parse(&lnurl).await?;
             let res = match input {
                 InputType::LnurlWithdraw(withdraw_request) => {
@@ -462,6 +469,7 @@ pub(crate) async fn execute_command(
                         .lnurl_withdraw(LnurlWithdrawRequest {
                             amount_sats,
                             withdraw_request,
+                            completion_timeout_secs,
                         })
                         .await?;
                     Ok(withdraw_res)

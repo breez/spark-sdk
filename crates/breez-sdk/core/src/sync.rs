@@ -4,7 +4,7 @@ use spark_wallet::{ListTokenTransactionsRequest, Order, PagingFilter, SparkWalle
 use tracing::{error, info};
 
 use crate::{
-    Payment, PaymentStatus, SdkError, Storage,
+    LnurlWithdrawInfo, Payment, PaymentDetails, PaymentMetadata, PaymentStatus, SdkError, Storage,
     persist::{CachedSyncInfo, ObjectCacheRepository},
     utils::token::token_transaction_to_payments,
 };
@@ -69,6 +69,13 @@ impl SparkSyncService {
             for transfer in &transfers_response.items {
                 // Create a payment record
                 let payment: Payment = transfer.clone().try_into()?;
+                // Apply any metadata from the payment request
+                if let Err(e) = self.apply_payment_request_metadata(&payment).await {
+                    error!(
+                        "Failed to apply payment request metadata for payment {}: {e:?}",
+                        payment.id
+                    );
+                }
                 // Insert payment into storage
                 if let Err(err) = self.storage.insert_payment(payment.clone()).await {
                     error!("Failed to insert payment: {err:?}");
@@ -99,6 +106,47 @@ impl SparkSyncService {
 
             next_filter = transfers_response.next;
         }
+
+        Ok(())
+    }
+
+    async fn apply_payment_request_metadata(&self, payment: &Payment) -> Result<(), SdkError> {
+        // Currently only Lightning LNURL payments have payment request metadata
+        let Some(PaymentDetails::Lightning { invoice, .. }) = &payment.details else {
+            return Ok(());
+        };
+
+        // Get the payment request metadata from storage for this invoice
+        let Some(request_metadata) = self
+            .storage
+            .get_payment_request_metadata(invoice.clone())
+            .await?
+        else {
+            return Ok(());
+        };
+
+        if let Some(lnurl_withdraw_request_details) =
+            request_metadata.lnurl_withdraw_request_details
+        {
+            // This is payment request from an LNURL withdraw, store the withdraw metadata
+            self.storage
+                .set_payment_metadata(
+                    payment.id.clone(),
+                    PaymentMetadata {
+                        lnurl_withdraw_info: Some(LnurlWithdrawInfo {
+                            withdraw_url: lnurl_withdraw_request_details.callback,
+                        }),
+                        lnurl_description: Some(lnurl_withdraw_request_details.default_description),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+        }
+
+        // Delete the payment request metadata since we have applied it
+        self.storage
+            .delete_payment_request_metadata(invoice.clone())
+            .await?;
 
         Ok(())
     }
