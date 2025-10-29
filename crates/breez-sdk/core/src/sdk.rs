@@ -3,6 +3,7 @@ use bitcoin::{
     consensus::serialize,
     hashes::{Hash, sha256},
     hex::DisplayHex,
+    secp256k1::PublicKey,
 };
 pub use breez_sdk_common::input::parse as parse_input;
 use breez_sdk_common::{
@@ -21,12 +22,12 @@ use breez_sdk_common::{
 };
 use lnurl_models::sanitize_username;
 use spark_wallet::{
-    ExitSpeed, InvoiceDescription, SparkAddress, SparkWallet, TransferTokenOutput, WalletEvent,
-    WalletTransfer,
+    ExitSpeed, InvoiceDescription, SparkAddress, SparkWallet, TokenTransaction,
+    TransferTokenOutput, WalletEvent, WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
 use tracing::{error, info, trace};
-use web_time::{Duration, SystemTime};
+use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::{
     select,
@@ -607,11 +608,42 @@ impl BreezSdk {
         &self,
         request: ReceivePaymentRequest,
     ) -> Result<ReceivePaymentResponse, SdkError> {
-        match &request.payment_method {
+        match request.payment_method {
             ReceivePaymentMethod::SparkAddress => Ok(ReceivePaymentResponse {
-                fee_sats: 0,
-                payment_request: self.spark_wallet.get_spark_address()?.to_string(),
+                fee: 0,
+                payment_request: self
+                    .spark_wallet
+                    .get_spark_address()?
+                    .to_address_string()
+                    .map_err(|e| {
+                        SdkError::Generic(format!("Failed to convert Spark address to string: {e}"))
+                    })?,
             }),
+            ReceivePaymentMethod::SparkInvoice {
+                amount,
+                token_identifier,
+                expiry_time,
+                description,
+                sender_public_key,
+            } => {
+                let invoice = self.spark_wallet.create_spark_invoice(
+                    amount,
+                    token_identifier.clone(),
+                    expiry_time
+                        .map(|time| {
+                            SystemTime::UNIX_EPOCH
+                                .checked_add(Duration::from_secs(time))
+                                .ok_or(SdkError::Generic("Invalid expiry time".to_string()))
+                        })
+                        .transpose()?,
+                    description,
+                    sender_public_key.map(|key| PublicKey::from_str(&key).unwrap()),
+                )?;
+                Ok(ReceivePaymentResponse {
+                    fee: 0,
+                    payment_request: invoice,
+                })
+            }
             ReceivePaymentMethod::BitcoinAddress => {
                 // TODO: allow passing amount
 
@@ -623,7 +655,7 @@ impl BreezSdk {
                 if let Some(static_deposit_address) = static_deposit_address {
                     return Ok(ReceivePaymentResponse {
                         payment_request: static_deposit_address.address.to_string(),
-                        fee_sats: 0,
+                        fee: 0,
                     });
                 }
 
@@ -651,7 +683,7 @@ impl BreezSdk {
 
                 Ok(ReceivePaymentResponse {
                     payment_request: address,
-                    fee_sats: 0,
+                    fee: 0,
                 })
             }
             ReceivePaymentMethod::Bolt11Invoice {
@@ -668,7 +700,7 @@ impl BreezSdk {
                     )
                     .await?
                     .invoice,
-                fee_sats: 0,
+                fee: 0,
             }),
         }
     }
@@ -789,72 +821,88 @@ impl BreezSdk {
         &self,
         request: PrepareSendPaymentRequest,
     ) -> Result<PrepareSendPaymentResponse, SdkError> {
-        // First check for spark address
-        if let Ok(spark_address) = request.payment_request.parse::<SparkAddress>() {
-            let payment_request_amount = if let Some(invoice_fields) =
-                &spark_address.spark_invoice_fields
-                && let Some(payment_type) = &invoice_fields.payment_type
-            {
-                match payment_type {
-                    spark_wallet::SparkAddressPaymentType::SatsPayment(sats_payment_details) => {
-                        if request.token_identifier.is_some() {
-                            return Err(SdkError::InvalidInput(
-                                "Token identifier can't be provided for this payment request: spark sats payment".to_string(),
-                            ));
-                        }
-                        if sats_payment_details.amount.is_some() && request.amount.is_some() {
-                            return Err(SdkError::InvalidInput(
-                                "Amount can't be provided for this payment request: spark invoice defines amount".to_string(),
-                            ));
-                        }
-                        sats_payment_details.amount.map(Into::into)
-                    }
-                    spark_wallet::SparkAddressPaymentType::TokensPayment(
-                        tokens_payment_details,
-                    ) => {
-                        if request.token_identifier.is_none() {
-                            return Err(SdkError::InvalidInput(
-                                "Token identifier is required for this payment request: spark tokens payment".to_string(),
-                            ));
-                        }
-                        if tokens_payment_details.amount.is_some() && request.amount.is_some() {
-                            return Err(SdkError::InvalidInput(
-                                "Amount can't be provided for this payment request: spark invoice defines amount".to_string(),
-                            ));
-                        }
-                        tokens_payment_details.amount
-                    }
-                }
-            } else {
-                None
-            };
-
-            return Ok(PrepareSendPaymentResponse {
+        let parsed_input = self.parse(&request.payment_request).await?;
+        match &parsed_input {
+            InputType::SparkAddress(spark_address_details) => Ok(PrepareSendPaymentResponse {
                 payment_method: SendPaymentMethod::SparkAddress {
-                    address: spark_address.to_string(),
+                    address: spark_address_details.address.clone(),
                     fee: 0,
                     token_identifier: request.token_identifier.clone(),
                 },
-                amount: payment_request_amount
-                    .or(request.amount)
+                amount: request
+                    .amount
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
                 token_identifier: request.token_identifier,
-            });
-        }
+            }),
+            InputType::SparkInvoice(spark_invoice_details) => {
+                if let Some(token_identifier) = &spark_invoice_details.token_identifier {
+                    if let Some(requested_token_identifier) = &request.token_identifier
+                        && requested_token_identifier != token_identifier
+                    {
+                        return Err(SdkError::InvalidInput(
+                            "Requested token identifier does not match invoice token identifier"
+                                .to_string(),
+                        ));
+                    }
+                    return Err(SdkError::InvalidInput(
+                        "Token identifier is required for tokens invoice".to_string(),
+                    ));
+                } else if request.token_identifier.is_some() {
+                    return Err(SdkError::InvalidInput(
+                            "Token identifier can't be provided for this payment request: non-tokens invoice".to_string(),
+                        ));
+                }
 
-        if request.token_identifier.is_some() {
-            return Err(SdkError::InvalidInput(
-                "Token identifier can't be provided for this payment request: non-spark address"
-                    .to_string(),
-            ));
-        }
+                if let Some(expiry_time) = spark_invoice_details.expiry_time
+                    && SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_err(|_| SdkError::Generic("Failed to get current time".to_string()))?
+                        > Duration::from_secs(expiry_time)
+                {
+                    return Err(SdkError::InvalidInput("Invoice has expired".to_string()));
+                }
 
-        let amount_sats = request.amount;
+                if let Some(sender_public_key) = &spark_invoice_details.sender_public_key
+                    && self.spark_wallet.get_identity_public_key().to_string() != *sender_public_key
+                {
+                    return Err(SdkError::InvalidInput(
+                        format!(
+                            "Invoice can only be paid by sender public key {sender_public_key}",
+                        )
+                        .to_string(),
+                    ));
+                }
 
-        // Then check for other types of inputs
-        let parsed_input = self.parse(&request.payment_request).await?;
-        match &parsed_input {
+                if let Some(invoice_amount) = spark_invoice_details.amount
+                    && let Some(request_amount) = request.amount
+                    && invoice_amount != request_amount
+                {
+                    return Err(SdkError::InvalidInput(
+                        "Requested amount does not match invoice amount".to_string(),
+                    ));
+                }
+
+                Ok(PrepareSendPaymentResponse {
+                    payment_method: SendPaymentMethod::SparkInvoice {
+                        spark_invoice_details: spark_invoice_details.clone(),
+                        fee: 0,
+                        token_identifier: request.token_identifier.clone(),
+                    },
+                    amount: spark_invoice_details
+                        .amount
+                        .or(request.amount)
+                        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                    token_identifier: request.token_identifier,
+                })
+            }
             InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
+                if request.token_identifier.is_some() {
+                    return Err(SdkError::InvalidInput(
+                        "Token identifier can't be provided for this payment request: non-spark address"
+                            .to_string(),
+                    ));
+                }
+
                 let spark_address = self
                     .spark_wallet
                     .extract_spark_address(&request.payment_request)?;
@@ -869,7 +917,8 @@ impl BreezSdk {
                     .spark_wallet
                     .fetch_lightning_send_fee_estimate(
                         &request.payment_request,
-                        amount_sats
+                        request
+                            .amount
                             .map(|a| Ok::<u64, SdkError>(a.try_into()?))
                             .transpose()?,
                     )
@@ -881,7 +930,8 @@ impl BreezSdk {
                         spark_transfer_fee_sats,
                         lightning_fee_sats,
                     },
-                    amount: amount_sats
+                    amount: request
+                        .amount
                         .or(detailed_bolt11_invoice
                             .amount_msat
                             .map(|msat| u128::from(msat) / 1000))
@@ -890,12 +940,20 @@ impl BreezSdk {
                 })
             }
             InputType::BitcoinAddress(withdrawal_address) => {
+                if request.token_identifier.is_some() {
+                    return Err(SdkError::InvalidInput(
+                        "Token identifier can't be provided for this payment request: non-spark address"
+                            .to_string(),
+                    ));
+                }
+
                 let fee_quote = self
                     .spark_wallet
                     .fetch_coop_exit_fee_quote(
                         &withdrawal_address.address,
                         Some(
-                            amount_sats
+                            request
+                                .amount
                                 .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?
                                 .try_into()?,
                         ),
@@ -906,7 +964,8 @@ impl BreezSdk {
                         address: withdrawal_address.clone(),
                         fee_quote: fee_quote.into(),
                     },
-                    amount: amount_sats
+                    amount: request
+                        .amount
                         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
                     token_identifier: None,
                 })
@@ -1230,6 +1289,13 @@ impl BreezSdk {
                 self.send_spark_address(address, token_identifier.clone(), &request)
                     .await
             }
+            SendPaymentMethod::SparkInvoice {
+                spark_invoice_details,
+                ..
+            } => {
+                self.send_spark_invoice(&spark_invoice_details.invoice, &request)
+                    .await
+            }
             SendPaymentMethod::Bolt11Invoice {
                 invoice_details,
                 spark_transfer_fee_sats,
@@ -1273,7 +1339,7 @@ impl BreezSdk {
             .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
 
         let payment = if let Some(identifier) = token_identifier {
-            self.send_spark_token_payment(
+            self.send_spark_token_address(
                 identifier,
                 request.prepare_response.amount,
                 spark_address,
@@ -1288,6 +1354,72 @@ impl BreezSdk {
         };
 
         Ok(SendPaymentResponse { payment })
+    }
+
+    async fn send_spark_token_address(
+        &self,
+        token_identifier: String,
+        amount: u128,
+        receiver_address: SparkAddress,
+    ) -> Result<Payment, SdkError> {
+        let token_transaction = self
+            .spark_wallet
+            .transfer_tokens(vec![TransferTokenOutput {
+                token_id: token_identifier,
+                amount,
+                receiver_address: receiver_address.clone(),
+                spark_invoice: None,
+            }])
+            .await?;
+
+        self.map_and_persist_token_transaction(&token_transaction)
+            .await
+    }
+
+    async fn send_spark_invoice(
+        &self,
+        invoice: &str,
+        request: &SendPaymentRequest,
+    ) -> Result<SendPaymentResponse, SdkError> {
+        let payment = match self
+            .spark_wallet
+            .fulfill_spark_invoice(invoice, Some(request.prepare_response.amount))
+            .await?
+        {
+            spark_wallet::FulfillSparkInvoiceResult::Transfer(wallet_transfer) => {
+                (*wallet_transfer).try_into()?
+            }
+            spark_wallet::FulfillSparkInvoiceResult::TokenTransaction(token_transaction) => {
+                self.map_and_persist_token_transaction(&token_transaction)
+                    .await?
+            }
+        };
+
+        Ok(SendPaymentResponse { payment })
+    }
+
+    async fn map_and_persist_token_transaction(
+        &self,
+        token_transaction: &TokenTransaction,
+    ) -> Result<Payment, SdkError> {
+        let object_repository = ObjectCacheRepository::new(self.storage.clone());
+        let payments = token_transaction_to_payments(
+            &self.spark_wallet,
+            &object_repository,
+            token_transaction,
+            true,
+        )
+        .await?;
+        for payment in &payments {
+            self.storage.insert_payment(payment.clone()).await?;
+        }
+
+        payments
+            .first()
+            .ok_or(SdkError::Generic(
+                "No payment created from token invoice".to_string(),
+            ))
+            .cloned()
     }
 
     async fn send_bolt11_invoice(
@@ -1463,43 +1595,6 @@ impl BreezSdk {
     }
 }
 
-impl BreezSdk {
-    async fn send_spark_token_payment(
-        &self,
-        token_identifier: String,
-        amount: u128,
-        receiver_address: SparkAddress,
-    ) -> Result<Payment, SdkError> {
-        let token_transaction = self
-            .spark_wallet
-            .transfer_tokens(vec![TransferTokenOutput {
-                token_id: token_identifier,
-                amount,
-                receiver_address: receiver_address.clone(),
-            }])
-            .await?;
-
-        let object_repository = ObjectCacheRepository::new(self.storage.clone());
-        let payments = token_transaction_to_payments(
-            &self.spark_wallet,
-            &object_repository,
-            &token_transaction,
-            true,
-        )
-        .await?;
-        for payment in &payments {
-            self.storage.insert_payment(payment.clone()).await?;
-        }
-
-        payments
-            .first()
-            .ok_or(SdkError::Generic(
-                "No payment created from token transfer".to_string(),
-            ))
-            .cloned()
-    }
-}
-
 fn is_payment_match(payment: &Payment, request: &WaitForPaymentRequest) -> bool {
     match &request.identifier {
         WaitForPaymentIdentifier::PaymentId(payment_id) => payment.id == *payment_id,
@@ -1509,9 +1604,20 @@ fn is_payment_match(payment: &Payment, request: &WaitForPaymentRequest) -> bool 
                     PaymentDetails::Lightning { invoice, .. } => {
                         invoice.to_lowercase() == payment_request.to_lowercase()
                     }
-                    PaymentDetails::Spark
-                    | PaymentDetails::Token { .. }
-                    | PaymentDetails::Withdraw { tx_id: _ }
+                    PaymentDetails::Spark {
+                        invoice_details: invoice,
+                    }
+                    | PaymentDetails::Token {
+                        invoice_details: invoice,
+                        ..
+                    } => {
+                        if let Some(invoice) = invoice {
+                            invoice.invoice.to_lowercase() == payment_request.to_lowercase()
+                        } else {
+                            false
+                        }
+                    }
+                    PaymentDetails::Withdraw { tx_id: _ }
                     | PaymentDetails::Deposit { tx_id: _ } => false,
                 }
             } else {

@@ -211,6 +211,17 @@ class MigrationManager {
           `CREATE INDEX IF NOT EXISTS idx_payments_timestamp ON payments(timestamp DESC)`,
         ],
       },
+      {
+        name: "Add spark invoice details",
+        sql: [
+          `CREATE TABLE payment_details_spark (
+              payment_id TEXT NOT NULL PRIMARY KEY,
+              invoice_details TEXT NOT NULL,
+              FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+            )`,
+          `ALTER TABLE payment_details_token ADD COLUMN invoice_details TEXT`,
+        ],
+      },
     ];
   }
 }

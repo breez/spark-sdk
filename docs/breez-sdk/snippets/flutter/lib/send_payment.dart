@@ -54,8 +54,8 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentOnchain(
   return response;
 }
 
-Future<PrepareSendPaymentResponse> prepareSendPaymentSpark(BreezSdk sdk) async {
-  // ANCHOR: prepare-send-payment-spark
+Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(BreezSdk sdk) async {
+  // ANCHOR: prepare-send-payment-spark-address
   String paymentRequest = "<spark address>";
   // Set the amount you wish the pay the receiver
   BigInt amountSats = BigInt.from(50000);
@@ -70,7 +70,29 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSpark(BreezSdk sdk) async {
     final feeSats = paymentMethod.fee;
     print("Fees: $feeSats sats");
   }
-  // ANCHOR_END: prepare-send-payment-spark
+  // ANCHOR_END: prepare-send-payment-spark-address
+  return response;
+}
+
+Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(BreezSdk sdk) async {
+  // ANCHOR: prepare-send-payment-spark-invoice
+  String paymentRequest = "<spark invoice>";
+  // Optionally set the amount you wish the pay the receiver
+  BigInt optionalAmountSats = BigInt.from(50000);
+
+  final request = PrepareSendPaymentRequest(
+      paymentRequest: paymentRequest, 
+      amount: optionalAmountSats
+  );
+  final response = await sdk.prepareSendPayment(request: request);
+
+  // If the fees are acceptable, continue to create the Send Payment
+  final paymentMethod = response.paymentMethod;
+  if (paymentMethod is SendPaymentMethod_SparkInvoice) {
+    final feeSats = paymentMethod.fee;
+    print("Fees: $feeSats sats");
+  }
+  // ANCHOR_END: prepare-send-payment-spark-invoice
   return response;
 }
 

@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
@@ -810,5 +812,155 @@ async fn test_06_lightning_timeout_and_wait(
     assert_eq!(received.amount, expected_amount as u128);
 
     info!("=== Test test_06_lightning_timeout_and_wait PASSED ===");
+    Ok(())
+}
+
+/// Test 7: Send payment from Alice to Bob using Spark invoice
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_07_spark_invoice(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_07_spark_invoice ===");
+
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
+
+    // Ensure Alice is funded (100 sats minimum for small test)
+    ensure_funded(&mut alice, 100).await?;
+
+    let alice_initial_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    info!("Alice balance: {} sats", alice_initial_balance);
+
+    // Get Bob's initial balance
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_initial_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    info!("Bob initial balance: {} sats", bob_initial_balance);
+
+    let current_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let expiry_time = current_time + 120;
+
+    // Get Alice's identity public key from her Spark address to use as sender public key in the invoice
+    let alice_spark_address = alice
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+    let InputType::SparkAddress(address_details) =
+        bob.sdk.parse(&alice_spark_address).await.unwrap()
+    else {
+        return Err(anyhow::anyhow!("Failed to parse Alice's Spark address"));
+    };
+    let alice_identity_public_key = address_details.identity_public_key;
+
+    // Bob creates a Spark invoice
+    let bob_spark_invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkInvoice {
+                amount: Some(5),
+                token_identifier: None,
+                expiry_time: Some(expiry_time),
+                description: Some("Test invoice".to_string()),
+                sender_public_key: Some(alice_identity_public_key),
+            },
+        })
+        .await?
+        .payment_request;
+
+    info!("Bob's Spark invoice: {}", bob_spark_invoice);
+
+    // Alice prepares and sends 5 sats to Bob
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_spark_invoice.clone(),
+            amount: None,
+            token_identifier: None,
+        })
+        .await?;
+
+    info!("Sending 5 sats from Alice to Bob via Spark...");
+
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: None,
+        })
+        .await?;
+
+    info!("Alice send payment status: {:?}", send_resp.payment.status);
+    assert!(
+        matches!(
+            send_resp.payment.status,
+            PaymentStatus::Completed | PaymentStatus::Pending
+        ),
+        "Payment should be completed or pending"
+    );
+
+    // Wait for Bob to receive the payment via event
+    info!("Waiting for Bob to receive payment event...");
+    let received_payment =
+        wait_for_payment_event(&mut bob.events, PaymentType::Receive, 60).await?;
+
+    assert_eq!(
+        received_payment.payment_type,
+        PaymentType::Receive,
+        "Bob should receive a payment"
+    );
+    assert!(
+        received_payment.amount >= 5,
+        "Bob should receive at least 5 sats"
+    );
+
+    info!(
+        "Bob received payment: {} sats, status: {:?}",
+        received_payment.amount, received_payment.status
+    );
+
+    // Verify Bob's balance increased
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_final_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    info!(
+        "Bob's balance: {} -> {} sats (change: +{})",
+        bob_initial_balance,
+        bob_final_balance,
+        bob_final_balance as i64 - bob_initial_balance as i64
+    );
+
+    assert!(
+        bob_final_balance > bob_initial_balance,
+        "Bob's balance should increase"
+    );
+
+    info!("=== Test test_07_spark_invoice PASSED ===");
     Ok(())
 }

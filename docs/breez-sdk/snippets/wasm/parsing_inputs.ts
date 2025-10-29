@@ -31,6 +31,33 @@ const parseInputs = async (sdk: BreezSdk) => {
       )
       break
 
+    case 'sparkAddress':
+      console.log(`Input is Spark address ${parsed.address}`)
+      break
+
+    case 'sparkInvoice':
+      console.log('Input is Spark invoice:')
+      if (parsed.tokenIdentifier != null) {
+        console.log(
+          `  Amount: ${parsed.amount} base units of token with id ${parsed.tokenIdentifier}`
+        )
+      } else {
+        console.log(`  Amount: ${parsed.amount} sats`)
+      }
+
+      if (parsed.description != null) {
+        console.log(`  Description: ${parsed.description}`)
+      }
+
+      if (parsed.expiryTime != null) {
+        console.log(`  Expiry time: ${new Date(Number(parsed.expiryTime) * 1000).toISOString()}`)
+      }
+
+      if (parsed.senderPublicKey != null) {
+        console.log(`  Sender public key: ${parsed.senderPublicKey}`)
+      }
+      break
+
     default:
       // Other input types are available
       break

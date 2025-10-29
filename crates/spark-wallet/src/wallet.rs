@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use bitcoin::{
     Address, Transaction,
@@ -8,12 +8,14 @@ use bitcoin::{
 };
 
 use spark::{
-    address::SparkAddress,
+    address::{
+        SatsPayment, SparkAddress, SparkAddressPaymentType, SparkInvoiceFields, TokensPayment,
+    },
     bitcoin::BitcoinService,
     events::{SparkEvent, subscribe_server_events},
     operator::{
         OperatorPool,
-        rpc::{ConnectionManager, DefaultConnectionManager},
+        rpc::{ConnectionManager, DefaultConnectionManager, spark::QuerySparkInvoicesRequest},
     },
     services::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
@@ -34,9 +36,11 @@ use spark::{
 use tokio::sync::{broadcast, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, info, trace};
+use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    ListTokenTransactionsRequest, TokenBalance, WalletEvent, WalletLeaves,
+    FulfillSparkInvoiceResult, ListTokenTransactionsRequest, QuerySparkInvoiceResult, TokenBalance,
+    WalletEvent, WalletLeaves,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
@@ -59,6 +63,7 @@ pub struct SparkWallet {
     lightning_service: Arc<LightningService>,
     ssp_client: Arc<ServiceProvider>,
     token_service: Arc<TokenService>,
+    operator_pool: Arc<OperatorPool>,
 }
 
 impl SparkWallet {
@@ -211,6 +216,7 @@ impl SparkWallet {
             lightning_service,
             ssp_client: service_provider.clone(),
             token_service,
+            operator_pool,
         })
     }
 }
@@ -492,6 +498,23 @@ impl SparkWallet {
         amount_sat: u64,
         receiver_address: &SparkAddress,
     ) -> Result<WalletTransfer, SparkWalletError> {
+        if receiver_address.is_invoice() {
+            return Err(SparkWalletError::Generic(
+                "Receiver address is a Spark invoice. Use `fulfill_spark_invoice` instead."
+                    .to_string(),
+            ));
+        }
+
+        self.transfer_with_invoice(amount_sat, receiver_address, None)
+            .await
+    }
+
+    async fn transfer_with_invoice(
+        &self,
+        amount_sat: u64,
+        receiver_address: &SparkAddress,
+        spark_invoice: Option<String>,
+    ) -> Result<WalletTransfer, SparkWalletError> {
         // validate receiver address and get its pubkey
         if self.config.network != receiver_address.network {
             return Err(SparkWalletError::InvalidNetwork);
@@ -511,6 +534,7 @@ impl SparkWallet {
                 leaves_reservation.leaves.clone(),
                 &receiver_pubkey,
                 None,
+                spark_invoice,
             ),
             &leaves_reservation,
         )
@@ -546,8 +570,47 @@ impl SparkWallet {
             self.identity_public_key,
             self.config.network,
             None,
-            None,
         ))
+    }
+
+    pub fn create_spark_invoice(
+        &self,
+        amount: Option<u128>,
+        token_identifier: Option<String>,
+        expiry_time: Option<SystemTime>,
+        description: Option<String>,
+        sender_public_key: Option<PublicKey>,
+    ) -> Result<String, SparkWalletError> {
+        let payment_type = if let Some(token_identifier) = token_identifier {
+            SparkAddressPaymentType::TokensPayment(TokensPayment {
+                token_identifier: Some(token_identifier),
+                amount,
+            })
+        } else {
+            SparkAddressPaymentType::SatsPayment(SatsPayment {
+                amount: amount
+                    .map(|amount| amount.try_into())
+                    .transpose()
+                    .map_err(|_| SparkWalletError::Generic("Invalid sats amount".to_string()))?,
+            })
+        };
+
+        let invoice_fields = SparkInvoiceFields {
+            id: uuid::Uuid::now_v7(),
+            version: 1,
+            memo: description,
+            sender_public_key,
+            expiry_time,
+            payment_type: Some(payment_type),
+        };
+
+        let invoice = SparkAddress::new(
+            self.identity_public_key,
+            self.config.network,
+            Some(invoice_fields),
+        );
+
+        Ok(invoice.to_invoice_string(&*self.signer)?)
     }
 
     pub async fn get_balance(&self) -> Result<u64, SparkWalletError> {
@@ -788,6 +851,12 @@ impl SparkWallet {
         &self,
         outputs: Vec<TransferTokenOutput>,
     ) -> Result<TokenTransaction, SparkWalletError> {
+        if outputs.iter().any(|o| o.spark_invoice.is_some()) {
+            return Err(SparkWalletError::Generic(
+                "Spark invoices are not supported for token transfers. Use the `fulfill_spark_invoice` method instead.".to_string(),
+            ));
+        }
+
         let tx = self.token_service.transfer_tokens(outputs).await?;
         Ok(tx)
     }
@@ -830,6 +899,105 @@ impl SparkWallet {
             .get_tokens_metadata(token_identifiers)
             .await
             .map_err(Into::into)
+    }
+
+    /// Fulfills a Spark invoice by paying the requested asset (Bitcoin or token) and amount (optional).
+    ///
+    /// # Arguments
+    /// * `invoice` - The Spark invoice to fulfill
+    /// * `amount` - The amount to pay in base units. Must be provided if the invoice doesn't include an amount. If it does, amount is ignored.
+    pub async fn fulfill_spark_invoice(
+        &self,
+        invoice_str: &str,
+        amount: Option<u128>,
+    ) -> Result<FulfillSparkInvoiceResult, SparkWalletError> {
+        let invoice = SparkAddress::from_str(invoice_str)?;
+
+        let Some(invoice_fields) = &invoice.spark_invoice_fields else {
+            return Err(SparkWalletError::InvalidAddress(format!(
+                "Invoice does not include Spark invoice fields: {invoice:?}"
+            )));
+        };
+
+        if let Some(expiry_time) = invoice_fields.expiry_time
+            && expiry_time < SystemTime::now()
+        {
+            return Err(SparkWalletError::InvalidAddress(format!(
+                "Invoice has expired at {}",
+                expiry_time.duration_since(UNIX_EPOCH).unwrap().as_secs()
+            )));
+        }
+
+        if let Some(sender_public_key) = invoice_fields.sender_public_key
+            && sender_public_key != self.identity_public_key
+        {
+            return Err(SparkWalletError::InvalidAddress(format!(
+                "Invoice sender public key does not match identity public key: {sender_public_key}"
+            )));
+        }
+
+        match &invoice_fields.payment_type {
+            Some(SparkAddressPaymentType::SatsPayment(payment)) => {
+                let amount = payment.amount.or(amount.map(|a| a as u64)).ok_or(
+                    SparkWalletError::Generic(
+                        "Amount is required when invoice does not include an amount".to_string(),
+                    ),
+                )?;
+
+                let transfer = self
+                    .transfer_with_invoice(amount, &invoice, Some(invoice_str.to_string()))
+                    .await?;
+
+                Ok(FulfillSparkInvoiceResult::Transfer(Box::new(transfer)))
+            }
+            Some(SparkAddressPaymentType::TokensPayment(payment)) => {
+                let Some(token_identifier) = &payment.token_identifier else {
+                    return Err(SparkWalletError::InvalidAddress(
+                        "Token invoice does not include token identifier".to_string(),
+                    ));
+                };
+                let amount = payment.amount.or(amount).ok_or(SparkWalletError::Generic(
+                    "Amount is required when invoice does not include an amount".to_string(),
+                ))?;
+
+                let tx = self
+                    .token_service
+                    .transfer_tokens(vec![TransferTokenOutput {
+                        token_id: token_identifier.clone(),
+                        amount,
+                        receiver_address: invoice,
+                        spark_invoice: Some(invoice_str.to_string()),
+                    }])
+                    .await?;
+
+                Ok(FulfillSparkInvoiceResult::TokenTransaction(Box::new(tx)))
+            }
+            None => Err(SparkWalletError::InvalidAddress(
+                "Invoice does not include payment type".to_string(),
+            )),
+        }
+    }
+
+    pub async fn query_spark_invoices(
+        &self,
+        invoices: Vec<String>,
+    ) -> Result<Vec<QuerySparkInvoiceResult>, SparkWalletError> {
+        let response = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .query_spark_invoices(QuerySparkInvoicesRequest {
+                invoice: invoices,
+                limit: 0,
+                offset: 0,
+            })
+            .await?;
+
+        response
+            .invoice_statuses
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect()
     }
 }
 

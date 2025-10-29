@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use spark_wallet::{SparkAddress, TransferId, TransferObserverError};
+use spark_wallet::{TransferId, TransferObserverError};
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -26,14 +26,14 @@ pub enum ProvisionalPaymentDetails {
         invoice: String,
     },
     Spark {
-        /// Spark receiver address
-        receiver_address: String,
+        /// Spark pay request being paid (either a Spark address or a Spark invoice)
+        pay_request: String,
     },
     Token {
         /// Token identifier
         token_id: String,
-        /// Spark receiver address
-        receiver_address: String,
+        /// Spark pay request being paid (either a Spark address or a Spark invoice)
+        pay_request: String,
     },
 }
 
@@ -133,7 +133,7 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
                         amount: output.amount,
                         details: ProvisionalPaymentDetails::Token {
                             token_id: token_id.to_string(),
-                            receiver_address: output.receiver_address.to_string(),
+                            pay_request: output.pay_request,
                         },
                     })
                     .collect(),
@@ -144,7 +144,7 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
     async fn before_send_transfer(
         &self,
         transfer_id: &TransferId,
-        receiver_address: &SparkAddress,
+        receiver_address: &str,
         amount_sats: u64,
     ) -> Result<(), TransferObserverError> {
         Ok(self
@@ -153,7 +153,7 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
                 payment_id: transfer_id.to_string(),
                 amount: u128::from(amount_sats),
                 details: ProvisionalPaymentDetails::Spark {
-                    receiver_address: receiver_address.to_string(),
+                    pay_request: receiver_address.to_string(),
                 },
             }])
             .await?)

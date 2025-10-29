@@ -37,6 +37,30 @@ func ParseInput(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_common.InputType, err
 		log.Printf("Input is LNURL-Withdraw for min/max %d/%d msats",
 			inputType.Field0.MinWithdrawable, inputType.Field0.MaxWithdrawable)
 
+	case breez_sdk_common.InputTypeSparkAddress:
+		log.Printf("Input is Spark address %s", inputType.Field0.Address)
+
+	case breez_sdk_common.InputTypeSparkInvoice:
+		invoice := inputType.Field0
+		log.Println("Input is Spark invoice:")
+		if invoice.TokenIdentifier != nil {
+			log.Printf("  Amount: %d base units of token with id %s", invoice.Amount, *invoice.TokenIdentifier)
+		} else {
+			log.Printf("  Amount: %d sats", invoice.Amount)
+		}
+
+		if invoice.Description != nil {
+			log.Printf("  Description: %s", *invoice.Description)
+		}
+
+		if invoice.ExpiryTime != nil {
+			log.Printf("  Expiry time: %d", *invoice.ExpiryTime)
+		}
+
+		if invoice.SenderPublicKey != nil {
+			log.Printf("  Sender public key: %s", *invoice.SenderPublicKey)
+		}
+
 	default:
 		// Other input types are available
 	}

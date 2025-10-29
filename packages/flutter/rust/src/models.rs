@@ -145,6 +145,7 @@ pub enum _InputType {
     Bolt12InvoiceRequest(Bolt12InvoiceRequestDetails),
     LnurlWithdraw(LnurlWithdrawRequestDetails),
     SparkAddress(SparkAddressDetails),
+    SparkInvoice(SparkInvoiceDetails),
 }
 
 #[frb(mirror(ListPaymentsRequest))]
@@ -241,6 +242,13 @@ pub struct _PrepareSendPaymentResponse {
 #[frb(mirror(ReceivePaymentMethod))]
 pub enum _ReceivePaymentMethod {
     SparkAddress,
+    SparkInvoice {
+        amount: Option<u128>,
+        token_identifier: Option<String>,
+        expiry_time: Option<u64>,
+        description: Option<String>,
+        sender_public_key: Option<String>,
+    },
     BitcoinAddress,
     Bolt11Invoice {
         description: String,
@@ -256,7 +264,7 @@ pub struct _ReceivePaymentRequest {
 #[frb(mirror(ReceivePaymentResponse))]
 pub struct _ReceivePaymentResponse {
     pub payment_request: String,
-    pub fee_sats: u64,
+    pub fee: u128,
 }
 
 #[frb(mirror(RefundDepositRequest))]
@@ -301,6 +309,11 @@ pub enum _SendPaymentMethod {
     },
     SparkAddress {
         address: String,
+        fee: u128,
+        token_identifier: Option<String>,
+    },
+    SparkInvoice {
+        spark_invoice_details: SparkInvoiceDetails,
         fee: u128,
         token_identifier: Option<String>,
     },
@@ -399,10 +412,13 @@ pub struct _Payment {
 
 #[frb(mirror(PaymentDetails))]
 pub enum _PaymentDetails {
-    Spark,
+    Spark {
+        invoice_details: Option<SparkInvoicePaymentDetails>,
+    },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
+        invoice_details: Option<SparkInvoicePaymentDetails>,
     },
     Lightning {
         description: Option<String>,
@@ -418,6 +434,12 @@ pub enum _PaymentDetails {
     Deposit {
         tx_id: String,
     },
+}
+
+#[frb(mirror(SparkInvoicePaymentDetails))]
+pub struct _SparkInvoicePaymentDetails {
+    pub description: Option<String>,
+    pub invoice: String,
 }
 
 #[frb(mirror(PaymentMetadata))]
@@ -575,43 +597,27 @@ pub struct _Bolt12OfferDetails {
 #[frb(mirror(SparkAddressDetails))]
 pub struct _SparkAddressDetails {
     pub address: String,
-    pub decoded_address: SparkAddress,
+    pub identity_public_key: String,
+    pub network: BitcoinNetwork,
     pub source: PaymentRequestSource,
 }
 
-#[frb(mirror(SparkAddress))]
-pub struct _SparkAddress {
+#[frb(mirror(SparkInvoiceDetails))]
+pub struct _SparkInvoiceDetails {
+    pub invoice: String,
     pub identity_public_key: String,
     pub network: BitcoinNetwork,
-    pub spark_invoice_fields: Option<SparkInvoiceFields>,
-    pub signature: Option<String>,
-}
-
-#[frb(mirror(SparkInvoiceFields))]
-pub struct _SparkInvoiceFields {
-    pub id: String,
-    pub version: u32,
-    pub memo: Option<String>,
-    pub sender_public_key: Option<String>,
-    pub expiry_time: Option<u64>,
-    pub payment_type: Option<SparkAddressPaymentType>,
-}
-
-#[frb(mirror(SparkAddressPaymentType))]
-pub enum _SparkAddressPaymentType {
-    TokensPayment(TokensPaymentDetails),
-    SatsPayment(SatsPaymentDetails),
-}
-
-#[frb(mirror(TokensPaymentDetails))]
-pub struct _TokensPaymentDetails {
-    pub token_identifier: Option<String>,
     pub amount: Option<u128>,
+    pub token_identifier: Option<String>,
+    pub expiry_time: Option<u64>,
+    pub description: Option<String>,
+    pub sender_public_key: Option<String>,
 }
 
-#[frb(mirror(SatsPaymentDetails))]
-pub struct _SatsPaymentDetails {
-    pub amount: Option<u64>,
+#[frb(mirror(SparkInvoicePaymentType))]
+pub enum _SparkInvoicePaymentType {
+    Sats,
+    Tokens { token_identifier: Option<String> },
 }
 
 #[frb(mirror(LightningAddressDetails))]

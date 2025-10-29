@@ -4,7 +4,9 @@ pub use payment_observer::*;
 
 use breez_sdk_common::{
     fiat::{FiatCurrency, Rate},
-    input::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser},
+    input::{
+        BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, SparkInvoiceDetails,
+    },
     lnurl::pay::{LnurlPayRequestDetails, SuccessAction, SuccessActionProcessed},
     network::BitcoinNetwork,
 };
@@ -201,10 +203,15 @@ impl crate::UniffiCustomTypeConverter for u128 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum PaymentDetails {
-    Spark,
+    Spark {
+        /// The invoice details if the payment fulfilled a spark invoice
+        invoice_details: Option<SparkInvoicePaymentDetails>,
+    },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
+        /// The invoice details if the payment fulfilled a spark invoice
+        invoice_details: Option<SparkInvoicePaymentDetails>,
     },
     Lightning {
         /// Represents the invoice description
@@ -231,6 +238,15 @@ pub enum PaymentDetails {
     Deposit {
         tx_id: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkInvoicePaymentDetails {
+    /// Represents the spark invoice description
+    pub description: Option<String>,
+    /// The raw spark invoice string
+    pub invoice: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -456,6 +472,19 @@ pub struct SyncWalletResponse {}
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ReceivePaymentMethod {
     SparkAddress,
+    SparkInvoice {
+        /// Amount to receive. Denominated in sats if token identifier is empty, otherwise in the token base units
+        amount: Option<u128>,
+        /// The presence of this field indicates that the payment is for a token
+        /// If empty, it is a Bitcoin payment
+        token_identifier: Option<String>,
+        /// The expiry time of the invoice in seconds since the Unix epoch
+        expiry_time: Option<u64>,
+        /// A description to embed in the invoice.
+        description: Option<String>,
+        /// If set, the invoice may only be fulfilled by a payer with this public key
+        sender_public_key: Option<String>,
+    },
     BitcoinAddress,
     Bolt11Invoice {
         description: String,
@@ -477,6 +506,15 @@ pub enum SendPaymentMethod {
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
+        /// Fee to pay for the transaction
+        /// Denominated in sats if token identifier is empty, otherwise in the token base units
+        fee: u128,
+        /// The presence of this field indicates that the payment is for a token
+        /// If empty, it is a Bitcoin payment
+        token_identifier: Option<String>,
+    },
+    SparkInvoice {
+        spark_invoice_details: SparkInvoiceDetails,
         /// Fee to pay for the transaction
         /// Denominated in sats if token identifier is empty, otherwise in the token base units
         fee: u128,
@@ -518,7 +556,9 @@ pub struct ReceivePaymentRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ReceivePaymentResponse {
     pub payment_request: String,
-    pub fee_sats: u64,
+    /// Fee to pay to receive the payment
+    /// Denominated in sats or token base units
+    pub fee: u128,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

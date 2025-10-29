@@ -7,14 +7,19 @@ use bitcoin::{Transaction, secp256k1::PublicKey};
 use serde::{Deserialize, Serialize};
 use spark::{
     Network,
+    operator::rpc::spark::{
+        InvoiceResponse, InvoiceStatus, invoice_response::TransferType as InvoiceTransferType,
+    },
     services::{
-        LightningSendPayment, TokenMetadata, Transfer, TransferId, TransferLeaf, TransferStatus,
-        TransferType,
+        LightningSendPayment, TokenMetadata, TokenTransaction, Transfer, TransferId, TransferLeaf,
+        TransferStatus, TransferType,
     },
     ssp::{SspTransfer, SspUserRequest},
     tree::{Leaves, SigningKeyshare, TreeNode, TreeNodeId},
     utils::paging::PagingFilter,
 };
+
+use crate::SparkWalletError;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -56,6 +61,7 @@ pub struct WalletTransfer {
     pub transfer_type: TransferType,
     pub direction: TransferDirection,
     pub user_request: Option<SspUserRequest>,
+    pub spark_invoice: Option<String>,
 }
 
 impl WalletTransfer {
@@ -88,6 +94,7 @@ impl WalletTransfer {
             transfer_type: value.transfer_type,
             direction,
             user_request: ssp_transfer.and_then(|t| t.user_request),
+            spark_invoice: value.spark_invoice,
         }
     }
 }
@@ -218,4 +225,80 @@ pub struct ListTokenTransactionsRequest {
     pub token_transaction_hashes: Vec<String>,
     pub token_ids: Vec<String>,
     pub output_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum FulfillSparkInvoiceResult {
+    Transfer(Box<WalletTransfer>),
+    TokenTransaction(Box<TokenTransaction>),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct QuerySparkInvoiceResult {
+    pub invoice: String,
+    pub status: SparkInvoiceStatus,
+    pub transfer_type: Option<SparkInvoiceTransferType>,
+}
+
+impl TryFrom<InvoiceResponse> for QuerySparkInvoiceResult {
+    type Error = SparkWalletError;
+    fn try_from(value: InvoiceResponse) -> Result<Self, Self::Error> {
+        Ok(QuerySparkInvoiceResult {
+            invoice: value.invoice,
+            status: InvoiceStatus::try_from(value.status)
+                .map_err(|_| {
+                    SparkWalletError::ValidationError("Invalid invoice status".to_string())
+                })?
+                .into(),
+            transfer_type: value.transfer_type.map(TryInto::try_into).transpose()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum SparkInvoiceStatus {
+    NotFound,
+    Pending,
+    Finalized,
+    Returned,
+}
+
+impl From<InvoiceStatus> for SparkInvoiceStatus {
+    fn from(value: InvoiceStatus) -> Self {
+        match value {
+            InvoiceStatus::NotFound => SparkInvoiceStatus::NotFound,
+            InvoiceStatus::Pending => SparkInvoiceStatus::Pending,
+            InvoiceStatus::Finalized => SparkInvoiceStatus::Finalized,
+            InvoiceStatus::Returned => SparkInvoiceStatus::Returned,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum SparkInvoiceTransferType {
+    Transfer { transfer_id: TransferId },
+    TokenTransfer { final_token_tx_hash: String },
+}
+
+impl TryFrom<InvoiceTransferType> for SparkInvoiceTransferType {
+    type Error = SparkWalletError;
+    fn try_from(value: InvoiceTransferType) -> Result<Self, Self::Error> {
+        match value {
+            InvoiceTransferType::SatsTransfer(transfer) => Ok(SparkInvoiceTransferType::Transfer {
+                transfer_id: TransferId::from_bytes(transfer.transfer_id.try_into().map_err(
+                    |e| {
+                        SparkWalletError::ValidationError(format!(
+                            "Failed to convert id bytes to UUID: {e:?}"
+                        ))
+                    },
+                )?),
+            }),
+
+            InvoiceTransferType::TokenTransfer(transfer) => {
+                Ok(SparkInvoiceTransferType::TokenTransfer {
+                    final_token_tx_hash: hex::encode(transfer.final_token_transaction_hash),
+                })
+            }
+        }
+    }
 }
