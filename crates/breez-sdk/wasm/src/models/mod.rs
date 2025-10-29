@@ -904,7 +904,7 @@ pub enum ProvisionalPaymentDetails {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SignMessageRequest)]
 pub struct SignMessageRequest {
     pub message: String,
-    pub compact: Option<bool>,
+    pub compact: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SignMessageResponse)]

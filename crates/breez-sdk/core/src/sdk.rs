@@ -1282,7 +1282,7 @@ impl BreezSdk {
     ) -> Result<SignMessageResponse, SdkError> {
         let pubkey = self.spark_wallet.get_identity_public_key().to_string();
         let signature = self.spark_wallet.sign_message(&request.message).await?;
-        let signature_hex = if request.compact.unwrap_or_default() {
+        let signature_hex = if request.compact {
             signature.serialize_compact().to_lower_hex_string()
         } else {
             signature.serialize_der().to_lower_hex_string()

@@ -3,11 +3,11 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 Future<SignMessageResponse> signMessage(BreezSdk sdk) async {
   // ANCHOR: sign-message
   // Set to true to get a compact signature rather than a DER
-  bool optionalCompact = true;
+  bool compact = true;
 
   SignMessageRequest signMessageRequest = SignMessageRequest(
     message: "<message to sign>",
-    compact: optionalCompact,
+    compact: compact,
   );
 
   SignMessageResponse signMessageResponse = await sdk.signMessage(

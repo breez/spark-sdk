@@ -897,8 +897,7 @@ pub struct GetTokensMetadataResponse {
 pub struct SignMessageRequest {
     pub message: String,
     /// If true, the signature will be encoded in compact format instead of DER format
-    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub compact: Option<bool>,
+    pub compact: bool,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

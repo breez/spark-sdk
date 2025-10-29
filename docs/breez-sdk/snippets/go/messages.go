@@ -10,11 +10,11 @@ func SignMessage(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.SignMessageRes
 	// ANCHOR: sign-message
 	message := "<message to sign>"
 	// Set to true to get a compact signature rather than a DER
-	optionalCompact := true
+	compact := true
 
 	signMessageRequest := breez_sdk_spark.SignMessageRequest{
 		Message: message,
-		Compact: &optionalCompact,
+		Compact: compact,
 	}
 	signMessageResponse, err := sdk.SignMessage(signMessageRequest)
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {

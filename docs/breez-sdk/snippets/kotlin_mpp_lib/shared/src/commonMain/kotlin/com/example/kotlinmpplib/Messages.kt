@@ -7,9 +7,9 @@ class Messages {
         // ANCHOR: sign-message
         val message = "<message to sign>"
         // Set to true to get a compact signature rather than a DER
-        val optionalCompact = true
+        val compact = true
         try {
-            val signMessageRequest = SignMessageRequest(message, optionalCompact)
+            val signMessageRequest = SignMessageRequest(message, compact)
             val signMessageResponse = sdk.signMessage(signMessageRequest)
 
             val signature = signMessageResponse?.signature

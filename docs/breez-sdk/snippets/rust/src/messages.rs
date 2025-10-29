@@ -6,11 +6,11 @@ async fn sign_message(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: sign-message
     let message = "<message to sign>".to_string();
     // Set to true to get a compact signature rather than a DER
-    let optional_compact = Some(true);
+    let compact = true;
 
     let sign_message_request = SignMessageRequest {
         message,
-        compact: optional_compact,
+        compact,
     };
     let sign_message_response = sdk
         .sign_message(sign_message_request).await?;

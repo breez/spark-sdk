@@ -356,7 +356,7 @@ pub struct _SendPaymentResponse {
 #[frb(mirror(SignMessageRequest))]
 pub struct _SignMessageRequest {
     pub message: String,
-    pub compact: Option<bool>,
+    pub compact: bool,
 }
 
 #[frb(mirror(SignMessageResponse))]

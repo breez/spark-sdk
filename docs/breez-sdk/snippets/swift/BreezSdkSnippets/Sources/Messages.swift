@@ -3,11 +3,11 @@ import BreezSdkSpark
 func signMessage(sdk: BreezSdk) async throws -> SignMessageResponse {
     // ANCHOR: sign-message
     // Set to true to get a compact signature rather than a DER
-    let optionalCompact = true
+    let compact = true
 
     let signMessageRequest = SignMessageRequest(
         message: "<message to sign>",
-        compact: optionalCompact
+        compact: compact
     )
     let signMessageResponse = try await sdk
         .signMessage(request: signMessageRequest)

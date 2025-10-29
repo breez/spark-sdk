@@ -6,10 +6,10 @@ async def sign_message(sdk: BreezSdk):
     # ANCHOR: sign-message
     message = "<message to sign>"
     # Set to true to get a compact signature rather than a DER
-    optional_compact = True
+    compact = True
     try:
         sign_message_request = SignMessageRequest(
-            message=message, compact=optional_compact
+            message=message, compact=compact
         )
         sign_message_response = await sdk.sign_message(request=sign_message_request)
 

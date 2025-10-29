@@ -57,14 +57,14 @@ async fn test_01_sign_and_check_der(
         .sdk
         .sign_message(SignMessageRequest {
             message: alice_message.clone(),
-            compact: None,
+            compact: false,
         })
         .await?;
     let bob_signing_res = bob
         .sdk
         .sign_message(SignMessageRequest {
             message: bob_message.clone(),
-            compact: None,
+            compact: false,
         })
         .await?;
 
@@ -127,14 +127,14 @@ async fn test_02_sign_and_check_compact(
         .sdk
         .sign_message(SignMessageRequest {
             message: bob_message.clone(),
-            compact: Some(true),
+            compact: true,
         })
         .await?;
     let alice_signing_res = alice
         .sdk
         .sign_message(SignMessageRequest {
             message: alice_message.clone(),
-            compact: Some(true),
+            compact: true,
         })
         .await?;
 
