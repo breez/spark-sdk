@@ -14,7 +14,7 @@ use figment::{
     providers::{Env, Format, Serialized, Toml},
 };
 use serde::{Deserialize, Serialize};
-use spark::operator::rpc::{DefaultConnectionManager, SparkRpcClient};
+use spark::operator::rpc::DefaultConnectionManager;
 use spark::session_manager::InMemorySessionManager;
 use spark::ssp::ServiceProvider;
 use spark::tree::InMemoryTreeStore;
@@ -228,22 +228,18 @@ where
             let user_pubkey = bitcoin::secp256k1::PublicKey::from_str(&user)
                 .map_err(|e| anyhow!("failed to parse user pubkey: {e:?}"))?;
 
-            let transport = connection_manager.get_transport(&coordinator).await?;
-            let rpc_client = SparkRpcClient::new(
-                transport,
-                signer.clone(),
-                user_pubkey,
-                session_manager.clone(),
-            );
-
-            zap::subscribe_to_user_for_zaps(
+            zap::create_rpc_client_and_subscribe(
                 repository.clone(),
                 user_pubkey,
-                rpc_client,
+                &connection_manager,
+                &coordinator,
+                signer.clone(),
+                session_manager.clone(),
                 Arc::clone(&service_provider),
                 nostr_keys.clone(),
                 Arc::clone(&subscribed_keys),
-            );
+            )
+            .await?;
         }
     }
 

@@ -1,11 +1,14 @@
 use crate::repository::LnurlRepository;
 use lightning_invoice::Bolt11Invoice;
 use nostr::{EventBuilder, JsonUtil, Keys, TagStandard};
-use spark::operator::rpc::SparkRpcClient;
+use spark::operator::OperatorConfig;
 use spark::operator::rpc::spark::SubscribeToEventsRequest;
 use spark::operator::rpc::spark::subscribe_to_events_response::Event;
+use spark::operator::rpc::{ConnectionManager, SparkRpcClient};
 use spark::services::Transfer;
+use spark::session_manager::InMemorySessionManager;
 use spark::ssp::ServiceProvider;
+use spark_wallet::DefaultSigner;
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -19,6 +22,39 @@ pub struct Zap {
     pub zap_event: Option<String>,
     pub user_pubkey: String,
     pub invoice_expiry: i64,
+}
+
+/// Helper function to create an RPC client and subscribe to a user for zaps.
+/// This consolidates the common pattern of getting a transport, creating an RPC client,
+/// and starting the zap subscription.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_rpc_client_and_subscribe<DB>(
+    db: DB,
+    user_pubkey: bitcoin::secp256k1::PublicKey,
+    connection_manager: &Arc<dyn ConnectionManager>,
+    coordinator: &OperatorConfig,
+    signer: Arc<DefaultSigner>,
+    session_manager: Arc<InMemorySessionManager>,
+    service_provider: Arc<ServiceProvider>,
+    nostr_keys: Keys,
+    subscribed_keys: Arc<Mutex<HashSet<String>>>,
+) -> Result<(), anyhow::Error>
+where
+    DB: LnurlRepository + Clone + Send + Sync + 'static,
+{
+    let transport = connection_manager.get_transport(coordinator).await?;
+    let rpc_client = SparkRpcClient::new(transport, signer, user_pubkey, session_manager);
+
+    subscribe_to_user_for_zaps(
+        db,
+        user_pubkey,
+        rpc_client,
+        service_provider,
+        nostr_keys,
+        subscribed_keys,
+    );
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]

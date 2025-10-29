@@ -364,36 +364,22 @@ where
 
             // Subscribe to user if not already subscribed (only if nostr is enabled)
             if let Some(nostr_keys) = &state.nostr_keys {
-                let subscribed = state.subscribed_keys.lock().await;
-                let is_subscribed = subscribed.contains(&user.pubkey);
-                drop(subscribed);
-
-                if !is_subscribed {
-                    let transport = state
-                        .connection_manager
-                        .get_transport(&state.coordinator)
-                        .await
-                        .map_err(|e| {
-                            error!("failed to get transport for user subscription: {}", e);
-                            lnurl_error("internal server error")
-                        })?;
-
-                    let rpc_client = spark::operator::rpc::SparkRpcClient::new(
-                        transport,
-                        state.signer.clone(),
-                        pubkey,
-                        state.session_manager.clone(),
-                    );
-
-                    crate::zap::subscribe_to_user_for_zaps(
-                        state.db.clone(),
-                        pubkey,
-                        rpc_client,
-                        state.service_provider.clone(),
-                        nostr_keys.clone(),
-                        Arc::clone(&state.subscribed_keys),
-                    );
-                }
+                crate::zap::create_rpc_client_and_subscribe(
+                    state.db.clone(),
+                    pubkey,
+                    &state.connection_manager,
+                    &state.coordinator,
+                    state.signer.clone(),
+                    state.session_manager.clone(),
+                    state.service_provider.clone(),
+                    nostr_keys.clone(),
+                    Arc::clone(&state.subscribed_keys),
+                )
+                .await
+                .map_err(|e| {
+                    error!("failed to subscribe to user for zaps: {}", e);
+                    lnurl_error("internal server error")
+                })?;
             }
         }
 
