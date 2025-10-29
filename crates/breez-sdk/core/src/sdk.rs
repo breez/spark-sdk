@@ -3,7 +3,7 @@ use bitcoin::{
     consensus::serialize,
     hashes::{Hash, sha256},
     hex::DisplayHex,
-    secp256k1::PublicKey,
+    secp256k1::{PublicKey, ecdsa::Signature},
 };
 pub use breez_sdk_common::input::parse as parse_input;
 use breez_sdk_common::{
@@ -39,14 +39,15 @@ use web_time::Instant;
 use x509_parser::parse_x509_certificate;
 
 use crate::{
-    BitcoinChainService, CheckLightningAddressRequest, ClaimDepositRequest, ClaimDepositResponse,
-    DepositInfo, Fee, GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest,
-    GetTokensMetadataResponse, LightningAddressInfo, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
-    LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger, Network, PaymentDetails,
-    PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse, RefundDepositRequest,
-    RefundDepositResponse, RegisterLightningAddressRequest, SendOnchainFeeQuote,
-    SendPaymentOptions, WaitForPaymentIdentifier, WaitForPaymentRequest, WaitForPaymentResponse,
+    BitcoinChainService, CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse,
+    ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee, GetPaymentRequest,
+    GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse, LightningAddressInfo,
+    ListFiatCurrenciesResponse, ListFiatRatesResponse, ListUnclaimedDepositsRequest,
+    ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, Logger,
+    Network, PaymentDetails, PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
+    SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest, SignMessageResponse,
+    WaitForPaymentIdentifier, WaitForPaymentRequest, WaitForPaymentResponse,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     lnurl::LnurlServerClient,
@@ -1270,6 +1271,52 @@ impl BreezSdk {
         Ok(GetTokensMetadataResponse {
             tokens_metadata: metadata,
         })
+    }
+
+    /// Signs a message with the wallet's identity key. The message is SHA256
+    /// hashed before signing. The returned signature will be hex encoded in
+    /// DER format by default, or compact format if specified.
+    pub async fn sign_message(
+        &self,
+        request: SignMessageRequest,
+    ) -> Result<SignMessageResponse, SdkError> {
+        let pubkey = self.spark_wallet.get_identity_public_key().to_string();
+        let signature = self.spark_wallet.sign_message(&request.message).await?;
+        let signature_hex = if request.compact.unwrap_or_default() {
+            signature.serialize_compact().to_lower_hex_string()
+        } else {
+            signature.serialize_der().to_lower_hex_string()
+        };
+
+        Ok(SignMessageResponse {
+            pubkey,
+            signature: signature_hex,
+        })
+    }
+
+    /// Verifies a message signature against the provided public key. The message
+    /// is SHA256 hashed before verification. The signature can be hex encoded
+    /// in either DER or compact format.
+    pub async fn check_message(
+        &self,
+        request: CheckMessageRequest,
+    ) -> Result<CheckMessageResponse, SdkError> {
+        let pubkey = PublicKey::from_str(&request.pubkey)
+            .map_err(|_| SdkError::InvalidInput("Invalid public key".to_string()))?;
+        let signature_bytes = hex::decode(&request.signature)
+            .map_err(|_| SdkError::InvalidInput("Not a valid hex encoded signature".to_string()))?;
+        let signature = Signature::from_der(&signature_bytes)
+            .or_else(|_| Signature::from_compact(&signature_bytes))
+            .map_err(|_| {
+                SdkError::InvalidInput("Not a valid DER or compact encoded signature".to_string())
+            })?;
+
+        let is_valid = self
+            .spark_wallet
+            .verify_message(&request.message, &signature, &pubkey)
+            .await
+            .is_ok();
+        Ok(CheckMessageResponse { is_valid })
     }
 }
 

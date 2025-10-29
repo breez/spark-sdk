@@ -58,6 +58,18 @@ pub struct _ConnectRequest {
     pub storage_dir: String,
 }
 
+#[frb(mirror(CheckMessageRequest))]
+pub struct _CheckMessageRequest {
+    pub message: String,
+    pub pubkey: String,
+    pub signature: String,
+}
+
+#[frb(mirror(CheckMessageResponse))]
+pub struct _CheckMessageResponse {
+    pub is_valid: bool,
+}
+
 #[frb(mirror(ClaimDepositRequest))]
 pub struct _ClaimDepositRequest {
     pub txid: String,
@@ -339,6 +351,18 @@ pub struct _SendPaymentRequest {
 #[frb(mirror(SendPaymentResponse))]
 pub struct _SendPaymentResponse {
     pub payment: Payment,
+}
+
+#[frb(mirror(SignMessageRequest))]
+pub struct _SignMessageRequest {
+    pub message: String,
+    pub compact: Option<bool>,
+}
+
+#[frb(mirror(SignMessageResponse))]
+pub struct _SignMessageResponse {
+    pub pubkey: String,
+    pub signature: String,
 }
 
 #[frb(mirror(SuccessAction))]

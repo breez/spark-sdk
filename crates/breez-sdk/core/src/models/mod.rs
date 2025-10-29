@@ -892,3 +892,33 @@ pub struct GetTokensMetadataRequest {
 pub struct GetTokensMetadataResponse {
     pub tokens_metadata: Vec<TokenMetadata>,
 }
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SignMessageRequest {
+    pub message: String,
+    /// If true, the signature will be encoded in compact format instead of DER format
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub compact: Option<bool>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SignMessageResponse {
+    pub pubkey: String,
+    /// The DER or compact hex encoded signature
+    pub signature: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CheckMessageRequest {
+    /// The message that was signed
+    pub message: String,
+    /// The public key that signed the message
+    pub pubkey: String,
+    /// The DER or compact hex encoded signature
+    pub signature: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CheckMessageResponse {
+    pub is_valid: bool,
+}

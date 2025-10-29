@@ -270,4 +270,20 @@ impl BreezSdk {
     ) -> WasmResult<GetTokensMetadataResponse> {
         Ok(self.sdk.get_tokens_metadata(request.into()).await?.into())
     }
+
+    #[wasm_bindgen(js_name = "signMessage")]
+    pub async fn sign_message(
+        &self,
+        request: SignMessageRequest,
+    ) -> WasmResult<SignMessageResponse> {
+        Ok(self.sdk.sign_message(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "checkMessage")]
+    pub async fn check_message(
+        &self,
+        request: CheckMessageRequest,
+    ) -> WasmResult<CheckMessageResponse> {
+        Ok(self.sdk.check_message(request.into()).await?.into())
+    }
 }

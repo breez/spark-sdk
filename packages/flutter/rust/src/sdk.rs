@@ -2,16 +2,17 @@ use std::sync::Arc;
 
 use breez_sdk_common::input::InputType;
 use breez_sdk_spark::{
-    CheckLightningAddressRequest, ClaimDepositRequest, ClaimDepositResponse, Config,
-    ConnectRequest, GetInfoRequest, GetInfoResponse, GetPaymentRequest, GetPaymentResponse,
-    GetTokensMetadataRequest, GetTokensMetadataResponse, LightningAddressInfo,
-    ListFiatCurrenciesResponse, ListFiatRatesResponse, ListPaymentsRequest, ListPaymentsResponse,
-    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayRequest, LnurlPayResponse,
-    LogEntry, Logger, Network, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentRequest,
-    ReceivePaymentResponse, RefundDepositRequest, RefundDepositResponse,
+    CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest,
+    ClaimDepositResponse, Config, ConnectRequest, GetInfoRequest, GetInfoResponse,
+    GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
+    LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse, ListPaymentsRequest,
+    ListPaymentsResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
+    LnurlPayRequest, LnurlPayResponse, LogEntry, Logger, Network, PrepareLnurlPayRequest,
+    PrepareLnurlPayResponse, PrepareSendPaymentRequest, PrepareSendPaymentResponse,
+    ReceivePaymentRequest, ReceivePaymentResponse, RefundDepositRequest, RefundDepositResponse,
     RegisterLightningAddressRequest, SdkError, SdkEvent, SendPaymentRequest, SendPaymentResponse,
-    Storage, SyncWalletRequest, SyncWalletResponse, WaitForPaymentRequest, WaitForPaymentResponse,
+    SignMessageRequest, SignMessageResponse, Storage, SyncWalletRequest, SyncWalletResponse,
+    WaitForPaymentRequest, WaitForPaymentResponse,
 };
 use flutter_rust_bridge::frb;
 
@@ -189,5 +190,19 @@ impl BreezSdk {
         request: GetTokensMetadataRequest,
     ) -> Result<GetTokensMetadataResponse, SdkError> {
         self.inner.get_tokens_metadata(request).await
+    }
+
+    pub async fn sign_message(
+        &self,
+        request: SignMessageRequest,
+    ) -> Result<SignMessageResponse, SdkError> {
+        self.inner.sign_message(request).await
+    }
+
+    pub async fn check_message(
+        &self,
+        request: CheckMessageRequest,
+    ) -> Result<CheckMessageResponse, SdkError> {
+        self.inner.check_message(request).await
     }
 }
