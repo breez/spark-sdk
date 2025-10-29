@@ -227,6 +227,7 @@ pub struct _LnurlWithdrawRequest {
 
 #[frb(mirror(LnurlWithdrawResponse))]
 pub struct _LnurlWithdrawResponse {
+    pub payment_request: String,
     pub payment: Option<Payment>,
 }
 

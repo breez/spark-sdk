@@ -117,36 +117,28 @@ impl SparkSyncService {
         };
 
         // Get the payment request metadata from storage for this invoice
-        let Some(request_metadata) = self
-            .storage
-            .get_payment_request_metadata(invoice.clone())
-            .await?
-        else {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let Some(metadata) = cache.fetch_payment_request_metadata(invoice).await? else {
             return Ok(());
         };
 
-        if let Some(lnurl_withdraw_request_details) =
-            request_metadata.lnurl_withdraw_request_details
-        {
-            // This is payment request from an LNURL withdraw, store the withdraw metadata
-            self.storage
-                .set_payment_metadata(
-                    payment.id.clone(),
-                    PaymentMetadata {
-                        lnurl_withdraw_info: Some(LnurlWithdrawInfo {
-                            withdraw_url: lnurl_withdraw_request_details.callback,
-                        }),
-                        lnurl_description: Some(lnurl_withdraw_request_details.default_description),
-                        ..Default::default()
-                    },
-                )
-                .await?;
-        }
+        self.storage
+            .set_payment_metadata(
+                payment.id.clone(),
+                PaymentMetadata {
+                    lnurl_withdraw_info: Some(LnurlWithdrawInfo {
+                        withdraw_url: metadata.lnurl_withdraw_request_details.callback,
+                    }),
+                    lnurl_description: Some(
+                        metadata.lnurl_withdraw_request_details.default_description,
+                    ),
+                    ..Default::default()
+                },
+            )
+            .await?;
 
         // Delete the payment request metadata since we have applied it
-        self.storage
-            .delete_payment_request_metadata(invoice.clone())
-            .await?;
+        cache.delete_payment_request_metadata(invoice).await?;
 
         Ok(())
     }

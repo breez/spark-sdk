@@ -8,9 +8,7 @@ use bitcoin::{
 pub use breez_sdk_common::input::parse as parse_input;
 use breez_sdk_common::{
     fiat::FiatService,
-    input::{
-        BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType, parse_invoice,
-    },
+    input::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType},
     lnurl::{self, withdraw::execute_lnurl_withdraw},
 };
 use breez_sdk_common::{
@@ -394,11 +392,6 @@ impl BreezSdk {
         if let Err(e) = self.check_and_claim_static_deposits().await {
             error!("sync_wallet_internal: Failed to check and claim static deposits: {e:?}");
         }
-        if let Err(e) = self.delete_expired_payment_request_metadata().await {
-            error!(
-                "sync_wallet_internal: Failed to delete expired payment request metadata: {e:?}"
-            );
-        }
         let elapsed = start_time.elapsed();
         info!("sync_wallet_internal: Wallet sync completed in {elapsed:?}");
         self.event_emitter.emit(&SdkEvent::Synced {}).await;
@@ -471,15 +464,6 @@ impl BreezSdk {
                 .emit(&SdkEvent::ClaimDepositsSucceeded { claimed_deposits })
                 .await;
         }
-        Ok(())
-    }
-
-    async fn delete_expired_payment_request_metadata(&self) -> Result<(), SdkError> {
-        let now_secs = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        self.storage
-            .delete_expired_payment_request_metadata(now_secs)
-            .await?;
-
         Ok(())
     }
 
@@ -876,28 +860,22 @@ impl BreezSdk {
         }
 
         // Generate a Lightning invoice for the withdraw
-        let receive_response = self
+        let payment_request = self
             .receive_payment(ReceivePaymentRequest {
                 payment_method: ReceivePaymentMethod::Bolt11Invoice {
                     description: withdraw_request.default_description.clone(),
                     amount_sats: Some(amount_sats),
                 },
             })
-            .await?;
-        let invoice = parse_invoice(&receive_response.payment_request)
-            .ok_or(SdkError::Generic("Failed to parse invoice".to_string()))?;
-        let expires = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs()
-            .checked_add(invoice.expiry)
-            .ok_or(SdkError::Generic("Invalid expiry time".to_string()))?;
+            .await?
+            .payment_request;
 
         // Store the LNURL withdraw metadata before executing the withdraw
-        self.storage
-            .set_payment_request_metadata(PaymentRequestMetadata {
-                payment_request: receive_response.payment_request.clone(),
-                lnurl_withdraw_request_details: Some(withdraw_request.clone()),
-                expires,
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        cache
+            .save_payment_request_metadata(&PaymentRequestMetadata {
+                payment_request: payment_request.clone(),
+                lnurl_withdraw_request_details: withdraw_request.clone(),
             })
             .await?;
 
@@ -905,7 +883,7 @@ impl BreezSdk {
         let withdraw_response = execute_lnurl_withdraw(
             self.lnurl_client.as_ref(),
             &withdraw_request,
-            &receive_response.payment_request,
+            &payment_request,
         )
         .await?;
         if let lnurl::withdraw::ValidatedCallbackResponse::EndpointError { data } =
@@ -916,12 +894,17 @@ impl BreezSdk {
 
         let completion_timeout_secs = match completion_timeout_secs {
             Some(secs) if secs > 0 => secs,
-            _ => return Ok(LnurlWithdrawResponse { payment: None }),
+            _ => {
+                return Ok(LnurlWithdrawResponse {
+                    payment_request,
+                    payment: None,
+                });
+            }
         };
 
         // Wait for the payment to be completed
         let fut = self.wait_for_payment(WaitForPaymentRequest {
-            identifier: WaitForPaymentIdentifier::PaymentRequest(receive_response.payment_request),
+            identifier: WaitForPaymentIdentifier::PaymentRequest(payment_request.clone()),
         });
 
         let payment = match timeout(Duration::from_secs(completion_timeout_secs.into()), fut).await
@@ -934,7 +917,10 @@ impl BreezSdk {
             Err(_) => None,
         };
 
-        Ok(LnurlWithdrawResponse { payment })
+        Ok(LnurlWithdrawResponse {
+            payment_request,
+            payment,
+        })
     }
 
     #[allow(clippy::too_many_lines)]

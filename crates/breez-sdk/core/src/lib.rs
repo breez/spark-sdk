@@ -21,9 +21,7 @@ pub use chain::{
 pub use error::{DepositClaimError, SdkError};
 pub use events::{EventEmitter, EventListener, SdkEvent};
 pub use models::*;
-pub use persist::{
-    PaymentMetadata, PaymentRequestMetadata, Storage, StorageError, UpdateDepositPayload,
-};
+pub use persist::{PaymentMetadata, Storage, StorageError, UpdateDepositPayload};
 pub use sdk::{BreezSdk, default_config, init_logging, parse_input};
 #[cfg(not(feature = "uniffi"))]
 pub use sdk_builder::SdkBuilder;

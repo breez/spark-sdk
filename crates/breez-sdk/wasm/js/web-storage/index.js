@@ -145,16 +145,6 @@ class MigrationManager {
           };
         },
       },
-      {
-        name: "Create payment request metadata store",
-        upgrade: (db) => {
-          if (!db.objectStoreNames.contains("payment_request_metadata")) {
-            db.createObjectStore("payment_request_metadata", {
-              keyPath: "paymentRequest",
-            });
-          }
-        },
-      },
     ];
   }
 }
@@ -178,7 +168,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 4; // Current schema version
+    this.dbVersion = 3; // Current schema version
   }
 
   /**
@@ -580,155 +570,6 @@ class IndexedDBStorage {
         reject(
           new StorageError(
             `Failed to set payment metadata for '${paymentId}': ${
-              request.error?.message || "Unknown error"
-            }`,
-            request.error
-          )
-        );
-      };
-    });
-  }
-
-  // Payment Request Metadata Operations
-
-  async getPaymentRequestMetadata(paymentRequest) {
-    if (!this.db) {
-      throw new StorageError("Database not initialized");
-    }
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction(
-        "payment_request_metadata",
-        "readonly"
-      );
-      const store = transaction.objectStore("payment_request_metadata");
-      const request = store.get(paymentRequest);
-
-      request.onsuccess = () => {
-        const result = request.result;
-        if (!result) {
-          resolve(null);
-          return;
-        }
-
-        const metadata = {
-          paymentRequest,
-          lnurlWithdrawRequestDetails: result.lnurlWithdrawRequestDetails
-            ? JSON.parse(result.lnurlWithdrawRequestDetails)
-            : null,
-          expires: result.expires,
-        };
-        resolve(metadata);
-      };
-
-      request.onerror = () => {
-        reject(
-          new StorageError(
-            `Failed to get payment request metadata for '${paymentRequest}': ${
-              request.error?.message || "Unknown error"
-            }`,
-            request.error
-          )
-        );
-      };
-    });
-  }
-
-  async setPaymentRequestMetadata(metadata) {
-    if (!this.db) {
-      throw new StorageError("Database not initialized");
-    }
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction(
-        "payment_request_metadata",
-        "readwrite"
-      );
-      const store = transaction.objectStore("payment_request_metadata");
-
-      const metadataToStore = {
-        paymentRequest: metadata.paymentRequest,
-        lnurlWithdrawRequestDetails: metadata.lnurlWithdrawRequestDetails
-          ? JSON.stringify(metadata.lnurlWithdrawRequestDetails)
-          : null,
-        expires: metadata.expires,
-      };
-
-      const request = store.put(metadataToStore);
-      request.onsuccess = () => resolve();
-      request.onerror = () => {
-        reject(
-          new StorageError(
-            `Failed to set payment request metadata for '${
-              metadata.paymentRequest
-            }': ${request.error?.message || "Unknown error"}`,
-            request.error
-          )
-        );
-      };
-    });
-  }
-
-  async deletePaymentRequestMetadata(paymentRequest) {
-    if (!this.db) {
-      throw new StorageError("Database not initialized");
-    }
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction(
-        "payment_request_metadata",
-        "readwrite"
-      );
-      const store = transaction.objectStore("payment_request_metadata");
-      const request = store.delete(paymentRequest);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => {
-        reject(
-          new StorageError(
-            `Failed to delete payment request metadata for '${paymentRequest}': ${
-              request.error?.message || "Unknown error"
-            }`,
-            request.error
-          )
-        );
-      };
-    });
-  }
-
-  async deleteExpiredPaymentRequestMetadata(nowSecs) {
-    if (!this.db) {
-      throw new StorageError("Database not initialized");
-    }
-    return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction(
-        "payment_request_metadata",
-        "readwrite"
-      );
-      const store = transaction.objectStore("payment_request_metadata");
-      const request = store.openCursor();
-      if (!request) {
-        resolve();
-        return;
-      }
-
-      request.onsuccess = (event) => {
-        const cursor = event.target.result;
-        if (!cursor) {
-          resolve();
-          return;
-        }
-
-        if (cursor.value.expires < nowSecs) {
-          store.delete(cursor.value.paymentRequest);
-        }
-        cursor.continue();
-      };
-
-      request.onerror = () => {
-        reject(
-          new StorageError(
-            `Failed to delete expired payment request metadata: ${
               request.error?.message || "Unknown error"
             }`,
             request.error

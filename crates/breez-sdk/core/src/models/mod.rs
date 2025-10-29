@@ -609,12 +609,15 @@ pub struct LnurlWithdrawRequest {
     /// If set, the function will return the payment if it is still pending after this
     /// number of seconds. If unset, the function will return immediately after
     /// initiating the LNURL withdraw.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub completion_timeout_secs: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LnurlWithdrawResponse {
+    /// The Lightning invoice generated for the LNURL withdraw
+    pub payment_request: String,
     pub payment: Option<Payment>,
 }
 

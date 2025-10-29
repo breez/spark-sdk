@@ -693,6 +693,7 @@ pub struct LnurlWithdrawRequest {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlWithdrawResponse)]
 pub struct LnurlWithdrawResponse {
+    pub payment_request: String,
     pub payment: Option<Payment>,
 }
 
@@ -783,13 +784,6 @@ pub struct PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentRequestMetadata)]
-pub struct PaymentRequestMetadata {
-    pub payment_request: String,
-    pub lnurl_withdraw_request_details: Option<LnurlWithdrawRequestDetails>,
-    pub expires: u64,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateDepositPayload)]
