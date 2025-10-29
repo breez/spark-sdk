@@ -900,3 +900,27 @@ pub enum ProvisionalPaymentDetails {
         pay_request: String,
     },
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SignMessageRequest)]
+pub struct SignMessageRequest {
+    pub message: String,
+    pub compact: bool,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SignMessageResponse)]
+pub struct SignMessageResponse {
+    pub pubkey: String,
+    pub signature: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CheckMessageRequest)]
+pub struct CheckMessageRequest {
+    pub message: String,
+    pub pubkey: String,
+    pub signature: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CheckMessageResponse)]
+pub struct CheckMessageResponse {
+    pub is_valid: bool,
+}
