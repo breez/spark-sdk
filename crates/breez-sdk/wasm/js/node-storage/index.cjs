@@ -648,27 +648,29 @@ class SqliteStorage {
         const revisionQuery = this.db.prepare(`
           UPDATE sync_revision
           SET revision = revision + 1
-          RETURNING revision
+          RETURNING CAST(revision AS TEXT) AS revision
         `);
-        const revision = revisionQuery.get().revision;
+        const revision = BigInt(revisionQuery.get().revision);
 
         // Insert the record
         const stmt = this.db.prepare(`
           INSERT INTO sync_outgoing (
             record_type, 
             data_id, 
-            schema_version, 
-            updated_fields, 
+            schema_version,
+            commit_time,
+            updated_fields_json, 
             revision
-          ) VALUES (?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, CAST(? AS INTEGER))
         `);
 
         stmt.run(
           record.id.type,
-          record.id.data_id,
+          record.id.dataId,
           record.schemaVersion,
+          Math.floor(Date.now() / 1000),
           JSON.stringify(record.updatedFields),
-          revision
+          revision.toString()
         );
 
         return revision;
@@ -691,10 +693,10 @@ class SqliteStorage {
         // Delete records that have been synced
         const deleteStmt = this.db.prepare(`
           DELETE FROM sync_outgoing
-          WHERE record_type = ? AND data_id = ? AND revision = ?
+          WHERE record_type = ? AND data_id = ? AND revision = CAST(? AS INTEGER)
         `);
         
-        deleteStmt.run(record.id.type, record.id.data_id, record.revision);
+        deleteStmt.run(record.id.type, record.id.dataId, record.revision.toString());
 
         // Update or insert the sync state
         const updateStateStmt = this.db.prepare(`
@@ -702,16 +704,18 @@ class SqliteStorage {
             record_type, 
             data_id, 
             revision,
-            schema_version, 
+            schema_version,
+            commit_time,
             data
-          ) VALUES (?, ?, ?, ?, ?)
+          ) VALUES (?, ?, CAST(? AS INTEGER), ?, ?, ?)
         `);
         
         updateStateStmt.run(
           record.id.type,
-          record.id.data_id,
-          record.revision,
-          record.schema_version,
+          record.id.dataId,
+          record.revision.toString(),
+          record.schemaVersion,
+          Math.floor(Date.now() / 1000),
           JSON.stringify(record.data)
         );
       });
@@ -734,16 +738,18 @@ class SqliteStorage {
         SELECT 
           o.record_type, 
           o.data_id, 
-          o.schema_version, 
-          o.updated_fields, 
-          o.revision,
-          s.revision as parent_revision,
-          s.schema_version as parent_schema_version,
-          s.data as parent_data
+          o.schema_version,
+          o.commit_time,
+          o.updated_fields_json, 
+          CAST(o.revision AS TEXT) as revision,
+          e.schema_version as existing_schema_version,
+          e.commit_time as existing_commit_time,
+          e.data as existing_data,
+          CAST(e.revision AS TEXT) as existing_revision
         FROM sync_outgoing o
-        LEFT JOIN sync_state s ON 
-          o.record_type = s.record_type AND 
-          o.data_id = s.data_id
+        LEFT JOIN sync_state e ON 
+          o.record_type = e.record_type AND 
+          o.data_id = e.data_id
         ORDER BY o.revision ASC
         LIMIT ?
       `);
@@ -754,23 +760,23 @@ class SqliteStorage {
         const change = {
           id: {
             type: row.record_type,
-            data_id: row.data_id
+            dataId: row.data_id
           },
           schemaVersion: row.schema_version,
-          updatedFields: JSON.parse(row.updated_fields),
-          revision: row.revision
+          updatedFields: JSON.parse(row.updated_fields_json),
+          revision: BigInt(row.revision)
         };
         
         let parent = null;
-        if (row.parent_data) {
+        if (row.existing_data) {
           parent = {
             id: {
               type: row.record_type,
-              data_id: row.data_id
+              dataId: row.data_id
             },
-            revision: row.parent_revision,
-            schema_version: row.parent_schema_version,
-            data: JSON.parse(row.parent_data)
+            revision: BigInt(row.existing_revision),
+            schemaVersion: row.existing_schema_version,
+            data: JSON.parse(row.existing_data)
           };
         }
         
@@ -793,10 +799,10 @@ class SqliteStorage {
 
   syncGetLastRevision() {
     try {
-      const stmt = this.db.prepare(`SELECT revision FROM sync_revision LIMIT 1`);
+      const stmt = this.db.prepare(`SELECT CAST(COALESCE(MAX(revision), 0) AS TEXT) as revision FROM sync_state`);
       const row = stmt.get();
       
-      return Promise.resolve(row ? row.revision : 0);
+      return Promise.resolve(row ? BigInt(row.revision) : BigInt(0));
     } catch (error) {
       return Promise.reject(
         new StorageError(
@@ -815,22 +821,24 @@ class SqliteStorage {
 
       const transaction = this.db.transaction(() => {
         const stmt = this.db.prepare(`
-          INSERT INTO sync_incoming (
+          INSERT OR REPLACE INTO sync_incoming (
             record_type, 
-            data_id, 
-            revision,
-            schema_version, 
-            data
-          ) VALUES (?, ?, ?, ?, ?)
+            data_id,
+            schema_version,
+            commit_time,
+            data,
+            revision
+          ) VALUES (?, ?, ?, ?, ?, CAST(? AS INTEGER))
         `);
         
         for (const record of records) {
           stmt.run(
             record.id.type,
-            record.id.data_id,
-            record.revision,
-            record.schema_version,
-            JSON.stringify(record.data)
+            record.id.dataId,
+            record.schemaVersion,
+            Math.floor(Date.now() / 1000),
+            JSON.stringify(record.data),
+            record.revision.toString()
           );
         }
       });
@@ -853,10 +861,10 @@ class SqliteStorage {
         DELETE FROM sync_incoming
         WHERE record_type = ? 
         AND data_id = ?
-        AND revision = ?
+        AND revision = CAST(? AS INTEGER)
       `);
-      
-      stmt.run(record.id.type, record.id.data_id, record.revision);
+
+      stmt.run(record.id.type, record.id.dataId, record.revision.toString());
       return Promise.resolve();
     } catch (error) {
       return Promise.reject(
@@ -873,25 +881,25 @@ class SqliteStorage {
       const transaction = this.db.transaction(() => {
         // Get current revision
         const getLastRevisionStmt = this.db.prepare(`
-          SELECT COALESCE(MAX(revision), 0) as last_revision FROM sync_state
+          SELECT CAST(COALESCE(MAX(revision), 0) AS TEXT) as last_revision FROM sync_state
         `);
         const revisionRow = getLastRevisionStmt.get();
-        const lastRevision = revisionRow ? revisionRow.last_revision : 0;
+        const lastRevision = revisionRow ? BigInt(revisionRow.last_revision) : BigInt(0);
         
         // Calculate the difference to add to all revision numbers
-        const diff = revision > lastRevision ? revision - lastRevision : 0;
+        const diff = revision > lastRevision ? revision - lastRevision : BigInt(0);
         
-        if (diff === 0) {
+        if (diff === BigInt(0)) {
           return; // No rebasing needed
         }
         
         // Update all pending outgoing records
         const updateRecordsStmt = this.db.prepare(`
           UPDATE sync_outgoing 
-          SET revision = revision + ?
+          SET revision = revision + CAST(? AS INTEGER)
         `);
         
-        updateRecordsStmt.run(diff);
+        updateRecordsStmt.run(diff.toString());
       });
       
       transaction();
@@ -915,11 +923,11 @@ class SqliteStorage {
           ,       i.data_id
           ,       i.schema_version
           ,       i.data
-          ,       i.revision
+          ,       CAST(i.revision AS TEXT) AS revision
           ,       e.schema_version AS existing_schema_version
           ,       e.commit_time AS existing_commit_time
           ,       e.data AS existing_data
-          ,       e.revision AS existing_revision
+          ,       CAST(e.revision AS TEXT) AS existing_revision
            FROM sync_incoming i
            LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id
            ORDER BY i.revision ASC
@@ -934,10 +942,10 @@ class SqliteStorage {
           const newState = {
             id: {
               type: row.record_type,
-              data_id: row.data_id
+              dataId: row.data_id
             },
-            revision: row.revision,
-            schema_version: row.schema_version,
+            revision: BigInt(row.revision),
+            schemaVersion: row.schema_version,
             data: JSON.parse(row.data)
           };
           
@@ -947,10 +955,10 @@ class SqliteStorage {
             oldState = {
               id: {
                 type: row.record_type,
-                data_id: row.data_id
+                dataId: row.data_id
               },
-              revision: row.existing_revision,
-              schema_version: row.existing_schema_version,
+              revision: BigInt(row.existing_revision),
+              schemaVersion: row.existing_schema_version,
               data: JSON.parse(row.existing_data)
             };
           }
@@ -982,16 +990,18 @@ class SqliteStorage {
         SELECT 
           o.record_type, 
           o.data_id, 
-          o.schema_version, 
-          o.updated_fields, 
-          o.revision,
-          s.revision as parent_revision,
-          s.schema_version as parent_schema_version,
-          s.data as parent_data
+          o.schema_version,
+          o.commit_time,
+          o.updated_fields_json, 
+          CAST(o.revision AS TEXT) AS revision,
+          e.schema_version as existing_schema_version,
+          e.commit_time as existing_commit_time,
+          e.data as existing_data,
+          CAST(e.revision AS TEXT) AS existing_revision
         FROM sync_outgoing o
-        LEFT JOIN sync_state s ON 
-          o.record_type = s.record_type AND 
-          o.data_id = s.data_id
+        LEFT JOIN sync_state e ON 
+          o.record_type = e.record_type AND 
+          o.data_id = e.data_id
         ORDER BY o.revision DESC
         LIMIT 1
       `);
@@ -1005,23 +1015,23 @@ class SqliteStorage {
       const change = {
         id: {
           type: row.record_type,
-          data_id: row.data_id
+          dataId: row.data_id
         },
         schemaVersion: row.schema_version,
-        updatedFields: JSON.parse(row.updated_fields),
-        revision: row.revision
+        updatedFields: JSON.parse(row.updated_fields_json),
+        revision: BigInt(row.revision)
       };
       
       let parent = null;
-      if (row.parent_data) {
+      if (row.existing_data) {
         parent = {
           id: {
             type: row.record_type,
-            data_id: row.data_id
+            dataId: row.data_id
           },
-          revision: row.parent_revision,
-          schema_version: row.parent_schema_version,
-          data: JSON.parse(row.parent_data)
+          revision: BigInt(row.existing_revision),
+          schemaVersion: row.existing_schema_version,
+          data: JSON.parse(row.existing_data)
         };
       }
       
@@ -1046,16 +1056,18 @@ class SqliteStorage {
           record_type, 
           data_id, 
           revision,
-          schema_version, 
+          schema_version,
+          commit_time,
           data
-        ) VALUES (?, ?, ?, ?, ?)
+        ) VALUES (?, ?, CAST(? AS INTEGER), ?, ?, ?)
       `);
       
       stmt.run(
         record.id.type,
-        record.id.data_id,
-        record.revision,
-        record.schema_version,
+        record.id.dataId,
+        record.revision.toString(),
+        record.schemaVersion,
+        Math.floor(Date.now() / 1000),
         JSON.stringify(record.data)
       );
       

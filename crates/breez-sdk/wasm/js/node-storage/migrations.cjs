@@ -230,33 +230,37 @@ class MigrationManager {
         name: "Create sync tables",
         sql: [
           `CREATE TABLE sync_revision (
-            revision INTEGER NOT NULL
+            revision INTEGER NOT NULL DEFAULT 0
           )`,
           `INSERT INTO sync_revision (revision) VALUES (0)`,
           `CREATE TABLE sync_outgoing (
             record_type TEXT NOT NULL,
             data_id TEXT NOT NULL,
             schema_version TEXT NOT NULL,
-            updated_fields TEXT NOT NULL,
+            commit_time INTEGER NOT NULL,
+            updated_fields_json TEXT NOT NULL,
             revision INTEGER NOT NULL
           )`,
-          `CREATE INDEX idx_sync_outgoing_revision ON sync_outgoing(revision)`,
-          `CREATE TABLE sync_incoming (
-            record_type TEXT NOT NULL,
-            data_id TEXT NOT NULL,
-            revision INTEGER NOT NULL,
-            schema_version TEXT NOT NULL,
-            data TEXT NOT NULL,
-            PRIMARY KEY (record_type, data_id, revision)
-          )`,
+          `CREATE INDEX idx_sync_outgoing_data_id_record_type ON sync_outgoing(record_type, data_id)`,
           `CREATE TABLE sync_state (
             record_type TEXT NOT NULL,
             data_id TEXT NOT NULL,
-            revision INTEGER NOT NULL,
             schema_version TEXT NOT NULL,
+            commit_time INTEGER NOT NULL,
             data TEXT NOT NULL,
+            revision INTEGER NOT NULL,
             PRIMARY KEY (record_type, data_id)
           )`,
+          `CREATE TABLE sync_incoming (
+            record_type TEXT NOT NULL,
+            data_id TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            commit_time INTEGER NOT NULL,
+            data TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            PRIMARY KEY (record_type, data_id, revision)
+          )`,
+          `CREATE INDEX idx_sync_incoming_revision ON sync_incoming(revision)`,
         ]
       }
     ];
