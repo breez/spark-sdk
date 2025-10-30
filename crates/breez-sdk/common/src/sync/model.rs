@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display};
+use std::collections::HashMap;
 
 use bitcoin::hashes::{Hash, sha256};
 use semver::Version;
@@ -20,15 +20,11 @@ impl RecordId {
             data_id: data_id.into(),
         }
     }
-}
 
-impl Display for RecordId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{:x}",
-            sha256::Hash::hash(format!("{}:{}", self.r#type, self.data_id).as_bytes())
-        )
+    pub fn to_id_string(&self) -> String {
+        let combined = format!("{}:{}", self.r#type, self.data_id);
+        let hash = sha256::Hash::hash(combined.as_bytes());
+        format!("{hash:x}")
     }
 }
 
@@ -195,17 +191,17 @@ mod test {
     }
 
     #[test]
-    fn test_record_id_display() {
+    fn test_record_id_to_id_string() {
         // This test already exists but we'll include it for completeness
         let record_id = RecordId::new("test", "123");
         let expected_hash = sha256::Hash::hash(format!("{}:{}", "test", "123").as_bytes());
-        assert_eq!(record_id.to_string(), format!("{expected_hash:x}"));
+        assert_eq!(record_id.to_id_string(), format!("{expected_hash:x}"));
 
         // Test with different values
         let record_id2 = RecordId::new("payment", "invoice123");
         let expected_hash2 =
             sha256::Hash::hash(format!("{}:{}", "payment", "invoice123").as_bytes());
-        assert_eq!(record_id2.to_string(), format!("{expected_hash2:x}"));
+        assert_eq!(record_id2.to_id_string(), format!("{expected_hash2:x}"));
     }
 
     #[test]

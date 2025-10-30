@@ -31,7 +31,7 @@ impl SyncService {
         self.storage.add_outgoing_change(record.try_into()?).await?;
         if self.sync_trigger.send(record_id.clone()).is_err() {
             warn!(
-                "Real-time sync failed to trigger for record id {}",
+                "Real-time sync failed to trigger for record id {:?}",
                 record_id
             );
         }
