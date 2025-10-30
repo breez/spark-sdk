@@ -64,7 +64,7 @@ impl SigningClient {
         let encrypted_data = self.signer.ecies_encrypt(serialized_data).await?;
         let msg = format!(
             "{}-{}-{}-{}-{}",
-            record.id,
+            record.id.to_id_string(),
             encrypted_data.to_lower_hex_string(),
             record.revision,
             record.schema_version,
@@ -74,7 +74,7 @@ impl SigningClient {
         let req = SetRecordRequest {
             client_id: Some(self.client_id.clone()),
             record: Some(crate::sync::proto::Record {
-                id: record.id.to_string(),
+                id: record.id.to_id_string(),
                 revision: record.revision,
                 schema_version: record.schema_version.to_string(),
                 data: encrypted_data,
