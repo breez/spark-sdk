@@ -114,6 +114,7 @@ impl TryFrom<OutgoingChange> for crate::sync::model::OutgoingChange {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Clone, Debug)]
 pub struct UnversionedRecordChange {
     pub id: RecordId,
     pub schema_version: String,
