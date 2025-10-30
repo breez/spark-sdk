@@ -6,6 +6,8 @@ use bitcoin::{
     secp256k1::{PublicKey, ecdsa::Signature},
 };
 pub use breez_sdk_common::input::parse as parse_input;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use breez_sdk_common::sync::storage::SyncStorage;
 use breez_sdk_common::{
     fiat::FiatService,
     input::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType},
@@ -70,6 +72,12 @@ use crate::{
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology";
+
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology:442";
 
 #[derive(Clone, Debug)]
 enum SyncType {
@@ -177,7 +185,12 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
         .join(path_suffix);
 
     let storage = default_storage(storage_dir.to_string_lossy().to_string())?;
-    let builder = crate::SdkBuilder::new(request.config, request.seed, storage);
+    let with_real_time_sync = request.config.real_time_sync_server_url.is_some();
+    let mut builder = super::sdk_builder::SdkBuilder::new(request.config, request.seed, storage);
+    if with_real_time_sync {
+        let sync_storage = default_sync_storage(storage_dir.to_string_lossy().to_string())?;
+        builder = builder.with_real_time_sync_storage(sync_storage);
+    }
     let sdk = builder.build().await?;
     Ok(sdk)
 }
@@ -188,8 +201,18 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
 pub fn default_storage(data_dir: String) -> Result<Arc<dyn Storage>, SdkError> {
     let db_path = std::path::PathBuf::from_str(&data_dir)?;
 
-    let storage = crate::SqliteStorage::new(&db_path)?;
-    Ok(Arc::new(storage))
+    let storage = Arc::new(crate::SqliteStorage::new(&db_path)?);
+    Ok(storage)
+}
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[allow(clippy::needless_pass_by_value)]
+pub fn default_sync_storage(data_dir: String) -> Result<Arc<dyn SyncStorage>, SdkError> {
+    let db_path = std::path::PathBuf::from_str(&data_dir)?;
+
+    let storage = Arc::new(crate::SqliteStorage::new(&db_path)?);
+    Ok(storage)
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -203,6 +226,7 @@ pub fn default_config(network: Network) -> Config {
         prefer_spark_over_lightning: false,
         external_input_parsers: None,
         use_default_external_input_parsers: true,
+        real_time_sync_server_url: Some(BREEZ_SYNC_SERVICE_URL.to_string()),
     }
 }
 
@@ -215,6 +239,7 @@ pub(crate) struct BreezSdkParams {
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub shutdown_sender: watch::Sender<()>,
     pub spark_wallet: Arc<SparkWallet>,
+    pub event_emitter: Arc<EventEmitter>,
 }
 
 impl BreezSdk {
@@ -238,12 +263,13 @@ impl BreezSdk {
             fiat_service: params.fiat_service,
             lnurl_client: params.lnurl_client,
             lnurl_server_client: params.lnurl_server_client,
-            event_emitter: Arc::new(EventEmitter::new()),
+            event_emitter: params.event_emitter,
             shutdown_sender: params.shutdown_sender,
             sync_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
             external_input_parsers,
         };
+
         sdk.start(initial_synced_sender);
         Ok(sdk)
     }

@@ -19,8 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, fmt::Display, str::FromStr};
 
-use crate::error::DepositClaimError;
-use crate::sdk_builder::Seed;
+use crate::{error::DepositClaimError, sdk_builder::Seed};
 
 /// A list of external input parsers that are used by default.
 /// To opt-out, set `use_default_external_input_parsers` in [Config] to false.
@@ -280,6 +279,15 @@ impl From<Network> for BitcoinNetwork {
     }
 }
 
+impl From<Network> for bitcoin::Network {
+    fn from(network: Network) -> Self {
+        match network {
+            Network::Mainnet => bitcoin::Network::Bitcoin,
+            Network::Regtest => bitcoin::Network::Regtest,
+        }
+    }
+}
+
 impl FromStr for Network {
     type Err = String;
 
@@ -319,6 +327,9 @@ pub struct Config {
     /// ([`DEFAULT_EXTERNAL_INPUT_PARSERS`]).
     /// Set this to false in order to prevent their use.
     pub use_default_external_input_parsers: bool,
+
+    /// Url to use for the real-time sync server. Defaults to the Breez real-time sync server.
+    pub real_time_sync_server_url: Option<String>,
 }
 
 impl Config {

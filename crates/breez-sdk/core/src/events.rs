@@ -17,6 +17,11 @@ use crate::{DepositInfo, Payment};
 pub enum SdkEvent {
     /// Emitted when the wallet has been synchronized with the network
     Synced,
+    /// Emitted when data was pushed and/or pulled to/from real-time sync storage.
+    DataSynced {
+        /// Value indicating whether new data was pulled through real-time sync.
+        did_pull_new_records: bool,
+    },
     /// Emitted when the wallet failed to claim some deposits
     ClaimDepositsFailed {
         unclaimed_deposits: Vec<DepositInfo>,
@@ -36,6 +41,18 @@ impl fmt::Display for SdkEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SdkEvent::Synced => write!(f, "Synced"),
+            SdkEvent::DataSynced {
+                did_pull_new_records,
+            } => {
+                write!(
+                    f,
+                    "DataSynced: {} new records",
+                    match did_pull_new_records {
+                        true => "with",
+                        false => "no",
+                    }
+                )
+            }
             SdkEvent::ClaimDepositsFailed { unclaimed_deposits } => {
                 write!(f, "ClaimDepositsFailed: {unclaimed_deposits:?}")
             }

@@ -4,6 +4,7 @@ pub use breez_sdk_common::lnurl::auth::*;
 pub use breez_sdk_common::lnurl::pay::*;
 pub use breez_sdk_common::lnurl::withdraw::LnurlWithdrawRequestDetails;
 pub use breez_sdk_common::network::BitcoinNetwork;
+pub use breez_sdk_common::sync::{RecordId, storage::SyncStorage};
 pub use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
 use std::collections::HashMap;
@@ -34,6 +35,7 @@ pub struct _Config {
     pub prefer_spark_over_lightning: bool,
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
     pub use_default_external_input_parsers: bool,
+    pub real_time_sync_server_url: Option<String>,
 }
 
 #[frb(mirror(ExternalInputParser))]
@@ -815,4 +817,46 @@ pub struct _GetTokensMetadataRequest {
 #[frb(mirror(GetTokensMetadataResponse))]
 pub struct _GetTokensMetadataResponse {
     pub tokens_metadata: Vec<TokenMetadata>,
+}
+
+#[frb(mirror(RecordId))]
+pub struct _RecordId {
+    pub r#type: String,
+    pub data_id: String,
+}
+
+#[frb(mirror(Record))]
+pub struct _Record {
+    pub id: RecordId,
+    pub revision: u64,
+    pub schema_version: String,
+    pub data: HashMap<String, String>,
+}
+
+#[frb(mirror(IncomingChange))]
+pub struct _IncomingChange {
+    pub new_state: breez_sdk_spark::sync_storage::Record,
+    pub old_state: Option<breez_sdk_spark::sync_storage::Record>,
+    // pub pending_outgoing_changes: Vec<RecordChange>,
+}
+
+#[frb(mirror(OutgoingChange))]
+pub struct _OutgoingChange {
+    pub change: breez_sdk_spark::sync_storage::RecordChange,
+    pub parent: Option<breez_sdk_spark::sync_storage::Record>,
+}
+
+#[frb(mirror(UnversionedRecordChange))]
+pub struct _UnversionedRecordChange {
+    pub id: RecordId,
+    pub schema_version: String,
+    pub updated_fields: HashMap<String, String>,
+}
+
+#[frb(mirror(RecordChange))]
+pub struct _RecordChange {
+    pub id: RecordId,
+    pub schema_version: String,
+    pub updated_fields: HashMap<String, String>,
+    pub revision: u64,
 }

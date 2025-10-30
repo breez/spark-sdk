@@ -1,19 +1,7 @@
 use std::sync::Arc;
 
 use breez_sdk_common::input::InputType;
-use breez_sdk_spark::{
-    CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest,
-    ClaimDepositResponse, Config, ConnectRequest, GetInfoRequest, GetInfoResponse,
-    GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
-    LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse, ListPaymentsRequest,
-    ListPaymentsResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
-    LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse, LogEntry,
-    Logger, Network, PrepareLnurlPayRequest, PrepareLnurlPayResponse, PrepareSendPaymentRequest,
-    PrepareSendPaymentResponse, ReceivePaymentRequest, ReceivePaymentResponse,
-    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest, SdkError,
-    SdkEvent, SendPaymentRequest, SendPaymentResponse, SignMessageRequest, SignMessageResponse,
-    Storage, SyncWalletRequest, SyncWalletResponse, WaitForPaymentRequest, WaitForPaymentResponse,
-};
+use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
 
 use crate::events::BindingEventListener;
