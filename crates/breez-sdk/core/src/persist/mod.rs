@@ -428,6 +428,312 @@ pub mod tests {
     };
 
     #[allow(clippy::too_many_lines)]
+    pub async fn test_sqlite_sync_storage(
+        storage: Box<dyn breez_sdk_common::sync::storage::SyncStorage>,
+    ) {
+        use breez_sdk_common::sync::RecordId;
+        use breez_sdk_common::sync::storage::{Record, UnversionedRecordChange};
+        use std::collections::HashMap;
+
+        // Test 1: Initial state - get_last_revision should return 0
+        let last_revision = storage.get_last_revision().await.unwrap();
+        assert_eq!(last_revision, 0, "Initial last revision should be 0");
+
+        // Test 2: No pending outgoing changes initially
+        let pending = storage.get_pending_outgoing_changes(10).await.unwrap();
+        assert_eq!(pending.len(), 0, "Should have no pending outgoing changes");
+
+        // Test 3: No incoming records initially
+        let incoming = storage.get_incoming_records(10).await.unwrap();
+        assert_eq!(incoming.len(), 0, "Should have no incoming records");
+
+        // Test 4: No latest outgoing change initially
+        let latest = storage.get_latest_outgoing_change().await.unwrap();
+        assert!(latest.is_none(), "Should have no latest outgoing change");
+
+        // Test 5: Add outgoing change (create new record)
+        let mut updated_fields = HashMap::new();
+        updated_fields.insert("name".to_string(), "\"Alice\"".to_string());
+        updated_fields.insert("age".to_string(), "30".to_string());
+
+        let change1 = UnversionedRecordChange {
+            id: RecordId::new("user".to_string(), "user1".to_string()),
+            schema_version: "1.0.0".to_string(),
+            updated_fields: updated_fields.clone(),
+        };
+
+        let revision1 = storage.add_outgoing_change(change1).await.unwrap();
+        assert!(revision1 > 0, "First revision should be greater than 0");
+
+        // Test 6: Check pending outgoing changes
+        let pending = storage.get_pending_outgoing_changes(10).await.unwrap();
+        assert_eq!(pending.len(), 1, "Should have 1 pending outgoing change");
+        assert_eq!(pending[0].change.id.r#type, "user");
+        assert_eq!(pending[0].change.id.data_id, "user1");
+        assert_eq!(pending[0].change.revision, revision1);
+        assert_eq!(pending[0].change.schema_version, "1.0.0");
+        assert!(
+            pending[0].parent.is_none(),
+            "First change should have no parent"
+        );
+
+        // Test 7: Get latest outgoing change
+        let latest = storage.get_latest_outgoing_change().await.unwrap();
+        assert!(latest.is_some());
+        let latest = latest.unwrap();
+        assert_eq!(latest.change.id.r#type, "user");
+        assert_eq!(latest.change.revision, revision1);
+
+        // Test 8: Complete outgoing sync (moves to sync_state)
+        let mut complete_data = HashMap::new();
+        complete_data.insert("name".to_string(), "\"Alice\"".to_string());
+        complete_data.insert("age".to_string(), "30".to_string());
+
+        let completed_record = Record {
+            id: RecordId::new("user".to_string(), "user1".to_string()),
+            revision: revision1,
+            schema_version: "1.0.0".to_string(),
+            data: complete_data,
+        };
+
+        storage
+            .complete_outgoing_sync(completed_record.clone())
+            .await
+            .unwrap();
+
+        // Test 9: Pending changes should now be empty
+        let pending = storage.get_pending_outgoing_changes(10).await.unwrap();
+        assert_eq!(
+            pending.len(),
+            0,
+            "Should have no pending changes after completion"
+        );
+
+        // Test 10: Last revision should be updated
+        let last_revision = storage.get_last_revision().await.unwrap();
+        assert_eq!(
+            last_revision, revision1,
+            "Last revision should match completed revision"
+        );
+
+        // Test 11: Add another outgoing change (update existing record)
+        let mut updated_fields2 = HashMap::new();
+        updated_fields2.insert("age".to_string(), "31".to_string());
+
+        let change2 = UnversionedRecordChange {
+            id: RecordId::new("user".to_string(), "user1".to_string()),
+            schema_version: "1.0.0".to_string(),
+            updated_fields: updated_fields2,
+        };
+
+        let revision2 = storage.add_outgoing_change(change2).await.unwrap();
+        assert!(
+            revision2 > revision1,
+            "Second revision should be greater than first"
+        );
+
+        // Test 12: Check pending changes now includes parent
+        let pending = storage.get_pending_outgoing_changes(10).await.unwrap();
+        assert_eq!(pending.len(), 1, "Should have 1 pending change");
+        assert!(
+            pending[0].parent.is_some(),
+            "Update should have parent record"
+        );
+        let parent = pending[0].parent.as_ref().unwrap();
+        assert_eq!(parent.revision, revision1);
+        assert_eq!(parent.id.r#type, "user");
+
+        // Test 13: Insert incoming records
+        let mut incoming_data1 = HashMap::new();
+        incoming_data1.insert("title".to_string(), "\"Post 1\"".to_string());
+        incoming_data1.insert("content".to_string(), "\"Hello World\"".to_string());
+
+        let incoming_record1 = Record {
+            id: RecordId::new("post".to_string(), "post1".to_string()),
+            revision: 100,
+            schema_version: "1.0.0".to_string(),
+            data: incoming_data1,
+        };
+
+        let mut incoming_data2 = HashMap::new();
+        incoming_data2.insert("title".to_string(), "\"Post 2\"".to_string());
+
+        let incoming_record2 = Record {
+            id: RecordId::new("post".to_string(), "post2".to_string()),
+            revision: 101,
+            schema_version: "1.0.0".to_string(),
+            data: incoming_data2,
+        };
+
+        storage
+            .insert_incoming_records(vec![incoming_record1.clone(), incoming_record2.clone()])
+            .await
+            .unwrap();
+
+        // Test 14: Get incoming records
+        let incoming = storage.get_incoming_records(10).await.unwrap();
+        assert_eq!(incoming.len(), 2, "Should have 2 incoming records");
+        assert_eq!(incoming[0].new_state.id.r#type, "post");
+        assert_eq!(incoming[0].new_state.revision, 100);
+        assert!(
+            incoming[0].old_state.is_none(),
+            "New incoming record should have no old state"
+        );
+
+        // Test 15: Update record from incoming (moves to sync_state)
+        storage
+            .update_record_from_incoming(incoming_record1.clone())
+            .await
+            .unwrap();
+
+        // Test 16: Delete incoming record
+        storage
+            .delete_incoming_record(incoming_record1.clone())
+            .await
+            .unwrap();
+
+        // Test 17: Check incoming records after deletion
+        let incoming = storage.get_incoming_records(10).await.unwrap();
+        assert_eq!(incoming.len(), 1, "Should have 1 incoming record remaining");
+        assert_eq!(incoming[0].new_state.id.data_id, "post2");
+
+        // Test 18: Insert incoming record that updates existing state
+        let mut updated_incoming_data = HashMap::new();
+        updated_incoming_data.insert("title".to_string(), "\"Post 1 Updated\"".to_string());
+        updated_incoming_data.insert("content".to_string(), "\"Updated content\"".to_string());
+
+        let updated_incoming_record = Record {
+            id: RecordId::new("post".to_string(), "post1".to_string()),
+            revision: 102,
+            schema_version: "1.0.0".to_string(),
+            data: updated_incoming_data,
+        };
+
+        storage
+            .insert_incoming_records(vec![updated_incoming_record.clone()])
+            .await
+            .unwrap();
+
+        // Test 19: Get incoming records with old_state
+        let incoming = storage.get_incoming_records(10).await.unwrap();
+        let post1_update = incoming.iter().find(|r| r.new_state.id.data_id == "post1");
+        assert!(post1_update.is_some(), "Should find post1 update");
+        let post1_update = post1_update.unwrap();
+        assert!(
+            post1_update.old_state.is_some(),
+            "Update should have old state"
+        );
+        assert_eq!(
+            post1_update.old_state.as_ref().unwrap().revision,
+            100,
+            "Old state should be original revision"
+        );
+
+        // Test 20: Rebase pending outgoing records
+        storage.rebase_pending_outgoing_records(150).await.unwrap();
+
+        // Test 21: Check that pending outgoing change revision was updated
+        let pending = storage.get_pending_outgoing_changes(10).await.unwrap();
+        assert!(
+            pending[0].change.revision > revision2,
+            "Revision should be rebased"
+        );
+
+        // Test 22: Test limit on pending outgoing changes
+        // Add multiple changes
+        for i in 0..5 {
+            let mut fields = HashMap::new();
+            fields.insert("value".to_string(), format!("\"{i}\""));
+
+            let change = UnversionedRecordChange {
+                id: RecordId::new("test".to_string(), format!("test{i}")),
+                schema_version: "1.0.0".to_string(),
+                updated_fields: fields,
+            };
+            storage.add_outgoing_change(change).await.unwrap();
+        }
+
+        let pending_limited = storage.get_pending_outgoing_changes(3).await.unwrap();
+        assert_eq!(
+            pending_limited.len(),
+            3,
+            "Should respect limit on pending changes"
+        );
+
+        // Test 23: Test limit on incoming records
+        let incoming_limited = storage.get_incoming_records(1).await.unwrap();
+        assert_eq!(
+            incoming_limited.len(),
+            1,
+            "Should respect limit on incoming records"
+        );
+
+        // Test 24: Test ordering - pending outgoing should be ordered by revision ASC
+        let all_pending = storage.get_pending_outgoing_changes(100).await.unwrap();
+        for i in 1..all_pending.len() {
+            assert!(
+                all_pending[i].change.revision >= all_pending[i.saturating_sub(1)].change.revision,
+                "Pending changes should be ordered by revision ascending"
+            );
+        }
+
+        // Test 25: Test ordering - incoming should be ordered by revision ASC
+        let all_incoming = storage.get_incoming_records(100).await.unwrap();
+        for i in 1..all_incoming.len() {
+            assert!(
+                all_incoming[i].new_state.revision >= all_incoming[i.saturating_sub(1)].new_state.revision,
+                "Incoming records should be ordered by revision ascending"
+            );
+        }
+
+        // Test 26: Test empty insert_incoming_records
+        storage.insert_incoming_records(vec![]).await.unwrap();
+
+        // Test 27: Test different record types
+        let mut settings_fields = HashMap::new();
+        settings_fields.insert("theme".to_string(), "\"dark\"".to_string());
+
+        let settings_change = UnversionedRecordChange {
+            id: RecordId::new("settings".to_string(), "global".to_string()),
+            schema_version: "2.0.0".to_string(),
+            updated_fields: settings_fields,
+        };
+
+        let settings_revision = storage.add_outgoing_change(settings_change).await.unwrap();
+
+        let pending = storage.get_pending_outgoing_changes(100).await.unwrap();
+        let settings_pending = pending.iter().find(|p| p.change.id.r#type == "settings");
+        assert!(settings_pending.is_some(), "Should find settings change");
+        assert_eq!(
+            settings_pending.unwrap().change.schema_version,
+            "2.0.0",
+            "Should preserve schema version"
+        );
+
+        // Test 28: Complete multiple types
+        let mut complete_settings_data = HashMap::new();
+        complete_settings_data.insert("theme".to_string(), "\"dark\"".to_string());
+
+        let completed_settings = Record {
+            id: RecordId::new("settings".to_string(), "global".to_string()),
+            revision: settings_revision,
+            schema_version: "2.0.0".to_string(),
+            data: complete_settings_data,
+        };
+
+        storage
+            .complete_outgoing_sync(completed_settings)
+            .await
+            .unwrap();
+
+        let last_revision = storage.get_last_revision().await.unwrap();
+        assert!(
+            last_revision >= settings_revision,
+            "Last revision should be at least settings revision"
+        );
+    }
+
+    #[allow(clippy::too_many_lines)]
     pub async fn test_sqlite_storage(storage: Box<dyn Storage>) {
         use crate::models::{LnurlPayInfo, TokenMetadata};
 

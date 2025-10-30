@@ -1347,4 +1347,12 @@ mod tests {
 
         crate::persist::tests::test_payment_request_metadata(Box::new(storage)).await;
     }
+
+    #[tokio::test]
+    async fn test_sync_storage() {
+        let temp_dir = tempdir::TempDir::new("sqlite_sync_storage").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_sqlite_sync_storage(Box::new(storage)).await;
+    }
 }
