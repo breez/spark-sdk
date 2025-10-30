@@ -5,7 +5,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const CURRENT_SCHEMA_VERSION: Version = Version::new(0, 2, 6);
+const CURRENT_SCHEMA_VERSION: Version = Version::new(1, 0, 0);
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RecordId {
