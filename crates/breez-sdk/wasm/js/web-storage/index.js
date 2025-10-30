@@ -148,30 +148,23 @@ class MigrationManager {
       {
         name: "Add sync tables",
         upgrade: (db, transaction) => {
-          // Create sync_revision table if it doesn't exist
           if (!db.objectStoreNames.contains("sync_revision")) {
             const syncRevisionStore = db.createObjectStore("sync_revision", { keyPath: "id" });
-            // Insert the initial revision (0)
-            transaction.objectStore("sync_revision").add({ id: 1, revision: 0 });
+            transaction.objectStore("sync_revision").add({ id: 1, revision: "0" });
           }
 
-          // Create sync_outgoing table if it doesn't exist
           if (!db.objectStoreNames.contains("sync_outgoing")) {
-            db.createObjectStore("sync_outgoing", { keyPath: "id" });
-            // Create index on revision
+            db.createObjectStore("sync_outgoing", { keyPath: ["type", "dataId", "revision"] });
             transaction.objectStore("sync_outgoing").createIndex("revision", "revision");
-            // Create index on record_id 
-            transaction.objectStore("sync_outgoing").createIndex("record_id", ["record_id.type", "record_id.data_id"]);
           }
 
-          // Create sync_incoming table if it doesn't exist
           if (!db.objectStoreNames.contains("sync_incoming")) {
-            db.createObjectStore("sync_incoming", { keyPath: "id" });
+            db.createObjectStore("sync_incoming", { keyPath: ["type", "dataId", "revision"] });
+            transaction.objectStore("sync_incoming").createIndex("revision", "revision");
           }
 
-          // Create sync_state table if it doesn't exist
           if (!db.objectStoreNames.contains("sync_state")) {
-            db.createObjectStore("sync_state", { keyPath: "id" });
+            db.createObjectStore("sync_state", { keyPath: ["type", "dataId"] });
           }
         }
       }
@@ -787,30 +780,32 @@ class IndexedDBStorage {
       const getRevisionRequest = revisionStore.get(1);
       
       getRevisionRequest.onsuccess = () => {
-        const revisionData = getRevisionRequest.result || { id: 1, revision: 0 };
-        const nextRevision = revisionData.revision + 1;
+        const revisionData = getRevisionRequest.result || { id: 1, revision: "0" };
+        const nextRevision = (BigInt(revisionData.revision) + BigInt(1));
         
         // Update the revision
-        const updateRequest = revisionStore.put({ id: 1, revision: nextRevision });
+        const updateRequest = revisionStore.put({ id: 1, revision: nextRevision.toString() });
         
         updateRequest.onsuccess = () => {
-          // Create the record change
           const outgoingStore = transaction.objectStore("sync_outgoing");
-          const recordId = `${record.id.type}:${record.id.data_id}`;
           
-          const recordChange = {
-            id: `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
-            record_id: record.id,
-            schema_version: record.schemaVersion,
-            updated_fields: record.updatedFields,
-            revision: nextRevision,
-            synced: false
+          const storeRecord = {
+            type: record.id.type,
+            dataId: record.id.dataId,
+            revision: Number(nextRevision),
+            record: {
+              ...record,
+              revision: nextRevision
+            }
           };
           
-          const addRequest = outgoingStore.add(recordChange);
+          const addRequest = outgoingStore.add(storeRecord);
           
           addRequest.onsuccess = () => {
-            resolve(nextRevision);
+            // Wait for transaction to complete before resolving
+            transaction.oncomplete = () => {
+              resolve(nextRevision);
+            };
           };
           
           addRequest.onerror = (event) => {
@@ -843,30 +838,19 @@ class IndexedDBStorage {
       const outgoingStore = transaction.objectStore("sync_outgoing");
       const stateStore = transaction.objectStore("sync_state");
       
-      // Find the record by record_id
-      const index = outgoingStore.index("record_id");
-      const request = index.openCursor([record.id.type, record.id.data_id]);
+      const deleteRequest = outgoingStore.delete([record.id.type, record.id.dataId, Number(record.revision)]);
       
-      request.onsuccess = (event) => {
-        const cursor = event.target.result;
-        if (cursor) {
-          // Delete the record instead of marking it as synced
-          cursor.delete();
-          
-          // Also store the record in the sync state
-          const stateRecord = {
-            id: `${record.id.type}:${record.id.data_id}`,
-            record: record
-          };
-          
-          stateStore.put(stateRecord);
-          resolve();
-        } else {
-          reject(new StorageError(`Record not found for sync completion`));
-        }
+      deleteRequest.onsuccess = () => {
+        const stateRecord = {
+          type: record.id.type,
+          dataId: record.id.dataId,
+          record: record
+        };
+        stateStore.put(stateRecord);
+        resolve();
       };
       
-      request.onerror = (event) => {
+      deleteRequest.onerror = (event) => {
         reject(new StorageError(`Failed to complete outgoing sync: ${event.target.error.message}`));
       };
     });
@@ -883,28 +867,24 @@ class IndexedDBStorage {
       const stateStore = transaction.objectStore("sync_state");
       
       // Get pending outgoing changes (all records in this store are pending)
-      const request = outgoingStore.openCursor();
+      // Use revision index to order by revision ascending
+      const revisionIndex = outgoingStore.index("revision");
+      const request = revisionIndex.openCursor(null, "next");
       const changes = [];
       let count = 0;
       
       request.onsuccess = (event) => {
         const cursor = event.target.result;
         if (cursor && count < limit) {
-          const record = cursor.value;
-          // Look up parent record if it exists
-          const stateRequest = stateStore.get(`${record.record_id.type}:${record.record_id.data_id}`);
+          const storeRecord = cursor.value;
+          const change = storeRecord.record;
           
+          // Look up parent record if it exists
+          const stateRequest = stateStore.get([storeRecord.type, storeRecord.dataId]);
           stateRequest.onsuccess = () => {
-            const parent = stateRequest.result ? stateRequest.result.record : null;
-            
-            // Create a change set
-            const change = {
-              id: record.record_id,
-              schemaVersion: record.schema_version,
-              updatedFields: record.updated_fields,
-              revision: record.revision
-            };
-            
+            const stateRecord = stateRequest.result;
+            const parent = stateRecord ? stateRecord.record : null;
+
             changes.push({
               change: change,
               parent: parent
@@ -915,14 +895,6 @@ class IndexedDBStorage {
           };
           
           stateRequest.onerror = () => {
-            // Continue even if parent lookup fails
-            const change = {
-              id: record.record_id,
-              schemaVersion: record.schema_version,
-              updatedFields: record.updated_fields,
-              revision: record.revision
-            };
-            
             changes.push({
               change: change,
               parent: null
@@ -953,8 +925,8 @@ class IndexedDBStorage {
       const request = store.get(1);
       
       request.onsuccess = () => {
-        const result = request.result || { id: 1, revision: 0 };
-        resolve(result.revision);
+        const result = request.result || { id: 1, revision: "0" };
+        resolve(BigInt(result.revision));
       };
       
       request.onerror = (event) => {
@@ -976,12 +948,14 @@ class IndexedDBStorage {
       let recordsProcessed = 0;
       
       for (const record of records) {
-        const incomingRecord = {
-          id: `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
+        const storeRecord = {
+          type: record.id.type,
+          dataId: record.id.dataId,
+          revision: Number(record.revision),
           record: record
         };
         
-        const request = store.add(incomingRecord);
+        const request = store.put(storeRecord);
         
         request.onsuccess = () => {
           recordsProcessed++;
@@ -1011,40 +985,15 @@ class IndexedDBStorage {
       const transaction = this.db.transaction(["sync_incoming"], "readwrite");
       const store = transaction.objectStore("sync_incoming");
       
-      // Find the record in the incoming store
-      const request = store.openCursor();
+      const key = [record.id.type, record.id.dataId, Number(record.revision)];
+      const request = store.delete(key);
       
-      request.onsuccess = (event) => {
-        const cursor = event.target.result;
-        if (cursor) {
-          const incomingRecord = cursor.value;
-          
-          if (incomingRecord.record && 
-              incomingRecord.record.id.type === record.id.type &&
-              incomingRecord.record.id.data_id === record.id.data_id &&
-              incomingRecord.record.revision === record.revision) {
-            
-            // Delete the record
-            const deleteRequest = cursor.delete();
-            
-            deleteRequest.onsuccess = () => {
-              resolve();
-            };
-            
-            deleteRequest.onerror = (event) => {
-              reject(new StorageError(`Failed to delete incoming record: ${event.target.error.message}`));
-            };
-          } else {
-            cursor.continue();
-          }
-        } else {
-          // Record not found, but we'll resolve anyway
-          resolve();
-        }
+      request.onsuccess = () => {
+        resolve();
       };
       
       request.onerror = (event) => {
-        reject(new StorageError(`Failed to search for incoming record: ${event.target.error.message}`));
+        reject(new StorageError(`Failed to delete incoming record: ${event.target.error.message}`));
       };
     });
   }
@@ -1059,59 +1008,74 @@ class IndexedDBStorage {
       const outgoingStore = transaction.objectStore("sync_outgoing");
       const revisionStore = transaction.objectStore("sync_revision");
       
-      // Get the current revision
+      // Get the last revision from sync_revision table
       const getRevisionRequest = revisionStore.get(1);
       
       getRevisionRequest.onsuccess = () => {
-        const revisionData = getRevisionRequest.result || { id: 1, revision: 0 };
-        const currentRevision = revisionData.revision;
+        const revisionData = getRevisionRequest.result || { id: 1, revision: "0" };
+        const lastRevision = BigInt(revisionData.revision);
         
-        if (revision > currentRevision) {
-          // Update the revision
-          revisionStore.put({ id: 1, revision: revision });
-          
-          // Get all records that need rebasing (where synced = false)
-          const recordsRequest = outgoingStore.openCursor();
-          const records = [];
-          
-          recordsRequest.onsuccess = (event) => {
-            const cursor = event.target.result;
-            if (cursor) {
-              const record = cursor.value;
-              if (!record.synced) {
-                records.push({ cursor, record });
-              }
-              cursor.continue();
-            } else {
-              // Update all records that need rebasing
-              let newRevision = revision;
-              
-              for (const { cursor, record } of records) {
-                newRevision++;
-                record.revision = newRevision;
-                cursor.update(record);
-              }
-              
-              // Update the final revision
-              if (records.length > 0) {
-                revisionStore.put({ id: 1, revision: newRevision });
-              }
-              
-              resolve();
-            }
-          };
-          
-          recordsRequest.onerror = (event) => {
-            reject(new StorageError(`Failed to rebase outgoing records: ${event.target.error.message}`));
-          };
-        } else {
-          // No rebasing needed
+        // Calculate the difference
+        const diff = revision - lastRevision;
+        
+        if (diff <= BigInt(0)) {
+          // No rebase needed
           resolve();
+          return;
         }
+        
+        // Get all records from sync_outgoing and update their revisions
+        const getAllRequest = outgoingStore.getAll();
+        
+        getAllRequest.onsuccess = () => {
+          const records = getAllRequest.result;
+          let updatesCompleted = 0;
+          
+          if (records.length === 0) {
+            resolve();
+            return;
+          }
+          
+          for (const storeRecord of records) {
+            // Delete the old record
+            const oldKey = [storeRecord.type, storeRecord.dataId, storeRecord.revision];
+            outgoingStore.delete(oldKey);
+            
+            // Update revision in both the key and the nested record
+            const newRevision = storeRecord.record.revision + diff;
+            const updatedRecord = {
+              type: storeRecord.type,
+              dataId: storeRecord.dataId,
+              revision: Number(newRevision),
+              record: {
+                ...storeRecord.record,
+                revision: newRevision
+              }
+            };
+            
+            // Add the updated record
+            const putRequest = outgoingStore.put(updatedRecord);
+            
+            putRequest.onsuccess = () => {
+              updatesCompleted++;
+              if (updatesCompleted === records.length) {
+                resolve();
+              }
+            };
+            
+            putRequest.onerror = (event) => {
+              reject(new StorageError(`Failed to rebase outgoing record: ${event.target.error.message}`));
+            };
+          }
+        };
+        
+        getAllRequest.onerror = (event) => {
+          reject(new StorageError(`Failed to get outgoing records for rebase: ${event.target.error.message}`));
+        };
       };
       
       getRevisionRequest.onerror = (event) => {
-        reject(new StorageError(`Failed to get revision for rebasing: ${event.target.error.message}`));
+        reject(new StorageError(`Failed to get last revision: ${event.target.error.message}`));
       };
     });
   }
@@ -1122,31 +1086,32 @@ class IndexedDBStorage {
     }
 
     return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction(["sync_incoming", "sync_state"], "readwrite");
+      const transaction = this.db.transaction(["sync_incoming", "sync_state"], "readonly");
       const incomingStore = transaction.objectStore("sync_incoming");
       const stateStore = transaction.objectStore("sync_state");
       
-      // Get records up to the limit
-      const request = incomingStore.openCursor();
+      // Get records up to the limit, ordered by revision
+      const revisionIndex = incomingStore.index("revision");
+      const request = revisionIndex.openCursor(null, "next");
       const records = [];
-      const recordsToDelete = [];
       let count = 0;
       
       request.onsuccess = (event) => {
         const cursor = event.target.result;
         if (cursor && count < limit) {
-          const incomingRecord = cursor.value;
-          recordsToDelete.push(incomingRecord.id);
+          const storeRecord = cursor.value;
+          const newState = storeRecord.record;
           
           // Look for parent record
-          const stateRequest = stateStore.get(`${incomingRecord.record.id.type}:${incomingRecord.record.id.data_id}`);
+          const stateRequest = stateStore.get([storeRecord.type, storeRecord.dataId]);
           
           stateRequest.onsuccess = () => {
-            const parent = stateRequest.result ? stateRequest.result.record : null;
-            
+            const stateRecord = stateRequest.result;
+            const oldState = stateRecord ? stateRecord.record : null;
+
             records.push({
-              record: incomingRecord.record,
-              parent: parent
+              newState: newState,
+              oldState: oldState
             });
             
             count++;
@@ -1154,23 +1119,15 @@ class IndexedDBStorage {
           };
           
           stateRequest.onerror = () => {
-            // Continue even if parent lookup fails
             records.push({
-              record: incomingRecord.record,
-              parent: null
+              newState: newState,
+              oldState: null
             });
             
             count++;
             cursor.continue();
           };
         } else {
-          // Delete the fetched records
-          if (recordsToDelete.length > 0) {
-            recordsToDelete.forEach(id => {
-              incomingStore.delete(id);
-            });
-          }
-          
           resolve(records);
         }
       };
@@ -1198,21 +1155,15 @@ class IndexedDBStorage {
       request.onsuccess = (event) => {
         const cursor = event.target.result;
         if (cursor) {
-          const record = cursor.value;
+          const storeRecord = cursor.value;
+          const change = storeRecord.record;
           
           // Get the parent record
-          const stateRequest = stateStore.get(`${record.record_id.type}:${record.record_id.data_id}`);
-          
+          const stateRequest = stateStore.get([storeRecord.type, storeRecord.dataId]);
+
           stateRequest.onsuccess = () => {
-            const parent = stateRequest.result ? stateRequest.result.record : null;
-            
-            // Create a change set
-            const change = {
-              id: record.record_id,
-              schemaVersion: record.schema_version,
-              updatedFields: record.updated_fields,
-              revision: record.revision
-            };
+            const stateRecord = stateRequest.result;
+            const parent = stateRecord ? stateRecord.record : null;
             
             resolve({
               change: change,
@@ -1221,14 +1172,6 @@ class IndexedDBStorage {
           };
           
           stateRequest.onerror = () => {
-            // Return without parent if lookup fails
-            const change = {
-              id: record.record_id,
-              schemaVersion: record.schema_version,
-              updatedFields: record.updated_fields,
-              revision: record.revision
-            };
-            
             resolve({
               change: change,
               parent: null
@@ -1254,14 +1197,14 @@ class IndexedDBStorage {
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction(["sync_state"], "readwrite");
       const stateStore = transaction.objectStore("sync_state");
-      
-      // Store or update the record state
-      const stateRecord = {
-        id: `${record.id.type}:${record.id.data_id}`,
+
+      const storeRecord = {
+        type: record.id.type,
+        dataId: record.id.dataId,
         record: record
       };
       
-      const request = stateStore.put(stateRecord);
+      const request = stateStore.put(storeRecord);
       
       request.onsuccess = () => {
         resolve();

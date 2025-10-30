@@ -681,7 +681,8 @@ pub mod tests {
         let all_incoming = storage.get_incoming_records(100).await.unwrap();
         for i in 1..all_incoming.len() {
             assert!(
-                all_incoming[i].new_state.revision >= all_incoming[i.saturating_sub(1)].new_state.revision,
+                all_incoming[i].new_state.revision
+                    >= all_incoming[i.saturating_sub(1)].new_state.revision,
                 "Incoming records should be ordered by revision ascending"
             );
         }
