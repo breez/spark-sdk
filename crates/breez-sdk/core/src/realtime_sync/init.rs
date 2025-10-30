@@ -36,7 +36,7 @@ pub async fn init_and_start_real_time_sync(
         params.event_emitter,
     ));
 
-    synced_storage.start();
+    synced_storage.initial_setup();
     let storage: Arc<dyn Storage> = synced_storage.clone();
     let sync_client = BreezSyncerClient::new(&params.server_url, params.api_key.as_deref())
         .map_err(|e| SdkError::Generic(e.to_string()))?;

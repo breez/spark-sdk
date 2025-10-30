@@ -91,7 +91,7 @@ impl SyncedStorage {
         }
     }
 
-    pub fn start(self: &Arc<Self>) {
+    pub fn initial_setup(self: &Arc<Self>) {
         let clone = Arc::clone(self);
         tokio::spawn(async move {
             if let Err(e) = clone.feed_existing_payment_metadata().await {
