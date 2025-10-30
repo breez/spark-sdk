@@ -280,8 +280,6 @@ impl BreezSdk {
     /// 1. `periodic_sync`: the wallet with the Spark network    
     /// 2. `monitor_deposits`: monitors for new deposits
     fn start(&self, initial_synced_sender: watch::Sender<bool>) {
-        // TODO: update the local database from outgoing sync records.
-        // ensure there will be no races. (if we would just take the pending outgoing records, it's possible the remote update happens before the local update. Then we have an issue at startup, because the update would no longer be 'pending', while the local data model hasn't been updated yet.)
         self.periodic_sync(initial_synced_sender);
         self.try_recover_lightning_address();
     }
