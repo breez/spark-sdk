@@ -8,11 +8,11 @@ use breez_sdk_spark::{
     LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse, ListPaymentsRequest,
     ListPaymentsResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
     LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse, LogEntry,
-    PrepareLnurlPayResponse, PrepareSendPaymentRequest, PrepareSendPaymentResponse,
-    ReceivePaymentRequest, ReceivePaymentResponse, RefundDepositRequest, RefundDepositResponse,
-    RegisterLightningAddressRequest, SdkError, SdkEvent, SendPaymentRequest, SendPaymentResponse,
-    SignMessageRequest, SignMessageResponse, Storage, SyncWalletRequest, SyncWalletResponse,
-    WaitForPaymentRequest, WaitForPaymentResponse,
+    Logger, Network, PrepareLnurlPayRequest, PrepareLnurlPayResponse, PrepareSendPaymentRequest,
+    PrepareSendPaymentResponse, ReceivePaymentRequest, ReceivePaymentResponse,
+    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest, SdkError,
+    SdkEvent, SendPaymentRequest, SendPaymentResponse, SignMessageRequest, SignMessageResponse,
+    Storage, SyncWalletRequest, SyncWalletResponse, WaitForPaymentRequest, WaitForPaymentResponse,
 };
 use flutter_rust_bridge::frb;
 
