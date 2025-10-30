@@ -61,11 +61,7 @@ pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
         .join(path_suffix);
 
     let storage = default_storage(storage_dir.to_string_lossy().as_ref()).await?;
-    let with_real_time_sync = request.config.real_time_sync_server_url.is_some();
-    let mut builder = SdkBuilder::new(request.config, request.seed, storage)?;
-    if with_real_time_sync {
-        builder = builder.with_real_time_sync();
-    }
+    let builder = SdkBuilder::new(request.config, request.seed, storage)?;
     let sdk = builder.build().await?;
     Ok(sdk)
 }

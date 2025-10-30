@@ -190,7 +190,7 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
     let mut builder = super::sdk_builder::SdkBuilder::new(request.config, request.seed, storage);
     if with_real_time_sync {
         let sync_storage = default_sync_storage(storage_dir.to_string_lossy().to_string())?;
-        builder = builder.with_real_time_sync(sync_storage);
+        builder = builder.with_real_time_sync_storage(sync_storage);
     }
     let sdk = builder.build().await?;
     Ok(sdk)

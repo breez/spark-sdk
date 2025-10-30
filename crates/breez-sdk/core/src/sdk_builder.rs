@@ -168,7 +168,7 @@ impl SdkBuilder {
     }
 
     #[must_use]
-    pub fn with_real_time_sync(mut self, storage: Arc<dyn SyncStorage>) -> Self {
+    pub fn with_real_time_sync_storage(mut self, storage: Arc<dyn SyncStorage>) -> Self {
         self.sync_storage = Some(storage);
         self
     }
@@ -278,31 +278,25 @@ impl SdkBuilder {
         let shutdown_sender = watch::channel::<()>(()).0;
 
         let event_emitter = Arc::new(EventEmitter::new());
-        let storage = match (&self.config.real_time_sync_server_url, &self.sync_storage) {
-            (Some(_), None) => {
+        let storage = if let Some(server_url) = &self.config.real_time_sync_server_url {
+            let Some(sync_storage) = self.sync_storage else {
                 return Err(SdkError::Generic(
-                    "Real-time sync is enabled, but sync storage is not provided".to_string(),
+                    "Real-time sync is enabled, but no sync storage is supplied".to_string(),
                 ));
-            }
-            (None, Some(_)) => {
-                return Err(SdkError::Generic(
-                    "Real-time sync is enabled, but server url is not provided".to_string(),
-                ));
-            }
-            (None, None) => Arc::clone(&self.storage),
-            (Some(server_url), Some(sync_storage)) => {
-                init_and_start_real_time_sync(RealTimeSyncParams {
-                    server_url: server_url.clone(),
-                    api_key: self.config.api_key.clone(),
-                    network: self.config.network,
-                    seed,
-                    storage: Arc::clone(&self.storage),
-                    sync_storage: Arc::clone(sync_storage),
-                    shutdown_receiver: shutdown_sender.subscribe(),
-                    event_emitter: Arc::clone(&event_emitter),
-                })
-                .await?
-            }
+            };
+            init_and_start_real_time_sync(RealTimeSyncParams {
+                server_url: server_url.clone(),
+                api_key: self.config.api_key.clone(),
+                network: self.config.network,
+                seed,
+                storage: Arc::clone(&self.storage),
+                sync_storage,
+                shutdown_receiver: shutdown_sender.subscribe(),
+                event_emitter: Arc::clone(&event_emitter),
+            })
+            .await?
+        } else {
+            Arc::clone(&self.storage)
         };
 
         // Create the SDK instance
