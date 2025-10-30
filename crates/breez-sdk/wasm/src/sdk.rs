@@ -154,6 +154,14 @@ impl BreezSdk {
         Ok(self.sdk.lnurl_pay(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "lnurlWithdraw")]
+    pub async fn lnurl_withdraw(
+        &self,
+        request: LnurlWithdrawRequest,
+    ) -> WasmResult<LnurlWithdrawResponse> {
+        Ok(self.sdk.lnurl_withdraw(request.into()).await?.into())
+    }
+
     #[wasm_bindgen(js_name = "sendPayment")]
     pub async fn send_payment(
         &self,

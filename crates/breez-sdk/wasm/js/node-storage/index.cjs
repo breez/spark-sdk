@@ -192,6 +192,7 @@ class SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       pm.lnurl_withdraw_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -337,6 +338,7 @@ class SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       pm.lnurl_withdraw_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -394,6 +396,7 @@ class SqliteStorage {
             ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
+            ,       pm.lnurl_withdraw_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -427,13 +430,16 @@ class SqliteStorage {
   setPaymentMetadata(paymentId, metadata) {
     try {
       const stmt = this.db.prepare(`
-                INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_description) 
-                VALUES (?, ?, ?)
+                INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description) 
+                VALUES (?, ?, ?, ?)
             `);
 
       stmt.run(
         paymentId,
         metadata.lnurlPayInfo ? JSON.stringify(metadata.lnurlPayInfo) : null,
+        metadata.lnurlWithdrawInfo
+          ? JSON.stringify(metadata.lnurlWithdrawInfo)
+          : null,
         metadata.lnurlDescription
       );
       return Promise.resolve();
@@ -566,6 +572,17 @@ class SqliteStorage {
         } catch (e) {
           throw new StorageError(
             `Failed to parse lnurl_pay_info JSON for payment ${row.id}: ${e.message}`,
+            e
+          );
+        }
+      }
+
+      if (row.lnurl_withdraw_info) {
+        try {
+          details.lnurlWithdrawInfo = JSON.parse(row.lnurl_withdraw_info);
+        } catch (e) {
+          throw new StorageError(
+            `Failed to parse lnurl_withdraw_info JSON for payment ${row.id}: ${e.message}`,
             e
           );
         }

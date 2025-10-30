@@ -3,13 +3,14 @@ pub(crate) mod sqlite;
 
 use std::{collections::HashMap, sync::Arc};
 
+use breez_sdk_common::lnurl::withdraw::LnurlWithdrawRequestDetails;
 use macros::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
     DepositClaimError, DepositInfo, LightningAddressInfo, ListPaymentsRequest, LnurlPayInfo,
-    TokenBalance, TokenMetadata, models::Payment,
+    LnurlWithdrawInfo, TokenBalance, TokenMetadata, models::Payment,
 };
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
@@ -18,6 +19,7 @@ const SYNC_OFFSET_KEY: &str = "sync_offset";
 const TX_CACHE_KEY: &str = "tx_cache";
 const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
 const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
+const PAYMENT_REQUEST_METADATA_KEY_PREFIX: &str = "payment_request_metadata";
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UpdateDepositPayload {
@@ -52,10 +54,11 @@ impl From<serde_json::Error> for StorageError {
 }
 
 /// Metadata associated with a payment that cannot be extracted from the Spark operator.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
+    pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
 }
 
@@ -337,6 +340,50 @@ impl ObjectCacheRepository {
             None => Ok(None),
         }
     }
+
+    pub(crate) async fn save_payment_request_metadata(
+        &self,
+        value: &PaymentRequestMetadata,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                format!(
+                    "{PAYMENT_REQUEST_METADATA_KEY_PREFIX}-{}",
+                    value.payment_request
+                ),
+                serde_json::to_string(value)?,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_payment_request_metadata(
+        &self,
+        payment_request: &str,
+    ) -> Result<Option<PaymentRequestMetadata>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(format!(
+                "{PAYMENT_REQUEST_METADATA_KEY_PREFIX}-{payment_request}",
+            ))
+            .await?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn delete_payment_request_metadata(
+        &self,
+        payment_request: &str,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .delete_cached_item(format!(
+                "{PAYMENT_REQUEST_METADATA_KEY_PREFIX}-{payment_request}",
+            ))
+            .await?;
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -357,6 +404,12 @@ pub(crate) struct CachedTx {
     pub(crate) raw_tx: String,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+pub(crate) struct PaymentRequestMetadata {
+    pub payment_request: String,
+    pub lnurl_withdraw_request_details: LnurlWithdrawRequestDetails,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct StaticDepositAddress {
     pub(crate) address: String,
@@ -364,11 +417,14 @@ pub(crate) struct StaticDepositAddress {
 
 #[cfg(feature = "test-utils")]
 pub mod tests {
+    use breez_sdk_common::lnurl::withdraw::LnurlWithdrawRequestDetails;
+
     use chrono::Utc;
 
     use crate::{
-        DepositClaimError, ListPaymentsRequest, Payment, PaymentDetails, PaymentMetadata,
-        PaymentMethod, PaymentStatus, PaymentType, Storage, UpdateDepositPayload,
+        DepositClaimError, ListPaymentsRequest, LnurlWithdrawInfo, Payment, PaymentDetails,
+        PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, Storage, UpdateDepositPayload,
+        persist::{ObjectCacheRepository, PaymentRequestMetadata},
     };
 
     #[allow(clippy::too_many_lines)]
@@ -422,7 +478,7 @@ pub mod tests {
         };
 
         // Test 3: Lightning payment with full details
-        let metadata = PaymentMetadata {
+        let pay_metadata = PaymentMetadata {
             lnurl_pay_info: Some(LnurlPayInfo {
                 ln_address: Some("test@example.com".to_string()),
                 comment: Some("Test comment".to_string()),
@@ -431,9 +487,10 @@ pub mod tests {
                 processed_success_action: None,
                 raw_success_action: None,
             }),
+            lnurl_withdraw_info: None,
             lnurl_description: None,
         };
-        let lightning_payment = Payment {
+        let lightning_lnurl_pay_payment = Payment {
             id: "lightning_pmt789".to_string(),
             payment_type: PaymentType::Send,
             status: PaymentStatus::Completed,
@@ -447,11 +504,39 @@ pub mod tests {
                 invoice: "lnbc250n1pjqxyz9pp5abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567890abcdefghijklmnopqrstuvwxyz".to_string(),
                 payment_hash: "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321".to_string(),
                 destination_pubkey: "03123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01".to_string(),
-                lnurl_pay_info: metadata.lnurl_pay_info.clone(),
+                lnurl_pay_info: pay_metadata.lnurl_pay_info.clone(),
+                lnurl_withdraw_info: pay_metadata.lnurl_withdraw_info.clone(),
             }),
         };
 
-        // Test 4: Lightning payment with minimal details
+        // Test 4: Lightning payment with full details
+        let withdraw_metadata = PaymentMetadata {
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: Some(LnurlWithdrawInfo {
+                withdraw_url: "http://example.com/withdraw".to_string(),
+            }),
+            lnurl_description: None,
+        };
+        let lightning_lnurl_withdraw_payment = Payment {
+            id: "lightning_pmtabc".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 75_000,
+            fees: 750,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Lightning,
+            details: Some(PaymentDetails::Lightning {
+                description: Some("Test lightning payment".to_string()),
+                preimage: Some("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab".to_string()),
+                invoice: "lnbc250n1pjqxyz9pp5abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567890abcdefghijklmnopqrstuvwxyz".to_string(),
+                payment_hash: "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321".to_string(),
+                destination_pubkey: "03123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01".to_string(),
+                lnurl_pay_info: withdraw_metadata.lnurl_pay_info.clone(),
+                lnurl_withdraw_info: withdraw_metadata.lnurl_withdraw_info.clone(),
+            }),
+        };
+
+        // Test 5: Lightning payment with minimal details
         let lightning_minimal_payment = Payment {
             id: "lightning_minimal_pmt012".to_string(),
             payment_type: PaymentType::Receive,
@@ -467,10 +552,11 @@ pub mod tests {
                 payment_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
                 destination_pubkey: "02987654321fedcba0987654321fedcba0987654321fedcba0987654321fedcba09".to_string(),
                 lnurl_pay_info: None,
+                lnurl_withdraw_info: None,
             }),
         };
 
-        // Test 5: Withdraw payment
+        // Test 6: Withdraw payment
         let withdraw_payment = Payment {
             id: "withdraw_pmt345".to_string(),
             payment_type: PaymentType::Send,
@@ -485,7 +571,7 @@ pub mod tests {
             }),
         };
 
-        // Test 6: Deposit payment
+        // Test 7: Deposit payment
         let deposit_payment = Payment {
             id: "deposit_pmt678".to_string(),
             payment_type: PaymentType::Receive,
@@ -500,7 +586,7 @@ pub mod tests {
             }),
         };
 
-        // Test 7: Payment with no details
+        // Test 8: Payment with no details
         let no_details_payment = Payment {
             id: "no_details_pmt901".to_string(),
             payment_type: PaymentType::Send,
@@ -515,7 +601,8 @@ pub mod tests {
         let test_payments = vec![
             spark_payment.clone(),
             token_payment.clone(),
-            lightning_payment.clone(),
+            lightning_lnurl_pay_payment.clone(),
+            lightning_lnurl_withdraw_payment.clone(),
             lightning_minimal_payment.clone(),
             withdraw_payment.clone(),
             deposit_payment.clone(),
@@ -527,7 +614,14 @@ pub mod tests {
             storage.insert_payment(payment.clone()).await.unwrap();
         }
         storage
-            .set_payment_metadata(lightning_payment.id.clone(), metadata)
+            .set_payment_metadata(lightning_lnurl_pay_payment.id.clone(), pay_metadata)
+            .await
+            .unwrap();
+        storage
+            .set_payment_metadata(
+                lightning_lnurl_withdraw_payment.id.clone(),
+                withdraw_metadata,
+            )
             .await
             .unwrap();
 
@@ -540,7 +634,7 @@ pub mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(payments.len(), 7);
+        assert_eq!(payments.len(), 8);
 
         // Test each payment type individually
         for (i, expected_payment) in test_payments.iter().enumerate() {
@@ -602,7 +696,8 @@ pub mod tests {
                         invoice: r_invoice,
                         payment_hash: r_hash,
                         destination_pubkey: r_dest_pubkey,
-                        lnurl_pay_info: r_lnurl,
+                        lnurl_pay_info: r_pay_lnurl,
+                        lnurl_withdraw_info: r_withdraw_lnurl,
                     }),
                     Some(PaymentDetails::Lightning {
                         description: e_description,
@@ -610,7 +705,8 @@ pub mod tests {
                         invoice: e_invoice,
                         payment_hash: e_hash,
                         destination_pubkey: e_dest_pubkey,
-                        lnurl_pay_info: e_lnurl,
+                        lnurl_pay_info: e_pay_lnurl,
+                        lnurl_withdraw_info: e_withdraw_lnurl,
                     }),
                 ) => {
                     assert_eq!(r_description, e_description);
@@ -620,7 +716,7 @@ pub mod tests {
                     assert_eq!(r_dest_pubkey, e_dest_pubkey);
 
                     // Test LNURL pay info if present
-                    match (r_lnurl, e_lnurl) {
+                    match (r_pay_lnurl, e_pay_lnurl) {
                         (Some(r_info), Some(e_info)) => {
                             assert_eq!(r_info.ln_address, e_info.ln_address);
                             assert_eq!(r_info.comment, e_info.comment);
@@ -630,6 +726,18 @@ pub mod tests {
                         (None, None) => {}
                         _ => panic!(
                             "LNURL pay info mismatch for payment {}",
+                            expected_payment.id
+                        ),
+                    }
+
+                    // Test LNURL withdraw info if present
+                    match (r_withdraw_lnurl, e_withdraw_lnurl) {
+                        (Some(r_info), Some(e_info)) => {
+                            assert_eq!(r_info.withdraw_url, e_info.withdraw_url);
+                        }
+                        (None, None) => {}
+                        _ => panic!(
+                            "LNURL withdraw info mismatch for payment {}",
                             expected_payment.id
                         ),
                     }
@@ -660,8 +768,8 @@ pub mod tests {
             .iter()
             .filter(|p| p.payment_type == PaymentType::Receive)
             .count();
-        assert_eq!(send_payments, 4); // spark, lightning, withdraw, no_details
-        assert_eq!(receive_payments, 3); // token, lightning_minimal, deposit
+        assert_eq!(send_payments, 4); // spark, lightning_lnurl_pay, withdraw, no_details
+        assert_eq!(receive_payments, 4); // token, lightning_lnurl_withdraw, lightning_minimal, deposit
 
         // Test filtering by status
         let completed_payments = payments
@@ -676,7 +784,7 @@ pub mod tests {
             .iter()
             .filter(|p| p.status == PaymentStatus::Failed)
             .count();
-        assert_eq!(completed_payments, 4); // spark, lightning, withdraw, deposit
+        assert_eq!(completed_payments, 5); // spark, lightning_lnurl_pay, lightning_lnurl_withdraw, withdraw, deposit
         assert_eq!(pending_payments, 2); // token, no_details
         assert_eq!(failed_payments, 1); // lightning_minimal
 
@@ -685,7 +793,7 @@ pub mod tests {
             .iter()
             .filter(|p| p.method == PaymentMethod::Lightning)
             .count();
-        assert_eq!(lightning_count, 2); // lightning and lightning_minimal
+        assert_eq!(lightning_count, 3); // lightning_lnurl_pay, lightning_lnurl_withdraw and lightning_minimal
     }
 
     pub async fn test_unclaimed_deposits_crud(storage: Box<dyn Storage>) {
@@ -809,6 +917,7 @@ pub mod tests {
                 description: None,
                 preimage: None,
                 lnurl_pay_info: None,
+                lnurl_withdraw_info: None,
             }),
         };
 
@@ -827,6 +936,7 @@ pub mod tests {
                 description: None,
                 preimage: None,
                 lnurl_pay_info: None,
+                lnurl_withdraw_info: None,
             }),
         };
 
@@ -984,6 +1094,7 @@ pub mod tests {
                 description: None,
                 preimage: None,
                 lnurl_pay_info: None,
+                lnurl_withdraw_info: None,
             }),
         };
 
@@ -1202,6 +1313,7 @@ pub mod tests {
                 description: None,
                 preimage: None,
                 lnurl_pay_info: None,
+                lnurl_withdraw_info: None,
             }),
         };
 
@@ -1220,6 +1332,7 @@ pub mod tests {
                 description: None,
                 preimage: None,
                 lnurl_pay_info: None,
+                lnurl_withdraw_info: None,
             }),
         };
 
@@ -1345,5 +1458,78 @@ pub mod tests {
         assert_eq!(desc_explicit[0].id, "sort_3");
         assert_eq!(desc_explicit[1].id, "sort_2");
         assert_eq!(desc_explicit[2].id, "sort_1");
+    }
+
+    pub async fn test_payment_request_metadata(storage: Box<dyn Storage>) {
+        let cache = ObjectCacheRepository::new(storage.into());
+
+        // Prepare test data
+        let payment_request1 = "pr1".to_string();
+        let metadata1 = PaymentRequestMetadata {
+            payment_request: payment_request1.clone(),
+            lnurl_withdraw_request_details: LnurlWithdrawRequestDetails {
+                callback: "https://callback.url".to_string(),
+                k1: "k1value".to_string(),
+                default_description: "desc1".to_string(),
+                min_withdrawable: 1000,
+                max_withdrawable: 2000,
+            },
+        };
+
+        let payment_request2 = "pr2".to_string();
+        let metadata2 = PaymentRequestMetadata {
+            payment_request: payment_request2.clone(),
+            lnurl_withdraw_request_details: LnurlWithdrawRequestDetails {
+                callback: "https://callback2.url".to_string(),
+                k1: "k1value2".to_string(),
+                default_description: "desc2".to_string(),
+                min_withdrawable: 10000,
+                max_withdrawable: 20000,
+            },
+        };
+
+        // set_payment_request_metadata
+        cache
+            .save_payment_request_metadata(&metadata1)
+            .await
+            .unwrap();
+        cache
+            .save_payment_request_metadata(&metadata2)
+            .await
+            .unwrap();
+
+        // get_payment_request_metadata
+        let fetched1 = cache
+            .fetch_payment_request_metadata(&payment_request1)
+            .await
+            .unwrap();
+        assert!(fetched1.is_some());
+        let fetched1 = fetched1.unwrap();
+        assert_eq!(fetched1.payment_request, payment_request1);
+        // Check lnurl_withdraw_request_details is present and correct
+        let details = fetched1.lnurl_withdraw_request_details;
+        assert_eq!(details.k1, "k1value");
+        assert_eq!(details.default_description, "desc1");
+        assert_eq!(details.min_withdrawable, 1000);
+        assert_eq!(details.max_withdrawable, 2000);
+        assert_eq!(details.callback, "https://callback.url");
+
+        let fetched2 = cache
+            .fetch_payment_request_metadata(&payment_request2)
+            .await
+            .unwrap();
+        assert!(fetched2.is_some());
+        assert_eq!(fetched2.as_ref().unwrap().payment_request, payment_request2);
+
+        // delete_payment_request_metadata
+        cache
+            .delete_payment_request_metadata(&payment_request1)
+            .await
+            .unwrap();
+        let deleted = cache
+            .fetch_payment_request_metadata(&payment_request1)
+            .await
+            .unwrap();
+        assert!(deleted.is_none());
     }
 }
