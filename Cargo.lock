@@ -685,6 +685,7 @@ dependencies = [
  "chrono",
  "clap",
  "dotenvy",
+ "ecies",
  "figment",
  "hex",
  "lnurl-models",

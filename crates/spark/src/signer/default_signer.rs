@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
 use bitcoin::key::{Parity, TapTweak};
-use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
+use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
 use bitcoin::secp256k1::{self, All, Keypair, Message, PublicKey, SecretKey, schnorr};
 use bitcoin::{
@@ -390,24 +390,6 @@ impl Signer for DefaultSigner {
         Ok(sig)
     }
 
-    fn sign_message_ecdsa_recoverable_from_path(
-        &self,
-        message: &[u8],
-        derivation_path: &DerivationPath,
-    ) -> Result<RecoverableSignature, SignerError> {
-        let signing_key = self
-            .key_set
-            .signing_master_key
-            .derive_priv(&self.secp, derivation_path)
-            .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {e}")))?
-            .private_key;
-        let digest = sha256::Hash::hash(message);
-        let sig = self
-            .secp
-            .sign_ecdsa_recoverable(&Message::from_digest(digest.to_byte_array()), &signing_key);
-        Ok(sig)
-    }
-
     fn sign_hash_schnorr_with_identity_key(
         &self,
         hash: &[u8],
@@ -747,38 +729,6 @@ impl Signer for DefaultSigner {
 
         tracing::debug!("signature: {:?}", signature);
         Ok(signature)
-    }
-
-    async fn ecies_encrypt(
-        &self,
-        msg: Vec<u8>,
-        path: DerivationPath,
-    ) -> Result<Vec<u8>, SignerError> {
-        let keypair = self
-            .key_set
-            .encryption_master_key
-            .derive_priv(&self.secp, &path)
-            .map_err(|e| SignerError::KeyDerivationError(e.to_string()))?
-            .to_keypair(&self.secp);
-        let rc_pub = keypair.public_key().serialize();
-        ecies::encrypt(&rc_pub, &msg)
-            .map_err(|err| SignerError::Generic(format!("Could not encrypt data: {err}")))
-    }
-
-    async fn ecies_decrypt(
-        &self,
-        msg: Vec<u8>,
-        path: DerivationPath,
-    ) -> Result<Vec<u8>, SignerError> {
-        let keypair = self
-            .key_set
-            .encryption_master_key
-            .derive_priv(&self.secp, &path)
-            .map_err(|e| SignerError::KeyDerivationError(e.to_string()))?
-            .to_keypair(&self.secp);
-        let rc_prv = keypair.secret_key().secret_bytes();
-        ecies::decrypt(&rc_prv, &msg)
-            .map_err(|err| SignerError::Generic(format!("Could not decrypt data: {err}")))
     }
 }
 

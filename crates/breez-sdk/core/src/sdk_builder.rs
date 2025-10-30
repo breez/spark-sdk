@@ -295,7 +295,7 @@ impl SdkBuilder {
                     server_url: server_url.clone(),
                     api_key: self.config.api_key.clone(),
                     network: self.config.network,
-                    signer: Arc::clone(&signer),
+                    seed,
                     storage: Arc::clone(&self.storage),
                     sync_storage: Arc::clone(sync_storage),
                     shutdown_receiver: shutdown_sender.subscribe(),

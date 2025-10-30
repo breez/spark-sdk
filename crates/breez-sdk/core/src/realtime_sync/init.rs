@@ -3,7 +3,6 @@ use std::sync::Arc;
 use breez_sdk_common::sync::{
     BreezSyncerClient, SigningClient, SyncProcessor, SyncService, storage::SyncStorage,
 };
-use spark_wallet::Signer;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -18,7 +17,7 @@ pub struct RealTimeSyncParams {
     pub server_url: String,
     pub api_key: Option<String>,
     pub network: Network,
-    pub signer: Arc<dyn Signer>,
+    pub seed: Vec<u8>,
     pub storage: Arc<dyn Storage>,
     pub sync_storage: Arc<dyn SyncStorage>,
     pub shutdown_receiver: tokio::sync::watch::Receiver<()>,
@@ -41,21 +40,13 @@ pub async fn init_and_start_real_time_sync(
     let sync_client = BreezSyncerClient::new(&params.server_url, params.api_key.as_deref())
         .map_err(|e| SdkError::Generic(e.to_string()))?;
 
-    let sync_coin_type = match params.network {
-        Network::Mainnet => "0",
-        Network::Regtest => "1",
-    };
-    let sync_signer = DefaultSyncSigner::new(
-        Arc::clone(&params.signer),
-        // This derivation path ensures no other software uses the same key for our storage with the same mnemonic.
-        format!("m/448201320'/{sync_coin_type}'/0'/0/0")
-            .parse()
-            .map_err(|_| SdkError::Generic("Invalid sync signer derivation path".to_string()))?,
+    let sync_signer = Arc::new(
+        DefaultSyncSigner::new(&params.seed, params.network)
+            .map_err(|e| SdkError::Generic(e.to_string()))?,
     );
-
     let signing_sync_client = SigningClient::new(
         Arc::new(sync_client),
-        Arc::new(sync_signer),
+        sync_signer,
         Uuid::now_v7().to_string(),
     );
     let sync_processor = Arc::new(SyncProcessor::new(
