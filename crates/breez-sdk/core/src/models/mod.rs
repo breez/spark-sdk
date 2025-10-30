@@ -279,6 +279,15 @@ impl From<Network> for BitcoinNetwork {
     }
 }
 
+impl From<Network> for bitcoin::Network {
+    fn from(network: Network) -> Self {
+        match network {
+            Network::Mainnet => bitcoin::Network::Bitcoin,
+            Network::Regtest => bitcoin::Network::Regtest,
+        }
+    }
+}
+
 impl FromStr for Network {
     type Err = String;
 
