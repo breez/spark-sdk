@@ -122,17 +122,21 @@ impl SyncedStorage {
             let PaymentDetails::Lightning {
                 description,
                 lnurl_pay_info,
+                lnurl_withdraw_info,
                 ..
             } = details
             else {
                 continue;
             };
-            let Some(lnurl_pay_info) = lnurl_pay_info else {
+
+            if lnurl_pay_info.is_none() && lnurl_withdraw_info.is_none() {
                 continue;
-            };
+            }
+
             let metadata = PaymentMetadata {
                 lnurl_description: description,
-                lnurl_pay_info: Some(lnurl_pay_info),
+                lnurl_pay_info,
+                lnurl_withdraw_info,
             };
             let record_id = RecordId::new(RecordType::PaymentMetadata.to_string(), &payment.id);
             let record_change_request = RecordChangeRequest {

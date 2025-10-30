@@ -12,7 +12,6 @@ use breez_sdk_common::{
     fiat::FiatService,
     input::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType},
     lnurl::{self, withdraw::execute_lnurl_withdraw},
-    sync::SyncProcessor,
 };
 use breez_sdk_common::{
     lnurl::{
