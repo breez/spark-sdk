@@ -28,6 +28,7 @@ pub async fn init_and_start_real_time_sync(
     params: RealTimeSyncParams,
 ) -> Result<Arc<dyn Storage>, SdkError> {
     debug!("Real-time sync is enabled.");
+
     let sync_service = Arc::new(SyncService::new(Arc::clone(&params.sync_storage)));
     let synced_storage = Arc::new(SyncedStorage::new(
         Arc::clone(&params.storage),

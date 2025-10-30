@@ -45,9 +45,9 @@ impl SdkBuilder {
     }
 
     #[frb(sync)]
-    pub fn with_real_time_sync(self, storage: Arc<dyn SyncStorage>) -> Self {
+    pub fn with_real_time_sync_storage(self, storage: Arc<dyn SyncStorage>) -> Self {
         let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
-            .with_real_time_sync(storage);
+            .with_real_time_sync_storage(storage);
         Self {
             inner: Arc::new(builder),
         }
