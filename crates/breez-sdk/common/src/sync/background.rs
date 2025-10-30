@@ -362,7 +362,7 @@ impl SyncProcessor {
     }
 
     async fn push_sync_once(&self) -> anyhow::Result<Option<u32>> {
-        debug!("Syncing once");
+        debug!("Push syncing once");
 
         let mut count: u32 = 0;
         while let changes = self
