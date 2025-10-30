@@ -14,7 +14,7 @@ use lnurl_models::{
     RegisterLnurlPayRequest, RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
     sanitize_username,
 };
-use nostr::{Alphabet, Event, JsonUtil, TagStandard};
+use nostr::{Alphabet, Event, JsonUtil, Kind, TagStandard};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -302,9 +302,7 @@ where
                 return Err(lnurl_error("nostr zap not supported"));
             }
 
-            if event.kind != nostr::Kind::ZapRequest {
-                return Err(lnurl_error("invalid zap request"));
-            }
+            validate_nostr_zap_request(amount_msat, event)?;
             sha256::Hash::hash(event.as_json().as_bytes())
         } else {
             let metadata = get_metadata(&user.domain, &user);
@@ -337,8 +335,6 @@ where
 
         // save to zap event to db
         if let Some(zap_request) = params.nostr {
-            validate_nostr_zap_request(amount_msat, &zap_request)?;
-
             // Calculate expiry timestamp: current time + expiry duration from invoice
             let expiry_timestamp = invoice.expires_at().ok_or({
                 error!("invoice has invalid expiry");
@@ -398,6 +394,11 @@ fn validate_nostr_zap_request(
     amount_msat: u64,
     event: &Event,
 ) -> Result<(), (StatusCode, Json<Value>)> {
+    if event.kind != Kind::ZapRequest {
+        trace!("nostr event is incorrect kind");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
     // 1. It MUST have a valid nostr signature
     if event.verify().is_err() {
         trace!("invalid nostr event, does not verify");
