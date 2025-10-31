@@ -106,9 +106,10 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Flutter & React Native bindings 
 - [x] Receive via LNURL-Pay w/ offline & Lightning address support
 - [x] Support Spark tokens (BTKN)
+- [x] LNURL-Withdraw
+- [x] Sign and verify arbitrary messages 
 - [ ] Real-time sync
 - [ ] C# language binding
-- [ ] LNURL-Withdraw
 - [ ] LNURL-Auth
 - [ ] External input parsers
 - [ ] Bolt12 
