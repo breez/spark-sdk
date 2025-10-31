@@ -1,5 +1,6 @@
 use sqlx::{Row, SqlitePool};
 
+use crate::zap::Zap;
 use crate::{repository::LnurlRepositoryError, time::now, user::User};
 
 #[derive(Clone)]
@@ -83,5 +84,73 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn upsert_zap(&self, zap: &Zap) -> Result<(), LnurlRepositoryError> {
+        sqlx::query(
+            "REPLACE INTO zaps (payment_hash, zap_request, zap_event, user_pubkey, invoice_expiry)
+            VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(&zap.payment_hash)
+        .bind(&zap.zap_request)
+        .bind(&zap.zap_event)
+        .bind(&zap.user_pubkey)
+        .bind(zap.invoice_expiry)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_zap_by_payment_hash(
+        &self,
+        payment_hash: &str,
+    ) -> Result<Option<Zap>, LnurlRepositoryError> {
+        let maybe_zap = sqlx::query(
+            "SELECT payment_hash, zap_request, zap_event, user_pubkey, invoice_expiry
+                FROM zaps
+                WHERE payment_hash = $1",
+        )
+        .bind(payment_hash)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(|row| Zap {
+            payment_hash: row.get(0),
+            zap_request: row.get(1),
+            zap_event: row.get(2),
+            user_pubkey: row.get(3),
+            invoice_expiry: row.get(4),
+        });
+        Ok(maybe_zap)
+    }
+
+    async fn get_users_with_unexpired_invoices(&self) -> Result<Vec<String>, LnurlRepositoryError> {
+        let now = now();
+        let rows = sqlx::query(
+            "SELECT DISTINCT user_pubkey
+             FROM zaps
+             WHERE invoice_expiry > $1 AND zap_event IS NULL",
+        )
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await?;
+        let keys = rows.into_iter().map(|row| row.get(0)).collect();
+        Ok(keys)
+    }
+
+    async fn user_has_unexpired_invoices(
+        &self,
+        user_pubkey: &str,
+    ) -> Result<bool, LnurlRepositoryError> {
+        let now = now();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM zaps
+             WHERE user_pubkey = $1 AND invoice_expiry > $2 AND zap_event IS NULL",
+        )
+        .bind(user_pubkey)
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count > 0)
     }
 }
