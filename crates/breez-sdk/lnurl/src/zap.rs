@@ -195,7 +195,7 @@ pub fn subscribe_to_user_for_zaps<DB>(
                                             .tags
                                             .iter()
                                             .filter_map(|t| {
-                                                if let Some(TagStandard::Relay(r)) =
+                                                if let Some(TagStandard::Relays(r)) =
                                                     t.as_standardized()
                                                 {
                                                     Some(r.clone())
@@ -203,6 +203,7 @@ pub fn subscribe_to_user_for_zaps<DB>(
                                                     None
                                                 }
                                             })
+                                            .flatten()
                                             .collect::<Vec<_>>();
 
                                         for r in relays {

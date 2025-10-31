@@ -33,7 +33,7 @@ use crate::{
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LnurlPayCallbackParams {
     pub amount: Option<u64>,
-    pub nostr: Option<Event>,
+    pub nostr: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -302,7 +302,11 @@ where
                 return Err(lnurl_error("nostr zap not supported"));
             }
 
-            validate_nostr_zap_request(amount_msat, event)?;
+            let event = Event::from_json(event).map_err(|e| {
+                trace!("invalid nostr event, could not parse: {}", e);
+                lnurl_error("invalid nostr event")
+            })?;
+            validate_nostr_zap_request(amount_msat, &event)?;
             sha256::Hash::hash(event.as_json().as_bytes())
         } else {
             let metadata = get_metadata(&user.domain, &user);
@@ -336,19 +340,27 @@ where
         // save to zap event to db
         if let Some(zap_request) = params.nostr {
             // Calculate expiry timestamp: current time + expiry duration from invoice
-            let expiry_timestamp = invoice.expires_at().ok_or({
-                error!("invoice has invalid expiry");
+            let expiry_timestamp = invoice.expires_at().ok_or_else(|| {
+                error!(
+                    "invoice has invalid expiry: duration since epoch {}s, expiry time: {}s",
+                    invoice.duration_since_epoch().as_secs(),
+                    invoice.expiry_time().as_secs()
+                );
                 lnurl_error("internal server error")
             })?;
 
             let invoice_expiry: i64 = i64::try_from(expiry_timestamp.as_secs()).map_err(|e| {
-                error!("invoice has invalid expiry: {e}");
+                error!(
+                    "invoice has invalid expiry for i64: duration since epoch {}s, expiry time: {}s: {e}",
+                    invoice.duration_since_epoch().as_secs(),
+                    invoice.expiry_time().as_secs(),
+                );
                 lnurl_error("internal server error")
             })?;
 
             let zap = Zap {
                 payment_hash: invoice.payment_hash().to_string(),
-                zap_request: zap_request.as_json(),
+                zap_request,
                 zap_event: None,
                 user_pubkey: user.pubkey.clone(),
                 invoice_expiry,
@@ -441,7 +453,7 @@ fn validate_nostr_zap_request(
     if !event
         .tags
         .iter()
-        .any(|t| matches!(t.as_standardized(), Some(TagStandard::Relay(_))))
+        .any(|t| matches!(t.as_standardized(), Some(TagStandard::Relays(_))))
     {
         trace!("invalid nostr event, missing relay tag");
         return Err(lnurl_error("invalid nostr event"));
