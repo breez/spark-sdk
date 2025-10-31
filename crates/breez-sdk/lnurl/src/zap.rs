@@ -139,129 +139,167 @@ pub fn subscribe_to_user_for_zaps<DB>(
                     continue;
                 };
 
-                match event {
-                    Event::Transfer(transfer_event) => {
-                        let Some(transfer) = transfer_event.transfer else {
-                            warn!("Received empty transfer event, skipping");
-                            continue;
-                        };
-                        debug!("Received transfer event with transfer id {}", transfer.id);
-                        trace!("Received transfer event with transfer: {:?}", transfer);
-                        let transfer: Transfer = match transfer.try_into() {
-                            Ok(transfer) => transfer,
-                            Err(e) => {
-                                error!("Failed to convert transfer event: {}", e);
-                                continue;
-                            }
-                        };
-
-                        // we only care about LN receive transfers
-                        if transfer.transfer_type != spark::services::TransferType::PreimageSwap {
-                            continue;
-                        }
-
-                        let ssp_transfer = ssp_client
-                            .get_transfers(vec![transfer.id.to_string()])
-                            .await
-                            .unwrap_or_default()
-                            .into_iter()
-                            .next();
-
-                        if let Some(req) = ssp_transfer.and_then(|s| s.user_request) {
-                            if let Some(inv) = req.get_lightning_invoice()
-                                && let Ok(invoice) = Bolt11Invoice::from_str(&inv)
-                            {
-                                let payment_hash = invoice.payment_hash().to_string();
-                                if let Ok(Some(mut zap)) =
-                                    db.get_zap_by_payment_hash(&payment_hash).await
-                                    && zap.zap_event.is_none()
-                                {
-                                    let zap_request = nostr::Event::from_json(&zap.zap_request)
-                                        .expect("we validated this before inserting");
-                                    if let Ok(zap_event) = EventBuilder::zap_receipt(
-                                        inv,
-                                        req.get_lightning_preimage(),
-                                        &zap_request,
-                                    )
-                                    .sign_with_keys(&nostr_keys)
-                                    {
-                                        zap.zap_event = Some(zap_event.as_json());
-                                        db.upsert_zap(&zap).await.unwrap();
-
-                                        let nostr_client =
-                                            nostr_sdk::Client::new(nostr_keys.clone());
-
-                                        let relays = zap_request
-                                            .tags
-                                            .iter()
-                                            .filter_map(|t| {
-                                                if let Some(TagStandard::Relays(r)) =
-                                                    t.as_standardized()
-                                                {
-                                                    Some(r.clone())
-                                                } else {
-                                                    None
-                                                }
-                                            })
-                                            .flatten()
-                                            .collect::<Vec<_>>();
-
-                                        for r in relays {
-                                            if let Err(e) = nostr_client.add_relay(&r).await {
-                                                error!("Failed to add relay {r}: {e}");
-                                            }
-                                        }
-                                        nostr_client.connect().await;
-
-                                        if let Err(e) = nostr_client.send_event(&zap_event).await {
-                                            error!("Failed to send zap event to nostr relay: {e}",);
-                                        } else {
-                                            debug!("Sent zap event to nostr relay");
-                                        }
-
-                                        nostr_client.disconnect().await; // safely cleanup
-
-                                        // Check if user still has unexpired invoices
-                                        // Hold the lock while checking to prevent race condition with new subscriptions
-                                        let mut subscribed = subscribed_keys.lock().await;
-                                        match db
-                                            .user_has_unexpired_invoices(&user_pk.to_string())
-                                            .await
-                                        {
-                                            Ok(has_unexpired) => {
-                                                if !has_unexpired {
-                                                    debug!(
-                                                        "User {user_pk} has no more unexpired invoices, unsubscribing"
-                                                    );
-                                                    subscribed.remove(&user_pk.to_string());
-                                                    drop(subscribed);
-                                                    break; // Exit subscription loop
-                                                }
-                                            }
-                                            Err(e) => {
-                                                error!(
-                                                    "Failed to check unexpired invoices for user {user_pk}: {e}"
-                                                );
-                                            }
-                                        }
-                                        drop(subscribed);
-                                    }
-                                }
-                            }
-                        } else {
-                            trace!(
-                                "No SSP transfer found for transfer {}, skipping",
-                                transfer.id
-                            );
-                        }
-                    }
+                let transfer_event = match event {
+                    Event::Transfer(transfer_event) => transfer_event,
                     Event::Deposit(_) => {
                         trace!("Received deposit event, skipping");
+                        continue;
                     }
                     Event::Connected(_) => {
                         debug!("Received connected event");
+                        continue;
+                    }
+                };
+
+                let Some(transfer) = transfer_event.transfer else {
+                    warn!("Received empty transfer event, skipping");
+                    continue;
+                };
+                debug!("Received transfer event with transfer id {}", transfer.id);
+                trace!("Received transfer event with transfer: {:?}", transfer);
+                let transfer: Transfer = match transfer.try_into() {
+                    Ok(transfer) => transfer,
+                    Err(e) => {
+                        error!("Failed to convert transfer event: {}", e);
+                        continue;
+                    }
+                };
+
+                // we only care about LN receive transfers
+                if transfer.transfer_type != spark::services::TransferType::PreimageSwap {
+                    continue;
+                }
+
+                let ssp_transfer = ssp_client
+                    .get_transfers(vec![transfer.id.to_string()])
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .next();
+
+                let Some(req) = ssp_transfer.and_then(|s| s.user_request) else {
+                    debug!(
+                        "No SSP transfer found for transfer {}, skipping",
+                        transfer.id
+                    );
+                    continue;
+                };
+
+                let Some(inv) = req.get_lightning_invoice() else {
+                    debug!(
+                        "No lightning invoice found in user request for transfer {}, skipping",
+                        transfer.id
+                    );
+                    continue;
+                };
+
+                let Ok(invoice) = Bolt11Invoice::from_str(&inv) else {
+                    error!(
+                        "Failed to parse lightning invoice from user request for transfer {}, skipping",
+                        transfer.id
+                    );
+                    continue;
+                };
+
+                let payment_hash = invoice.payment_hash().to_string();
+                let mut zap = match db.get_zap_by_payment_hash(&payment_hash).await {
+                    Ok(Some(zap)) => zap,
+                    Ok(None) => {
+                        debug!("No zap found for payment hash {}, skipping", payment_hash);
+                        continue;
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to get zap by payment hash {}: {}, skipping",
+                            payment_hash, e
+                        );
+                        continue;
+                    }
+                };
+
+                if zap.zap_event.is_some() {
+                    debug!(
+                        "Zap event already exists for payment hash {}, skipping",
+                        payment_hash
+                    );
+                    continue;
+                }
+
+                let Ok(zap_request) = nostr::Event::from_json(&zap.zap_request) else {
+                    error!(
+                        "Failed to parse zap request from stored zap for payment hash {}, zap request: {}",
+                        payment_hash, zap.zap_request
+                    );
+                    continue;
+                };
+
+                let zap_event = match EventBuilder::zap_receipt(
+                    inv,
+                    req.get_lightning_preimage(),
+                    &zap_request,
+                )
+                .sign_with_keys(&nostr_keys)
+                {
+                    Ok(event) => event,
+                    Err(e) => {
+                        error!(
+                            "Failed to build zap event for payment hash {}: {}",
+                            payment_hash, e
+                        );
+                        continue;
+                    }
+                };
+
+                zap.zap_event = Some(zap_event.as_json());
+                db.upsert_zap(&zap).await.unwrap();
+
+                let nostr_client = nostr_sdk::Client::new(nostr_keys.clone());
+
+                let relays = zap_request
+                    .tags
+                    .iter()
+                    .filter_map(|t| {
+                        if let Some(TagStandard::Relays(r)) = t.as_standardized() {
+                            Some(r.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten()
+                    .collect::<Vec<_>>();
+
+                for r in relays {
+                    if let Err(e) = nostr_client.add_relay(&r).await {
+                        error!("Failed to add relay {r}: {e}");
                     }
                 }
+                nostr_client.connect().await;
+
+                if let Err(e) = nostr_client.send_event(&zap_event).await {
+                    error!("Failed to send zap event to nostr relay: {e}",);
+                } else {
+                    debug!("Sent zap event to nostr relay");
+                }
+
+                nostr_client.disconnect().await; // safely cleanup
+
+                // Check if user still has unexpired invoices
+                // Hold the lock while checking to prevent race condition with new subscriptions
+                let mut subscribed = subscribed_keys.lock().await;
+                match db.user_has_unexpired_invoices(&user_pk.to_string()).await {
+                    Ok(has_unexpired) => {
+                        if !has_unexpired {
+                            debug!("User {user_pk} has no more unexpired invoices, unsubscribing");
+                            subscribed.remove(&user_pk.to_string());
+                            drop(subscribed);
+                            return; // Exit subscription completely
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to check unexpired invoices for user {user_pk}: {e}");
+                    }
+                }
+                drop(subscribed);
             }
 
             // Connection lost, wait before reconnecting
