@@ -36,7 +36,7 @@ async def receive_onchain(sdk: BreezSdk):
     # ANCHOR: receive-payment-onchain
     try:
         request = ReceivePaymentRequest(
-            payment_method=ReceivePaymentMethod.BITCOIN_ADDRESS
+            payment_method=ReceivePaymentMethod.BITCOIN_ADDRESS()
         )
         response = await sdk.receive_payment(request=request)
 
@@ -55,7 +55,7 @@ async def receive_spark_address(sdk: BreezSdk):
     # ANCHOR: receive-payment-spark-address
     try:
         request = ReceivePaymentRequest(
-            payment_method=ReceivePaymentMethod.SPARK_ADDRESS
+            payment_method=ReceivePaymentMethod.SPARK_ADDRESS()
         )
         response = await sdk.receive_payment(request=request)
 
