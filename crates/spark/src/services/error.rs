@@ -83,6 +83,12 @@ pub enum ServiceError {
     #[error("Partial check timelock error")]
     PartialCheckTimelockError(Vec<TreeNode>),
 
+    // HTLC related errors
+    #[error("invalid payment hash: {0}")]
+    InvalidPaymentHash(String),
+    #[error("invalid preimage: {0}")]
+    InvalidPreimage(String),
+
     // Common errors
     #[error("bitcoin error: {0}")]
     BitcoinError(#[from] crate::bitcoin::BitcoinError),

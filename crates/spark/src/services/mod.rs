@@ -1,6 +1,7 @@
 mod coop_exit;
 mod deposit;
 mod error;
+mod htlc;
 mod lightning;
 mod models;
 mod swap;
@@ -13,6 +14,7 @@ mod unilateral_exit;
 pub use coop_exit::*;
 pub use deposit::*;
 pub use error::*;
+pub use htlc::*;
 pub use lightning::{
     InvoiceDescription, LightningReceivePayment, LightningSendPayment, LightningSendStatus,
     LightningService,

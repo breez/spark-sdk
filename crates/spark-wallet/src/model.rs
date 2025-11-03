@@ -12,8 +12,8 @@ use spark::{
         invoice_response::TransferType as InvoiceTransferType,
     },
     services::{
-        ExitSpeed, LightningSendPayment, TokenTransaction, Transfer, TransferId, TransferLeaf,
-        TransferStatus, TransferType,
+        ExitSpeed, LightningSendPayment, PreimageRequestStatus, PreimageRequestWithTransfer,
+        TokenTransaction, Transfer, TransferId, TransferLeaf, TransferStatus, TransferType,
     },
     ssp::{SspTransfer, SspUserRequest},
     token::TokenMetadata,
@@ -329,4 +329,32 @@ pub(crate) struct WithdrawInnerParams<'a> {
     pub fee_sats: u64,
     pub fee_quote_id: String,
     pub transfer_id: Option<TransferId>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct WalletHtlc {
+    pub payment_hash: String,
+    pub receiver_identity_pubkey: PublicKey,
+    pub status: PreimageRequestStatus,
+    pub created_time: SystemTime,
+    pub transfer: Option<WalletTransfer>,
+    pub preimage: Option<String>,
+}
+
+impl WalletHtlc {
+    pub fn from_preimage_request_with_transfer(
+        value: PreimageRequestWithTransfer,
+        our_public_key: PublicKey,
+    ) -> Self {
+        WalletHtlc {
+            payment_hash: value.payment_hash.to_string(),
+            receiver_identity_pubkey: value.receiver_identity_pubkey,
+            status: value.status,
+            created_time: value.created_time,
+            transfer: value
+                .transfer
+                .map(|t| WalletTransfer::from_transfer(t, None, our_public_key)),
+            preimage: value.preimage.map(|p| p.encode_hex()),
+        }
+    }
 }

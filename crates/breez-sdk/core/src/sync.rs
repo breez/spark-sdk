@@ -173,7 +173,7 @@ impl SparkSyncService {
                     paging: Some(PagingFilter::new(
                         Some(next_offset),
                         Some(PAYMENT_SYNC_BATCH_SIZE),
-                        None,
+                        Some(Order::Descending),
                     )),
                     ..Default::default()
                 })
@@ -227,7 +227,11 @@ impl SparkSyncService {
             let Ok(parent_transactions) = self
                 .spark_wallet
                 .list_token_transactions(ListTokenTransactionsRequest {
-                    paging: Some(PagingFilter::new(None, Some(PAYMENT_SYNC_BATCH_SIZE), None)),
+                    paging: Some(PagingFilter::new(
+                        None,
+                        Some(PAYMENT_SYNC_BATCH_SIZE),
+                        Some(Order::Descending),
+                    )),
                     owner_public_keys: Some(Vec::new()),
                     token_transaction_hashes: token_transactions_prevout_hashes,
                     ..Default::default()
