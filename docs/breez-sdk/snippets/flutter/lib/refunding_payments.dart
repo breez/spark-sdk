@@ -12,9 +12,11 @@ Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
     final claimError = deposit.claimError;
     if (claimError is DepositClaimError_DepositClaimFeeExceeded) {
       print(
-          "Claim failed: Fee exceeded. Max: ${claimError.maxFee}, Actual: ${claimError.actualFee}");
+          "Max claim fee exceeded. Max: ${claimError.maxFee}, Actual: ${claimError.actualFee} sats");
+    } else if (claimError is DepositClaimError_DepositClaimFeeNotSet) {
+      print("Max claim fee not set. Actual: ${claimError.actualFee} sats");
     } else if (claimError is DepositClaimError_MissingUtxo) {
-      print("Claim failed: UTXO not found");
+      print("UTXO not found when claiming deposit");
     } else if (claimError is DepositClaimError_Generic) {
       print("Claim failed: ${claimError.message}");
     }

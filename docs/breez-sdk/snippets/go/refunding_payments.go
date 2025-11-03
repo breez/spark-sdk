@@ -22,9 +22,11 @@ func ListUnclaimedDeposits(sdk *breez_sdk_spark.BreezSdk) error {
 		if claimErr := *deposit.ClaimError; claimErr != nil {
 			switch claimErr := claimErr.(type) {
 			case breez_sdk_spark.DepositClaimErrorDepositClaimFeeExceeded:
-				log.Printf("Claim failed: Fee exceeded. Max: %v, Actual: %v", claimErr.MaxFee, claimErr.ActualFee)
+				log.Printf("Max claim fee exceeded. Max: %v, Actual: %v sats", claimErr.MaxFee, claimErr.ActualFee)
+			case breez_sdk_spark.DepositClaimErrorDepositClaimFeeNotSet:
+				log.Printf("Max claim fee not set. Actual: %v sats", claimErr.ActualFee)
 			case breez_sdk_spark.DepositClaimErrorMissingUtxo:
-				log.Print("Claim failed: UTXO not found")
+				log.Print("UTXO not found when claiming deposit")
 			case breez_sdk_spark.DepositClaimErrorGeneric:
 				log.Printf("Claim failed: %v", claimErr.Message)
 			case nil:

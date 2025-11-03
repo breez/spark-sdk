@@ -16,10 +16,13 @@ class RefundingPayments {
                 deposit.claimError?.let { claimError ->
                     when (claimError) {
                         is DepositClaimError.DepositClaimFeeExceeded -> {
-                            // Log.v("Breez", "Claim failed: Fee exceeded. Max: ${claimError.maxFee}, Actual: ${claimError.actualFee}")
+                            // Log.v("Breez", "Max claim fee exceeded. Max: ${claimError.maxFee}, Actual: ${claimError.actualFee} sats")
+                        }
+                        is DepositClaimError.DepositClaimFeeNotSet -> {
+                            // Log.v("Breez", "Max claim fee not set. Actual: ${claimError.actualFee} sats")
                         }
                         is DepositClaimError.MissingUtxo -> {
-                            // Log.v("Breez", "Claim failed: UTXO not found")
+                            // Log.v("Breez", "UTXO not found when claiming deposit")
                         }
                         is DepositClaimError.Generic -> {
                             // Log.v("Breez", "Claim failed: ${claimError.message}")

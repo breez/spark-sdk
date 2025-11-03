@@ -46,6 +46,12 @@ pub enum SdkError {
         max_fee: Fee,
         actual_fee: u64,
     },
+    #[error("Deposit claim fee not set for utxo: {tx}:{vout}, actual fee sat: {actual_fee}")]
+    DepositClaimFeeNotSet {
+        tx: String,
+        vout: u32,
+        actual_fee: u64,
+    },
 
     #[error("Missing utxo: {tx}:{vout}")]
     MissingUtxo { tx: String, vout: u32 },
@@ -193,6 +199,13 @@ pub enum DepositClaimError {
         actual_fee: u64,
     },
 
+    #[error("Deposit claim fee not set for utxo: {tx}:{vout}, actual fee sat: {actual_fee}")]
+    DepositClaimFeeNotSet {
+        tx: String,
+        vout: u32,
+        actual_fee: u64,
+    },
+
     #[error("Missing utxo: {tx}:{vout}")]
     MissingUtxo { tx: String, vout: u32 },
 
@@ -212,6 +225,15 @@ impl From<SdkError> for DepositClaimError {
                 tx,
                 vout,
                 max_fee,
+                actual_fee,
+            },
+            SdkError::DepositClaimFeeNotSet {
+                tx,
+                vout,
+                actual_fee,
+            } => DepositClaimError::DepositClaimFeeNotSet {
+                tx,
+                vout,
                 actual_fee,
             },
             SdkError::MissingUtxo { tx, vout } => DepositClaimError::MissingUtxo { tx, vout },

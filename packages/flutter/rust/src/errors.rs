@@ -10,6 +10,11 @@ pub enum _DepositClaimError {
         max_fee: Fee,
         actual_fee: u64,
     },
+    DepositClaimFeeNotSet {
+        tx: String,
+        vout: u32,
+        actual_fee: u64,
+    },
     MissingUtxo {
         tx: String,
         vout: u32,
@@ -31,6 +36,11 @@ pub enum _SdkError {
         tx: String,
         vout: u32,
         max_fee: Fee,
+        actual_fee: u64,
+    },
+    DepositClaimFeeNotSet {
+        tx: String,
+        vout: u32,
         actual_fee: u64,
     },
     MissingUtxo {
