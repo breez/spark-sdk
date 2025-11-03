@@ -295,29 +295,6 @@ impl SparkRpcClient {
             .into_inner())
     }
 
-    pub async fn refresh_timelock_v2(
-        &self,
-        req: RefreshTimelockRequest,
-    ) -> Result<RefreshTimelockResponse> {
-        debug!("Calling refresh_timelock_v2 with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .refresh_timelock_v2(req)
-            .await?
-            .into_inner())
-    }
-
-    pub async fn extend_leaf_v2(&self, req: ExtendLeafRequest) -> Result<ExtendLeafResponse> {
-        debug!("Calling extend_leaf_v2 with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .extend_leaf_v2(req)
-            .await?
-            .into_inner())
-    }
-
     pub async fn renew_leaf(&self, req: RenewLeafRequest) -> Result<RenewLeafResponse> {
         debug!("Calling renew_leaf with request: {:?}", req);
         Ok(self
@@ -540,6 +517,16 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    pub async fn query_htlc(&self, req: QueryHtlcRequest) -> Result<QueryHtlcResponse> {
+        debug!("Calling query_htlc with request: {:?}", req);
+        Ok(self
+            .spark_service_client()
+            .await?
+            .query_htlc(req)
+            .await?
+            .into_inner())
+    }
+
     pub async fn start_transaction(
         &self,
         req: StartTransactionRequest,
@@ -564,16 +551,6 @@ impl SparkRpcClient {
             .commit_transaction(req)
             .await?
             .into_inner())
-    }
-
-    pub async fn return_lightning_payment(&self, req: ReturnLightningPaymentRequest) -> Result<()> {
-        debug!("Calling return_lightning_payment with request: {:?}", req);
-        self.spark_service_client()
-            .await?
-            .return_lightning_payment(req)
-            .await?
-            .into_inner();
-        Ok(())
     }
 
     pub async fn query_static_deposit_addresses(

@@ -4480,6 +4480,7 @@ dependencies = [
  "figment",
  "hex",
  "qrcode-rs",
+ "rand 0.8.5",
  "reqwest",
  "rustyline",
  "serde",
