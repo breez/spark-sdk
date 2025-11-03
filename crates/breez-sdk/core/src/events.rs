@@ -22,11 +22,11 @@ pub enum SdkEvent {
         /// Value indicating whether new data was pulled through real-time sync.
         did_pull_new_records: bool,
     },
-    /// Emitted when the wallet failed to claim some deposits
-    ClaimDepositsFailed {
+    /// Emitted when the SDK was unable to claim deposits
+    UnclaimedDeposits {
         unclaimed_deposits: Vec<DepositInfo>,
     },
-    ClaimDepositsSucceeded {
+    ClaimedDeposits {
         claimed_deposits: Vec<DepositInfo>,
     },
     PaymentSucceeded {
@@ -53,11 +53,11 @@ impl fmt::Display for SdkEvent {
                     }
                 )
             }
-            SdkEvent::ClaimDepositsFailed { unclaimed_deposits } => {
-                write!(f, "ClaimDepositsFailed: {unclaimed_deposits:?}")
+            SdkEvent::UnclaimedDeposits { unclaimed_deposits } => {
+                write!(f, "UnclaimedDeposits: {unclaimed_deposits:?}")
             }
-            SdkEvent::ClaimDepositsSucceeded { claimed_deposits } => {
-                write!(f, "ClaimDepositsSucceeded: {claimed_deposits:?}")
+            SdkEvent::ClaimedDeposits { claimed_deposits } => {
+                write!(f, "ClaimedDeposits: {claimed_deposits:?}")
             }
             SdkEvent::PaymentSucceeded { payment } => {
                 write!(f, "PaymentSucceeded: {payment:?}")

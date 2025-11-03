@@ -30,6 +30,18 @@ async fn bob_sdk() -> Result<SdkInstance> {
 }
 
 #[fixture]
+async fn bob_no_fee_sdk() -> Result<SdkInstance> {
+    let dir = TempDir::new("breez-sdk-bob-no-fee")?;
+    let path = dir.path().to_string_lossy().to_string();
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+
+    let mut cfg = default_config(Network::Regtest);
+    cfg.max_deposit_claim_fee = None;
+    build_sdk_with_custom_config(path, seed, cfg, Some(dir)).await
+}
+
+#[fixture]
 async fn bob_strict_fee_sdk() -> Result<SdkInstance> {
     let dir = TempDir::new("breez-sdk-bob-fee")?;
     let path = dir.path().to_string_lossy().to_string();
@@ -61,7 +73,7 @@ async fn ensure_funded(sdk_instance: &mut SdkInstance, min_balance: u64) -> Resu
     Ok(())
 }
 
-async fn wait_for_claim_failed(
+async fn wait_for_unclaimed_event(
     event_rx: &mut tokio::sync::mpsc::Receiver<SdkEvent>,
     timeout: u64,
 ) -> Result<Vec<DepositInfo>> {
@@ -69,10 +81,10 @@ async fn wait_for_claim_failed(
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
-            anyhow::bail!("Timeout waiting for ClaimDepositsFailed event");
+            anyhow::bail!("Timeout waiting for UnclaimedDeposits event");
         }
         match tokio::time::timeout(remaining, event_rx.recv()).await {
-            Ok(Some(SdkEvent::ClaimDepositsFailed { unclaimed_deposits })) => {
+            Ok(Some(SdkEvent::UnclaimedDeposits { unclaimed_deposits })) => {
                 return Ok(unclaimed_deposits);
             }
             Ok(Some(other)) => {
@@ -83,7 +95,7 @@ async fn wait_for_claim_failed(
                 continue;
             }
             Ok(None) => anyhow::bail!("Event channel closed"),
-            Err(_) => anyhow::bail!("Timeout waiting for ClaimDepositsFailed event"),
+            Err(_) => anyhow::bail!("Timeout waiting for UnclaimedDeposits event"),
         }
     }
 }
@@ -179,11 +191,11 @@ async fn test_onchain_withdraw_to_static_address(
     Ok(())
 }
 
-/// Verify deposit fee limit blocks auto-claim, then manual claim succeeds; then refund path.
+/// Verify deposit fee limit blocks auto-claim then manually claim
 #[rstest]
 #[ignore]
 #[test_log::test(tokio::test)]
-async fn test_deposit_fee_claim_and_refund(
+async fn test_deposit_fee_manual_claim(
     #[future] bob_strict_fee_sdk: Result<SdkInstance>,
 ) -> Result<()> {
     let mut bob = bob_strict_fee_sdk.await?;
@@ -203,9 +215,9 @@ async fn test_deposit_fee_claim_and_refund(
     let txid = faucet.fund_address(&addr, fund_amount).await?;
     info!("Faucet txid: {}", txid);
 
-    // Kick sync and wait for ClaimDepositsFailed due to fee limit
+    // Start sync and wait for UnclaimedDeposits due to fee limit
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let failed = wait_for_claim_failed(&mut bob.events, 180).await?;
+    let failed = wait_for_unclaimed_event(&mut bob.events, 180).await?;
     assert!(!failed.is_empty());
     let (txid_found, vout) = {
         let d = failed
@@ -256,31 +268,55 @@ async fn test_deposit_fee_claim_and_refund(
         "Deposit should be removed after successful claim"
     );
 
-    // Fund again to test refund path (still strict fee blocks auto-claim)
-    let txid2 = faucet.fund_address(&addr, 25_000).await?;
-    info!("Faucet txid (for refund): {}", txid2);
+    Ok(())
+}
+
+/// Verify deposit no fee blocks auto-claim then refund
+#[rstest]
+#[ignore]
+#[test_log::test(tokio::test)]
+async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) -> Result<()> {
+    let mut bob = bob_no_fee_sdk.await?;
+
+    // Acquire a static deposit address
+    let addr = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress,
+        })
+        .await?
+        .payment_request;
+
+    // Fund address via faucet; no max fee blocks auto-claim
+    let faucet = RegtestFaucet::new()?;
+    let fund_amount = 25_000u64;
+    let txid = faucet.fund_address(&addr, fund_amount).await?;
+    info!("Faucet txid: {}", txid);
+
+    // Start sync and wait for UnclaimedDeposits due to no fee set
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let _ = wait_for_claim_failed(&mut bob.events, 180).await?;
+    let failed = wait_for_unclaimed_event(&mut bob.events, 180).await?;
+    assert!(!failed.is_empty());
 
     // Get current unclaimed deposit (use the new txid)
-    let deposits2 = bob
+    let deposits = bob
         .sdk
         .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
         .await?
         .deposits;
-    let dep2 = deposits2
+    let dep = deposits
         .iter()
-        .find(|d| d.txid == txid2)
+        .find(|d| d.txid == txid)
         .cloned()
-        .expect("second unclaimed deposit missing");
+        .expect("unclaimed deposit not found");
 
     // Refund to the same static address (acceptable for test)
     let refund_dest = addr.clone();
     let refund = bob
         .sdk
         .refund_deposit(RefundDepositRequest {
-            txid: dep2.txid.clone(),
-            vout: dep2.vout,
+            txid: dep.txid.clone(),
+            vout: dep.vout,
             destination_address: refund_dest,
             fee: Fee::Fixed { amount: 500 },
         })
@@ -298,7 +334,7 @@ async fn test_deposit_fee_claim_and_refund(
         .deposits;
     if let Some(updated) = deposits_after_refund
         .iter()
-        .find(|d| d.txid == dep2.txid && d.vout == dep2.vout)
+        .find(|d| d.txid == dep.txid && d.vout == dep.vout)
     {
         assert_eq!(updated.refund_tx_id.as_deref(), Some(refund.tx_id.as_str()));
     } else {

@@ -99,6 +99,8 @@ pub async fn build_sdk_with_custom_config(
     // Speed up tests and prefer spark routing
     config.prefer_spark_over_lightning = true;
     config.sync_interval_secs = 5;
+    // Disable real-time sync for tests
+    config.real_time_sync_server_url = None;
 
     let storage = default_storage(storage_dir)?;
     let seed = Seed::Entropy(seed_bytes.to_vec());
@@ -243,8 +245,8 @@ pub async fn receive_and_fund(
         txid
     );
 
-    // Wait for the ClaimDepositsSucceeded event
-    wait_for_claim_event(&mut sdk_instance.events, 180).await?;
+    // Wait for the ClaimedDeposits event
+    wait_for_claimed_event(&mut sdk_instance.events, 180).await?;
     wait_for_balance(&sdk_instance.sdk, Some(initial_balance + 1), None, 20).await?;
     sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
@@ -328,7 +330,7 @@ where
 ///
 /// # Returns
 /// Ok if claim succeeded, Error if timeout or failure
-pub async fn wait_for_claim_event(
+pub async fn wait_for_claimed_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     timeout_secs: u64,
 ) -> Result<()> {
@@ -337,15 +339,15 @@ pub async fn wait_for_claim_event(
         timeout_secs,
         "ClaimDeposits",
         |event| match event {
-            SdkEvent::ClaimDepositsSucceeded { claimed_deposits } => {
+            SdkEvent::ClaimedDeposits { claimed_deposits } => {
                 info!(
-                    "Received ClaimDepositsSucceeded event: {} deposits claimed",
+                    "Received ClaimedDeposits event: {} deposits claimed",
                     claimed_deposits.len()
                 );
                 Ok(Some(EventResult::ClaimSucceeded))
             }
-            SdkEvent::ClaimDepositsFailed { unclaimed_deposits } => Err(anyhow::anyhow!(
-                "Deposit claim failed: {} deposits unclaimed",
+            SdkEvent::UnclaimedDeposits { unclaimed_deposits } => Err(anyhow::anyhow!(
+                "Received UnclaimedDeposits event: {} deposits unclaimed",
                 unclaimed_deposits.len()
             )),
             other => {

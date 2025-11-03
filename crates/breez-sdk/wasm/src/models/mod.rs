@@ -62,10 +62,10 @@ pub enum SdkEvent {
     DataSynced {
         did_pull_new_records: bool,
     },
-    ClaimDepositsFailed {
+    UnclaimedDeposits {
         unclaimed_deposits: Vec<DepositInfo>,
     },
-    ClaimDepositsSucceeded {
+    ClaimedDeposits {
         claimed_deposits: Vec<DepositInfo>,
     },
     PaymentSucceeded {
@@ -154,7 +154,7 @@ pub enum DepositClaimError {
     DepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Fee,
+        max_fee: Option<Fee>,
         actual_fee: u64,
     },
     MissingUtxo {

@@ -9,10 +9,10 @@ pub enum _SdkEvent {
     DataSynced {
         did_pull_new_records: bool,
     },
-    ClaimDepositsFailed {
+    UnclaimedDeposits {
         unclaimed_deposits: Vec<DepositInfo>,
     },
-    ClaimDepositsSucceeded {
+    ClaimedDeposits {
         claimed_deposits: Vec<DepositInfo>,
     },
     PaymentSucceeded {

@@ -12,9 +12,9 @@ func listUnclaimedDeposits(sdk: BreezSdk) async throws {
         if let claimError = deposit.claimError {
             switch claimError {
             case .depositClaimFeeExceeded(let tx, let vout, let maxFee, let actualFee):
-                print("Claim failed: Fee exceeded. Max: \(maxFee), Actual: \(actualFee)")
+                print("Max claim fee exceeded. Max: \(maxFee), Actual: \(actualFee) sats")
             case .missingUtxo(let tx, let vout):
-                print("Claim failed: UTXO not found")
+                print("UTXO not found when claiming deposit")
             case .generic(let message):
                 print("Claim failed: \(message)")
             }

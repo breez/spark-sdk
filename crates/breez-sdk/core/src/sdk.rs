@@ -28,7 +28,7 @@ use spark_wallet::{
     TransferTokenOutput, WalletEvent, WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, warn};
 use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::{
@@ -221,7 +221,7 @@ pub fn default_config(network: Network) -> Config {
         api_key: None,
         network,
         sync_interval_secs: 60, // every 1 minute
-        max_deposit_claim_fee: None,
+        max_deposit_claim_fee: Some(Fee::Rate { sat_per_vbyte: 1 }),
         lnurl_domain: Some("breez.tips".to_string()),
         prefer_spark_over_lightning: false,
         external_input_parsers: None,
@@ -458,7 +458,7 @@ impl BreezSdk {
                     claimed_deposits.push(detailed_utxo.into());
                 }
                 Err(e) => {
-                    error!(
+                    warn!(
                         "Failed to claim utxo {}:{}: {e}",
                         detailed_utxo.txid, detailed_utxo.vout
                     );
@@ -482,12 +482,12 @@ impl BreezSdk {
 
         if !unclaimed_deposits.is_empty() {
             self.event_emitter
-                .emit(&SdkEvent::ClaimDepositsFailed { unclaimed_deposits })
+                .emit(&SdkEvent::UnclaimedDeposits { unclaimed_deposits })
                 .await;
         }
         if !claimed_deposits.is_empty() {
             self.event_emitter
-                .emit(&SdkEvent::ClaimDepositsSucceeded { claimed_deposits })
+                .emit(&SdkEvent::ClaimedDeposits { claimed_deposits })
                 .await;
         }
         Ok(())
@@ -502,44 +502,49 @@ impl BreezSdk {
             "Fetching static deposit claim quote for deposit tx {}:{} and amount: {}",
             detailed_utxo.txid, detailed_utxo.vout, detailed_utxo.value
         );
-
         let quote = self
             .spark_wallet
             .fetch_static_deposit_claim_quote(detailed_utxo.tx.clone(), Some(detailed_utxo.vout))
             .await?;
         let spark_requested_fee = detailed_utxo.value.saturating_sub(quote.credit_amount_sats);
-        if let Some(max_deposit_claim_fee) = max_claim_fee {
-            match max_deposit_claim_fee {
-                Fee::Fixed { amount } => {
-                    info!(
-                        "User max fee: {} spark requested fee: {}",
-                        amount, spark_requested_fee
-                    );
-                    if spark_requested_fee > amount {
-                        return Err(SdkError::DepositClaimFeeExceeded {
-                            tx: detailed_utxo.txid.to_string(),
-                            vout: detailed_utxo.vout,
-                            max_fee: max_deposit_claim_fee,
-                            actual_fee: spark_requested_fee,
-                        });
-                    }
+        let Some(max_deposit_claim_fee) = max_claim_fee else {
+            return Err(SdkError::DepositClaimFeeExceeded {
+                tx: detailed_utxo.txid.to_string(),
+                vout: detailed_utxo.vout,
+                max_fee: None,
+                actual_fee: spark_requested_fee,
+            });
+        };
+        match max_deposit_claim_fee {
+            Fee::Fixed { amount } => {
+                info!(
+                    "User max fee: {} spark requested fee: {}",
+                    amount, spark_requested_fee
+                );
+                if spark_requested_fee > amount {
+                    return Err(SdkError::DepositClaimFeeExceeded {
+                        tx: detailed_utxo.txid.to_string(),
+                        vout: detailed_utxo.vout,
+                        max_fee: Some(max_deposit_claim_fee),
+                        actual_fee: spark_requested_fee,
+                    });
                 }
-                Fee::Rate { sat_per_vbyte } => {
-                    // The claim tx size is 99 vbytes
-                    const CLAIM_TX_SIZE: u64 = 99;
-                    let user_max_fee = CLAIM_TX_SIZE.saturating_mul(sat_per_vbyte);
-                    info!(
-                        "User max fee: {} spark requested fee: {}",
-                        user_max_fee, spark_requested_fee
-                    );
-                    if spark_requested_fee > user_max_fee {
-                        return Err(SdkError::DepositClaimFeeExceeded {
-                            tx: detailed_utxo.txid.to_string(),
-                            vout: detailed_utxo.vout,
-                            max_fee: max_deposit_claim_fee,
-                            actual_fee: spark_requested_fee,
-                        });
-                    }
+            }
+            Fee::Rate { sat_per_vbyte } => {
+                // The claim tx size is 99 vbytes
+                const CLAIM_TX_SIZE: u64 = 99;
+                let user_max_fee = CLAIM_TX_SIZE.saturating_mul(sat_per_vbyte);
+                info!(
+                    "User max fee: {} spark requested fee: {}",
+                    user_max_fee, spark_requested_fee
+                );
+                if spark_requested_fee > user_max_fee {
+                    return Err(SdkError::DepositClaimFeeExceeded {
+                        tx: detailed_utxo.txid.to_string(),
+                        vout: detailed_utxo.vout,
+                        max_fee: Some(max_deposit_claim_fee),
+                        actual_fee: spark_requested_fee,
+                    });
                 }
             }
         }
@@ -1824,7 +1829,7 @@ impl BalanceWatcher {
 impl EventListener for BalanceWatcher {
     async fn on_event(&self, event: SdkEvent) {
         match event {
-            SdkEvent::PaymentSucceeded { .. } | SdkEvent::ClaimDepositsSucceeded { .. } => {
+            SdkEvent::PaymentSucceeded { .. } | SdkEvent::ClaimedDeposits { .. } => {
                 match update_balances(self.spark_wallet.clone(), self.storage.clone()).await {
                     Ok(()) => info!("Balance updated successfully"),
                     Err(e) => error!("Failed to update balance: {e:?}"),

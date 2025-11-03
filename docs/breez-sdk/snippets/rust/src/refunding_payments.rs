@@ -14,10 +14,10 @@ async fn list_unclaimed_deposits(sdk: &BreezSdk) -> Result<()> {
         if let Some(claim_error) = &deposit.claim_error {
             match claim_error {
                 DepositClaimError::DepositClaimFeeExceeded { max_fee, actual_fee, .. } => {
-                    info!("Claim failed: Fee exceeded. Max: {}, Actual: {}", max_fee, actual_fee);
+                    info!("Max claim fee exceeded. Max: {:?}, Actual: {} sats", max_fee, actual_fee);
                 }
                 DepositClaimError::MissingUtxo { .. } => {
-                    info!("Claim failed: UTXO not found");
+                    info!("UTXO not found when claiming deposit");
                 }
                 DepositClaimError::Generic { message } => {
                     info!("Claim failed: {}", message);

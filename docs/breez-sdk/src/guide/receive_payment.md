@@ -96,7 +96,8 @@ To receive via LNURL-Pay and/or a Lightning address, follow [these instructions]
 ### Bitcoin
 
 For onchain payments you can use the static Bitcoin address to receive payments.
-The SDK monitors the specified address for new UTXOs and automatically initiates the claim process when funds are detected.
+
+The SDK monitors the specified address for new UTXOs and automatically initiates the claim process when funds are detected. If the Config's maximum deposit claim fee is not set or below the current Spark fee to claim the Bitcoin deposit, the deposit will need to be claimed or refunded manually. See [Handling unclaimed deposits](/guide/unclaimed_deposits.md) for more details on this process.
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>
@@ -430,8 +431,8 @@ Once a receive payment is initiated, you can follow and react to the different p
 
 | Event                      | Description                                                                                                                                                                                               | UX Suggestion                                                                                           |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| **ClaimDepositsFailed**    | The SDK attempted to claim static address deposits but they failed from one of several reasons. Either the claim fee exceeded the maximum allowed limit or there was an issue finding the available UTXO. | Allow the user to refund these failed deposits. See [Refunding payments](/guide/refunding_payments.md). |
-| **ClaimDepositsSucceeded** | The SDK successfully claimed static address deposits.                                                                                                                                                     |                                                                                                         |
+| **UnclaimedDeposits**    | The SDK attempted to claim static address deposits but they failed from one of several reasons. Either the claim fee exceeded the maximum allowed limit or there was an issue finding the available UTXO. | Allow the user to refund these failed deposits. See [Handling unclaimed deposits](/guide/unclaimed_deposits.md). |
+| **ClaimedDeposits** | The SDK successfully claimed static address deposits.                                                                                                                                                     |                                                                                                         |
 | **PaymentSucceeded**       | The Spark transfer is claimed and the payment is complete.                                                                                                                                                | Update the balance and show payment as complete.                                                        |
 
 ### Spark
