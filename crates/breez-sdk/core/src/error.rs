@@ -38,18 +38,12 @@ pub enum SdkError {
     ChainServiceError(String),
 
     #[error(
-        "Deposit claim fee exceeds for utxo: {tx}:{vout} with max fee: {max_fee} and actual fee sat: {actual_fee}"
+        "Deposit claim fee exceeds for utxo: {tx}:{vout} with max fee: {max_fee:?} and actual fee: {actual_fee} sats"
     )]
     DepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Fee,
-        actual_fee: u64,
-    },
-    #[error("Deposit claim fee not set for utxo: {tx}:{vout}, actual fee sat: {actual_fee}")]
-    DepositClaimFeeNotSet {
-        tx: String,
-        vout: u32,
+        max_fee: Option<Fee>,
         actual_fee: u64,
     },
 
@@ -190,19 +184,12 @@ impl From<TryInitError> for SdkError {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum DepositClaimError {
     #[error(
-        "Deposit claim fee exceeds for utxo: {tx}:{vout} with max fee: {max_fee} and actual fee sat: {actual_fee}"
+        "Deposit claim fee exceeds for utxo: {tx}:{vout} with max fee: {max_fee:?} and actual fee: {actual_fee} sats"
     )]
     DepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Fee,
-        actual_fee: u64,
-    },
-
-    #[error("Deposit claim fee not set for utxo: {tx}:{vout}, actual fee sat: {actual_fee}")]
-    DepositClaimFeeNotSet {
-        tx: String,
-        vout: u32,
+        max_fee: Option<Fee>,
         actual_fee: u64,
     },
 
@@ -225,15 +212,6 @@ impl From<SdkError> for DepositClaimError {
                 tx,
                 vout,
                 max_fee,
-                actual_fee,
-            },
-            SdkError::DepositClaimFeeNotSet {
-                tx,
-                vout,
-                actual_fee,
-            } => DepositClaimError::DepositClaimFeeNotSet {
-                tx,
-                vout,
                 actual_fee,
             },
             SdkError::MissingUtxo { tx, vout } => DepositClaimError::MissingUtxo { tx, vout },

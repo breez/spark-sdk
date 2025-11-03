@@ -28,7 +28,7 @@ use spark_wallet::{
     TransferTokenOutput, WalletEvent, WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, warn};
 use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::{
@@ -458,7 +458,7 @@ impl BreezSdk {
                     claimed_deposits.push(detailed_utxo.into());
                 }
                 Err(e) => {
-                    error!(
+                    warn!(
                         "Failed to claim utxo {}:{}: {e}",
                         detailed_utxo.txid, detailed_utxo.vout
                     );
@@ -508,9 +508,10 @@ impl BreezSdk {
             .await?;
         let spark_requested_fee = detailed_utxo.value.saturating_sub(quote.credit_amount_sats);
         let Some(max_deposit_claim_fee) = max_claim_fee else {
-            return Err(SdkError::DepositClaimFeeNotSet {
+            return Err(SdkError::DepositClaimFeeExceeded {
                 tx: detailed_utxo.txid.to_string(),
                 vout: detailed_utxo.vout,
+                max_fee: None,
                 actual_fee: spark_requested_fee,
             });
         };
@@ -524,7 +525,7 @@ impl BreezSdk {
                     return Err(SdkError::DepositClaimFeeExceeded {
                         tx: detailed_utxo.txid.to_string(),
                         vout: detailed_utxo.vout,
-                        max_fee: max_deposit_claim_fee,
+                        max_fee: Some(max_deposit_claim_fee),
                         actual_fee: spark_requested_fee,
                     });
                 }
@@ -541,7 +542,7 @@ impl BreezSdk {
                     return Err(SdkError::DepositClaimFeeExceeded {
                         tx: detailed_utxo.txid.to_string(),
                         vout: detailed_utxo.vout,
-                        max_fee: max_deposit_claim_fee,
+                        max_fee: Some(max_deposit_claim_fee),
                         actual_fee: spark_requested_fee,
                     });
                 }

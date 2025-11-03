@@ -16,7 +16,7 @@ The SDK emits a `UnclaimedDeposits` event containing information about the uncla
 
 The SDK provides three methods to handle unclaimed deposits:
 
-1. **Listing unclaimed deposits** - Retrieve all deposits that failed to be claimed
+1. **Listing unclaimed deposits** - Retrieve all deposits that have not yet been claimed
 2. **Claiming a deposit** - Claim a deposit using specific claiming parameters
 3. **Refunding a deposit** - Send the deposit funds to an external Bitcoin address
 

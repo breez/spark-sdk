@@ -18,9 +18,6 @@ class RefundingPayments {
                         is DepositClaimError.DepositClaimFeeExceeded -> {
                             // Log.v("Breez", "Max claim fee exceeded. Max: ${claimError.maxFee}, Actual: ${claimError.actualFee} sats")
                         }
-                        is DepositClaimError.DepositClaimFeeNotSet -> {
-                            // Log.v("Breez", "Max claim fee not set. Actual: ${claimError.actualFee} sats")
-                        }
                         is DepositClaimError.MissingUtxo -> {
                             // Log.v("Breez", "UTXO not found when claiming deposit")
                         }

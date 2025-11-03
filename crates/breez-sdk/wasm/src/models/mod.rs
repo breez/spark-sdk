@@ -154,12 +154,7 @@ pub enum DepositClaimError {
     DepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Fee,
-        actual_fee: u64,
-    },
-    DepositClaimFeeNotSet {
-        tx: String,
-        vout: u32,
+        max_fee: Option<Fee>,
         actual_fee: u64,
     },
     MissingUtxo {
