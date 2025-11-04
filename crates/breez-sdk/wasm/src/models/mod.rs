@@ -408,6 +408,7 @@ pub struct Payment {
 pub enum PaymentDetails {
     Spark {
         invoice_details: Option<SparkInvoicePaymentDetails>,
+        htlc_details: Option<SparkHtlcDetails>,
     },
     Token {
         metadata: TokenMetadata,
@@ -435,6 +436,21 @@ pub enum PaymentDetails {
 pub struct SparkInvoicePaymentDetails {
     pub description: Option<String>,
     pub invoice: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkHtlcDetails)]
+pub struct SparkHtlcDetails {
+    pub payment_hash: String,
+    pub preimage: Option<String>,
+    pub expiry_time: u64,
+    pub status: SparkHtlcStatus,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkHtlcStatus)]
+pub enum SparkHtlcStatus {
+    WaitingForPreimage,
+    PreimageShared,
+    Returned,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentMethod)]
@@ -733,6 +749,15 @@ pub enum SendPaymentOptions {
         prefer_spark: bool,
         completion_timeout_secs: Option<u32>,
     },
+    SparkAddress {
+        htlc_options: Option<SparkHtlcOptions>,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkHtlcOptions)]
+pub struct SparkHtlcOptions {
+    pub preimage: String,
+    pub expiry_duration_secs: u64,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentRequest)]
@@ -990,4 +1015,14 @@ pub struct IncomingChange {
 pub struct OutgoingChange {
     pub change: RecordChange,
     pub parent: Option<Record>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimSparkHtlcRequest)]
+pub struct ClaimSparkHtlcRequest {
+    pub preimage: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimSparkHtlcResponse)]
+pub struct ClaimSparkHtlcResponse {
+    pub payment: Payment,
 }

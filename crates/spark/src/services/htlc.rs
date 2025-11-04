@@ -135,13 +135,14 @@ impl HtlcService {
             })
             .collect();
 
+        // TODO: add transfer ids to filter once supported
         let response = self
             .operator_pool
             .get_coordinator()
             .client
             .query_htlc(QueryHtlcRequest {
                 payment_hashes,
-                identity_public_key: self.signer.get_identity_public_key()?.serialize().to_vec(),
+                identity_public_key: filter.receiver_identity_public_key.serialize().to_vec(),
                 status: filter
                     .status
                     .map(|s| operator_rpc::spark::PreimageRequestStatus::from(s).into()),

@@ -1,8 +1,7 @@
-use std::time::UNIX_EPOCH;
-
 use breez_sdk_common::input::{InputType, PaymentRequestSource, parse_spark_address};
 use spark_wallet::SparkWallet;
 use tracing::warn;
+use web_time::UNIX_EPOCH;
 
 use crate::{
     Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError, TokenMetadata,

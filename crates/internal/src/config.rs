@@ -48,7 +48,7 @@ spark_config:
   service_provider_config:
     base_url: "https://api.lightspark.com"
     schema_endpoint: "graphql/spark/rc"
-    identity_public_key: "023e33e2920326f64ea31058d44777442d97d7d5cbfcf54e3060bc1695e5261c93"
+    identity_public_key: "022bf283544b16c0622daecb79422007d167eca6ce9f0c98c0c49833b1f7170bfe"
   tokens_config:
     expected_withdraw_bond_sats: 10000
     expected_withdraw_relative_block_locktime: 1000

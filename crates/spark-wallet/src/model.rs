@@ -1,9 +1,6 @@
-use std::{
-    fmt::Display,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::fmt::Display;
 
-use bitcoin::{Transaction, secp256k1::PublicKey};
+use bitcoin::{Transaction, hashes::sha256, secp256k1::PublicKey};
 use serde::{Deserialize, Serialize};
 use spark::{
     Network,
@@ -11,13 +8,15 @@ use spark::{
         InvoiceResponse, InvoiceStatus, invoice_response::TransferType as InvoiceTransferType,
     },
     services::{
-        LightningSendPayment, PreimageRequestStatus, PreimageRequestWithTransfer, TokenMetadata,
-        TokenTransaction, Transfer, TransferId, TransferLeaf, TransferStatus, TransferType,
+        LightningSendPayment, Preimage, PreimageRequestStatus, PreimageRequestWithTransfer,
+        TokenMetadata, TokenTransaction, Transfer, TransferId, TransferLeaf, TransferStatus,
+        TransferType,
     },
     ssp::{SspTransfer, SspUserRequest},
     tree::{Leaves, SigningKeyshare, TreeNode, TreeNodeId},
     utils::paging::PagingFilter,
 };
+use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::SparkWalletError;
 
@@ -62,12 +61,14 @@ pub struct WalletTransfer {
     pub direction: TransferDirection,
     pub user_request: Option<SspUserRequest>,
     pub spark_invoice: Option<String>,
+    pub htlc: Option<WalletHtlc>,
 }
 
 impl WalletTransfer {
     pub fn from_transfer(
         value: Transfer,
         ssp_transfer: Option<SspTransfer>,
+        htlc: Option<WalletHtlc>,
         our_public_key: PublicKey,
     ) -> Self {
         let direction = if value.sender_identity_public_key == our_public_key {
@@ -95,6 +96,44 @@ impl WalletTransfer {
             direction,
             user_request: ssp_transfer.and_then(|t| t.user_request),
             spark_invoice: value.spark_invoice,
+            htlc,
+        }
+    }
+
+    pub fn from_preimage_request_with_transfer(
+        value: PreimageRequestWithTransfer,
+        our_public_key: PublicKey,
+    ) -> Result<Self, SparkWalletError> {
+        let transfer = Self::from_transfer(
+            value.transfer.clone().ok_or(SparkWalletError::Generic(
+                "Missing transfer in PreimageRequestWithTransfer".to_string(),
+            ))?,
+            None,
+            Some(value.into()),
+            our_public_key,
+        );
+
+        Ok(transfer)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct WalletHtlc {
+    pub payment_hash: sha256::Hash,
+    pub status: PreimageRequestStatus,
+    pub created_time: SystemTime,
+    pub expiry_time: SystemTime,
+    pub preimage: Option<Preimage>,
+}
+
+impl From<PreimageRequestWithTransfer> for WalletHtlc {
+    fn from(value: PreimageRequestWithTransfer) -> Self {
+        WalletHtlc {
+            payment_hash: value.payment_hash,
+            status: value.status,
+            created_time: value.created_time,
+            expiry_time: value.expiry_time,
+            preimage: value.preimage,
         }
     }
 }
@@ -299,34 +338,6 @@ impl TryFrom<InvoiceTransferType> for SparkInvoiceTransferType {
                     final_token_tx_hash: hex::encode(transfer.final_token_transaction_hash),
                 })
             }
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct WalletHtlc {
-    pub payment_hash: String,
-    pub receiver_identity_pubkey: PublicKey,
-    pub status: PreimageRequestStatus,
-    pub created_time: SystemTime,
-    pub transfer: Option<WalletTransfer>,
-    pub preimage: Option<String>,
-}
-
-impl WalletHtlc {
-    pub fn from_preimage_request_with_transfer(
-        value: PreimageRequestWithTransfer,
-        our_public_key: PublicKey,
-    ) -> Self {
-        WalletHtlc {
-            payment_hash: value.payment_hash.to_string(),
-            receiver_identity_pubkey: value.receiver_identity_pubkey,
-            status: value.status,
-            created_time: value.created_time,
-            transfer: value
-                .transfer
-                .map(|t| WalletTransfer::from_transfer(t, None, our_public_key)),
-            preimage: value.preimage.map(|p| p.encode_hex()),
         }
     }
 }

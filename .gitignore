@@ -15,7 +15,7 @@ js_reference/
 
 # Example CLI files
 *.spark/
-crates/breez-sdk/cli/.data
+crates/breez-sdk/cli/.data*
 
 # Deployment files
 fly.toml

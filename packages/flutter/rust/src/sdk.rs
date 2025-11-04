@@ -64,6 +64,13 @@ impl BreezSdk {
         self.inner.receive_payment(request).await
     }
 
+    pub async fn claim_spark_htlc(
+        &self,
+        request: ClaimSparkHtlcRequest,
+    ) -> Result<ClaimSparkHtlcResponse, SdkError> {
+        self.inner.claim_spark_htlc(request).await
+    }
+
     pub async fn prepare_lnurl_pay(
         &self,
         request: PrepareLnurlPayRequest,
