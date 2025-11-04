@@ -44,10 +44,18 @@ func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
 
 	// Create the default config
 	apiKey := "<breez api key>"
-	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	network := breez_sdk_spark.NetworkMainnet
+
+	config := breez_sdk_spark.DefaultConfig(network)
 	config.ApiKey = &apiKey
 
-	storage, err := breez_sdk_spark.DefaultStorage("./.data")
+	// Create the default storage
+	defaultStorageRequest := breez_sdk_spark.DefaultStorageRequest{
+		StorageDir: "./.data",
+		Network:    network,
+		Seed:       seed,
+	}
+	storage, err := breez_sdk_spark.DefaultStorage(defaultStorageRequest)
 	if err != nil {
 		return nil, err
 	}

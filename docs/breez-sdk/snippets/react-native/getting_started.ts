@@ -37,11 +37,16 @@ const exampleGettingStartedAdvanced = async () => {
   const seed = new Seed.Mnemonic({ mnemonic, passphrase: undefined })
 
   // Create the default config
-  const config = defaultConfig(Network.Mainnet)
+  const network = Network.Mainnet
+  const config = defaultConfig(network)
   config.apiKey = '<breez api key>'
 
   // Create the default storage
-  const storage = defaultStorage(`${RNFS.DocumentDirectoryPath}/data`)
+  const storage = defaultStorage({
+    storageDir: `${RNFS.DocumentDirectoryPath}/data`,
+    network,
+    seed
+  })
 
   const builder = new SdkBuilder(config, seed, storage)
   // You can also pass your custom implementations:

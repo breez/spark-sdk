@@ -32,11 +32,17 @@ Future<void> initSdkAdvanced() async {
   final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
 
   // Create the default config
-  final config = defaultConfig(network: Network.mainnet)
+  final network = Network.mainnet;
+  final config = defaultConfig(network: network)
       .copyWith(apiKey: "<breez api key>");
 
   // Create the default storage
-  final storage = defaultStorage(dataDir: "./.data");
+  final defaultStorageRequest = DefaultStorageRequest(
+      storageDir: "./.data",
+      network: network,
+      seed: seed,
+  );
+  final storage = defaultStorage(request: defaultStorageRequest);
 
   final builder =
       SdkBuilder(config: config, seed: seed, storage: storage);

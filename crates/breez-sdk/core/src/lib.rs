@@ -31,7 +31,7 @@ pub use sdk_builder::Seed;
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use {
     persist::sqlite::SqliteStorage,
-    sdk::{connect, default_storage},
+    sdk::{connect, default_storage, default_sync_storage},
 };
 
 #[cfg(feature = "test-utils")]

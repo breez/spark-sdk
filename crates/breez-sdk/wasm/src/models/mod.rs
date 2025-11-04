@@ -85,6 +85,7 @@ pub enum KeySetType {
     Legacy,
 }
 
+#[derive(Clone)]
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Seed)]
 pub enum Seed {
     /// A BIP-39 mnemonic phrase with an optional passphrase.
@@ -103,6 +104,13 @@ pub struct ConnectRequest {
     pub config: Config,
     pub seed: Seed,
     pub storage_dir: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::DefaultStorageRequest)]
+pub struct DefaultStorageRequest {
+    pub storage_dir: String,
+    pub network: Network,
+    pub seed: Seed,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::DepositInfo)]
@@ -506,6 +514,7 @@ pub struct LnurlWithdrawInfo {
     pub withdraw_url: String,
 }
 
+#[derive(Clone)]
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Network)]
 pub enum Network {
     Mainnet,

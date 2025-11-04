@@ -91,6 +91,13 @@ pub struct _Credentials {
     pub password: String,
 }
 
+#[frb(mirror(DefaultStorageRequest))]
+pub struct _DefaultStorageRequest {
+    pub storage_dir: String,
+    pub network: Network,
+    pub seed: Seed,
+}
+
 #[frb(mirror(DepositInfo))]
 pub struct _DepositInfo {
     pub txid: String,

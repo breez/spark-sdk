@@ -3,6 +3,7 @@ from breez_sdk_spark import (
     BreezSdk,
     connect,
     ConnectRequest,
+    DefaultStorageRequest,
     default_config,
     default_storage,
     EventListener,
@@ -43,11 +44,17 @@ async def init_sdk_advanced():
     mnemonic = "<mnemonic words>"
     seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
     # Create the default config
-    config = default_config(network=Network.MAINNET)
+    network = Network.MAINNET
+    config = default_config(network=network)
     config.api_key = "<breez api key>"
     try:
         # Create the default storage
-        storage = default_storage(data_dir="./.data")
+        default_storage_request = DefaultStorageRequest(
+            storage_dir="./.data",
+            network=network,
+            seed=seed,
+        )
+        storage = default_storage(default_storage_request)
         # Build the SDK using the config, seed and storage
         builder = SdkBuilder(config=config, seed=seed, storage=storage)
         # You can also pass your custom implementations:

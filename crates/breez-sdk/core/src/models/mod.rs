@@ -1,5 +1,6 @@
 pub(crate) mod adaptors;
 pub mod payment_observer;
+use bitcoin::hashes::{Hash, sha256};
 pub use payment_observer::*;
 
 use breez_sdk_common::{
@@ -17,9 +18,9 @@ use core::fmt;
 use lnurl_models::RecoverLnurlPayResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, fmt::Display, str::FromStr};
+use std::{collections::HashMap, fmt::Display, path::PathBuf, str::FromStr};
 
-use crate::{error::DepositClaimError, sdk_builder::Seed};
+use crate::{SdkError, error::DepositClaimError, sdk_builder::Seed};
 
 /// A list of external input parsers that are used by default.
 /// To opt-out, set `use_default_external_input_parsers` in [Config] to false.
@@ -41,6 +42,45 @@ pub struct ConnectRequest {
     pub config: Config,
     pub seed: Seed,
     pub storage_dir: String,
+}
+
+#[derive(Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct DefaultStorageRequest {
+    pub storage_dir: String,
+    pub network: Network,
+    pub seed: Seed,
+}
+
+impl DefaultStorageRequest {
+    pub fn to_path(&self) -> Result<PathBuf, SdkError> {
+        let storage_dir = std::path::PathBuf::from_str(&self.storage_dir)?;
+        let path_suffix: String = match &self.seed {
+            crate::Seed::Mnemonic {
+                mnemonic,
+                passphrase,
+            } => {
+                // Ensure mnemonic is valid before proceeding
+                bip39::Mnemonic::parse(mnemonic)
+                    .map_err(|e| SdkError::InvalidInput(format!("Invalid mnemonic: {e}")))?;
+                let str = format!("{mnemonic}:{passphrase:?}");
+                sha256::Hash::hash(str.as_bytes())
+                    .to_string()
+                    .chars()
+                    .take(8)
+                    .collect()
+            }
+            crate::Seed::Entropy(vec) => sha256::Hash::hash(vec.as_slice())
+                .to_string()
+                .chars()
+                .take(8)
+                .collect(),
+        };
+
+        Ok(storage_dir
+            .join(self.network.to_string().to_lowercase())
+            .join(path_suffix))
+    }
 }
 
 /// The type of payment

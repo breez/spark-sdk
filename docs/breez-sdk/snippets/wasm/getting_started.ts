@@ -49,11 +49,16 @@ const exampleGettingStartedAdvanced = async () => {
   const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
 
   // Create the default config
-  const config = defaultConfig('mainnet')
+  const network = 'mainnet'
+  const config = defaultConfig(network)
   config.apiKey = '<breez api key>'
 
   // Create the default storage
-  const storage = await defaultStorage('./.data')
+  const storage = await defaultStorage({
+    storageDir: './.data',
+    network,
+    seed
+  })
 
   // Build the SDK using the config, seed and storage
   const builder = SdkBuilder.new(config, seed, storage)
