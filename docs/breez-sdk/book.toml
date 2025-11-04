@@ -6,8 +6,8 @@ title = "Breez SDK - Nodeless (Spark)"
 
 [output.html]
 theme = "theme"
-additional-css = ["styles.css"]
-additional-js = ["tabs.js"]
+additional-css = ["styles.css", "theme/pagetoc.css"]
+additional-js = ["tabs.js", "theme/pagetoc.js"]
 git-repository-url = "https://github.com/breez/spark-sdk"
 edit-url-template = "https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/{path}"
 no-section-label = true
@@ -23,3 +23,7 @@ after = ["links"]
 
 [preprocessor.variables.variables]
 api_key_form_uri = "https://breez.technology/request-api-key/#contact-us-form-sdk"
+
+[preprocessor.pagetoc]
+command = "mdbook-pagetoc"
+renderer = "html"

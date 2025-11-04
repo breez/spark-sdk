@@ -14,6 +14,7 @@ To locally serve the docs run:
 cargo install mdbook
 cargo install --path ./snippets-processor
 cargo install mdbook-variables
+cargo install mdbook-pagetoc
 mdbook build
 mdbook serve --open
 
