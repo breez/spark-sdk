@@ -20,8 +20,8 @@ use breez_sdk_common::{
 };
 use lnurl_models::sanitize_username;
 use spark_wallet::{
-    ExitSpeed, InvoiceDescription, SparkAddress, SparkWallet, TransferId, TransferTokenOutput,
-    WalletEvent, WalletTransfer,
+    ExitSpeed, InvoiceDescription, Preimage, SparkAddress, SparkWallet, TransferId,
+    TransferTokenOutput, WalletEvent, WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
 use tracing::{error, info, trace, warn};
@@ -39,15 +39,15 @@ use x509_parser::parse_x509_certificate;
 use crate::{
     BitcoinAddressDetails, BitcoinChainService, Bolt11InvoiceDetails, CheckLightningAddressRequest,
     CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest, ClaimDepositResponse,
-    DepositInfo, ExternalInputParser, Fee, GetPaymentRequest, GetPaymentResponse,
-    GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, LightningAddressInfo,
-    ListFiatCurrenciesResponse, ListFiatRatesResponse, ListUnclaimedDepositsRequest,
-    ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse,
-    LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, Network, PaymentDetails, PaymentStatus,
-    PrepareLnurlPayRequest, PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
-    RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest,
-    SignMessageResponse, UpdateUserSettingsRequest, UserSettings, WaitForPaymentIdentifier,
-    chain::RecommendedFees,
+    ClaimSparkHtlcRequest, ClaimSparkHtlcResponse, DepositInfo, ExternalInputParser, Fee,
+    GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
+    InputType, LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse,
+    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest,
+    LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, Network, PaymentDetails,
+    PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse, RecommendedFees,
+    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
+    SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest, SignMessageResponse,
+    SparkHtlcOptions, UpdateUserSettingsRequest, UserSettings, WaitForPaymentIdentifier,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     issuer::TokenIssuer,
@@ -776,6 +776,35 @@ impl BreezSdk {
         }
     }
 
+    pub async fn claim_spark_htlc(
+        &self,
+        request: ClaimSparkHtlcRequest,
+    ) -> Result<ClaimSparkHtlcResponse, SdkError> {
+        let preimage = Preimage::from_hex(&request.preimage)
+            .map_err(|_| SdkError::InvalidInput("Invalid preimage".to_string()))?;
+        let payment_hash = preimage.compute_hash();
+
+        // Check if there is a claimable HTLC with the given payment hash
+        let claimable_htlc_transfers = self
+            .spark_wallet
+            .list_claimable_htlc_transfers(None)
+            .await?;
+        if !claimable_htlc_transfers
+            .iter()
+            .filter_map(|t| t.htlc.as_ref())
+            .any(|h| h.payment_hash == payment_hash)
+        {
+            return Err(SdkError::InvalidInput(
+                "No claimable HTLC with the given payment hash".to_string(),
+            ));
+        }
+
+        let transfer = self.spark_wallet.claim_htlc(&preimage).await?;
+        Ok(ClaimSparkHtlcResponse {
+            payment: transfer.try_into()?,
+        })
+    }
+
     pub async fn prepare_lnurl_pay(
         &self,
         request: PrepareLnurlPayRequest,
@@ -1488,8 +1517,14 @@ impl BreezSdk {
                 token_identifier,
                 ..
             } => {
-                self.send_spark_address(address, token_identifier.clone(), &request)
-                    .await
+                self.send_spark_address(
+                    address,
+                    token_identifier.clone(),
+                    request.prepare_response.amount,
+                    request.options.as_ref(),
+                    request.idempotency_key,
+                )
+                .await
             }
             SendPaymentMethod::SparkInvoice {
                 spark_invoice_details,
@@ -1534,37 +1569,66 @@ impl BreezSdk {
         &self,
         address: &str,
         token_identifier: Option<String>,
-        request: &SendPaymentRequest,
+        amount: u128,
+        options: Option<&SendPaymentOptions>,
+        idempotency_key: Option<String>,
     ) -> Result<SendPaymentResponse, SdkError> {
         let spark_address = address
             .parse::<SparkAddress>()
             .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
 
+        // If HTLC options are provided, send an HTLC transfer
+        if let Some(SendPaymentOptions::SparkAddress { htlc_options }) = options
+            && let Some(htlc_options) = htlc_options
+        {
+            if token_identifier.is_some() {
+                return Err(SdkError::InvalidInput(
+                    "Can't provide both token identifier and HTLC options".to_string(),
+                ));
+            }
+
+            return self
+                .send_spark_htlc(&spark_address, amount.try_into()?, htlc_options)
+                .await;
+        }
+
         let payment = if let Some(identifier) = token_identifier {
-            self.send_spark_token_address(
-                identifier,
-                request.prepare_response.amount,
-                spark_address,
-            )
-            .await?
+            self.send_spark_token_address(identifier, amount, spark_address)
+                .await?
         } else {
-            let transfer_id = request
-                .idempotency_key
+            let transfer_id = idempotency_key
                 .as_ref()
                 .map(|key| TransferId::from_str(key))
                 .transpose()?;
             let transfer = self
                 .spark_wallet
-                .transfer(
-                    request.prepare_response.amount.try_into()?,
-                    &spark_address,
-                    transfer_id,
-                )
+                .transfer(amount.try_into()?, &spark_address, transfer_id)
                 .await?;
             transfer.try_into()?
         };
 
         Ok(SendPaymentResponse { payment })
+    }
+
+    async fn send_spark_htlc(
+        &self,
+        address: &SparkAddress,
+        amount_sat: u64,
+        htlc_options: &SparkHtlcOptions,
+    ) -> Result<SendPaymentResponse, SdkError> {
+        let preimage = Preimage::from_hex(&htlc_options.preimage)
+            .map_err(|_| SdkError::InvalidInput("Invalid preimage".to_string()))?;
+
+        let expiry_duration = Duration::from_secs(htlc_options.expiry_duration_secs);
+
+        let transfer = self
+            .spark_wallet
+            .create_htlc(amount_sat, address, &preimage, expiry_duration)
+            .await?;
+
+        Ok(SendPaymentResponse {
+            payment: transfer.try_into()?,
+        })
     }
 
     async fn send_spark_token_address(
@@ -1867,6 +1931,7 @@ fn is_payment_match(payment: &Payment, identifier: &WaitForPaymentIdentifier) ->
                     }
                     PaymentDetails::Spark {
                         invoice_details: invoice,
+                        ..
                     }
                     | PaymentDetails::Token {
                         invoice_details: invoice,

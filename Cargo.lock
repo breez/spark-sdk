@@ -937,6 +937,8 @@ dependencies = [
  "breez-sdk-spark",
  "clap",
  "dirs",
+ "hex",
+ "rand 0.8.5",
  "rustyline",
  "serde",
  "serde_json",
@@ -5875,6 +5877,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
+ "serde",
  "wasm-bindgen",
 ]
 
