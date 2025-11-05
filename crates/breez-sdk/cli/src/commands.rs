@@ -2,10 +2,11 @@ use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
     ClaimSparkHtlcRequest, Fee, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, OnchainConfirmationSpeed, PaymentStatus, PaymentType,
-    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
-    SendPaymentRequest, SparkHtlcOptions, SyncWalletRequest,
+    ListUnclaimedHtlcTransferPaymentsRequest, LnurlPayRequest, LnurlWithdrawRequest,
+    OnchainConfirmationSpeed, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
+    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
+    SparkHtlcOptions, SyncWalletRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -138,6 +139,8 @@ pub enum Command {
         completion_timeout_secs: Option<u32>,
     },
 
+    /// List unclaimed HTLC transfer payments
+    ListUnclaimedHtlcTransferPayments,
     /// Claim a Spark HTLC
     ClaimSparkHtlc {
         /// The preimage of the HTLC (hex string)
@@ -484,6 +487,13 @@ pub(crate) async fn execute_command(
                 _ => Err(anyhow::anyhow!("Invalid input")),
             }?;
 
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::ListUnclaimedHtlcTransferPayments => {
+            let res = sdk
+                .list_unclaimed_htlc_transfer_payments(ListUnclaimedHtlcTransferPaymentsRequest {})
+                .await?;
             print_value(&res)?;
             Ok(true)
         }
