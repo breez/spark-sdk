@@ -48,8 +48,8 @@ The [Breez SDK - Nodeless *(Spark Implementation)* cli](https://github.com/breez
 
 Looking for a quick way to try the SDK in the browser? Check out our WASM demo app:
 
+- **Live demo:** [https://breez-sdk-spark-example.vercel.app](https://breez-sdk-spark-example.vercel.app)
 - **Repo:** [breez/breez-sdk-spark-example](https://github.com/breez/breez-sdk-spark-example)  
-- **Live demo:** https://breez-sdk-spark-example.vercel.app  
 
 > **Note:** The demo is for demonstration purposes only and not intended for production use.
 
