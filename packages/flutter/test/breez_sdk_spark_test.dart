@@ -23,16 +23,15 @@ void main() {
   });
 
   test('Connect', () async {
-    const storageDir = './.data';
-    const mnemonic =
+    String mnemonic =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    const apiKey = "<api key>";
-    final storage = await defaultStorage(dataDir: storageDir);    
-    final config = defaultConfig(
-      network: Network.regtest,
-    ).copyWith(apiKey: apiKey);
+    final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
 
-    final sdkBuilder = SdkBuilder(config: config, mnemonic: mnemonic, storage: storage);
+    final config = defaultConfig(network: Network.regtest)
+        .copyWith(apiKey: "<api key>");
+
+    final sdkBuilder = SdkBuilder(config: config, seed: seed);
+    sdkBuilder.withDefaultStorage(storageDir: './.data');
     final sdk = await sdkBuilder.build();
 
     /*final sdk = await connect(

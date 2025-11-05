@@ -37,7 +37,6 @@ import init, {
   initLogging,
   defaultConfig,
   SdkBuilder,
-  defaultStorage,
 } from "@breeztech/breez-sdk-spark/web";
 
 // Initialise the WebAssembly module
@@ -55,7 +54,6 @@ const {
   initLogging,
   defaultConfig,
   SdkBuilder,
-  defaultStorage,
 } = require("@breeztech/breez-sdk-spark/nodejs");
 const { Command } = require("commander");
 require("dotenv").config();
@@ -94,13 +92,11 @@ const initSdk = async () => {
   config.apiKey = process.env.BREEZ_API_KEY;
   console.log(`defaultConfig: ${JSON.stringify(config)}`);
 
-  const storage = await defaultStorage("./.data");
-
-  let sdkBuilder = SdkBuilder.new(
-    config,
-    { type: "mnemonic", mnemonic: mnemonic },
-    storage
-  );
+  let sdkBuilder = SdkBuilder.new(config, {
+    type: "mnemonic",
+    mnemonic: mnemonic,
+  });
+  sdkBuilder = await sdkBuilder.withDefaultStorage("./.data");
 
   const sdk = await sdkBuilder.build();
 
