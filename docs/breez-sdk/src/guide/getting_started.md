@@ -24,8 +24,8 @@ Many of the guidelines are implemented in [Misty Breez](https://github.com/breez
 
 Looking for a quick way to try the SDK in your browser? Check out the WebAssembly (WASM) demo app:
 
+- **Live demo:** [https://breez-sdk-spark-example.vercel.app](https://breez-sdk-spark-example.vercel.app)
 - **Repo:** [breez/breez-sdk-spark-example](https://github.com/breez/breez-sdk-spark-example)  
-- **Live demo:** https://breez-sdk-spark-example.vercel.app  
 
 > **Note:** The demo is for demonstration purposes only and not intended for production use.
 
