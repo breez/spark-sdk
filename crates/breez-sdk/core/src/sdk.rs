@@ -791,8 +791,8 @@ impl BreezSdk {
             .await?;
         if !claimable_htlc_transfers
             .iter()
-            .filter_map(|t| t.htlc.as_ref())
-            .any(|h| h.payment_hash == payment_hash)
+            .filter_map(|t| t.htlc_preimage_request.as_ref())
+            .any(|p| p.payment_hash == payment_hash)
         {
             return Err(SdkError::InvalidInput(
                 "No claimable HTLC with the given payment hash".to_string(),

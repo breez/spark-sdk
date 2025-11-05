@@ -3,8 +3,8 @@ use breez_sdk_common::input::{
 };
 use spark_wallet::{
     CoopExitFeeQuote, CoopExitSpeedFeeQuote, ExitSpeed, LightningSendPayment, LightningSendStatus,
-    Network as SparkNetwork, PreimageRequestStatus, SspUserRequest, TokenTransactionStatus,
-    TransferDirection, TransferStatus, TransferType, WalletHtlc, WalletTransfer,
+    Network as SparkNetwork, PreimageRequest, PreimageRequestStatus, SspUserRequest,
+    TokenTransactionStatus, TransferDirection, TransferStatus, TransferType, WalletTransfer,
 };
 use web_time::UNIX_EPOCH;
 
@@ -18,7 +18,7 @@ impl PaymentMethod {
     fn from_transfer(transfer: &WalletTransfer) -> Self {
         // HTLC transfers share PreimageSwap type with Lightning payments.
         // We can tell them apart by checking if they have an htlc.
-        if transfer.htlc.is_some() {
+        if transfer.htlc_preimage_request.is_some() {
             return PaymentMethod::Spark;
         }
 
@@ -45,10 +45,10 @@ impl PaymentDetails {
                 invoice_details: Some(invoice_details.into()),
                 htlc_details: None,
             }));
-        } else if let Some(htlc) = &transfer.htlc {
+        } else if let Some(htlc_preimage_request) = &transfer.htlc_preimage_request {
             return Ok(Some(PaymentDetails::Spark {
                 invoice_details: None,
-                htlc_details: Some(htlc.clone().try_into()?),
+                htlc_details: Some(htlc_preimage_request.clone().try_into()?),
             }));
         }
 
@@ -357,9 +357,9 @@ impl PaymentStatus {
     }
 }
 
-impl TryFrom<WalletHtlc> for SparkHtlcDetails {
+impl TryFrom<PreimageRequest> for SparkHtlcDetails {
     type Error = SdkError;
-    fn try_from(value: WalletHtlc) -> Result<Self, Self::Error> {
+    fn try_from(value: PreimageRequest) -> Result<Self, Self::Error> {
         Ok(Self {
             payment_hash: value.payment_hash.to_string(),
             preimage: value.preimage.map(|p| p.encode_hex()),

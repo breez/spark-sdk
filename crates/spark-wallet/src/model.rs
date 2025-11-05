@@ -66,14 +66,14 @@ pub struct WalletTransfer {
     pub direction: TransferDirection,
     pub user_request: Option<SspUserRequest>,
     pub spark_invoice: Option<String>,
-    pub htlc: Option<WalletHtlc>,
+    pub htlc_preimage_request: Option<PreimageRequest>,
 }
 
 impl WalletTransfer {
     pub fn from_transfer(
         value: Transfer,
         ssp_transfer: Option<SspTransfer>,
-        htlc: Option<WalletHtlc>,
+        htlc_preimage_request: Option<PreimageRequest>,
         our_public_key: PublicKey,
     ) -> Self {
         let direction = if value.sender_identity_public_key == our_public_key {
@@ -101,7 +101,7 @@ impl WalletTransfer {
             direction,
             user_request: ssp_transfer.and_then(|t| t.user_request),
             spark_invoice: value.spark_invoice,
-            htlc,
+            htlc_preimage_request,
         }
     }
 
@@ -123,7 +123,7 @@ impl WalletTransfer {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct WalletHtlc {
+pub struct PreimageRequest {
     pub payment_hash: sha256::Hash,
     pub status: PreimageRequestStatus,
     pub created_time: SystemTime,
@@ -131,9 +131,9 @@ pub struct WalletHtlc {
     pub preimage: Option<Preimage>,
 }
 
-impl From<PreimageRequestWithTransfer> for WalletHtlc {
+impl From<PreimageRequestWithTransfer> for PreimageRequest {
     fn from(value: PreimageRequestWithTransfer) -> Self {
-        WalletHtlc {
+        PreimageRequest {
             payment_hash: value.payment_hash,
             status: value.status,
             created_time: value.created_time,
