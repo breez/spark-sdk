@@ -40,8 +40,8 @@ use tracing::{debug, error, info, trace};
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    FulfillSparkInvoiceResult, ListTokenTransactionsRequest, QuerySparkInvoiceResult, TokenBalance,
-    WalletEvent, WalletHtlc, WalletLeaves,
+    FulfillSparkInvoiceResult, ListTokenTransactionsRequest, PreimageRequest,
+    QuerySparkInvoiceResult, TokenBalance, WalletEvent, WalletLeaves,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
@@ -606,7 +606,7 @@ impl SparkWallet {
         )
         .await?;
 
-        let htlc = WalletHtlc {
+        let htlc_preimage_request = PreimageRequest {
             payment_hash: preimage.compute_hash(),
             status: PreimageRequestStatus::WaitingForPreimage,
             created_time: transfer
@@ -620,7 +620,7 @@ impl SparkWallet {
         Ok(WalletTransfer::from_transfer(
             transfer,
             None,
-            Some(htlc),
+            Some(htlc_preimage_request),
             self.identity_public_key,
         ))
     }
