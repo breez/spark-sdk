@@ -1028,3 +1028,11 @@ pub struct ClaimSparkHtlcRequest {
 pub struct ClaimSparkHtlcResponse {
     pub payment: Payment,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ListUnclaimedHtlcTransferPaymentsRequest)]
+pub struct ListUnclaimedHtlcTransferPaymentsRequest {}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ListUnclaimedHtlcTransferPaymentsResponse)]
+pub struct ListUnclaimedHtlcTransferPaymentsResponse {
+    pub payments: Vec<Payment>,
+}

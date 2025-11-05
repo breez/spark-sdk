@@ -63,6 +63,13 @@ impl BreezSdk {
         self.inner.receive_payment(request).await
     }
 
+    pub async fn list_unclaimed_htlc_transfer_payments(
+        &self,
+        request: ListUnclaimedHtlcTransferPaymentsRequest,
+    ) -> Result<ListUnclaimedHtlcTransferPaymentsResponse, SdkError> {
+        self.inner.list_unclaimed_htlc_transfer_payments(request).await
+    }
+
     pub async fn claim_spark_htlc(
         &self,
         request: ClaimSparkHtlcRequest,

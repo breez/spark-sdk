@@ -942,3 +942,11 @@ pub struct _ClaimSparkHtlcRequest {
 pub struct _ClaimSparkHtlcResponse {
     pub payment: Payment,
 }
+
+#[frb(mirror(ListUnclaimedHtlcTransferPaymentsRequest))]
+pub struct _ListUnclaimedHtlcTransferPaymentsRequest {}
+
+#[frb(mirror(ListUnclaimedHtlcTransferPaymentsResponse))]
+pub struct _ListUnclaimedHtlcTransferPaymentsResponse {
+    pub payments: Vec<Payment>,
+}

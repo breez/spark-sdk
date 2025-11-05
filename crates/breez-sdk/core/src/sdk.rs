@@ -42,12 +42,14 @@ use crate::{
     ClaimSparkHtlcRequest, ClaimSparkHtlcResponse, DepositInfo, ExternalInputParser, Fee,
     GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
     InputType, LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse,
-    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest,
-    LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, Network, PaymentDetails,
-    PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse, RecommendedFees,
-    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
-    SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest, SignMessageResponse,
-    SparkHtlcOptions, UpdateUserSettingsRequest, UserSettings, WaitForPaymentIdentifier,
+    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
+    ListUnclaimedHtlcTransferPaymentsRequest, ListUnclaimedHtlcTransferPaymentsResponse,
+    LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse,
+    Logger, Network, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
+    PrepareLnurlPayResponse, RecommendedFees, RefundDepositRequest, RefundDepositResponse,
+    RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest,
+    SignMessageResponse, SparkHtlcOptions, SparkHtlcStatus, UpdateUserSettingsRequest,
+    UserSettings, WaitForPaymentIdentifier,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     issuer::TokenIssuer,
@@ -774,6 +776,36 @@ impl BreezSdk {
                 fee: 0,
             }),
         }
+    }
+
+    #[allow(unused_variables)]
+    pub async fn list_unclaimed_htlc_transfer_payments(
+        &self,
+        req: ListUnclaimedHtlcTransferPaymentsRequest,
+    ) -> Result<ListUnclaimedHtlcTransferPaymentsResponse, SdkError> {
+        // We can move the following filtering to the storage layer in the future if it becomes an issue.
+        let payments = self
+            .list_payments(ListPaymentsRequest {
+                type_filter: Some(vec![PaymentType::Receive]),
+                status_filter: Some(vec![PaymentStatus::Pending]),
+                ..Default::default()
+            })
+            .await?
+            .payments
+            .into_iter()
+            .filter_map(|p| {
+                if let Some(PaymentDetails::Spark { htlc_details, .. }) = &p.details
+                    && let Some(htlc_details) = htlc_details
+                    && htlc_details.status == SparkHtlcStatus::WaitingForPreimage
+                {
+                    Some(p)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(ListUnclaimedHtlcTransferPaymentsResponse { payments })
     }
 
     pub async fn claim_spark_htlc(

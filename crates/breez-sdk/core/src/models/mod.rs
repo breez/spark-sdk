@@ -1067,3 +1067,12 @@ pub struct ClaimSparkHtlcRequest {
 pub struct ClaimSparkHtlcResponse {
     pub payment: Payment,
 }
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ListUnclaimedHtlcTransferPaymentsRequest {}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ListUnclaimedHtlcTransferPaymentsResponse {
+    pub payments: Vec<Payment>,
+}
