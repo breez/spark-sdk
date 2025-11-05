@@ -2,7 +2,6 @@ import {
   defaultConfig,
   connect,
   Network,
-  defaultStorage,
   SdkBuilder,
   type BreezSdk,
   initLogging,
@@ -37,19 +36,15 @@ const exampleGettingStartedAdvanced = async () => {
   const seed = new Seed.Mnemonic({ mnemonic, passphrase: undefined })
 
   // Create the default config
-  const network = Network.Mainnet
-  const config = defaultConfig(network)
+  const config = defaultConfig(Network.Mainnet)
   config.apiKey = '<breez api key>'
 
-  // Create the default storage
-  const storage = defaultStorage({
-    storageDir: `${RNFS.DocumentDirectoryPath}/data`,
-    network,
-    seed
-  })
-
-  const builder = new SdkBuilder(config, seed, storage)
+  // Build the SDK using the config, seed and default storage
+  const builder = new SdkBuilder(config, seed)
+  await builder.withDefaultStorage(`${RNFS.DocumentDirectoryPath}/data`)
   // You can also pass your custom implementations:
+  // await builder.withStorage(<your storage implementation>)
+  // await builder.withRealTimeSyncStorage(<your real-time sync storage implementation>)
   // await builder.withChainService(<your chain service implementation>)
   // await builder.withRestClient(<your rest client implementation>)
   // await builder.withKeySet(<your key set type>, <use address index>, <account number>)

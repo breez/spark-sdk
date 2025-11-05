@@ -32,21 +32,16 @@ class GettingStarted {
         val seed = Seed.Mnemonic(mnemonic, null)
 
         // Create the default config
-        val network = Network.MAINNET
-        val config = defaultConfig(network)
+        val config = defaultConfig(Network.MAINNET)
         config.apiKey = "<breez api key>"
 
         try {
-            // Create the default storage
-            val defaultStorageRequest = DefaultStorageRequest(
-                storageDir = "./.data",
-                network = network,
-                seed = seed,
-            )
-            val storage = defaultStorage(defaultStorageRequest)
-
-            val builder = SdkBuilder(config, seed, storage)
+            // Build the SDK using the config, seed and default storage
+            val builder = SdkBuilder(config, seed)
+            builder.withDefaultStorage("./.data")
             // You can also pass your custom implementations:
+            // builder.withStorage(<your storage implementation>)
+            // builder.withRealTimeSyncStorage(<your real-time sync storage implementation>)
             // builder.withChainService(<your chain service implementation>)
             // builder.withRestClient(<your rest client implementation>)
             // builder.withKeySet(<your key set type>, <use address index>, <account number>)

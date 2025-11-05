@@ -106,13 +106,6 @@ pub struct ConnectRequest {
     pub storage_dir: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::DefaultStorageRequest)]
-pub struct DefaultStorageRequest {
-    pub storage_dir: String,
-    pub network: Network,
-    pub seed: Seed,
-}
-
 #[macros::extern_wasm_bindgen(breez_sdk_spark::DepositInfo)]
 pub struct DepositInfo {
     pub txid: String,

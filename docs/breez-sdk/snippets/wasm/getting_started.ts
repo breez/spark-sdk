@@ -2,7 +2,6 @@ import {
   type BreezSdk,
   connect,
   defaultConfig,
-  defaultStorage,
   initLogging,
   type LogEntry,
   type SdkEvent,
@@ -49,21 +48,15 @@ const exampleGettingStartedAdvanced = async () => {
   const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
 
   // Create the default config
-  const network = 'mainnet'
-  const config = defaultConfig(network)
+  const config = defaultConfig('mainnet')
   config.apiKey = '<breez api key>'
 
-  // Create the default storage
-  const storage = await defaultStorage({
-    storageDir: './.data',
-    network,
-    seed
-  })
-
-  // Build the SDK using the config, seed and storage
-  const builder = SdkBuilder.new(config, seed, storage)
-
+  // Build the SDK using the config, seed and default storage
+  let builder = SdkBuilder.new(config, seed)
+  builder = await builder.withDefaultStorage('./.data')
   // You can also pass your custom implementations:
+  // builder = builder.withStorage(<your storage implementation>)
+  // builder = builder.withRealTimeSyncStorage(<your real-time sync storage implementation>)
   // builder = builder.withChainService(<your chain service implementation>)
   // builder = builder.withRestClient(<your rest client implementation>)
   // builder = builder.withKeySet(<your key set type>, <use address index>, <account number>)

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use breez_sdk_common::input::InputType;
-use breez_sdk_common::sync::storage::SyncStorage;
 use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
 
@@ -19,16 +18,6 @@ pub async fn connect(request: ConnectRequest) -> Result<BreezSdk, SdkError> {
 #[frb(sync)]
 pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network)
-}
-
-#[frb(sync)]
-pub fn default_storage(request: DefaultStorageRequest) -> Result<Arc<dyn Storage>, SdkError> {
-    breez_sdk_spark::default_storage(request)
-}
-
-#[frb(sync)]
-pub fn default_sync_storage(request: DefaultStorageRequest) -> Result<Arc<dyn SyncStorage>, SdkError> {
-    breez_sdk_spark::default_sync_storage(request)
 }
 
 #[frb(sync)]

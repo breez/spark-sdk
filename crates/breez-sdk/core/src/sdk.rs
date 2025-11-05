@@ -6,8 +6,6 @@ use bitcoin::{
     secp256k1::{PublicKey, ecdsa::Signature},
 };
 pub use breez_sdk_common::input::parse as parse_input;
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-use breez_sdk_common::sync::storage::SyncStorage;
 use breez_sdk_common::{
     fiat::FiatService,
     input::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType},
@@ -157,42 +155,10 @@ pub fn init_logging(
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkError> {
-    let default_storage_request = crate::DefaultStorageRequest {
-        storage_dir: request.storage_dir,
-        network: request.config.network,
-        seed: request.seed.clone(),
-    };
-    let storage = default_storage(default_storage_request.clone())?;
-    let with_real_time_sync = request.config.real_time_sync_server_url.is_some();
-    let mut builder = super::sdk_builder::SdkBuilder::new(request.config, request.seed, storage);
-    if with_real_time_sync {
-        let sync_storage = default_sync_storage(default_storage_request)?;
-        builder = builder.with_real_time_sync_storage(sync_storage);
-    }
+    let builder = super::sdk_builder::SdkBuilder::new(request.config, request.seed)
+        .with_default_storage(request.storage_dir);
     let sdk = builder.build().await?;
     Ok(sdk)
-}
-
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-#[allow(clippy::needless_pass_by_value)]
-pub fn default_storage(
-    request: crate::DefaultStorageRequest,
-) -> Result<Arc<dyn Storage>, SdkError> {
-    let db_path = request.to_path()?;
-    let storage = Arc::new(crate::SqliteStorage::new(&db_path)?);
-    Ok(storage)
-}
-
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-#[allow(clippy::needless_pass_by_value)]
-pub fn default_sync_storage(
-    request: crate::DefaultStorageRequest,
-) -> Result<Arc<dyn SyncStorage>, SdkError> {
-    let db_path = request.to_path()?;
-    let storage = Arc::new(crate::SqliteStorage::new(&db_path)?);
-    Ok(storage)
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]

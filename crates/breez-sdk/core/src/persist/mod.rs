@@ -1,3 +1,4 @@
+pub(crate) mod path;
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub(crate) mod sqlite;
 

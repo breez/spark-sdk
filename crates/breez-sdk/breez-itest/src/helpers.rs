@@ -32,8 +32,7 @@ pub async fn build_sdk_with_dir(
     seed_bytes: [u8; 32],
     temp_dir: Option<tempdir::TempDir>,
 ) -> Result<SdkInstance> {
-    let network = Network::Regtest;
-    let mut config = default_config(network);
+    let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed
     config.lnurl_domain = None; // Avoid lnurl server in tests
     config.prefer_spark_over_lightning = true; // prefer spark transfers when possible
@@ -41,13 +40,7 @@ pub async fn build_sdk_with_dir(
     config.real_time_sync_server_url = None; // Disable real-time sync for tests
 
     let seed = Seed::Entropy(seed_bytes.to_vec());
-    let storage = default_storage(DefaultStorageRequest {
-        storage_dir,
-        network,
-        seed: seed.clone(),
-    })?;
-
-    let builder = SdkBuilder::new(config, seed, storage);
+    let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
     let sdk = builder.build().await?;
 
     // Set up event listener
@@ -108,13 +101,8 @@ pub async fn build_sdk_with_custom_config(
     config.real_time_sync_server_url = None;
 
     let seed = Seed::Entropy(seed_bytes.to_vec());
-    let storage = default_storage(DefaultStorageRequest {
-        storage_dir,
-        network: config.network,
-        seed: seed.clone(),
-    })?;
 
-    let builder = SdkBuilder::new(config, seed, storage);
+    let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
     let sdk = builder.build().await?;
 
     // Set up event listener

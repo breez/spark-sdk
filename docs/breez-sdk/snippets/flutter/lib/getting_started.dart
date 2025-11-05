@@ -32,20 +32,13 @@ Future<void> initSdkAdvanced() async {
   final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
 
   // Create the default config
-  final network = Network.mainnet;
-  final config = defaultConfig(network: network)
+  final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: "<breez api key>");
 
-  // Create the default storage
-  final defaultStorageRequest = DefaultStorageRequest(
-      storageDir: "./.data",
-      network: network,
-      seed: seed,
-  );
-  final storage = defaultStorage(request: defaultStorageRequest);
 
-  final builder =
-      SdkBuilder(config: config, seed: seed, storage: storage);
+  // Build the SDK using the config, seed and default storage
+  final builder = SdkBuilder(config: config, seed: seed);
+  builder.withDefaultStorage(storageDir: "./.data");
   // You can also pass your custom implementations:
   // builder.withRestChainService(
   //     url: "https://custom.chain.service",

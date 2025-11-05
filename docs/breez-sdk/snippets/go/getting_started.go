@@ -44,24 +44,15 @@ func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
 
 	// Create the default config
 	apiKey := "<breez api key>"
-	network := breez_sdk_spark.NetworkMainnet
-
-	config := breez_sdk_spark.DefaultConfig(network)
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
 	config.ApiKey = &apiKey
 
-	// Create the default storage
-	defaultStorageRequest := breez_sdk_spark.DefaultStorageRequest{
-		StorageDir: "./.data",
-		Network:    network,
-		Seed:       seed,
-	}
-	storage, err := breez_sdk_spark.DefaultStorage(defaultStorageRequest)
-	if err != nil {
-		return nil, err
-	}
-
-	builder := breez_sdk_spark.NewSdkBuilder(config, seed, storage)
+	// Build the SDK using the config, seed and default storage
+	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
+	builder.WithDefaultStorage("./.data")
 	// You can also pass your custom implementations:
+	// builder.WithStorage(<your storage implementation>)
+	// builder.WithRealTimeSyncStorage(<your real-time sync storage implementation>)
 	// builder.WithChainService(<your chain service implementation>)
 	// builder.WithRestClient(<your rest client implementation>)
 	// builder.WithKeySet(<your key set type>, <use address index>, <account number>)

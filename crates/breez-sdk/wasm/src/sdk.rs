@@ -6,9 +6,8 @@ use wasm_bindgen::prelude::*;
 use crate::{
     error::WasmResult,
     event::{EventListener, WasmEventListener},
-    logger::{Logger, WASM_LOGGER, WasmTracingLayer},
+    logger::{Logger, WasmTracingLayer},
     models::*,
-    persist::Storage,
     sdk_builder::SdkBuilder,
 };
 
@@ -35,13 +34,9 @@ pub async fn init_logging(logger: Logger, filter: Option<String>) -> WasmResult<
 
 #[wasm_bindgen(js_name = "connect")]
 pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
-    let storage = default_storage(DefaultStorageRequest {
-        storage_dir: request.storage_dir,
-        network: request.config.network.clone(),
-        seed: request.seed.clone(),
-    })
-    .await?;
-    let builder = SdkBuilder::new(request.config, request.seed, storage)?;
+    let builder = SdkBuilder::new(request.config, request.seed)
+        .with_default_storage(request.storage_dir)
+        .await?;
     let sdk = builder.build().await?;
     Ok(sdk)
 }
@@ -49,32 +44,6 @@ pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
 #[wasm_bindgen(js_name = "defaultConfig")]
 pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network.into()).into()
-}
-
-#[wasm_bindgen(js_name = "defaultStorage")]
-pub async fn default_storage(request: DefaultStorageRequest) -> WasmResult<Storage> {
-    let db_path = Into::<breez_sdk_spark::DefaultStorageRequest>::into(request).to_path()?;
-    // SAFETY: In WASM, thread-local storage is stable and the logger reference
-    // will remain valid for the duration of this async function call.
-    // The WASM environment is single-threaded, so there's no risk of the
-    // logger being moved or deallocated during the async operation.
-    let logger_ref = unsafe {
-        WASM_LOGGER.with_borrow(|logger| {
-            logger
-                .as_ref()
-                .map(|l| std::mem::transmute::<&Logger, &'static Logger>(l))
-        })
-    };
-    Ok(create_default_storage(db_path.to_string_lossy().as_ref(), logger_ref).await?)
-}
-
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_name = "createDefaultStorage", catch)]
-    async fn create_default_storage(
-        data_dir: &str,
-        logger: Option<&Logger>,
-    ) -> Result<crate::persist::Storage, JsValue>;
 }
 
 #[wasm_bindgen]
