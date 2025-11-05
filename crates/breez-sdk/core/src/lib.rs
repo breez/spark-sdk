@@ -1,5 +1,5 @@
 #[cfg(feature = "uniffi")]
-mod bindings;
+pub mod bindings;
 mod chain;
 mod error;
 mod events;
@@ -13,8 +13,6 @@ mod sdk_builder;
 mod sync;
 mod utils;
 
-#[cfg(feature = "uniffi")]
-pub use bindings::*;
 pub use breez_sdk_common::{input::*, sync::storage as sync_storage};
 pub use chain::{
     BitcoinChainService, ChainServiceError, TxStatus, Utxo, rest_client::RestClientChainService,
@@ -22,17 +20,14 @@ pub use chain::{
 pub use error::{DepositClaimError, SdkError};
 pub use events::{EventEmitter, EventListener, SdkEvent};
 pub use models::*;
-pub use persist::{PaymentMetadata, Storage, StorageError, UpdateDepositPayload};
+pub use persist::{
+    PaymentMetadata, Storage, StorageError, UpdateDepositPayload, path::default_storage_path,
+};
 pub use sdk::{BreezSdk, default_config, init_logging, parse_input};
-#[cfg(not(feature = "uniffi"))]
 pub use sdk_builder::SdkBuilder;
-pub use sdk_builder::Seed;
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-pub use {
-    persist::sqlite::SqliteStorage,
-    sdk::{connect, default_storage},
-};
+pub use {persist::sqlite::SqliteStorage, sdk::connect};
 
 #[cfg(feature = "test-utils")]
 pub use persist::tests as storage_tests;

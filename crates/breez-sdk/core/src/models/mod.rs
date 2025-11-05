@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, fmt::Display, str::FromStr};
 
-use crate::{error::DepositClaimError, sdk_builder::Seed};
+use crate::error::DepositClaimError;
 
 /// A list of external input parsers that are used by default.
 /// To opt-out, set `use_default_external_input_parsers` in [Config] to false.
@@ -35,6 +35,22 @@ pub const DEFAULT_EXTERNAL_INPUT_PARSERS: &[(&str, &str, &str)] = &[
         "https://cryptoqr.net/.well-known/lnurlw/<input>",
     ),
 ];
+
+/// Represents the seed for wallet generation, either as a mnemonic phrase with an optional
+/// passphrase or as raw entropy bytes.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum Seed {
+    /// A BIP-39 mnemonic phrase with an optional passphrase.
+    Mnemonic {
+        /// The mnemonic phrase. 12 or 24 words.
+        mnemonic: String,
+        /// An optional passphrase for the mnemonic.
+        passphrase: Option<String>,
+    },
+    /// Raw entropy bytes.
+    Entropy(Vec<u8>),
+}
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConnectRequest {

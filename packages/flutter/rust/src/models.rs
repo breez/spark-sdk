@@ -4,7 +4,7 @@ pub use breez_sdk_common::lnurl::auth::*;
 pub use breez_sdk_common::lnurl::pay::*;
 pub use breez_sdk_common::lnurl::withdraw::LnurlWithdrawRequestDetails;
 pub use breez_sdk_common::network::BitcoinNetwork;
-pub use breez_sdk_common::sync::{RecordId, storage::SyncStorage};
+pub use breez_sdk_common::sync::RecordId;
 pub use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
 use std::collections::HashMap;

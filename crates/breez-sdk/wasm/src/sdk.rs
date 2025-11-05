@@ -1,15 +1,13 @@
-use std::{rc::Rc, str::FromStr};
+use std::rc::Rc;
 
-use bitcoin::hashes::{Hash, sha256};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    error::{WasmError, WasmResult},
+    error::WasmResult,
     event::{EventListener, WasmEventListener},
-    logger::{Logger, WASM_LOGGER, WasmTracingLayer},
+    logger::{Logger, WasmTracingLayer},
     models::*,
-    persist::Storage,
     sdk_builder::SdkBuilder,
 };
 
@@ -36,32 +34,9 @@ pub async fn init_logging(logger: Logger, filter: Option<String>) -> WasmResult<
 
 #[wasm_bindgen(js_name = "connect")]
 pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
-    let db_path = std::path::PathBuf::from_str(&request.storage_dir).map_err(WasmError::new)?;
-    let path_suffix: String = match &request.seed {
-        Seed::Mnemonic {
-            mnemonic,
-            passphrase,
-        } => {
-            let str = format!("{mnemonic}:{passphrase:?}");
-            sha256::Hash::hash(str.as_bytes())
-                .to_string()
-                .chars()
-                .take(8)
-                .collect()
-        }
-        Seed::Entropy(vec) => sha256::Hash::hash(vec.as_slice())
-            .to_string()
-            .chars()
-            .take(8)
-            .collect(),
-    };
-
-    let storage_dir = db_path
-        .join(request.config.network.to_string().to_lowercase())
-        .join(path_suffix);
-
-    let storage = default_storage(storage_dir.to_string_lossy().as_ref()).await?;
-    let builder = SdkBuilder::new(request.config, request.seed, storage)?;
+    let builder = SdkBuilder::new(request.config, request.seed)
+        .with_default_storage(request.storage_dir)
+        .await?;
     let sdk = builder.build().await?;
     Ok(sdk)
 }
@@ -69,31 +44,6 @@ pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
 #[wasm_bindgen(js_name = "defaultConfig")]
 pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network.into()).into()
-}
-
-#[wasm_bindgen(js_name = "defaultStorage")]
-pub async fn default_storage(data_dir: &str) -> WasmResult<Storage> {
-    // SAFETY: In WASM, thread-local storage is stable and the logger reference
-    // will remain valid for the duration of this async function call.
-    // The WASM environment is single-threaded, so there's no risk of the
-    // logger being moved or deallocated during the async operation.
-    let logger_ref = unsafe {
-        WASM_LOGGER.with_borrow(|logger| {
-            logger
-                .as_ref()
-                .map(|l| std::mem::transmute::<&Logger, &'static Logger>(l))
-        })
-    };
-    Ok(create_default_storage(data_dir, logger_ref).await?)
-}
-
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_name = "createDefaultStorage", catch)]
-    async fn create_default_storage(
-        data_dir: &str,
-        logger: Option<&Logger>,
-    ) -> Result<crate::persist::Storage, JsValue>;
 }
 
 #[wasm_bindgen]

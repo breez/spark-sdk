@@ -39,10 +39,8 @@ pub async fn build_sdk_with_dir(
     config.sync_interval_secs = 5; // Faster syncing for tests
     config.real_time_sync_server_url = None; // Disable real-time sync for tests
 
-    let storage = default_storage(storage_dir)?;
     let seed = Seed::Entropy(seed_bytes.to_vec());
-
-    let builder = SdkBuilder::new(config, seed, storage);
+    let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
     let sdk = builder.build().await?;
 
     // Set up event listener
@@ -102,10 +100,9 @@ pub async fn build_sdk_with_custom_config(
     // Disable real-time sync for tests
     config.real_time_sync_server_url = None;
 
-    let storage = default_storage(storage_dir)?;
     let seed = Seed::Entropy(seed_bytes.to_vec());
 
-    let builder = SdkBuilder::new(config, seed, storage);
+    let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
     let sdk = builder.build().await?;
 
     // Set up event listener

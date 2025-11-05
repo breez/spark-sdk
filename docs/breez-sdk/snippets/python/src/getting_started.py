@@ -4,7 +4,6 @@ from breez_sdk_spark import (
     connect,
     ConnectRequest,
     default_config,
-    default_storage,
     EventListener,
     GetInfoRequest,
     init_logging,
@@ -46,11 +45,12 @@ async def init_sdk_advanced():
     config = default_config(network=Network.MAINNET)
     config.api_key = "<breez api key>"
     try:
-        # Create the default storage
-        storage = default_storage(data_dir="./.data")
-        # Build the SDK using the config, seed and storage
-        builder = SdkBuilder(config=config, seed=seed, storage=storage)
+        # Build the SDK using the config, seed and default storage
+        builder = SdkBuilder(config=config, seed=seed)
+        await builder.with_default_storage(storage_dir="./.data")
         # You can also pass your custom implementations:
+        # await builder.with_storage(<your storage implementation>)
+        # await builder.with_real_time_sync_storage(<your real-time sync storage implementation>)
         # await builder.with_chain_service(<your chain service implementation>)
         # await builder.with_rest_client(<your rest client implementation>)
         # await builder.with_key_set(<your key set type>, <use address index>, <account number>)

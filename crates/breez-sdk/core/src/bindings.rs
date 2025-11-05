@@ -4,10 +4,9 @@ use breez_sdk_common::sync::storage::SyncStorage;
 use breez_sdk_common::{fiat::FiatService, rest::RestClient};
 use tokio::sync::Mutex;
 
-use crate::sdk_builder::Seed;
 use crate::{
     BitcoinChainService, BreezSdk, Config, Credentials, KeySetType, PaymentObserver, SdkError,
-    Storage,
+    Seed, Storage,
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -23,13 +22,38 @@ impl SdkBuilder {
     /// Arguments:
     /// - `config`: The configuration to be used.
     /// - `seed`: The seed for wallet generation.
-    /// - `storage`: The storage backend to be used.
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
-    pub fn new(config: Config, seed: Seed, storage: Arc<dyn Storage>) -> Self {
-        let inner = crate::sdk_builder::SdkBuilder::new(config, seed, storage);
+    pub fn new(config: Config, seed: Seed) -> Self {
+        let inner = crate::sdk_builder::SdkBuilder::new(config, seed);
         SdkBuilder {
             inner: Mutex::new(inner),
         }
+    }
+
+    /// Sets the root storage directory to initialize the default storage with.
+    /// This initializes both storage and real-time sync storage with the
+    /// default implementations.
+    /// Arguments:
+    /// - `storage_dir`: The data directory for storage.
+    pub async fn with_default_storage(&self, storage_dir: String) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_default_storage(storage_dir);
+    }
+
+    /// Sets the storage implementation to be used by the SDK.
+    /// Arguments:
+    /// - `storage`: The storage implementation to be used.
+    pub async fn with_storage(&self, storage: Arc<dyn Storage>) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_storage(storage);
+    }
+
+    /// Sets the real-time sync storage implementation to be used by the SDK.
+    /// Arguments:
+    /// - `storage`: The sync storage implementation to be used.
+    pub async fn with_real_time_sync_storage(&self, storage: Arc<dyn SyncStorage>) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_real_time_sync_storage(storage);
     }
 
     /// Sets the key set type to be used by the SDK.
@@ -84,11 +108,6 @@ impl SdkBuilder {
     pub async fn with_payment_observer(&self, payment_observer: Arc<dyn PaymentObserver>) {
         let mut builder = self.inner.lock().await;
         *builder = builder.clone().with_payment_observer(payment_observer);
-    }
-
-    pub async fn with_real_time_sync_storage(&self, storage: Arc<dyn SyncStorage>) {
-        let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_real_time_sync_storage(storage);
     }
 
     /// Builds the `BreezSdk` instance with the configured components.

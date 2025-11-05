@@ -4,7 +4,6 @@ import init, {
   initLogging,
   defaultConfig,
   SdkBuilder,
-  defaultStorage,
 } from "@breeztech/breez-sdk-spark";
 
 // Configuration loaded from environment variables
@@ -208,12 +207,11 @@ async function initializeSdk() {
     config.apiKey = CONFIG.apiKey;
 
     // Create SDK builder
-    let storage = await defaultStorage("BreezSDK");
-    let sdkBuilder = SdkBuilder.new(
-      config,
-      { type: "mnemonic", mnemonic: CONFIG.mnemonic },
-      storage
-    );
+    let sdkBuilder = SdkBuilder.new(config, {
+      type: "mnemonic",
+      mnemonic: CONFIG.mnemonic,
+    });
+    sdkBuilder = await sdkBuilder.withDefaultStorage("BreezSDK");
 
     // Add chain service if configured
     if (
