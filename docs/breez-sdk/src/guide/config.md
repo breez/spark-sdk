@@ -91,7 +91,7 @@ More information can be found in the [Handling unclaimed deposits](./unclaimed_d
 
 The SDK performs regular background synchronization to check for payment status updates. You can configure how often this synchronization occurs.
 
-The synchronization process detects payment status updates and is required to discover incoming [Token payments](./tokens.md). New incoming Bitcoin payments are discovered in real-time through event streams, so they are not affected by this setting.
+The synchronization process is used to detect some payment status updates that are not detected in real-time through event streams.
 
 A shorter synchronization interval provides more responsive detection of payment updates but increases resource usage and may trigger API rate limits. The default interval balances responsiveness with resource efficiency for most use cases.
 
