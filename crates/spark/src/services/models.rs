@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
-use std::time::SystemTime;
 
+use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::{Transaction, Txid};
 use bitcoin::{consensus::deserialize, secp256k1::PublicKey};
@@ -13,6 +13,7 @@ use frost_secp256k1_tr::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::address::SparkAddress;
 use crate::core::Network;
@@ -834,7 +835,7 @@ impl TryFrom<(operator_rpc::spark_token::TokenTransaction, Network)> for TokenTr
         let created_timestamp = token_transaction
             .client_created_timestamp
             .map(|ts| {
-                std::time::UNIX_EPOCH
+                UNIX_EPOCH
                     + std::time::Duration::from_secs(ts.seconds as u64)
                     + std::time::Duration::from_nanos(ts.nanos as u64)
             })
@@ -899,9 +900,9 @@ impl
         let created_timestamp = token_transaction
             .client_created_timestamp
             .map(|ts| {
-                std::time::UNIX_EPOCH
-                    + std::time::Duration::from_secs(ts.seconds as u64)
-                    + std::time::Duration::from_nanos(ts.nanos as u64)
+                UNIX_EPOCH
+                    + Duration::from_secs(ts.seconds as u64)
+                    + Duration::from_nanos(ts.nanos as u64)
             })
             .ok_or(ServiceError::Generic(
                 "Missing client created timestamp. Could this be a V1 transaction?".to_string(),
@@ -1148,6 +1149,135 @@ pub struct TransferTokenOutput {
     pub amount: u128,
     pub receiver_address: SparkAddress,
     pub spark_invoice: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct QueryHtlcFilter {
+    pub transfer_ids: Vec<String>,
+    pub payment_hashes: Vec<String>,
+    pub receiver_identity_public_key: PublicKey,
+    pub status: Option<PreimageRequestStatus>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct Preimage([u8; 32]);
+
+impl TryFrom<Vec<u8>> for Preimage {
+    type Error = ServiceError;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        let array: [u8; 32] = value
+            .try_into()
+            .map_err(|_| ServiceError::InvalidPreimage("Invalid preimage length".to_string()))?;
+        Ok(Preimage(array))
+    }
+}
+
+impl Preimage {
+    pub fn from_hex(hex: &str) -> Result<Self, ServiceError> {
+        let bytes = hex::decode(hex)
+            .map_err(|_| ServiceError::InvalidPreimage("Invalid preimage hex".to_string()))?;
+        Self::try_from(bytes)
+    }
+
+    pub fn encode_hex(&self) -> String {
+        hex::encode(self.0)
+    }
+
+    pub fn compute_hash(&self) -> sha256::Hash {
+        sha256::Hash::hash(&self.0)
+    }
+
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.0.to_vec()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PreimageRequestWithTransfer {
+    pub payment_hash: sha256::Hash,
+    pub receiver_identity_pubkey: PublicKey,
+    pub status: PreimageRequestStatus,
+    pub created_time: SystemTime,
+    pub expiry_time: SystemTime,
+    pub transfer: Option<Transfer>,
+    pub preimage: Option<Preimage>,
+}
+
+impl TryFrom<operator_rpc::spark::PreimageRequestWithTransfer> for PreimageRequestWithTransfer {
+    type Error = ServiceError;
+
+    fn try_from(
+        request: operator_rpc::spark::PreimageRequestWithTransfer,
+    ) -> Result<Self, Self::Error> {
+        let expiry_time = request
+            .transfer
+            .as_ref()
+            .ok_or(ServiceError::Generic("Missing transfer".to_string()))?
+            .expiry_time
+            .ok_or(ServiceError::Generic("Missing expiry time".to_string()))?;
+        let expiry_time = UNIX_EPOCH
+            + Duration::from_secs(expiry_time.seconds as u64)
+            + Duration::from_nanos(expiry_time.nanos as u64);
+        Ok(PreimageRequestWithTransfer {
+            payment_hash: sha256::Hash::from_slice(&request.payment_hash).map_err(|_| {
+                ServiceError::InvalidPaymentHash(hex::encode(request.payment_hash.clone()))
+            })?,
+            receiver_identity_pubkey: PublicKey::from_slice(&request.receiver_identity_pubkey)
+                .map_err(|_| ServiceError::InvalidPublicKey)?,
+            status: request.status().into(),
+            created_time: request
+                .created_time
+                .map(|ts| {
+                    UNIX_EPOCH
+                        + Duration::from_secs(ts.seconds as u64)
+                        + Duration::from_nanos(ts.nanos as u64)
+                })
+                .ok_or(ServiceError::Generic("Missing created time".to_string()))?,
+            expiry_time,
+            transfer: request.transfer.map(|t| t.try_into()).transpose()?,
+            preimage: request
+                .preimage
+                .map(TryInto::try_into)
+                .transpose()
+                .map_err(|_| ServiceError::ValidationError("Invalid preimage".to_string()))?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum PreimageRequestStatus {
+    WaitingForPreimage,
+    PreimageShared,
+    Returned,
+}
+
+impl From<PreimageRequestStatus> for operator_rpc::spark::PreimageRequestStatus {
+    fn from(status: PreimageRequestStatus) -> Self {
+        match status {
+            PreimageRequestStatus::WaitingForPreimage => {
+                operator_rpc::spark::PreimageRequestStatus::WaitingForPreimage
+            }
+            PreimageRequestStatus::PreimageShared => {
+                operator_rpc::spark::PreimageRequestStatus::PreimageShared
+            }
+            PreimageRequestStatus::Returned => operator_rpc::spark::PreimageRequestStatus::Returned,
+        }
+    }
+}
+
+impl From<operator_rpc::spark::PreimageRequestStatus> for PreimageRequestStatus {
+    fn from(status: operator_rpc::spark::PreimageRequestStatus) -> Self {
+        match status {
+            operator_rpc::spark::PreimageRequestStatus::WaitingForPreimage => {
+                PreimageRequestStatus::WaitingForPreimage
+            }
+            operator_rpc::spark::PreimageRequestStatus::PreimageShared => {
+                PreimageRequestStatus::PreimageShared
+            }
+            operator_rpc::spark::PreimageRequestStatus::Returned => PreimageRequestStatus::Returned,
+        }
+    }
 }
 
 #[cfg(test)]

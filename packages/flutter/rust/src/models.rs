@@ -361,6 +361,15 @@ pub enum _SendPaymentOptions {
         prefer_spark: bool,
         completion_timeout_secs: Option<u32>,
     },
+    SparkAddress {
+        htlc_options: Option<SparkHtlcOptions>,
+    },
+}
+
+#[frb(mirror(SparkHtlcOptions))]
+pub struct _SparkHtlcOptions {
+    pub preimage: String,
+    pub expiry_duration_secs: u64,
 }
 
 #[frb(mirror(SendPaymentRequest))]
@@ -459,6 +468,7 @@ pub struct _Payment {
 pub enum _PaymentDetails {
     Spark {
         invoice_details: Option<SparkInvoicePaymentDetails>,
+        htlc_details: Option<SparkHtlcDetails>,
     },
     Token {
         metadata: TokenMetadata,
@@ -486,6 +496,21 @@ pub enum _PaymentDetails {
 pub struct _SparkInvoicePaymentDetails {
     pub description: Option<String>,
     pub invoice: String,
+}
+
+#[frb(mirror(SparkHtlcDetails))]
+pub struct _SparkHtlcDetails {
+    pub payment_hash: String,
+    pub preimage: Option<String>,
+    pub expiry_time: u64,
+    pub status: SparkHtlcStatus,
+}
+
+#[frb(mirror(SparkHtlcStatus))]
+pub enum _SparkHtlcStatus {
+    WaitingForPreimage,
+    PreimageShared,
+    Returned,
 }
 
 #[frb(mirror(PaymentMetadata))]
@@ -859,4 +884,22 @@ pub struct _RecordChange {
     pub schema_version: String,
     pub updated_fields: HashMap<String, String>,
     pub revision: u64,
+}
+
+#[frb(mirror(ClaimSparkHtlcRequest))]
+pub struct _ClaimSparkHtlcRequest {
+    pub preimage: String,
+}
+
+#[frb(mirror(ClaimSparkHtlcResponse))]
+pub struct _ClaimSparkHtlcResponse {
+    pub payment: Payment,
+}
+
+#[frb(mirror(ListUnclaimedHtlcTransferPaymentsRequest))]
+pub struct _ListUnclaimedHtlcTransferPaymentsRequest {}
+
+#[frb(mirror(ListUnclaimedHtlcTransferPaymentsResponse))]
+pub struct _ListUnclaimedHtlcTransferPaymentsResponse {
+    pub payments: Vec<Payment>,
 }

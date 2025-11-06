@@ -224,6 +224,8 @@ pub enum PaymentDetails {
     Spark {
         /// The invoice details if the payment fulfilled a spark invoice
         invoice_details: Option<SparkInvoicePaymentDetails>,
+        /// The HTLC transfer details if the payment fulfilled an HTLC transfer
+        htlc_details: Option<SparkHtlcDetails>,
     },
     Token {
         metadata: TokenMetadata,
@@ -268,6 +270,27 @@ pub struct SparkInvoicePaymentDetails {
     pub description: Option<String>,
     /// The raw spark invoice string
     pub invoice: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkHtlcDetails {
+    /// The payment hash of the HTLC
+    pub payment_hash: String,
+    /// The preimage of the HTLC. Empty until receiver has released it.
+    pub preimage: Option<String>,
+    /// The expiry time of the HTLC in seconds since the Unix epoch
+    pub expiry_time: u64,
+    /// The HTLC status
+    pub status: SparkHtlcStatus,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum SparkHtlcStatus {
+    WaitingForPreimage,
+    PreimageShared,
+    Returned,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -737,6 +760,20 @@ pub enum SendPaymentOptions {
         /// number of seconds. If unset, the function will return immediately after initiating the payment.
         completion_timeout_secs: Option<u32>,
     },
+    SparkAddress {
+        /// Can only be provided for Bitcoin payments. If set, a Spark HTLC transfer will be created.
+        /// The receiver will need to provide the preimage to claim it.
+        htlc_options: Option<SparkHtlcOptions>,
+    },
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkHtlcOptions {
+    /// The preimage of the HTLC. The receiver will need to provide this to claim it.
+    pub preimage: String,
+    /// The duration of the HTLC in seconds.
+    /// After this time, the HTLC will be reverted.
+    pub expiry_duration_secs: u64,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -981,4 +1018,23 @@ pub struct CheckMessageRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CheckMessageResponse {
     pub is_valid: bool,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ClaimSparkHtlcRequest {
+    pub preimage: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ClaimSparkHtlcResponse {
+    pub payment: Payment,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ListUnclaimedHtlcTransferPaymentsRequest {}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ListUnclaimedHtlcTransferPaymentsResponse {
+    pub payments: Vec<Payment>,
 }

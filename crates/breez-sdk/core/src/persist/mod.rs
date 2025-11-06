@@ -424,7 +424,8 @@ pub mod tests {
 
     use crate::{
         DepositClaimError, ListPaymentsRequest, LnurlWithdrawInfo, Payment, PaymentDetails,
-        PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, Storage, UpdateDepositPayload,
+        PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, SparkHtlcDetails,
+        SparkHtlcStatus, Storage, UpdateDepositPayload,
         persist::{ObjectCacheRepository, PaymentRequestMetadata},
     };
 
@@ -739,24 +740,45 @@ pub mod tests {
     pub async fn test_sqlite_storage(storage: Box<dyn Storage>) {
         use crate::models::{LnurlPayInfo, TokenMetadata};
 
-        // Test 1: Spark payment
+        // Test 1: Spark invoice payment
         let spark_payment = Payment {
             id: "spark_pmt123".to_string(),
             payment_type: PaymentType::Send,
             status: PaymentStatus::Completed,
             amount: u128::from(u64::MAX).checked_add(100_000).unwrap(),
-            fees: 1000,
-            timestamp: 5000,
+            fees: 1_000,
+            timestamp: 5_000,
             method: PaymentMethod::Spark,
             details: Some(PaymentDetails::Spark {
                 invoice_details: Some(crate::SparkInvoicePaymentDetails {
                     description: Some("description".to_string()),
                     invoice: "invoice_string".to_string(),
                 }),
+                htlc_details: None,
             }),
         };
 
-        // Test 2: Token payment
+        // Test 2: Spark HTLC payment
+        let spark_htlc_payment = Payment {
+            id: "spark_htlc_pmt123".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 20_000,
+            fees: 2_000,
+            timestamp: 10_000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: Some(SparkHtlcDetails {
+                    payment_hash: "payment_hash123".to_string(),
+                    preimage: Some("preimage123".to_string()),
+                    expiry_time: 15_000,
+                    status: SparkHtlcStatus::PreimageShared,
+                }),
+            }),
+        };
+
+        // Test 3: Token payment
         let token_metadata = TokenMetadata {
             identifier: "token123".to_string(),
             issuer_public_key:
@@ -785,7 +807,7 @@ pub mod tests {
             }),
         };
 
-        // Test 3: Lightning payment with full details
+        // Test 4: Lightning payment with full details
         let pay_metadata = PaymentMetadata {
             lnurl_pay_info: Some(LnurlPayInfo {
                 ln_address: Some("test@example.com".to_string()),
@@ -817,7 +839,7 @@ pub mod tests {
             }),
         };
 
-        // Test 4: Lightning payment with full details
+        // Test 5: Lightning payment with full details
         let withdraw_metadata = PaymentMetadata {
             lnurl_pay_info: None,
             lnurl_withdraw_info: Some(LnurlWithdrawInfo {
@@ -844,7 +866,7 @@ pub mod tests {
             }),
         };
 
-        // Test 5: Lightning payment with minimal details
+        // Test 6: Lightning payment with minimal details
         let lightning_minimal_payment = Payment {
             id: "lightning_minimal_pmt012".to_string(),
             payment_type: PaymentType::Receive,
@@ -864,7 +886,7 @@ pub mod tests {
             }),
         };
 
-        // Test 6: Withdraw payment
+        // Test 7: Withdraw payment
         let withdraw_payment = Payment {
             id: "withdraw_pmt345".to_string(),
             payment_type: PaymentType::Send,
@@ -879,7 +901,7 @@ pub mod tests {
             }),
         };
 
-        // Test 7: Deposit payment
+        // Test 8: Deposit payment
         let deposit_payment = Payment {
             id: "deposit_pmt678".to_string(),
             payment_type: PaymentType::Receive,
@@ -894,7 +916,7 @@ pub mod tests {
             }),
         };
 
-        // Test 8: Payment with no details
+        // Test 9: Payment with no details
         let no_details_payment = Payment {
             id: "no_details_pmt901".to_string(),
             payment_type: PaymentType::Send,
@@ -908,6 +930,7 @@ pub mod tests {
 
         let test_payments = vec![
             spark_payment.clone(),
+            spark_htlc_payment.clone(),
             token_payment.clone(),
             lightning_lnurl_pay_payment.clone(),
             lightning_lnurl_withdraw_payment.clone(),
@@ -942,7 +965,7 @@ pub mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(payments.len(), 8);
+        assert_eq!(payments.len(), 9);
 
         // Test each payment type individually
         for (i, expected_payment) in test_payments.iter().enumerate() {
@@ -968,12 +991,15 @@ pub mod tests {
                 (
                     Some(PaymentDetails::Spark {
                         invoice_details: r_invoice,
+                        htlc_details: r_htlc,
                     }),
                     Some(PaymentDetails::Spark {
                         invoice_details: e_invoice,
+                        htlc_details: e_htlc,
                     }),
                 ) => {
                     assert_eq!(r_invoice, e_invoice);
+                    assert_eq!(r_htlc, e_htlc);
                 }
                 (
                     Some(PaymentDetails::Token {
@@ -1077,7 +1103,7 @@ pub mod tests {
             .filter(|p| p.payment_type == PaymentType::Receive)
             .count();
         assert_eq!(send_payments, 4); // spark, lightning_lnurl_pay, withdraw, no_details
-        assert_eq!(receive_payments, 4); // token, lightning_lnurl_withdraw, lightning_minimal, deposit
+        assert_eq!(receive_payments, 5); // spark_htlc, token, lightning_lnurl_withdraw, lightning_minimal, deposit
 
         // Test filtering by status
         let completed_payments = payments
@@ -1092,7 +1118,7 @@ pub mod tests {
             .iter()
             .filter(|p| p.status == PaymentStatus::Failed)
             .count();
-        assert_eq!(completed_payments, 5); // spark, lightning_lnurl_pay, lightning_lnurl_withdraw, withdraw, deposit
+        assert_eq!(completed_payments, 6); // spark, spark_htlc, lightning_lnurl_pay, lightning_lnurl_withdraw, withdraw, deposit
         assert_eq!(pending_payments, 2); // token, no_details
         assert_eq!(failed_payments, 1); // lightning_minimal
 
@@ -1303,6 +1329,7 @@ pub mod tests {
             method: PaymentMethod::Spark,
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
+                htlc_details: None,
             }),
         };
 
@@ -1316,6 +1343,7 @@ pub mod tests {
             method: PaymentMethod::Spark,
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
+                htlc_details: None,
             }),
         };
 
@@ -1329,6 +1357,7 @@ pub mod tests {
             method: PaymentMethod::Spark,
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
+                htlc_details: None,
             }),
         };
 
@@ -1384,6 +1413,7 @@ pub mod tests {
             method: PaymentMethod::Spark,
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
+                htlc_details: None,
             }),
         };
 
@@ -1522,6 +1552,7 @@ pub mod tests {
             method: PaymentMethod::Spark,
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
+                htlc_details: None,
             }),
         };
 
@@ -1535,6 +1566,7 @@ pub mod tests {
             method: PaymentMethod::Spark,
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
+                htlc_details: None,
             }),
         };
 
@@ -1548,6 +1580,7 @@ pub mod tests {
             method: PaymentMethod::Spark,
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
+                htlc_details: None,
             }),
         };
 
@@ -1603,6 +1636,7 @@ pub mod tests {
             method: PaymentMethod::Spark,
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
+                htlc_details: None,
             }),
         };
 
@@ -1698,6 +1732,7 @@ pub mod tests {
             method: PaymentMethod::Spark,
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
+                htlc_details: None,
             }),
         };
 
@@ -1711,6 +1746,7 @@ pub mod tests {
             method: PaymentMethod::Spark,
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
+                htlc_details: None,
             }),
         };
 
@@ -1724,6 +1760,7 @@ pub mod tests {
             method: PaymentMethod::Spark,
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
+                htlc_details: None,
             }),
         };
 

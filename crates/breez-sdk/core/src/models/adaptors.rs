@@ -1,23 +1,28 @@
-use std::time::UNIX_EPOCH;
-
 use breez_sdk_common::input::{
     self, InputType, PaymentRequestSource, SparkInvoiceDetails, parse_spark_address,
 };
 use spark_wallet::{
     CoopExitFeeQuote, CoopExitSpeedFeeQuote, ExitSpeed, LightningSendPayment, LightningSendStatus,
-    Network as SparkNetwork, SspUserRequest, TokenTransactionStatus, TransferDirection,
-    TransferStatus, TransferType, WalletTransfer,
+    Network as SparkNetwork, PreimageRequest, PreimageRequestStatus, SspUserRequest,
+    TokenTransactionStatus, TransferDirection, TransferStatus, TransferType, WalletTransfer,
 };
+use web_time::UNIX_EPOCH;
 
 use crate::{
     Fee, Network, OnchainConfirmationSpeed, Payment, PaymentDetails, PaymentMethod, PaymentStatus,
-    PaymentType, SdkError, SendOnchainFeeQuote, SendOnchainSpeedFeeQuote,
-    SparkInvoicePaymentDetails, TokenBalance, TokenMetadata,
+    PaymentType, SdkError, SendOnchainFeeQuote, SendOnchainSpeedFeeQuote, SparkHtlcDetails,
+    SparkHtlcStatus, SparkInvoicePaymentDetails, TokenBalance, TokenMetadata,
 };
 
-impl From<TransferType> for PaymentMethod {
-    fn from(value: TransferType) -> Self {
-        match value {
+impl PaymentMethod {
+    fn from_transfer(transfer: &WalletTransfer) -> Self {
+        // HTLC transfers share PreimageSwap type with Lightning payments.
+        // We can tell them apart by checking if they have an htlc.
+        if transfer.htlc_preimage_request.is_some() {
+            return PaymentMethod::Spark;
+        }
+
+        match transfer.transfer_type {
             TransferType::PreimageSwap => PaymentMethod::Lightning,
             TransferType::CooperativeExit => PaymentMethod::Withdraw,
             TransferType::Transfer => PaymentMethod::Spark,
@@ -38,6 +43,12 @@ impl PaymentDetails {
 
             return Ok(Some(PaymentDetails::Spark {
                 invoice_details: Some(invoice_details.into()),
+                htlc_details: None,
+            }));
+        } else if let Some(htlc_preimage_request) = &transfer.htlc_preimage_request {
+            return Ok(Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: Some(htlc_preimage_request.clone().try_into()?),
             }));
         }
 
@@ -51,6 +62,7 @@ impl PaymentDetails {
             },
             SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark {
                 invoice_details: None,
+                htlc_details: None,
             },
             SspUserRequest::LightningReceiveRequest(request) => {
                 let invoice_details = input::parse_invoice(&request.invoice.encoded_invoice)
@@ -171,7 +183,7 @@ impl TryFrom<WalletTransfer> for Payment {
                 Some(Ok(duration)) => duration.as_secs(),
                 _ => 0,
             },
-            method: transfer.transfer_type.into(),
+            method: PaymentMethod::from_transfer(&transfer),
             details,
         })
     }
@@ -341,6 +353,32 @@ impl PaymentStatus {
             TokenTransactionStatus::StartedCancelled | TokenTransactionStatus::SignedCancelled => {
                 PaymentStatus::Failed
             }
+        }
+    }
+}
+
+impl TryFrom<PreimageRequest> for SparkHtlcDetails {
+    type Error = SdkError;
+    fn try_from(value: PreimageRequest) -> Result<Self, Self::Error> {
+        Ok(Self {
+            payment_hash: value.payment_hash.to_string(),
+            preimage: value.preimage.map(|p| p.encode_hex()),
+            expiry_time: value
+                .expiry_time
+                .duration_since(UNIX_EPOCH)
+                .map_err(|e| SdkError::Generic(format!("Invalid expiry time: {e}")))?
+                .as_secs(),
+            status: value.status.into(),
+        })
+    }
+}
+
+impl From<PreimageRequestStatus> for SparkHtlcStatus {
+    fn from(status: PreimageRequestStatus) -> Self {
+        match status {
+            PreimageRequestStatus::WaitingForPreimage => SparkHtlcStatus::WaitingForPreimage,
+            PreimageRequestStatus::PreimageShared => SparkHtlcStatus::PreimageShared,
+            PreimageRequestStatus::Returned => SparkHtlcStatus::Returned,
         }
     }
 }
