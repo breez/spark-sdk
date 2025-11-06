@@ -3,7 +3,7 @@ package com.example.kotlinmpplib
 import breez_sdk_spark.*
 
 class LightningAddress {
-    fun configureLightningAddress(): Config {
+    fun configureLightningAddress(): breez_sdk_spark.Config {
         // ANCHOR: config-lightning-address
         val config = defaultConfig(Network.MAINNET)
         config.apiKey = "your-api-key"

@@ -1,6 +1,6 @@
 # Getting Started
 
-Integrating Breez SDK - Nodeless *(Spark Implementation)* into your application takes just a few minutes.
+Integrating Breez SDK - Nodeless _(Spark Implementation)_ into your application takes just a few minutes.
 
 Before you begin, make sure to read the [repository README](https://github.com/breez/spark-sdk#breez-sdk---nodeless-spark-implementation) carefully. Then follow these steps to get started:
 
@@ -9,6 +9,7 @@ Before you begin, make sure to read the [repository README](https://github.com/b
 - **[Fetching the balance](/guide/get_info.md)**
 - **[Listening to events](/guide/events.md)**
 - **[Adding logging](/guide/logging.md)**
+- **[Custom configuration](/guide/config.md)**
 
 ## API Key
 
@@ -24,8 +25,8 @@ Many of the guidelines are implemented in [Misty Breez](https://github.com/breez
 
 Looking for a quick way to try the SDK in your browser? Check out the WebAssembly (WASM) demo app:
 
-- **Repo:** [breez/breez-sdk-spark-example](https://github.com/breez/breez-sdk-spark-example)  
-- **Live demo:** https://breez-sdk-spark-example.vercel.app  
+- **Repo:** [breez/breez-sdk-spark-example](https://github.com/breez/breez-sdk-spark-example)
+- **Live demo:** [https://breez-sdk-spark-example.vercel.app](https://breez-sdk-spark-example.vercel.app)
 
 > **Note:** The demo is for demonstration purposes only and not intended for production use.
 

@@ -31,7 +31,7 @@ We will verify and add it to our list of allowed domains.
     <a class="header" href="#configuring-lightning-address">Configuring Lightning addresses for users</a>
 </h2>
 
-configure your domain in the SDK by passing the `lnurl_domain` parameter in the SDK configuration:
+Configure your domain in the SDK by passing the `lnurl_domain` parameter in the SDK configuration:
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>

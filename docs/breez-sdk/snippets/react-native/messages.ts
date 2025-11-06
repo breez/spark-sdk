@@ -7,7 +7,7 @@ const exampleSignMessage = async (sdk: BreezSdk) => {
 
   const signMessageResponse = await sdk.signMessage({
     message: '<message to sign>',
-    compact: compact
+    compact
   })
 
   const signature = signMessageResponse.signature
