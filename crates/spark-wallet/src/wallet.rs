@@ -1211,9 +1211,6 @@ impl BackgroundProcessor {
             return Ok(());
         }
 
-        trace!("Claiming transfer from event");
-        claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
-        trace!("Claimed transfer from event");
         // get the ssp transfer details, if it fails just use None
         // Internal transfers will not have an SSP entry so just skip it
         let ssp_transfer = if transfer.transfer_type == spark::services::TransferType::Transfer {
@@ -1226,6 +1223,19 @@ impl BackgroundProcessor {
                 .into_iter()
                 .next()
         };
+
+        self.event_manager
+            .notify_listeners(WalletEvent::PendingTransferFound(
+                WalletTransfer::from_transfer(
+                    transfer.clone(),
+                    ssp_transfer.clone(),
+                    self.identity_public_key,
+                ),
+            ));
+
+        trace!("Claiming transfer from event");
+        claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
+        trace!("Claimed transfer from event");
 
         self.event_manager
             .notify_listeners(WalletEvent::TransferClaimed(WalletTransfer::from_transfer(

@@ -362,6 +362,17 @@ impl BreezSdk {
                     error!("Failed to sync wallet: {e:?}");
                 }
             }
+            WalletEvent::PendingTransferFound(transfer) => {
+                info!("Pending transfer found");
+                if let Ok(payment) = transfer.try_into() {
+                    self.event_emitter
+                        .emit(&SdkEvent::PaymentPending { payment })
+                        .await;
+                }
+                if let Err(e) = self.sync_trigger.send(SyncRequest::payments_only(None)) {
+                    error!("Failed to sync wallet: {e:?}");
+                }
+            }
         }
     }
 

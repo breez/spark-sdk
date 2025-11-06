@@ -30,12 +30,15 @@ pub enum WalletEvent {
     StreamDisconnected,
     Synced,
     TransferClaimed(WalletTransfer),
+    PendingTransferFound(WalletTransfer),
 }
 
 impl Display for WalletEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let WalletEvent::TransferClaimed(transfer) = self {
             write!(f, "TransferClaimed({})", transfer.id)
+        } else if let WalletEvent::PendingTransferFound(transfer) = self {
+            write!(f, "PendingTransferFound({})", transfer.id)
         } else {
             write!(f, "{:?}", self)
         }
