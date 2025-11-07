@@ -632,7 +632,7 @@ impl BreezSdk {
                     object_repository.fetch_static_deposit_address().await?;
                 if let Some(static_deposit_address) = static_deposit_address {
                     return Ok(ReceivePaymentResponse {
-                        payment_request: static_deposit_address.address.to_string(),
+                        payment_request: static_deposit_address.address.clone(),
                         fee: 0,
                     });
                 }
@@ -1662,7 +1662,7 @@ impl BreezSdk {
         let sync_trigger = self.sync_trigger.clone();
         let event_emitter = self.event_emitter.clone();
         let payment = payment.clone();
-        let payment_id = payment_id.to_string();
+        let payment_id = payment_id.clone();
         let mut shutdown = self.shutdown_sender.subscribe();
 
         tokio::spawn(async move {

@@ -650,7 +650,7 @@ pub fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option
                         );
                         return None;
                     };
-                    Some(token_identifier.to_string())
+                    Some(token_identifier.clone())
                 }
                 SparkAddressPaymentType::SatsPayment(_) => None,
             };

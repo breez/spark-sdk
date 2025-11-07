@@ -116,7 +116,7 @@ impl DepositChainSyncer {
             );
             let status = self
                 .chain_service
-                .get_transaction_status(refund_tx_id.to_string())
+                .get_transaction_status(refund_tx_id.clone())
                 .await;
             match status {
                 Ok(status) => {

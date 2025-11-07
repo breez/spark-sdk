@@ -712,7 +712,7 @@ impl SyncStorage for SqliteStorage {
             params![
                 record.id.r#type,
                 record.id.data_id,
-                record.schema_version.to_string(),
+                record.schema_version.clone(),
                 serde_json::to_string(&record.updated_fields)?,
                 revision,
             ],
@@ -746,7 +746,7 @@ impl SyncStorage for SqliteStorage {
             params![
                 record.id.r#type,
                 record.id.data_id,
-                record.schema_version.to_string(),
+                record.schema_version.clone(),
                 serde_json::to_string(&record.data)?,
                 record.revision,
             ],
@@ -853,7 +853,7 @@ impl SyncStorage for SqliteStorage {
                 params![
                     record.id.r#type,
                     record.id.data_id,
-                    record.schema_version.to_string(),
+                    record.schema_version.clone(),
                     serde_json::to_string(&record.data)?,
                     record.revision,
                 ],
@@ -1040,7 +1040,7 @@ impl SyncStorage for SqliteStorage {
                 params![
                     record.id.r#type,
                     record.id.data_id,
-                    record.schema_version.to_string(),
+                    record.schema_version.clone(),
                     serde_json::to_string(&record.data)?,
                     record.revision,
                 ],
