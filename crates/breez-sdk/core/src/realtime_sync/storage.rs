@@ -280,4 +280,11 @@ impl Storage for SyncedStorage {
     ) -> Result<(), StorageError> {
         self.inner.update_deposit(txid, vout, payload).await
     }
+
+    async fn add_lnurl_metadata(
+        &self,
+        metadata: Vec<crate::persist::AddLnurlMetadataItem>,
+    ) -> Result<(), StorageError> {
+        self.inner.add_lnurl_metadata(metadata).await
+    }
 }

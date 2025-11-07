@@ -16,6 +16,7 @@ use crate::{
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
 const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
+const LNURL_METADATA_OFFSET_KEY: &str = "lnurl_metadata_offset";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
 const TX_CACHE_KEY: &str = "tx_cache";
 const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
@@ -32,6 +33,23 @@ pub enum UpdateDepositPayload {
         refund_txid: String,
         refund_tx: String,
     },
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct AddLnurlMetadataItem {
+    pub payment_hash: String,
+    pub sender_comment: Option<String>,
+    pub nostr_zap_request: Option<String>,
+}
+
+impl From<lnurl_models::ListMetadataMetadata> for AddLnurlMetadataItem {
+    fn from(value: lnurl_models::ListMetadataMetadata) -> Self {
+        AddLnurlMetadataItem {
+            payment_hash: value.payment_hash,
+            sender_comment: value.sender_comment,
+            nostr_zap_request: value.nostr_zap_request,
+        }
+    }
 }
 
 /// Errors that can occur during storage operations
@@ -183,6 +201,11 @@ pub trait Storage: Send + Sync {
         txid: String,
         vout: u32,
         payload: UpdateDepositPayload,
+    ) -> Result<(), StorageError>;
+
+    async fn add_lnurl_metadata(
+        &self,
+        metadata: Vec<AddLnurlMetadataItem>,
     ) -> Result<(), StorageError>;
 }
 
@@ -405,6 +428,26 @@ impl ObjectCacheRepository {
         match value {
             Some(value) => Ok(value == "true"),
             None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn save_lnurl_metadata_offset(&self, offset: u32) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(LNURL_METADATA_OFFSET_KEY.to_string(), offset.to_string())
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_lnurl_metadata_offset(&self) -> Result<u32, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(LNURL_METADATA_OFFSET_KEY.to_string())
+            .await?;
+        match value {
+            Some(value) => Ok(value.parse().map_err(|_| {
+                StorageError::Serialization("invalid lnurl_metadata_offset".to_string())
+            })?),
+            None => Ok(0),
         }
     }
 }
@@ -757,6 +800,7 @@ pub mod tests {
 
     #[allow(clippy::too_many_lines)]
     pub async fn test_sqlite_storage(storage: Box<dyn Storage>) {
+        use crate::AddLnurlMetadataItem;
         use crate::models::{LnurlPayInfo, TokenMetadata};
 
         // Test 1: Spark invoice payment
@@ -839,6 +883,7 @@ pub mod tests {
             lnurl_withdraw_info: None,
             lnurl_description: None,
         };
+
         let lightning_lnurl_pay_payment = Payment {
             id: "lightning_pmt789".to_string(),
             payment_type: PaymentType::Send,
@@ -855,6 +900,7 @@ pub mod tests {
                 destination_pubkey: "03123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01".to_string(),
                 lnurl_pay_info: pay_metadata.lnurl_pay_info.clone(),
                 lnurl_withdraw_info: pay_metadata.lnurl_withdraw_info.clone(),
+                lnurl_receive_metadata: None,
             }),
         };
 
@@ -882,6 +928,7 @@ pub mod tests {
                 destination_pubkey: "03123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01".to_string(),
                 lnurl_pay_info: withdraw_metadata.lnurl_pay_info.clone(),
                 lnurl_withdraw_info: withdraw_metadata.lnurl_withdraw_info.clone(),
+                lnurl_receive_metadata: None,
             }),
         };
 
@@ -902,6 +949,7 @@ pub mod tests {
                 destination_pubkey: "02987654321fedcba0987654321fedcba0987654321fedcba0987654321fedcba09".to_string(),
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
+                lnurl_receive_metadata: None,
             }),
         };
 
@@ -1051,6 +1099,7 @@ pub mod tests {
                         destination_pubkey: r_dest_pubkey,
                         lnurl_pay_info: r_pay_lnurl,
                         lnurl_withdraw_info: r_withdraw_lnurl,
+                        lnurl_receive_metadata: r_receive_metadata,
                     }),
                     Some(PaymentDetails::Lightning {
                         description: e_description,
@@ -1060,6 +1109,7 @@ pub mod tests {
                         destination_pubkey: e_dest_pubkey,
                         lnurl_pay_info: e_pay_lnurl,
                         lnurl_withdraw_info: e_withdraw_lnurl,
+                        lnurl_receive_metadata: e_receive_metadata,
                     }),
                 ) => {
                     assert_eq!(r_description, e_description);
@@ -1091,6 +1141,19 @@ pub mod tests {
                         (None, None) => {}
                         _ => panic!(
                             "LNURL withdraw info mismatch for payment {}",
+                            expected_payment.id
+                        ),
+                    }
+
+                    // Test LNURL receive metadata if present
+                    match (r_receive_metadata, e_receive_metadata) {
+                        (Some(r_info), Some(e_info)) => {
+                            assert_eq!(r_info.nostr_zap_request, e_info.nostr_zap_request);
+                            assert_eq!(r_info.sender_comment, e_info.sender_comment);
+                        }
+                        (None, None) => {}
+                        _ => panic!(
+                            "LNURL receive metadata mismatch for payment {}",
                             expected_payment.id
                         ),
                     }
@@ -1147,6 +1210,203 @@ pub mod tests {
             .filter(|p| p.method == PaymentMethod::Lightning)
             .count();
         assert_eq!(lightning_count, 3); // lightning_lnurl_pay, lightning_lnurl_withdraw and lightning_minimal
+
+        // Test 9: Lightning payment with lnurl receive metadata (zap request and sender comment)
+        let lightning_zap_payment = Payment {
+            id: "lightning_zap_pmt".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 100_000,
+            fees: 1000,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Lightning,
+            details: Some(PaymentDetails::Lightning {
+                description: Some("Zap payment".to_string()),
+                preimage: Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01".to_string()),
+                invoice: "lnbc1000n1pjqxyz9pp5zap123def456ghi789jkl012mno345pqr678stu901vwx234yz567890abcdefghijklmnopqrstuvwxyz".to_string(),
+                payment_hash: "zaphash1234567890abcdef1234567890abcdef1234567890abcdef12345678".to_string(),
+                destination_pubkey: "03zappubkey123456789abcdef0123456789abcdef0123456789abcdef0123456701".to_string(),
+                lnurl_pay_info: None,
+                lnurl_withdraw_info: None,
+                lnurl_receive_metadata: None,
+            }),
+        };
+
+        storage
+            .insert_payment(lightning_zap_payment.clone())
+            .await
+            .unwrap();
+
+        // Add lnurl receive metadata for the zap payment
+        storage
+            .add_lnurl_metadata(vec![AddLnurlMetadataItem {
+                payment_hash: "zaphash1234567890abcdef1234567890abcdef1234567890abcdef12345678"
+                    .to_string(),
+                sender_comment: Some("Great content!".to_string()),
+                nostr_zap_request: Some(
+                    r#"{"kind":9734,"content":"zap request","tags":[]}"#.to_string(),
+                ),
+            }])
+            .await
+            .unwrap();
+
+        // Retrieve the payment and verify lnurl receive metadata is present
+        let retrieved_zap_payment = storage
+            .get_payment_by_id(lightning_zap_payment.id.clone())
+            .await
+            .unwrap();
+
+        match retrieved_zap_payment.details {
+            Some(PaymentDetails::Lightning {
+                lnurl_receive_metadata: Some(metadata),
+                ..
+            }) => {
+                assert_eq!(
+                    metadata.sender_comment,
+                    Some("Great content!".to_string()),
+                    "Sender comment should match"
+                );
+                assert_eq!(
+                    metadata.nostr_zap_request,
+                    Some(r#"{"kind":9734,"content":"zap request","tags":[]}"#.to_string()),
+                    "Nostr zap request should match"
+                );
+            }
+            _ => panic!("Expected Lightning payment with lnurl receive metadata"),
+        }
+
+        // Test 10: Add multiple lnurl receive metadata items at once
+        let lightning_zap_payment2 = Payment {
+            id: "lightning_zap_pmt2".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 50_000,
+            fees: 500,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Lightning,
+            details: Some(PaymentDetails::Lightning {
+                description: Some("Another zap".to_string()),
+                preimage: None,
+                invoice: "lnbc500n1pjqxyz9pp5zap2".to_string(),
+                payment_hash: "zaphash2".to_string(),
+                destination_pubkey: "03zappubkey2".to_string(),
+                lnurl_pay_info: None,
+                lnurl_withdraw_info: None,
+                lnurl_receive_metadata: None,
+            }),
+        };
+
+        let lightning_zap_payment3 = Payment {
+            id: "lightning_zap_pmt3".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 25_000,
+            fees: 250,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Lightning,
+            details: Some(PaymentDetails::Lightning {
+                description: Some("Third zap".to_string()),
+                preimage: None,
+                invoice: "lnbc250n1pjqxyz9pp5zap3".to_string(),
+                payment_hash: "zaphash3".to_string(),
+                destination_pubkey: "03zappubkey3".to_string(),
+                lnurl_pay_info: None,
+                lnurl_withdraw_info: None,
+                lnurl_receive_metadata: None,
+            }),
+        };
+
+        storage
+            .insert_payment(lightning_zap_payment2.clone())
+            .await
+            .unwrap();
+        storage
+            .insert_payment(lightning_zap_payment3.clone())
+            .await
+            .unwrap();
+
+        // Add multiple metadata items at once
+        storage
+            .add_lnurl_metadata(vec![
+                AddLnurlMetadataItem {
+                    payment_hash: "zaphash2".to_string(),
+                    sender_comment: Some("Nice work!".to_string()),
+                    nostr_zap_request: None,
+                },
+                AddLnurlMetadataItem {
+                    payment_hash: "zaphash3".to_string(),
+                    sender_comment: None,
+                    nostr_zap_request: Some(r#"{"kind":9734,"content":"zap3"}"#.to_string()),
+                },
+            ])
+            .await
+            .unwrap();
+
+        // Verify both payments have their respective metadata
+        let retrieved_zap2 = storage
+            .get_payment_by_id(lightning_zap_payment2.id.clone())
+            .await
+            .unwrap();
+
+        match retrieved_zap2.details {
+            Some(PaymentDetails::Lightning {
+                lnurl_receive_metadata: Some(metadata),
+                ..
+            }) => {
+                assert_eq!(
+                    metadata.sender_comment,
+                    Some("Nice work!".to_string()),
+                    "Second payment should have sender comment"
+                );
+                assert_eq!(
+                    metadata.nostr_zap_request, None,
+                    "Second payment should not have zap request"
+                );
+            }
+            _ => panic!("Expected Lightning payment with lnurl receive metadata"),
+        }
+
+        let retrieved_zap3 = storage
+            .get_payment_by_id(lightning_zap_payment3.id.clone())
+            .await
+            .unwrap();
+
+        match retrieved_zap3.details {
+            Some(PaymentDetails::Lightning {
+                lnurl_receive_metadata: Some(metadata),
+                ..
+            }) => {
+                assert_eq!(
+                    metadata.sender_comment, None,
+                    "Third payment should not have sender comment"
+                );
+                assert_eq!(
+                    metadata.nostr_zap_request,
+                    Some(r#"{"kind":9734,"content":"zap3"}"#.to_string()),
+                    "Third payment should have zap request"
+                );
+            }
+            _ => panic!("Expected Lightning payment with lnurl receive metadata"),
+        }
+
+        // Test 11: Lightning payment without lnurl receive metadata should return None
+        let retrieved_minimal = storage
+            .get_payment_by_id(lightning_minimal_payment.id.clone())
+            .await
+            .unwrap();
+
+        match retrieved_minimal.details {
+            Some(PaymentDetails::Lightning {
+                lnurl_receive_metadata,
+                ..
+            }) => {
+                assert!(
+                    lnurl_receive_metadata.is_none(),
+                    "Payment without metadata should have None"
+                );
+            }
+            _ => panic!("Expected Lightning payment"),
+        }
     }
 
     pub async fn test_unclaimed_deposits_crud(storage: Box<dyn Storage>) {
@@ -1271,6 +1531,7 @@ pub mod tests {
                 preimage: None,
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
+                lnurl_receive_metadata: None,
             }),
         };
 
@@ -1290,6 +1551,7 @@ pub mod tests {
                 preimage: None,
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
+                lnurl_receive_metadata: None,
             }),
         };
 
@@ -1452,6 +1714,7 @@ pub mod tests {
                 preimage: None,
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
+                lnurl_receive_metadata: None,
             }),
         };
 
@@ -1823,6 +2086,7 @@ pub mod tests {
                 preimage: None,
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
+                lnurl_receive_metadata: None,
             }),
         };
 
@@ -1842,6 +2106,7 @@ pub mod tests {
                 preimage: None,
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
+                lnurl_receive_metadata: None,
             }),
         };
 

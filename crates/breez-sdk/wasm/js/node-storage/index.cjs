@@ -212,11 +212,14 @@ class SqliteStorage {
             ,       t.invoice_details AS token_invoice_details
             ,       s.invoice_details AS spark_invoice_details
             ,       s.htlc_details AS spark_htlc_details
+            ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       lrm.sender_comment AS lnurl_sender_comment
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_details_spark s ON p.id = s.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash
              ${whereSql}
              ORDER BY p.timestamp ${orderDirection}
              LIMIT ? OFFSET ?
@@ -363,11 +366,14 @@ class SqliteStorage {
             ,       t.invoice_details AS token_invoice_details
             ,       s.invoice_details AS spark_invoice_details
             ,       s.htlc_details AS spark_htlc_details
+            ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       lrm.sender_comment AS lnurl_sender_comment
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_details_spark s ON p.id = s.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash
              WHERE p.id = ?
             `);
 
@@ -422,11 +428,14 @@ class SqliteStorage {
             ,       t.invoice_details AS token_invoice_details
             ,       s.invoice_details AS spark_invoice_details
             ,       s.htlc_details AS spark_htlc_details
+            ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       lrm.sender_comment AS lnurl_sender_comment
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_details_spark s ON p.id = s.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash
              WHERE l.invoice = ?
             `);
 
@@ -573,6 +582,34 @@ class SqliteStorage {
     }
   }
 
+  addLnurlMetadata(metadata) {
+    try {
+      const stmt = this.db.prepare(
+        "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, sender_comment) VALUES (?, ?, ?)"
+      );
+
+      const transaction = this.db.transaction(() => {
+        for (const item of metadata) {
+          stmt.run(
+            item.paymentHash,
+            item.nostrZapRequest || null,
+            item.senderComment || null
+          );
+        }
+      });
+
+      transaction();
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to add lnurl metadata: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
   // ===== Private Helper Methods =====
 
   _rowToPayment(row) {
@@ -607,6 +644,13 @@ class SqliteStorage {
             e
           );
         }
+      }
+
+      if (row.lnurl_nostr_zap_request || row.lnurl_sender_comment) {
+        details.lnurlReceiveMetadata = {
+          nostrZapRequest: row.lnurl_nostr_zap_request || null,
+          senderComment: row.lnurl_sender_comment || null,
+        };
       }
     } else if (row.withdraw_tx_id) {
       details = {
