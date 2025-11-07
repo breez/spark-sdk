@@ -1328,7 +1328,7 @@ impl TransferService {
             .operator_pool
             .get_coordinator()
             .client
-            .finalize_transfer(
+            .finalize_transfer_with_transfer_package(
                 operator_rpc::spark::FinalizeTransferWithTransferPackageRequest {
                     transfer_id: transfer_request.transfer_id,
                     owner_identity_public_key: transfer_request.owner_identity_public_key,
