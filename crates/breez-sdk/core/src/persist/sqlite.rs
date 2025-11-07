@@ -15,10 +15,10 @@ use rusqlite::{
 use rusqlite_migration::{M, Migrations, SchemaVersion};
 
 use crate::{
-    AssetFilter, DepositInfo, ListPaymentsRequest, LnurlPayInfo, LnurlWithdrawInfo, PaymentDetails,
-    PaymentMethod,
+    AssetFilter, DepositInfo, ListPaymentsRequest, LnurlPayInfo, LnurlReceiveMetadata,
+    LnurlWithdrawInfo, PaymentDetails, PaymentMethod,
     error::DepositClaimError,
-    persist::{PaymentMetadata, UpdateDepositPayload},
+    persist::{AddLnurlMetadataItem, PaymentMetadata, UpdateDepositPayload},
 };
 
 use super::{Payment, Storage, StorageError};
@@ -235,6 +235,11 @@ impl SqliteStorage {
                 PRIMARY KEY(record_type, data_id, revision)
             );
             CREATE INDEX idx_sync_incoming_revision ON sync_incoming(revision);",
+            "CREATE TABLE lnurl_receive_metadata (
+                payment_hash TEXT NOT NULL PRIMARY KEY,
+                nostr_zap_request TEXT,
+                sender_comment TEXT
+            );",
         ]
     }
 }
@@ -359,11 +364,14 @@ impl Storage for SqliteStorage {
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
             ,       s.invoice_details AS spark_invoice_details
+            ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       lrm.sender_comment AS lnurl_sender_comment
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_details_spark s ON p.id = s.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash
              {}
              ORDER BY p.timestamp {} 
              LIMIT {} OFFSET {}",
@@ -536,11 +544,14 @@ impl Storage for SqliteStorage {
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
             ,       s.invoice_details AS spark_invoice_details
+            ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       lrm.sender_comment AS lnurl_sender_comment
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_details_spark s ON p.id = s.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash
              WHERE p.id = ?",
         )?;
 
@@ -576,11 +587,14 @@ impl Storage for SqliteStorage {
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
             ,       s.invoice_details AS spark_invoice_details
+            ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       lrm.sender_comment AS lnurl_sender_comment
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
              LEFT JOIN payment_details_spark s ON p.id = s.payment_id
              LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash
              WHERE l.invoice = ?",
         )?;
 
@@ -660,6 +674,25 @@ impl Storage for SqliteStorage {
                     params![refund_tx, refund_txid, txid, vout],
                 )?;
             }
+        }
+        Ok(())
+    }
+
+    async fn add_lnurl_metadata(
+        &self,
+        metadata: Vec<AddLnurlMetadataItem>,
+    ) -> Result<(), StorageError> {
+        let connection = self.get_connection()?;
+        for metadata in metadata {
+            connection.execute(
+                "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, sender_comment)
+                 VALUES (?, ?, ?)",
+                params![
+                    metadata.payment_hash,
+                    metadata.nostr_zap_request,
+                    metadata.sender_comment
+                ],
+            )?;
         }
         Ok(())
     }
@@ -1076,7 +1109,17 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             let preimage: Option<String> = row.get(14)?;
             let lnurl_pay_info: Option<LnurlPayInfo> = row.get(15)?;
             let lnurl_withdraw_info: Option<LnurlWithdrawInfo> = row.get(16)?;
-
+            let lnurl_nostr_zap_request: Option<String> = row.get(21)?;
+            let lnurl_sender_comment: Option<String> = row.get(22)?;
+            let lnurl_receive_metadata =
+                if lnurl_nostr_zap_request.is_some() || lnurl_sender_comment.is_some() {
+                    Some(LnurlReceiveMetadata {
+                        nostr_zap_request: lnurl_nostr_zap_request,
+                        sender_comment: lnurl_sender_comment,
+                    })
+                } else {
+                    None
+                };
             Some(PaymentDetails::Lightning {
                 invoice,
                 payment_hash,
@@ -1085,6 +1128,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 preimage,
                 lnurl_pay_info,
                 lnurl_withdraw_info,
+                lnurl_receive_metadata,
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),

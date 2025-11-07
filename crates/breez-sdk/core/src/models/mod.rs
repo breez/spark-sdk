@@ -252,6 +252,9 @@ pub enum PaymentDetails {
 
         /// Lnurl withdrawal information if this was an lnurl payment.
         lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
+
+        /// Lnurl receive information if this was a received lnurl payment.
+        lnurl_receive_metadata: Option<LnurlReceiveMetadata>,
     },
     Withdraw {
         tx_id: String,
@@ -981,4 +984,11 @@ pub struct CheckMessageRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CheckMessageResponse {
     pub is_valid: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct LnurlReceiveMetadata {
+    pub nostr_zap_request: Option<String>,
+    pub sender_comment: Option<String>,
 }

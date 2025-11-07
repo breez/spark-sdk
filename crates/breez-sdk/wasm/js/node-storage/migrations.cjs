@@ -262,6 +262,14 @@ class MigrationManager {
           )`,
           `CREATE INDEX idx_sync_incoming_revision ON sync_incoming(revision)`,
         ]
+      },
+      {
+        name: "Create lnurl_receive_metadata table",
+        sql: `CREATE TABLE lnurl_receive_metadata (
+                payment_hash TEXT NOT NULL PRIMARY KEY,
+                nostr_zap_request TEXT,
+                sender_comment TEXT
+            )`
       }
     ];
   }
