@@ -275,6 +275,10 @@ where
             "/lnurlpay/{pubkey}/recover",
             post(LnurlServer::<DB>::recover),
         )
+        .route(
+            "/lnurlpay/{pubkey}/metadata",
+            get(LnurlServer::<DB>::list_metadata),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::auth::<DB>,

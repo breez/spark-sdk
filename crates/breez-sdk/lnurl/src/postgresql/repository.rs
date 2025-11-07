@@ -1,5 +1,7 @@
+use lnurl_models::ListMetadataMetadata;
 use sqlx::{PgPool, Row};
 
+use crate::repository::LnurlSenderComment;
 use crate::zap::Zap;
 use crate::{repository::LnurlRepositoryError, time::now, user::User};
 
@@ -157,5 +159,58 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .fetch_one(&self.pool)
         .await?;
         Ok(count > 0)
+    }
+
+    async fn insert_lnurl_sender_comment(
+        &self,
+        comment: &LnurlSenderComment,
+    ) -> Result<(), LnurlRepositoryError> {
+        sqlx::query(
+            "INSERT INTO sender_comments (payment_hash, user_pubkey, sender_comment, invoice_expiry)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT(payment_hash) DO UPDATE
+             SET user_pubkey = excluded.user_pubkey
+             ,   sender_comment = excluded.sender_comment
+             ,   invoice_expiry = excluded.invoice_expiry",
+        )
+        .bind(&comment.payment_hash)
+        .bind(&comment.user_pubkey)
+        .bind(&comment.comment)
+        .bind(comment.invoice_expiry)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_metadata_by_pubkey(
+        &self,
+        pubkey: &str,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Vec<ListMetadataMetadata>, LnurlRepositoryError> {
+        let rows = sqlx::query(
+            "SELECT COALESCE(z.payment_hash, sc.payment_hash) AS payment_hash
+             ,      sc.sender_comment
+             ,      z.zap_request
+             FROM zaps z
+             FULL JOIN sender_comments sc ON z.payment_hash = sc.payment_hash
+             WHERE z.user_pubkey = $1 OR sc.user_pubkey = $1
+             ORDER BY COALESCE(z.invoice_expiry, sc.invoice_expiry) ASC
+             OFFSET $2 LIMIT $3",
+        )
+        .bind(pubkey)
+        .bind(i64::from(offset))
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await?;
+        let metadata = rows
+            .into_iter()
+            .map(|row| ListMetadataMetadata {
+                payment_hash: row.get(0),
+                sender_comment: row.get(1),
+                nostr_zap_request: row.get(2),
+            })
+            .collect();
+        Ok(metadata)
     }
 }

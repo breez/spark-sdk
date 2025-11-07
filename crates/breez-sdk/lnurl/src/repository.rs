@@ -1,3 +1,5 @@
+use lnurl_models::ListMetadataMetadata;
+
 use crate::user::User;
 use crate::zap::Zap;
 
@@ -7,6 +9,13 @@ pub enum LnurlRepositoryError {
     NameTaken,
     #[error("database error: {0}")]
     General(anyhow::Error),
+}
+
+pub struct LnurlSenderComment {
+    pub comment: String,
+    pub invoice_expiry: i64,
+    pub payment_hash: String,
+    pub user_pubkey: String,
 }
 
 #[async_trait::async_trait]
@@ -36,4 +45,14 @@ pub trait LnurlRepository {
         &self,
         user_pubkey: &str,
     ) -> Result<bool, LnurlRepositoryError>;
+    async fn insert_lnurl_sender_comment(
+        &self,
+        comment: &LnurlSenderComment,
+    ) -> Result<(), LnurlRepositoryError>;
+    async fn get_metadata_by_pubkey(
+        &self,
+        pubkey: &str,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Vec<ListMetadataMetadata>, LnurlRepositoryError>;
 }

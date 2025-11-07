@@ -10,9 +10,9 @@ use bitcoin::{
 };
 use lightning_invoice::Bolt11Invoice;
 use lnurl_models::{
-    CheckUsernameAvailableResponse, RecoverLnurlPayRequest, RecoverLnurlPayResponse,
-    RegisterLnurlPayRequest, RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
-    sanitize_username,
+    CheckUsernameAvailableResponse, ListMetadataRequest, ListMetadataResponse,
+    RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
+    RegisterLnurlPayResponse, UnregisterLnurlPayRequest, sanitize_username,
 };
 use nostr::{Alphabet, Event, JsonUtil, Kind, TagStandard};
 use regex::Regex;
@@ -23,16 +23,20 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, trace, warn};
 
-use crate::zap::Zap;
+use crate::{repository::LnurlSenderComment, zap::Zap};
 use crate::{
     repository::{LnurlRepository, LnurlRepositoryError},
     state::State,
     user::{USERNAME_VALIDATION_REGEX, User},
 };
 
+const DEFAULT_METADATA_OFFSET: u32 = 0;
+const DEFAULT_METADATA_LIMIT: u32 = 100;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LnurlPayCallbackParams {
     pub amount: Option<u64>,
+    pub comment: Option<String>,
     pub nostr: Option<String>,
 }
 
@@ -219,6 +223,28 @@ where
         }
     }
 
+    pub async fn list_metadata(
+        Path(pubkey): Path<String>,
+        Query(params): Query<ListMetadataRequest>,
+        Extension(state): Extension<State<DB>>,
+    ) -> Result<Json<ListMetadataResponse>, (StatusCode, Json<Value>)> {
+        let pubkey = validate(&pubkey, &params.signature, &pubkey, &state).await?;
+        let offset = params.offset.unwrap_or(DEFAULT_METADATA_OFFSET);
+        let limit = params.limit.unwrap_or(DEFAULT_METADATA_LIMIT);
+        let metadata = state
+            .db
+            .get_metadata_by_pubkey(&pubkey.to_string(), offset, limit)
+            .await
+            .map_err(|e| {
+                error!("failed to execute query: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(Value::String("internal server error".into())),
+                )
+            })?;
+        Ok(Json(ListMetadataResponse { metadata }))
+    }
+
     pub async fn handle_lnurl_pay(
         Host(host): Host,
         Path(identifier): Path<String>,
@@ -251,7 +277,7 @@ where
             min_sendable: state.min_sendable,
             tag: Tag::Pay,
             metadata: get_metadata(&user.domain, &user),
-            comment_allowed: None,
+            comment_allowed: Some(255),
             allows_nostr: if state.nostr_keys.is_some() {
                 Some(true)
             } else {
@@ -337,27 +363,27 @@ where
             lnurl_error("internal server error")
         })?;
 
+        // Calculate expiry timestamp: current time + expiry duration from invoice
+        let expiry_timestamp = invoice.expires_at().ok_or_else(|| {
+            error!(
+                "invoice has invalid expiry: duration since epoch {}s, expiry time: {}s",
+                invoice.duration_since_epoch().as_secs(),
+                invoice.expiry_time().as_secs()
+            );
+            lnurl_error("internal server error")
+        })?;
+
+        let invoice_expiry: i64 = i64::try_from(expiry_timestamp.as_secs()).map_err(|e| {
+            error!(
+                "invoice has invalid expiry for i64: duration since epoch {}s, expiry time: {}s: {e}",
+                invoice.duration_since_epoch().as_secs(),
+                invoice.expiry_time().as_secs(),
+            );
+            lnurl_error("internal server error")
+        })?;
+
         // save to zap event to db
         if let Some(zap_request) = params.nostr {
-            // Calculate expiry timestamp: current time + expiry duration from invoice
-            let expiry_timestamp = invoice.expires_at().ok_or_else(|| {
-                error!(
-                    "invoice has invalid expiry: duration since epoch {}s, expiry time: {}s",
-                    invoice.duration_since_epoch().as_secs(),
-                    invoice.expiry_time().as_secs()
-                );
-                lnurl_error("internal server error")
-            })?;
-
-            let invoice_expiry: i64 = i64::try_from(expiry_timestamp.as_secs()).map_err(|e| {
-                error!(
-                    "invoice has invalid expiry for i64: duration since epoch {}s, expiry time: {}s: {e}",
-                    invoice.duration_since_epoch().as_secs(),
-                    invoice.expiry_time().as_secs(),
-                );
-                lnurl_error("internal server error")
-            })?;
-
             let zap = Zap {
                 payment_hash: invoice.payment_hash().to_string(),
                 zap_request,
@@ -388,6 +414,24 @@ where
                     error!("failed to subscribe to user for zaps: {}", e);
                     lnurl_error("internal server error")
                 })?;
+            }
+        }
+
+        if let Some(comment) = params.comment {
+            let comment = comment.trim();
+            if !comment.is_empty()
+                && let Err(e) = state
+                    .db
+                    .insert_lnurl_sender_comment(&LnurlSenderComment {
+                        comment: comment.to_string(),
+                        payment_hash: invoice.payment_hash().to_string(),
+                        user_pubkey: user.pubkey.clone(),
+                        invoice_expiry,
+                    })
+                    .await
+            {
+                error!("Failed to insert lnurl sender comment: {:?}", e);
+                return Err(lnurl_error("internal server error"));
             }
         }
 
