@@ -1,13 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
-use bitcoin::{
-    hashes::{Hash, sha256},
-    hex::DisplayHex,
-};
+use bitcoin::hex::DisplayHex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tonic::Streaming;
-use tracing::trace;
 
 use crate::{
     sync::{
@@ -118,11 +114,8 @@ impl SigningClient {
 
     async fn sign_message(&self, msg: &[u8]) -> anyhow::Result<String> {
         let msg = [MESSAGE_PREFIX, msg].concat();
-        trace!("About to compute sha256 hash of msg: {msg:?}");
-        let digest = sha256::Hash::hash(&msg);
-        trace!("About to sign digest: {digest:?}");
         self.signer
-            .sign_ecdsa_recoverable(digest.as_byte_array())
+            .sign_ecdsa_recoverable(&msg)
             .await
             .map(|bytes| zbase32::encode_full_bytes(&bytes))
     }
