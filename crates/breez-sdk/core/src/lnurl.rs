@@ -24,6 +24,7 @@ pub enum LnurlServerError {
 pub struct RegisterLightningAddressRequest {
     pub username: String,
     pub description: String,
+    pub nostr_pubkey: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -224,6 +225,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
             username: request.username.clone(),
             description: request.description.clone(),
             signature,
+            nostr_pubkey: request.nostr_pubkey.clone(),
         };
 
         let url = format!("{}/lnurlpay/{}", self.base_url(), pubkey);

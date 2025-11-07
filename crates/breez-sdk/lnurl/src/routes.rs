@@ -131,11 +131,26 @@ where
                 Json(Value::String("description too long".into())),
             ));
         }
+
+        let nostr_pubkey = match payload.nostr_pubkey {
+            Some(nostr_pubkey) => {
+                let xonly_pubkey = XOnlyPublicKey::from_str(&nostr_pubkey).map_err(|e| {
+                    trace!("invalid nostr pubkey, could not parse: {:?}", e);
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(Value::String("invalid nostr pubkey".into())),
+                    )
+                })?;
+                Some(xonly_pubkey.to_string())
+            }
+            None => None,
+        };
         let user = User {
             domain: sanitize_domain(&state, &host)?,
             pubkey: pubkey.to_string(),
             name: username,
             description: payload.description,
+            nostr_pubkey,
         };
 
         if let Err(e) = state.db.upsert_user(&user).await {
@@ -214,6 +229,7 @@ where
                     lightning_address: format!("{}@{}", user.name, &user.domain),
                     username: user.name,
                     description: user.description,
+                    nostr_pubkey: user.nostr_pubkey,
                 }))
             }
             None => Err((
@@ -268,6 +284,26 @@ where
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         };
 
+        let nostr_pubkey = match (user.nostr_pubkey.as_ref(), state.nostr_keys.as_ref()) {
+            (Some(nostr_pubkey), _) => {
+                let xonly_pubkey = XOnlyPublicKey::from_str(nostr_pubkey).map_err(|e| {
+                    error!(
+                        "invalid nostr pubkey in user record, could not parse: {:?}",
+                        e
+                    );
+                    lnurl_error("internal server error")
+                })?;
+                Some(xonly_pubkey)
+            }
+            (None, Some(nostr_keys)) => Some(nostr_keys.public_key.xonly().map_err(|e| {
+                error!(
+                    "invalid nostr pubkey in server keys, could not parse: {:?}",
+                    e
+                );
+                lnurl_error("internal server error")
+            })?),
+            _ => None,
+        };
         Ok(Json(PayResponse {
             callback: format!(
                 "{}://{}/lnurlp/{}/invoice",
@@ -278,12 +314,8 @@ where
             tag: Tag::Pay,
             metadata: get_metadata(&user.domain, &user),
             comment_allowed: Some(255),
-            allows_nostr: if state.nostr_keys.is_some() {
-                Some(true)
-            } else {
-                None
-            },
-            nostr_pubkey: state.nostr_keys.and_then(|n| n.public_key.xonly().ok()),
+            allows_nostr: nostr_pubkey.map(|_| true),
+            nostr_pubkey,
         }))
     }
 
@@ -322,8 +354,33 @@ where
             return Err(lnurl_error("amount must be a whole sat amount"));
         }
 
+        let (nostr_pubkey, is_user_nostr_key) =
+            match (user.nostr_pubkey.as_ref(), state.nostr_keys.as_ref()) {
+                (Some(nostr_pubkey), _) => {
+                    let xonly_pubkey = XOnlyPublicKey::from_str(nostr_pubkey).map_err(|e| {
+                        error!(
+                            "invalid nostr pubkey in user record, could not parse: {:?}",
+                            e
+                        );
+                        lnurl_error("internal server error")
+                    })?;
+                    (Some(xonly_pubkey), true)
+                }
+                (None, Some(nostr_keys)) => (
+                    Some(nostr_keys.public_key.xonly().map_err(|e| {
+                        error!(
+                            "invalid nostr pubkey in server keys, could not parse: {:?}",
+                            e
+                        );
+                        lnurl_error("internal server error")
+                    })?),
+                    false,
+                ),
+                _ => (None, false),
+            };
+
         let desc_hash = if let Some(event) = &params.nostr {
-            if state.nostr_keys.is_none() {
+            if nostr_pubkey.is_none() {
                 trace!("nostr zap not supported");
                 return Err(lnurl_error("nostr zap not supported"));
             }
@@ -396,8 +453,9 @@ where
                 return Err(lnurl_error("internal server error"));
             }
 
-            // Subscribe to user if not already subscribed (only if nostr is enabled)
-            if let Some(nostr_keys) = &state.nostr_keys {
+            // Subscribe to user if not already subscribed (only if nostr is enabled, and
+            // the user doesn't handle the zap receipt itself)
+            if !is_user_nostr_key && let Some(nostr_keys) = &state.nostr_keys {
                 crate::zap::create_rpc_client_and_subscribe(
                     state.db.clone(),
                     pubkey,

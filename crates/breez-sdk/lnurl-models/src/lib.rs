@@ -16,6 +16,7 @@ pub struct RecoverLnurlPayResponse {
     pub lightning_address: String,
     pub username: String,
     pub description: String,
+    pub nostr_pubkey: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -23,6 +24,7 @@ pub struct RegisterLnurlPayRequest {
     pub username: String,
     pub signature: String,
     pub description: String,
+    pub nostr_pubkey: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

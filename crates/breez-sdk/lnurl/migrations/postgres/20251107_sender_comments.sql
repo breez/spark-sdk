@@ -8,3 +8,6 @@ CREATE TABLE sender_comments
 
 CREATE INDEX idx_sender_comments_user_pubkey ON sender_comments(user_pubkey);
 CREATE INDEX idx_sender_comments_invoice_expiry ON sender_comments(invoice_expiry);
+
+ALTER TABLE users
+ADD COLUMN nostr_pubkey VARCHAR(66);
