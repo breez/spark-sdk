@@ -38,3 +38,9 @@ pub use persist::tests as storage_tests;
 
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();
+
+#[allow(clippy::doc_markdown)]
+pub(crate) mod built_info {
+    // The file has been placed there by the build script.
+    include!(concat!(env!("OUT_DIR"), "/built.rs"));
+}

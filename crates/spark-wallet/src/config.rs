@@ -32,16 +32,17 @@ impl SparkWalletConfig {
         Ok(())
     }
 
-    pub fn default_config(network: Network) -> Self {
+    pub fn default_config(network: Network, user_agent: Option<String>) -> Self {
         match network {
             Network::Mainnet => Self {
                 network,
-                operator_pool: Self::default_operator_pool_config(network),
+                operator_pool: Self::default_operator_pool_config(network, user_agent.clone()),
                 reconnect_interval_seconds: 1,
                 service_provider_config: Self::create_service_provider_config(
                     "https://api.lightspark.com",
                     "023e33e2920326f64ea31058d44777442d97d7d5cbfcf54e3060bc1695e5261c93",
                     None,
+                    user_agent,
                 )
                 .unwrap(),
                 split_secret_threshold: 2,
@@ -49,12 +50,13 @@ impl SparkWalletConfig {
             },
             _ => Self {
                 network,
-                operator_pool: Self::default_operator_pool_config(network),
+                operator_pool: Self::default_operator_pool_config(network, user_agent.clone()),
                 reconnect_interval_seconds: 1,
                 service_provider_config: Self::create_service_provider_config(
                     "https://api.lightspark.com",
                     "022bf283544b16c0622daecb79422007d167eca6ce9f0c98c0c49833b1f7170bfe",
                     Some("graphql/spark/rc".to_string()),
+                    user_agent,
                 )
                 .unwrap(),
                 split_secret_threshold: 2,
@@ -63,7 +65,10 @@ impl SparkWalletConfig {
         }
     }
 
-    pub fn default_operator_pool_config(_: Network) -> OperatorPoolConfig {
+    pub fn default_operator_pool_config(
+        _: Network,
+        user_agent: Option<String>,
+    ) -> OperatorPoolConfig {
         let operators = vec![
             Self::create_operator_config(
                 0,
@@ -71,6 +76,7 @@ impl SparkWalletConfig {
                 "https://0.spark.lightspark.com",
                 None,
                 "03dfbdff4b6332c220f8fa2ba8ed496c698ceada563fa01b67d9983bfc5c95e763",
+                user_agent.clone(),
             )
             .unwrap(),
             Self::create_operator_config(
@@ -79,6 +85,7 @@ impl SparkWalletConfig {
                 "https://1.spark.lightspark.com",
                 None,
                 "03e625e9768651c9be268e287245cc33f96a68ce9141b0b4769205db027ee8ed77",
+                user_agent.clone(),
             )
             .unwrap(),
             Self::create_operator_config(
@@ -87,6 +94,7 @@ impl SparkWalletConfig {
                 "https://2.spark.flashnet.xyz",
                 None,
                 "022eda13465a59205413086130a65dc0ed1b8f8e51937043161f8be0c369b1a410",
+                user_agent.clone(),
             )
             .unwrap(),
         ];
@@ -97,6 +105,7 @@ impl SparkWalletConfig {
         url: &str,
         pubkey: &str,
         schema_endpoint: Option<String>,
+        user_agent: Option<String>,
     ) -> Result<ServiceProviderConfig, SparkWalletError> {
         Ok(ServiceProviderConfig {
             base_url: url.to_string(),
@@ -104,6 +113,7 @@ impl SparkWalletConfig {
             identity_public_key: PublicKey::from_str(pubkey).map_err(|_| {
                 SparkWalletError::ValidationError("Invalid identity public key".to_string())
             })?,
+            user_agent,
         })
     }
 
@@ -113,6 +123,7 @@ impl SparkWalletConfig {
         address: &str,
         ca_cert: Option<&[u8]>,
         identity_public_key: &str,
+        user_agent: Option<String>,
     ) -> Result<OperatorConfig, SparkWalletError> {
         Ok(OperatorConfig {
             id,
@@ -129,6 +140,7 @@ impl SparkWalletConfig {
             identity_public_key: PublicKey::from_str(identity_public_key).map_err(|_| {
                 SparkWalletError::ValidationError("Invalid identity public key".to_string())
             })?,
+            user_agent,
         })
     }
 

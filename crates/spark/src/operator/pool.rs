@@ -73,6 +73,7 @@ pub struct OperatorConfig {
     pub ca_cert: Option<Vec<u8>>,
     #[serde_as(as = "DisplayFromStr")]
     pub identity_public_key: PublicKey,
+    pub user_agent: Option<String>,
 }
 
 impl OperatorConfig {}

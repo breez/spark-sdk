@@ -8,6 +8,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use tracing::{debug, error};
 
+use crate::default_user_agent;
 use crate::session_manager::{Session, SessionManager};
 use crate::signer::Signer;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
@@ -47,11 +48,9 @@ impl GraphQLClient {
             .schema_endpoint
             .unwrap_or_else(|| String::from("graphql/spark/2025-03-19"));
 
+        let user_agent = config.user_agent.unwrap_or_else(default_user_agent);
         Self {
-            client: Client::builder()
-                .user_agent("rust-spark/0.1.0")
-                .build()
-                .unwrap(),
+            client: Client::builder().user_agent(user_agent).build().unwrap(),
             base_url: config.base_url,
             schema_endpoint,
             signer,
