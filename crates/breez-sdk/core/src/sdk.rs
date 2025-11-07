@@ -26,7 +26,7 @@ use spark_wallet::{
     TransferTokenOutput, WalletEvent, WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::{
@@ -50,7 +50,7 @@ use crate::{
     SignMessageResponse, WaitForPaymentIdentifier, WaitForPaymentRequest, WaitForPaymentResponse,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
-    lnurl::LnurlServerClient,
+    lnurl::{ListMetadataRequest, LnurlServerClient},
     logger,
     models::{
         Config, GetInfoRequest, GetInfoResponse, ListPaymentsRequest, ListPaymentsResponse,
@@ -58,6 +58,7 @@ use crate::{
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentMethod, SendPaymentRequest,
         SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
+    nostr::NostrClient,
     persist::{
         CachedAccountInfo, ObjectCacheRepository, PaymentMetadata, PaymentRequestMetadata,
         StaticDepositAddress, Storage, UpdateDepositPayload,
@@ -76,6 +77,8 @@ const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology";
 
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology:442";
+
+const LNURL_METADATA_LIMIT: u32 = 100;
 
 #[derive(Clone, Debug)]
 enum SyncType {
@@ -132,6 +135,7 @@ pub struct BreezSdk {
     sync_trigger: tokio::sync::broadcast::Sender<SyncRequest>,
     initial_synced_watcher: watch::Receiver<bool>,
     external_input_parsers: Vec<ExternalInputParser>,
+    nostr_client: Arc<NostrClient>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -186,6 +190,7 @@ pub(crate) struct BreezSdkParams {
     pub shutdown_sender: watch::Sender<()>,
     pub spark_wallet: Arc<SparkWallet>,
     pub event_emitter: Arc<EventEmitter>,
+    pub nostr_client: Arc<NostrClient>,
 }
 
 impl BreezSdk {
@@ -214,6 +219,7 @@ impl BreezSdk {
             sync_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
             external_input_parsers,
+            nostr_client: params.nostr_client,
         };
 
         sdk.start(initial_synced_sender);
@@ -357,6 +363,10 @@ impl BreezSdk {
             if let Err(e) = self.spark_wallet.sync().await {
                 error!("sync_wallet_internal: Failed to sync with Spark network: {e:?}");
             }
+
+            if let Err(e) = self.sync_lnurl_metadata().await {
+                error!("sync_wallet_internal: Failed to sync lnurl metadata: {e:?}");
+            }
         }
         if let Err(e) = self.sync_wallet_state_to_storage().await {
             error!("sync_wallet_internal: Failed to sync wallet state to storage: {e:?}");
@@ -436,6 +446,45 @@ impl BreezSdk {
                 .emit(&SdkEvent::ClaimedDeposits { claimed_deposits })
                 .await;
         }
+        Ok(())
+    }
+
+    async fn sync_lnurl_metadata(&self) -> Result<(), SdkError> {
+        let Some(lnurl_server_client) = self.lnurl_server_client.clone() else {
+            return Ok(());
+        };
+
+        let cache = ObjectCacheRepository::new(Arc::clone(&self.storage));
+        let mut offset = cache.fetch_lnurl_metadata_offset().await?;
+
+        loop {
+            debug!("Syncing lnurl metadata from offset {offset}");
+            let metadata = lnurl_server_client
+                .list_metadata(&ListMetadataRequest {
+                    offset: Some(offset),
+                    limit: Some(LNURL_METADATA_LIMIT),
+                })
+                .await?;
+
+            if metadata.metadata.is_empty() {
+                debug!("No more lnurl metadata on offset {offset}");
+                break;
+            }
+
+            let len = u32::try_from(metadata.metadata.len())?;
+            self.storage
+                .add_lnurl_metadata(metadata.metadata.into_iter().map(From::from).collect())
+                .await?;
+
+            debug!("Synchronized {} lnurl metadata at offset {offset}", len);
+            offset = offset.saturating_add(len);
+            cache.save_lnurl_metadata_offset(offset).await?;
+            if len < LNURL_METADATA_LIMIT {
+                // No more invoices to fetch
+                break;
+            }
+        }
+
         Ok(())
     }
 
@@ -1243,6 +1292,8 @@ impl BreezSdk {
         let params = crate::lnurl::RegisterLightningAddressRequest {
             username: username.clone(),
             description: description.clone(),
+            // TODO: Depend on privacy settings (None if non-private)
+            nostr_pubkey: Some(self.nostr_client.nostr_pubkey()),
         };
 
         let response = client.register_lightning_address(&params).await?;

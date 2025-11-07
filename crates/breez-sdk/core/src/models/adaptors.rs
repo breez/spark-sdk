@@ -65,6 +65,7 @@ impl PaymentDetails {
                     destination_pubkey: invoice_details.payee_pubkey,
                     lnurl_pay_info: None,
                     lnurl_withdraw_info: None,
+                    lnurl_receive_metadata: None,
                 }
             }
             SspUserRequest::LightningSendRequest(request) => {
@@ -80,6 +81,7 @@ impl PaymentDetails {
                     destination_pubkey: invoice_details.payee_pubkey,
                     lnurl_pay_info: None,
                     lnurl_withdraw_info: None,
+                    lnurl_receive_metadata: None,
                 }
             }
             SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
@@ -207,6 +209,7 @@ impl Payment {
             destination_pubkey: invoice_details.payee_pubkey,
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
+            lnurl_receive_metadata: None,
         };
 
         Ok(Payment {

@@ -1,12 +1,14 @@
 use bitcoin::hex::DisplayHex;
 use lnurl_models::{
-    CheckUsernameAvailableResponse, RecoverLnurlPayRequest, RecoverLnurlPayResponse,
-    RegisterLnurlPayRequest, RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
+    CheckUsernameAvailableResponse, ListMetadataResponse, RecoverLnurlPayRequest,
+    RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
+    UnregisterLnurlPayRequest,
 };
 use reqwest::{
     StatusCode,
     header::{AUTHORIZATION, HeaderMap, InvalidHeaderValue},
 };
+use std::fmt::Write as _;
 
 pub enum LnurlServerError {
     InvalidApiKey,
@@ -22,11 +24,18 @@ pub enum LnurlServerError {
 pub struct RegisterLightningAddressRequest {
     pub username: String,
     pub description: String,
+    pub nostr_pubkey: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct UnregisterLightningAddressRequest {
     pub username: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ListMetadataRequest {
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
 }
 
 #[macros::async_trait]
@@ -44,6 +53,10 @@ pub trait LnurlServerClient: Send + Sync {
         &self,
         request: &UnregisterLightningAddressRequest,
     ) -> Result<(), LnurlServerError>;
+    async fn list_metadata(
+        &self,
+        request: &ListMetadataRequest,
+    ) -> Result<ListMetadataResponse, LnurlServerError>;
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -201,6 +214,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
             username: request.username.clone(),
             description: request.description.clone(),
             signature,
+            nostr_pubkey: request.nostr_pubkey.clone(),
         };
 
         let url = format!("https://{}/lnurlpay/{}", self.domain, pubkey);
@@ -268,6 +282,61 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
             StatusCode::UNAUTHORIZED => return Err(LnurlServerError::InvalidApiKey),
             StatusCode::NOT_FOUND => return Ok(()),
             success if success.is_success() => return Ok(()),
+            other => {
+                return Err(LnurlServerError::Network {
+                    statuscode: other.as_u16(),
+                    message: response.text().await.ok(),
+                });
+            }
+        }
+    }
+
+    async fn list_metadata(
+        &self,
+        request: &ListMetadataRequest,
+    ) -> Result<ListMetadataResponse, LnurlServerError> {
+        let spark_address = self.wallet.get_spark_address().map_err(|e| {
+            LnurlServerError::SigningError(format!("Failed to get spark address: {e}"))
+        })?;
+        let pubkey = spark_address.identity_public_key;
+
+        let signature = self
+            .wallet
+            .sign_message(&pubkey.to_string())
+            .await
+            .map_err(|e| LnurlServerError::SigningError(e.to_string()))?
+            .serialize_der()
+            .to_lower_hex_string();
+
+        let mut url = format!(
+            "https://{}/lnurlpay/metadata?signature={}",
+            self.domain, signature
+        );
+        if let Some(offset) = request.offset {
+            let _ = write!(url, "&offset={offset}");
+        }
+        if let Some(limit) = request.limit {
+            let _ = write!(url, "&limit={limit}");
+        }
+
+        let result = self.client.get(url).send().await;
+        let response = match result {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(LnurlServerError::RequestFailure(e.to_string()));
+            }
+        };
+
+        match response.status() {
+            StatusCode::UNAUTHORIZED => return Err(LnurlServerError::InvalidApiKey),
+            success if success.is_success() => {
+                let body = response.json().await.map_err(|e| {
+                    LnurlServerError::RequestFailure(format!(
+                        "failed to deserialize response json: {e}"
+                    ))
+                })?;
+                return Ok(body);
+            }
             other => {
                 return Err(LnurlServerError::Network {
                     statuscode: other.as_u16(),
