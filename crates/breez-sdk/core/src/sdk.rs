@@ -58,6 +58,7 @@ use crate::{
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentMethod, SendPaymentRequest,
         SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
+    nostr::NostrClient,
     persist::{
         CachedAccountInfo, ObjectCacheRepository, PaymentMetadata, PaymentRequestMetadata,
         StaticDepositAddress, Storage, UpdateDepositPayload,
@@ -134,6 +135,7 @@ pub struct BreezSdk {
     sync_trigger: tokio::sync::broadcast::Sender<SyncRequest>,
     initial_synced_watcher: watch::Receiver<bool>,
     external_input_parsers: Vec<ExternalInputParser>,
+    nostr_client: Arc<NostrClient>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -188,6 +190,7 @@ pub(crate) struct BreezSdkParams {
     pub shutdown_sender: watch::Sender<()>,
     pub spark_wallet: Arc<SparkWallet>,
     pub event_emitter: Arc<EventEmitter>,
+    pub nostr_client: Arc<NostrClient>,
 }
 
 impl BreezSdk {
@@ -216,6 +219,7 @@ impl BreezSdk {
             sync_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
             external_input_parsers,
+            nostr_client: params.nostr_client,
         };
 
         sdk.start(initial_synced_sender);
@@ -1288,6 +1292,8 @@ impl BreezSdk {
         let params = crate::lnurl::RegisterLightningAddressRequest {
             username: username.clone(),
             description: description.clone(),
+            // TODO: Depend on privacy settings (None if non-private)
+            nostr_pubkey: Some(self.nostr_client.nostr_pubkey()),
         };
 
         let response = client.register_lightning_address(&params).await?;

@@ -780,8 +780,8 @@ pub mod tests {
 
     #[allow(clippy::too_many_lines)]
     pub async fn test_sqlite_storage(storage: Box<dyn Storage>) {
-        use crate::models::{LnurlPayInfo, TokenMetadata};
         use crate::AddLnurlMetadataItem;
+        use crate::models::{LnurlPayInfo, TokenMetadata};
 
         // Test 1: Spark payment
         let spark_payment = Payment {

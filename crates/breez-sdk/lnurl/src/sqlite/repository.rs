@@ -33,7 +33,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         name: &str,
     ) -> Result<Option<User>, LnurlRepositoryError> {
         let maybe_user = sqlx::query(
-            "SELECT pubkey, name, description 
+            "SELECT pubkey, name, description, nostr_pubkey
             FROM users 
             WHERE domain = $1 AND name = $2",
         )
@@ -46,6 +46,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             pubkey: row.get(0),
             name: row.get(1),
             description: row.get(2),
+            nostr_pubkey: row.get(3),
         });
         Ok(maybe_user)
     }
@@ -56,7 +57,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         pubkey: &str,
     ) -> Result<Option<User>, LnurlRepositoryError> {
         let maybe_user = sqlx::query(
-            "SELECT pubkey, name, description
+            "SELECT pubkey, name, description, nostr_pubkey
                 FROM users
                 WHERE domain = $1 AND pubkey = $2",
         )
@@ -69,19 +70,21 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             pubkey: row.get(0),
             name: row.get(1),
             description: row.get(2),
+            nostr_pubkey: row.get(3),
         });
         Ok(maybe_user)
     }
 
     async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "REPLACE INTO users (domain, pubkey, name, description, updated_at)
-            VALUES ($1, $2, $3, $4, $5)",
+            "REPLACE INTO users (domain, pubkey, name, description, nostr_pubkey, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(&user.domain)
         .bind(&user.pubkey)
         .bind(&user.name)
         .bind(&user.description)
+        .bind(&user.nostr_pubkey)
         .bind(now())
         .execute(&self.pool)
         .await?;
