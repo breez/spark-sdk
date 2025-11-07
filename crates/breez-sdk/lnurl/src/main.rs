@@ -164,7 +164,7 @@ where
 {
     let auth_seed: [u8; 32] = rand::random();
 
-    let spark_config = SparkWalletConfig::default_config(args.network);
+    let spark_config = SparkWalletConfig::default_config(args.network, None);
 
     // Create shared infrastructure components
     let signer = Arc::new(DefaultSigner::new(&auth_seed, args.network)?);
