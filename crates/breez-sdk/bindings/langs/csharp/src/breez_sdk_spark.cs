@@ -533,6 +533,25 @@ class BigEndianStream {
     public double ReadDouble() => BitConverter.Int64BitsToDouble(ReadLong());
 }
 
+// Helper extension methods to convert between BigEndianStream types
+static class BigEndianStreamConverter {
+    public static Breez.Sdk.Spark.Common.BigEndianStream AsCommon(this BigEndianStream stream) {
+        unsafe {
+            // Both BigEndianStream classes wrap the same Stream object
+            // We can perform an unsafe memory cast since they have identical structure
+            return System.Runtime.CompilerServices.Unsafe.As<BigEndianStream, Breez.Sdk.Spark.Common.BigEndianStream>(ref stream);
+        }
+    }
+    
+    public static BigEndianStream AsLocal(this Breez.Sdk.Spark.Common.BigEndianStream stream) {
+        unsafe {
+            // Both BigEndianStream classes wrap the same Stream object
+            // We can perform an unsafe memory cast since they have identical structure
+            return System.Runtime.CompilerServices.Unsafe.As<Breez.Sdk.Spark.Common.BigEndianStream, BigEndianStream>(ref stream);
+        }
+    }
+}
+
 // Contains loading, initialization code,
 // and the FFI Function declarations in a com.sun.jna.Library.
 
@@ -6553,7 +6572,7 @@ class FfiConverterTypeLnurlWithdrawRequest: FfiConverterRustBuffer<LnurlWithdraw
     public override LnurlWithdrawRequest Read(BigEndianStream stream) {
         return new LnurlWithdrawRequest(
             @amountSats: FfiConverterUInt64.INSTANCE.Read(stream),
-            @withdrawRequest: FfiConverterTypeLnurlWithdrawRequestDetails.INSTANCE.Read(stream),
+            @withdrawRequest: FfiConverterTypeLnurlWithdrawRequestDetails.INSTANCE.Read(stream.AsCommon()),
             @completionTimeoutSecs: FfiConverterOptionalUInt32.INSTANCE.Read(stream)
         );
     }
@@ -6567,7 +6586,7 @@ class FfiConverterTypeLnurlWithdrawRequest: FfiConverterRustBuffer<LnurlWithdraw
 
     public override void Write(LnurlWithdrawRequest value, BigEndianStream stream) {
             FfiConverterUInt64.INSTANCE.Write(value.@amountSats, stream);
-            FfiConverterTypeLnurlWithdrawRequestDetails.INSTANCE.Write(value.@withdrawRequest, stream);
+            FfiConverterTypeLnurlWithdrawRequestDetails.INSTANCE.Write(value.@withdrawRequest, stream.AsCommon());
             FfiConverterOptionalUInt32.INSTANCE.Write(value.@completionTimeoutSecs, stream);
     }
 }
@@ -6798,7 +6817,7 @@ class FfiConverterTypePrepareLnurlPayRequest: FfiConverterRustBuffer<PrepareLnur
     public override PrepareLnurlPayRequest Read(BigEndianStream stream) {
         return new PrepareLnurlPayRequest(
             @amountSats: FfiConverterUInt64.INSTANCE.Read(stream),
-            @payRequest: FfiConverterTypeLnurlPayRequestDetails.INSTANCE.Read(stream),
+            @payRequest: FfiConverterTypeLnurlPayRequestDetails.INSTANCE.Read(stream.AsCommon()),
             @comment: FfiConverterOptionalString.INSTANCE.Read(stream),
             @validateSuccessActionUrl: FfiConverterOptionalBoolean.INSTANCE.Read(stream)
         );
@@ -6814,7 +6833,7 @@ class FfiConverterTypePrepareLnurlPayRequest: FfiConverterRustBuffer<PrepareLnur
 
     public override void Write(PrepareLnurlPayRequest value, BigEndianStream stream) {
             FfiConverterUInt64.INSTANCE.Write(value.@amountSats, stream);
-            FfiConverterTypeLnurlPayRequestDetails.INSTANCE.Write(value.@payRequest, stream);
+            FfiConverterTypeLnurlPayRequestDetails.INSTANCE.Write(value.@payRequest, stream.AsCommon());
             FfiConverterOptionalString.INSTANCE.Write(value.@comment, stream);
             FfiConverterOptionalBoolean.INSTANCE.Write(value.@validateSuccessActionUrl, stream);
     }
@@ -6839,9 +6858,9 @@ class FfiConverterTypePrepareLnurlPayResponse: FfiConverterRustBuffer<PrepareLnu
         return new PrepareLnurlPayResponse(
             @amountSats: FfiConverterUInt64.INSTANCE.Read(stream),
             @comment: FfiConverterOptionalString.INSTANCE.Read(stream),
-            @payRequest: FfiConverterTypeLnurlPayRequestDetails.INSTANCE.Read(stream),
+            @payRequest: FfiConverterTypeLnurlPayRequestDetails.INSTANCE.Read(stream.AsCommon()),
             @feeSats: FfiConverterUInt64.INSTANCE.Read(stream),
-            @invoiceDetails: FfiConverterTypeBolt11InvoiceDetails.INSTANCE.Read(stream),
+            @invoiceDetails: FfiConverterTypeBolt11InvoiceDetails.INSTANCE.Read(stream.AsCommon()),
             @successAction: FfiConverterOptionalTypeSuccessAction.INSTANCE.Read(stream)
         );
     }
@@ -6859,9 +6878,9 @@ class FfiConverterTypePrepareLnurlPayResponse: FfiConverterRustBuffer<PrepareLnu
     public override void Write(PrepareLnurlPayResponse value, BigEndianStream stream) {
             FfiConverterUInt64.INSTANCE.Write(value.@amountSats, stream);
             FfiConverterOptionalString.INSTANCE.Write(value.@comment, stream);
-            FfiConverterTypeLnurlPayRequestDetails.INSTANCE.Write(value.@payRequest, stream);
+            FfiConverterTypeLnurlPayRequestDetails.INSTANCE.Write(value.@payRequest, stream.AsCommon());
             FfiConverterUInt64.INSTANCE.Write(value.@feeSats, stream);
-            FfiConverterTypeBolt11InvoiceDetails.INSTANCE.Write(value.@invoiceDetails, stream);
+            FfiConverterTypeBolt11InvoiceDetails.INSTANCE.Write(value.@invoiceDetails, stream.AsCommon());
             FfiConverterOptionalTypeSuccessAction.INSTANCE.Write(value.@successAction, stream);
     }
 }
@@ -9305,12 +9324,12 @@ class FfiConverterTypeSendPaymentMethod : FfiConverterRustBuffer<SendPaymentMeth
         switch (value) {
             case 1:
                 return new SendPaymentMethod.BitcoinAddress(
-                    FfiConverterTypeBitcoinAddressDetails.INSTANCE.Read(stream),
+                    FfiConverterTypeBitcoinAddressDetails.INSTANCE.Read(stream.AsCommon()),
                     FfiConverterTypeSendOnchainFeeQuote.INSTANCE.Read(stream)
                 );
             case 2:
                 return new SendPaymentMethod.Bolt11Invoice(
-                    FfiConverterTypeBolt11InvoiceDetails.INSTANCE.Read(stream),
+                    FfiConverterTypeBolt11InvoiceDetails.INSTANCE.Read(stream.AsCommon()),
                     FfiConverterOptionalUInt64.INSTANCE.Read(stream),
                     FfiConverterUInt64.INSTANCE.Read(stream)
                 );
@@ -9322,7 +9341,7 @@ class FfiConverterTypeSendPaymentMethod : FfiConverterRustBuffer<SendPaymentMeth
                 );
             case 4:
                 return new SendPaymentMethod.SparkInvoice(
-                    FfiConverterTypeSparkInvoiceDetails.INSTANCE.Read(stream),
+                    FfiConverterTypeSparkInvoiceDetails.INSTANCE.Read(stream.AsCommon()),
                     FfiConverterTypeu128.INSTANCE.Read(stream),
                     FfiConverterOptionalString.INSTANCE.Read(stream)
                 );
@@ -9361,12 +9380,12 @@ class FfiConverterTypeSendPaymentMethod : FfiConverterRustBuffer<SendPaymentMeth
         switch (value) {
             case SendPaymentMethod.BitcoinAddress variant_value:
                 stream.WriteInt(1);
-                FfiConverterTypeBitcoinAddressDetails.INSTANCE.Write(variant_value.@address, stream);
+                FfiConverterTypeBitcoinAddressDetails.INSTANCE.Write(variant_value.@address, stream.AsCommon());
                 FfiConverterTypeSendOnchainFeeQuote.INSTANCE.Write(variant_value.@feeQuote, stream);
                 break;
             case SendPaymentMethod.Bolt11Invoice variant_value:
                 stream.WriteInt(2);
-                FfiConverterTypeBolt11InvoiceDetails.INSTANCE.Write(variant_value.@invoiceDetails, stream);
+                FfiConverterTypeBolt11InvoiceDetails.INSTANCE.Write(variant_value.@invoiceDetails, stream.AsCommon());
                 FfiConverterOptionalUInt64.INSTANCE.Write(variant_value.@sparkTransferFeeSats, stream);
                 FfiConverterUInt64.INSTANCE.Write(variant_value.@lightningFeeSats, stream);
                 break;
@@ -9378,7 +9397,7 @@ class FfiConverterTypeSendPaymentMethod : FfiConverterRustBuffer<SendPaymentMeth
                 break;
             case SendPaymentMethod.SparkInvoice variant_value:
                 stream.WriteInt(4);
-                FfiConverterTypeSparkInvoiceDetails.INSTANCE.Write(variant_value.@sparkInvoiceDetails, stream);
+                FfiConverterTypeSparkInvoiceDetails.INSTANCE.Write(variant_value.@sparkInvoiceDetails, stream.AsCommon());
                 FfiConverterTypeu128.INSTANCE.Write(variant_value.@fee, stream);
                 FfiConverterOptionalString.INSTANCE.Write(variant_value.@tokenIdentifier, stream);
                 break;
@@ -9741,16 +9760,12 @@ class UniffiCallbackInterfaceEventListener {
         if (FfiConverterTypeEventListener.INSTANCE.handleMap.TryGet(handle, out var uniffiObject)) {
             CancellationTokenSource cts = new CancellationTokenSource();
 
-            Task.Run(async () => {
+            Task.Run(() => {
                 var ret = new _UniFFILib.UniffiForeignFutureStructVoid();
                 ret.@callStatus = new UniffiRustCallStatus();
 
-                await uniffiObject.OnEvent(
-                    FfiConverterTypeSdkEvent.INSTANCE.Lift(@event))
-                #if NET6_0_OR_GREATER
-                    .WaitAsync(cts.Token)
-                #endif
-                    ;
+                uniffiObject.OnEvent(
+                    FfiConverterTypeSdkEvent.INSTANCE.Lift(@event));
 
                 ret.@callStatus.code = UniffiCallbackResponseStatus.SUCCESS;
 
@@ -10487,7 +10502,7 @@ class FfiConverterOptionalTypeSuccessAction: FfiConverterRustBuffer<SuccessActio
         if (stream.ReadByte() == 0) {
             return null;
         }
-        return FfiConverterTypeSuccessAction.INSTANCE.Read(stream);
+        return FfiConverterTypeSuccessAction.INSTANCE.Read(stream.AsCommon());
     }
 
     public override int AllocationSize(SuccessAction? value) {
@@ -10503,7 +10518,7 @@ class FfiConverterOptionalTypeSuccessAction: FfiConverterRustBuffer<SuccessActio
             stream.WriteByte(0);
         } else {
             stream.WriteByte(1);
-            FfiConverterTypeSuccessAction.INSTANCE.Write((SuccessAction)value, stream);
+            FfiConverterTypeSuccessAction.INSTANCE.Write((SuccessAction)value, stream.AsCommon());
         }
     }
 }
@@ -10518,7 +10533,7 @@ class FfiConverterOptionalTypeSuccessActionProcessed: FfiConverterRustBuffer<Suc
         if (stream.ReadByte() == 0) {
             return null;
         }
-        return FfiConverterTypeSuccessActionProcessed.INSTANCE.Read(stream);
+        return FfiConverterTypeSuccessActionProcessed.INSTANCE.Read(stream.AsCommon());
     }
 
     public override int AllocationSize(SuccessActionProcessed? value) {
@@ -10534,7 +10549,7 @@ class FfiConverterOptionalTypeSuccessActionProcessed: FfiConverterRustBuffer<Suc
             stream.WriteByte(0);
         } else {
             stream.WriteByte(1);
-            FfiConverterTypeSuccessActionProcessed.INSTANCE.Write((SuccessActionProcessed)value, stream);
+            FfiConverterTypeSuccessActionProcessed.INSTANCE.Write((SuccessActionProcessed)value, stream.AsCommon());
         }
     }
 }
@@ -10916,8 +10931,9 @@ class FfiConverterSequenceTypeExternalInputParser: FfiConverterRustBuffer<List<E
         var length = stream.ReadInt();
         var result = new List<ExternalInputParser>(length);
         var readFn = FfiConverterTypeExternalInputParser.INSTANCE.Read;
+        var commonStream = stream.AsCommon();
         for (int i = 0; i < length; i++) {
-            result.Add(readFn(stream));
+            result.Add(readFn(commonStream));
         }
         return result;
     }
@@ -10944,7 +10960,8 @@ class FfiConverterSequenceTypeExternalInputParser: FfiConverterRustBuffer<List<E
 
         stream.WriteInt(value.Count);
         var writerFn = FfiConverterTypeExternalInputParser.INSTANCE.Write;
-        value.ForEach(item => writerFn(item, stream));
+        var commonStream = stream.AsCommon();
+        value.ForEach(item => writerFn(item, commonStream));
     }
 }
 
@@ -10958,8 +10975,9 @@ class FfiConverterSequenceTypeFiatCurrency: FfiConverterRustBuffer<List<FiatCurr
         var length = stream.ReadInt();
         var result = new List<FiatCurrency>(length);
         var readFn = FfiConverterTypeFiatCurrency.INSTANCE.Read;
+        var commonStream = stream.AsCommon();
         for (int i = 0; i < length; i++) {
-            result.Add(readFn(stream));
+            result.Add(readFn(commonStream));
         }
         return result;
     }
@@ -10986,7 +11004,8 @@ class FfiConverterSequenceTypeFiatCurrency: FfiConverterRustBuffer<List<FiatCurr
 
         stream.WriteInt(value.Count);
         var writerFn = FfiConverterTypeFiatCurrency.INSTANCE.Write;
-        value.ForEach(item => writerFn(item, stream));
+        var commonStream = stream.AsCommon();
+        value.ForEach(item => writerFn(item, commonStream));
     }
 }
 
@@ -11000,8 +11019,9 @@ class FfiConverterSequenceTypeRate: FfiConverterRustBuffer<List<Rate>> {
         var length = stream.ReadInt();
         var result = new List<Rate>(length);
         var readFn = FfiConverterTypeRate.INSTANCE.Read;
+        var commonStream = stream.AsCommon();
         for (int i = 0; i < length; i++) {
-            result.Add(readFn(stream));
+            result.Add(readFn(commonStream));
         }
         return result;
     }
@@ -11028,7 +11048,8 @@ class FfiConverterSequenceTypeRate: FfiConverterRustBuffer<List<Rate>> {
 
         stream.WriteInt(value.Count);
         var writerFn = FfiConverterTypeRate.INSTANCE.Write;
-        value.ForEach(item => writerFn(item, stream));
+        var commonStream = stream.AsCommon();
+        value.ForEach(item => writerFn(item, commonStream));
     }
 }
 
