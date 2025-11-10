@@ -448,14 +448,11 @@ pub mod tests {
         DepositClaimError, ListPaymentsRequest, LnurlWithdrawInfo, Payment, PaymentDetails,
         PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, Storage, UpdateDepositPayload,
         persist::{ObjectCacheRepository, PaymentRequestMetadata},
+        sync_storage::{Record, RecordId, SyncStorage, UnversionedRecordChange},
     };
 
     #[allow(clippy::too_many_lines)]
-    pub async fn test_sqlite_sync_storage(
-        storage: Box<dyn breez_sdk_common::sync::storage::SyncStorage>,
-    ) {
-        use breez_sdk_common::sync::RecordId;
-        use breez_sdk_common::sync::storage::{Record, UnversionedRecordChange};
+    pub async fn test_sqlite_sync_storage(storage: Box<dyn SyncStorage>) {
         use std::collections::HashMap;
 
         // Test 1: Initial state - get_last_revision should return 0

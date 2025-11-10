@@ -6,16 +6,15 @@ use std::sync::Arc;
 
 use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
-    fiat::FiatService,
-    rest::{ReqwestRestClient as CommonRequestRestClient, RestClient},
-    sync::storage::SyncStorage,
+    rest::ReqwestRestClient as CommonRequestRestClient,
 };
 use spark_wallet::{DefaultSigner, Signer};
 use tokio::sync::watch;
 use tracing::debug;
 
 use crate::{
-    Credentials, EventEmitter, KeySetType, Network, Seed,
+    Credentials, EventEmitter, FiatService, FiatServiceWrapper, KeySetType, Network, RestClient,
+    RestClientWrapper, Seed,
     chain::{
         BitcoinChainService,
         rest_client::{BasicAuth, RestClientChainService},
@@ -27,6 +26,7 @@ use crate::{
     persist::Storage,
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams},
+    sync_storage::SyncStorage,
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -270,16 +270,16 @@ impl SdkBuilder {
             }
         };
 
-        let fiat_service: Arc<dyn FiatService> = match self.fiat_service {
-            Some(service) => service,
+        let fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService> = match self.fiat_service {
+            Some(service) => Arc::new(FiatServiceWrapper::new(service)),
             None => Arc::new(
                 BreezServer::new(PRODUCTION_BREEZSERVER_URL, None)
                     .map_err(|e| SdkError::Generic(e.to_string()))?,
             ),
         };
 
-        let lnurl_client: Arc<dyn RestClient> = match self.lnurl_client {
-            Some(client) => client,
+        let lnurl_client: Arc<dyn breez_sdk_common::rest::RestClient> = match self.lnurl_client {
+            Some(client) => Arc::new(RestClientWrapper::new(client)),
             None => Arc::new(
                 CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?,
             ),

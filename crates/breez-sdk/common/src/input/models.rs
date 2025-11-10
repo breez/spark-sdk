@@ -271,27 +271,3 @@ pub struct ExternalInputParser {
     /// input to be parsed. The input is sanitized using percent encoding.
     pub parser_url: String,
 }
-
-// Uniffi bindings have issues if multiple crates define the same custom type. This is a workaround.
-#[allow(unused_imports)]
-use u128 as common_u128;
-
-#[cfg(feature = "uniffi")]
-uniffi::custom_type!(common_u128, String);
-
-#[cfg(feature = "uniffi")]
-impl crate::UniffiCustomTypeConverter for u128 {
-    type Builtin = String;
-
-    fn into_custom(val: Self::Builtin) -> ::uniffi::Result<Self>
-    where
-        Self: ::std::marker::Sized,
-    {
-        val.parse::<u128>()
-            .map_err(uniffi::deps::anyhow::Error::msg)
-    }
-
-    fn from_custom(obj: Self) -> Self::Builtin {
-        obj.to_string()
-    }
-}

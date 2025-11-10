@@ -1,6 +1,6 @@
 use std::{collections::HashMap, option::Option, string::String};
 
-use breez_sdk_common::error::ServiceConnectivityError;
+use breez_sdk_spark::ServiceConnectivityError;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{
     JsFuture,
@@ -9,7 +9,7 @@ use wasm_bindgen_futures::{
 
 use crate::models::error::js_error_to_service_connectivity_error;
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::rest::RestResponse)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RestResponse)]
 pub struct RestResponse {
     pub status: u16,
     pub body: String,
@@ -24,12 +24,12 @@ unsafe impl Send for WasmRestClient {}
 unsafe impl Sync for WasmRestClient {}
 
 #[macros::async_trait]
-impl breez_sdk_common::rest::RestClient for WasmRestClient {
+impl breez_sdk_spark::RestClient for WasmRestClient {
     async fn get_request(
         &self,
         url: String,
         headers: Option<HashMap<String, String>>,
-    ) -> Result<breez_sdk_common::rest::RestResponse, ServiceConnectivityError> {
+    ) -> Result<breez_sdk_spark::RestResponse, ServiceConnectivityError> {
         let promise = self
             .inner
             .get_request(url, headers_to_js_value(headers)?)
@@ -48,7 +48,7 @@ impl breez_sdk_common::rest::RestClient for WasmRestClient {
         url: String,
         headers: Option<HashMap<String, String>>,
         body: Option<String>,
-    ) -> Result<breez_sdk_common::rest::RestResponse, ServiceConnectivityError> {
+    ) -> Result<breez_sdk_spark::RestResponse, ServiceConnectivityError> {
         let promise = self
             .inner
             .post_request(url, headers_to_js_value(headers)?, body)
@@ -67,7 +67,7 @@ impl breez_sdk_common::rest::RestClient for WasmRestClient {
         url: String,
         headers: Option<HashMap<String, String>>,
         body: Option<String>,
-    ) -> Result<breez_sdk_common::rest::RestResponse, ServiceConnectivityError> {
+    ) -> Result<breez_sdk_spark::RestResponse, ServiceConnectivityError> {
         let promise = self
             .inner
             .delete_request(url, headers_to_js_value(headers)?, body)

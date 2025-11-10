@@ -5,10 +5,8 @@ use bitcoin::{
     hex::DisplayHex,
     secp256k1::{PublicKey, ecdsa::Signature},
 };
-pub use breez_sdk_common::input::parse as parse_input;
 use breez_sdk_common::{
     fiat::FiatService,
-    input::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType},
     lnurl::{self, withdraw::execute_lnurl_withdraw},
 };
 use breez_sdk_common::{
@@ -49,6 +47,7 @@ use crate::{
     RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest,
     SignMessageResponse, UpdateUserSettingsRequest, UserSettings, WaitForPaymentIdentifier,
     WaitForPaymentRequest, WaitForPaymentResponse,
+    common::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType},
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     lnurl::LnurlServerClient,
@@ -71,6 +70,18 @@ use crate::{
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
+
+pub async fn parse_input(
+    input: &str,
+    external_input_parsers: Option<Vec<ExternalInputParser>>,
+) -> Result<InputType, SdkError> {
+    Ok(breez_sdk_common::input::parse(
+        input,
+        external_input_parsers.map(|parsers| parsers.into_iter().map(From::from).collect()),
+    )
+    .await?
+    .into())
+}
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology";
@@ -612,7 +623,7 @@ impl BreezSdk {
     }
 
     pub async fn parse(&self, input: &str) -> Result<InputType, SdkError> {
-        Ok(parse_input(input, Some(self.external_input_parsers.clone())).await?)
+        parse_input(input, Some(self.external_input_parsers.clone())).await
     }
 
     /// Returns the balance of the wallet in satoshis
@@ -748,7 +759,7 @@ impl BreezSdk {
             self.lnurl_client.as_ref(),
             request.amount_sats.saturating_mul(1_000),
             &None,
-            &request.pay_request,
+            &request.pay_request.clone().into(),
             self.config.network.into(),
             request.validate_success_action_url,
         )
@@ -785,7 +796,7 @@ impl BreezSdk {
             pay_request: request.pay_request,
             invoice_details,
             fee_sats: lightning_fee_sats,
-            success_action: success_data.success_action,
+            success_action: success_data.success_action.map(From::from),
         })
     }
 
@@ -809,15 +820,22 @@ impl BreezSdk {
         .await?
         .payment;
 
-        let success_action =
-            process_success_action(&payment, request.prepare_response.success_action.as_ref())?;
+        let success_action = process_success_action(
+            &payment,
+            request
+                .prepare_response
+                .success_action
+                .clone()
+                .map(Into::into)
+                .as_ref(),
+        )?;
 
         let lnurl_info = LnurlPayInfo {
             ln_address: request.prepare_response.pay_request.address,
             comment: request.prepare_response.comment,
             domain: Some(request.prepare_response.pay_request.domain),
             metadata: Some(request.prepare_response.pay_request.metadata_str),
-            processed_success_action: success_action.clone(),
+            processed_success_action: success_action.clone().map(From::from),
             raw_success_action: request.prepare_response.success_action,
         };
         let Some(PaymentDetails::Lightning {
@@ -849,7 +867,7 @@ impl BreezSdk {
         emit_final_payment_status(&self.event_emitter, payment.clone()).await;
         Ok(LnurlPayResponse {
             payment,
-            success_action,
+            success_action: success_action.map(From::from),
         })
     }
 
@@ -888,7 +906,8 @@ impl BreezSdk {
             withdraw_request,
             completion_timeout_secs,
         } = request;
-
+        let withdraw_request: breez_sdk_common::lnurl::withdraw::LnurlWithdrawRequestDetails =
+            withdraw_request.into();
         if !withdraw_request.is_amount_valid(amount_sats) {
             return Err(SdkError::InvalidInput(
                 "Amount must be within min/max LNURL withdrawable limits".to_string(),
@@ -1341,13 +1360,25 @@ impl BreezSdk {
     /// List fiat currencies for which there is a known exchange rate,
     /// sorted by the canonical name of the currency.
     pub async fn list_fiat_currencies(&self) -> Result<ListFiatCurrenciesResponse, SdkError> {
-        let currencies = self.fiat_service.fetch_fiat_currencies().await?;
+        let currencies = self
+            .fiat_service
+            .fetch_fiat_currencies()
+            .await?
+            .into_iter()
+            .map(From::from)
+            .collect();
         Ok(ListFiatCurrenciesResponse { currencies })
     }
 
     /// List the latest rates of fiat currencies, sorted by name.
     pub async fn list_fiat_rates(&self) -> Result<ListFiatRatesResponse, SdkError> {
-        let rates = self.fiat_service.fetch_fiat_rates().await?;
+        let rates = self
+            .fiat_service
+            .fetch_fiat_rates()
+            .await?
+            .into_iter()
+            .map(From::from)
+            .collect();
         Ok(ListFiatRatesResponse { rates })
     }
 

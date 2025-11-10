@@ -167,7 +167,7 @@ pub enum DepositClaimError {
     },
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::InputType)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::InputType)]
 pub enum InputType {
     BitcoinAddress(BitcoinAddressDetails),
     Bolt11Invoice(Bolt11InvoiceDetails),
@@ -185,7 +185,7 @@ pub enum InputType {
     SparkInvoice(SparkInvoiceDetails),
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::SparkAddressDetails)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkAddressDetails)]
 pub struct SparkAddressDetails {
     pub address: String,
     pub identity_public_key: String,
@@ -193,7 +193,7 @@ pub struct SparkAddressDetails {
     pub source: PaymentRequestSource,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::SparkInvoiceDetails)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkInvoiceDetails)]
 pub struct SparkInvoiceDetails {
     pub invoice: String,
     pub identity_public_key: String,
@@ -206,14 +206,14 @@ pub struct SparkInvoiceDetails {
     pub sender_public_key: Option<String>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::BitcoinAddressDetails)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BitcoinAddressDetails)]
 pub struct BitcoinAddressDetails {
     pub address: String,
     pub network: BitcoinNetwork,
     pub source: PaymentRequestSource,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::network::BitcoinNetwork)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BitcoinNetwork)]
 pub enum BitcoinNetwork {
     Bitcoin,
     Testnet3,
@@ -222,13 +222,13 @@ pub enum BitcoinNetwork {
     Regtest,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::PaymentRequestSource)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentRequestSource)]
 pub struct PaymentRequestSource {
     pub bip_21_uri: Option<String>,
     pub bip_353_address: Option<String>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::Bolt11InvoiceDetails)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Bolt11InvoiceDetails)]
 pub struct Bolt11InvoiceDetails {
     pub amount_msat: Option<u64>,
     pub description: Option<String>,
@@ -244,18 +244,18 @@ pub struct Bolt11InvoiceDetails {
     pub timestamp: u64,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::Bolt11Invoice)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Bolt11Invoice)]
 pub struct Bolt11Invoice {
     pub bolt11: String,
     pub source: PaymentRequestSource,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::Bolt11RouteHint)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Bolt11RouteHint)]
 pub struct Bolt11RouteHint {
     pub hops: Vec<Bolt11RouteHintHop>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::Bolt11RouteHintHop)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Bolt11RouteHintHop)]
 pub struct Bolt11RouteHintHop {
     pub src_node_id: String,
     pub short_channel_id: String,
@@ -266,25 +266,25 @@ pub struct Bolt11RouteHintHop {
     pub htlc_maximum_msat: Option<u64>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::Bolt12InvoiceDetails)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Bolt12InvoiceDetails)]
 pub struct Bolt12InvoiceDetails {
     pub amount_msat: u64,
     pub invoice: Bolt12Invoice,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::Bolt12Invoice)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Bolt12Invoice)]
 pub struct Bolt12Invoice {
     pub invoice: String,
     pub source: PaymentRequestSource,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::Bolt12Offer)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Bolt12Offer)]
 pub struct Bolt12Offer {
     pub offer: String,
     pub source: PaymentRequestSource,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::Bolt12OfferDetails)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Bolt12OfferDetails)]
 pub struct Bolt12OfferDetails {
     pub absolute_expiry: Option<u64>,
     pub chains: Vec<String>,
@@ -296,12 +296,12 @@ pub struct Bolt12OfferDetails {
     pub signing_pubkey: Option<String>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::Bolt12OfferBlindedPath)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Bolt12OfferBlindedPath)]
 pub struct Bolt12OfferBlindedPath {
     pub blinded_hops: Vec<String>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::Amount)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Amount)]
 pub enum Amount {
     Bitcoin {
         amount_msat: u64,
@@ -312,13 +312,13 @@ pub enum Amount {
     },
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::LightningAddressDetails)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LightningAddressDetails)]
 pub struct LightningAddressDetails {
     pub address: String,
     pub pay_request: LnurlPayRequestDetails,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::LnurlPayRequestDetails)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlPayRequestDetails)]
 pub struct LnurlPayRequestDetails {
     pub callback: String,
     pub min_sendable: u64,
@@ -332,7 +332,7 @@ pub struct LnurlPayRequestDetails {
     pub nostr_pubkey: Option<String>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::SilentPaymentAddressDetails)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SilentPaymentAddressDetails)]
 
 pub struct SilentPaymentAddressDetails {
     pub address: String,
@@ -340,7 +340,7 @@ pub struct SilentPaymentAddressDetails {
     pub source: PaymentRequestSource,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::auth::LnurlAuthRequestDetails)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlAuthRequestDetails)]
 pub struct LnurlAuthRequestDetails {
     pub k1: String,
     pub action: Option<String>,
@@ -348,7 +348,7 @@ pub struct LnurlAuthRequestDetails {
     pub url: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::Bip21Details)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Bip21Details)]
 pub struct Bip21Details {
     pub amount_sat: Option<u64>,
     pub asset_id: Option<String>,
@@ -359,18 +359,18 @@ pub struct Bip21Details {
     pub payment_methods: Vec<InputType>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::Bip21Extra)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Bip21Extra)]
 pub struct Bip21Extra {
     pub key: String,
     pub value: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::Bolt12InvoiceRequestDetails)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Bolt12InvoiceRequestDetails)]
 pub struct Bolt12InvoiceRequestDetails {
     // TODO: Fill fields
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::withdraw::LnurlWithdrawRequestDetails)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlWithdrawRequestDetails)]
 pub struct LnurlWithdrawRequestDetails {
     pub callback: String,
     pub k1: String,
@@ -457,45 +457,45 @@ pub struct LnurlPayInfo {
     pub raw_success_action: Option<SuccessAction>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::SuccessActionProcessed)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SuccessActionProcessed)]
 pub enum SuccessActionProcessed {
     Aes { result: AesSuccessActionDataResult },
     Message { data: MessageSuccessActionData },
     Url { data: UrlSuccessActionData },
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::AesSuccessActionDataResult)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AesSuccessActionDataResult)]
 pub enum AesSuccessActionDataResult {
     Decrypted { data: AesSuccessActionDataDecrypted },
     ErrorStatus { reason: String },
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::AesSuccessActionDataDecrypted)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AesSuccessActionDataDecrypted)]
 pub struct AesSuccessActionDataDecrypted {
     pub description: String,
     pub plaintext: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::MessageSuccessActionData)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::MessageSuccessActionData)]
 pub struct MessageSuccessActionData {
     pub message: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::UrlSuccessActionData)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UrlSuccessActionData)]
 pub struct UrlSuccessActionData {
     pub description: String,
     pub url: String,
     pub matches_callback_domain: bool,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::SuccessAction)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SuccessAction)]
 pub enum SuccessAction {
     Aes { data: AesSuccessActionData },
     Message { data: MessageSuccessActionData },
     Url { data: UrlSuccessActionData },
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::lnurl::pay::AesSuccessActionData)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AesSuccessActionData)]
 pub struct AesSuccessActionData {
     pub description: String,
     pub ciphertext: String,
@@ -543,7 +543,7 @@ pub enum Fee {
     Rate { sat_per_vbyte: u64 },
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::input::ExternalInputParser)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ExternalInputParser)]
 pub struct ExternalInputParser {
     pub provider_id: String,
     pub input_regex: String,
@@ -833,19 +833,19 @@ pub struct ListFiatRatesResponse {
     pub rates: Vec<Rate>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::fiat::Rate)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Rate)]
 pub struct Rate {
     pub coin: String,
     pub value: f64,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::fiat::FiatCurrency)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FiatCurrency)]
 pub struct FiatCurrency {
     pub id: String,
     pub info: CurrencyInfo,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::fiat::CurrencyInfo)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CurrencyInfo)]
 pub struct CurrencyInfo {
     pub name: String,
     pub fraction_size: u32,
@@ -856,20 +856,20 @@ pub struct CurrencyInfo {
     pub locale_overrides: Vec<LocaleOverrides>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::fiat::LocaleOverrides)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LocaleOverrides)]
 pub struct LocaleOverrides {
     pub locale: String,
     pub spacing: Option<u32>,
     pub symbol: Symbol,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::fiat::LocalizedName)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LocalizedName)]
 pub struct LocalizedName {
     pub locale: String,
     pub name: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_common::fiat::Symbol)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Symbol)]
 pub struct Symbol {
     pub grapheme: Option<String>,
     pub template: Option<String>,
@@ -952,7 +952,7 @@ pub struct CheckMessageResponse {
 }
 
 // Sync types
-#[macros::extern_wasm_bindgen(breez_sdk_common::sync::RecordId)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::sync_storage::RecordId)]
 pub struct RecordId {
     pub r#type: String,
     pub data_id: String,

@@ -1,12 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use breez_sdk_common::sync::{
-    RecordId,
-    storage::{
-        IncomingChange, OutgoingChange, Record, RecordChange, SyncStorage, SyncStorageError,
-        UnversionedRecordChange,
-    },
-};
 use macros::async_trait;
 use rusqlite::{
     Connection, Row, ToSql, Transaction, params,
@@ -19,6 +12,10 @@ use crate::{
     PaymentMethod,
     error::DepositClaimError,
     persist::{PaymentMetadata, UpdateDepositPayload},
+    sync_storage::{
+        IncomingChange, OutgoingChange, Record, RecordChange, RecordId, SyncStorage,
+        SyncStorageError, UnversionedRecordChange,
+    },
 };
 
 use super::{Payment, Storage, StorageError};
@@ -1266,6 +1263,7 @@ impl FromSql for U128SqlWrapper {
 
 #[cfg(test)]
 mod tests {
+
     use crate::SqliteStorage;
 
     #[tokio::test]

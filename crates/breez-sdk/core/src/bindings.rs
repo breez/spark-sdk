@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
-use breez_sdk_common::sync::storage::SyncStorage;
-use breez_sdk_common::{fiat::FiatService, rest::RestClient};
 use tokio::sync::Mutex;
 
 use crate::{
-    BitcoinChainService, BreezSdk, Config, Credentials, KeySetType, PaymentObserver, SdkError,
-    Seed, Storage,
+    BitcoinChainService, BreezSdk, Config, Credentials, FiatService, KeySetType, PaymentObserver,
+    RestClient, SdkError, Seed, Storage, sync_storage::SyncStorage,
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.

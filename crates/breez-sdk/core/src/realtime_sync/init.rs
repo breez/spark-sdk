@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use breez_sdk_common::sync::{
-    BreezSyncerClient, SigningClient, SyncProcessor, SyncService, storage::SyncStorage,
-};
+use breez_sdk_common::sync::{BreezSyncerClient, SigningClient, SyncProcessor, SyncService};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -11,6 +9,7 @@ use crate::{
     error::SdkError,
     persist::Storage,
     realtime_sync::{DefaultSyncSigner, SyncedStorage},
+    sync_storage::{SyncStorage, SyncStorageWrapper},
 };
 
 pub struct RealTimeSyncParams {
@@ -28,8 +27,9 @@ pub async fn init_and_start_real_time_sync(
     params: RealTimeSyncParams,
 ) -> Result<Arc<dyn Storage>, SdkError> {
     debug!("Real-time sync is enabled.");
-
-    let sync_service = Arc::new(SyncService::new(Arc::clone(&params.sync_storage)));
+    let sync_storage: Arc<dyn breez_sdk_common::sync::storage::SyncStorage> =
+        Arc::new(SyncStorageWrapper::new(params.sync_storage));
+    let sync_service = Arc::new(SyncService::new(Arc::clone(&sync_storage)));
     let synced_storage = Arc::new(SyncedStorage::new(
         Arc::clone(&params.storage),
         Arc::clone(&sync_service),
@@ -54,7 +54,7 @@ pub async fn init_and_start_real_time_sync(
         signing_sync_client,
         sync_service.get_sync_trigger(),
         synced_storage,
-        Arc::clone(&params.sync_storage),
+        Arc::clone(&sync_storage),
     ));
 
     sync_processor

@@ -2,24 +2,21 @@ pub(crate) mod adaptors;
 pub mod payment_observer;
 pub use payment_observer::*;
 
-use breez_sdk_common::{
-    fiat::{FiatCurrency, Rate},
-    input::{
-        BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, SparkInvoiceDetails,
-    },
-    lnurl::{
-        pay::{LnurlPayRequestDetails, SuccessAction, SuccessActionProcessed},
-        withdraw::LnurlWithdrawRequestDetails,
-    },
-    network::BitcoinNetwork,
-};
 use core::fmt;
 use lnurl_models::RecoverLnurlPayResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, fmt::Display, str::FromStr};
 
-use crate::error::DepositClaimError;
+use crate::{
+    common::{
+        BitcoinAddressDetails, BitcoinNetwork, Bolt11InvoiceDetails, ExternalInputParser,
+        LnurlPayRequestDetails, LnurlWithdrawRequestDetails, SparkInvoiceDetails, SuccessAction,
+        SuccessActionProcessed,
+    },
+    error::DepositClaimError,
+    fiat::{FiatCurrency, Rate},
+};
 
 /// A list of external input parsers that are used by default.
 /// To opt-out, set `use_default_external_input_parsers` in [Config] to false.
@@ -291,6 +288,15 @@ impl From<Network> for BitcoinNetwork {
         match network {
             Network::Mainnet => BitcoinNetwork::Bitcoin,
             Network::Regtest => BitcoinNetwork::Regtest,
+        }
+    }
+}
+
+impl From<Network> for breez_sdk_common::network::BitcoinNetwork {
+    fn from(network: Network) -> Self {
+        match network {
+            Network::Mainnet => breez_sdk_common::network::BitcoinNetwork::Bitcoin,
+            Network::Regtest => breez_sdk_common::network::BitcoinNetwork::Regtest,
         }
     }
 }
