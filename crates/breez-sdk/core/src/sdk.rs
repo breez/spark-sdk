@@ -31,7 +31,7 @@ use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::{
     select,
-    sync::{Mutex, mpsc, oneshot, watch},
+    sync::{Mutex, OnceCell, mpsc, oneshot, watch},
     time::timeout,
 };
 use tokio_with_wasm::alias as tokio;
@@ -133,6 +133,7 @@ pub struct BreezSdk {
     sync_trigger: tokio::sync::broadcast::Sender<SyncRequest>,
     initial_synced_watcher: watch::Receiver<bool>,
     external_input_parsers: Vec<ExternalInputParser>,
+    spark_private_mode_initialized: Arc<OnceCell<()>>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -216,6 +217,7 @@ impl BreezSdk {
             sync_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
             external_input_parsers,
+            spark_private_mode_initialized: Arc::new(OnceCell::new()),
         };
 
         sdk.start(initial_synced_sender);
@@ -521,13 +523,21 @@ impl BreezSdk {
     }
 
     async fn ensure_spark_private_mode_initialized(&self) -> Result<(), SdkError> {
-        let object_repository = ObjectCacheRepository::new(self.storage.clone());
-        let spark_private_mode_initialized = object_repository
-            .fetch_spark_private_mode_initialized()
+        self.spark_private_mode_initialized
+            .get_or_try_init(|| async {
+                // Check if already initialized in storage
+                let object_repository = ObjectCacheRepository::new(self.storage.clone());
+                let is_initialized = object_repository
+                    .fetch_spark_private_mode_initialized()
+                    .await?;
+
+                if !is_initialized {
+                    // Initialize if not already done
+                    self.initialize_spark_private_mode().await?;
+                }
+                Ok::<_, SdkError>(())
+            })
             .await?;
-        if !spark_private_mode_initialized {
-            return self.initialize_spark_private_mode().await;
-        }
         Ok(())
     }
 
