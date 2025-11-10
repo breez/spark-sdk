@@ -56,7 +56,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bindings-csharp
-          path: crates/breez-sdk/bindings/ffi/csharp/*.cs
+          path: crates/breez-sdk/bindings/ffi/csharp/breez_sdk_spark.cs
 
   build-package:
     runs-on: ubuntu-latest
