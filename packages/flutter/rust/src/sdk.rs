@@ -195,4 +195,12 @@ impl BreezSdk {
     ) -> Result<CheckMessageResponse, SdkError> {
         self.inner.check_message(request).await
     }
+
+    pub async fn get_user_settings(&self) -> Result<UserSettings, SdkError> {
+        self.inner.get_user_settings().await
+    }
+
+    pub async fn update_user_settings(&self, request: UpdateUserSettingsRequest) -> Result<(), SdkError> {
+        self.inner.update_user_settings(request).await
+    }
 }

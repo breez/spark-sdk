@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use spark::{
     Network,
     operator::rpc::spark::{
-        InvoiceResponse, InvoiceStatus, invoice_response::TransferType as InvoiceTransferType,
+        InvoiceResponse, InvoiceStatus, WalletSetting,
+        invoice_response::TransferType as InvoiceTransferType,
     },
     services::{
         LightningSendPayment, TokenMetadata, TokenTransaction, Transfer, TransferId, TransferLeaf,
@@ -299,6 +300,19 @@ impl TryFrom<InvoiceTransferType> for SparkInvoiceTransferType {
                     final_token_tx_hash: hex::encode(transfer.final_token_transaction_hash),
                 })
             }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WalletSettings {
+    pub private_enabled: bool,
+}
+
+impl From<WalletSetting> for WalletSettings {
+    fn from(value: WalletSetting) -> Self {
+        WalletSettings {
+            private_enabled: value.private_enabled,
         }
     }
 }

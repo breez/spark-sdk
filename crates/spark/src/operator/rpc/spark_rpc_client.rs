@@ -364,45 +364,6 @@ impl SparkRpcClient {
             .into_inner())
     }
 
-    pub async fn start_token_transaction(
-        &self,
-        req: StartTokenTransactionRequest,
-    ) -> Result<StartTokenTransactionResponse> {
-        debug!("Calling start_token_transaction with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .start_token_transaction(req)
-            .await?
-            .into_inner())
-    }
-
-    pub async fn sign_token_transaction(
-        &self,
-        req: SignTokenTransactionRequest,
-    ) -> Result<SignTokenTransactionResponse> {
-        debug!("Calling sign_token_transaction with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .sign_token_transaction(req)
-            .await?
-            .into_inner())
-    }
-
-    pub async fn finalize_token_transaction(
-        &self,
-        req: FinalizeTokenTransactionRequest,
-    ) -> Result<()> {
-        debug!("Calling finalize_token_transaction with request: {:?}", req);
-        self.spark_service_client()
-            .await?
-            .finalize_token_transaction(req)
-            .await?
-            .into_inner();
-        Ok(())
-    }
-
     pub async fn freeze_tokens(
         &self,
         req: spark_token::FreezeTokensRequest,
@@ -548,6 +509,29 @@ impl SparkRpcClient {
             .spark_service_client()
             .await?
             .subscribe_to_events(req)
+            .await?
+            .into_inner())
+    }
+
+    pub async fn update_wallet_setting(
+        &self,
+        req: UpdateWalletSettingRequest,
+    ) -> Result<UpdateWalletSettingResponse> {
+        debug!("Calling update_wallet_setting with request: {:?}", req);
+        Ok(self
+            .spark_service_client()
+            .await?
+            .update_wallet_setting(req)
+            .await?
+            .into_inner())
+    }
+
+    pub async fn query_wallet_setting(&self) -> Result<QueryWalletSettingResponse> {
+        debug!("Calling query_wallet_setting");
+        Ok(self
+            .spark_service_client()
+            .await?
+            .query_wallet_setting(QueryWalletSettingRequest {})
             .await?
             .into_inner())
     }

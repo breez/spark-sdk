@@ -21,6 +21,7 @@ const TX_CACHE_KEY: &str = "tx_cache";
 const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
 const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
 const PAYMENT_REQUEST_METADATA_KEY_PREFIX: &str = "payment_request_metadata";
+const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UpdateDepositPayload {
@@ -384,6 +385,27 @@ impl ObjectCacheRepository {
             ))
             .await?;
         Ok(())
+    }
+
+    pub(crate) async fn save_spark_private_mode_initialized(&self) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                SPARK_PRIVATE_MODE_INITIALIZED_KEY.to_string(),
+                "true".to_string(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_spark_private_mode_initialized(&self) -> Result<bool, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(SPARK_PRIVATE_MODE_INITIALIZED_KEY.to_string())
+            .await?;
+        match value {
+            Some(value) => Ok(value == "true"),
+            None => Ok(false),
+        }
     }
 }
 
