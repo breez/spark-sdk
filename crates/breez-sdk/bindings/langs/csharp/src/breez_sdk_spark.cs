@@ -538,7 +538,7 @@ class BigEndianStream {
 
 
 // This is an implementation detail that will be called internally by the public API.
-static class _UniFFILib {
+internal static class _UniFFILib {
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void UniffiRustFutureContinuationCallback(
         ulong @data,sbyte @pollResult
@@ -3466,13 +3466,13 @@ public class BreezSdk : IBreezSdk, IDisposable {
             return _UniFFILib.uniffi_breez_sdk_spark_fn_method_breezsdk_parse(thisPtr, FfiConverterString.INSTANCE.Lower(@input));
         }),
         // Poll
-        (IntPtr future, IntPtr continuation, IntPtr data) => _UniFFILib.ffi_breez_sdk_spark_rust_future_poll_rust_buffer(future, continuation, data),
+        (IntPtr future, IntPtr continuation, IntPtr data) => Breez.Sdk.Spark.Common._UniFFILib.ffi_breez_sdk_common_rust_future_poll_rust_buffer(future, continuation, data),
         // Complete
         (IntPtr future, ref UniffiRustCallStatus status) => {
-            return _UniFFILib.ffi_breez_sdk_spark_rust_future_complete_rust_buffer(future, ref status);
+            return Breez.Sdk.Spark.Common._UniFFILib.ffi_breez_sdk_common_rust_future_complete_rust_buffer(future, ref status);
         },
         // Free
-        (IntPtr future) => _UniFFILib.ffi_breez_sdk_spark_rust_future_free_rust_buffer(future),
+        (IntPtr future) => Breez.Sdk.Spark.Common._UniFFILib.ffi_breez_sdk_common_rust_future_free_rust_buffer(future),
         // Lift
         (result) => FfiConverterTypeInputType.INSTANCE.Lift(result),
         // Error

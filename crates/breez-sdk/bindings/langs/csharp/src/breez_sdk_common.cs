@@ -537,7 +537,7 @@ class BigEndianStream {
 
 
 // This is an implementation detail that will be called internally by the public API.
-static class _UniFFILib {
+internal static class _UniFFILib {
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void UniffiRustFutureContinuationCallback(
         ulong @data,sbyte @pollResult
