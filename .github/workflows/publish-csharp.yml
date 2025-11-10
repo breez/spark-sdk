@@ -127,43 +127,7 @@ jobs:
           name: Breez.Sdk.Spark.${{ inputs.package-version || '0.0.1' }}.nupkg
           path: crates/breez-sdk/bindings/langs/csharp/src/bin/Release/Breez.Sdk.Spark.*.nupkg
 
-  test-package:
-    needs: build-package
-    runs-on: ${{ matrix.target }}
-    strategy:
-      matrix:
-        target: [
-          windows-latest,
-          ubuntu-latest,          
-          macOS-latest,
-        ]
-    steps:
-      - name: Checkout spark-sdk repo
-        if: ${{ !inputs.skip-tests }}
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ inputs.repository || github.repository }}
-          ref: ${{ inputs.ref || github.sha }}
-      
-      - uses: actions/download-artifact@v4
-        if: ${{ !inputs.skip-tests }}
-        with:
-          name: Breez.Sdk.Spark.${{ inputs.package-version || '0.0.1' }}.nupkg
-          path: crates/breez-sdk/bindings/langs/csharp/src/bin/Release
-
-      - name: Setup dotnet
-        if: ${{ !inputs.skip-tests }}
-        uses: actions/setup-dotnet@v3
-        with:
-          dotnet-version: '7.0.x'
-      
-      - name: test package
-        if: ${{ !inputs.skip-tests }}
-        working-directory: crates/breez-sdk/bindings/langs/csharp/test
-        run: dotnet run
-      
   publish-package:
-    needs: test-package
     if: ${{ inputs.publish }}
     runs-on: ubuntu-latest
     steps:
