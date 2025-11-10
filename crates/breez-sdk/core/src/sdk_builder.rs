@@ -295,10 +295,12 @@ impl SdkBuilder {
             crate::built_info::GIT_VERSION.unwrap_or(crate::built_info::PKG_VERSION),
         );
         info!("Building SparkWallet with user agent: {}", user_agent);
-        let spark_wallet_config = spark_wallet::SparkWalletConfig::default_config(
-            self.config.network.into(),
-            Some(user_agent),
-        );
+        let mut spark_wallet_config =
+            spark_wallet::SparkWalletConfig::default_config(self.config.network.into());
+        spark_wallet_config.operator_pool = spark_wallet_config
+            .operator_pool
+            .with_user_agent(Some(user_agent.clone()));
+        spark_wallet_config.service_provider_config.user_agent = Some(user_agent);
 
         let mut wallet_builder =
             spark_wallet::WalletBuilder::new(spark_wallet_config, Arc::clone(&signer));
