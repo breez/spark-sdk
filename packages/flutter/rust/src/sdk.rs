@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use breez_sdk_common::input::InputType;
 use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
 

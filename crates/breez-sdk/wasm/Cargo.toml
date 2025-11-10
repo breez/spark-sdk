@@ -13,7 +13,6 @@ crate-type = ["cdylib"]
 [dependencies]
 async-trait.workspace = true
 bitcoin.workspace = true
-breez-sdk-common.workspace = true
 breez-sdk-spark.workspace = true
 js-sys.workspace = true
 macros.workspace = true
