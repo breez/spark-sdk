@@ -41,7 +41,7 @@ build-release-target-%: install-target-%
 	cargo build --release --target $*
 
 install-uniffi-bindgen-cs:
-	$(INSTALL_PREFIX) cargo install uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.9.2+v0.28.3
+	$(INSTALL_PREFIX) cargo install uniffi-bindgen-cs --git https://github.com/breez/uniffi-bindgen-cs --branch jssdwt-fix-async-event-listener
 
 install-uniffi-bindgen-gobley:
 	$(INSTALL_PREFIX) cargo install gobley-uniffi-bindgen --git https://github.com/breez/gobley --rev 72753910f54a157de2f84b78dc6f78415e28d4f2
@@ -167,4 +167,9 @@ package-nuget: bindings-csharp build-aarch64-apple-darwin build-x86_64-apple-dar
 	cp $(TARGET_DIR)i686-pc-windows-msvc/release/$(BIN_NAME).dll langs/csharp/src/runtimes/win-x86/native/$(BIN_NAME).dll
 	cp $(TARGET_DIR)x86_64-pc-windows-msvc/release/$(BIN_NAME).dll langs/csharp/src/runtimes/win-x64/native/$(BIN_NAME).dll
 	cp -r $(FFI_DIR)csharp/*.cs langs/csharp/src/
+	cd langs/csharp/src && dotnet pack -c Release
+
+package-nuget-no-binaries: bindings-csharp
+	rm -f langs/csharp/src/*.cs
+	cp $(FFI_DIR)csharp/breez_sdk_spark.cs langs/csharp/src/
 	cd langs/csharp/src && dotnet pack -c Release
