@@ -3468,7 +3468,7 @@ public class BreezSdk : IBreezSdk, IDisposable {
         // Poll
         (IntPtr future, IntPtr continuation, IntPtr data) => Breez.Sdk.Spark.Common._UniFFILib.ffi_breez_sdk_common_rust_future_poll_rust_buffer(future, continuation, data),
         // Complete
-        (IntPtr future, ref UniffiRustCallStatus status) => {
+        (IntPtr future, ref Breez.Sdk.Spark.Common.UniffiRustCallStatus status) => {
             return Breez.Sdk.Spark.Common._UniFFILib.ffi_breez_sdk_common_rust_future_complete_rust_buffer(future, ref status);
         },
         // Free
@@ -11198,9 +11198,9 @@ internal static class _UniFFIAsync {
         }
     }
 
-    public delegate F CompleteFuncDelegate<F>(IntPtr ptr, ref UniffiRustCallStatus status);
+    public delegate F CompleteFuncDelegate<F, TStatus>(IntPtr ptr, ref TStatus status);
 
-    public delegate void CompleteActionDelegate(IntPtr ptr, ref UniffiRustCallStatus status);
+    public delegate void CompleteActionDelegate<TStatus>(IntPtr ptr, ref TStatus status);
 
     private static async Task PollFuture(IntPtr rustFuture, Action<IntPtr, IntPtr, IntPtr> pollFunc)
     {
@@ -11216,10 +11216,21 @@ internal static class _UniFFIAsync {
         while(pollResult != UNIFFI_RUST_FUTURE_POLL_READY);
     }
 
+    private static RustBuffer ConvertCommonRustBufferToLocal(Breez.Sdk.Spark.Common.RustBuffer commonBuf)
+    {
+        return new RustBuffer
+        {
+            capacity = commonBuf.capacity,
+            len = commonBuf.len,
+            data = commonBuf.data
+        };
+    }
+
+    // Overload for local UniffiRustCallStatus
     public static async Task<T> UniffiRustCallAsync<T, F, E>(
         IntPtr rustFuture,
         Action<IntPtr, IntPtr, IntPtr> pollFunc,
-        CompleteFuncDelegate<F> completeFunc,
+        CompleteFuncDelegate<F, UniffiRustCallStatus> completeFunc,
         Action<IntPtr> freeFunc,
         Func<F, T> liftFunc,
         CallStatusErrorHandler<E> errorHandler
@@ -11239,7 +11250,7 @@ internal static class _UniFFIAsync {
     public static async Task UniffiRustCallAsync<E>(
         IntPtr rustFuture,
         Action<IntPtr, IntPtr, IntPtr> pollFunc,
-        CompleteActionDelegate completeFunc,
+        CompleteActionDelegate<UniffiRustCallStatus> completeFunc,
         Action<IntPtr> freeFunc,
         CallStatusErrorHandler<E> errorHandler
     ) where E : UniffiException
@@ -11248,6 +11259,74 @@ internal static class _UniFFIAsync {
             await PollFuture(rustFuture, pollFunc);
             _UniffiHelpers.RustCallWithError(errorHandler, (ref UniffiRustCallStatus status) => completeFunc(rustFuture, ref status));
 
+        }
+        finally
+        {
+            freeFunc(rustFuture);
+        }
+    }
+
+    // Overloads for Common.UniffiRustCallStatus
+    public static async Task<T> UniffiRustCallAsync<T, F, E>(
+        IntPtr rustFuture,
+        Action<IntPtr, IntPtr, IntPtr> pollFunc,
+        CompleteFuncDelegate<F, Breez.Sdk.Spark.Common.UniffiRustCallStatus> completeFunc,
+        Action<IntPtr> freeFunc,
+        Func<F, T> liftFunc,
+        CallStatusErrorHandler<E> errorHandler
+    ) where E : UniffiException
+    {
+        try {
+            await PollFuture(rustFuture, pollFunc);
+            var status = new Breez.Sdk.Spark.Common.UniffiRustCallStatus();
+            var return_value = completeFunc(rustFuture, ref status);
+            if (status.IsSuccess()) {
+                return liftFunc(return_value);
+            } else if (status.IsError()) {
+                // Convert Common.RustBuffer to local RustBuffer (they have the same memory layout)
+                throw errorHandler.Lift(ConvertCommonRustBufferToLocal(status.error_buf));
+            } else if (status.IsPanic()) {
+                if (status.error_buf.len > 0) {
+                    throw new PanicException(Breez.Sdk.Spark.Common.FfiConverterString.INSTANCE.Lift(status.error_buf));
+                } else {
+                    throw new PanicException("Rust panic");
+                }
+            } else {
+                throw new InternalException($"Unknown rust call status: {status.code}");
+            }
+        }
+        finally
+        {
+            freeFunc(rustFuture);
+        }
+    }
+
+    public static async Task UniffiRustCallAsync<E>(
+        IntPtr rustFuture,
+        Action<IntPtr, IntPtr, IntPtr> pollFunc,
+        CompleteActionDelegate<Breez.Sdk.Spark.Common.UniffiRustCallStatus> completeFunc,
+        Action<IntPtr> freeFunc,
+        CallStatusErrorHandler<E> errorHandler
+    ) where E : UniffiException
+    {
+         try {
+            await PollFuture(rustFuture, pollFunc);
+            var status = new Breez.Sdk.Spark.Common.UniffiRustCallStatus();
+            completeFunc(rustFuture, ref status);
+            if (status.IsSuccess()) {
+                return;
+            } else if (status.IsError()) {
+                // Convert Common.RustBuffer to local RustBuffer (they have the same memory layout)
+                throw errorHandler.Lift(ConvertCommonRustBufferToLocal(status.error_buf));
+            } else if (status.IsPanic()) {
+                if (status.error_buf.len > 0) {
+                    throw new PanicException(Breez.Sdk.Spark.Common.FfiConverterString.INSTANCE.Lift(status.error_buf));
+                } else {
+                    throw new PanicException("Rust panic");
+                }
+            } else {
+                throw new InternalException($"Unknown rust call status: {status.code}");
+            }
         }
         finally
         {
