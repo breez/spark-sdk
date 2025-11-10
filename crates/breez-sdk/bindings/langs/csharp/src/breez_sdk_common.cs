@@ -15,7 +15,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-namespace Breez.Sdk.Spark.Bindings;
+namespace Breez.Sdk.Spark.Common;
 using FfiConverterTypecommon_u128 = FfiConverterString;
 using common_u128 = String;
 
