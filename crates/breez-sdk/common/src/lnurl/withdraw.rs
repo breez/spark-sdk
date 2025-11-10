@@ -42,7 +42,6 @@ pub fn build_withdraw_callback_url(
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LnurlWithdrawRequestDetails {
     pub callback: String,
     pub k1: String,

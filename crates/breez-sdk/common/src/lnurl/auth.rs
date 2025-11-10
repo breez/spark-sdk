@@ -18,7 +18,6 @@ use super::{
 ///
 /// See <https://github.com/lnurl/luds/blob/luds/04.md>
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LnurlAuthRequestDetails {
     /// Hex encoded 32 bytes of challenge
     pub k1: String,

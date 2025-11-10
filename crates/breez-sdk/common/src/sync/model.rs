@@ -7,7 +7,6 @@ use serde_json::Value;
 
 const CURRENT_SCHEMA_VERSION: Version = Version::new(1, 0, 0);
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RecordId {
     pub r#type: String,
     pub data_id: String,

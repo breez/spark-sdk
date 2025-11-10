@@ -140,7 +140,6 @@ pub fn validate_invoice(
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LnurlPayRequestDetails {
     pub callback: String,
     /// The minimum amount, in millisats, that this LNURL-pay endpoint accepts
@@ -202,7 +201,6 @@ pub struct CallbackResponse {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(tag = "tag")]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SuccessAction {
     /// AES type, described in LUD-10
     Aes {
@@ -227,7 +225,6 @@ pub enum SuccessAction {
 ///
 /// Contents are identical to [`SuccessAction`], except for AES where the ciphertext is decrypted.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SuccessActionProcessed {
     /// See [`SuccessAction::Aes`] for received payload
     ///
@@ -245,7 +242,6 @@ pub enum SuccessActionProcessed {
 ///
 /// See [`AesSuccessActionDataDecrypted`] for a similar wrapper containing the decrypted payload
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct AesSuccessActionData {
     /// Contents description, up to 144 characters
     pub description: String,
@@ -302,7 +298,6 @@ impl AesSuccessActionData {
 
 /// Result of decryption of [`AesSuccessActionData`] payload
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum AesSuccessActionDataResult {
     Decrypted { data: AesSuccessActionDataDecrypted },
     ErrorStatus { reason: String },
@@ -310,7 +305,6 @@ pub enum AesSuccessActionDataResult {
 
 /// Wrapper for the decrypted [`AesSuccessActionData`] payload
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct AesSuccessActionDataDecrypted {
     /// Contents description, up to 144 characters
     pub description: String,
@@ -336,7 +330,6 @@ impl TryFrom<(&AesSuccessActionData, &[u8; 32])> for AesSuccessActionDataDecrypt
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct MessageSuccessActionData {
     pub message: String,
 }
@@ -353,7 +346,6 @@ impl MessageSuccessActionData {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct UrlSuccessActionData {
     /// Contents description, up to 144 characters
     pub description: String,

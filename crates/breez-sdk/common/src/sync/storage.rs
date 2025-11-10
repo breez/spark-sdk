@@ -6,7 +6,6 @@ pub use crate::sync::RecordId;
 
 /// Errors that can occur during storage operations
 #[derive(Debug, Error, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum SyncStorageError {
     #[error("Underline implementation error: {0}")]
     Implementation(String),
@@ -31,7 +30,6 @@ impl From<serde_json::Error> for SyncStorageError {
     }
 }
 
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[cfg_attr(test, mockall::automock)]
 #[macros::async_trait]
 pub trait SyncStorage: Send + Sync {
@@ -70,7 +68,6 @@ pub trait SyncStorage: Send + Sync {
     async fn update_record_from_incoming(&self, record: Record) -> Result<(), SyncStorageError>;
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Clone, Debug)]
 pub struct IncomingChange {
     pub new_state: Record,
@@ -92,7 +89,6 @@ impl TryFrom<&IncomingChange> for crate::sync::model::IncomingChange {
     }
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Clone, Debug)]
 pub struct OutgoingChange {
     pub change: RecordChange,
@@ -113,7 +109,6 @@ impl TryFrom<OutgoingChange> for crate::sync::model::OutgoingChange {
     }
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Clone, Debug)]
 pub struct UnversionedRecordChange {
     pub id: RecordId,
@@ -153,7 +148,6 @@ impl TryFrom<crate::sync::model::UnversionedRecordChange> for UnversionedRecordC
     }
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Clone, Debug)]
 pub struct RecordChange {
     pub id: RecordId,
@@ -179,7 +173,6 @@ impl TryFrom<RecordChange> for crate::sync::model::RecordChange {
     }
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Clone, Debug)]
 pub struct Record {
     pub id: RecordId,
