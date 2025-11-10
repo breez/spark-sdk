@@ -202,4 +202,11 @@ impl BreezSdk {
     pub async fn update_user_settings(&self, request: UpdateUserSettingsRequest) -> Result<(), SdkError> {
         self.inner.update_user_settings(request).await
     }
+    
+    pub fn get_issuer_sdk(&self) -> crate::issuer::BreezIssuerSdk {
+        let issuer_sdk = self.inner.get_issuer_sdk();
+        crate::issuer::BreezIssuerSdk {
+            issuer_sdk: Arc::new(issuer_sdk),
+        }
+    }
 }

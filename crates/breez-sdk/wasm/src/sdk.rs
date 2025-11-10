@@ -6,6 +6,7 @@ use wasm_bindgen::prelude::*;
 use crate::{
     error::WasmResult,
     event::{EventListener, WasmEventListener},
+    issuer::BreezIssuerSdk,
     logger::{Logger, WasmTracingLayer},
     models::*,
     sdk_builder::SdkBuilder,
@@ -253,5 +254,13 @@ impl BreezSdk {
     #[wasm_bindgen(js_name = "updateUserSettings")]
     pub async fn update_user_settings(&self, request: UpdateUserSettingsRequest) -> WasmResult<()> {
         Ok(self.sdk.update_user_settings(request.into()).await?)
+    }
+
+    #[wasm_bindgen(js_name = "getIssuerSdk")]
+    pub fn get_issuer_sdk(&self) -> BreezIssuerSdk {
+        let issuer_sdk = self.sdk.get_issuer_sdk();
+        BreezIssuerSdk {
+            issuer_sdk: Rc::new(issuer_sdk),
+        }
     }
 }

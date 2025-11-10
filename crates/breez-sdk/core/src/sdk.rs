@@ -20,8 +20,8 @@ use breez_sdk_common::{
 };
 use lnurl_models::sanitize_username;
 use spark_wallet::{
-    ExitSpeed, InvoiceDescription, SparkAddress, SparkWallet, TokenTransaction,
-    TransferTokenOutput, WalletEvent, WalletTransfer,
+    ExitSpeed, InvoiceDescription, SparkAddress, SparkWallet, TransferTokenOutput, WalletEvent,
+    WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
 use tracing::{error, info, trace, warn};
@@ -50,6 +50,7 @@ use crate::{
     WaitForPaymentRequest, WaitForPaymentResponse,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
+    issuer::BreezIssuerSdk,
     lnurl::LnurlServerClient,
     logger,
     models::{
@@ -67,7 +68,7 @@ use crate::{
         deposit_chain_syncer::DepositChainSyncer,
         run_with_shutdown,
         send_payment_validation::validate_prepare_send_payment_request,
-        token::{get_tokens_metadata_cached_or_query, token_transaction_to_payments},
+        token::{get_tokens_metadata_cached_or_query, map_and_persist_token_transaction},
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
@@ -1488,6 +1489,11 @@ impl BreezSdk {
         }
         Ok(())
     }
+
+    /// Returns an instance of the [`BreezIssuerSdk`] for managing token issuance.
+    pub fn get_issuer_sdk(&self) -> BreezIssuerSdk {
+        BreezIssuerSdk::new(self.spark_wallet.clone(), self.storage.clone())
+    }
 }
 
 // Separate impl block to avoid exposing private methods to uniffi.
@@ -1581,15 +1587,18 @@ impl BreezSdk {
     ) -> Result<Payment, SdkError> {
         let token_transaction = self
             .spark_wallet
-            .transfer_tokens(vec![TransferTokenOutput {
-                token_id: token_identifier,
-                amount,
-                receiver_address: receiver_address.clone(),
-                spark_invoice: None,
-            }])
+            .transfer_tokens(
+                vec![TransferTokenOutput {
+                    token_id: token_identifier,
+                    amount,
+                    receiver_address: receiver_address.clone(),
+                    spark_invoice: None,
+                }],
+                None,
+            )
             .await?;
 
-        self.map_and_persist_token_transaction(&token_transaction)
+        map_and_persist_token_transaction(&self.spark_wallet, &self.storage, &token_transaction)
             .await
     }
 
@@ -1607,36 +1616,16 @@ impl BreezSdk {
                 (*wallet_transfer).try_into()?
             }
             spark_wallet::FulfillSparkInvoiceResult::TokenTransaction(token_transaction) => {
-                self.map_and_persist_token_transaction(&token_transaction)
-                    .await?
+                map_and_persist_token_transaction(
+                    &self.spark_wallet,
+                    &self.storage,
+                    &token_transaction,
+                )
+                .await?
             }
         };
 
         Ok(SendPaymentResponse { payment })
-    }
-
-    async fn map_and_persist_token_transaction(
-        &self,
-        token_transaction: &TokenTransaction,
-    ) -> Result<Payment, SdkError> {
-        let object_repository = ObjectCacheRepository::new(self.storage.clone());
-        let payments = token_transaction_to_payments(
-            &self.spark_wallet,
-            &object_repository,
-            token_transaction,
-            true,
-        )
-        .await?;
-        for payment in &payments {
-            self.storage.insert_payment(payment.clone()).await?;
-        }
-
-        payments
-            .first()
-            .ok_or(SdkError::Generic(
-                "No payment created from token invoice".to_string(),
-            ))
-            .cloned()
     }
 
     async fn send_bolt11_invoice(

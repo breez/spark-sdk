@@ -865,3 +865,50 @@ pub struct _UserSettings {
 pub struct _UpdateUserSettingsRequest {
     pub spark_private_mode_enabled: Option<bool>,
 }
+
+#[frb(mirror(CreateTokenRequest))]
+pub struct _CreateTokenRequest {
+    pub name: String,
+    pub ticker: String,
+    pub decimals: u32,
+    pub is_freezable: bool,
+    pub max_supply: u128,
+}
+
+#[frb(mirror(GetIssuerTokenBalanceResponse))]
+pub struct _GetIssuerTokenBalanceResponse {
+    pub identifier: String,
+    pub balance: u128,
+}
+
+#[frb(mirror(MintTokensRequest))]
+pub struct _MintTokensRequest {
+    pub amount: u128,
+}
+
+#[frb(mirror(BurnTokensRequest))]
+pub struct _BurnTokensRequest {
+    pub amount: u128,
+}
+
+#[frb(mirror(FreezeTokensRequest))]
+pub struct _FreezeTokensRequest {
+    pub address: String,
+}
+
+#[frb(mirror(FreezeTokensResponse))]
+pub struct _FreezeTokensResponse {
+    pub impacted_output_ids: Vec<String>,
+    pub impacted_token_amount: u128,
+}
+
+#[frb(mirror(UnfreezeTokensRequest))]
+pub struct _UnfreezeTokensRequest {
+    pub address: String,
+}
+
+#[frb(mirror(UnfreezeTokensResponse))]
+pub struct _UnfreezeTokensResponse {
+    pub impacted_output_ids: Vec<String>,
+    pub impacted_token_amount: u128,
+}

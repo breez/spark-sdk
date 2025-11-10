@@ -3,12 +3,12 @@ use std::{collections::HashMap, ops::Not, sync::Arc};
 use bitcoin::{
     bech32::{self, Bech32m, Hrp},
     hashes::{Hash, HashEngine, sha256},
+    secp256k1::PublicKey,
 };
-use prost_types::Timestamp;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tracing::warn;
-use web_time::SystemTime;
+use tracing::{info, warn};
+use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     Network,
@@ -24,11 +24,15 @@ use crate::{
         },
     },
     services::{
-        QueryTokenTransactionsFilter, ReceiverTokenOutput, ServiceError, TokenMetadata,
-        TokenOutputWithPrevOut, TokenTransaction, TransferObserver, TransferTokenOutput,
+        FreezeTokensResponse, QueryTokenTransactionsFilter, ReceiverTokenOutput, ServiceError,
+        TokenMetadata, TokenOutputWithPrevOut, TokenTransaction, TransferObserver,
+        TransferTokenOutput,
     },
     signer::Signer,
-    utils::paging::{PagingFilter, PagingResult, pager},
+    utils::{
+        paging::{PagingFilter, PagingResult, pager},
+        time::web_time_to_prost_timestamp,
+    },
 };
 
 const MAX_TOKEN_TX_INPUTS: usize = 500;
@@ -119,7 +123,9 @@ impl TokenService {
 
         // Fetch metadata for owned tokens
         let token_identifiers = outputs_map.keys().cloned().collect();
-        let metadata = self.query_tokens_metadata_inner(token_identifiers).await?;
+        let metadata = self
+            .query_tokens_metadata_inner(token_identifiers, vec![])
+            .await?;
 
         if metadata.len() != outputs_map.keys().len() {
             return Err(ServiceError::Generic(
@@ -154,12 +160,14 @@ impl TokenService {
     pub async fn get_tokens_metadata(
         &self,
         token_identifiers: &[&str],
+        issuer_public_keys: &[PublicKey],
     ) -> Result<Vec<TokenMetadata>, ServiceError> {
         let cached_outputs = { self.tokens_outputs.lock().await.clone() };
 
         // Separate token identifiers into cached and uncached
         let mut cached_metadata = Vec::new();
         let mut uncached_identifiers = Vec::new();
+        let mut uncached_issuer_public_keys = Vec::new();
 
         for token_id in token_identifiers {
             if let Some(outputs) = cached_outputs.get(*token_id) {
@@ -169,10 +177,26 @@ impl TokenService {
             }
         }
 
+        if !issuer_public_keys.is_empty() {
+            let cached_outputs_by_issuer_public_key = cached_outputs
+                .values()
+                .map(|output| (output.metadata.issuer_public_key, output))
+                .collect::<HashMap<_, _>>();
+            for pubkey in issuer_public_keys {
+                if let Some(outputs) = cached_outputs_by_issuer_public_key.get(pubkey) {
+                    cached_metadata.push(outputs.metadata.clone());
+                } else {
+                    uncached_issuer_public_keys.push(*pubkey);
+                }
+            }
+        }
+
         // Query metadata for uncached tokens
         let mut queried_metadata = Vec::new();
-        if !uncached_identifiers.is_empty() {
-            queried_metadata = self.query_tokens_metadata(&uncached_identifiers).await?;
+        if !uncached_identifiers.is_empty() || !uncached_issuer_public_keys.is_empty() {
+            queried_metadata = self
+                .query_tokens_metadata(&uncached_identifiers, &uncached_issuer_public_keys)
+                .await?;
         }
 
         // Combine cached and queried metadata
@@ -185,6 +209,7 @@ impl TokenService {
     async fn query_tokens_metadata(
         &self,
         token_identifiers: &[&str],
+        issuer_public_keys: &[PublicKey],
     ) -> Result<Vec<TokenMetadata>, ServiceError> {
         let token_identifiers = token_identifiers
             .iter()
@@ -193,7 +218,13 @@ impl TokenService {
                     .map_err(|_| ServiceError::Generic("Invalid token id".to_string()))
             })
             .collect::<Result<Vec<Vec<u8>>, _>>()?;
-        let metadata = self.query_tokens_metadata_inner(token_identifiers).await?;
+        let issuer_public_keys = issuer_public_keys
+            .iter()
+            .map(|k| k.serialize().to_vec())
+            .collect::<Vec<_>>();
+        let metadata = self
+            .query_tokens_metadata_inner(token_identifiers, issuer_public_keys)
+            .await?;
         let metadata = metadata
             .into_iter()
             .map(|m| (m, self.network).try_into())
@@ -204,6 +235,7 @@ impl TokenService {
     async fn query_tokens_metadata_inner(
         &self,
         token_identifiers: Vec<Vec<u8>>,
+        issuer_public_keys: Vec<Vec<u8>>,
     ) -> Result<Vec<rpc::spark_token::TokenMetadata>, ServiceError> {
         let metadata = self
             .operator_pool
@@ -211,7 +243,7 @@ impl TokenService {
             .client
             .query_token_metadata(QueryTokenMetadataRequest {
                 token_identifiers,
-                ..Default::default()
+                issuer_public_keys,
             })
             .await?
             .token_metadata;
@@ -300,9 +332,130 @@ impl TokenService {
         Ok(transactions)
     }
 
+    pub async fn get_issuer_token_metadata(&self) -> Result<TokenMetadata, ServiceError> {
+        let identity_public_key = self.signer.get_identity_public_key()?;
+        let tokens_metadata = self
+            .get_tokens_metadata(&[], &[identity_public_key])
+            .await?;
+        Ok(tokens_metadata
+            .first()
+            .ok_or(ServiceError::Generic("No issuer token found".to_string()))?
+            .clone())
+    }
+
+    pub async fn create_issuer_token(
+        &self,
+        name: &str,
+        ticker: &str,
+        decimals: u32,
+        is_freezable: bool,
+        max_supply: u128,
+    ) -> Result<TokenTransaction, ServiceError> {
+        validate_create_token_params(name, ticker, decimals)?;
+
+        let partial_tx =
+            self.build_create_token_transaction(name, ticker, decimals, is_freezable, max_supply)?;
+        let final_tx = self.start_transaction(partial_tx).await?;
+
+        self.commit_transaction(final_tx.clone()).await?;
+
+        (final_tx, self.network).try_into()
+    }
+
+    pub async fn mint_issuer_token(&self, amount: u128) -> Result<TokenTransaction, ServiceError> {
+        let issuer_token_metadata = self.get_issuer_token_metadata().await?;
+
+        let partial_tx =
+            self.build_mint_token_transaction(&issuer_token_metadata.identifier, amount)?;
+        let final_tx = self.start_transaction(partial_tx).await?;
+
+        self.commit_transaction(final_tx.clone()).await?;
+
+        (final_tx, self.network).try_into()
+    }
+
+    pub async fn burn_issuer_token(
+        &self,
+        amount: u128,
+        preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+    ) -> Result<TokenTransaction, ServiceError> {
+        let burn_public_key =
+            PublicKey::from_slice(&[2; 33]).map_err(|_| ServiceError::InvalidPublicKey)?;
+        let burn_spark_address = SparkAddress::new(burn_public_key, self.network, None);
+        let receiver_outputs = vec![TransferTokenOutput {
+            token_id: self.get_issuer_token_metadata().await?.identifier,
+            amount,
+            receiver_address: burn_spark_address,
+            spark_invoice: None,
+        }];
+        self.transfer_tokens(receiver_outputs, preferred_outputs)
+            .await
+    }
+
+    pub async fn freeze_issuer_token(
+        &self,
+        spark_address: &SparkAddress,
+        should_unfreeze: bool,
+    ) -> Result<FreezeTokensResponse, ServiceError> {
+        let owner_public_key = spark_address.identity_public_key.serialize().to_vec();
+        let token_metadata = self.get_issuer_token_metadata().await?;
+        if !token_metadata.is_freezable {
+            return Err(ServiceError::Generic(
+                "Issuer token is not freezable".to_string(),
+            ));
+        }
+
+        let token_identifier =
+            bech32m_decode_token_id(&token_metadata.identifier, Some(self.network))?;
+        let issuer_provided_timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| {
+                ServiceError::Generic("issuer_provided_timestamp is before UNIX_EPOCH".to_string())
+            })?
+            .as_millis() as u64;
+
+        let mut requests = Vec::new();
+        for operator in self.operator_pool.get_all_operators() {
+            let freeze_tokens_payload = rpc::spark_token::FreezeTokensPayload {
+                version: 1,
+                owner_public_key: owner_public_key.clone(),
+                token_identifier: Some(token_identifier.clone()),
+                should_unfreeze,
+                issuer_provided_timestamp,
+                operator_identity_public_key: operator.identity_public_key.serialize().to_vec(),
+                ..Default::default()
+            };
+            let payload_hash = hash_freeze_tokens_payload(&freeze_tokens_payload)?;
+            let issuer_signature = self
+                .signer
+                .sign_hash_schnorr_with_identity_key(&payload_hash)?
+                .serialize()
+                .to_vec();
+
+            let request = operator
+                .client
+                .freeze_tokens(rpc::spark_token::FreezeTokensRequest {
+                    freeze_tokens_payload: Some(freeze_tokens_payload),
+                    issuer_signature,
+                });
+            requests.push(request);
+        }
+        let responses = futures::future::try_join_all(requests).await?;
+        info!("Freeze tokens responses: {:?}", responses);
+
+        responses
+            .first()
+            .ok_or(ServiceError::Generic(
+                "No response from freeze tokens request".to_string(),
+            ))?
+            .clone()
+            .try_into()
+    }
+
     pub async fn transfer_tokens(
         &self,
         receiver_outputs: Vec<TransferTokenOutput>,
+        preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
     ) -> Result<TokenTransaction, ServiceError> {
         // Validate parameters
         if receiver_outputs.is_empty() {
@@ -327,7 +480,11 @@ impl TokenService {
             )));
         };
 
-        let inputs = Self::select_token_outputs(&this_token_outputs.outputs, total_amount)?;
+        let inputs = Self::select_token_outputs(
+            &this_token_outputs.outputs,
+            total_amount,
+            preferred_outputs,
+        )?;
 
         if inputs.len() > MAX_TOKEN_TX_INPUTS {
             // We may consider doing an intermediate self transfer here to aggregate the inputs
@@ -338,7 +495,7 @@ impl TokenService {
         }
 
         let partial_tx = self
-            .build_partial_tx(inputs.clone(), receiver_outputs.clone())
+            .build_transfer_token_transaction(inputs.clone(), receiver_outputs.clone())
             .await?;
         let final_tx = self.start_transaction(partial_tx).await?;
         let txid = hex::encode(final_tx.compute_hash(false)?);
@@ -390,12 +547,29 @@ impl TokenService {
     }
 
     /// Selects tokens to match a given amount.
-    ///
     /// Prioritizes smaller outputs.
+    ///
+    /// # Arguments
+    ///
+    /// * `available_outputs` - Available token outputs to select from
+    /// * `amount` - Total amount to select
+    /// * `preferred_outputs` - Optional list of preferred outputs to use for the transfer
     fn select_token_outputs(
-        outputs: &[TokenOutputWithPrevOut],
+        available_outputs: &[TokenOutputWithPrevOut],
         amount: u128,
+        preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
     ) -> Result<Vec<TokenOutputWithPrevOut>, ServiceError> {
+        let mut outputs = if let Some(preferred_outputs) = preferred_outputs {
+            // Filter available outputs to only include preferred ones
+            available_outputs
+                .iter()
+                .filter(|o| preferred_outputs.iter().any(|p| o.output.id == p.output.id))
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            available_outputs.to_vec()
+        };
+
         if outputs.iter().map(|o| o.output.token_amount).sum::<u128>() < amount {
             return Err(ServiceError::Generic(
                 "Not enough outputs to transfer tokens".to_string(),
@@ -409,13 +583,12 @@ impl TokenService {
 
         // TODO: support other selection strategies (JS supports either smallest or largest first)
         // Sort outputs by amount, smallest first
-        let mut sorted_outputs = outputs.to_vec();
-        sorted_outputs.sort_by_key(|o| o.output.token_amount);
+        outputs.sort_by_key(|o| o.output.token_amount);
 
         // Select outputs to match the amount
         let mut selected_outputs = Vec::new();
         let mut remaining_amount = amount;
-        for output in sorted_outputs {
+        for output in outputs {
             if remaining_amount == 0 {
                 break;
             }
@@ -433,7 +606,55 @@ impl TokenService {
         Ok(selected_outputs)
     }
 
-    async fn build_partial_tx(
+    fn build_create_token_transaction(
+        &self,
+        name: &str,
+        ticker: &str,
+        decimals: u32,
+        is_freezable: bool,
+        max_supply: u128,
+    ) -> Result<rpc::spark_token::TokenTransaction, ServiceError> {
+        let token_inputs = rpc::spark_token::token_transaction::TokenInputs::CreateInput(
+            rpc::spark_token::TokenCreateInput {
+                issuer_public_key: self.signer.get_identity_public_key()?.serialize().to_vec(),
+                token_name: name.to_string(),
+                token_ticker: ticker.to_string(),
+                decimals,
+                is_freezable,
+                max_supply: max_supply.to_be_bytes().to_vec(),
+                ..Default::default()
+            },
+        );
+
+        self.build_token_transaction(token_inputs, vec![], vec![])
+    }
+
+    fn build_mint_token_transaction(
+        &self,
+        token_id: &str,
+        amount: u128,
+    ) -> Result<rpc::spark_token::TokenTransaction, ServiceError> {
+        let identity_public_key = self.signer.get_identity_public_key()?.serialize().to_vec();
+        let token_identifier = bech32m_decode_token_id(token_id, Some(self.network))
+            .map_err(|_| ServiceError::Generic("Invalid token id".to_string()))?;
+
+        let token_inputs = rpc::spark_token::token_transaction::TokenInputs::MintInput(
+            rpc::spark_token::TokenMintInput {
+                issuer_public_key: identity_public_key.clone(),
+                token_identifier: Some(token_identifier.clone()),
+            },
+        );
+        let token_outputs = vec![rpc::spark_token::TokenOutput {
+            owner_public_key: identity_public_key,
+            token_identifier: Some(token_identifier),
+            token_amount: amount.to_be_bytes().to_vec(),
+            ..Default::default()
+        }];
+
+        self.build_token_transaction(token_inputs, token_outputs, vec![])
+    }
+
+    async fn build_transfer_token_transaction(
         &self,
         mut inputs: Vec<TokenOutputWithPrevOut>,
         mut receiver_outputs: Vec<TransferTokenOutput>,
@@ -500,30 +721,31 @@ impl TokenService {
             .collect::<Vec<_>>();
 
         // Build transaction
-        let transaction = rpc::spark_token::TokenTransaction {
+        self.build_token_transaction(inputs, token_outputs, invoice_attachments)
+    }
+
+    fn build_token_transaction(
+        &self,
+        token_inputs: rpc::spark_token::token_transaction::TokenInputs,
+        token_outputs: Vec<rpc::spark_token::TokenOutput>,
+        invoice_attachments: Vec<rpc::spark_token::InvoiceAttachment>,
+    ) -> Result<rpc::spark_token::TokenTransaction, ServiceError> {
+        Ok(rpc::spark_token::TokenTransaction {
             version: 2,
             token_outputs,
             spark_operator_identity_public_keys: self.get_operator_identity_public_keys()?,
             expiry_time: None,
             network: self.network.to_proto_network().into(),
-            client_created_timestamp: Some({
-                let now_ms = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .map_err(|_| {
-                        ServiceError::Generic(
-                            "client_created_timestamp is before UNIX_EPOCH".to_string(),
-                        )
-                    })?;
-                Timestamp {
-                    seconds: now_ms.as_secs() as i64,
-                    nanos: now_ms.subsec_nanos() as i32,
-                }
-            }),
-            token_inputs: Some(inputs),
+            client_created_timestamp: Some(
+                web_time_to_prost_timestamp(&SystemTime::now()).map_err(|_| {
+                    ServiceError::Generic(
+                        "client_created_timestamp is before UNIX_EPOCH".to_string(),
+                    )
+                })?,
+            ),
+            token_inputs: Some(token_inputs),
             invoice_attachments,
-        };
-
-        Ok(transaction)
+        })
     }
 
     fn get_operator_identity_public_keys(&self) -> Result<Vec<Vec<u8>>, ServiceError> {
@@ -542,23 +764,35 @@ impl TokenService {
 
         // Sign inputs
         let mut owner_signatures: Vec<SignatureWithIndex> = Vec::new();
-        let Some(rpc::spark_token::token_transaction::TokenInputs::TransferInput(input)) =
-            partial_tx.token_inputs.as_ref()
-        else {
-            return Err(ServiceError::Generic(
-                "Token inputs are required".to_string(),
-            ));
-        };
         let signature = self
             .signer
             .sign_hash_schnorr_with_identity_key(&partial_tx_hash)?
             .serialize()
             .to_vec();
-        for i in 0..input.outputs_to_spend.len() {
-            owner_signatures.push(SignatureWithIndex {
-                signature: signature.clone(),
-                input_index: i as u32,
-            });
+        match partial_tx.token_inputs.as_ref() {
+            Some(
+                rpc::spark_token::token_transaction::TokenInputs::CreateInput(_)
+                | rpc::spark_token::token_transaction::TokenInputs::MintInput(_),
+            ) => {
+                owner_signatures.push(SignatureWithIndex {
+                    signature,
+                    input_index: 0,
+                });
+            }
+            Some(rpc::spark_token::token_transaction::TokenInputs::TransferInput(input)) => {
+                // One signature per input
+                for i in 0..input.outputs_to_spend.len() {
+                    owner_signatures.push(SignatureWithIndex {
+                        signature: signature.clone(),
+                        input_index: i as u32,
+                    });
+                }
+            }
+            _ => {
+                return Err(ServiceError::Generic(
+                    "Token inputs are required".to_string(),
+                ));
+            }
         }
 
         let start_response = self
@@ -640,13 +874,39 @@ impl TokenService {
 
         match (partial_tx_inputs, final_tx_inputs) {
             (
+                rpc::spark_token::token_transaction::TokenInputs::CreateInput(partial_tx_input),
+                rpc::spark_token::token_transaction::TokenInputs::CreateInput(final_tx_input),
+            ) => {
+                if partial_tx_input.issuer_public_key != final_tx_input.issuer_public_key {
+                    return Err(ServiceError::Generic(
+                        "Issuer public key mismatch in create input".to_string(),
+                    ));
+                }
+            }
+            (
+                rpc::spark_token::token_transaction::TokenInputs::MintInput(partial_tx_input),
+                rpc::spark_token::token_transaction::TokenInputs::MintInput(final_tx_input),
+            ) => {
+                if partial_tx_input.issuer_public_key != final_tx_input.issuer_public_key {
+                    return Err(ServiceError::Generic(
+                        "Issuer public key mismatch in mint input".to_string(),
+                    ));
+                }
+
+                if partial_tx_input.token_identifier != final_tx_input.token_identifier {
+                    return Err(ServiceError::Generic(
+                        "Token identifier mismatch in mint input".to_string(),
+                    ));
+                }
+            }
+            (
                 rpc::spark_token::token_transaction::TokenInputs::TransferInput(partial_tx_input),
                 rpc::spark_token::token_transaction::TokenInputs::TransferInput(final_tx_input),
             ) => {
                 if partial_tx_input.outputs_to_spend.len() != final_tx_input.outputs_to_spend.len()
                 {
                     return Err(ServiceError::Generic(
-                        "Outputs to spend mismatch between partial and final tx".to_string(),
+                        "Outputs to spend mismatch in transfer input".to_string(),
                     ));
                 }
 
@@ -659,8 +919,7 @@ impl TokenService {
                         != final_output.prev_token_transaction_hash
                     {
                         return Err(ServiceError::Generic(
-                            "Prev token transaction hash mismatch between partial and final tx"
-                                .to_string(),
+                            "Prev token transaction hash mismatch in transfer input".to_string(),
                         ));
                     }
 
@@ -668,8 +927,7 @@ impl TokenService {
                         != final_output.prev_token_transaction_vout
                     {
                         return Err(ServiceError::Generic(
-                            "Prev token transaction vout mismatch between partial and final tx"
-                                .to_string(),
+                            "Prev token transaction vout mismatch in transfer input".to_string(),
                         ));
                     }
                 }
@@ -787,19 +1045,6 @@ impl TokenService {
             let operator_identity_public_key_bytes =
                 operator.identity_public_key.serialize().to_vec();
 
-            let mut signatures = Vec::new();
-
-            let rpc::spark_token::token_transaction::TokenInputs::TransferInput(input) =
-                tx.token_inputs.as_ref().ok_or(ServiceError::Generic(
-                    "Token inputs are required".to_string(),
-                ))?
-            else {
-                return Err(ServiceError::Generic(
-                    "Token transfer inputs are required".to_string(),
-                ));
-            };
-            let inputs_len = input.outputs_to_spend.len();
-
             let tx_hash_hash = sha256::Hash::hash(tx_hash).to_byte_array().to_vec();
             let operator_pubkey_hash = sha256::Hash::hash(&operator_identity_public_key_bytes)
                 .to_byte_array()
@@ -808,17 +1053,37 @@ impl TokenService {
                 .to_byte_array()
                 .to_vec();
 
+            let mut signatures = Vec::new();
             let signature = self
                 .signer
                 .sign_hash_schnorr_with_identity_key(&final_hash)?
                 .serialize()
                 .to_vec();
 
-            for i in 0..inputs_len {
-                signatures.push(rpc::spark_token::SignatureWithIndex {
-                    signature: signature.clone(),
-                    input_index: i as u32,
-                });
+            match tx.token_inputs.as_ref() {
+                Some(
+                    rpc::spark_token::token_transaction::TokenInputs::CreateInput(_)
+                    | rpc::spark_token::token_transaction::TokenInputs::MintInput(_),
+                ) => {
+                    signatures.push(rpc::spark_token::SignatureWithIndex {
+                        signature,
+                        input_index: 0,
+                    });
+                }
+                Some(rpc::spark_token::token_transaction::TokenInputs::TransferInput(input)) => {
+                    // One signature per input
+                    for i in 0..input.outputs_to_spend.len() {
+                        signatures.push(rpc::spark_token::SignatureWithIndex {
+                            signature: signature.clone(),
+                            input_index: i as u32,
+                        });
+                    }
+                }
+                _ => {
+                    return Err(ServiceError::Generic(
+                        "Token inputs are required".to_string(),
+                    ));
+                }
             }
 
             per_operator_signatures.push(rpc::spark_token::InputTtxoSignaturesPerOperator {
@@ -873,8 +1138,6 @@ pub(crate) fn bech32m_decode_token_id(
     Ok(data)
 }
 
-const TOKEN_TRANSACTION_TRANSFER_TYPE: u32 = 3;
-
 pub trait HashableTokenTransaction {
     fn compute_hash(&self, partial: bool) -> Result<Vec<u8>, ServiceError>;
 }
@@ -904,35 +1167,114 @@ fn compute_common_hash_components(
         .to_vec();
     all_hashes.push(version_hash);
 
-    // We only support transfer transactions
-    let tx_type_hash = sha256::Hash::hash(&TOKEN_TRANSACTION_TRANSFER_TYPE.to_be_bytes())
-        .to_byte_array()
-        .to_vec();
-    all_hashes.push(tx_type_hash);
+    match transaction.token_inputs.as_ref() {
+        Some(rpc::spark_token::token_transaction::TokenInputs::CreateInput(input)) => {
+            // Hash transaction type
+            let tx_type = (rpc::spark_token::TokenTransactionType::Create as u32).to_be_bytes();
+            let tx_type_hash = sha256::Hash::hash(&tx_type).to_byte_array().to_vec();
+            all_hashes.push(tx_type_hash);
 
-    let rpc::spark_token::token_transaction::TokenInputs::TransferInput(input) = transaction
-        .token_inputs
-        .as_ref()
-        .ok_or(ServiceError::Generic(
-            "Token inputs are required".to_string(),
-        ))?
-    else {
-        return Err(ServiceError::Generic(
-            "Token transfer inputs are required".to_string(),
-        ));
-    };
-    let inputs = &input.outputs_to_spend;
-    let inputs_len = inputs.len() as u32;
-    let inputs_len_hash = sha256::Hash::hash(&inputs_len.to_be_bytes())
-        .to_byte_array()
-        .to_vec();
-    all_hashes.push(inputs_len_hash);
+            // Hash issuer public key
+            let issuer_pubkey_hash = sha256::Hash::hash(&input.issuer_public_key)
+                .to_byte_array()
+                .to_vec();
+            all_hashes.push(issuer_pubkey_hash);
 
-    for input in inputs {
-        let mut engine = sha256::Hash::engine();
-        engine.input(&input.prev_token_transaction_hash);
-        engine.input(&input.prev_token_transaction_vout.to_be_bytes());
-        all_hashes.push(sha256::Hash::from_engine(engine).to_byte_array().to_vec());
+            // Hash token name
+            let token_name_hash = sha256::Hash::hash(input.token_name.as_bytes())
+                .to_byte_array()
+                .to_vec();
+            all_hashes.push(token_name_hash);
+
+            // Hash token ticker
+            let token_ticker_hash = sha256::Hash::hash(input.token_ticker.as_bytes())
+                .to_byte_array()
+                .to_vec();
+            all_hashes.push(token_ticker_hash);
+
+            // Hash decimals
+            let decimals_hash = sha256::Hash::hash(&input.decimals.to_be_bytes())
+                .to_byte_array()
+                .to_vec();
+            all_hashes.push(decimals_hash);
+
+            // Hash max supply
+            let max_supply_hash = sha256::Hash::hash(&input.max_supply)
+                .to_byte_array()
+                .to_vec();
+            all_hashes.push(max_supply_hash);
+
+            // Hash is freezable
+            let is_freezable_byte = if input.is_freezable { 1u8 } else { 0u8 };
+            let is_freezable_hash = sha256::Hash::hash(&[is_freezable_byte])
+                .to_byte_array()
+                .to_vec();
+            all_hashes.push(is_freezable_hash);
+
+            // Hash creation entity public key (only for final hash)
+            let creation_entity_public_key = if !partial
+                && let Some(creation_entity_public_key) = input.creation_entity_public_key.as_ref()
+            {
+                creation_entity_public_key
+            } else {
+                &Vec::new()
+            };
+
+            let creation_entity_public_key_hash = sha256::Hash::hash(creation_entity_public_key)
+                .to_byte_array()
+                .to_vec();
+            all_hashes.push(creation_entity_public_key_hash);
+        }
+        Some(rpc::spark_token::token_transaction::TokenInputs::MintInput(input)) => {
+            // Hash transaction type
+            let tx_type = (rpc::spark_token::TokenTransactionType::Mint as u32).to_be_bytes();
+            let tx_type_hash = sha256::Hash::hash(&tx_type).to_byte_array().to_vec();
+            all_hashes.push(tx_type_hash);
+
+            // Hash issuer public key
+            let issuer_pubkey_hash = sha256::Hash::hash(&input.issuer_public_key)
+                .to_byte_array()
+                .to_vec();
+            all_hashes.push(issuer_pubkey_hash);
+
+            // Hash token identifier
+            let zeroed_token_identifier = vec![0; 32];
+            let token_identifier = input
+                .token_identifier
+                .as_ref()
+                .unwrap_or(&zeroed_token_identifier);
+            let token_identifier_hash = sha256::Hash::hash(token_identifier)
+                .to_byte_array()
+                .to_vec();
+            all_hashes.push(token_identifier_hash);
+        }
+        Some(rpc::spark_token::token_transaction::TokenInputs::TransferInput(input)) => {
+            // Hash transaction type
+            let tx_type = (rpc::spark_token::TokenTransactionType::Transfer as u32).to_be_bytes();
+            let tx_type_hash = sha256::Hash::hash(&tx_type).to_byte_array().to_vec();
+            all_hashes.push(tx_type_hash);
+
+            // Hash outputs to spend length
+            let inputs = &input.outputs_to_spend;
+            let inputs_len = inputs.len() as u32;
+            let inputs_len_hash = sha256::Hash::hash(&inputs_len.to_be_bytes())
+                .to_byte_array()
+                .to_vec();
+            all_hashes.push(inputs_len_hash);
+
+            // Hash outputs to spend
+            for input in inputs {
+                let mut engine = sha256::Hash::engine();
+                engine.input(&input.prev_token_transaction_hash);
+                engine.input(&input.prev_token_transaction_vout.to_be_bytes());
+                all_hashes.push(sha256::Hash::from_engine(engine).to_byte_array().to_vec());
+            }
+        }
+        _ => {
+            return Err(ServiceError::Generic(
+                "Token inputs are required".to_string(),
+            ));
+        }
     }
 
     let outputs_len = transaction.token_outputs.len() as u32;
@@ -1124,6 +1466,87 @@ fn compute_hash_v2(
     Ok(final_hash)
 }
 
+fn validate_create_token_params(
+    name: &str,
+    ticker: &str,
+    decimals: u32,
+) -> Result<(), ServiceError> {
+    if !unicode_normalization::is_nfc(name) {
+        return Err(ServiceError::Generic(
+            "Token name must be NFC-normalised UTF-8".to_string(),
+        ));
+    }
+    if !unicode_normalization::is_nfc(ticker) {
+        return Err(ServiceError::Generic(
+            "Token ticker must be NFC-normalised UTF-8".to_string(),
+        ));
+    }
+    if name.len() < 3 || name.len() > 20 {
+        return Err(ServiceError::Generic(
+            "Token name must be between 3 and 20 bytes".to_string(),
+        ));
+    }
+    if ticker.len() < 3 || ticker.len() > 6 {
+        return Err(ServiceError::Generic(
+            "Token ticker must be between 3 and 6 bytes".to_string(),
+        ));
+    }
+    if decimals > 255 {
+        return Err(ServiceError::Generic(
+            "Decimals must be an between 0 and 255".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn hash_freeze_tokens_payload(
+    payload: &rpc::spark_token::FreezeTokensPayload,
+) -> Result<Vec<u8>, ServiceError> {
+    let mut all_hashes = Vec::new();
+    let empty_bytes = vec![];
+
+    let version_hash = sha256::Hash::hash(&payload.version.to_be_bytes())
+        .to_byte_array()
+        .to_vec();
+    all_hashes.push(version_hash);
+
+    let owner_public_key_hash = sha256::Hash::hash(&payload.owner_public_key)
+        .to_byte_array()
+        .to_vec();
+    all_hashes.push(owner_public_key_hash);
+
+    let token_identifier = payload.token_identifier.as_ref().unwrap_or(&empty_bytes);
+    let token_identifier_hash = sha256::Hash::hash(token_identifier)
+        .to_byte_array()
+        .to_vec();
+    all_hashes.push(token_identifier_hash);
+
+    let should_unfreeze = if payload.should_unfreeze { 1u8 } else { 0u8 };
+    let should_unfreeze_hash = sha256::Hash::hash(&[should_unfreeze])
+        .to_byte_array()
+        .to_vec();
+    all_hashes.push(should_unfreeze_hash);
+
+    let issuer_provided_timestamp_hash =
+        sha256::Hash::hash(&payload.issuer_provided_timestamp.to_le_bytes())
+            .to_byte_array()
+            .to_vec();
+    all_hashes.push(issuer_provided_timestamp_hash);
+
+    let operator_identity_public_key_hash =
+        sha256::Hash::hash(&payload.operator_identity_public_key)
+            .to_byte_array()
+            .to_vec();
+    all_hashes.push(operator_identity_public_key_hash);
+
+    let final_hash = sha256::Hash::hash(&all_hashes.concat())
+        .to_byte_array()
+        .to_vec();
+
+    Ok(final_hash)
+}
+
 #[cfg(test)]
 mod tests {
     use macros::test_all;
@@ -1136,7 +1559,7 @@ mod tests {
                 TokenOutput, TokenOutputToSpend, TokenTransferInput, token_transaction::TokenInputs,
             },
         },
-        services::tokens::HashableTokenTransaction,
+        services::tokens::{HashableTokenTransaction, validate_create_token_params},
     };
 
     #[cfg(feature = "browser-tests")]
@@ -1291,5 +1714,117 @@ mod tests {
             hex::decode("cd2ad2481353728dc82c7d80565fb5e66e67a5d98deb338740786a052177ffbe")
                 .unwrap()
         );
+    }
+
+    #[test_all]
+    fn test_validate_create_token_params_valid() {
+        // Valid parameters
+        assert!(validate_create_token_params("Bitcoin", "BTC", 8).is_ok());
+        assert!(validate_create_token_params("ABC", "ABC", 0).is_ok());
+        assert!(validate_create_token_params("12345678901234567890", "ABCDEF", 255).is_ok());
+    }
+
+    #[test_all]
+    fn test_validate_create_token_params_name_too_short() {
+        let result = validate_create_token_params("AB", "BTC", 8);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Token name must be between 3 and 20 bytes")
+        );
+    }
+
+    #[test_all]
+    fn test_validate_create_token_params_name_too_long() {
+        let result = validate_create_token_params("123456789012345678901", "BTC", 8);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Token name must be between 3 and 20 bytes")
+        );
+    }
+
+    #[test_all]
+    fn test_validate_create_token_params_ticker_too_short() {
+        let result = validate_create_token_params("Bitcoin", "AB", 8);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Token ticker must be between 3 and 6 bytes")
+        );
+    }
+
+    #[test_all]
+    fn test_validate_create_token_params_ticker_too_long() {
+        let result = validate_create_token_params("Bitcoin", "ABCDEFG", 8);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Token ticker must be between 3 and 6 bytes")
+        );
+    }
+
+    #[test_all]
+    fn test_validate_create_token_params_decimals_too_large() {
+        let result = validate_create_token_params("Bitcoin", "BTC", 256);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Decimals must be an between 0 and 255")
+        );
+    }
+
+    #[test_all]
+    fn test_validate_create_token_params_name_not_nfc() {
+        // Using a string that is not NFC normalized (combining characters)
+        // "é" as e + combining acute accent (U+0065 U+0301) instead of composed form (U+00E9)
+        let non_nfc_name = "Caf\u{0065}\u{0301}";
+        let result = validate_create_token_params(non_nfc_name, "BTC", 8);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Token name must be NFC-normalised UTF-8")
+        );
+    }
+
+    #[test_all]
+    fn test_validate_create_token_params_ticker_not_nfc() {
+        // Using a string that is not NFC normalized
+        let non_nfc_ticker = "BT\u{0065}\u{0301}";
+        let result = validate_create_token_params("Bitcoin", non_nfc_ticker, 8);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Token ticker must be NFC-normalised UTF-8")
+        );
+    }
+
+    #[test_all]
+    fn test_validate_create_token_params_edge_cases() {
+        // Minimum valid values
+        assert!(validate_create_token_params("ABC", "ABC", 0).is_ok());
+
+        // Maximum valid values
+        assert!(validate_create_token_params("12345678901234567890", "ABCDEF", 255).is_ok());
+
+        // Exactly at boundaries
+        assert!(validate_create_token_params("123", "ABC", 0).is_ok());
+        assert!(validate_create_token_params("12345678901234567890", "ABC", 0).is_ok());
+        assert!(validate_create_token_params("Bitcoin", "ABC", 0).is_ok());
+        assert!(validate_create_token_params("Bitcoin", "ABCDEF", 0).is_ok());
     }
 }

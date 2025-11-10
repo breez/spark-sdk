@@ -4,6 +4,7 @@ mod chain;
 mod common;
 mod error;
 mod events;
+mod issuer;
 mod lnurl;
 mod logger;
 mod models;
@@ -20,6 +21,7 @@ pub use chain::{
 pub use common::{fiat::*, models::*, rest::*, sync_storage};
 pub use error::{DepositClaimError, SdkError};
 pub use events::{EventEmitter, EventListener, SdkEvent};
+pub use issuer::*;
 pub use models::*;
 pub use persist::{
     PaymentMetadata, Storage, StorageError, UpdateDepositPayload, path::default_storage_path,

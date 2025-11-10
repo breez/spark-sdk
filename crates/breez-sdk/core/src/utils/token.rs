@@ -1,12 +1,12 @@
-use std::time::UNIX_EPOCH;
+use std::{sync::Arc, time::UNIX_EPOCH};
 
 use breez_sdk_common::input::{InputType, PaymentRequestSource, parse_spark_address};
 use spark_wallet::SparkWallet;
 use tracing::warn;
 
 use crate::{
-    Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError, TokenMetadata,
-    persist::ObjectCacheRepository,
+    Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError, Storage,
+    TokenMetadata, persist::ObjectCacheRepository,
 };
 
 /// Returns the metadata for the given token identifiers.
@@ -34,7 +34,7 @@ pub async fn get_tokens_metadata_cached_or_query(
     }
 
     let queried_results = spark_wallet
-        .get_tokens_metadata(uncached_identifiers.as_slice())
+        .get_tokens_metadata(uncached_identifiers.as_slice(), &[])
         .await?
         .into_iter()
         .map(Into::into)
@@ -79,6 +79,7 @@ pub async fn token_transaction_to_payments(
             .cloned()
             .ok_or(SdkError::Generic("Token metadata not found".to_string()))?;
 
+    let is_mint_transaction = matches!(&transaction.inputs, spark_wallet::TokenInputs::Mint(..));
     let is_transfer_transaction =
         matches!(&transaction.inputs, spark_wallet::TokenInputs::Transfer(..));
 
@@ -109,8 +110,12 @@ pub async fn token_transaction_to_payments(
         let payment_type = if tx_inputs_are_ours && output.owner_public_key != identity_public_key {
             // If inputs are ours and outputs are not ours, add an outgoing payment
             PaymentType::Send
-        } else if !tx_inputs_are_ours && output.owner_public_key == identity_public_key {
-            // If inputs are not ours and outputs are ours, add an incoming payment
+        } else if (!tx_inputs_are_ours || is_mint_transaction)
+            && output.owner_public_key == identity_public_key
+        {
+            // Add an incoming payment if:
+            // - If inputs are not ours and outputs are ours
+            // - If it's a mint transaction and outputs are ours
             PaymentType::Receive
         } else {
             continue;
@@ -153,4 +158,25 @@ pub async fn token_transaction_to_payments(
     }
 
     Ok(payments)
+}
+
+pub(crate) async fn map_and_persist_token_transaction(
+    spark_wallet: &SparkWallet,
+    storage: &Arc<dyn Storage>,
+    token_transaction: &spark_wallet::TokenTransaction,
+) -> Result<Payment, SdkError> {
+    let object_repository = ObjectCacheRepository::new(storage.clone());
+    let payments =
+        token_transaction_to_payments(spark_wallet, &object_repository, token_transaction, true)
+            .await?;
+    for payment in &payments {
+        storage.insert_payment(payment.clone()).await?;
+    }
+
+    payments
+        .first()
+        .ok_or(SdkError::Generic(
+            "No payment created from token invoice".to_string(),
+        ))
+        .cloned()
 }
