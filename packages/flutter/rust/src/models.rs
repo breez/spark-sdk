@@ -1,4 +1,5 @@
 pub use breez_sdk_spark::*;
+pub use breez_sdk_spark::sync_storage::*;
 use flutter_rust_bridge::frb;
 use std::collections::HashMap;
 
