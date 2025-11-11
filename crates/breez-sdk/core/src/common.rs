@@ -15,7 +15,6 @@ pub enum BitcoinNetwork {
 
 #[derive(Clone, Debug, Error)]
 #[macros::derive_from(breez_sdk_common::input::ParseError)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ParseError {
     #[error("empty input")]
     EmptyInput,
@@ -33,7 +32,6 @@ pub enum ParseError {
 
 #[derive(Clone, Debug, Error)]
 #[macros::derive_from(breez_sdk_common::input::Bip21Error)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Bip21Error {
     #[error("bip21 contains invalid address")]
     InvalidAddress,
@@ -53,7 +51,6 @@ pub enum Bip21Error {
 
 #[derive(Clone, Debug, Error)]
 #[macros::derive_from(breez_sdk_common::lnurl::error::LnurlError)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum LnurlError {
     #[error("lnurl missing k1 parameter")]
     MissingK1,
