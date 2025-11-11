@@ -347,9 +347,9 @@ pub struct Config {
     /// Url to use for the real-time sync server. Defaults to the Breez real-time sync server.
     pub real_time_sync_server_url: Option<String>,
 
-    /// Wether the Spark private mode is enabled by default.
+    /// Whether the Spark private mode is enabled by default.
     ///
-    /// If set to true, the Spark private will be enabled on the first initialization of the SDK.
+    /// If set to true, the Spark private mode will be enabled on the first initialization of the SDK.
     /// If set to false, no changes will be made to the Spark private mode.
     pub private_enabled_default: bool,
 }
