@@ -1,5 +1,6 @@
 mod async_trait;
 mod derive_from;
+mod derive_into;
 mod testing;
 mod wasm_bindgen;
 
@@ -33,6 +34,11 @@ pub fn extern_wasm_bindgen(args: TokenStream, input: TokenStream) -> TokenStream
 #[proc_macro_attribute]
 pub fn derive_from(attr: TokenStream, item: TokenStream) -> TokenStream {
     derive_from::derive_from(attr, item)
+}
+
+#[proc_macro_attribute]
+pub fn derive_into(attr: TokenStream, item: TokenStream) -> TokenStream {
+    derive_into::derive_into(attr, item)
 }
 
 /// Attribute macro to async test only non-WASM targets
