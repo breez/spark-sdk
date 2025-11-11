@@ -9,9 +9,9 @@ const exampleGetUserSettings = async (sdk: BreezSdk) => {
 
 const exampleUpdateUserSettings = async (sdk: BreezSdk) => {
   // ANCHOR: update-user-settings
-  const enableSparkPrivateMode = true
+  const sparkPrivateModeEnabled = true
   await sdk.updateUserSettings({
-    enableSparkPrivateMode
+    sparkPrivateModeEnabled
   })
   // ANCHOR_END: update-user-settings
 }

@@ -21,9 +21,9 @@ func GetUserSettings(sdk *breez_sdk_spark.BreezSdk) error {
 
 func UpdateUserSettings(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: update-user-settings
-	enableSparkPrivateMode := true
+	sparkPrivateModeEnabled := true
 	err := sdk.UpdateUserSettings(breez_sdk_spark.UpdateUserSettingsRequest{
-		EnableSparkPrivateMode: &enableSparkPrivateMode,
+		SparkPrivateModeEnabled: &sparkPrivateModeEnabled,
 	})
 
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {

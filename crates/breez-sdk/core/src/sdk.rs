@@ -552,7 +552,7 @@ impl BreezSdk {
 
         // Enable spark private mode
         self.update_user_settings(UpdateUserSettingsRequest {
-            enable_spark_private_mode: Some(true),
+            spark_private_mode_enabled: Some(true),
         })
         .await?;
         ObjectCacheRepository::new(self.storage.clone())
@@ -1486,9 +1486,9 @@ impl BreezSdk {
         &self,
         request: UpdateUserSettingsRequest,
     ) -> Result<(), SdkError> {
-        if let Some(enable_spark_private_mode) = request.enable_spark_private_mode {
+        if let Some(spark_private_mode_enabled) = request.spark_private_mode_enabled {
             self.spark_wallet
-                .update_wallet_settings(enable_spark_private_mode)
+                .update_wallet_settings(spark_private_mode_enabled)
                 .await?;
         }
         Ok(())

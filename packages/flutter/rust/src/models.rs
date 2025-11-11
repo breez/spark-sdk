@@ -869,5 +869,5 @@ pub struct _UserSettings {
 
 #[frb(mirror(UpdateUserSettingsRequest))]
 pub struct _UpdateUserSettingsRequest {
-    pub enable_spark_private_mode: Option<bool>,
+    pub spark_private_mode_enabled: Option<bool>,
 }

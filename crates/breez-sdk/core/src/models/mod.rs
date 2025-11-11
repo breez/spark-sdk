@@ -997,5 +997,5 @@ pub struct UserSettings {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct UpdateUserSettingsRequest {
-    pub enable_spark_private_mode: Option<bool>,
+    pub spark_private_mode_enabled: Option<bool>,
 }

@@ -50,13 +50,13 @@ async fn test_01_spark_private_mode_user_setting(
     default_private
         .sdk
         .update_user_settings(UpdateUserSettingsRequest {
-            enable_spark_private_mode: Some(false),
+            spark_private_mode_enabled: Some(false),
         })
         .await?;
     default_non_private
         .sdk
         .update_user_settings(UpdateUserSettingsRequest {
-            enable_spark_private_mode: Some(true),
+            spark_private_mode_enabled: Some(true),
         })
         .await?;
 

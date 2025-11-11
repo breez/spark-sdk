@@ -9,10 +9,10 @@ Future<void> getUserSettings(BreezSdk sdk) async {
 
 Future<void> updateUserSettings(BreezSdk sdk) async {
   // ANCHOR: update-user-settings
-  final bool enableSparkPrivateMode = true;
+  final bool sparkPrivateModeEnabled = true;
 
   await sdk.updateUserSettings(
       request: UpdateUserSettingsRequest(
-          enableSparkPrivateMode: enableSparkPrivateMode));
+          sparkPrivateModeEnabled: sparkPrivateModeEnabled));
   // ANCHOR_END: update-user-settings
 }

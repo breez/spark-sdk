@@ -17,8 +17,8 @@ class UserSettings {
     suspend fun updateUserSettings(sdk: BreezSdk) {
         // ANCHOR: update-user-settings
         try {
-            val enableSparkPrivateMode = true
-            sdk.updateUserSettings(UpdateUserSettingsRequest(enableSparkPrivateMode))
+            val sparkPrivateModeEnabled = true
+            sdk.updateUserSettings(UpdateUserSettingsRequest(sparkPrivateModeEnabled))
         } catch (e: Exception) {
             // handle error
         }

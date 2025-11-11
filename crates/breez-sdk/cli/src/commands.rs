@@ -199,7 +199,7 @@ pub enum Command {
     SetUserSettings {
         /// Whether spark private mode is enabled.
         #[clap(short = 'p', long = "private")]
-        enable_spark_private_mode: Option<bool>,
+        spark_private_mode_enabled: Option<bool>,
     },
 }
 
@@ -538,10 +538,10 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::SetUserSettings {
-            enable_spark_private_mode,
+            spark_private_mode_enabled,
         } => {
             sdk.update_user_settings(UpdateUserSettingsRequest {
-                enable_spark_private_mode,
+                spark_private_mode_enabled,
             })
             .await?;
             Ok(true)

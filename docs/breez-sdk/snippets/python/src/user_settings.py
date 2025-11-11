@@ -19,10 +19,10 @@ async def get_user_settings(sdk: BreezSdk):
 async def update_user_settings(sdk: BreezSdk):
     # ANCHOR: update-user-settings
     try:
-        enable_spark_private_mode = True
+        spark_private_mode_enabled = True
         await sdk.update_user_settings(
             request=UpdateUserSettingsRequest(
-                enable_spark_private_mode=enable_spark_private_mode
+                spark_private_mode_enabled=spark_private_mode_enabled
             )
         )
     except Exception as error:
