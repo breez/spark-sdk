@@ -9,13 +9,9 @@ use serde_json::Value;
 use std::{collections::HashMap, fmt::Display, str::FromStr};
 
 use crate::{
-    common::{
-        BitcoinAddressDetails, BitcoinNetwork, Bolt11InvoiceDetails, ExternalInputParser,
-        LnurlPayRequestDetails, LnurlWithdrawRequestDetails, SparkInvoiceDetails, SuccessAction,
-        SuccessActionProcessed,
-    },
-    error::DepositClaimError,
-    fiat::{FiatCurrency, Rate},
+    BitcoinAddressDetails, BitcoinNetwork, Bolt11InvoiceDetails, ExternalInputParser, FiatCurrency,
+    LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate, SparkInvoiceDetails, SuccessAction,
+    SuccessActionProcessed, error::DepositClaimError,
 };
 
 /// A list of external input parsers that are used by default.

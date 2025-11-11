@@ -37,9 +37,10 @@ use web_time::Instant;
 use x509_parser::parse_x509_certificate;
 
 use crate::{
-    BitcoinChainService, CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse,
-    ClaimDepositRequest, ClaimDepositResponse, DepositInfo, Fee, GetPaymentRequest,
-    GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse, LightningAddressInfo,
+    BitcoinAddressDetails, BitcoinChainService, Bolt11InvoiceDetails, CheckLightningAddressRequest,
+    CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest, ClaimDepositResponse,
+    DepositInfo, ExternalInputParser, Fee, GetPaymentRequest, GetPaymentResponse,
+    GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, LightningAddressInfo,
     ListFiatCurrenciesResponse, ListFiatRatesResponse, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse,
     LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, Network, PaymentDetails, PaymentStatus,
@@ -47,7 +48,6 @@ use crate::{
     RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest,
     SignMessageResponse, UpdateUserSettingsRequest, UserSettings, WaitForPaymentIdentifier,
     WaitForPaymentRequest, WaitForPaymentResponse,
-    common::{BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, InputType},
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     lnurl::LnurlServerClient,
