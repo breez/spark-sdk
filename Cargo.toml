@@ -16,6 +16,7 @@ members = [
   "crates/breez-sdk/breez-itest",
   "crates/breez-sdk/wasm",
   "crates/macros",
+  "crates/macro_test",
   "crates/spark",
   "crates/spark-itest",
   "crates/spark-wallet",
