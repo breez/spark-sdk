@@ -1,18 +1,18 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    DeriveInput, GenericArgument, Ident, PathArguments, Result, Type,
+    DeriveInput, GenericArgument, Ident, Path, PathArguments, Result, Type,
     parse::{Parse, ParseStream},
     parse_macro_input,
 };
 
 struct FromAttr {
-    source_type: Ident,
+    source_type: Path,
 }
 
 impl Parse for FromAttr {
     fn parse(input: ParseStream) -> Result<Self> {
-        let source_type: Ident = input.parse()?;
+        let source_type: Path = input.parse()?;
         Ok(FromAttr { source_type })
     }
 }
@@ -88,7 +88,7 @@ fn is_option_vec_type(ty: &Type) -> bool {
 }
 
 fn generate_struct_impl(
-    source_type: Ident,
+    source_type: Path,
     target_name: &Ident,
     data_struct: &syn::DataStruct,
 ) -> proc_macro2::TokenStream {
