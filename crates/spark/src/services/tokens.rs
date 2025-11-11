@@ -373,7 +373,7 @@ impl TokenService {
 
         self.commit_transaction(final_tx.clone()).await?;
 
-        // Removed used outputs from local cache and add any change outputs
+        // Remove used outputs from local cache and add any change outputs
         this_token_outputs.outputs.retain(|o| !inputs.contains(o));
         let identity_public_key_bytes = self.signer.get_identity_public_key()?.serialize();
         final_tx
@@ -385,7 +385,7 @@ impl TokenService {
             .try_for_each(|(vout, o)| -> Result<(), ServiceError> {
                 this_token_outputs.outputs.push(TokenOutputWithPrevOut {
                     output: (o, self.network).try_into()?,
-                    prev_tx_hash: txid.to_string(),
+                    prev_tx_hash: hex::encode(txid.as_raw_hash()),
                     prev_tx_vout: vout as u32,
                 });
                 Ok(())
