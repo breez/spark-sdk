@@ -362,8 +362,8 @@ impl BreezSdk {
                     error!("Failed to sync wallet: {e:?}");
                 }
             }
-            WalletEvent::PendingTransferFound(transfer) => {
-                info!("Pending transfer found");
+            WalletEvent::FoundClaimableTransfer(transfer) => {
+                info!("Found a claimable transfer");
                 if let Ok(payment) = transfer.try_into() {
                     self.event_emitter
                         .emit(&SdkEvent::PaymentPending { payment })
@@ -857,7 +857,7 @@ impl BreezSdk {
             )
             .await?;
 
-        emit_final_payment_status(&self.event_emitter, payment.clone()).await;
+        emit_payment_status(&self.event_emitter, payment.clone()).await;
         Ok(LnurlPayResponse {
             payment,
             success_action,
@@ -1552,7 +1552,7 @@ impl BreezSdk {
             // we trigger the sync here anyway to get the fresh payment.
             //self.storage.insert_payment(response.payment.clone()).await?;
             if !suppress_payment_event {
-                emit_final_payment_status(&self.event_emitter, response.payment.clone()).await;
+                emit_payment_status(&self.event_emitter, response.payment.clone()).await;
             }
             if let Err(e) = self.sync_trigger.send(SyncRequest::payments_only(None)) {
                 error!("Failed to send sync trigger: {e:?}");
@@ -1782,9 +1782,9 @@ impl BreezSdk {
                     p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
                       if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone()) {
                         info!("Polling payment status = {} {:?}", payment.status, p.status);
-                       if payment.status != PaymentStatus::Pending {
+                        if payment.status != PaymentStatus::Pending {
                           info!("Polling payment completed status = {}", payment.status);
-                          emit_final_payment_status(&event_emitter, payment.clone()).await;
+                          emit_payment_status(&event_emitter, payment.clone()).await;
                           if let Err(e) = sync_trigger.send(SyncRequest::payments_only(None)) {
                             error!("Failed to send sync trigger: {e:?}");
                           }
@@ -1976,7 +1976,7 @@ fn process_success_action(
     Ok(Some(SuccessActionProcessed::Aes { result }))
 }
 
-async fn emit_final_payment_status(event_emitter: &EventEmitter, payment: Payment) {
+async fn emit_payment_status(event_emitter: &EventEmitter, payment: Payment) {
     match payment.status {
         PaymentStatus::Completed => {
             event_emitter
@@ -1988,7 +1988,11 @@ async fn emit_final_payment_status(event_emitter: &EventEmitter, payment: Paymen
                 .emit(&SdkEvent::PaymentFailed { payment })
                 .await;
         }
-        PaymentStatus::Pending => (),
+        PaymentStatus::Pending => {
+            event_emitter
+                .emit(&SdkEvent::PaymentPending { payment })
+                .await;
+        }
     }
 }
 
