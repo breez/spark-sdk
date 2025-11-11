@@ -1,11 +1,10 @@
 package example
 
 import (
-	"github.com/breez/breez-sdk-spark-go/breez_sdk_common"
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func ListFiatCurrencies(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_common.FiatCurrency, error) {
+func ListFiatCurrencies(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.FiatCurrency, error) {
 	// ANCHOR: list-fiat-currencies
 	response, err := sdk.ListFiatCurrencies()
 
@@ -16,10 +15,10 @@ func ListFiatCurrencies(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_common.Fiat
 	return &response.Currencies, nil
 }
 
-func ListFiatRates(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_common.Rate, error) {
+func ListFiatRates(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.Rate, error) {
 	// ANCHOR: list-fiat-rates
 	response, err := sdk.ListFiatRates()
-	
+
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return nil, err
 	}

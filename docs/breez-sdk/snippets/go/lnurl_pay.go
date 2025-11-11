@@ -3,7 +3,6 @@ package example
 import (
 	"log"
 
-	"github.com/breez/breez-sdk-spark-go/breez_sdk_common"
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
@@ -21,7 +20,7 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 	}
 
 	switch inputType := input.(type) {
-	case breez_sdk_common.InputTypeLightningAddress:
+	case breez_sdk_spark.InputTypeLightningAddress:
 		amountSats := uint64(5_000)
 		optionalComment := "<comment>"
 		optionalValidateSuccessActionUrl := true
