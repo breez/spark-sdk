@@ -20,6 +20,7 @@
   - [Sending payments using LNURL-Pay/Lightning address](guide/lnurl_pay.md)
   - [Receiving payments using LNURL-Pay/Lightning address](guide/receive_lnurl_pay.md)
   - [Receiving payments using LNURL-Withdraw](guide/lnurl_withdraw.md)
+- [User settings](guide/user_settings.md)
 - [Signing and verifying messages](guide/messages.md)
 - [Supporting fiat currencies](guide/fiat_currencies.md)
 - [End-user fees](guide/end-user_fees.md)

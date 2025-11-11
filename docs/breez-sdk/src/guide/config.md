@@ -13,79 +13,7 @@ By default, automatic claiming is enabled with a maximum feerate of 1 sat/vB.
 
 More information can be found in the [Handling unclaimed deposits](./unclaimed_deposits.md) page.
 
-<custom-tabs category="lang">
-<div slot="title">Rust</div>
-<section>
-
-```rust,ignore
-{{#include ../../snippets/rust/src/config.rs:max-deposit-claim-fee}}
-```
-
-</section>
-
-<div slot="title">Swift</div>
-<section>
-
-```swift,ignore
-{{#include ../../snippets/swift/BreezSdkSnippets/Sources/Config.swift:max-deposit-claim-fee}}
-```
-
-</section>
-
-<div slot="title">Kotlin</div>
-<section>
-
-```kotlin,ignore
-{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/Config.kt:max-deposit-claim-fee}}
-```
-
-</section>
-
-<div slot="title">Javascript</div>
-<section>
-
-```typescript
-{{#include ../../snippets/wasm/config.ts:max-deposit-claim-fee}}
-```
-
-</section>
-
-<div slot="title">React Native</div>
-<section>
-
-```typescript
-{{#include ../../snippets/react-native/config.ts:max-deposit-claim-fee}}
-```
-
-</section>
-
-<div slot="title">Flutter</div>
-<section>
-
-```dart,ignore
-{{#include ../../snippets/flutter/lib/config.dart:max-deposit-claim-fee}}
-```
-
-</section>
-
-<div slot="title">Python</div>
-<section>
-
-```python,ignore
-{{#include ../../snippets/python/src/config.py:max-deposit-claim-fee}}
-```
-
-</section>
-
-<div slot="title">Go</div>
-<section>
-
-```go,ignore
-{{#include ../../snippets/go/config.go:max-deposit-claim-fee}}
-```
-
-</section>
-</custom-tabs>
+{{#tabs config:max-deposit-claim-fee}}
 
 ## Synchronization interval
 
@@ -110,3 +38,14 @@ The SDK's parsing module can be extended by providing external parsers that are 
 ## Real-time sync server URL
 
 The SDK synchronizes user data across different SDK instances using a [real-time synchronization server](https://github.com/breez/data-sync). By default, a Breez instance will be used, but you may configure a different instance by providing its URL, or disable it entirely by providing no URL.
+
+## Private mode enabled by default
+
+Configures whether the Spark private mode should be enabled by default. By default, it is enabled. When enabled, the Spark private mode will be enabled on the first initialization of the SDK. If disabled, no changes will be made to the Spark private mode.
+
+<div class="warning">
+<h4>Developer note</h4>
+
+This configuration option is only relevant when the SDK is initialized for the first time. To update the user settings after that, or to explicitly disable the Spark private mode, see the [User settings](./user_settings.md) page.
+
+</div>

@@ -31,7 +31,7 @@ use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::{
     select,
-    sync::{Mutex, mpsc, oneshot, watch},
+    sync::{Mutex, OnceCell, mpsc, oneshot, watch},
     time::timeout,
 };
 use tokio_with_wasm::alias as tokio;
@@ -47,7 +47,8 @@ use crate::{
     LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, Network, PaymentDetails, PaymentStatus,
     PrepareLnurlPayRequest, PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
     RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest,
-    SignMessageResponse, WaitForPaymentIdentifier, WaitForPaymentRequest, WaitForPaymentResponse,
+    SignMessageResponse, UpdateUserSettingsRequest, UserSettings, WaitForPaymentIdentifier,
+    WaitForPaymentRequest, WaitForPaymentResponse,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     lnurl::LnurlServerClient,
@@ -132,6 +133,7 @@ pub struct BreezSdk {
     sync_trigger: tokio::sync::broadcast::Sender<SyncRequest>,
     initial_synced_watcher: watch::Receiver<bool>,
     external_input_parsers: Vec<ExternalInputParser>,
+    spark_private_mode_initialized: Arc<OnceCell<()>>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -173,6 +175,7 @@ pub fn default_config(network: Network) -> Config {
         external_input_parsers: None,
         use_default_external_input_parsers: true,
         real_time_sync_server_url: Some(BREEZ_SYNC_SERVICE_URL.to_string()),
+        private_enabled_default: true,
     }
 }
 
@@ -214,6 +217,7 @@ impl BreezSdk {
             sync_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
             external_input_parsers,
+            spark_private_mode_initialized: Arc::new(OnceCell::new()),
         };
 
         sdk.start(initial_synced_sender);
@@ -223,11 +227,22 @@ impl BreezSdk {
     /// Starts the SDK's background tasks
     ///
     /// This method initiates the following backround tasks:
-    /// 1. `periodic_sync`: the wallet with the Spark network    
-    /// 2. `monitor_deposits`: monitors for new deposits
+    /// 1. `spawn_spark_private_mode_initialization`: initializes the spark private mode on startup
+    /// 2. `periodic_sync`: syncs the wallet with the Spark network    
+    /// 3. `try_recover_lightning_address`: recovers the lightning address on startup
     fn start(&self, initial_synced_sender: watch::Sender<bool>) {
+        self.spawn_spark_private_mode_initialization();
         self.periodic_sync(initial_synced_sender);
         self.try_recover_lightning_address();
+    }
+
+    fn spawn_spark_private_mode_initialization(&self) {
+        let sdk = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = sdk.ensure_spark_private_mode_initialized().await {
+                error!("Failed to initialize spark private mode: {e:?}");
+            }
+        });
     }
 
     /// Refreshes the user's lightning address on the server on startup.
@@ -381,6 +396,7 @@ impl BreezSdk {
     }
 
     async fn check_and_claim_static_deposits(&self) -> Result<(), SdkError> {
+        self.ensure_spark_private_mode_initialized().await?;
         let to_claim = DepositChainSyncer::new(
             self.chain_service.clone(),
             self.storage.clone(),
@@ -505,6 +521,46 @@ impl BreezSdk {
         );
         Ok(transfer)
     }
+
+    async fn ensure_spark_private_mode_initialized(&self) -> Result<(), SdkError> {
+        self.spark_private_mode_initialized
+            .get_or_try_init(|| async {
+                // Check if already initialized in storage
+                let object_repository = ObjectCacheRepository::new(self.storage.clone());
+                let is_initialized = object_repository
+                    .fetch_spark_private_mode_initialized()
+                    .await?;
+
+                if !is_initialized {
+                    // Initialize if not already done
+                    self.initialize_spark_private_mode().await?;
+                }
+                Ok::<_, SdkError>(())
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn initialize_spark_private_mode(&self) -> Result<(), SdkError> {
+        if !self.config.private_enabled_default {
+            ObjectCacheRepository::new(self.storage.clone())
+                .save_spark_private_mode_initialized()
+                .await?;
+            info!("Spark private mode initialized: no changes needed");
+            return Ok(());
+        }
+
+        // Enable spark private mode
+        self.update_user_settings(UpdateUserSettingsRequest {
+            spark_private_mode_enabled: Some(true),
+        })
+        .await?;
+        ObjectCacheRepository::new(self.storage.clone())
+            .save_spark_private_mode_initialized()
+            .await?;
+        info!("Spark private mode initialized: enabled");
+        Ok(())
+    }
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
@@ -586,6 +642,7 @@ impl BreezSdk {
         &self,
         request: ReceivePaymentRequest,
     ) -> Result<ReceivePaymentResponse, SdkError> {
+        self.ensure_spark_private_mode_initialized().await?;
         match request.payment_method {
             ReceivePaymentMethod::SparkAddress => Ok(ReceivePaymentResponse {
                 fee: 0,
@@ -733,6 +790,7 @@ impl BreezSdk {
     }
 
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
+        self.ensure_spark_private_mode_initialized().await?;
         let mut payment = Box::pin(self.send_payment_internal(
             SendPaymentRequest {
                 prepare_response: PrepareSendPaymentResponse {
@@ -824,6 +882,7 @@ impl BreezSdk {
         &self,
         request: LnurlWithdrawRequest,
     ) -> Result<LnurlWithdrawResponse, SdkError> {
+        self.ensure_spark_private_mode_initialized().await?;
         let LnurlWithdrawRequest {
             amount_sats,
             withdraw_request,
@@ -1064,6 +1123,7 @@ impl BreezSdk {
         &self,
         request: SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
+        self.ensure_spark_private_mode_initialized().await?;
         Box::pin(self.send_payment_internal(request, false)).await
     }
 
@@ -1119,6 +1179,7 @@ impl BreezSdk {
         &self,
         request: ClaimDepositRequest,
     ) -> Result<ClaimDepositResponse, SdkError> {
+        self.ensure_spark_private_mode_initialized().await?;
         let detailed_utxo =
             CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
                 .fetch_detailed_utxo(&request.txid, request.vout)
@@ -1400,6 +1461,37 @@ impl BreezSdk {
             .await
             .is_ok();
         Ok(CheckMessageResponse { is_valid })
+    }
+
+    /// Returns the user settings for the wallet.
+    ///
+    /// Some settings are fetched from the Spark network so network requests are performed.
+    pub async fn get_user_settings(&self) -> Result<UserSettings, SdkError> {
+        // Ensure spark private mode is initialized to avoid race conditions with the initialization task.
+        self.ensure_spark_private_mode_initialized().await?;
+
+        let spark_user_settings = self.spark_wallet.query_wallet_settings().await?;
+
+        // We may in the future have user settings that are stored locally and synced using real-time sync.
+
+        Ok(UserSettings {
+            spark_private_mode_enabled: spark_user_settings.private_enabled,
+        })
+    }
+
+    /// Updates the user settings for the wallet.
+    ///
+    /// Some settings are updated on the Spark network so network requests may be performed.
+    pub async fn update_user_settings(
+        &self,
+        request: UpdateUserSettingsRequest,
+    ) -> Result<(), SdkError> {
+        if let Some(spark_private_mode_enabled) = request.spark_private_mode_enabled {
+            self.spark_wallet
+                .update_wallet_settings(spark_private_mode_enabled)
+                .await?;
+        }
+        Ok(())
     }
 }
 

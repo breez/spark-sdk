@@ -346,6 +346,12 @@ pub struct Config {
 
     /// Url to use for the real-time sync server. Defaults to the Breez real-time sync server.
     pub real_time_sync_server_url: Option<String>,
+
+    /// Whether the Spark private mode is enabled by default.
+    ///
+    /// If set to true, the Spark private mode will be enabled on the first initialization of the SDK.
+    /// If set to false, no changes will be made to the Spark private mode.
+    pub private_enabled_default: bool,
 }
 
 impl Config {
@@ -981,4 +987,15 @@ pub struct CheckMessageRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CheckMessageResponse {
     pub is_valid: bool,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize)]
+pub struct UserSettings {
+    pub spark_private_mode_enabled: bool,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UpdateUserSettingsRequest {
+    pub spark_private_mode_enabled: Option<bool>,
 }

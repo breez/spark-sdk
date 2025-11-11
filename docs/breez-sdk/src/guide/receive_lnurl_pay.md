@@ -22,15 +22,17 @@ In case you choose to point your domain to a hosted LNURL server, you will need 
 **Option 1: Using your domain without any subdomain**
 
 This points yourdomain.com directly to the LNURL server. Some DNS providers do not support this method. If yours doesn't support CNAME or ALIAS records for the root domain, you will need to configure your domain at the registrar level to use an external DNS provider (like Google Cloud DNS).
-* **Host/Name**: @
-* **Type**: CNAME (or ALIAS if available)
-* **Value/Target**: breez.tips
+
+- **Host/Name**: @
+- **Type**: CNAME (or ALIAS if available)
+- **Value/Target**: breez.tips
 
 **Option 2: Using a subdomain**
 This points a subdomain like pay.yourdomain.com to the LNURL server.
-* **Host/Name**: pay (or your chosen prefix like payment, tip, donate)
-* **Type**: CNAME
-* **Value/Target**: breez.tips
+
+- **Host/Name**: pay (or your chosen prefix like payment, tip, donate)
+- **Type**: CNAME
+- **Value/Target**: breez.tips
 
 Send us your domain name (e.g., yourdomain.com or pay.yourdomain.com).
 
@@ -42,71 +44,7 @@ We will verify and add it to our list of allowed domains.
 
 Configure your domain in the SDK by passing the `lnurl_domain` parameter in the SDK configuration:
 
-<custom-tabs category="lang">
-<div slot="title">Rust</div>
-<section>
-
-```rust,ignore
-{{#include ../../snippets/rust/src/lightning_address.rs:config-lightning-address}}
-```
-</section>
-
-<div slot="title">Swift</div>
-<section>
-
-```swift,ignore
-{{#include ../../snippets/swift/BreezSdkSnippets/Sources/LightningAddress.swift:config-lightning-address}}
-```
-</section>
-
-<div slot="title">Kotlin</div>
-<section>
-
-```kotlin,ignore
-{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/LightningAddress.kt:config-lightning-address}}
-```
-</section>
-
-<div slot="title">Javascript</div>
-<section>
-
-```typescript,ignore
-{{#include ../../snippets/wasm/lightning_address.ts:config-lightning-address}}
-```
-</section>
-
-<div slot="title">React Native</div>
-<section>
-
-```typescript,ignore
-{{#include ../../snippets/react-native/lightning_address.ts:config-lightning-address}}
-```
-</section>
-
-<div slot="title">Flutter</div>
-<section>
-
-```dart,ignore
-{{#include ../../snippets/flutter/lib/lightning_address.dart:config-lightning-address}}
-```
-</section>
-
-<div slot="title">Python</div>
-<section>
-
-```python,ignore
-{{#include ../../snippets/python/src/lightning_address.py:config-lightning-address}}
-```
-</section>
-
-<div slot="title">Go</div>
-<section>
-
-```go,ignore
-{{#include ../../snippets/go/lightning_address.go:config-lightning-address}}
-```
-</section>
-</custom-tabs>
+{{#tabs lightning_address:config-lightning-address}}
 
 <h2 id="managing-lightning-address">
     <a class="header" href="#managing-lightning-address">Managing Lightning addresses</a>
@@ -121,71 +59,7 @@ The SDK provides several functions to manage Lightning addresses:
 
 Before registering a Lightning address, you can check if the username is available. In your UI you can use a quick check mark to show the address is available before registering.
 
-<custom-tabs category="lang">
-<div slot="title">Rust</div>
-<section>
-
-```rust,ignore
-{{#include ../../snippets/rust/src/lightning_address.rs:check-lightning-address}}
-```
-</section>
-
-<div slot="title">Swift</div>
-<section>
-
-```swift,ignore
-{{#include ../../snippets/swift/BreezSdkSnippets/Sources/LightningAddress.swift:check-lightning-address}}
-```
-</section>
-
-<div slot="title">Kotlin</div>
-<section>
-
-```kotlin,ignore
-{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/LightningAddress.kt:check-lightning-address}}
-```
-</section>
-
-<div slot="title">Javascript</div>
-<section>
-
-```typescript,ignore
-{{#include ../../snippets/wasm/lightning_address.ts:check-lightning-address}}
-```
-</section>
-
-<div slot="title">React Native</div>
-<section>
-
-```typescript,ignore
-{{#include ../../snippets/react-native/lightning_address.ts:check-lightning-address}}
-```
-</section>
-
-<div slot="title">Flutter</div>
-<section>
-
-```dart,ignore
-{{#include ../../snippets/flutter/lib/lightning_address.dart:check-lightning-address}}
-```
-</section>
-
-<div slot="title">Python</div>
-<section>
-
-```python,ignore
-{{#include ../../snippets/python/src/lightning_address.py:check-lightning-address}}
-```
-</section>
-
-<div slot="title">Go</div>
-<section>
-
-```go,ignore
-{{#include ../../snippets/go/lightning_address.go:check-lightning-address}}
-```
-</section>
-</custom-tabs>
+{{#tabs lightning_address:check-lightning-address}}
 
 <h3 id="registering-address">
     <a class="header" href="#registering-address">Registering a Lightning address</a>
@@ -193,71 +67,7 @@ Before registering a Lightning address, you can check if the username is availab
 
 Once you've confirmed a username is available, you can register it by passing a username and a description. The username will be used in `username@domain.com`. The description will be included in lnurl metadata and as the invoice description, so this is what the sender will see. The description is optional, and will default to `Pay to username@domain.com`.
 
-<custom-tabs category="lang">
-<div slot="title">Rust</div>
-<section>
-
-```rust,ignore
-{{#include ../../snippets/rust/src/lightning_address.rs:register-lightning-address}}
-```
-</section>
-
-<div slot="title">Swift</div>
-<section>
-
-```swift,ignore
-{{#include ../../snippets/swift/BreezSdkSnippets/Sources/LightningAddress.swift:register-lightning-address}}
-```
-</section>
-
-<div slot="title">Kotlin</div>
-<section>
-
-```kotlin,ignore
-{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/LightningAddress.kt:register-lightning-address}}
-```
-</section>
-
-<div slot="title">Javascript</div>
-<section>
-
-```typescript,ignore
-{{#include ../../snippets/wasm/lightning_address.ts:register-lightning-address}}
-```
-</section>
-
-<div slot="title">React Native</div>
-<section>
-
-```typescript,ignore
-{{#include ../../snippets/react-native/lightning_address.ts:register-lightning-address}}
-```
-</section>
-
-<div slot="title">Flutter</div>
-<section>
-
-```dart,ignore
-{{#include ../../snippets/flutter/lib/lightning_address.dart:register-lightning-address}}
-```
-</section>
-
-<div slot="title">Python</div>
-<section>
-
-```python,ignore
-{{#include ../../snippets/python/src/lightning_address.py:register-lightning-address}}
-```
-</section>
-
-<div slot="title">Go</div>
-<section>
-
-```go,ignore
-{{#include ../../snippets/go/lightning_address.go:register-lightning-address}}
-```
-</section>
-</custom-tabs>
+{{#tabs lightning_address:register-lightning-address}}
 
 <h3 id="retrieving-address">
     <a class="header" href="#retrieving-address">Retrieving Lightning address information</a>
@@ -265,71 +75,7 @@ Once you've confirmed a username is available, you can register it by passing a 
 
 You can retrieve information about the currently registered Lightning address.
 
-<custom-tabs category="lang">
-<div slot="title">Rust</div>
-<section>
-
-```rust,ignore
-{{#include ../../snippets/rust/src/lightning_address.rs:get-lightning-address}}
-```
-</section>
-
-<div slot="title">Swift</div>
-<section>
-
-```swift,ignore
-{{#include ../../snippets/swift/BreezSdkSnippets/Sources/LightningAddress.swift:get-lightning-address}}
-```
-</section>
-
-<div slot="title">Kotlin</div>
-<section>
-
-```kotlin,ignore
-{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/LightningAddress.kt:get-lightning-address}}
-```
-</section>
-
-<div slot="title">Javascript</div>
-<section>
-
-```typescript,ignore
-{{#include ../../snippets/wasm/lightning_address.ts:get-lightning-address}}
-```
-</section>
-
-<div slot="title">React Native</div>
-<section>
-
-```typescript,ignore
-{{#include ../../snippets/react-native/lightning_address.ts:get-lightning-address}}
-```
-</section>
-
-<div slot="title">Flutter</div>
-<section>
-
-```dart,ignore
-{{#include ../../snippets/flutter/lib/lightning_address.dart:get-lightning-address}}
-```
-</section>
-
-<div slot="title">Python</div>
-<section>
-
-```python,ignore
-{{#include ../../snippets/python/src/lightning_address.py:get-lightning-address}}
-```
-</section>
-
-<div slot="title">Go</div>
-<section>
-
-```go,ignore
-{{#include ../../snippets/go/lightning_address.go:get-lightning-address}}
-```
-</section>
-</custom-tabs>
+{{#tabs lightning_address:get-lightning-address}}
 
 <h3 id="deleting-address">
     <a class="header" href="#deleting-address">Deleting a Lightning address</a>
@@ -337,69 +83,4 @@ You can retrieve information about the currently registered Lightning address.
 
 When a user no longer wants to use the Lightning address, you can delete it.
 
-<custom-tabs category="lang">
-<div slot="title">Rust</div>
-<section>
-
-```rust,ignore
-{{#include ../../snippets/rust/src/lightning_address.rs:delete-lightning-address}}
-```
-</section>
-
-<div slot="title">Swift</div>
-<section>
-
-```swift,ignore
-{{#include ../../snippets/swift/BreezSdkSnippets/Sources/LightningAddress.swift:delete-lightning-address}}
-```
-</section>
-
-<div slot="title">Kotlin</div>
-<section>
-
-```kotlin,ignore
-{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/LightningAddress.kt:delete-lightning-address}}
-```
-</section>
-
-<div slot="title">Javascript</div>
-<section>
-
-```typescript,ignore
-{{#include ../../snippets/wasm/lightning_address.ts:delete-lightning-address}}
-```
-</section>
-
-<div slot="title">React Native</div>
-<section>
-
-```typescript,ignore
-{{#include ../../snippets/react-native/lightning_address.ts:delete-lightning-address}}
-```
-</section>
-
-<div slot="title">Flutter</div>
-<section>
-
-```dart,ignore
-{{#include ../../snippets/flutter/lib/lightning_address.dart:delete-lightning-address}}
-```
-</section>
-
-<div slot="title">Python</div>
-<section>
-
-```python,ignore
-{{#include ../../snippets/python/src/lightning_address.py:delete-lightning-address}}
-```
-</section>
-
-<div slot="title">Go</div>
-<section>
-
-```go,ignore
-{{#include ../../snippets/go/lightning_address.go:delete-lightning-address}}
-```
-</section>
-</custom-tabs>
-
+{{#tabs lightning_address:delete-lightning-address}}

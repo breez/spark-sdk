@@ -534,6 +534,7 @@ pub struct Config {
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
     pub use_default_external_input_parsers: bool,
     pub real_time_sync_server_url: Option<String>,
+    pub private_enabled_default: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Fee)]
@@ -990,4 +991,14 @@ pub struct IncomingChange {
 pub struct OutgoingChange {
     pub change: RecordChange,
     pub parent: Option<Record>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UserSettings)]
+pub struct UserSettings {
+    pub spark_private_mode_enabled: bool,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateUserSettingsRequest)]
+pub struct UpdateUserSettingsRequest {
+    pub spark_private_mode_enabled: Option<bool>,
 }

@@ -15,7 +15,10 @@ use spark::{
     events::{SparkEvent, subscribe_server_events},
     operator::{
         OperatorPool,
-        rpc::{ConnectionManager, DefaultConnectionManager, spark::QuerySparkInvoicesRequest},
+        rpc::{
+            ConnectionManager, DefaultConnectionManager,
+            spark::{QuerySparkInvoicesRequest, UpdateWalletSettingRequest},
+        },
     },
     services::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
@@ -40,7 +43,7 @@ use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     FulfillSparkInvoiceResult, ListTokenTransactionsRequest, QuerySparkInvoiceResult, TokenBalance,
-    WalletEvent, WalletLeaves,
+    WalletEvent, WalletLeaves, WalletSettings,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
@@ -998,6 +1001,34 @@ impl SparkWallet {
             .into_iter()
             .map(TryInto::try_into)
             .collect()
+    }
+
+    pub async fn query_wallet_settings(&self) -> Result<WalletSettings, SparkWalletError> {
+        Ok(self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .query_wallet_setting()
+            .await?
+            .wallet_setting
+            .ok_or(SparkWalletError::Generic(
+                "Response doesn't include wallet settings".to_string(),
+            ))?
+            .into())
+    }
+
+    pub async fn update_wallet_settings(
+        &self,
+        private_enabled: bool,
+    ) -> Result<(), SparkWalletError> {
+        self.operator_pool
+            .get_coordinator()
+            .client
+            .update_wallet_setting(UpdateWalletSettingRequest {
+                private_enabled: Some(private_enabled),
+            })
+            .await?;
+        Ok(())
     }
 }
 

@@ -244,4 +244,14 @@ impl BreezSdk {
     ) -> WasmResult<CheckMessageResponse> {
         Ok(self.sdk.check_message(request.into()).await?.into())
     }
+
+    #[wasm_bindgen(js_name = "getUserSettings")]
+    pub async fn get_user_settings(&self) -> WasmResult<UserSettings> {
+        Ok(self.sdk.get_user_settings().await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "updateUserSettings")]
+    pub async fn update_user_settings(&self, request: UpdateUserSettingsRequest) -> WasmResult<()> {
+        Ok(self.sdk.update_user_settings(request.into()).await?)
+    }
 }

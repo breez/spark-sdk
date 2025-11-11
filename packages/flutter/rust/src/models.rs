@@ -36,6 +36,7 @@ pub struct _Config {
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
     pub use_default_external_input_parsers: bool,
     pub real_time_sync_server_url: Option<String>,
+    pub private_enabled_default: bool,
 }
 
 #[frb(mirror(ExternalInputParser))]
@@ -859,4 +860,14 @@ pub struct _RecordChange {
     pub schema_version: String,
     pub updated_fields: HashMap<String, String>,
     pub revision: u64,
+}
+
+#[frb(mirror(UserSettings))]
+pub struct _UserSettings {
+    pub spark_private_mode_enabled: bool,
+}
+
+#[frb(mirror(UpdateUserSettingsRequest))]
+pub struct _UpdateUserSettingsRequest {
+    pub spark_private_mode_enabled: Option<bool>,
 }

@@ -5,7 +5,7 @@ use breez_sdk_spark::{
     OnchainConfirmationSpeed, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
     PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
     RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SyncWalletRequest,
+    SyncWalletRequest, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rustyline::{
@@ -194,6 +194,12 @@ pub enum Command {
     GetTokensMetadata {
         /// The token identifiers to get metadata for
         token_identifiers: Vec<String>,
+    },
+    GetUserSettings,
+    SetUserSettings {
+        /// Whether spark private mode is enabled.
+        #[clap(short = 'p', long = "private")]
+        spark_private_mode_enabled: Option<bool>,
     },
 }
 
@@ -524,6 +530,20 @@ pub(crate) async fn execute_command(
                 .get_tokens_metadata(GetTokensMetadataRequest { token_identifiers })
                 .await?;
             print_value(&res)?;
+            Ok(true)
+        }
+        Command::GetUserSettings => {
+            let res = sdk.get_user_settings().await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::SetUserSettings {
+            spark_private_mode_enabled,
+        } => {
+            sdk.update_user_settings(UpdateUserSettingsRequest {
+                spark_private_mode_enabled,
+            })
+            .await?;
             Ok(true)
         }
     }
