@@ -1,6 +1,6 @@
 use breez_sdk_spark::{
-    BreezIssuerSdk, BurnTokensRequest, CreateTokenRequest, FreezeTokensRequest, MintTokensRequest,
-    UnfreezeTokensRequest,
+    BreezIssuerSdk, BurnIssuerTokenRequest, CreateIssuerTokenRequest, FreezeIssuerTokenRequest,
+    MintIssuerTokenRequest, UnfreezeIssuerTokenRequest,
 };
 use clap::{ArgAction, Subcommand};
 
@@ -71,7 +71,7 @@ pub async fn handle_command(
             max_supply,
         } => {
             let metadata = issuer_sdk
-                .create_issuer_token(CreateTokenRequest {
+                .create_issuer_token(CreateIssuerTokenRequest {
                     name,
                     ticker,
                     decimals,
@@ -84,28 +84,28 @@ pub async fn handle_command(
         }
         IssuerCommand::MintToken { amount } => {
             let payment = issuer_sdk
-                .mint_issuer_token(MintTokensRequest { amount })
+                .mint_issuer_token(MintIssuerTokenRequest { amount })
                 .await?;
             print_value(&payment)?;
             Ok(true)
         }
         IssuerCommand::BurnToken { amount } => {
             let payment = issuer_sdk
-                .burn_issuer_token(BurnTokensRequest { amount })
+                .burn_issuer_token(BurnIssuerTokenRequest { amount })
                 .await?;
             print_value(&payment)?;
             Ok(true)
         }
         IssuerCommand::FreezeToken { address } => {
             let response = issuer_sdk
-                .freeze_issuer_token(FreezeTokensRequest { address })
+                .freeze_issuer_token(FreezeIssuerTokenRequest { address })
                 .await?;
             print_value(&response)?;
             Ok(true)
         }
         IssuerCommand::UnfreezeToken { address } => {
             let response = issuer_sdk
-                .unfreeze_issuer_token(UnfreezeTokensRequest { address })
+                .unfreeze_issuer_token(UnfreezeIssuerTokenRequest { address })
                 .await?;
             print_value(&response)?;
             Ok(true)

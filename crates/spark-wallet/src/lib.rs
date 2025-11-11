@@ -16,9 +16,9 @@ pub use spark::{
     operator::rpc::{ConnectionManager, DefaultConnectionManager},
     services::TokensConfig,
     services::{
-        CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee, FreezeTokensResponse,
-        InvoiceDescription, LightningSendPayment, LightningSendStatus, ReceiverTokenOutput,
-        TokenInputs, TokenMetadata, TokenOutputWithPrevOut, TokenTransaction,
+        CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,
+        FreezeIssuerTokenResponse, InvoiceDescription, LightningSendPayment, LightningSendStatus,
+        ReceiverTokenOutput, TokenInputs, TokenMetadata, TokenOutputWithPrevOut, TokenTransaction,
         TokenTransactionStatus, TransferId, TransferObserver, TransferObserverError,
         TransferStatus, TransferTokenOutput, TransferType, Utxo,
     },

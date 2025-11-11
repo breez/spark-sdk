@@ -27,7 +27,7 @@ service SparkTokenService {
     rpc query_token_outputs(QueryTokenOutputsRequest)
         returns (QueryTokenOutputsResponse) {}
 
-    rpc freeze_tokens(FreezeTokensRequest) returns (FreezeTokensResponse) {}
+    rpc freeze_tokens(FreezeIssuerTokenRequest) returns (FreezeIssuerTokenResponse) {}
 }
 
 // This proto is constructed by the wallet to specify leaves it wants to spend
@@ -270,7 +270,7 @@ message TokenTransactionWithStatus {
 }
 
 
-message FreezeTokensPayload {
+message FreezeIssuerTokenPayload {
     uint32 version = 1;
     bytes owner_public_key = 2 [(validate.rules).bytes.len = 33];
     optional bytes token_public_key = 3 [(validate.rules).bytes.len = 33];
@@ -281,13 +281,13 @@ message FreezeTokensPayload {
     bool should_unfreeze = 7;
 }
 
-message FreezeTokensRequest {
-    FreezeTokensPayload freeze_tokens_payload = 1;
+message FreezeIssuerTokenRequest {
+    FreezeIssuerTokenPayload freeze_tokens_payload = 1;
     // This is a Schnorr or ECDSA DER signature which can be between 64 and 73 bytes.
     bytes issuer_signature = 2 [(validate.rules).bytes.min_len = 64, (validate.rules).bytes.max_len = 73];
 }
 
-message FreezeTokensResponse {
+message FreezeIssuerTokenResponse {
     repeated string impacted_output_ids = 1 [(validate.rules).repeated.items.string.uuid = true];
     bytes impacted_token_amount = 2;  // Decoded uint128
 }

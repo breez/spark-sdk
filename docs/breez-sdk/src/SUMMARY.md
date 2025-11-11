@@ -25,6 +25,8 @@
 - [Supporting fiat currencies](guide/fiat_currencies.md)
 - [End-user fees](guide/end-user_fees.md)
 - [Handling tokens](guide/tokens.md)
+  - [Token payments](guide/token_payments.md)
+  - [Issuing tokens](guide/issuing_tokens.md)
 
 ---
 

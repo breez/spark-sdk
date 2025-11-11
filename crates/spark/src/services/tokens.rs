@@ -24,7 +24,7 @@ use crate::{
         },
     },
     services::{
-        FreezeTokensResponse, QueryTokenTransactionsFilter, ReceiverTokenOutput, ServiceError,
+        FreezeIssuerTokenResponse, QueryTokenTransactionsFilter, ReceiverTokenOutput, ServiceError,
         TokenMetadata, TokenOutputWithPrevOut, TokenTransaction, TransferObserver,
         TransferTokenOutput,
     },
@@ -396,7 +396,7 @@ impl TokenService {
         &self,
         spark_address: &SparkAddress,
         should_unfreeze: bool,
-    ) -> Result<FreezeTokensResponse, ServiceError> {
+    ) -> Result<FreezeIssuerTokenResponse, ServiceError> {
         let owner_public_key = spark_address.identity_public_key.serialize().to_vec();
         let token_metadata = self.get_issuer_token_metadata().await?;
         if !token_metadata.is_freezable {
@@ -416,7 +416,7 @@ impl TokenService {
 
         let mut requests = Vec::new();
         for operator in self.operator_pool.get_all_operators() {
-            let freeze_tokens_payload = rpc::spark_token::FreezeTokensPayload {
+            let freeze_tokens_payload = rpc::spark_token::FreezeIssuerTokenPayload {
                 version: 1,
                 owner_public_key: owner_public_key.clone(),
                 token_identifier: Some(token_identifier.clone()),
@@ -432,12 +432,13 @@ impl TokenService {
                 .serialize()
                 .to_vec();
 
-            let request = operator
-                .client
-                .freeze_tokens(rpc::spark_token::FreezeTokensRequest {
-                    freeze_tokens_payload: Some(freeze_tokens_payload),
-                    issuer_signature,
-                });
+            let request =
+                operator
+                    .client
+                    .freeze_tokens(rpc::spark_token::FreezeIssuerTokenRequest {
+                        freeze_tokens_payload: Some(freeze_tokens_payload),
+                        issuer_signature,
+                    });
             requests.push(request);
         }
         let responses = futures::future::try_join_all(requests).await?;
@@ -1501,7 +1502,7 @@ fn validate_create_token_params(
 }
 
 fn hash_freeze_tokens_payload(
-    payload: &rpc::spark_token::FreezeTokensPayload,
+    payload: &rpc::spark_token::FreezeIssuerTokenPayload,
 ) -> Result<Vec<u8>, ServiceError> {
     let mut all_hashes = Vec::new();
     let empty_bytes = vec![];

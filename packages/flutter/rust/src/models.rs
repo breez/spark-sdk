@@ -866,8 +866,8 @@ pub struct _UpdateUserSettingsRequest {
     pub spark_private_mode_enabled: Option<bool>,
 }
 
-#[frb(mirror(CreateTokenRequest))]
-pub struct _CreateTokenRequest {
+#[frb(mirror(CreateIssuerTokenRequest))]
+pub struct _CreateIssuerTokenRequest {
     pub name: String,
     pub ticker: String,
     pub decimals: u32,
@@ -881,34 +881,34 @@ pub struct _GetIssuerTokenBalanceResponse {
     pub balance: u128,
 }
 
-#[frb(mirror(MintTokensRequest))]
-pub struct _MintTokensRequest {
+#[frb(mirror(MintIssuerTokenRequest))]
+pub struct _MintIssuerTokenRequest {
     pub amount: u128,
 }
 
-#[frb(mirror(BurnTokensRequest))]
-pub struct _BurnTokensRequest {
+#[frb(mirror(BurnIssuerTokenRequest))]
+pub struct _BurnIssuerTokenRequest {
     pub amount: u128,
 }
 
-#[frb(mirror(FreezeTokensRequest))]
-pub struct _FreezeTokensRequest {
+#[frb(mirror(FreezeIssuerTokenRequest))]
+pub struct _FreezeIssuerTokenRequest {
     pub address: String,
 }
 
-#[frb(mirror(FreezeTokensResponse))]
-pub struct _FreezeTokensResponse {
+#[frb(mirror(FreezeIssuerTokenResponse))]
+pub struct _FreezeIssuerTokenResponse {
     pub impacted_output_ids: Vec<String>,
     pub impacted_token_amount: u128,
 }
 
-#[frb(mirror(UnfreezeTokensRequest))]
-pub struct _UnfreezeTokensRequest {
+#[frb(mirror(UnfreezeIssuerTokenRequest))]
+pub struct _UnfreezeIssuerTokenRequest {
     pub address: String,
 }
 
-#[frb(mirror(UnfreezeTokensResponse))]
-pub struct _UnfreezeTokensResponse {
+#[frb(mirror(UnfreezeIssuerTokenResponse))]
+pub struct _UnfreezeIssuerTokenResponse {
     pub impacted_output_ids: Vec<String>,
     pub impacted_token_amount: u128,
 }

@@ -1151,18 +1151,18 @@ pub struct TransferTokenOutput {
     pub spark_invoice: Option<String>,
 }
 
-pub struct FreezeTokensResponse {
+pub struct FreezeIssuerTokenResponse {
     pub impacted_output_ids: Vec<String>,
     pub impacted_token_amount: u128,
 }
 
-impl TryFrom<operator_rpc::spark_token::FreezeTokensResponse> for FreezeTokensResponse {
+impl TryFrom<operator_rpc::spark_token::FreezeIssuerTokenResponse> for FreezeIssuerTokenResponse {
     type Error = ServiceError;
 
     fn try_from(
-        response: operator_rpc::spark_token::FreezeTokensResponse,
+        response: operator_rpc::spark_token::FreezeIssuerTokenResponse,
     ) -> Result<Self, Self::Error> {
-        Ok(FreezeTokensResponse {
+        Ok(FreezeIssuerTokenResponse {
             impacted_output_ids: response.impacted_output_ids,
             impacted_token_amount: u128::from_unpadded_be_bytes(
                 response.impacted_token_amount.as_slice(),

@@ -22,7 +22,7 @@ use spark::{
     },
     services::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
-        FreezeTokensResponse, InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment,
+        FreezeIssuerTokenResponse, InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment,
         LightningSendPayment, LightningService, QueryTokenTransactionsFilter, StaticDepositQuote,
         Swap, TimelockManager, TokenMetadata, TokenOutputWithPrevOut, TokenService,
         TokenTransaction, Transfer, TransferObserver, TransferService, TransferStatus,
@@ -972,7 +972,7 @@ impl SparkWallet {
     pub async fn freeze_issuer_token(
         &self,
         spark_address: &SparkAddress,
-    ) -> Result<FreezeTokensResponse, SparkWalletError> {
+    ) -> Result<FreezeIssuerTokenResponse, SparkWalletError> {
         Ok(self
             .token_service
             .freeze_issuer_token(spark_address, false)
@@ -982,7 +982,7 @@ impl SparkWallet {
     pub async fn unfreeze_issuer_token(
         &self,
         spark_address: &SparkAddress,
-    ) -> Result<FreezeTokensResponse, SparkWalletError> {
+    ) -> Result<FreezeIssuerTokenResponse, SparkWalletError> {
         Ok(self
             .token_service
             .freeze_issuer_token(spark_address, true)

@@ -7,9 +7,9 @@ use crate::{
     models::{
         Payment, TokenMetadata,
         issuer::{
-            BurnTokensRequest, CreateTokenRequest, FreezeTokensRequest, FreezeTokensResponse,
-            GetIssuerTokenBalanceResponse, MintTokensRequest, UnfreezeTokensRequest,
-            UnfreezeTokensResponse,
+            BurnIssuerTokenRequest, CreateIssuerTokenRequest, FreezeIssuerTokenRequest,
+            FreezeIssuerTokenResponse, GetIssuerTokenBalanceResponse, MintIssuerTokenRequest,
+            UnfreezeIssuerTokenRequest, UnfreezeIssuerTokenResponse,
         },
     },
 };
@@ -34,7 +34,7 @@ impl BreezIssuerSdk {
     #[wasm_bindgen(js_name = "createIssuerToken")]
     pub async fn create_issuer_token(
         &self,
-        request: CreateTokenRequest,
+        request: CreateIssuerTokenRequest,
     ) -> WasmResult<TokenMetadata> {
         Ok(self
             .issuer_sdk
@@ -44,7 +44,7 @@ impl BreezIssuerSdk {
     }
 
     #[wasm_bindgen(js_name = "mintIssuerToken")]
-    pub async fn mint_issuer_token(&self, request: MintTokensRequest) -> WasmResult<Payment> {
+    pub async fn mint_issuer_token(&self, request: MintIssuerTokenRequest) -> WasmResult<Payment> {
         Ok(self
             .issuer_sdk
             .mint_issuer_token(request.into())
@@ -53,7 +53,7 @@ impl BreezIssuerSdk {
     }
 
     #[wasm_bindgen(js_name = "burnIssuerToken")]
-    pub async fn burn_issuer_token(&self, request: BurnTokensRequest) -> WasmResult<Payment> {
+    pub async fn burn_issuer_token(&self, request: BurnIssuerTokenRequest) -> WasmResult<Payment> {
         Ok(self
             .issuer_sdk
             .burn_issuer_token(request.into())
@@ -64,8 +64,8 @@ impl BreezIssuerSdk {
     #[wasm_bindgen(js_name = "freezeIssuerToken")]
     pub async fn freeze_issuer_token(
         &self,
-        request: FreezeTokensRequest,
-    ) -> WasmResult<FreezeTokensResponse> {
+        request: FreezeIssuerTokenRequest,
+    ) -> WasmResult<FreezeIssuerTokenResponse> {
         Ok(self
             .issuer_sdk
             .freeze_issuer_token(request.into())
@@ -76,8 +76,8 @@ impl BreezIssuerSdk {
     #[wasm_bindgen(js_name = "unfreezeIssuerToken")]
     pub async fn unfreeze_issuer_token(
         &self,
-        request: UnfreezeTokensRequest,
-    ) -> WasmResult<UnfreezeTokensResponse> {
+        request: UnfreezeIssuerTokenRequest,
+    ) -> WasmResult<UnfreezeIssuerTokenResponse> {
         Ok(self
             .issuer_sdk
             .unfreeze_issuer_token(request.into())

@@ -3,9 +3,9 @@ use std::sync::Arc;
 use spark_wallet::{SparkAddress, SparkWallet};
 
 use crate::{
-    BurnTokensRequest, CreateTokenRequest, FreezeTokensRequest, FreezeTokensResponse,
-    MintTokensRequest, Payment, SdkError, Storage, TokenMetadata, UnfreezeTokensRequest,
-    UnfreezeTokensResponse, issuer::GetIssuerTokenBalanceResponse,
+    BurnIssuerTokenRequest, CreateIssuerTokenRequest, FreezeIssuerTokenRequest,
+    FreezeIssuerTokenResponse, MintIssuerTokenRequest, Payment, SdkError, Storage, TokenMetadata,
+    UnfreezeIssuerTokenRequest, UnfreezeIssuerTokenResponse, issuer::GetIssuerTokenBalanceResponse,
     utils::token::map_and_persist_token_transaction,
 };
 
@@ -63,7 +63,7 @@ impl BreezIssuerSdk {
     /// * `SdkError` - If there was an error during the token creation
     pub async fn create_issuer_token(
         &self,
-        request: CreateTokenRequest,
+        request: CreateIssuerTokenRequest,
     ) -> Result<TokenMetadata, SdkError> {
         self.spark_wallet
             .create_issuer_token(
@@ -88,7 +88,10 @@ impl BreezIssuerSdk {
     /// Result containing either:
     /// * `Payment` - The payment representing the minting transaction
     /// * `SdkError` - If there was an error during the minting process
-    pub async fn mint_issuer_token(&self, request: MintTokensRequest) -> Result<Payment, SdkError> {
+    pub async fn mint_issuer_token(
+        &self,
+        request: MintIssuerTokenRequest,
+    ) -> Result<Payment, SdkError> {
         let token_transaction = self.spark_wallet.mint_issuer_token(request.amount).await?;
         map_and_persist_token_transaction(&self.spark_wallet, &self.storage, &token_transaction)
             .await
@@ -105,7 +108,10 @@ impl BreezIssuerSdk {
     /// Result containing either:
     /// * `Payment` - The payment representing the burn transaction
     /// * `SdkError` - If there was an error during the burn process
-    pub async fn burn_issuer_token(&self, request: BurnTokensRequest) -> Result<Payment, SdkError> {
+    pub async fn burn_issuer_token(
+        &self,
+        request: BurnIssuerTokenRequest,
+    ) -> Result<Payment, SdkError> {
         let token_transaction = self
             .spark_wallet
             .burn_issuer_token(request.amount, None)
@@ -123,12 +129,12 @@ impl BreezIssuerSdk {
     /// # Returns
     ///
     /// Result containing either:
-    /// * `FreezeTokensResponse` - The response containing details of the freeze operation
+    /// * `FreezeIssuerTokenResponse` - The response containing details of the freeze operation
     /// * `SdkError` - If there was an error during the freeze process
     pub async fn freeze_issuer_token(
         &self,
-        request: FreezeTokensRequest,
-    ) -> Result<FreezeTokensResponse, SdkError> {
+        request: FreezeIssuerTokenRequest,
+    ) -> Result<FreezeIssuerTokenResponse, SdkError> {
         let spark_address = request
             .address
             .parse::<SparkAddress>()
@@ -149,12 +155,12 @@ impl BreezIssuerSdk {
     /// # Returns
     ///
     /// Result containing either:
-    /// * `UnfreezeTokensResponse` - The response containing details of the unfreeze operation
+    /// * `UnfreezeIssuerTokenResponse` - The response containing details of the unfreeze operation
     /// * `SdkError` - If there was an error during the unfreeze process
     pub async fn unfreeze_issuer_token(
         &self,
-        request: UnfreezeTokensRequest,
-    ) -> Result<UnfreezeTokensResponse, SdkError> {
+        request: UnfreezeIssuerTokenRequest,
+    ) -> Result<UnfreezeIssuerTokenResponse, SdkError> {
         let spark_address = request
             .address
             .parse::<SparkAddress>()

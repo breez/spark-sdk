@@ -203,6 +203,7 @@ impl BreezSdk {
         self.inner.update_user_settings(request).await
     }
     
+    #[frb(sync)]
     pub fn get_issuer_sdk(&self) -> crate::issuer::BreezIssuerSdk {
         let issuer_sdk = self.inner.get_issuer_sdk();
         crate::issuer::BreezIssuerSdk {
