@@ -1,6 +1,7 @@
 package example
 
 import (
+	"log"
 	"math/big"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
@@ -26,7 +27,7 @@ func CreateToken(issuerSdk *breez_sdk_spark.BreezIssuerSdk) (*breez_sdk_spark.To
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return nil, err
 	}
-	println("Token identifier: ", tokenMetadata.Identifier)
+	log.Printf("Token identifier: %v", tokenMetadata.Identifier)
 	// ANCHOR_END: create-token
 	return &tokenMetadata, nil
 }
@@ -63,13 +64,13 @@ func GetTokenMetadata(issuerSdk *breez_sdk_spark.BreezIssuerSdk) (*breez_sdk_spa
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return nil, err
 	}
-	println("Token balance: ", tokenBalance.Balance)
+	log.Printf("Token balance: %v", tokenBalance.Balance)
 
 	tokenMetadata, err := issuerSdk.GetIssuerTokenMetadata()
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return nil, err
 	}
-	println("Token ticker: ", tokenMetadata.Ticker)
+	log.Printf("Token ticker: %v", tokenMetadata.Ticker)
 	// ANCHOR_END: get-token-metadata
 	return &tokenMetadata, nil
 }
@@ -95,7 +96,7 @@ func FreezeToken(issuerSdk *breez_sdk_spark.BreezIssuerSdk) error {
 		return err
 	}
 	// ANCHOR_END: freeze-token
-	println("Freeze response: ", freezeResponse)
-	println("Unfreeze response: ", unfreezeResponse)
+	log.Printf("Freeze response: %v", freezeResponse)
+	log.Printf("Unfreeze response: %v", unfreezeResponse)
 	return nil
 }
