@@ -58,32 +58,18 @@ impl breez_sdk_common::fiat::FiatService for FiatServiceWrapper {
 
 /// Wrapper around the [`CurrencyInfo`] of a fiat currency
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[macros::derive_from(breez_sdk_common::fiat::FiatCurrency)]
+#[macros::derive_into(breez_sdk_common::fiat::FiatCurrency)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FiatCurrency {
     pub id: String,
     pub info: CurrencyInfo,
 }
 
-impl From<breez_sdk_common::fiat::FiatCurrency> for FiatCurrency {
-    fn from(value: breez_sdk_common::fiat::FiatCurrency) -> Self {
-        FiatCurrency {
-            id: value.id,
-            info: value.info.into(),
-        }
-    }
-}
-
-impl From<FiatCurrency> for breez_sdk_common::fiat::FiatCurrency {
-    fn from(value: FiatCurrency) -> Self {
-        breez_sdk_common::fiat::FiatCurrency {
-            id: value.id,
-            info: value.info.into(),
-        }
-    }
-}
-
 /// Details about a supported currency in the fiat rate feed
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[macros::derive_from(breez_sdk_common::fiat::CurrencyInfo)]
+#[macros::derive_into(breez_sdk_common::fiat::CurrencyInfo)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CurrencyInfo {
@@ -98,62 +84,20 @@ pub struct CurrencyInfo {
     pub locale_overrides: Vec<LocaleOverrides>,
 }
 
-impl From<breez_sdk_common::fiat::CurrencyInfo> for CurrencyInfo {
-    fn from(value: breez_sdk_common::fiat::CurrencyInfo) -> Self {
-        CurrencyInfo {
-            name: value.name,
-            fraction_size: value.fraction_size,
-            spacing: value.spacing,
-            symbol: value.symbol.map(From::from),
-            uniq_symbol: value.uniq_symbol.map(From::from),
-            localized_name: value.localized_name.into_iter().map(From::from).collect(),
-            locale_overrides: value.locale_overrides.into_iter().map(From::from).collect(),
-        }
-    }
-}
-
-impl From<CurrencyInfo> for breez_sdk_common::fiat::CurrencyInfo {
-    fn from(value: CurrencyInfo) -> Self {
-        breez_sdk_common::fiat::CurrencyInfo {
-            name: value.name,
-            fraction_size: value.fraction_size,
-            spacing: value.spacing,
-            symbol: value.symbol.map(From::from),
-            uniq_symbol: value.uniq_symbol.map(From::from),
-            localized_name: value.localized_name.into_iter().map(From::from).collect(),
-            locale_overrides: value.locale_overrides.into_iter().map(From::from).collect(),
-        }
-    }
-}
-
 /// Localized name of a currency
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[macros::derive_from(breez_sdk_common::fiat::LocalizedName)]
+#[macros::derive_into(breez_sdk_common::fiat::LocalizedName)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LocalizedName {
     pub locale: String,
     pub name: String,
 }
 
-impl From<breez_sdk_common::fiat::LocalizedName> for LocalizedName {
-    fn from(value: breez_sdk_common::fiat::LocalizedName) -> Self {
-        LocalizedName {
-            locale: value.locale,
-            name: value.name,
-        }
-    }
-}
-
-impl From<LocalizedName> for breez_sdk_common::fiat::LocalizedName {
-    fn from(value: LocalizedName) -> Self {
-        breez_sdk_common::fiat::LocalizedName {
-            locale: value.locale,
-            name: value.name,
-        }
-    }
-}
-
 /// Locale-specific settings for the representation of a currency
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[macros::derive_from(breez_sdk_common::fiat::LocaleOverrides)]
+#[macros::derive_into(breez_sdk_common::fiat::LocaleOverrides)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LocaleOverrides {
     pub locale: String,
@@ -161,80 +105,24 @@ pub struct LocaleOverrides {
     pub symbol: Symbol,
 }
 
-impl From<breez_sdk_common::fiat::LocaleOverrides> for LocaleOverrides {
-    fn from(value: breez_sdk_common::fiat::LocaleOverrides) -> Self {
-        LocaleOverrides {
-            locale: value.locale,
-            spacing: value.spacing,
-            symbol: value.symbol.into(),
-        }
-    }
-}
-
-impl From<LocaleOverrides> for breez_sdk_common::fiat::LocaleOverrides {
-    fn from(value: LocaleOverrides) -> Self {
-        breez_sdk_common::fiat::LocaleOverrides {
-            locale: value.locale,
-            spacing: value.spacing,
-            symbol: value.symbol.into(),
-        }
-    }
-}
-
 /// Denominator in an exchange rate
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[macros::derive_from(breez_sdk_common::fiat::Rate)]
+#[macros::derive_into(breez_sdk_common::fiat::Rate)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Rate {
     pub coin: String,
     pub value: f64,
 }
 
-impl From<breez_sdk_common::fiat::Rate> for Rate {
-    fn from(value: breez_sdk_common::fiat::Rate) -> Self {
-        Rate {
-            coin: value.coin,
-            value: value.value,
-        }
-    }
-}
-
-impl From<Rate> for breez_sdk_common::fiat::Rate {
-    fn from(value: Rate) -> Self {
-        breez_sdk_common::fiat::Rate {
-            coin: value.coin,
-            value: value.value,
-        }
-    }
-}
-
 /// Settings for the symbol representation of a currency
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[macros::derive_from(breez_sdk_common::fiat::Symbol)]
+#[macros::derive_into(breez_sdk_common::fiat::Symbol)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Symbol {
     pub grapheme: Option<String>,
     pub template: Option<String>,
     pub rtl: Option<bool>,
     pub position: Option<u32>,
-}
-
-impl From<breez_sdk_common::fiat::Symbol> for Symbol {
-    fn from(value: breez_sdk_common::fiat::Symbol) -> Self {
-        Symbol {
-            grapheme: value.grapheme,
-            template: value.template,
-            rtl: value.rtl,
-            position: value.position,
-        }
-    }
-}
-
-impl From<Symbol> for breez_sdk_common::fiat::Symbol {
-    fn from(value: Symbol) -> Self {
-        breez_sdk_common::fiat::Symbol {
-            grapheme: value.grapheme,
-            template: value.template,
-            rtl: value.rtl,
-            position: value.position,
-        }
-    }
 }

@@ -40,28 +40,12 @@ pub trait RestClient: Send + Sync {
     ) -> Result<RestResponse, ServiceConnectivityError>;
 }
 
+#[macros::derive_from(breez_sdk_common::rest::RestResponse)]
+#[macros::derive_into(breez_sdk_common::rest::RestResponse)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RestResponse {
     pub status: u16,
     pub body: String,
-}
-
-impl From<breez_sdk_common::rest::RestResponse> for RestResponse {
-    fn from(value: breez_sdk_common::rest::RestResponse) -> Self {
-        RestResponse {
-            status: value.status,
-            body: value.body,
-        }
-    }
-}
-
-impl From<RestResponse> for breez_sdk_common::rest::RestResponse {
-    fn from(value: RestResponse) -> Self {
-        breez_sdk_common::rest::RestResponse {
-            status: value.status,
-            body: value.body,
-        }
-    }
 }
 
 pub(crate) struct RestClientWrapper {
