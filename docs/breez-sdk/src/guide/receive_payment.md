@@ -63,9 +63,10 @@ Once a receive payment is initiated, you can follow and react to the different p
 
 ### Lightning
 
-| Event                | Description                                                | UX Suggestion                                    |
-| -------------------- | ---------------------------------------------------------- | ------------------------------------------------ |
-| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete. | Update the balance and show payment as complete. |
+| Event                | Description                                                       | UX Suggestion                                    |
+| -------------------- | ----------------------------------------------------------------- | ------------------------------------------------ |
+| **PaymentPending**   | The Spark transfer was detected and the claim process will start. | Show payment as pending.                         |
+| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete.        | Update the balance and show payment as complete. |
 
 ### Bitcoin
 
@@ -73,10 +74,12 @@ Once a receive payment is initiated, you can follow and react to the different p
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | **UnclaimedDeposits** | The SDK attempted to claim static address deposits but they failed from one of several reasons. Either the claim fee exceeded the maximum allowed limit or there was an issue finding the available UTXO. | Allow the user to refund these failed deposits. See [Handling unclaimed deposits](/guide/unclaimed_deposits.md). |
 | **ClaimedDeposits**   | The SDK successfully claimed static address deposits.                                                                                                                                                     |                                                                                                                  |
+| **PaymentPending**    | The Spark transfer was detected and the claim process will start.                                                                                                                                         | Show payment as pending.                                                                                         |
 | **PaymentSucceeded**  | The Spark transfer is claimed and the payment is complete.                                                                                                                                                | Update the balance and show payment as complete.                                                                 |
 
 ### Spark
 
-| Event                | Description                                                | UX Suggestion                                    |
-| -------------------- | ---------------------------------------------------------- | ------------------------------------------------ |
-| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete. | Update the balance and show payment as complete. |
+| Event                | Description                                                       | UX Suggestion                                    |
+| -------------------- | ----------------------------------------------------------------- | ------------------------------------------------ |
+| **PaymentPending**   | The Spark transfer was detected and the claim process will start. | Show payment as pending.                         |
+| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete.        | Update the balance and show payment as complete. |

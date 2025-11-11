@@ -89,14 +89,16 @@ Once a send payment is initiated, you can follow and react to the different paym
 
 | Event                | Description                                                                       | UX Suggestion                                    |
 | -------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------ |
+| **PaymentPending**   | The Spark transfer has been started. Awaiting Lightning payment completion.       | Show payment as pending.                         |
 | **PaymentSucceeded** | The Lightning invoice has been paid either over Lightning or via a Spark transfer | Update the balance and show payment as complete. |
 | **PaymentFailed**    | The attempt to pay the Lightning invoice failed.                                  |                                                  |
 
 ### Bitcoin
 
-| Event                | Description                                            | UX Suggestion                                    |
-| -------------------- | ------------------------------------------------------ | ------------------------------------------------ |
-| **PaymentSucceeded** | The payment amount was successfully withdrawn onchain. | Update the balance and show payment as complete. |
+| Event                | Description                                                                  | UX Suggestion                                    |
+| -------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------ |
+| **PaymentPending**   | The Spark transfer has been started. Awaiting onchain withdrawal completion. | Show payment as pending.                         |
+| **PaymentSucceeded** | The payment amount was successfully withdrawn onchain.                       | Update the balance and show payment as complete. |
 
 ### Spark
 
