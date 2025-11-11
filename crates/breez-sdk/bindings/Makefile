@@ -22,7 +22,6 @@ bindings-kotlin: build-release install-uniffi-bindgen-gobley
 	gobley-uniffi-bindgen --library -o $(FFI_DIR)kotlin \
 		--crate-configs breez_sdk_spark_bindings=./uniffi.toml \
 		--crate-configs breez_sdk_spark=../core/uniffi.toml \
-		--crate-configs breez_sdk_common=../common/uniffi.toml \
 		$(BIN_PATH)
 
 bindings-golang: build-release install-uniffi-bindgen-golang
@@ -66,11 +65,10 @@ build-android: install-uniffi-bindgen-gobley build-ndk-release-target-aarch64-li
 	gobley-uniffi-bindgen --library -o $(FFI_DIR)kotlin \
 		--crate-configs breez_sdk_spark_bindings=./uniffi.toml \
 		--crate-configs breez_sdk_spark=../core/uniffi.toml \
-		--crate-configs breez_sdk_common=../common/uniffi.toml \
 		$(TARGET_DIR)aarch64-linux-android/release/$(BIN_NAME).so
 
 package-android: build-android
-	rm $(FFI_DIR)kotlin/jniLibs/**/*common.so  $(FFI_DIR)kotlin/jniLibs/**/*spark.so
+	rm $(FFI_DIR)kotlin/jniLibs/**/*spark.so
 	cp -r $(FFI_DIR)kotlin/jniLibs langs/android/lib/src/main
 	cp -r $(FFI_DIR)kotlin/main/kotlin/breez_sdk_spark langs/android/lib/src/main/kotlin/
 	cd langs/android && ./gradlew assemble
@@ -121,7 +119,6 @@ build-kotlin-multiplatform-bindgen-only: install-uniffi-bindgen-gobley build-ndk
 	gobley-uniffi-bindgen --library -o $(FFI_DIR)kmp \
 		--crate-configs breez_sdk_spark_bindings=./uniffi.kotlin-multiplatform.toml \
 		--crate-configs breez_sdk_spark=../core/uniffi.kotlin-multiplatform.toml \
-		--crate-configs breez_sdk_common=../common/uniffi.kotlin-multiplatform.toml \
 		$(TARGET_DIR)aarch64-linux-android/release/$(BIN_NAME).so
 
 # Build all binaries + run bindgen
@@ -146,7 +143,7 @@ package-kotlin-multiplatform-dummy-binaries: build-kotlin-multiplatform-bindgen-
 package-kotlin-multiplatform: build-kotlin-multiplatform
 	mkdir -p $(KMP_BASE)/lib/ios-arm64 $(KMP_BASE)/lib/ios-simulator-arm64 $(KMP_BASE)/lib/ios-simulator-x64
 	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
-	rm -f $(FFI_DIR)kotlin/jniLibs/**/*common.so $(FFI_DIR)kotlin/jniLibs/**/*spark.so
+	rm -f $(FFI_DIR)kotlin/jniLibs/**/*spark.so
 	cp -r $(FFI_DIR)kotlin/jniLibs/ $(KMP_BASE)/androidMain/jniLibs/
 	cp $(TARGET_DIR)aarch64-apple-ios/release/$(BIN_NAME).a $(KMP_BASE)/lib/ios-arm64/
 	cp $(TARGET_DIR)aarch64-apple-ios-sim/release/$(BIN_NAME).a $(KMP_BASE)/lib/ios-simulator-arm64/
