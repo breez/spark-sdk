@@ -118,7 +118,7 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
 
     async fn before_send_token(
         &self,
-        tx_id: &bitcoin::Txid,
+        tx_id: &str,
         token_id: &str,
         receiver_outputs: Vec<spark_wallet::ReceiverTokenOutput>,
     ) -> Result<(), TransferObserverError> {

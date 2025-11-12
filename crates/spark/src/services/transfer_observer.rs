@@ -1,4 +1,4 @@
-use bitcoin::{Address, Txid};
+use bitcoin::Address;
 use thiserror::Error;
 
 use crate::services::TransferId;
@@ -32,7 +32,7 @@ pub trait TransferObserver: Send + Sync {
     ) -> Result<(), TransferObserverError>;
     async fn before_send_token(
         &self,
-        tx_id: &Txid,
+        tx_id: &str,
         token_id: &str,
         receiver_outputs: Vec<ReceiverTokenOutput>,
     ) -> Result<(), TransferObserverError>;
