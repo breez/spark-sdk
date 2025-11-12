@@ -1,5 +1,5 @@
-pub use breez_sdk_spark::*;
 pub use breez_sdk_spark::sync_storage::*;
+pub use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
 use std::collections::HashMap;
 
@@ -351,10 +351,14 @@ pub enum _SendPaymentMethod {
 pub enum _SendPaymentOptions {
     BitcoinAddress {
         confirmation_speed: OnchainConfirmationSpeed,
+        idempotency_key: Option<String>,
     },
     Bolt11Invoice {
         prefer_spark: bool,
         completion_timeout_secs: Option<u32>,
+    },
+    Spark {
+        idempotency_key: String,
     },
 }
 

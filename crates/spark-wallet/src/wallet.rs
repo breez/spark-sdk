@@ -25,7 +25,7 @@ use spark::{
         FreezeIssuerTokenResponse, InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment,
         LightningSendPayment, LightningService, QueryTokenTransactionsFilter, StaticDepositQuote,
         Swap, TimelockManager, TokenMetadata, TokenOutputWithPrevOut, TokenService,
-        TokenTransaction, Transfer, TransferObserver, TransferService, TransferStatus,
+        TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
         TransferTokenOutput, UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
@@ -251,7 +251,7 @@ impl SparkWallet {
         if let Some(receiver_spark_address) = receiver_spark_address {
             return Ok(PayLightningInvoiceResult {
                 transfer: self
-                    .transfer(total_amount_sat, &receiver_spark_address)
+                    .transfer(total_amount_sat, &receiver_spark_address, None)
                     .await?,
                 lightning_payment: None,
             });
@@ -501,6 +501,7 @@ impl SparkWallet {
         &self,
         amount_sat: u64,
         receiver_address: &SparkAddress,
+        transfer_id: Option<TransferId>,
     ) -> Result<WalletTransfer, SparkWalletError> {
         if receiver_address.is_invoice() {
             return Err(SparkWalletError::Generic(
@@ -509,7 +510,7 @@ impl SparkWallet {
             ));
         }
 
-        self.transfer_with_invoice(amount_sat, receiver_address, None)
+        self.transfer_with_invoice(amount_sat, receiver_address, transfer_id, None)
             .await
     }
 
@@ -517,6 +518,7 @@ impl SparkWallet {
         &self,
         amount_sat: u64,
         receiver_address: &SparkAddress,
+        transfer_id: Option<TransferId>,
         spark_invoice: Option<String>,
     ) -> Result<WalletTransfer, SparkWalletError> {
         // validate receiver address and get its pubkey
@@ -537,6 +539,7 @@ impl SparkWallet {
             self.transfer_service.transfer_leaves_to(
                 leaves_reservation.leaves.clone(),
                 &receiver_pubkey,
+                transfer_id,
                 None,
                 spark_invoice,
             ),
@@ -697,6 +700,7 @@ impl SparkWallet {
         amount_sats: Option<u64>,
         exit_speed: ExitSpeed,
         fee_quote: CoopExitFeeQuote,
+        transfer_id: Option<TransferId>,
     ) -> Result<WalletTransfer, SparkWalletError> {
         // Validate withdrawal address
         let withdrawal_address = withdrawal_address
@@ -730,6 +734,7 @@ impl SparkWallet {
                 target_amounts.as_ref(),
                 fee_sats,
                 fee_quote.id,
+                transfer_id,
             ),
             &leaves_reservation,
         )
@@ -757,6 +762,7 @@ impl SparkWallet {
         target_amounts: Option<&TargetAmounts>,
         fee_sats: u64,
         fee_quote_id: String,
+        transfer_id: Option<TransferId>,
     ) -> Result<Transfer, SparkWalletError> {
         let withdraw_all = target_amounts.is_none();
         let (withdraw_leaves, fee_leaves, fee_quote_id) = if withdraw_all {
@@ -791,6 +797,7 @@ impl SparkWallet {
                 exit_speed,
                 fee_quote_id,
                 fee_leaves,
+                transfer_id,
             )
             .await?;
 
@@ -990,6 +997,7 @@ impl SparkWallet {
         &self,
         invoice_str: &str,
         amount: Option<u128>,
+        transfer_id: Option<TransferId>,
     ) -> Result<FulfillSparkInvoiceResult, SparkWalletError> {
         let invoice = SparkAddress::from_str(invoice_str)?;
 
@@ -1025,7 +1033,12 @@ impl SparkWallet {
                 )?;
 
                 let transfer = self
-                    .transfer_with_invoice(amount, &invoice, Some(invoice_str.to_string()))
+                    .transfer_with_invoice(
+                        amount,
+                        &invoice,
+                        transfer_id,
+                        Some(invoice_str.to_string()),
+                    )
                     .await?;
 
                 Ok(FulfillSparkInvoiceResult::Transfer(Box::new(transfer)))

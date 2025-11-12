@@ -581,6 +581,7 @@ fn read_payment_options(
             };
             Ok(Some(SendPaymentOptions::BitcoinAddress {
                 confirmation_speed,
+                idempotency_key: None,
             }))
         }
         SendPaymentMethod::Bolt11Invoice {

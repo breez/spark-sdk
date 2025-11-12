@@ -140,6 +140,7 @@ impl CoopExitService {
         exit_speed: ExitSpeed,
         fee_quote_id: Option<String>,
         fee_leaves: Option<Vec<TreeNode>>,
+        transfer_id: Option<TransferId>,
     ) -> Result<Transfer, ServiceError> {
         debug!("Starting cooperative exit with leaves");
         let leaf_external_ids = leaves.iter().map(|l| l.id.clone().to_string()).collect();
@@ -152,7 +153,7 @@ impl CoopExitService {
         trace!("Leaf external IDs for cooperative exit: {leaf_external_ids:?}");
         trace!("Fee leaf external IDs for cooperative exit: {fee_leaf_external_ids:?}");
 
-        let transfer_id = TransferId::generate();
+        let transfer_id = transfer_id.unwrap_or_else(TransferId::generate);
         if let Some(transfer_observer) = &self.transfer_observer {
             let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
             transfer_observer

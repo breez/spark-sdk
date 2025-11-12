@@ -733,10 +733,14 @@ pub enum OnchainConfirmationSpeed {
 pub enum SendPaymentOptions {
     BitcoinAddress {
         confirmation_speed: OnchainConfirmationSpeed,
+        idempotency_key: Option<String>,
     },
     Bolt11Invoice {
         prefer_spark: bool,
         completion_timeout_secs: Option<u32>,
+    },
+    Spark {
+        idempotency_key: String,
     },
 }
 

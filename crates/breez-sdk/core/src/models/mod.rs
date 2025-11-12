@@ -737,6 +737,13 @@ pub struct PrepareSendPaymentResponse {
 pub enum SendPaymentOptions {
     BitcoinAddress {
         confirmation_speed: OnchainConfirmationSpeed,
+
+        /// If set, providing the same idempotency key for multiple requests will ensure that only one
+        /// payment is made.
+        ///
+        /// If an idempotency key is re-used, the same payment will be returned if available; otherwise,
+        /// the payment request will result in an error.
+        idempotency_key: Option<String>,
     },
     Bolt11Invoice {
         prefer_spark: bool,
@@ -744,6 +751,14 @@ pub enum SendPaymentOptions {
         /// If set, the function will return the payment if it is still pending after this
         /// number of seconds. If unset, the function will return immediately after initiating the payment.
         completion_timeout_secs: Option<u32>,
+    },
+    Spark {
+        /// Providing the same idempotency key for multiple requests will ensure that only one
+        /// payment is made. The idempotency key is only valid for non-token Spark transfers.
+        ///
+        /// If an idempotency key is re-used, the same payment will be returned if available; otherwise,
+        /// the payment request will result in an error.
+        idempotency_key: String,
     },
 }
 

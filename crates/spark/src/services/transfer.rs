@@ -109,10 +109,11 @@ impl TransferService {
         &self,
         leaves: Vec<TreeNode>,
         receiver_id: &PublicKey,
+        transfer_id: Option<TransferId>,
         signing_key_source: Option<PrivateKeySource>,
         spark_invoice: Option<String>,
     ) -> Result<Transfer, ServiceError> {
-        let transfer_id = TransferId::generate();
+        let transfer_id = transfer_id.unwrap_or_else(TransferId::generate);
 
         if let Some(transfer_observer) = &self.transfer_observer {
             let identity_public_key = &self.signer.get_identity_public_key()?;
@@ -147,32 +148,6 @@ impl TransferService {
             .await?;
 
         Ok(transfer)
-    }
-
-    pub async fn transfer_leaves_to_self(
-        &self,
-        leaves: Vec<TreeNode>,
-        signing_key_source: Option<PrivateKeySource>,
-    ) -> Result<Vec<TreeNode>, ServiceError> {
-        let transfer = self
-            .transfer_leaves_to(
-                leaves,
-                &self.signer.get_identity_public_key()?,
-                signing_key_source,
-                None,
-            )
-            .await?;
-
-        let pending_transfer =
-            self.query_transfer(&transfer.id)
-                .await?
-                .ok_or(ServiceError::Generic(
-                    "Pending transfer not found".to_string(),
-                ))?;
-
-        let resulting_nodes = self.claim_transfer(&pending_transfer, None).await?;
-
-        Ok(resulting_nodes)
     }
 
     pub async fn send_transfer_with_key_tweaks(

@@ -197,6 +197,23 @@ pub async fn wait_for_balance(
     }
 }
 
+/// Ensure SDK has at least the specified balance, funding if necessary
+pub async fn ensure_funded(sdk_instance: &mut SdkInstance, min_balance: u64) -> Result<()> {
+    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let info = sdk_instance
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?;
+    if info.balance_sats < min_balance {
+        let needed = min_balance - info.balance_sats;
+        info!("Funding wallet via faucet: need {} sats", needed);
+        receive_and_fund(sdk_instance, needed.max(10000)).await?;
+    }
+    Ok(())
+}
+
 /// Get a deposit address and fund it from the faucet in one operation
 ///
 /// This helper generates a deposit address, funds it, and waits for the claim event.
