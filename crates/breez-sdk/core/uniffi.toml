@@ -36,9 +36,10 @@ cdylib_name = "breez_sdk_spark"
 namespace = "Breez.Sdk.Spark"
 access_modifier = "public"
 
-[bindings.csharp.custom_types.U128]
-type_name = "System.Numerics.BigInteger"
-into_custom = "new System.Numerics.BigInteger({})"
+[bindings.csharp.custom_types.u128]
+imports = ["System.Numerics", "System.Text"]
+type_name = "BigInteger"
+into_custom = "new BigInteger(Encoding.UTF8.GetBytes({}))"
 from_custom = "{}.ToString()"
 
 [bindings.typescript.customTypes.u128]
