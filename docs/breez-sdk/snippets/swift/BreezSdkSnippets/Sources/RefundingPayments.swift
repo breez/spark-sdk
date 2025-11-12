@@ -47,8 +47,11 @@ func refundDeposit(sdk: BreezSdk) async throws {
     let txid = "your_deposit_txid"
     let vout: UInt32 = 0
     let destinationAddress = "bc1qexample..." // Your Bitcoin address
-    // Set the fee for the refund transaction
-    let fee = Fee.fixed(amount: 500) // 500 sats
+
+    // Set the fee for the refund transaction using a rate
+    let fee = Fee.rate(satPerVbyte: 5) // 5 sats per vbyte
+    // or using a fixed amount
+    //let fee = Fee.fixed(amount: 500) // 500 sats
     
     let request = RefundDepositRequest(
         txid: txid,
@@ -62,4 +65,15 @@ func refundDeposit(sdk: BreezSdk) async throws {
     print("Transaction ID: \(response.txId)")
     print("Transaction hex: \(response.txHex)")
     // ANCHOR_END: refund-deposit
+}
+
+func recommendedFees(sdk: BreezSdk) async throws {
+    // ANCHOR: recommended-fees
+    let response = try await sdk.recommendedFees()
+    print("Fastest fee: \(response.fastestFee) sats")
+    print("Half-hour fee: \(response.halfHourFee) sats")
+    print("Hour fee: \(response.hourFee) sats")
+    print("Economy fee: \(response.economyFee) sats")
+    print("Minimum fee: \(response.minimumFee) sats")
+    // ANCHOR_END: recommended-fees
 }

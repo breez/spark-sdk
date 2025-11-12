@@ -62,10 +62,16 @@ func RefundDeposit(sdk *breez_sdk_spark.BreezSdk) error {
 	vout := uint32(0)
 	destinationAddress := "bc1qexample..." // Your Bitcoin address
 
+	// Set the fee for the refund transaction using a rate
+	fee := breez_sdk_spark.Fee(breez_sdk_spark.FeeRate{SatPerVbyte: 5})
+	// or using a fixed amount
+	//fee := breez_sdk_spark.Fee(breez_sdk_spark.FeeFixed{Amount: 500})
+
 	request := breez_sdk_spark.RefundDepositRequest{
 		Txid:               txid,
 		Vout:               vout,
 		DestinationAddress: destinationAddress,
+		Fee:                fee,
 	}
 	response, err := sdk.RefundDeposit(request)
 
@@ -77,5 +83,20 @@ func RefundDeposit(sdk *breez_sdk_spark.BreezSdk) error {
 	log.Printf("Transaction ID: %v", response.TxId)
 	log.Printf("Transaction hex: %v", response.TxHex)
 	// ANCHOR_END: refund-deposit
+	return nil
+}
+
+func RecommendedFees(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: recommended-fees
+	response, err := sdk.RecommendedFees()
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return err
+	}
+	log.Printf("Fastest fee: %v sats", response.FastestFee)
+	log.Printf("Half-hour fee: %v sats", response.HalfHourFee)
+	log.Printf("Hour fee: %v sats", response.HourFee)
+	log.Printf("Economy fee: %v sats", response.EconomyFee)
+	log.Printf("Minimum fee: %v sats", response.MinimumFee)
+	// ANCHOR_END: recommended-fees
 	return nil
 }
