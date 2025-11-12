@@ -139,21 +139,5 @@ namespace BreezSdkSnippets
             var payment = sendResponse.payment;
             // ANCHOR_END: send-payment-spark
         }
-
-        async Task SendPaymentMethod(BreezSdk sdk, PrepareSendPaymentResponse prepareResponse)
-        {
-            // ANCHOR: send-payment
-            var optionsFastOnchain = new SendPaymentOptions.BitcoinAddress(
-                confirmationSpeed: OnchainConfirmationSpeed.Fast
-            );
-            var response = await sdk.SendPayment(
-                request: new SendPaymentRequest(
-                    prepareResponse: prepareResponse,
-                    options: optionsFastOnchain
-                )
-            );
-            var payment = response.payment;
-            // ANCHOR_END: send-payment
-        }
     }
 }

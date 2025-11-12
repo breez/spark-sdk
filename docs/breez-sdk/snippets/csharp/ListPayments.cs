@@ -37,9 +37,14 @@ namespace BreezSdkSnippets
                 // Filter by status
                 statusFilter: new List<PaymentStatus> { PaymentStatus.Completed },
                 assetFilter: assetFilter,
-                // Offset and limit
+                // Time range filters
+                fromTimestamp: 1704067200, // Unix timestamp
+                toTimestamp: 1735689600,   // Unix timestamp
+                                           // Pagination
                 offset: 0,
-                limit: 50
+                limit: 50,
+                // Sort order (true = oldest first, false = newest first)
+                sortAscending: false
             );
 
             var response = await sdk.ListPayments(request: request);

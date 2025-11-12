@@ -81,14 +81,32 @@ namespace BreezSdkSnippets
             // ANCHOR_END: receive-payment-spark-invoice
         }
 
-        async Task WaitForPayment(BreezSdk sdk, string paymentIdentifier)
+        async Task WaitForPayment(BreezSdk sdk)
         {
             // ANCHOR: wait-for-payment
-            var identifier = new WaitForPaymentIdentifier.PaymentRequest(v1: paymentIdentifier);
-            var request = new WaitForPaymentRequest(
-                identifier: identifier
+            // Waiting for a payment given its payment request (Bolt11 or Spark invoice)
+            var paymentRequest = "<Bolt11 or Spark invoice>";
+
+            // Wait for a payment to be completed using a payment request
+            var paymentRequestResponse = await sdk.WaitForPayment(
+                request: new WaitForPaymentRequest(
+                    identifier: new WaitForPaymentIdentifier.PaymentRequest(v1: paymentRequest)
+                )
             );
-            var payment = await sdk.WaitForPayment(request: request);
+
+            Console.WriteLine($"Payment received with ID: {paymentRequestResponse.payment.id}");
+
+            // Waiting for a payment given its payment id
+            var paymentId = "<payment id>";
+
+            // Wait for a payment to be completed using a payment id
+            var paymentIdResponse = await sdk.WaitForPayment(
+                request: new WaitForPaymentRequest(
+                    identifier: new WaitForPaymentIdentifier.PaymentId(v1: paymentId)
+                )
+            );
+
+            Console.WriteLine($"Payment received with ID: {paymentIdResponse.payment.id}");
             // ANCHOR_END: wait-for-payment
         }
     }
