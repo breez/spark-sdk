@@ -287,3 +287,23 @@ jobs:
       - name: Run Check doc snippets
         run: |
           cargo xtask check-doc-snippets -p react-native
+
+  docs-csharp:
+    name: Docs (csharp)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Run Check doc snippets
+        run: |
+          cargo xtask check-doc-snippets -p csharp
