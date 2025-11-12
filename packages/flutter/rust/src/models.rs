@@ -875,12 +875,6 @@ pub struct _CreateIssuerTokenRequest {
     pub max_supply: u128,
 }
 
-#[frb(mirror(GetIssuerTokenBalanceResponse))]
-pub struct _GetIssuerTokenBalanceResponse {
-    pub identifier: String,
-    pub balance: u128,
-}
-
 #[frb(mirror(MintIssuerTokenRequest))]
 pub struct _MintIssuerTokenRequest {
     pub amount: u128,

@@ -16,7 +16,8 @@ Future<TokenMetadata> createToken(BreezIssuerSdk issuerSdk) async {
     isFreezable: false,
     maxSupply: BigInt.from(1000000),
   );
-  TokenMetadata tokenMetadata = await issuerSdk.createIssuerToken(request: request);
+  TokenMetadata tokenMetadata =
+      await issuerSdk.createIssuerToken(request: request);
   print("Token identifier: ${tokenMetadata.identifier}");
   // ANCHOR_END: create-token
   return tokenMetadata;
@@ -44,8 +45,7 @@ Future<Payment> burnTokens(BreezIssuerSdk issuerSdk) async {
 
 Future<TokenMetadata> getTokenMetadata(BreezIssuerSdk issuerSdk) async {
   // ANCHOR: get-token-metadata
-  GetIssuerTokenBalanceResponse tokenBalance =
-      await issuerSdk.getIssuerTokenBalance();
+  TokenBalance tokenBalance = await issuerSdk.getIssuerTokenBalance();
   print("Token balance: ${tokenBalance.balance}");
 
   TokenMetadata tokenMetadata = await issuerSdk.getIssuerTokenMetadata();

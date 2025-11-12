@@ -43,8 +43,8 @@ use tracing::{debug, error, info, trace};
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    FulfillSparkInvoiceResult, IssuerTokenBalance, ListTokenTransactionsRequest,
-    QuerySparkInvoiceResult, TokenBalance, WalletEvent, WalletLeaves, WalletSettings,
+    FulfillSparkInvoiceResult, ListTokenTransactionsRequest, QuerySparkInvoiceResult, TokenBalance,
+    WalletEvent, WalletLeaves, WalletSettings,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
@@ -910,20 +910,16 @@ impl SparkWallet {
             .map_err(Into::into)
     }
 
-    pub async fn get_issuer_token_balance(&self) -> Result<IssuerTokenBalance, SparkWalletError> {
+    pub async fn get_issuer_token_balance(&self) -> Result<TokenBalance, SparkWalletError> {
         let token_identifier = self.get_issuer_token_identifier().await?;
         let token_balances = self.get_token_balances().await?;
-        let issuer_token_balance =
-            token_balances
-                .get(&token_identifier)
-                .ok_or(SparkWalletError::Generic(
-                    "No issuer token found".to_string(),
-                ))?;
 
-        Ok(IssuerTokenBalance {
-            identifier: issuer_token_balance.token_metadata.identifier.clone(),
-            balance: issuer_token_balance.balance,
-        })
+        Ok(token_balances
+            .get(&token_identifier)
+            .ok_or(SparkWalletError::Generic(
+                "No issuer token found".to_string(),
+            ))?
+            .clone())
     }
 
     pub async fn get_issuer_token_identifier(&self) -> Result<String, SparkWalletError> {

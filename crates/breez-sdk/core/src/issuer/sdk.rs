@@ -4,8 +4,8 @@ use spark_wallet::{SparkAddress, SparkWallet};
 
 use crate::{
     BurnIssuerTokenRequest, CreateIssuerTokenRequest, FreezeIssuerTokenRequest,
-    FreezeIssuerTokenResponse, MintIssuerTokenRequest, Payment, SdkError, Storage, TokenMetadata,
-    UnfreezeIssuerTokenRequest, UnfreezeIssuerTokenResponse, issuer::GetIssuerTokenBalanceResponse,
+    FreezeIssuerTokenResponse, MintIssuerTokenRequest, Payment, SdkError, Storage, TokenBalance,
+    TokenMetadata, UnfreezeIssuerTokenRequest, UnfreezeIssuerTokenResponse,
     utils::token::map_and_persist_token_transaction,
 };
 
@@ -31,11 +31,9 @@ impl BreezIssuerSdk {
     /// # Returns
     ///
     /// Result containing either:
-    /// * `GetIssuerTokenBalanceResponse` - The balance of the issuer token
+    /// * `TokenBalance` - The balance of the issuer token
     /// * `SdkError` - If there was an error during the retrieval or no issuer token exists
-    pub async fn get_issuer_token_balance(
-        &self,
-    ) -> Result<GetIssuerTokenBalanceResponse, SdkError> {
+    pub async fn get_issuer_token_balance(&self) -> Result<TokenBalance, SdkError> {
         Ok(self.spark_wallet.get_issuer_token_balance().await?.into())
     }
 

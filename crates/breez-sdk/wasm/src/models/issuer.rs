@@ -7,12 +7,6 @@ pub struct CreateIssuerTokenRequest {
     pub max_supply: u128,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::GetIssuerTokenBalanceResponse)]
-pub struct GetIssuerTokenBalanceResponse {
-    pub identifier: String,
-    pub balance: u128,
-}
-
 #[macros::extern_wasm_bindgen(breez_sdk_spark::MintIssuerTokenRequest)]
 pub struct MintIssuerTokenRequest {
     pub amount: u128,

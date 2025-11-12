@@ -319,8 +319,3 @@ impl From<WalletSetting> for WalletSettings {
         }
     }
 }
-
-pub struct IssuerTokenBalance {
-    pub identifier: String,
-    pub balance: u128,
-}

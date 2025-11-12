@@ -16,7 +16,7 @@ const createToken = async (issuerSdk: BreezIssuerSdk): Promise<TokenMetadata> =>
   const tokenMetadata = await issuerSdk.createIssuerToken({
     name: 'My Token',
     ticker: 'MTK',
-    decimals: 2,
+    decimals: 6,
     isFreezable: false,
     maxSupply: BigInt(1_000_000)
   })

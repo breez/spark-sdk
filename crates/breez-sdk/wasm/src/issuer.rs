@@ -5,11 +5,11 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use crate::{
     error::WasmResult,
     models::{
-        Payment, TokenMetadata,
+        Payment, TokenBalance, TokenMetadata,
         issuer::{
             BurnIssuerTokenRequest, CreateIssuerTokenRequest, FreezeIssuerTokenRequest,
-            FreezeIssuerTokenResponse, GetIssuerTokenBalanceResponse, MintIssuerTokenRequest,
-            UnfreezeIssuerTokenRequest, UnfreezeIssuerTokenResponse,
+            FreezeIssuerTokenResponse, MintIssuerTokenRequest, UnfreezeIssuerTokenRequest,
+            UnfreezeIssuerTokenResponse,
         },
     },
 };
@@ -27,7 +27,7 @@ impl BreezIssuerSdk {
     }
 
     #[wasm_bindgen(js_name = "getIssuerTokenBalance")]
-    pub async fn get_issuer_token_balance(&self) -> WasmResult<GetIssuerTokenBalanceResponse> {
+    pub async fn get_issuer_token_balance(&self) -> WasmResult<TokenBalance> {
         Ok(self.issuer_sdk.get_issuer_token_balance().await?.into())
     }
 
