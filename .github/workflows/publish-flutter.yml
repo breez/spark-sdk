@@ -11,11 +11,11 @@ on:
         required: true
         type: string
       package-version:
-        description: 'Version for the gradle library (MAJOR.MINOR.BUILD)'
+        description: 'Version for the Flutter package (MAJOR.MINOR.PATCH) // (no v prefix)'
         required: true
         type: string
       publish:
-        description: 'Should publish'
+        description: 'Should publish the package'
         required: true
         type: boolean
         default: false
@@ -30,27 +30,39 @@ on:
         description: 'Cargokit private key for signing precompiled binaries'
         required: true
 
+env:
+  FLUTTER_VERSION: '3.35.7'  
+  NDK_VERSION: '23.2.8568313'
+  ANDROID_MIN_SDK: '24'
+  IPHONEOS_DEPLOYMENT_TARGET: '13.0'
+  CARGO_MANIFEST_DIR: '../../rust'
+  FLUTTER_PACKAGE_REPO: 'breez/breez-sdk-spark-flutter'
+
 jobs:
   build-package:
-    name: Build package
+    name: Build Flutter Package
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      package-version: ${{ inputs.package-version }}
     steps:
-      - name: Checkout
+      - name: Checkout Flutter Package Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FLUTTER_PACKAGE_REPO }}
+          ssh-key: ${{ secrets.REPO_SSH_KEY }}
+          fetch-depth: 0
+          path: dist
+      
+      - name: Checkout SDK Repository
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.repository || github.repository }}
           ref: ${{ inputs.ref || github.sha }}
-
-      - name: Checkout breez-sdk-spark-flutter repo
-        uses: actions/checkout@v4
-        with:
-          repository: breez/breez-sdk-spark-flutter
-          ssh-key: ${{ secrets.REPO_SSH_KEY }}
-          fetch-depth: 0
-          path: dist
+          path: build
   
       - name: Setup build
-        uses: ./.github/actions/setup-build
+        uses: ./build/.github/actions/setup-build
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -58,82 +70,117 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version:  3.35.7
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
 
-      - name: Set cargo version
-        working-directory: packages/flutter/rust
+      - name: Update Cargo Dependencies
+        working-directory: build/packages/flutter/rust
         run: |
           HASH=$(git rev-parse HEAD)
           sed -i.bak -e 's/^breez-sdk-common = .*/breez-sdk-common = { git = "https:\/\/github.com\/breez\/spark-sdk.git", rev = "'"$HASH"'" }/' Cargo.toml
           sed -i.bak -e 's/^breez-sdk-spark = .*/breez-sdk-spark = { git = "https:\/\/github.com\/breez\/spark-sdk.git", rev = "'"$HASH"'", features = ["openssl-vendored"] }/' Cargo.toml
           rm Cargo.toml.bak
 
-      - name: Generate bindings
-        working-directory: packages/flutter
+      - name: Install flutter_rust_bridge_codegen & Generate Flutter Bindings
+        working-directory: build/packages/flutter
         run: make generate-bindings
   
-      - name: Copy package files
+      - name: Prepare Package Structure
         working-directory: dist
         run: |
-          rm -rf android ios macos lib rust
-          cp -r ../packages/flutter/android .
-          cp -r ../packages/flutter/ios .
-          cp -r ../packages/flutter/macos .
-          cp -r ../packages/flutter/lib .
-          cp -r ../packages/flutter/rust .
-          rm lib/src/.gitignore rust/src/.gitignore
+          # Remove existing directories
+          rm -rf android cargokit ios macos lib rust
+
+          # Copy source directories
+          cp -r ../build/packages/flutter/{android,cargokit,ios,macos,lib,rust} .
+
+          # Clean up gitignore files
+          rm -f {lib,rust}/src/.gitignore
+
+          # Clean up build artifacts
           rm -rf rust/target
-          cp ../packages/flutter/*.yaml .
-          cp ../packages/flutter/README.md .
 
-      - name: Set package version
+          # Copy package metadata
+          cp ../build/packages/flutter/*.yaml .
+
+      - name: Copy Documentation
         working-directory: dist
         run: |
-          sed -i.bak -e 's/^version:.*/version: ${{ inputs.package-version }}/' pubspec.yaml
-          sed -i.bak -e "s/^version .*/version '${{ inputs.package-version }}'/" android/build.gradle
-          sed -i.bak -e "s/version             = .*/version             = '${{ inputs.package-version }}'/" ios/breez_sdk_spark_flutter.podspec
-          sed -i.bak -e "s/version             = .*/version             = '${{ inputs.package-version }}'/" macos/breez_sdk_spark_flutter.podspec
-          rm pubspec.yaml.bak android/build.gradle.bak
-          rm ios/breez_sdk_spark_flutter.podspec.bak macos/breez_sdk_spark_flutter.podspec.bak
+          for file in CHANGELOG.md LICENSE README.md; do
+            [ -f "../packages/flutter/$file" ] && cp "../packages/flutter/$file" . || echo "Warning: $file not found"
+          done
 
-      - name: Archive package
-        if: ${{ !inputs.publish }}
+      - name: Update Package Version
+        working-directory: dist
+        run: |
+          # Update pubspec.yaml
+          sed -i.bak -e 's/^version:.*/version: ${{ inputs.package-version }}/' pubspec.yaml
+
+          # Update Android gradle
+          sed -i.bak -e "s/^version .*/version '${{ inputs.package-version }}'/" android/build.gradle
+
+          # Update iOS podspec          
+          sed -i.bak -e "s/version             = .*/version             = '${{ inputs.package-version }}'/" ios/breez_sdk_spark_flutter.podspec
+
+          # Update macOS podspec
+          sed -i.bak -e "s/version             = .*/version             = '${{ inputs.package-version }}'/" macos/breez_sdk_spark_flutter.podspec
+
+          # Remove backup files
+          rm *.bak */*.bak 2>/dev/null || true
+
+      - name: Archive Flutter Package
         uses: actions/upload-artifact@v4
         with:
-          name: flutter-${{ inputs.package-version || '0.0.2' }}
-          path: dist/*
+          name: breez-sdk-spark-flutter-${{ inputs.package-version || github.sha }}
+          path: |
+            dist/*
+            !dist/.git
+          retention-days: 30
+          compression-level: 9
 
-      - name: Tag the Flutter package
+      - name: Publish Package
         working-directory: dist
         if: ${{ inputs.publish }}
         run: |
-          git config --global user.name "SDK release tagger"
-          git config --global user.email "no-reply@breez.technology"
+          git config user.name "Breez SDK Bot"
+          git config user.email "sdk-bot@breez.technology"
+
           git add .
-          git commit -m "Update Flutter package to version v${{ inputs.package-version }}"
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "chore: release Flutter package v${{ inputs.package-version }}"
           git push
-          git tag v${{ inputs.package-version }} -m "v${{ inputs.package-version }}"
-          git push --tags
+
+          git tag "v${{ inputs.package-version }}" -m "Release v${{ inputs.package-version }}"
+          git push origin "v${{ inputs.package-version }}"
 
   precompile-binaries:
-    name: Precompile binaries ${{ matrix.os }}
+    name: Precompile Binaries (${{ matrix.platform }})
     needs: build-package
+    if: ${{ inputs.publish }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [
-          ubuntu-latest,
-          macOS-latest,
-        ]
+        include:
+          - platform: linux
+            os: ubuntu-latest
+            features: android
+          - platform: darwin
+            os: macOS-latest
+            features: ios,macos
     steps:
-      - name: Checkout breez-sdk-spark-flutter repo
+      - name: Checkout Flutter Package Repository
         uses: actions/checkout@v4
         with:
-          repository: breez/breez-sdk-spark-flutter
+          repository: ${{ env.FLUTTER_PACKAGE_REPO }}
           ssh-key: ${{ secrets.REPO_SSH_KEY }}
           fetch-depth: 0
-  
+
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -143,37 +190,54 @@ jobs:
       - name: Setup rust cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Setup Dart
+      - name: Setup Dart SDK
         uses: dart-lang/setup-dart@v1
 
-      - name: Install GTK
-        if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
-      
-      - name: Setup Android SDK
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install Linux Dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev
+
+      - name: Setup Android Development
+        if: matrix.platform == 'linux'
         uses: android-actions/setup-android@v3
 
-      - name: Install NDK
-        if: matrix.os == 'ubuntu-latest'
-        run: sdkmanager "ndk;23.2.8568313"
+      - name: Install Android NDK
+        if: matrix.platform == 'linux'
+        run: sdkmanager "ndk;${{ env.NDK_VERSION }}"
 
-      - name: Set IPHONEOS_DEPLOYMENT_TARGET
-        if: matrix.os == 'macOS-latest'
-        run: echo "IPHONEOS_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV
+      - name: Set iOS Deployment Target
+        if: matrix.platform == 'darwin'
+        run: echo "IPHONEOS_DEPLOYMENT_TARGET=${{ env.IPHONEOS_DEPLOYMENT_TARGET }}" >> $GITHUB_ENV
 
-      - name: Precompile ${{ matrix.os }}
-        if: inputs.publish && matrix.os == 'macOS-latest'
-        run: dart run build_tool precompile-binaries -v --manifest-dir=../../rust --repository=breez/breez-sdk-spark-flutter
+      - name: Precompile Binaries (Linux + Android)
+        if: matrix.platform == 'linux'
         working-directory: cargokit/build_tool
+        run: |
+          dart run build_tool precompile-binaries \
+            --verbose \
+            --manifest-dir=${{ env.CARGO_MANIFEST_DIR }} \
+            --repository=${{ env.FLUTTER_PACKAGE_REPO }} \
+            --android-sdk-location=$ANDROID_HOME \
+            --android-ndk-version=${{ env.NDK_VERSION }} \
+            --android-min-sdk-version=${{ env.ANDROID_MIN_SDK }}
         env:
           GITHUB_TOKEN: ${{ secrets.FLUTTER_RELEASE_TOKEN }}
           PRIVATE_KEY: ${{ secrets.CARGOKIT_PRIVATE_KEY }}
 
-      - name: Precompile ${{ matrix.os }}
-        if: inputs.publish && matrix.os == 'ubuntu-latest'
-        run: dart run build_tool precompile-binaries -v --manifest-dir=../../rust --repository=breez/breez-sdk-spark-flutter --android-sdk-location=$ANDROID_HOME --android-ndk-version=23.2.8568313 --android-min-sdk-version=24
+      - name: Precompile Binaries (macOS + iOS)
+        if: matrix.platform == 'darwin'
         working-directory: cargokit/build_tool
+        run: |
+          dart run build_tool precompile-binaries \
+            --verbose \
+            --manifest-dir=${{ env.CARGO_MANIFEST_DIR }} \
+            --repository=${{ env.FLUTTER_PACKAGE_REPO }}
         env:
           GITHUB_TOKEN: ${{ secrets.FLUTTER_RELEASE_TOKEN }}
           PRIVATE_KEY: ${{ secrets.CARGOKIT_PRIVATE_KEY }}
+
+      - name: Validate Binary Compilation
+        run: |
+          echo "Binary precompilation completed successfully for ${{ matrix.platform }}"
