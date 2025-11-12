@@ -164,7 +164,8 @@ async fn test_onchain_withdraw_to_static_address(
 
     // Trigger Bob sync and wait for receive + claim
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let recv_payment = wait_for_payment_event(&mut bob.events, PaymentType::Receive, 180).await?;
+    let recv_payment =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 180).await?;
     assert!(matches!(recv_payment.method, PaymentMethod::Deposit));
 
     // Verify Bob's balance increased and no unclaimed deposits remain

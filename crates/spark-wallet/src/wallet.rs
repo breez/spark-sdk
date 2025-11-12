@@ -25,7 +25,7 @@ use spark::{
         InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment,
         LightningService, QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager,
         TokenMetadata, TokenService, TokenTransaction, Transfer, TransferObserver, TransferService,
-        TransferTokenOutput, UnilateralExitService, Utxo,
+        TransferStatus, TransferTokenOutput, UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
@@ -1237,9 +1237,12 @@ impl BackgroundProcessor {
         claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
         trace!("Claimed transfer from event");
 
+        // Update transfer status before notifying listeners
+        let mut claimed_transfer = transfer;
+        claimed_transfer.status = TransferStatus::Completed;
         self.event_manager
             .notify_listeners(WalletEvent::TransferClaimed(WalletTransfer::from_transfer(
-                transfer,
+                claimed_transfer,
                 ssp_transfer,
                 self.identity_public_key,
             )));

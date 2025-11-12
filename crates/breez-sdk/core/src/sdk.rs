@@ -353,7 +353,11 @@ impl BreezSdk {
             }
             WalletEvent::TransferClaimed(transfer) => {
                 info!("Transfer claimed");
-                if let Ok(payment) = transfer.try_into() {
+                if let Ok(payment) = Payment::try_from(transfer) {
+                    // Insert the payment into storage to make it immediately available for listing
+                    if let Err(e) = self.storage.insert_payment(payment.clone()).await {
+                        error!("Failed to insert succeeded payment: {e:?}");
+                    }
                     self.event_emitter
                         .emit(&SdkEvent::PaymentSucceeded { payment })
                         .await;
@@ -364,7 +368,11 @@ impl BreezSdk {
             }
             WalletEvent::FoundClaimableTransfer(transfer) => {
                 info!("Found a claimable transfer");
-                if let Ok(payment) = transfer.try_into() {
+                if let Ok(payment) = Payment::try_from(transfer) {
+                    // Insert the payment into storage to make it immediately available for listing
+                    if let Err(e) = self.storage.insert_payment(payment.clone()).await {
+                        error!("Failed to insert pending payment: {e:?}");
+                    }
                     self.event_emitter
                         .emit(&SdkEvent::PaymentPending { payment })
                         .await;

@@ -256,6 +256,8 @@ pub enum EventResult {
     ClaimSucceeded,
     /// Payment succeeded with details
     PaymentSucceeded(Box<Payment>),
+    /// Payment pending with details
+    PaymentPending(Box<Payment>),
     /// Synced event occurred
     Synced,
 }
@@ -365,7 +367,7 @@ pub async fn wait_for_claimed_event(
 ///
 /// # Returns
 /// The payment details from the PaymentSucceeded event
-pub async fn wait_for_payment_event(
+pub async fn wait_for_payment_succeeded_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     payment_type: PaymentType,
     timeout_secs: u64,
@@ -391,6 +393,36 @@ pub async fn wait_for_payment_event(
     .await
     .and_then(|result| match result {
         EventResult::PaymentSucceeded(payment) => Ok(*payment),
+        _ => Err(anyhow::anyhow!("Unexpected event result")),
+    })
+}
+
+pub async fn wait_for_payment_pending_event(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    payment_type: PaymentType,
+    timeout_secs: u64,
+) -> Result<Payment> {
+    wait_for_event(
+        event_rx,
+        timeout_secs,
+        "PaymentPending",
+        |event| match event {
+            SdkEvent::PaymentPending { payment } if payment.payment_type == payment_type => {
+                info!(
+                    "Received PaymentPending event: {} sats, type: {:?}",
+                    payment.amount, payment.payment_type
+                );
+                Ok(Some(EventResult::PaymentPending(Box::new(payment))))
+            }
+            other => {
+                info!("Received SDK event: {:?}", other);
+                Ok(None)
+            }
+        },
+    )
+    .await
+    .and_then(|result| match result {
+        EventResult::PaymentPending(payment) => Ok(*payment),
         _ => Err(anyhow::anyhow!("Unexpected event result")),
     })
 }
