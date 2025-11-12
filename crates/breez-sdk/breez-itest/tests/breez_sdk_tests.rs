@@ -155,11 +155,29 @@ async fn test_01_spark_transfer(
         "Payment should be completed or pending"
     );
 
-    // Wait for Bob to receive the payment via event
-    info!("Waiting for Bob to receive payment event...");
-    let received_payment =
-        wait_for_payment_event(&mut bob.events, PaymentType::Receive, 60).await?;
+    // Wait for Bob to receive payment pending event
+    info!("Waiting for Bob to receive pending payment event...");
+    let pending_payment =
+        wait_for_payment_pending_event(&mut bob.events, PaymentType::Receive, 60).await?;
 
+    // Confirm payment is immediately available for listing
+    let payment = bob
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: pending_payment.id,
+        })
+        .await?
+        .payment;
+    assert_eq!(
+        payment.status,
+        PaymentStatus::Pending,
+        "Payment should be pending"
+    );
+
+    // Wait for Bob to receive payment succeeded event
+    info!("Waiting for Bob to receive payment succeeded event...");
+    let received_payment =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
     assert_eq!(
         received_payment.payment_type,
         PaymentType::Receive,
@@ -168,6 +186,20 @@ async fn test_01_spark_transfer(
     assert!(
         received_payment.amount >= 5,
         "Bob should receive at least 5 sats"
+    );
+
+    // Confirm payment is now completed
+    let payment = bob
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: received_payment.id,
+        })
+        .await?
+        .payment;
+    assert_eq!(
+        payment.status,
+        PaymentStatus::Completed,
+        "Payment should be completed"
     );
 
     info!(
@@ -380,7 +412,7 @@ async fn test_03_lightning_invoice_payment(
     // Wait for Bob to receive the payment via event
     info!("Waiting for Bob to receive payment event...");
     let received_payment =
-        wait_for_payment_event(&mut bob.events, PaymentType::Receive, 60).await?;
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
     wait_for_balance(
         &bob.sdk,
         Some(bob_initial_balance + expected_amount),
@@ -413,7 +445,8 @@ async fn test_03_lightning_invoice_payment(
     );
 
     // Verify Alice's balance decreased by amount + fees
-    let sent_payment = wait_for_payment_event(&mut alice.events, PaymentType::Send, 60).await?;
+    let sent_payment =
+        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 60).await?;
     wait_for_balance(
         &alice.sdk,
         Some(alice_initial_balance - sent_payment.amount as u64 - sent_payment.fees as u64),
@@ -576,7 +609,7 @@ async fn test_04_renew_timelocks(
     // Ensure Alice is funded (100 sats minimum for small test)
     ensure_funded(&mut alice, 100).await?;
     let received_payment =
-        wait_for_payment_event(&mut alice.events, PaymentType::Receive, 60).await?;
+        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 60).await?;
 
     assert_eq!(
         received_payment.payment_type,
@@ -594,66 +627,67 @@ async fn test_04_renew_timelocks(
         .await?
         .balance_sats as u128;
 
-    let send_sdk_payment =
-        async |from_sdk: &mut SdkInstance, to_sdk: &mut SdkInstance| -> Result<()> {
-            info!("Sending via Spark started...");
-            // Sync "from" SDK and wait for some balance
-            wait_for_balance(&from_sdk.sdk, Some(1), None, 60).await?;
+    let send_sdk_payment = async |from_sdk: &mut SdkInstance,
+                                  to_sdk: &mut SdkInstance|
+           -> Result<()> {
+        info!("Sending via Spark started...");
+        // Sync "from" SDK and wait for some balance
+        wait_for_balance(&from_sdk.sdk, Some(1), None, 60).await?;
 
-            // Get spark address of "to" SDK
-            let spark_address = to_sdk
-                .sdk
-                .receive_payment(ReceivePaymentRequest {
-                    payment_method: ReceivePaymentMethod::SparkAddress,
-                })
-                .await?
-                .payment_request;
+        // Get spark address of "to" SDK
+        let spark_address = to_sdk
+            .sdk
+            .receive_payment(ReceivePaymentRequest {
+                payment_method: ReceivePaymentMethod::SparkAddress,
+            })
+            .await?
+            .payment_request;
 
-            info!("Sending {balance} sats to {spark_address}...");
+        info!("Sending {balance} sats to {spark_address}...");
 
-            // Send payment
-            let prepare = from_sdk
-                .sdk
-                .prepare_send_payment(PrepareSendPaymentRequest {
-                    payment_request: spark_address.to_string(),
-                    amount: Some(balance),
-                    token_identifier: None,
-                })
-                .await?;
+        // Send payment
+        let prepare = from_sdk
+            .sdk
+            .prepare_send_payment(PrepareSendPaymentRequest {
+                payment_request: spark_address.to_string(),
+                amount: Some(balance),
+                token_identifier: None,
+            })
+            .await?;
 
-            info!("Sending via Spark before send payment");
-            let send_resp = from_sdk
-                .sdk
-                .send_payment(SendPaymentRequest {
-                    prepare_response: prepare,
-                    options: None,
-                })
-                .await?;
+        info!("Sending via Spark before send payment");
+        let send_resp = from_sdk
+            .sdk
+            .send_payment(SendPaymentRequest {
+                prepare_response: prepare,
+                options: None,
+            })
+            .await?;
 
-            info!("Sending via Spark after send payment");
-            assert!(
-                matches!(
-                    send_resp.payment.status,
-                    PaymentStatus::Completed | PaymentStatus::Pending
-                ),
-                "Payment should be completed or pending"
-            );
+        info!("Sending via Spark after send payment");
+        assert!(
+            matches!(
+                send_resp.payment.status,
+                PaymentStatus::Completed | PaymentStatus::Pending
+            ),
+            "Payment should be completed or pending"
+        );
 
-            info!("Sending via Spark Waiting for receive payment event...");
-            let received_payment =
-                wait_for_payment_event(&mut to_sdk.events, PaymentType::Receive, 60).await?;
+        info!("Sending via Spark Waiting for receive payment event...");
+        let received_payment =
+            wait_for_payment_succeeded_event(&mut to_sdk.events, PaymentType::Receive, 60).await?;
 
-            assert_eq!(
-                received_payment.payment_type,
-                PaymentType::Receive,
-                "Payment should be received"
-            );
+        assert_eq!(
+            received_payment.payment_type,
+            PaymentType::Receive,
+            "Payment should be received"
+        );
 
-            assert_eq!(received_payment.method, PaymentMethod::Spark);
+        assert_eq!(received_payment.method, PaymentMethod::Spark);
 
-            info!("Sending via Spark after receive payment");
-            Ok(())
-        };
+        info!("Sending via Spark after receive payment");
+        Ok(())
+    };
 
     for n in 0..200 {
         info!("Iteration {n}");
@@ -749,7 +783,8 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
     assert!(matches!(send_resp.payment.payment_type, PaymentType::Send));
 
     // Bob should receive the amount
-    let received = wait_for_payment_event(&mut bob.events, PaymentType::Receive, 60).await?;
+    let received =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
     assert_eq!(received.amount, invoice_amount_sats as u128);
     // Receiver should see Spark method when routed via prefer_spark
     assert!(matches!(received.method, PaymentMethod::Spark));
@@ -808,7 +843,8 @@ async fn test_06_lightning_timeout_and_wait(
     info!("Immediate return status: {:?}", send_resp.payment.status);
     assert!(matches!(send_resp.payment.status, PaymentStatus::Pending));
     // Bob should have received the exact amount
-    let received = wait_for_payment_event(&mut bob.events, PaymentType::Receive, 60).await?;
+    let received =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
     assert_eq!(received.amount, expected_amount as u128);
 
     info!("=== Test test_06_lightning_timeout_and_wait PASSED ===");
@@ -922,7 +958,7 @@ async fn test_07_spark_invoice(
     // Wait for Bob to receive the payment via event
     info!("Waiting for Bob to receive payment event...");
     let received_payment =
-        wait_for_payment_event(&mut bob.events, PaymentType::Receive, 60).await?;
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
 
     assert_eq!(
         received_payment.payment_type,

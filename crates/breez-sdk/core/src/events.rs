@@ -32,6 +32,9 @@ pub enum SdkEvent {
     PaymentSucceeded {
         payment: Payment,
     },
+    PaymentPending {
+        payment: Payment,
+    },
     PaymentFailed {
         payment: Payment,
     },
@@ -61,6 +64,9 @@ impl fmt::Display for SdkEvent {
             }
             SdkEvent::PaymentSucceeded { payment } => {
                 write!(f, "PaymentSucceeded: {payment:?}")
+            }
+            SdkEvent::PaymentPending { payment } => {
+                write!(f, "PaymentPending: {payment:?}")
             }
             SdkEvent::PaymentFailed { payment } => {
                 write!(f, "PaymentFailed: {payment:?}")
