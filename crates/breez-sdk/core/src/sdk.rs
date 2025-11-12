@@ -366,8 +366,8 @@ impl BreezSdk {
                     error!("Failed to sync wallet: {e:?}");
                 }
             }
-            WalletEvent::FoundClaimableTransfer(transfer) => {
-                info!("Found a claimable transfer");
+            WalletEvent::TransferClaimStarting(transfer) => {
+                info!("Transfer claim starting");
                 if let Ok(payment) = Payment::try_from(transfer) {
                     // Insert the payment into storage to make it immediately available for listing
                     if let Err(e) = self.storage.insert_payment(payment.clone()).await {

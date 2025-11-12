@@ -1225,7 +1225,7 @@ impl BackgroundProcessor {
         };
 
         self.event_manager
-            .notify_listeners(WalletEvent::FoundClaimableTransfer(
+            .notify_listeners(WalletEvent::TransferClaimStarting(
                 WalletTransfer::from_transfer(
                     transfer.clone(),
                     ssp_transfer.clone(),
