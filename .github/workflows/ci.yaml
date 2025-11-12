@@ -128,7 +128,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.29.0
+          flutter-version: 3.35.7
 
       - name: Generate bindings
         working-directory: packages/flutter
@@ -184,7 +184,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.29.0
+          flutter-version: 3.35.7
 
       - name: Run Check doc snippets
         run: |
