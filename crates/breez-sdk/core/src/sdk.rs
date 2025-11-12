@@ -50,7 +50,7 @@ use crate::{
     WaitForPaymentRequest, WaitForPaymentResponse,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
-    issuer::BreezIssuerSdk,
+    issuer::TokenIssuer,
     lnurl::LnurlServerClient,
     logger,
     models::{
@@ -1490,9 +1490,9 @@ impl BreezSdk {
         Ok(())
     }
 
-    /// Returns an instance of the [`BreezIssuerSdk`] for managing token issuance.
-    pub fn get_issuer_sdk(&self) -> BreezIssuerSdk {
-        BreezIssuerSdk::new(self.spark_wallet.clone(), self.storage.clone())
+    /// Returns an instance of the [`TokenIssuer`] for managing token issuance.
+    pub fn get_token_issuer(&self) -> TokenIssuer {
+        TokenIssuer::new(self.spark_wallet.clone(), self.storage.clone())
     }
 }
 

@@ -204,10 +204,10 @@ impl BreezSdk {
     }
     
     #[frb(sync)]
-    pub fn get_issuer_sdk(&self) -> crate::issuer::BreezIssuerSdk {
-        let issuer_sdk = self.inner.get_issuer_sdk();
-        crate::issuer::BreezIssuerSdk {
-            issuer_sdk: Arc::new(issuer_sdk),
+    pub fn get_token_issuer(&self) -> crate::issuer::TokenIssuer {
+        let token_issuer = self.inner.get_token_issuer();
+        crate::issuer::TokenIssuer {
+            token_issuer: Arc::new(token_issuer),
         }
     }
 }

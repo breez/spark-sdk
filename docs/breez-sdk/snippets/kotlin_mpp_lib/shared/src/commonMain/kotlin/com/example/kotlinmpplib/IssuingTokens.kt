@@ -4,14 +4,14 @@ import breez_sdk_spark.*
 import com.ionspin.kotlin.bignum.integer.BigInteger
 
 class IssuingTokens {
-    fun getIssuerSdk(sdk: BreezSdk): BreezIssuerSdk {
+    fun getTokenIssuer(sdk: BreezSdk): TokenIssuer {
         // ANCHOR: get-issuer-sdk
-        val issuerSdk = sdk.getIssuerSdk()
+        val tokenIssuer = sdk.getTokenIssuer()
         // ANCHOR_END: get-issuer-sdk
-        return issuerSdk
+        return tokenIssuer
     }
 
-    suspend fun createToken(issuerSdk: BreezIssuerSdk) {
+    suspend fun createToken(tokenIssuer: TokenIssuer) {
         // ANCHOR: create-token
         try {
             val request = CreateIssuerTokenRequest(
@@ -21,7 +21,7 @@ class IssuingTokens {
                 isFreezable = false,
                 maxSupply = BigInteger.fromLong(1_000_000L)
             )
-            val tokenMetadata = issuerSdk.createIssuerToken(request)
+            val tokenMetadata = tokenIssuer.createIssuerToken(request)
             // Log.v("Breez", "Token identifier: ${tokenMetadata.identifier}")
         } catch (e: Exception) {
             // Handle exception
@@ -29,39 +29,39 @@ class IssuingTokens {
         // ANCHOR_END: create-token
     }
 
-    suspend fun mintToken(issuerSdk: BreezIssuerSdk) {
+    suspend fun mintToken(tokenIssuer: TokenIssuer) {
         // ANCHOR: mint-token
         try {
             val request = MintIssuerTokenRequest(
                 amount = BigInteger.fromLong(1_000L),
             )
-            val payment = issuerSdk.mintIssuerToken(request)
+            val payment = tokenIssuer.mintIssuerToken(request)
         } catch (e: Exception) {
             // Handle exception
         }
         // ANCHOR_END: mint-token
     }
 
-    suspend fun burnToken(issuerSdk: BreezIssuerSdk) {
+    suspend fun burnToken(tokenIssuer: TokenIssuer) {
         // ANCHOR: burn-token
         try {
             val request = BurnIssuerTokenRequest(
                 amount = BigInteger.fromLong(1_000L),
             )
-            val payment = issuerSdk.burnIssuerToken(request)
+            val payment = tokenIssuer.burnIssuerToken(request)
         } catch (e: Exception) {
             // Handle exception
         }
         // ANCHOR_END: burn-token
     }
 
-    suspend fun getTokenMetadata(issuerSdk: BreezIssuerSdk) {
+    suspend fun getTokenMetadata(tokenIssuer: TokenIssuer) {
         // ANCHOR: get-token-metadata
         try {
-            val tokenBalance = issuerSdk.getIssuerTokenBalance()
+            val tokenBalance = tokenIssuer.getIssuerTokenBalance()
             // Log.v("Breez", "Token balance: ${tokenBalance.balance}")
 
-            val tokenMetadata = issuerSdk.getIssuerTokenMetadata()
+            val tokenMetadata = tokenIssuer.getIssuerTokenMetadata()
             // Log.v("Breez", "Token ticker: ${tokenMetadata.ticker}")
         } catch (e: Exception) {
             // Handle exception
@@ -69,7 +69,7 @@ class IssuingTokens {
         // ANCHOR_END: get-token-metadata
     }
 
-    suspend fun freezeToken(issuerSdk: BreezIssuerSdk) {
+    suspend fun freezeToken(tokenIssuer: TokenIssuer) {
         // ANCHOR: freeze-token
         try {
             val sparkAddress = "<spark address>"
@@ -77,13 +77,13 @@ class IssuingTokens {
             val freezeRequest = FreezeIssuerTokenRequest(
                 address = sparkAddress,
             )
-            val freezeResponse = issuerSdk.freezeIssuerToken(freezeRequest)
+            val freezeResponse = tokenIssuer.freezeIssuerToken(freezeRequest)
 
             // Unfreeze the tokens held at the specified Spark address
             val unfreezeRequest = UnfreezeIssuerTokenRequest(
                 address = sparkAddress,
             )
-            val unfreezeResponse = issuerSdk.unfreezeIssuerToken(unfreezeRequest)
+            val unfreezeResponse = tokenIssuer.unfreezeIssuerToken(unfreezeRequest)
         } catch (e: Exception) {
             // Handle exception
         }

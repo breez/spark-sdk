@@ -1,6 +1,6 @@
 use breez_sdk_spark::{
-    BreezIssuerSdk, BurnIssuerTokenRequest, CreateIssuerTokenRequest, FreezeIssuerTokenRequest,
-    MintIssuerTokenRequest, UnfreezeIssuerTokenRequest,
+    BurnIssuerTokenRequest, CreateIssuerTokenRequest, FreezeIssuerTokenRequest,
+    MintIssuerTokenRequest, TokenIssuer, UnfreezeIssuerTokenRequest,
 };
 use clap::{ArgAction, Subcommand};
 
@@ -49,17 +49,17 @@ pub enum IssuerCommand {
 }
 
 pub async fn handle_command(
-    issuer_sdk: &BreezIssuerSdk,
+    token_issuer: &TokenIssuer,
     command: IssuerCommand,
 ) -> Result<bool, anyhow::Error> {
     match command {
         IssuerCommand::TokenBalance => {
-            let response = issuer_sdk.get_issuer_token_balance().await?;
+            let response = token_issuer.get_issuer_token_balance().await?;
             print_value(&response)?;
             Ok(true)
         }
         IssuerCommand::TokenMetadata => {
-            let metadata = issuer_sdk.get_issuer_token_metadata().await?;
+            let metadata = token_issuer.get_issuer_token_metadata().await?;
             print_value(&metadata)?;
             Ok(true)
         }
@@ -70,7 +70,7 @@ pub async fn handle_command(
             is_freezable,
             max_supply,
         } => {
-            let metadata = issuer_sdk
+            let metadata = token_issuer
                 .create_issuer_token(CreateIssuerTokenRequest {
                     name,
                     ticker,
@@ -83,28 +83,28 @@ pub async fn handle_command(
             Ok(true)
         }
         IssuerCommand::MintToken { amount } => {
-            let payment = issuer_sdk
+            let payment = token_issuer
                 .mint_issuer_token(MintIssuerTokenRequest { amount })
                 .await?;
             print_value(&payment)?;
             Ok(true)
         }
         IssuerCommand::BurnToken { amount } => {
-            let payment = issuer_sdk
+            let payment = token_issuer
                 .burn_issuer_token(BurnIssuerTokenRequest { amount })
                 .await?;
             print_value(&payment)?;
             Ok(true)
         }
         IssuerCommand::FreezeToken { address } => {
-            let response = issuer_sdk
+            let response = token_issuer
                 .freeze_issuer_token(FreezeIssuerTokenRequest { address })
                 .await?;
             print_value(&response)?;
             Ok(true)
         }
         IssuerCommand::UnfreezeToken { address } => {
-            let response = issuer_sdk
+            let response = token_issuer
                 .unfreeze_issuer_token(UnfreezeIssuerTokenRequest { address })
                 .await?;
             print_value(&response)?;

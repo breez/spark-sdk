@@ -111,7 +111,7 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
     let listener = Box::new(CliEventListener {});
     sdk.add_event_listener(listener).await;
 
-    let issuer_sdk = sdk.get_issuer_sdk();
+    let token_issuer = sdk.get_token_issuer();
 
     println!("Breez SDK CLI Interactive Mode");
     println!("Type 'help' for available commands or 'exit' to quit");
@@ -134,7 +134,7 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
 
                 match parse_command(trimmed) {
                     Ok(command) => {
-                        match Box::pin(execute_command(rl, command, &sdk, &issuer_sdk)).await {
+                        match Box::pin(execute_command(rl, command, &sdk, &token_issuer)).await {
                             Ok(continue_loop) => {
                                 if !continue_loop {
                                     break;

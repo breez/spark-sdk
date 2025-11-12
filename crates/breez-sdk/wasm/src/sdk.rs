@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 use crate::{
     error::WasmResult,
     event::{EventListener, WasmEventListener},
-    issuer::BreezIssuerSdk,
+    issuer::TokenIssuer,
     logger::{Logger, WasmTracingLayer},
     models::*,
     sdk_builder::SdkBuilder,
@@ -256,11 +256,11 @@ impl BreezSdk {
         Ok(self.sdk.update_user_settings(request.into()).await?)
     }
 
-    #[wasm_bindgen(js_name = "getIssuerSdk")]
-    pub fn get_issuer_sdk(&self) -> BreezIssuerSdk {
-        let issuer_sdk = self.sdk.get_issuer_sdk();
-        BreezIssuerSdk {
-            issuer_sdk: Rc::new(issuer_sdk),
+    #[wasm_bindgen(js_name = "getTokenIssuer")]
+    pub fn get_token_issuer(&self) -> TokenIssuer {
+        let token_issuer = self.sdk.get_token_issuer();
+        TokenIssuer {
+            token_issuer: Rc::new(token_issuer),
         }
     }
 }

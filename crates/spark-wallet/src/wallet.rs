@@ -911,7 +911,7 @@ impl SparkWallet {
     }
 
     pub async fn get_issuer_token_balance(&self) -> Result<TokenBalance, SparkWalletError> {
-        let token_identifier = self.get_issuer_token_identifier().await?;
+        let token_identifier = self.get_issuer_token_metadata().await?.identifier;
         let token_balances = self.get_token_balances().await?;
 
         Ok(token_balances
@@ -920,10 +920,6 @@ impl SparkWallet {
                 "No issuer token found".to_string(),
             ))?
             .clone())
-    }
-
-    pub async fn get_issuer_token_identifier(&self) -> Result<String, SparkWalletError> {
-        Ok(self.get_issuer_token_metadata().await?.identifier)
     }
 
     pub async fn get_issuer_token_metadata(&self) -> Result<TokenMetadata, SparkWalletError> {

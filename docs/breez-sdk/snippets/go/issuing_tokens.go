@@ -7,14 +7,14 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func GetIssuerSdk(sdk *breez_sdk_spark.BreezSdk) *breez_sdk_spark.BreezIssuerSdk {
+func GetTokenIssuer(sdk *breez_sdk_spark.BreezSdk) *breez_sdk_spark.TokenIssuer {
 	// ANCHOR: get-issuer-sdk
-	issuerSdk := sdk.GetIssuerSdk()
+	tokenIssuer := sdk.GetTokenIssuer()
 	// ANCHOR_END: get-issuer-sdk
-	return issuerSdk
+	return tokenIssuer
 }
 
-func CreateToken(issuerSdk *breez_sdk_spark.BreezIssuerSdk) (*breez_sdk_spark.TokenMetadata, error) {
+func CreateToken(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.TokenMetadata, error) {
 	// ANCHOR: create-token
 	request := breez_sdk_spark.CreateIssuerTokenRequest{
 		Name:        "My Token",
@@ -23,7 +23,7 @@ func CreateToken(issuerSdk *breez_sdk_spark.BreezIssuerSdk) (*breez_sdk_spark.To
 		IsFreezable: false,
 		MaxSupply:   new(big.Int).SetInt64(1_000_000),
 	}
-	tokenMetadata, err := issuerSdk.CreateIssuerToken(request)
+	tokenMetadata, err := tokenIssuer.CreateIssuerToken(request)
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return nil, err
 	}
@@ -32,12 +32,12 @@ func CreateToken(issuerSdk *breez_sdk_spark.BreezIssuerSdk) (*breez_sdk_spark.To
 	return &tokenMetadata, nil
 }
 
-func MintToken(issuerSdk *breez_sdk_spark.BreezIssuerSdk) (*breez_sdk_spark.Payment, error) {
+func MintToken(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: mint-token
 	request := breez_sdk_spark.MintIssuerTokenRequest{
 		Amount: new(big.Int).SetInt64(1_000),
 	}
-	payment, err := issuerSdk.MintIssuerToken(request)
+	payment, err := tokenIssuer.MintIssuerToken(request)
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return nil, err
 	}
@@ -45,12 +45,12 @@ func MintToken(issuerSdk *breez_sdk_spark.BreezIssuerSdk) (*breez_sdk_spark.Paym
 	return &payment, nil
 }
 
-func BurnToken(issuerSdk *breez_sdk_spark.BreezIssuerSdk) (*breez_sdk_spark.Payment, error) {
+func BurnToken(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: burn-token
 	request := breez_sdk_spark.BurnIssuerTokenRequest{
 		Amount: new(big.Int).SetInt64(1_000),
 	}
-	payment, err := issuerSdk.BurnIssuerToken(request)
+	payment, err := tokenIssuer.BurnIssuerToken(request)
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return nil, err
 	}
@@ -58,15 +58,15 @@ func BurnToken(issuerSdk *breez_sdk_spark.BreezIssuerSdk) (*breez_sdk_spark.Paym
 	return &payment, nil
 }
 
-func GetTokenMetadata(issuerSdk *breez_sdk_spark.BreezIssuerSdk) (*breez_sdk_spark.TokenMetadata, error) {
+func GetTokenMetadata(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.TokenMetadata, error) {
 	// ANCHOR: get-token-metadata
-	tokenBalance, err := issuerSdk.GetIssuerTokenBalance()
+	tokenBalance, err := tokenIssuer.GetIssuerTokenBalance()
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return nil, err
 	}
 	log.Printf("Token balance: %v", tokenBalance.Balance)
 
-	tokenMetadata, err := issuerSdk.GetIssuerTokenMetadata()
+	tokenMetadata, err := tokenIssuer.GetIssuerTokenMetadata()
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return nil, err
 	}
@@ -75,14 +75,14 @@ func GetTokenMetadata(issuerSdk *breez_sdk_spark.BreezIssuerSdk) (*breez_sdk_spa
 	return &tokenMetadata, nil
 }
 
-func FreezeToken(issuerSdk *breez_sdk_spark.BreezIssuerSdk) error {
+func FreezeToken(tokenIssuer *breez_sdk_spark.TokenIssuer) error {
 	// ANCHOR: freeze-token
 	sparkAddress := "<spark address>"
 	// Freeze the tokens held at the specified Spark address
 	freezeRequest := breez_sdk_spark.FreezeIssuerTokenRequest{
 		Address: sparkAddress,
 	}
-	freezeResponse, err := issuerSdk.FreezeIssuerToken(freezeRequest)
+	freezeResponse, err := tokenIssuer.FreezeIssuerToken(freezeRequest)
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func FreezeToken(issuerSdk *breez_sdk_spark.BreezIssuerSdk) error {
 	unfreezeRequest := breez_sdk_spark.UnfreezeIssuerTokenRequest{
 		Address: sparkAddress,
 	}
-	unfreezeResponse, err := issuerSdk.UnfreezeIssuerToken(unfreezeRequest)
+	unfreezeResponse, err := tokenIssuer.UnfreezeIssuerToken(unfreezeRequest)
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return err
 	}

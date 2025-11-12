@@ -10,12 +10,12 @@ use crate::{
 };
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
-pub struct BreezIssuerSdk {
+pub struct TokenIssuer {
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
 }
 
-impl BreezIssuerSdk {
+impl TokenIssuer {
     pub fn new(spark_wallet: Arc<SparkWallet>, storage: Arc<dyn Storage>) -> Self {
         Self {
             spark_wallet,
@@ -25,7 +25,7 @@ impl BreezIssuerSdk {
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-impl BreezIssuerSdk {
+impl TokenIssuer {
     /// Gets the issuer token balance
     ///
     /// # Returns

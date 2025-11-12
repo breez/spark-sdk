@@ -1,13 +1,13 @@
 mod issuer;
 
 use breez_sdk_spark::{
-    AssetFilter, BreezIssuerSdk, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee,
-    GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest, InputType,
-    LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest,
-    LnurlWithdrawRequest, OnchainConfirmationSpeed, PaymentStatus, PaymentType,
-    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
-    SendPaymentRequest, SyncWalletRequest, UpdateUserSettingsRequest,
+    AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee, GetInfoRequest,
+    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
+    OnchainConfirmationSpeed, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
+    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
+    SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rustyline::{
@@ -228,7 +228,7 @@ pub(crate) async fn execute_command(
     rl: &mut Editor<CliHelper, DefaultHistory>,
     command: Command,
     sdk: &BreezSdk,
-    issuer_sdk: &BreezIssuerSdk,
+    token_issuer: &TokenIssuer,
 ) -> Result<bool, anyhow::Error> {
     match command {
         Command::Exit => {
@@ -555,7 +555,9 @@ pub(crate) async fn execute_command(
             .await?;
             Ok(true)
         }
-        Command::Issuer(issuer_command) => issuer::handle_command(issuer_sdk, issuer_command).await,
+        Command::Issuer(issuer_command) => {
+            issuer::handle_command(token_issuer, issuer_command).await
+        }
     }
 }
 
