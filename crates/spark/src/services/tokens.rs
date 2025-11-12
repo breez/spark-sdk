@@ -1,7 +1,6 @@
 use std::{collections::HashMap, ops::Not, sync::Arc};
 
 use bitcoin::{
-    Txid,
     bech32::{self, Bech32m, Hrp},
     hashes::{Hash, HashEngine, sha256},
 };
@@ -342,11 +341,7 @@ impl TokenService {
             .build_partial_tx(inputs.clone(), receiver_outputs.clone())
             .await?;
         let final_tx = self.start_transaction(partial_tx).await?;
-        let txid = Txid::from_slice(&final_tx.compute_hash(false)?).map_err(|e| {
-            ServiceError::Generic(format!(
-                "Failed to compute txid from final transaction: {e}",
-            ))
-        })?;
+        let txid = hex::encode(final_tx.compute_hash(false)?);
 
         if let Some(observer) = &self.transfer_observer {
             observer
@@ -385,7 +380,7 @@ impl TokenService {
             .try_for_each(|(vout, o)| -> Result<(), ServiceError> {
                 this_token_outputs.outputs.push(TokenOutputWithPrevOut {
                     output: (o, self.network).try_into()?,
-                    prev_tx_hash: hex::encode(txid.as_raw_hash()),
+                    prev_tx_hash: txid.clone(),
                     prev_tx_vout: vout as u32,
                 });
                 Ok(())
