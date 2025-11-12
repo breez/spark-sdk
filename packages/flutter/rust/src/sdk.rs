@@ -167,6 +167,10 @@ impl BreezSdk {
         self.inner.list_fiat_rates().await
     }
 
+    pub async fn recommended_fees(&self) -> Result<RecommendedFees, SdkError> {
+        self.inner.recommended_fees().await
+    }
+
     pub async fn wait_for_payment(
         &self,
         request: WaitForPaymentRequest,

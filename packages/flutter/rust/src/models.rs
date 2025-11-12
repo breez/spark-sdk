@@ -1,5 +1,5 @@
-pub use breez_sdk_spark::*;
 pub use breez_sdk_spark::sync_storage::*;
+pub use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
 use std::collections::HashMap;
 
@@ -905,4 +905,19 @@ pub struct _UnfreezeIssuerTokenRequest {
 pub struct _UnfreezeIssuerTokenResponse {
     pub impacted_output_ids: Vec<String>,
     pub impacted_token_amount: u128,
+}
+
+#[frb(mirror(RecommendedFees))]
+pub struct _RecommendedFees {
+    pub fastest_fee: u64,
+    pub half_hour_fee: u64,
+    pub hour_fee: u64,
+    pub economy_fee: u64,
+    pub minimum_fee: u64,
+}
+
+#[frb(mirror(ChainApiType))]
+pub enum _ChainApiType {
+    Electrum,
+    MempoolSpace,
 }

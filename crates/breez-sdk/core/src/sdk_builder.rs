@@ -17,7 +17,7 @@ use crate::{
     RestClientWrapper, Seed,
     chain::{
         BitcoinChainService,
-        rest_client::{BasicAuth, RestClientChainService},
+        rest_client::{BasicAuth, ChainApiType, RestClientChainService},
     },
     error::SdkError,
     lnurl::{LnurlServerClient, ReqwestLnurlServerClient},
@@ -128,11 +128,13 @@ impl SdkBuilder {
     /// Sets the REST chain service to be used by the SDK.
     /// Arguments:
     /// - `url`: The base URL of the REST API.
+    /// - `api_type`: The API type to be used.
     /// - `credentials`: Optional credentials for basic authentication.
     #[must_use]
     pub fn with_rest_chain_service(
         mut self,
         url: String,
+        api_type: ChainApiType,
         credentials: Option<Credentials>,
     ) -> Self {
         self.chain_service = Some(Arc::new(RestClientChainService::new(
@@ -141,6 +143,7 @@ impl SdkBuilder {
             5,
             Box::new(CommonRequestRestClient::new().unwrap()),
             credentials.map(|c| BasicAuth::new(c.username, c.password)),
+            api_type,
         )));
         self
     }
@@ -250,6 +253,7 @@ impl SdkBuilder {
                     5,
                     Box::new(inner_client),
                     None,
+                    ChainApiType::Electrum,
                 )),
                 Network::Regtest => Arc::new(RestClientChainService::new(
                     "https://regtest-mempool.us-west-2.sparkinfra.net/api".to_string(),
@@ -266,6 +270,7 @@ impl SdkBuilder {
                             "mCMk1JqlBNtetUNy".to_string(),
                         )),
                     },
+                    ChainApiType::MempoolSpace,
                 )),
             }
         };

@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio_with_wasm::alias as tokio;
 use tracing::info;
 
+use crate::chain::RecommendedFees;
 use crate::{
     Network,
     chain::{ChainServiceError, Utxo},
@@ -47,6 +48,36 @@ pub struct RestClientChainService {
     client: Box<dyn breez_sdk_common::rest::RestClient>,
     max_retries: usize,
     basic_auth: Option<BasicAuth>,
+    api_type: ChainApiType,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ChainApiType {
+    Electrum,
+    MempoolSpace,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MempoolSpaceRecommendedFeesResponse {
+    fastest_fee: f64,
+    half_hour_fee: f64,
+    hour_fee: f64,
+    economy_fee: f64,
+    minimum_fee: f64,
+}
+
+impl From<MempoolSpaceRecommendedFeesResponse> for RecommendedFees {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn from(response: MempoolSpaceRecommendedFeesResponse) -> Self {
+        Self {
+            fastest_fee: response.fastest_fee.ceil() as u64,
+            half_hour_fee: response.half_hour_fee.ceil() as u64,
+            hour_fee: response.hour_fee.ceil() as u64,
+            economy_fee: response.economy_fee.ceil() as u64,
+            minimum_fee: response.minimum_fee.ceil() as u64,
+        }
+    }
 }
 
 impl RestClientChainService {
@@ -56,6 +87,7 @@ impl RestClientChainService {
         max_retries: usize,
         rest_client: Box<dyn CommonRestClient>,
         basic_auth: Option<BasicAuth>,
+        api_type: ChainApiType,
     ) -> Self {
         Self {
             base_url,
@@ -63,6 +95,7 @@ impl RestClientChainService {
             client: rest_client,
             max_retries,
             basic_auth,
+            api_type,
         }
     }
 
@@ -150,6 +183,29 @@ impl RestClientChainService {
 
         Ok(body)
     }
+
+    async fn recommended_fees_electrum(&self) -> Result<RecommendedFees, ChainServiceError> {
+        let fee_map = self
+            .get_response_json::<HashMap<u16, f64>>("/fee-estimates")
+            .await?;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let get_fees = |block: &u16| fee_map.get(block).map_or(0, |fee| fee.ceil() as u64);
+
+        Ok(RecommendedFees {
+            fastest_fee: get_fees(&1),
+            half_hour_fee: get_fees(&3),
+            hour_fee: get_fees(&6),
+            economy_fee: get_fees(&25),
+            minimum_fee: get_fees(&1008),
+        })
+    }
+
+    async fn recommended_fees_mempool_space(&self) -> Result<RecommendedFees, ChainServiceError> {
+        let response = self
+            .get_response_json::<MempoolSpaceRecommendedFeesResponse>("/v1/fees/recommended")
+            .await?;
+        Ok(response.into())
+    }
 }
 
 #[macros::async_trait]
@@ -187,6 +243,13 @@ impl BitcoinChainService for RestClientChainService {
         let url = format!("{}{}", self.base_url, "/tx");
         self.post(&url, Some(tx)).await?;
         Ok(())
+    }
+
+    async fn recommended_fees(&self) -> Result<RecommendedFees, ChainServiceError> {
+        match self.api_type {
+            ChainApiType::Electrum => self.recommended_fees_electrum().await,
+            ChainApiType::MempoolSpace => self.recommended_fees_mempool_space().await,
+        }
     }
 }
 
@@ -278,6 +341,7 @@ mod tests {
             3,
             Box::new(mock),
             None,
+            ChainApiType::Electrum,
         );
 
         // Call the method under test
