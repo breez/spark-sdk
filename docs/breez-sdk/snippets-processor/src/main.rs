@@ -77,6 +77,7 @@ impl SnippetsProcessor {
             ("Rust", "rust", format!("snippets/rust/src/{}.rs", file_base)),
             ("Swift", "swift", format!("snippets/swift/BreezSdkSnippets/Sources/{}.swift", capitalize_first(file_base))),
             ("Kotlin", "kotlin", format!("snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/{}.kt", capitalize_first(file_base))),
+            ("C#", "csharp", format!("snippets/csharp/{}.cs", capitalize_first(file_base))),
             ("Javascript", "typescript", format!("snippets/wasm/{}.ts", file_base)),
             ("React Native", "typescript", format!("snippets/react-native/{}.ts", file_base)),
             ("Flutter", "dart", format!("snippets/flutter/lib/{}.dart", file_base)),

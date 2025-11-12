@@ -16,6 +16,7 @@ pub enum DocSnippetsPackage {
     ReactNative,
     Rust,
     Swift,
+    CSharp,
 }
 
 impl FromStr for DocSnippetsPackage {
@@ -30,6 +31,7 @@ impl FromStr for DocSnippetsPackage {
             "react-native" => Ok(DocSnippetsPackage::ReactNative),
             "rust" => Ok(DocSnippetsPackage::Rust),
             "swift" => Ok(DocSnippetsPackage::Swift),
+            "csharp" => Ok(DocSnippetsPackage::CSharp),
             _ => bail!("invalid target package: {}", s),
         }
     }
@@ -64,6 +66,9 @@ pub fn check_doc_snippets_cmd(
         Some(DocSnippetsPackage::Swift) => {
             check_doc_snippets_swift_cmd(skip_binding_gen)?;
         }
+        Some(DocSnippetsPackage::CSharp) => {
+            check_doc_snippets_csharp_cmd(skip_binding_gen)?;
+        }
         None => {
             check_doc_snippets_wasm_cmd(skip_binding_gen)?;
             check_doc_snippets_flutter_cmd(skip_binding_gen)?;
@@ -73,6 +78,7 @@ pub fn check_doc_snippets_cmd(
             check_doc_snippets_react_native_cmd(skip_binding_gen)?;
             check_doc_snippets_rust_cmd()?;
             check_doc_snippets_swift_cmd(skip_binding_gen)?;
+            check_doc_snippets_csharp_cmd(skip_binding_gen)?;
         }
     }
     Ok(())
@@ -554,6 +560,123 @@ fn check_doc_snippets_rust_cmd() -> Result<()> {
         .status()?;
     if !status.success() {
         anyhow::bail!("Doc snippet check failed: `cargo clippy` failed");
+    }
+
+    Ok(())
+}
+
+fn check_doc_snippets_csharp_cmd(skip_binding_gen: bool) -> Result<()> {
+    let workspace_root = env::current_dir()?;
+
+    if !skip_binding_gen {
+        println!("Building C# package with dummy binaries");
+
+        let bindings_dir = workspace_root.join("crates/breez-sdk/bindings");
+
+        // Generate C# bindings
+        let status = Command::new("make")
+            .arg("bindings-csharp")
+            .current_dir(&bindings_dir)
+            .status()?;
+        if !status.success() {
+            anyhow::bail!("Failed to generate C# bindings: `make bindings-csharp` failed");
+        }
+
+        // Create dummy binaries for all platforms
+        let csharp_src_dir = bindings_dir.join("langs/csharp/src");
+        let runtimes = vec![
+            ("osx-arm64", "libbreez_sdk_spark_bindings.dylib"),
+            ("osx-x64", "libbreez_sdk_spark_bindings.dylib"),
+            ("linux-arm64", "libbreez_sdk_spark_bindings.so"),
+            ("linux-x64", "libbreez_sdk_spark_bindings.so"),
+            ("win-x64", "breez_sdk_spark_bindings.dll"),
+            ("win-x86", "breez_sdk_spark_bindings.dll"),
+        ];
+
+        for (platform, lib_name) in runtimes {
+            let runtime_dir = csharp_src_dir.join(format!("runtimes/{}/native", platform));
+            std::fs::create_dir_all(&runtime_dir)?;
+            let lib_path = runtime_dir.join(lib_name);
+            // Create empty dummy file
+            std::fs::File::create(&lib_path)?;
+        }
+
+        // Delete existing .cs files in the src directory (except the project file)
+        for entry in std::fs::read_dir(&csharp_src_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("cs") {
+                std::fs::remove_file(&path)?;
+            }
+        }
+
+        // Copy only the main C# binding file to the src directory
+        let ffi_csharp_file = bindings_dir.join("ffi/csharp/breez_sdk_spark.cs");
+        std::fs::copy(&ffi_csharp_file, csharp_src_dir.join("breez_sdk_spark.cs"))?;
+
+        // Pack the NuGet package
+        let status = Command::new("dotnet")
+            .arg("pack")
+            .arg("-c")
+            .arg("Release")
+            .arg("-p:Version=0.0.0-local-docs")
+            .current_dir(&csharp_src_dir)
+            .status()?;
+        if !status.success() {
+            anyhow::bail!("Failed to pack NuGet package: `dotnet pack` failed");
+        }
+
+        // Add local NuGet source if not already added
+        let nuget_source = csharp_src_dir.join("bin/Release");
+        let _ = Command::new("dotnet")
+            .arg("nuget")
+            .arg("add")
+            .arg("source")
+            .arg(&nuget_source)
+            .arg("-n")
+            .arg("LocalBreezSdkSpark")
+            .status();
+    }
+
+    println!("Checking doc snippets C#");
+
+    let csharp_snippets_dir = workspace_root.join("docs/breez-sdk/snippets/csharp");
+
+    // Clear NuGet cache for our local package to ensure latest version is used
+    let _ = Command::new("dotnet")
+        .arg("nuget")
+        .arg("locals")
+        .arg("all")
+        .arg("--clear")
+        .status();
+
+    // Restore NuGet packages
+    let status = Command::new("dotnet")
+        .arg("restore")
+        .current_dir(&csharp_snippets_dir)
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("Doc snippet check failed: `dotnet restore` failed");
+    }
+
+    // Build the project
+    let status = Command::new("dotnet")
+        .arg("build")
+        .arg("--no-restore")
+        .current_dir(&csharp_snippets_dir)
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("Doc snippet check failed: `dotnet build` failed");
+    }
+
+    // Format check
+    let status = Command::new("dotnet")
+        .arg("format")
+        .arg("--verify-no-changes")
+        .current_dir(&csharp_snippets_dir)
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("Doc snippet check failed: `dotnet format --verify-no-changes` failed");
     }
 
     Ok(())
