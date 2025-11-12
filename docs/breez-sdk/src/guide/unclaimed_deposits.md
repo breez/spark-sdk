@@ -24,19 +24,19 @@ The SDK provides three methods to handle unclaimed deposits:
 
 This lists all of the currently unclaimed deposits, including the specific reason why the deposit is unclaimed.
 
-{{#tabs unclaimed_deposits:list-unclaimed-deposits}}
+{{#tabs refunding_payments:list-unclaimed-deposits}}
 
 ## Claiming a deposit
 
 If a deposit is unclaimed due to insufficient fees, you can retry the claim operation with a higher maximum fee. This is particularly useful during periods of high network congestion when transaction fees are elevated.
 
-{{#tabs unclaimed_deposits:claim-deposit}}
+{{#tabs refunding_payments:claim-deposit}}
 
 ## Refunding a deposit
 
 When a deposit cannot be successfully claimed, you can refund the funds to an external Bitcoin address. This operation creates a transaction that sends the deposit amount (minus transaction fees) to the specified destination address.
 
-{{#tabs unclaimed_deposits:refund-deposit}}
+{{#tabs refunding_payments:refund-deposit}}
 
 ## Best Practices
 
