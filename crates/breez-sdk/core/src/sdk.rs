@@ -25,7 +25,7 @@ use spark_wallet::{
 };
 use std::{str::FromStr, sync::Arc};
 use tracing::{error, info, trace, warn};
-use web_time::{Duration, SystemTime, UNIX_EPOCH};
+use web_time::{Duration, SystemTime};
 
 use tokio::{
     select,
@@ -66,6 +66,7 @@ use crate::{
     utils::{
         deposit_chain_syncer::DepositChainSyncer,
         run_with_shutdown,
+        send_payment_validation::validate_prepare_send_payment_request,
         token::{get_tokens_metadata_cached_or_query, token_transaction_to_payments},
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
@@ -1003,6 +1004,13 @@ impl BreezSdk {
         request: PrepareSendPaymentRequest,
     ) -> Result<PrepareSendPaymentResponse, SdkError> {
         let parsed_input = self.parse(&request.payment_request).await?;
+
+        validate_prepare_send_payment_request(
+            &parsed_input,
+            &request,
+            &self.spark_wallet.get_identity_public_key().to_string(),
+        )?;
+
         match &parsed_input {
             InputType::SparkAddress(spark_address_details) => Ok(PrepareSendPaymentResponse {
                 payment_method: SendPaymentMethod::SparkAddress {
@@ -1015,75 +1023,19 @@ impl BreezSdk {
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
                 token_identifier: request.token_identifier,
             }),
-            InputType::SparkInvoice(spark_invoice_details) => {
-                if let Some(token_identifier) = &spark_invoice_details.token_identifier {
-                    if let Some(requested_token_identifier) = &request.token_identifier
-                        && requested_token_identifier != token_identifier
-                    {
-                        return Err(SdkError::InvalidInput(
-                            "Requested token identifier does not match invoice token identifier"
-                                .to_string(),
-                        ));
-                    }
-                    return Err(SdkError::InvalidInput(
-                        "Token identifier is required for tokens invoice".to_string(),
-                    ));
-                } else if request.token_identifier.is_some() {
-                    return Err(SdkError::InvalidInput(
-                            "Token identifier can't be provided for this payment request: non-tokens invoice".to_string(),
-                        ));
-                }
-
-                if let Some(expiry_time) = spark_invoice_details.expiry_time
-                    && SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map_err(|_| SdkError::Generic("Failed to get current time".to_string()))?
-                        > Duration::from_secs(expiry_time)
-                {
-                    return Err(SdkError::InvalidInput("Invoice has expired".to_string()));
-                }
-
-                if let Some(sender_public_key) = &spark_invoice_details.sender_public_key
-                    && self.spark_wallet.get_identity_public_key().to_string() != *sender_public_key
-                {
-                    return Err(SdkError::InvalidInput(
-                        format!(
-                            "Invoice can only be paid by sender public key {sender_public_key}",
-                        )
-                        .to_string(),
-                    ));
-                }
-
-                if let Some(invoice_amount) = spark_invoice_details.amount
-                    && let Some(request_amount) = request.amount
-                    && invoice_amount != request_amount
-                {
-                    return Err(SdkError::InvalidInput(
-                        "Requested amount does not match invoice amount".to_string(),
-                    ));
-                }
-
-                Ok(PrepareSendPaymentResponse {
-                    payment_method: SendPaymentMethod::SparkInvoice {
-                        spark_invoice_details: spark_invoice_details.clone(),
-                        fee: 0,
-                        token_identifier: request.token_identifier.clone(),
-                    },
-                    amount: spark_invoice_details
-                        .amount
-                        .or(request.amount)
-                        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
-                    token_identifier: request.token_identifier,
-                })
-            }
+            InputType::SparkInvoice(spark_invoice_details) => Ok(PrepareSendPaymentResponse {
+                payment_method: SendPaymentMethod::SparkInvoice {
+                    spark_invoice_details: spark_invoice_details.clone(),
+                    fee: 0,
+                    token_identifier: request.token_identifier.clone(),
+                },
+                amount: spark_invoice_details
+                    .amount
+                    .or(request.amount)
+                    .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?,
+                token_identifier: request.token_identifier,
+            }),
             InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
-                if request.token_identifier.is_some() {
-                    return Err(SdkError::InvalidInput(
-                        "Token identifier can't be provided for this payment request: non-spark address"
-                            .to_string(),
-                    ));
-                }
-
                 let spark_address = self
                     .spark_wallet
                     .extract_spark_address(&request.payment_request)?;
@@ -1121,13 +1073,6 @@ impl BreezSdk {
                 })
             }
             InputType::BitcoinAddress(withdrawal_address) => {
-                if request.token_identifier.is_some() {
-                    return Err(SdkError::InvalidInput(
-                        "Token identifier can't be provided for this payment request: non-spark address"
-                            .to_string(),
-                    ));
-                }
-
                 let fee_quote = self
                     .spark_wallet
                     .fetch_coop_exit_fee_quote(
