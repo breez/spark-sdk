@@ -140,6 +140,13 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           scope: '@breeztech'
 
+      - name: Remove existing bindings
+        run: |
+          git rm -r android/generated || true
+          git rm -r cpp/generated || true
+          git rm -r lib || true
+          git rm -r src/generated || true
+
       - name: Download React Native bindings
         uses: actions/download-artifact@v4
         with:
