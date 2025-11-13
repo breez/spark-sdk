@@ -209,7 +209,7 @@ pub async fn ensure_funded(sdk_instance: &mut SdkInstance, min_balance: u64) -> 
     if info.balance_sats < min_balance {
         let needed = min_balance - info.balance_sats;
         info!("Funding wallet via faucet: need {} sats", needed);
-        receive_and_fund(sdk_instance, needed.max(10000)).await?;
+        receive_and_fund(sdk_instance, needed.clamp(10000, 50000)).await?;
     }
     Ok(())
 }
