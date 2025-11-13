@@ -29,7 +29,7 @@ pub struct RecommendedFees {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ChainApiType)]
 pub enum ChainApiType {
-    Electrum,
+    Esplora,
     MempoolSpace,
 }
 

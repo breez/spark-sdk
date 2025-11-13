@@ -253,7 +253,7 @@ impl SdkBuilder {
                     5,
                     Box::new(inner_client),
                     None,
-                    ChainApiType::Electrum,
+                    ChainApiType::Esplora,
                 )),
                 Network::Regtest => Arc::new(RestClientChainService::new(
                     "https://regtest-mempool.us-west-2.sparkinfra.net/api".to_string(),

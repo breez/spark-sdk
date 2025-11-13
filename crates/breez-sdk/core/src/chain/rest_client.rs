@@ -53,7 +53,7 @@ pub struct RestClientChainService {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ChainApiType {
-    Electrum,
+    Esplora,
     MempoolSpace,
 }
 
@@ -184,7 +184,7 @@ impl RestClientChainService {
         Ok(body)
     }
 
-    async fn recommended_fees_electrum(&self) -> Result<RecommendedFees, ChainServiceError> {
+    async fn recommended_fees_esplora(&self) -> Result<RecommendedFees, ChainServiceError> {
         let fee_map = self
             .get_response_json::<HashMap<u16, f64>>("/fee-estimates")
             .await?;
@@ -247,7 +247,7 @@ impl BitcoinChainService for RestClientChainService {
 
     async fn recommended_fees(&self) -> Result<RecommendedFees, ChainServiceError> {
         match self.api_type {
-            ChainApiType::Electrum => self.recommended_fees_electrum().await,
+            ChainApiType::Esplora => self.recommended_fees_esplora().await,
             ChainApiType::MempoolSpace => self.recommended_fees_mempool_space().await,
         }
     }
@@ -341,7 +341,7 @@ mod tests {
             3,
             Box::new(mock),
             None,
-            ChainApiType::Electrum,
+            ChainApiType::Esplora,
         );
 
         // Call the method under test

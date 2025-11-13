@@ -918,6 +918,6 @@ pub struct _RecommendedFees {
 
 #[frb(mirror(ChainApiType))]
 pub enum _ChainApiType {
-    Electrum,
+    Esplora,
     MempoolSpace,
 }
