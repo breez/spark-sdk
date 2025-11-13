@@ -110,7 +110,7 @@ pub async fn handle_command(
                 .into_iter()
                 .map(|o| o.try_into())
                 .collect::<Result<Vec<_>, _>>()?;
-            let transfer_id = wallet.transfer_tokens(outputs).await?;
+            let transfer_id = wallet.transfer_tokens(outputs, None).await?;
             println!("Transaction ID: {transfer_id:?}");
             Ok(())
         }

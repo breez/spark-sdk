@@ -1,6 +1,7 @@
 pub mod chain_service;
 mod error;
 pub mod fiat_service;
+pub mod issuer;
 pub mod payment_observer;
 pub mod rest_client;
 

@@ -1,3 +1,5 @@
+mod issuer;
+
 use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee, GetInfoRequest,
     GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
@@ -5,7 +7,7 @@ use breez_sdk_spark::{
     OnchainConfirmationSpeed, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
     PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
     RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SyncWalletRequest, UpdateUserSettingsRequest,
+    SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rustyline::{
@@ -16,6 +18,8 @@ use std::{
     borrow::Cow::{self, Owned},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use crate::command::issuer::IssuerCommand;
 
 #[derive(Clone, Parser)]
 pub enum Command {
@@ -201,6 +205,10 @@ pub enum Command {
         #[clap(short = 'p', long = "private")]
         spark_private_mode_enabled: Option<bool>,
     },
+
+    /// Issuer related commands
+    #[command(subcommand)]
+    Issuer(IssuerCommand),
 }
 
 #[derive(Helper, Completer, Hinter, Validator)]
@@ -220,6 +228,7 @@ pub(crate) async fn execute_command(
     rl: &mut Editor<CliHelper, DefaultHistory>,
     command: Command,
     sdk: &BreezSdk,
+    token_issuer: &TokenIssuer,
 ) -> Result<bool, anyhow::Error> {
     match command {
         Command::Exit => {
@@ -546,6 +555,9 @@ pub(crate) async fn execute_command(
             .await?;
             Ok(true)
         }
+        Command::Issuer(issuer_command) => {
+            issuer::handle_command(token_issuer, issuer_command).await
+        }
     }
 }
 
@@ -597,7 +609,7 @@ fn read_payment_options(
     }
 }
 
-fn print_value<T: serde::Serialize>(value: &T) -> Result<(), serde_json::Error> {
+pub(crate) fn print_value<T: serde::Serialize>(value: &T) -> Result<(), serde_json::Error> {
     let serialized = serialize(value)?;
     println!("{serialized}");
     Ok(())

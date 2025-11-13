@@ -21,6 +21,7 @@ use crate::services::{HashableTokenTransaction, bech32m_encode_token_id};
 use crate::signer::PrivateKeySource;
 use crate::ssp::BitcoinNetwork;
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
+use crate::utils::byte_padding::BytePadding;
 
 use super::ServiceError;
 
@@ -1148,6 +1149,27 @@ pub struct TransferTokenOutput {
     pub amount: u128,
     pub receiver_address: SparkAddress,
     pub spark_invoice: Option<String>,
+}
+
+pub struct FreezeIssuerTokenResponse {
+    pub impacted_output_ids: Vec<String>,
+    pub impacted_token_amount: u128,
+}
+
+impl TryFrom<operator_rpc::spark_token::FreezeIssuerTokenResponse> for FreezeIssuerTokenResponse {
+    type Error = ServiceError;
+
+    fn try_from(
+        response: operator_rpc::spark_token::FreezeIssuerTokenResponse,
+    ) -> Result<Self, Self::Error> {
+        Ok(FreezeIssuerTokenResponse {
+            impacted_output_ids: response.impacted_output_ids,
+            impacted_token_amount: u128::from_unpadded_be_bytes(
+                response.impacted_token_amount.as_slice(),
+            )
+            .map_err(|_| ServiceError::Generic("Invalid impacted token amount".to_string()))?,
+        })
+    }
 }
 
 #[cfg(test)]

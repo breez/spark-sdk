@@ -22,10 +22,11 @@ use spark::{
     },
     services::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
-        InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment,
-        LightningService, QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager,
-        TokenMetadata, TokenService, TokenTransaction, Transfer, TransferObserver, TransferService,
-        TransferStatus, TransferTokenOutput, UnilateralExitService, Utxo,
+        FreezeIssuerTokenResponse, InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment,
+        LightningSendPayment, LightningService, QueryTokenTransactionsFilter, StaticDepositQuote,
+        Swap, TimelockManager, TokenMetadata, TokenOutputWithPrevOut, TokenService,
+        TokenTransaction, Transfer, TransferObserver, TransferService, TransferStatus,
+        TransferTokenOutput, UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
@@ -853,6 +854,7 @@ impl SparkWallet {
     pub async fn transfer_tokens(
         &self,
         outputs: Vec<TransferTokenOutput>,
+        selected_outputs: Option<Vec<TokenOutputWithPrevOut>>,
     ) -> Result<TokenTransaction, SparkWalletError> {
         if outputs.iter().any(|o| o.spark_invoice.is_some()) {
             return Err(SparkWalletError::Generic(
@@ -860,7 +862,10 @@ impl SparkWallet {
             ));
         }
 
-        let tx = self.token_service.transfer_tokens(outputs).await?;
+        let tx = self
+            .token_service
+            .transfer_tokens(outputs, selected_outputs)
+            .await?;
         Ok(tx)
     }
 
@@ -897,11 +902,83 @@ impl SparkWallet {
     pub async fn get_tokens_metadata(
         &self,
         token_identifiers: &[&str],
+        issuer_public_keys: &[PublicKey],
     ) -> Result<Vec<TokenMetadata>, SparkWalletError> {
         self.token_service
-            .get_tokens_metadata(token_identifiers)
+            .get_tokens_metadata(token_identifiers, issuer_public_keys)
             .await
             .map_err(Into::into)
+    }
+
+    pub async fn get_issuer_token_balance(&self) -> Result<TokenBalance, SparkWalletError> {
+        let token_identifier = self.get_issuer_token_metadata().await?.identifier;
+        let token_balances = self.get_token_balances().await?;
+
+        Ok(token_balances
+            .get(&token_identifier)
+            .ok_or(SparkWalletError::Generic(
+                "No issuer token found".to_string(),
+            ))?
+            .clone())
+    }
+
+    pub async fn get_issuer_token_metadata(&self) -> Result<TokenMetadata, SparkWalletError> {
+        Ok(self.token_service.get_issuer_token_metadata().await?)
+    }
+
+    pub async fn create_issuer_token(
+        &self,
+        name: &str,
+        ticker: &str,
+        decimals: u32,
+        is_freezable: bool,
+        max_supply: u128,
+    ) -> Result<TokenTransaction, SparkWalletError> {
+        let token_transaction = self
+            .token_service
+            .create_issuer_token(name, ticker, decimals, is_freezable, max_supply)
+            .await?;
+        Ok(token_transaction)
+    }
+
+    pub async fn mint_issuer_token(
+        &self,
+        amount: u128,
+    ) -> Result<TokenTransaction, SparkWalletError> {
+        let token_transaction = self.token_service.mint_issuer_token(amount).await?;
+        Ok(token_transaction)
+    }
+
+    pub async fn burn_issuer_token(
+        &self,
+        amount: u128,
+        preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+    ) -> Result<TokenTransaction, SparkWalletError> {
+        let token_transaction = self
+            .token_service
+            .burn_issuer_token(amount, preferred_outputs)
+            .await?;
+        Ok(token_transaction)
+    }
+
+    pub async fn freeze_issuer_token(
+        &self,
+        spark_address: &SparkAddress,
+    ) -> Result<FreezeIssuerTokenResponse, SparkWalletError> {
+        Ok(self
+            .token_service
+            .freeze_issuer_token(spark_address, false)
+            .await?)
+    }
+
+    pub async fn unfreeze_issuer_token(
+        &self,
+        spark_address: &SparkAddress,
+    ) -> Result<FreezeIssuerTokenResponse, SparkWalletError> {
+        Ok(self
+            .token_service
+            .freeze_issuer_token(spark_address, true)
+            .await?)
     }
 
     /// Fulfills a Spark invoice by paying the requested asset (Bitcoin or token) and amount (optional).
@@ -965,12 +1042,15 @@ impl SparkWallet {
 
                 let tx = self
                     .token_service
-                    .transfer_tokens(vec![TransferTokenOutput {
-                        token_id: token_identifier.clone(),
-                        amount,
-                        receiver_address: invoice,
-                        spark_invoice: Some(invoice_str.to_string()),
-                    }])
+                    .transfer_tokens(
+                        vec![TransferTokenOutput {
+                            token_id: token_identifier.clone(),
+                            amount,
+                            receiver_address: invoice,
+                            spark_invoice: Some(invoice_str.to_string()),
+                        }],
+                        None,
+                    )
                     .await?;
 
                 Ok(FulfillSparkInvoiceResult::TokenTransaction(Box::new(tx)))

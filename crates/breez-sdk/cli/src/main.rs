@@ -1,14 +1,14 @@
-mod commands;
+mod command;
 mod persist;
 
-use crate::commands::CliHelper;
+use crate::command::CliHelper;
 use crate::persist::CliPersistence;
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::{
     ConnectRequest, EventListener, Network, SdkEvent, Seed, connect, default_config,
 };
 use clap::Parser;
-use commands::{Command, execute_command};
+use command::{Command, execute_command};
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
 use rustyline::hint::HistoryHinter;
@@ -111,6 +111,8 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
     let listener = Box::new(CliEventListener {});
     sdk.add_event_listener(listener).await;
 
+    let token_issuer = sdk.get_token_issuer();
+
     println!("Breez SDK CLI Interactive Mode");
     println!("Type 'help' for available commands or 'exit' to quit");
 
@@ -131,16 +133,18 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
                 rl.add_history_entry(line.as_str())?;
 
                 match parse_command(trimmed) {
-                    Ok(command) => match Box::pin(execute_command(rl, command, &sdk)).await {
-                        Ok(continue_loop) => {
-                            if !continue_loop {
-                                break;
+                    Ok(command) => {
+                        match Box::pin(execute_command(rl, command, &sdk, &token_issuer)).await {
+                            Ok(continue_loop) => {
+                                if !continue_loop {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                println!("Error: {e}");
                             }
                         }
-                        Err(e) => {
-                            println!("Error: {e}");
-                        }
-                    },
+                    }
                     Err(e) => {
                         println!("{e}");
                     }

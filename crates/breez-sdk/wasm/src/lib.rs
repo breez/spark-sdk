@@ -1,5 +1,6 @@
 mod error;
 mod event;
+mod issuer;
 mod logger;
 mod models;
 mod persist;

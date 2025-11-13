@@ -10,6 +10,7 @@ use crate::{
     },
     services::{bech32m_decode_token_id, bech32m_encode_token_id},
     signer::Signer,
+    utils::byte_padding::BytePadding,
 };
 use bitcoin::{
     bech32::{self, Bech32m, Hrp},
@@ -79,7 +80,7 @@ impl TryFrom<SparkAddressPaymentType> for ProtoPaymentType {
         let payment_type = match value {
             SparkAddressPaymentType::TokensPayment(tp) => {
                 ProtoPaymentType::TokensPayment(ProtoTokensPayment {
-                    amount: tp.amount.map(to_variable_length_be_bytes),
+                    amount: tp.amount.map(|amount| amount.to_unpadded_be_bytes()),
                     token_identifier: tp
                         .token_identifier
                         .map(|id| {
@@ -107,8 +108,11 @@ impl TryFrom<(ProtoPaymentType, Network)> for SparkAddressPaymentType {
             ProtoPaymentType::TokensPayment(tp) => {
                 let amount = tp
                     .amount
-                    .map(|amount| from_variable_length_be_bytes(&amount))
-                    .transpose()?;
+                    .map(|amount| u128::from_unpadded_be_bytes(&amount))
+                    .transpose()
+                    .map_err(|e| {
+                        AddressError::InvalidPaymentIntent(format!("Invalid amount: {e}"))
+                    })?;
 
                 Ok(SparkAddressPaymentType::TokensPayment(TokensPayment {
                     token_identifier: tp
@@ -375,7 +379,7 @@ impl SparkAddress {
                 }
 
                 all_hashes.push(
-                    sha256::Hash::hash(&to_variable_length_be_bytes(payment.amount.unwrap_or(0)))
+                    sha256::Hash::hash(&u128::to_unpadded_be_bytes(&payment.amount.unwrap_or(0)))
                         .to_byte_array()
                         .to_vec(),
                 );
@@ -493,28 +497,6 @@ impl FromStr for SparkAddress {
 
         Ok(address)
     }
-}
-
-fn to_variable_length_be_bytes(value: u128) -> Vec<u8> {
-    let bytes = value.to_be_bytes();
-    bytes
-        .iter()
-        .skip_while(|&&b| b == 0)
-        .copied()
-        .collect::<Vec<u8>>()
-}
-
-fn from_variable_length_be_bytes(bytes: &[u8]) -> Result<u128, AddressError> {
-    if bytes.len() > 16 {
-        return Err(AddressError::InvalidPaymentIntent(
-            "Invalid amount: length exceeds 16 bytes".to_string(),
-        ));
-    }
-    let mut arr = [0u8; 16];
-    let offset = 16 - bytes.len();
-    arr[offset..].copy_from_slice(bytes);
-    let amount_bytes = arr;
-    Ok(u128::from_be_bytes(amount_bytes))
 }
 
 /// Encodes SparkInvoiceFields in canonical field order for server compatibility.
@@ -965,26 +947,5 @@ mod tests {
         // Parsing should work but then fail when converting the proto payment intent
         let result = SparkAddress::from_str(&address);
         assert!(result.is_err());
-    }
-
-    #[test_all]
-    fn test_to_variable_length_be_bytes() {
-        assert_eq!(to_variable_length_be_bytes(0), Vec::<u8>::new());
-        assert_eq!(to_variable_length_be_bytes(1), vec![1]);
-        assert_eq!(to_variable_length_be_bytes(256), vec![1, 0]);
-    }
-
-    #[test_all]
-    fn test_from_variable_length_be_bytes() {
-        assert_eq!(from_variable_length_be_bytes(&[]).unwrap(), 0);
-        assert_eq!(from_variable_length_be_bytes(&[1]).unwrap(), 1);
-        assert_eq!(from_variable_length_be_bytes(&[1, 0]).unwrap(), 256);
-
-        assert!(
-            from_variable_length_be_bytes(&[
-                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17
-            ])
-            .is_err()
-        );
     }
 }
