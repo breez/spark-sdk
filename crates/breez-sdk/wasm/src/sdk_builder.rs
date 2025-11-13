@@ -38,14 +38,19 @@ impl SdkBuilder {
 
     #[wasm_bindgen(js_name = "withDefaultStorage")]
     pub async fn with_default_storage(mut self, storage_dir: String) -> WasmResult<Self> {
-        let storage = default_storage(&storage_dir, &self.network, &self.seed).await?;
-        self.builder = self.builder.with_storage(Arc::new(WasmStorage { storage }));
+        let storage = Arc::new(WasmStorage {
+            storage: default_storage(&storage_dir, &self.network, &self.seed).await?,
+        });
+        self.builder = self.builder.with_storage(storage.clone());
+        self.builder = self.builder.with_real_time_sync_storage(storage);
         Ok(self)
     }
 
     #[wasm_bindgen(js_name = "withStorage")]
     pub fn with_storage(mut self, storage: Storage) -> Self {
-        self.builder = self.builder.with_storage(Arc::new(WasmStorage { storage }));
+        let storage_arc = Arc::new(WasmStorage { storage });
+        self.builder = self.builder.with_storage(storage_arc.clone());
+        self.builder = self.builder.with_real_time_sync_storage(storage_arc);
         self
     }
 
