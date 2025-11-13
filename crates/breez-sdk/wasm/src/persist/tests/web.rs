@@ -101,6 +101,13 @@ async fn test_payment_request_metadata() {
 }
 
 #[wasm_bindgen_test]
+async fn test_sync_storage() {
+    let storage = create_test_storage("sync_storage").await;
+
+    breez_sdk_spark::storage_tests::test_sqlite_sync_storage(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_migration_from_v2_to_v3() {
     let db_name = "migration_v2_to_v3_test";
 

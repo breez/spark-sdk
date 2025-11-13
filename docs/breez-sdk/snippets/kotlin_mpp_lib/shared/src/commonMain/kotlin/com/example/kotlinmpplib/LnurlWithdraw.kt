@@ -1,7 +1,6 @@
 package com.example.kotlinmpplib
 
 import breez_sdk_spark.*
-import breez_sdk_spark.common.InputType
 class LnurlWithdraw {
     suspend fun lnurlWithdraw(sdk: BreezSdk) {
         // ANCHOR: lnurl-withdraw

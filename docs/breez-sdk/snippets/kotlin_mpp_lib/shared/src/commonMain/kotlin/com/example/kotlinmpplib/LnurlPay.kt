@@ -1,7 +1,6 @@
 package com.example.kotlinmpplib
 
 import breez_sdk_spark.*
-import breez_sdk_spark.common.InputType
 
 class LnurlPay {
     suspend fun prepareLnurlPay(sdk: BreezSdk) {

@@ -7,7 +7,6 @@ version.workspace = true
 default = ["default-tls"]
 browser-tests = [] # Enable browser wasm-pack tests
 uniffi = [
-    "breez-sdk-common/uniffi",
     "dep:uniffi",
     "openssl-vendored",
 ]
@@ -34,6 +33,7 @@ breez-sdk-common.workspace = true
 chrono.workspace = true
 clap = { workspace = true, features = ["derive"] }
 dotenvy.workspace = true
+ecies.workspace = true
 figment = { workspace = true, features = ["env", "yaml"] }
 hex.workspace = true
 lnurl-models.workspace = true
@@ -54,6 +54,9 @@ uuid.workspace = true
 uniffi = { workspace = true, optional = true }
 web-time.workspace = true
 x509-parser = { version = "0.16.0" }
+semver = "1.0.27"
+anyhow.workspace = true
+zbase32 = "0.1.2"
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]

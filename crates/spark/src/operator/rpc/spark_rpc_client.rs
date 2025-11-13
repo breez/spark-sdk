@@ -129,28 +129,18 @@ impl SparkRpcClient {
             .into_inner())
     }
 
-    pub async fn finalize_transfer(
+    pub async fn finalize_transfer_with_transfer_package(
         &self,
         req: FinalizeTransferWithTransferPackageRequest,
     ) -> Result<FinalizeTransferResponse> {
-        debug!("Calling finalize_transfer with request: {:?}", req);
+        debug!(
+            "Calling finalize_transfer_with_transfer_package with request: {:?}",
+            req
+        );
         Ok(self
             .spark_service_client()
             .await?
             .finalize_transfer_with_transfer_package(req)
-            .await?
-            .into_inner())
-    }
-
-    pub async fn cancel_transfer(
-        &self,
-        req: CancelTransferRequest,
-    ) -> Result<CancelTransferResponse> {
-        debug!("Calling cancel_transfer with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .cancel_transfer(req)
             .await?
             .into_inner())
     }
@@ -282,42 +272,6 @@ impl SparkRpcClient {
             .into_inner())
     }
 
-    pub async fn counter_leaf_swap_v2(
-        &self,
-        req: CounterLeafSwapRequest,
-    ) -> Result<CounterLeafSwapResponse> {
-        debug!("Calling counter_leaf_swap_v2 with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .counter_leaf_swap_v2(req)
-            .await?
-            .into_inner())
-    }
-
-    pub async fn refresh_timelock_v2(
-        &self,
-        req: RefreshTimelockRequest,
-    ) -> Result<RefreshTimelockResponse> {
-        debug!("Calling refresh_timelock_v2 with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .refresh_timelock_v2(req)
-            .await?
-            .into_inner())
-    }
-
-    pub async fn extend_leaf_v2(&self, req: ExtendLeafRequest) -> Result<ExtendLeafResponse> {
-        debug!("Calling extend_leaf_v2 with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .extend_leaf_v2(req)
-            .await?
-            .into_inner())
-    }
-
     pub async fn renew_leaf(&self, req: RenewLeafRequest) -> Result<RenewLeafResponse> {
         debug!("Calling renew_leaf with request: {:?}", req);
         Ok(self
@@ -387,32 +341,6 @@ impl SparkRpcClient {
             .into_inner())
     }
 
-    pub async fn query_nodes_distribution(
-        &self,
-        req: QueryNodesDistributionRequest,
-    ) -> Result<QueryNodesDistributionResponse> {
-        debug!("Calling query_nodes_distribution with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .query_nodes_distribution(req)
-            .await?
-            .into_inner())
-    }
-
-    pub async fn query_nodes_by_value(
-        &self,
-        req: QueryNodesByValueRequest,
-    ) -> Result<QueryNodesByValueResponse> {
-        debug!("Calling query_nodes_by_value with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .query_nodes_by_value(req)
-            .await?
-            .into_inner())
-    }
-
     pub async fn query_balance(&self, req: QueryBalanceRequest) -> Result<QueryBalanceResponse> {
         debug!("Calling query_balance with request: {:?}", req);
         Ok(self
@@ -434,45 +362,6 @@ impl SparkRpcClient {
             .query_user_signed_refunds(req)
             .await?
             .into_inner())
-    }
-
-    pub async fn start_token_transaction(
-        &self,
-        req: StartTokenTransactionRequest,
-    ) -> Result<StartTokenTransactionResponse> {
-        debug!("Calling start_token_transaction with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .start_token_transaction(req)
-            .await?
-            .into_inner())
-    }
-
-    pub async fn sign_token_transaction(
-        &self,
-        req: SignTokenTransactionRequest,
-    ) -> Result<SignTokenTransactionResponse> {
-        debug!("Calling sign_token_transaction with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .sign_token_transaction(req)
-            .await?
-            .into_inner())
-    }
-
-    pub async fn finalize_token_transaction(
-        &self,
-        req: FinalizeTokenTransactionRequest,
-    ) -> Result<()> {
-        debug!("Calling finalize_token_transaction with request: {:?}", req);
-        self.spark_service_client()
-            .await?
-            .finalize_token_transaction(req)
-            .await?
-            .into_inner();
-        Ok(())
     }
 
     pub async fn freeze_tokens(
@@ -566,16 +455,6 @@ impl SparkRpcClient {
             .into_inner())
     }
 
-    pub async fn return_lightning_payment(&self, req: ReturnLightningPaymentRequest) -> Result<()> {
-        debug!("Calling return_lightning_payment with request: {:?}", req);
-        self.spark_service_client()
-            .await?
-            .return_lightning_payment(req)
-            .await?
-            .into_inner();
-        Ok(())
-    }
-
     pub async fn query_static_deposit_addresses(
         &self,
         req: QueryStaticDepositAddressesRequest,
@@ -621,34 +500,6 @@ impl SparkRpcClient {
             .into_inner())
     }
 
-    pub async fn initiate_utxo_swap(
-        &self,
-        req: InitiateUtxoSwapRequest,
-    ) -> Result<InitiateUtxoSwapResponse> {
-        debug!("Calling initiate_utxo_swap with request: {:?}", req);
-        // TODO: update to drop use of deprecated initiate_utxo_swap call
-        #[allow(deprecated)]
-        Ok(self
-            .spark_service_client()
-            .await?
-            .initiate_utxo_swap(req)
-            .await?
-            .into_inner())
-    }
-
-    pub async fn exit_single_node_trees(
-        &self,
-        req: ExitSingleNodeTreesRequest,
-    ) -> Result<ExitSingleNodeTreesResponse> {
-        debug!("Calling exit_single_node_trees with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .exit_single_node_trees(req)
-            .await?
-            .into_inner())
-    }
-
     pub async fn subscribe_to_events(
         &self,
         req: SubscribeToEventsRequest,
@@ -658,6 +509,29 @@ impl SparkRpcClient {
             .spark_service_client()
             .await?
             .subscribe_to_events(req)
+            .await?
+            .into_inner())
+    }
+
+    pub async fn update_wallet_setting(
+        &self,
+        req: UpdateWalletSettingRequest,
+    ) -> Result<UpdateWalletSettingResponse> {
+        debug!("Calling update_wallet_setting with request: {:?}", req);
+        Ok(self
+            .spark_service_client()
+            .await?
+            .update_wallet_setting(req)
+            .await?
+            .into_inner())
+    }
+
+    pub async fn query_wallet_setting(&self) -> Result<QueryWalletSettingResponse> {
+        debug!("Calling query_wallet_setting");
+        Ok(self
+            .spark_service_client()
+            .await?
+            .query_wallet_setting(QueryWalletSettingRequest {})
             .await?
             .into_inner())
     }

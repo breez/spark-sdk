@@ -1,19 +1,6 @@
 use std::sync::Arc;
 
-use breez_sdk_common::input::InputType;
-use breez_sdk_spark::{
-    CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest,
-    ClaimDepositResponse, Config, ConnectRequest, GetInfoRequest, GetInfoResponse,
-    GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
-    LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse, ListPaymentsRequest,
-    ListPaymentsResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
-    LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse, LogEntry,
-    Logger, Network, PrepareLnurlPayRequest, PrepareLnurlPayResponse, PrepareSendPaymentRequest,
-    PrepareSendPaymentResponse, ReceivePaymentRequest, ReceivePaymentResponse,
-    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest, SdkError,
-    SdkEvent, SendPaymentRequest, SendPaymentResponse, SignMessageRequest, SignMessageResponse,
-    Storage, SyncWalletRequest, SyncWalletResponse, WaitForPaymentRequest, WaitForPaymentResponse,
-};
+use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
 
 use crate::events::BindingEventListener;
@@ -30,11 +17,6 @@ pub async fn connect(request: ConnectRequest) -> Result<BreezSdk, SdkError> {
 #[frb(sync)]
 pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network)
-}
-
-#[frb(sync)]
-pub fn default_storage(data_dir: String) -> Result<Arc<dyn Storage>, SdkError> {
-    breez_sdk_spark::default_storage(data_dir)
 }
 
 #[frb(sync)]
@@ -211,5 +193,13 @@ impl BreezSdk {
         request: CheckMessageRequest,
     ) -> Result<CheckMessageResponse, SdkError> {
         self.inner.check_message(request).await
+    }
+
+    pub async fn get_user_settings(&self) -> Result<UserSettings, SdkError> {
+        self.inner.get_user_settings().await
+    }
+
+    pub async fn update_user_settings(&self, request: UpdateUserSettingsRequest) -> Result<(), SdkError> {
+        self.inner.update_user_settings(request).await
     }
 }

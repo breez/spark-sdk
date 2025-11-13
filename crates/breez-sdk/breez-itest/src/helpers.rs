@@ -37,11 +37,10 @@ pub async fn build_sdk_with_dir(
     config.lnurl_domain = None; // Avoid lnurl server in tests
     config.prefer_spark_over_lightning = true; // prefer spark transfers when possible
     config.sync_interval_secs = 5; // Faster syncing for tests
+    config.real_time_sync_server_url = None; // Disable real-time sync for tests
 
-    let storage = default_storage(storage_dir)?;
     let seed = Seed::Entropy(seed_bytes.to_vec());
-
-    let builder = SdkBuilder::new(config, seed, storage);
+    let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
     let sdk = builder.build().await?;
 
     // Set up event listener
@@ -98,11 +97,12 @@ pub async fn build_sdk_with_custom_config(
     // Speed up tests and prefer spark routing
     config.prefer_spark_over_lightning = true;
     config.sync_interval_secs = 5;
+    // Disable real-time sync for tests
+    config.real_time_sync_server_url = None;
 
-    let storage = default_storage(storage_dir)?;
     let seed = Seed::Entropy(seed_bytes.to_vec());
 
-    let builder = SdkBuilder::new(config, seed, storage);
+    let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
     let sdk = builder.build().await?;
 
     // Set up event listener
@@ -242,8 +242,8 @@ pub async fn receive_and_fund(
         txid
     );
 
-    // Wait for the ClaimDepositsSucceeded event
-    wait_for_claim_event(&mut sdk_instance.events, 180).await?;
+    // Wait for the ClaimedDeposits event
+    wait_for_claimed_event(&mut sdk_instance.events, 180).await?;
     wait_for_balance(&sdk_instance.sdk, Some(initial_balance + 1), None, 20).await?;
     sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
@@ -256,6 +256,8 @@ pub enum EventResult {
     ClaimSucceeded,
     /// Payment succeeded with details
     PaymentSucceeded(Box<Payment>),
+    /// Payment pending with details
+    PaymentPending(Box<Payment>),
     /// Synced event occurred
     Synced,
 }
@@ -327,7 +329,7 @@ where
 ///
 /// # Returns
 /// Ok if claim succeeded, Error if timeout or failure
-pub async fn wait_for_claim_event(
+pub async fn wait_for_claimed_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     timeout_secs: u64,
 ) -> Result<()> {
@@ -336,15 +338,15 @@ pub async fn wait_for_claim_event(
         timeout_secs,
         "ClaimDeposits",
         |event| match event {
-            SdkEvent::ClaimDepositsSucceeded { claimed_deposits } => {
+            SdkEvent::ClaimedDeposits { claimed_deposits } => {
                 info!(
-                    "Received ClaimDepositsSucceeded event: {} deposits claimed",
+                    "Received ClaimedDeposits event: {} deposits claimed",
                     claimed_deposits.len()
                 );
                 Ok(Some(EventResult::ClaimSucceeded))
             }
-            SdkEvent::ClaimDepositsFailed { unclaimed_deposits } => Err(anyhow::anyhow!(
-                "Deposit claim failed: {} deposits unclaimed",
+            SdkEvent::UnclaimedDeposits { unclaimed_deposits } => Err(anyhow::anyhow!(
+                "Received UnclaimedDeposits event: {} deposits unclaimed",
                 unclaimed_deposits.len()
             )),
             other => {
@@ -365,7 +367,7 @@ pub async fn wait_for_claim_event(
 ///
 /// # Returns
 /// The payment details from the PaymentSucceeded event
-pub async fn wait_for_payment_event(
+pub async fn wait_for_payment_succeeded_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     payment_type: PaymentType,
     timeout_secs: u64,
@@ -391,6 +393,36 @@ pub async fn wait_for_payment_event(
     .await
     .and_then(|result| match result {
         EventResult::PaymentSucceeded(payment) => Ok(*payment),
+        _ => Err(anyhow::anyhow!("Unexpected event result")),
+    })
+}
+
+pub async fn wait_for_payment_pending_event(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    payment_type: PaymentType,
+    timeout_secs: u64,
+) -> Result<Payment> {
+    wait_for_event(
+        event_rx,
+        timeout_secs,
+        "PaymentPending",
+        |event| match event {
+            SdkEvent::PaymentPending { payment } if payment.payment_type == payment_type => {
+                info!(
+                    "Received PaymentPending event: {} sats, type: {:?}",
+                    payment.amount, payment.payment_type
+                );
+                Ok(Some(EventResult::PaymentPending(Box::new(payment))))
+            }
+            other => {
+                info!("Received SDK event: {:?}", other);
+                Ok(None)
+            }
+        },
+    )
+    .await
+    .and_then(|result| match result {
+        EventResult::PaymentPending(payment) => Ok(*payment),
         _ => Err(anyhow::anyhow!("Unexpected event result")),
     })
 }

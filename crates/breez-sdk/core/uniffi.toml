@@ -30,6 +30,18 @@ type_name = "int"
 into_custom = "int({})"
 from_custom = "str({})"
 
+[bindings.csharp]
+package_name = "breez_sdk_spark"
+cdylib_name = "breez_sdk_spark"
+namespace = "Breez.Sdk.Spark"
+access_modifier = "public"
+
+[bindings.csharp.custom_types.u128]
+imports = ["System.Numerics", "System.Text"]
+type_name = "BigInteger"
+into_custom = "new BigInteger(Encoding.UTF8.GetBytes({}))"
+from_custom = "{}.ToString()"
+
 [bindings.typescript.customTypes.u128]
 typeName = "bigint"
 intoCustom = "BigInt({})"

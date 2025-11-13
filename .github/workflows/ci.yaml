@@ -128,7 +128,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.29.0
+          flutter-version: 3.35.7
 
       - name: Generate bindings
         working-directory: packages/flutter
@@ -184,7 +184,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.29.0
+          flutter-version: 3.35.7
 
       - name: Run Check doc snippets
         run: |
@@ -217,7 +217,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -287,3 +287,23 @@ jobs:
       - name: Run Check doc snippets
         run: |
           cargo xtask check-doc-snippets -p react-native
+
+  docs-csharp:
+    name: Docs (csharp)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Run Check doc snippets
+        run: |
+          cargo xtask check-doc-snippets -p csharp

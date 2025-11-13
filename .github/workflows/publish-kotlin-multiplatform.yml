@@ -53,7 +53,7 @@ jobs:
         working-directory: crates/breez-sdk/bindings
         run: |
           cargo install gobley-uniffi-bindgen --git https://github.com/breez/gobley --rev 72753910f54a157de2f84b78dc6f78415e28d4f2
-          gobley-uniffi-bindgen --library -o ffi/kmp --crate-configs breez_sdk_spark_bindings=./uniffi.kotlin-multiplatform.toml --crate-configs breez_sdk_spark=../core/uniffi.kotlin-multiplatform.toml --crate-configs breez_sdk_common=../common/uniffi.kotlin-multiplatform.toml ../../../aarch64-linux-android/libbreez_sdk_spark_bindings.so
+          gobley-uniffi-bindgen --library -o ffi/kmp --crate-configs breez_sdk_spark_bindings=./uniffi.kotlin-multiplatform.toml --crate-configs breez_sdk_spark=../core/uniffi.kotlin-multiplatform.toml ../../../aarch64-linux-android/libbreez_sdk_spark_bindings.so
 
       - name: Archive Kotlin Multiplatform language bindings
         uses: actions/upload-artifact@v4

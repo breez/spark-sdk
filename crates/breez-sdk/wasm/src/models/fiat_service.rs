@@ -1,4 +1,4 @@
-use breez_sdk_common::error::ServiceConnectivityError;
+use breez_sdk_spark::ServiceConnectivityError;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 
@@ -13,10 +13,10 @@ unsafe impl Send for WasmFiatService {}
 unsafe impl Sync for WasmFiatService {}
 
 #[macros::async_trait]
-impl breez_sdk_common::fiat::FiatService for WasmFiatService {
+impl breez_sdk_spark::FiatService for WasmFiatService {
     async fn fetch_fiat_currencies(
         &self,
-    ) -> Result<Vec<breez_sdk_common::fiat::FiatCurrency>, ServiceConnectivityError> {
+    ) -> Result<Vec<breez_sdk_spark::FiatCurrency>, ServiceConnectivityError> {
         let promise = self
             .inner
             .fetch_fiat_currencies()
@@ -32,7 +32,7 @@ impl breez_sdk_common::fiat::FiatService for WasmFiatService {
 
     async fn fetch_fiat_rates(
         &self,
-    ) -> Result<Vec<breez_sdk_common::fiat::Rate>, ServiceConnectivityError> {
+    ) -> Result<Vec<breez_sdk_spark::Rate>, ServiceConnectivityError> {
         let promise = self
             .inner
             .fetch_fiat_rates()

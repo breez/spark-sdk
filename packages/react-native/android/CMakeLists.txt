@@ -26,7 +26,6 @@ include_directories(
 
 add_library(breeztech-breez-sdk-spark-react-native            SHARED
     ../cpp/breeztech-breez-sdk-spark-react-native.cpp
-    ../cpp/generated/breez_sdk_common.cpp
     ../cpp/generated/breez_sdk_spark.cpp
     ../cpp/generated/breez_sdk_spark_bindings.cpp
     cpp-adapter.cpp

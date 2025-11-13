@@ -38,12 +38,12 @@ pub enum SdkError {
     ChainServiceError(String),
 
     #[error(
-        "Deposit claim fee exceeds for utxo: {tx}:{vout} with max fee: {max_fee} and actual fee sat: {actual_fee}"
+        "Deposit claim fee exceeds for utxo: {tx}:{vout} with max fee: {max_fee:?} and actual fee: {actual_fee} sats"
     )]
     DepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Fee,
+        max_fee: Option<Fee>,
         actual_fee: u64,
     },
 
@@ -184,12 +184,12 @@ impl From<TryInitError> for SdkError {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum DepositClaimError {
     #[error(
-        "Deposit claim fee exceeds for utxo: {tx}:{vout} with max fee: {max_fee} and actual fee sat: {actual_fee}"
+        "Deposit claim fee exceeds for utxo: {tx}:{vout} with max fee: {max_fee:?} and actual fee: {actual_fee} sats"
     )]
     DepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Fee,
+        max_fee: Option<Fee>,
         actual_fee: u64,
     },
 

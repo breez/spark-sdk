@@ -9,11 +9,9 @@ pub mod invoice;
 pub mod lnurl;
 pub mod network;
 pub mod rest;
+pub mod sync;
 pub mod tonic_wrap;
 pub mod utils;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
-
-#[cfg(feature = "uniffi")]
-uniffi::setup_scaffolding!();

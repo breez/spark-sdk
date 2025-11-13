@@ -6,8 +6,9 @@
 ## Basic Initialization
 
 The easiest way to initialize the SDK is with the `connect` method. This method requires:
-- The network, mnemonic, and Breez API key you intend to use  
-- A storage directory path where the SDK can manage its data  
+
+- The network, mnemonic, and Breez API key you intend to use
+- A storage directory path where the SDK can manage its data
 
 <div class="warning">
 <h4>Developer note</h4>
@@ -18,76 +19,7 @@ The storage is used to persist the SDK’s state. If you run multiple SDK instan
 
 Once connected, you’re ready to start interacting with the SDK.
 
-<custom-tabs category="lang">
-<div slot="title">Rust</div>
-<section>
-
-```rust,ignore
-{{#include ../../snippets/rust/src/getting_started.rs:init-sdk}}
-```
-
-</section>
-
-<div slot="title">Swift</div>
-<section>
-
-```swift,ignore
-{{#include ../../snippets/swift/BreezSdkSnippets/Sources/GettingStarted.swift:init-sdk}}
-```
-
-</section>
-
-<div slot="title">Kotlin</div>
-<section>
-
-```kotlin,ignore
-{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/GettingStarted.kt:init-sdk}}
-```
-
-</section>
-
-<div slot="title">Javascript</div>
-<section>
-
-```typescript
-{{#include ../../snippets/wasm/getting_started.ts:init-sdk}}
-```
-
-</section>
-
-<div slot="title">React Native</div>
-<section>
-
-```typescript
-{{#include ../../snippets/react-native/getting_started.ts:init-sdk}}
-```
-
-</section>
-
-<div slot="title">Flutter</div>
-<section>
-
-```dart,ignore
-{{#include ../../snippets/flutter/lib/getting_started.dart:init-sdk}}
-```
-</section>
-
-<div slot="title">Python</div>
-<section>
-
-```python,ignore 
-{{#include ../../snippets/python/src/getting_started.py:init-sdk}}
-```
-</section>
-
-<div slot="title">Go</div>
-<section>
-
-```go,ignore
-{{#include ../../snippets/go/getting_started.go:init-sdk}}
-```
-</section>
-</custom-tabs>
+{{#tabs getting_started:init-sdk}}
 
 <div class="warning">
 <h4>Developer note</h4>
@@ -99,81 +31,13 @@ On some platforms (e.g., Android, iOS), you must use an application-specific wri
 ## Advanced Initialization
 
 For advanced use cases where you need more control, you can configure the SDK using the Builder pattern. With the SDK Builder you can define:
+
 - Custom storage management (bring your own implementation)
 - Which chain service to use (custom or the SDK’s default)
 - Which REST client to use for LNURL requests (custom or the SDK’s default)
 - Which keyset to use for the signer (custom or the SDK’s default)
 
-<custom-tabs category="lang">
-<div slot="title">Rust</div>
-<section>
-
-```rust,ignore
-{{#include ../../snippets/rust/src/getting_started.rs:init-sdk-advanced}}
-```
-
-</section>
-
-<div slot="title">Swift</div>
-<section>
-
-```swift,ignore
-{{#include ../../snippets/swift/BreezSdkSnippets/Sources/GettingStarted.swift:init-sdk-advanced}}
-```
-
-</section>
-
-<div slot="title">Kotlin</div>
-<section>
-
-```kotlin,ignore
-{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/GettingStarted.kt:init-sdk-advanced}}
-```
-
-</section>
-
-<div slot="title">Javascript</div>
-<section>
-
-```typescript
-{{#include ../../snippets/wasm/getting_started.ts:init-sdk-advanced}}
-```
-
-</section>
-
-<div slot="title">React Native</div>
-<section>
-
-```typescript
-{{#include ../../snippets/react-native/getting_started.ts:init-sdk-advanced}}
-```
-
-</section>
-
-<div slot="title">Flutter</div>
-<section>
-
-```dart,ignore
-{{#include ../../snippets/flutter/lib/getting_started.dart:init-sdk-advanced}}
-```
-</section>
-
-<div slot="title">Python</div>
-<section>
-
-```python,ignore 
-{{#include ../../snippets/python/src/getting_started.py:init-sdk-advanced}}
-```
-</section>
-
-<div slot="title">Go</div>
-<section>
-
-```go,ignore
-{{#include ../../snippets/go/getting_started.go:init-sdk-advanced}}
-```
-</section>
-</custom-tabs>
+{{#tabs getting_started:init-sdk-advanced}}
 
 <h2 id="disconnecting">
     <a class="header" href="#disconnecting">Disconnecting</a>
@@ -184,73 +48,4 @@ When you’re done using the SDK, call the disconnect method to release any reso
 
 This is particularly useful if you need to re-instantiate the SDK, such as when changing the mnemonic or updating configuration.
 
-<custom-tabs category="lang">
-<div slot="title">Rust</div>
-<section>
-
-```rust,ignore
-{{#include ../../snippets/rust/src/getting_started.rs:disconnect}}
-```
-
-</section>
-
-<div slot="title">Swift</div>
-<section>
-
-```swift,ignore
-{{#include ../../snippets/swift/BreezSdkSnippets/Sources/GettingStarted.swift:disconnect}}
-```
-
-</section>
-
-<div slot="title">Kotlin</div>
-<section>
-
-```kotlin,ignore
-{{#include ../../snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/GettingStarted.kt:disconnect}}
-```
-
-</section>
-
-<div slot="title">Javascript</div>
-<section>
-
-```typescript
-{{#include ../../snippets/wasm/getting_started.ts:disconnect}}
-```
-
-</section>
-
-<div slot="title">React Native</div>
-<section>
-
-```typescript
-{{#include ../../snippets/react-native/getting_started.ts:disconnect}}
-```
-
-</section>
-
-<div slot="title">Flutter</div>
-<section>
-
-```dart,ignore
-{{#include ../../snippets/flutter/lib/getting_started.dart:disconnect}}
-```
-</section>
-
-<div slot="title">Python</div>
-<section>
-
-```python,ignore 
-{{#include ../../snippets/python/src/getting_started.py:disconnect}}
-```
-</section>
-
-<div slot="title">Go</div>
-<section>
-
-```go,ignore
-{{#include ../../snippets/go/getting_started.go:disconnect}}
-```
-</section>
-</custom-tabs>
+{{#tabs getting_started:disconnect}}

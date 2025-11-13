@@ -3,7 +3,6 @@ use spark::Network;
 use strum::Display;
 
 #[derive(Clone, Copy, Debug, Display, Eq, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum BitcoinNetwork {
     /// Mainnet
     Bitcoin,

@@ -4,11 +4,10 @@ import (
 	"log"
 	"strconv"
 
-	"github.com/breez/breez-sdk-spark-go/breez_sdk_common"
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func ParseInput(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_common.InputType, error) {
+func ParseInput(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.InputType, error) {
 	// ANCHOR: parse-inputs
 	inputStr := "an input to be parsed..."
 
@@ -19,28 +18,28 @@ func ParseInput(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_common.InputType, err
 	}
 
 	switch inputType := input.(type) {
-	case breez_sdk_common.InputTypeBitcoinAddress:
+	case breez_sdk_spark.InputTypeBitcoinAddress:
 		log.Printf("Input is Bitcoin address %s", inputType.Field0.Address)
 
-	case breez_sdk_common.InputTypeBolt11Invoice:
+	case breez_sdk_spark.InputTypeBolt11Invoice:
 		amount := "unknown"
 		if inputType.Field0.AmountMsat != nil {
 			amount = strconv.FormatUint(*inputType.Field0.AmountMsat, 10)
 		}
 		log.Printf("Input is BOLT11 invoice for %s msats", amount)
 
-	case breez_sdk_common.InputTypeLnurlPay:
+	case breez_sdk_spark.InputTypeLnurlPay:
 		log.Printf("Input is LNURL-Pay/Lightning address accepting min/max %d/%d msats",
 			inputType.Field0.MinSendable, inputType.Field0.MaxSendable)
 
-	case breez_sdk_common.InputTypeLnurlWithdraw:
+	case breez_sdk_spark.InputTypeLnurlWithdraw:
 		log.Printf("Input is LNURL-Withdraw for min/max %d/%d msats",
 			inputType.Field0.MinWithdrawable, inputType.Field0.MaxWithdrawable)
 
-	case breez_sdk_common.InputTypeSparkAddress:
+	case breez_sdk_spark.InputTypeSparkAddress:
 		log.Printf("Input is Spark address %s", inputType.Field0.Address)
 
-	case breez_sdk_common.InputTypeSparkInvoice:
+	case breez_sdk_spark.InputTypeSparkInvoice:
 		invoice := inputType.Field0
 		log.Println("Input is Spark invoice:")
 		if invoice.TokenIdentifier != nil {
@@ -76,7 +75,7 @@ func SetExternalInputParsers() (*breez_sdk_spark.Config, error) {
 	config.ApiKey = &apiKey
 
 	// Configure external parsers
-	parsers := []breez_sdk_common.ExternalInputParser{
+	parsers := []breez_sdk_spark.ExternalInputParser{
 		{
 			ProviderId: "provider_a",
 			InputRegex: "^provider_a",

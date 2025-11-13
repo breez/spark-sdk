@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::Network;
 pub mod rest_client;
 
 #[derive(Debug, Error, Clone)]
@@ -51,15 +50,4 @@ pub struct Utxo {
     pub vout: u32,
     pub value: u64,
     pub status: TxStatus,
-}
-
-impl TryFrom<Network> for bitcoin::Network {
-    type Error = ChainServiceError;
-
-    fn try_from(value: Network) -> Result<Self, Self::Error> {
-        match value {
-            Network::Mainnet => Ok(bitcoin::Network::Bitcoin),
-            Network::Regtest => Ok(bitcoin::Network::Regtest),
-        }
-    }
 }

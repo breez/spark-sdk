@@ -6,15 +6,15 @@ use std::sync::Arc;
 
 use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
-    fiat::FiatService,
-    rest::{ReqwestRestClient as CommonRequestRestClient, RestClient},
+    rest::ReqwestRestClient as CommonRequestRestClient,
 };
-use spark_wallet::DefaultSigner;
+use spark_wallet::{DefaultSigner, Signer};
 use tokio::sync::watch;
 use tracing::debug;
 
 use crate::{
-    Credentials, KeySetType, Network,
+    Credentials, EventEmitter, FiatService, FiatServiceWrapper, KeySetType, Network, RestClient,
+    RestClientWrapper, Seed,
     chain::{
         BitcoinChainService,
         rest_client::{BasicAuth, RestClientChainService},
@@ -24,31 +24,18 @@ use crate::{
     models::Config,
     payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::Storage,
+    realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams},
+    sync_storage::SyncStorage,
 };
-
-/// Represents the seed for wallet generation, either as a mnemonic phrase with an optional
-/// passphrase or as raw entropy bytes.
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum Seed {
-    /// A BIP-39 mnemonic phrase with an optional passphrase.
-    Mnemonic {
-        /// The mnemonic phrase. 12 or 24 words.
-        mnemonic: String,
-        /// An optional passphrase for the mnemonic.
-        passphrase: Option<String>,
-    },
-    /// Raw entropy bytes.
-    Entropy(Vec<u8>),
-}
 
 /// Builder for creating `BreezSdk` instances with customizable components.
 #[derive(Clone)]
 pub struct SdkBuilder {
     config: Config,
     seed: Seed,
-    storage: Arc<dyn Storage>,
+    storage_dir: Option<String>,
+    storage: Option<Arc<dyn Storage>>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     fiat_service: Option<Arc<dyn FiatService>>,
     lnurl_client: Option<Arc<dyn RestClient>>,
@@ -57,6 +44,7 @@ pub struct SdkBuilder {
     key_set_type: KeySetType,
     use_address_index: bool,
     account_number: Option<u32>,
+    sync_storage: Option<Arc<dyn SyncStorage>>,
 }
 
 impl SdkBuilder {
@@ -64,12 +52,12 @@ impl SdkBuilder {
     /// Arguments:
     /// - `config`: The configuration to be used.
     /// - `seed`: The seed for wallet generation.
-    /// - `storage`: The storage backend to be used.
-    pub fn new(config: Config, seed: Seed, storage: Arc<dyn Storage>) -> Self {
+    pub fn new(config: Config, seed: Seed) -> Self {
         SdkBuilder {
             config,
             seed,
-            storage,
+            storage_dir: None,
+            storage: None,
             chain_service: None,
             fiat_service: None,
             lnurl_client: None,
@@ -78,7 +66,37 @@ impl SdkBuilder {
             key_set_type: KeySetType::Default,
             use_address_index: false,
             account_number: None,
+            sync_storage: None,
         }
+    }
+
+    #[must_use]
+    /// Sets the root storage directory to initialize the default storage with.
+    /// This initializes both storage and real-time sync storage with the
+    /// default implementations.
+    /// Arguments:
+    /// - `storage_dir`: The data directory for storage.
+    pub fn with_default_storage(mut self, storage_dir: String) -> Self {
+        self.storage_dir = Some(storage_dir);
+        self
+    }
+
+    #[must_use]
+    /// Sets the storage implementation to be used by the SDK.
+    /// Arguments:
+    /// - `storage`: The storage implementation to be used.
+    pub fn with_storage(mut self, storage: Arc<dyn Storage>) -> Self {
+        self.storage = Some(storage);
+        self
+    }
+
+    #[must_use]
+    /// Sets the real-time sync storage implementation to be used by the SDK.
+    /// Arguments:
+    /// - `storage`: The sync storage implementation to be used.
+    pub fn with_real_time_sync_storage(mut self, storage: Arc<dyn SyncStorage>) -> Self {
+        self.sync_storage = Some(storage);
+        self
     }
 
     /// Sets the key set type to be used by the SDK.
@@ -166,6 +184,34 @@ impl SdkBuilder {
     /// Builds the `BreezSdk` instance with the configured components.
     #[allow(clippy::too_many_lines)]
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
+        let (storage, sync_storage) = match (self.storage, self.storage_dir) {
+            // Use provided storages directly
+            (Some(storage), _) => (storage, self.sync_storage),
+            // Initialize default storages based on provided directory
+            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+            (None, Some(storage_dir)) => {
+                let storage = default_storage(&storage_dir, self.config.network, &self.seed)?;
+                let sync_storage = match (self.sync_storage, &self.config.real_time_sync_server_url)
+                {
+                    // Use provided sync storage directly
+                    (Some(sync_storage), _) => Some(sync_storage),
+                    // Initialize default sync storage based on provided directory
+                    // if real-time sync is enabled
+                    (None, Some(_)) => Some(default_sync_storage(
+                        &storage_dir,
+                        self.config.network,
+                        &self.seed,
+                    )?),
+                    _ => None,
+                };
+                (storage, sync_storage)
+            }
+            _ => {
+                return Err(SdkError::Generic(
+                    "Either storage or storage_dir must be set before building the SDK".to_string(),
+                ));
+            }
+        };
         // Create the signer from seed
         let seed = match self.seed {
             Seed::Mnemonic {
@@ -182,14 +228,16 @@ impl SdkBuilder {
             Seed::Entropy(entropy) => entropy,
         };
 
-        let signer = DefaultSigner::with_keyset_type(
-            &seed,
-            self.config.network.into(),
-            self.key_set_type.into(),
-            self.use_address_index,
-            self.account_number,
-        )
-        .map_err(|e| SdkError::Generic(e.to_string()))?;
+        let signer: Arc<dyn Signer> = Arc::new(
+            DefaultSigner::with_keyset_type(
+                &seed,
+                self.config.network.into(),
+                self.key_set_type.into(),
+                self.use_address_index,
+                self.account_number,
+            )
+            .map_err(|e| SdkError::Generic(e.to_string()))?,
+        );
         let chain_service = if let Some(service) = self.chain_service {
             service
         } else {
@@ -222,16 +270,16 @@ impl SdkBuilder {
             }
         };
 
-        let fiat_service: Arc<dyn FiatService> = match self.fiat_service {
-            Some(service) => service,
+        let fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService> = match self.fiat_service {
+            Some(service) => Arc::new(FiatServiceWrapper::new(service)),
             None => Arc::new(
                 BreezServer::new(PRODUCTION_BREEZSERVER_URL, None)
                     .map_err(|e| SdkError::Generic(e.to_string()))?,
             ),
         };
 
-        let lnurl_client: Arc<dyn RestClient> = match self.lnurl_client {
-            Some(client) => client,
+        let lnurl_client: Arc<dyn breez_sdk_common::rest::RestClient> = match self.lnurl_client {
+            Some(client) => Arc::new(RestClientWrapper::new(client)),
             None => Arc::new(
                 CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?,
             ),
@@ -240,7 +288,7 @@ impl SdkBuilder {
             spark_wallet::SparkWalletConfig::default_config(self.config.network.into());
 
         let mut wallet_builder =
-            spark_wallet::WalletBuilder::new(spark_wallet_config, Arc::new(signer.clone()));
+            spark_wallet::WalletBuilder::new(spark_wallet_config, Arc::clone(&signer));
         if let Some(observer) = self.payment_observer {
             let observer: Arc<dyn spark_wallet::TransferObserver> =
                 Arc::new(SparkTransferObserver::new(observer));
@@ -265,20 +313,64 @@ impl SdkBuilder {
         };
         let shutdown_sender = watch::channel::<()>(()).0;
 
+        let event_emitter = Arc::new(EventEmitter::new());
+        let storage = if let Some(server_url) = &self.config.real_time_sync_server_url {
+            let Some(sync_storage) = sync_storage else {
+                return Err(SdkError::Generic(
+                    "Real-time sync is enabled, but no sync storage is supplied".to_string(),
+                ));
+            };
+            init_and_start_real_time_sync(RealTimeSyncParams {
+                server_url: server_url.clone(),
+                api_key: self.config.api_key.clone(),
+                network: self.config.network,
+                seed,
+                storage: Arc::clone(&storage),
+                sync_storage,
+                shutdown_receiver: shutdown_sender.subscribe(),
+                event_emitter: Arc::clone(&event_emitter),
+            })
+            .await?
+        } else {
+            storage
+        };
+
         // Create the SDK instance
         let sdk = BreezSdk::init_and_start(BreezSdkParams {
             config: self.config,
-            storage: self.storage,
+            storage,
             chain_service,
             fiat_service,
             lnurl_client,
             lnurl_server_client,
             shutdown_sender,
             spark_wallet,
+            event_emitter,
         })?;
-
         debug!("Initialized and started breez sdk.");
 
         Ok(sdk)
     }
+}
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+fn default_storage(
+    data_dir: &str,
+    network: Network,
+    seed: &Seed,
+) -> Result<Arc<dyn Storage>, SdkError> {
+    let db_path = crate::default_storage_path(data_dir, &network, seed)?;
+    let storage = Arc::new(crate::SqliteStorage::new(&db_path)?);
+    Ok(storage)
+}
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+fn default_sync_storage(
+    data_dir: &str,
+    network: Network,
+    seed: &Seed,
+) -> Result<Arc<dyn SyncStorage>, SdkError> {
+    let db_path = crate::default_storage_path(data_dir, &network, seed)?;
+    let storage = Arc::new(crate::SqliteStorage::new(&db_path)?);
+    Ok(storage)
 }

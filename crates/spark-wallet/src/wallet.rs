@@ -15,14 +15,17 @@ use spark::{
     events::{SparkEvent, subscribe_server_events},
     operator::{
         OperatorPool,
-        rpc::{ConnectionManager, DefaultConnectionManager, spark::QuerySparkInvoicesRequest},
+        rpc::{
+            ConnectionManager, DefaultConnectionManager,
+            spark::{QuerySparkInvoicesRequest, UpdateWalletSettingRequest},
+        },
     },
     services::{
         CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
         InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment,
         LightningService, QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager,
         TokenMetadata, TokenService, TokenTransaction, Transfer, TransferObserver, TransferService,
-        TransferTokenOutput, UnilateralExitService, Utxo,
+        TransferStatus, TransferTokenOutput, UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
@@ -40,7 +43,7 @@ use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     FulfillSparkInvoiceResult, ListTokenTransactionsRequest, QuerySparkInvoiceResult, TokenBalance,
-    WalletEvent, WalletLeaves,
+    WalletEvent, WalletLeaves, WalletSettings,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
@@ -83,7 +86,7 @@ impl SparkWallet {
         .await
     }
 
-    pub(crate) async fn new(
+    pub async fn new(
         config: SparkWalletConfig,
         signer: Arc<dyn Signer>,
         session_manager: Arc<dyn SessionManager>,
@@ -999,6 +1002,34 @@ impl SparkWallet {
             .map(TryInto::try_into)
             .collect()
     }
+
+    pub async fn query_wallet_settings(&self) -> Result<WalletSettings, SparkWalletError> {
+        Ok(self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .query_wallet_setting()
+            .await?
+            .wallet_setting
+            .ok_or(SparkWalletError::Generic(
+                "Response doesn't include wallet settings".to_string(),
+            ))?
+            .into())
+    }
+
+    pub async fn update_wallet_settings(
+        &self,
+        private_enabled: bool,
+    ) -> Result<(), SparkWalletError> {
+        self.operator_pool
+            .get_coordinator()
+            .client
+            .update_wallet_setting(UpdateWalletSettingRequest {
+                private_enabled: Some(private_enabled),
+            })
+            .await?;
+        Ok(())
+    }
 }
 
 async fn claim_pending_transfers(
@@ -1180,9 +1211,6 @@ impl BackgroundProcessor {
             return Ok(());
         }
 
-        trace!("Claiming transfer from event");
-        claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
-        trace!("Claimed transfer from event");
         // get the ssp transfer details, if it fails just use None
         // Internal transfers will not have an SSP entry so just skip it
         let ssp_transfer = if transfer.transfer_type == spark::services::TransferType::Transfer {
@@ -1197,8 +1225,24 @@ impl BackgroundProcessor {
         };
 
         self.event_manager
+            .notify_listeners(WalletEvent::TransferClaimStarting(
+                WalletTransfer::from_transfer(
+                    transfer.clone(),
+                    ssp_transfer.clone(),
+                    self.identity_public_key,
+                ),
+            ));
+
+        trace!("Claiming transfer from event");
+        claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
+        trace!("Claimed transfer from event");
+
+        // Update transfer status before notifying listeners
+        let mut claimed_transfer = transfer;
+        claimed_transfer.status = TransferStatus::Completed;
+        self.event_manager
             .notify_listeners(WalletEvent::TransferClaimed(WalletTransfer::from_transfer(
-                transfer,
+                claimed_transfer,
                 ssp_transfer,
                 self.identity_public_key,
             )));

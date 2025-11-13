@@ -11,14 +11,12 @@ if (!rustInstalled) {
 }
 
 // Export the generated bindings to the app.
-export * from './generated/breez_sdk_common';
 export * from './generated/breez_sdk_spark';
 export * from './generated/breez_sdk_spark_bindings';
 
 // Now import the bindings so we can:
 // - intialize them
 // - export them as namespaced objects as the default export.
-import * as breez_sdk_common from './generated/breez_sdk_common';
 import * as breez_sdk_spark from './generated/breez_sdk_spark';
 import * as breez_sdk_spark_bindings from './generated/breez_sdk_spark_bindings';
 
@@ -27,7 +25,6 @@ import * as breez_sdk_spark_bindings from './generated/breez_sdk_spark_bindings'
 //   is reloaded (e.g. during development with metro).
 let initialized = false;
 if (!initialized) {
-  breez_sdk_common.default.initialize();
   breez_sdk_spark.default.initialize();
   breez_sdk_spark_bindings.default.initialize();
   initialized = true;
@@ -35,7 +32,6 @@ if (!initialized) {
 
 // Export the crates as individually namespaced objects.
 export default {
-  breez_sdk_common,
   breez_sdk_spark,
   breez_sdk_spark_bindings,
 };

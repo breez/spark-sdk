@@ -1,7 +1,6 @@
 use thiserror::Error;
 
 #[derive(Clone, Debug, Error)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum ServiceConnectivityError {
     #[error("Builder error: {0}")]
     Builder(String),

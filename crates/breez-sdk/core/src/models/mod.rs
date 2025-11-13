@@ -2,25 +2,17 @@ pub(crate) mod adaptors;
 pub mod payment_observer;
 pub use payment_observer::*;
 
-use breez_sdk_common::{
-    fiat::{FiatCurrency, Rate},
-    input::{
-        BitcoinAddressDetails, Bolt11InvoiceDetails, ExternalInputParser, SparkInvoiceDetails,
-    },
-    lnurl::{
-        pay::{LnurlPayRequestDetails, SuccessAction, SuccessActionProcessed},
-        withdraw::LnurlWithdrawRequestDetails,
-    },
-    network::BitcoinNetwork,
-};
 use core::fmt;
 use lnurl_models::RecoverLnurlPayResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, fmt::Display, str::FromStr};
 
-use crate::error::DepositClaimError;
-use crate::sdk_builder::Seed;
+use crate::{
+    BitcoinAddressDetails, BitcoinNetwork, Bolt11InvoiceDetails, ExternalInputParser, FiatCurrency,
+    LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate, SparkInvoiceDetails, SuccessAction,
+    SuccessActionProcessed, error::DepositClaimError,
+};
 
 /// A list of external input parsers that are used by default.
 /// To opt-out, set `use_default_external_input_parsers` in [Config] to false.
@@ -36,6 +28,22 @@ pub const DEFAULT_EXTERNAL_INPUT_PARSERS: &[(&str, &str, &str)] = &[
         "https://cryptoqr.net/.well-known/lnurlw/<input>",
     ),
 ];
+
+/// Represents the seed for wallet generation, either as a mnemonic phrase with an optional
+/// passphrase or as raw entropy bytes.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum Seed {
+    /// A BIP-39 mnemonic phrase with an optional passphrase.
+    Mnemonic {
+        /// The mnemonic phrase. 12 or 24 words.
+        mnemonic: String,
+        /// An optional passphrase for the mnemonic.
+        passphrase: Option<String>,
+    },
+    /// Raw entropy bytes.
+    Entropy(Vec<u8>),
+}
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConnectRequest {
@@ -280,6 +288,24 @@ impl From<Network> for BitcoinNetwork {
     }
 }
 
+impl From<Network> for breez_sdk_common::network::BitcoinNetwork {
+    fn from(network: Network) -> Self {
+        match network {
+            Network::Mainnet => breez_sdk_common::network::BitcoinNetwork::Bitcoin,
+            Network::Regtest => breez_sdk_common::network::BitcoinNetwork::Regtest,
+        }
+    }
+}
+
+impl From<Network> for bitcoin::Network {
+    fn from(network: Network) -> Self {
+        match network {
+            Network::Mainnet => bitcoin::Network::Bitcoin,
+            Network::Regtest => bitcoin::Network::Regtest,
+        }
+    }
+}
+
 impl FromStr for Network {
     type Err = String;
 
@@ -319,6 +345,15 @@ pub struct Config {
     /// ([`DEFAULT_EXTERNAL_INPUT_PARSERS`]).
     /// Set this to false in order to prevent their use.
     pub use_default_external_input_parsers: bool,
+
+    /// Url to use for the real-time sync server. Defaults to the Breez real-time sync server.
+    pub real_time_sync_server_url: Option<String>,
+
+    /// Whether the Spark private mode is enabled by default.
+    ///
+    /// If set to true, the Spark private mode will be enabled on the first initialization of the SDK.
+    /// If set to false, no changes will be made to the Spark private mode.
+    pub private_enabled_default: bool,
 }
 
 impl Config {
@@ -954,4 +989,15 @@ pub struct CheckMessageRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CheckMessageResponse {
     pub is_valid: bool,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize)]
+pub struct UserSettings {
+    pub spark_private_mode_enabled: bool,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UpdateUserSettingsRequest {
+    pub spark_private_mode_enabled: Option<bool>,
 }

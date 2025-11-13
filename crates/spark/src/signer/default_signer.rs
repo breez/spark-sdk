@@ -125,12 +125,15 @@ impl DerivedKeySet {
             identity_master_key.derive_priv(&secp, &[ChildNumber::from_hardened_idx(1)?])?;
         let static_deposit_master_key =
             identity_master_key.derive_priv(&secp, &[ChildNumber::from_hardened_idx(3)?])?;
+        let encryption_master_key = identity_master_key
+            .derive_priv(&secp, &[ChildNumber::from_hardened_idx(712532575)?])?;
         if let Some(child_number) = identity_child_number {
             identity_master_key =
                 identity_master_key.derive_priv(&secp, &DerivationPath::from(vec![child_number]))?
         }
         Ok(KeySet {
             identity_key_pair: identity_master_key.private_key.keypair(&secp),
+            encryption_master_key,
             signing_master_key,
             static_deposit_master_key,
         })
@@ -140,6 +143,7 @@ impl DerivedKeySet {
 #[derive(Clone)]
 pub struct KeySet {
     pub identity_key_pair: Keypair,
+    pub encryption_master_key: Xpriv,
     pub signing_master_key: Xpriv,
     pub static_deposit_master_key: Xpriv,
 }

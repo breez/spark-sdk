@@ -1,4 +1,4 @@
-use breez_sdk_common::error::ServiceConnectivityError;
+use breez_sdk_spark::ServiceConnectivityError;
 use wasm_bindgen::JsValue;
 
 pub(crate) fn js_error_to_chain_service_error(

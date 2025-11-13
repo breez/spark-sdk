@@ -12,8 +12,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 async-trait.workspace = true
-breez-sdk-common.workspace = true
+bitcoin.workspace = true
 breez-sdk-spark.workspace = true
+js-sys.workspace = true
 macros.workspace = true
 serde.workspace = true
 serde-wasm-bindgen.workspace = true
@@ -22,7 +23,7 @@ tracing-subscriber.workspace = true
 tsify-next = {workspace = true, default-features = false, features = ["js"]}
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
-bitcoin.workspace = true
+web-sys.workspace = true
 
 [dev-dependencies]
 wasm-bindgen-test.workspace = true

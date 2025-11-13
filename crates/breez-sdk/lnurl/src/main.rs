@@ -1,5 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
-
+use crate::{repository::LnurlRepository, routes::LnurlServer, state::State};
 use anyhow::anyhow;
 use axum::{
     Extension, Router,
@@ -10,21 +9,27 @@ use axum::{
 };
 use base64::{Engine, prelude::BASE64_STANDARD};
 use clap::Parser;
+use domain_validator::ListDomainValidator;
 use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
 };
-use serde::{Deserialize, Serialize};
-use domain_validator::ListDomainValidator;
 use fly_api::FlyDomainValidator;
+use serde::{Deserialize, Serialize};
+use spark::operator::rpc::DefaultConnectionManager;
+use spark::session_manager::InMemorySessionManager;
+use spark::ssp::ServiceProvider;
+use spark::tree::InMemoryTreeStore;
 use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
 use sqlx::{PgPool, SqlitePool};
+use std::collections::HashSet;
+use std::str::FromStr;
+use std::{path::PathBuf, sync::Arc};
+use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use x509_parser::prelude::{FromDer, X509Certificate};
-
-use crate::{repository::LnurlRepository, routes::LnurlServer, state::State};
 
 mod auth;
 mod error;
@@ -35,6 +40,7 @@ mod sqlite;
 mod state;
 mod time;
 mod user;
+mod zap;
 
 #[derive(Clone, Parser, Debug, Serialize, Deserialize)]
 #[command(version, about, long_about = None)]
@@ -84,6 +90,10 @@ struct Args {
     /// List of domains that are allowed to use the lnurl server. Comma separated.
     #[arg(long, default_value = "localhost:8080")]
     pub domains: String,
+
+    /// Nostr private key for zaps. If not set, zap requests will be ignored.
+    #[arg(long)]
+    pub nsec: Option<String>,
 
     /// Base64 encoded DER format CA certificate without begin/end certificate markers.
     /// If set, the server will use this certificate to validate api keys.
@@ -159,28 +169,51 @@ async fn main() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_server<DB>(args: Args, repository: DB) -> Result<(), anyhow::Error>
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
     let auth_seed: [u8; 32] = rand::random();
+
+    let spark_config = SparkWalletConfig::default_config(args.network);
+
+    // Create shared infrastructure components
+    let signer = Arc::new(DefaultSigner::new(&auth_seed, args.network)?);
+    let session_manager = Arc::new(InMemorySessionManager::default());
+    let connection_manager: Arc<dyn spark::operator::rpc::ConnectionManager> =
+        Arc::new(DefaultConnectionManager::new());
+    let coordinator = spark_config.operator_pool.get_coordinator().clone();
+    let service_provider = Arc::new(ServiceProvider::new(
+        spark_config.service_provider_config.clone(),
+        signer.clone(),
+        session_manager.clone(),
+    ));
+
+    // Create wallet using shared signer
     let wallet = Arc::new(
-        spark_wallet::SparkWallet::connect(
-            SparkWalletConfig::default_config(args.network),
-            Arc::new(DefaultSigner::new(&auth_seed, args.network)?),
+        spark_wallet::SparkWallet::new(
+            spark_config.clone(),
+            signer.clone(),
+            session_manager.clone(),
+            Arc::new(InMemoryTreeStore::default()),
+            Arc::clone(&connection_manager),
+            None,
+            true,
         )
         .await?,
     );
-    let domain_validator: Box<dyn domain_validator::DomainValidator> = if let (Some(app_name), Some(api_token)) = (args.fly_app_name, args.fly_api_token) {
-        Box::new(FlyDomainValidator::new(app_name, api_token))
-    } else {
-        let domains: std::collections::HashSet<String> = args
-            .domains
-            .split(',')
-            .map(|s| s.trim().to_lowercase())
-            .collect();
-        Box::new(ListDomainValidator::new(domains))
-    };
+    let domain_validator: Box<dyn domain_validator::DomainValidator> =
+        if let (Some(app_name), Some(api_token)) = (args.fly_app_name, args.fly_api_token) {
+            Box::new(FlyDomainValidator::new(app_name, api_token))
+        } else {
+            let domains = args
+                .domains
+                .split(',')
+                .map(|d| d.trim().to_lowercase())
+                .collect();
+            Box::new(ListDomainValidator::new(domains))
+        };
 
     let ca_cert = args
         .ca_cert
@@ -194,6 +227,39 @@ where
         })
         .transpose()?;
 
+    let nostr_keys = args
+        .nsec
+        .map(|nsec| {
+            let keys = nostr::Keys::from_str(&nsec)
+                .map_err(|e| anyhow!("failed to parse nsec key: {:?}", e))?;
+            Ok::<_, anyhow::Error>(keys)
+        })
+        .transpose()?;
+
+    let subscribed_keys = Arc::new(Mutex::new(HashSet::new()));
+
+    // Initialize zap subscriptions if nostr keys are provided
+    if let Some(nostr_keys) = &nostr_keys {
+        // start bg task to subscribe to users with unexpired invoices
+        for user in repository.get_users_with_unexpired_invoices().await? {
+            let user_pubkey = bitcoin::secp256k1::PublicKey::from_str(&user)
+                .map_err(|e| anyhow!("failed to parse user pubkey: {e:?}"))?;
+
+            zap::create_rpc_client_and_subscribe(
+                repository.clone(),
+                user_pubkey,
+                &connection_manager,
+                &coordinator,
+                signer.clone(),
+                session_manager.clone(),
+                Arc::clone(&service_provider),
+                nostr_keys.clone(),
+                Arc::clone(&subscribed_keys),
+            )
+            .await?;
+        }
+    }
+
     let state = State {
         db: repository,
         wallet,
@@ -202,7 +268,14 @@ where
         max_sendable: args.max_sendable,
         include_spark_address: args.include_spark_address,
         domain_validator: Arc::new(domain_validator),
+        nostr_keys,
         ca_cert,
+        connection_manager,
+        coordinator,
+        signer,
+        session_manager,
+        service_provider,
+        subscribed_keys,
     };
 
     let server_router = Router::new()

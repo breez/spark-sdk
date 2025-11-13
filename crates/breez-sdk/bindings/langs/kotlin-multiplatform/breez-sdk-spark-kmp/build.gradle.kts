@@ -39,10 +39,6 @@ kotlin {
         }
 
         it.compilations["main"].cinterops {
-            create("breezSdkCommonCInterop") {
-                defFile(project.file("src/nativeInterop/cinterop/breez_sdk_common.def"))
-                includeDirs(project.file("src/nativeInterop/cinterop/headers/breez_sdk_common"), project.file("src/lib/$platform"))
-            }
             create("breezSdkSparkCInterop") {
                 defFile(project.file("src/nativeInterop/cinterop/breez_sdk_spark.def"))
                 includeDirs(project.file("src/nativeInterop/cinterop/headers/breez_sdk_spark"), project.file("src/lib/$platform"))

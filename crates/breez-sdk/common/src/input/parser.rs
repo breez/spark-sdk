@@ -91,12 +91,12 @@ where
 
     pub async fn parse_core(&self, input: &str) -> Result<Option<InputType>, ParseError> {
         if input.contains('@') {
-            if let Some(bip_21) = self.parse_bip_353(input).await? {
-                return Ok(Some(InputType::Bip21(bip_21)));
-            }
-
             if let Some(lightning_address) = self.parse_lightning_address(input).await {
                 return Ok(Some(InputType::LightningAddress(lightning_address)));
+            }
+
+            if let Some(bip_21) = self.parse_bip_353(input).await? {
+                return Ok(Some(InputType::Bip21(bip_21)));
             }
         }
 
@@ -650,7 +650,7 @@ pub fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option
                         );
                         return None;
                     };
-                    Some(token_identifier.to_string())
+                    Some(token_identifier.clone())
                 }
                 SparkAddressPaymentType::SatsPayment(_) => None,
             };

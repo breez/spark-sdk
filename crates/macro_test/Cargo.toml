@@ -1,0 +1,8 @@
+[package]
+name = "macro_test"
+version.workspace = true
+edition = "2024"
+publish = false
+
+[dependencies]
+macros = { path = "../macros" }

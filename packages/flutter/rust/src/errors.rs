@@ -7,7 +7,7 @@ pub enum _DepositClaimError {
     DepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Fee,
+        max_fee: Option<Fee>,
         actual_fee: u64,
     },
     MissingUtxo {
@@ -30,7 +30,7 @@ pub enum _SdkError {
     DepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Fee,
+        max_fee: Option<Fee>,
         actual_fee: u64,
     },
     MissingUtxo {

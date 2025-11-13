@@ -1,18 +1,18 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    DeriveInput, GenericArgument, Ident, PathArguments, Result, Type,
+    DeriveInput, GenericArgument, Ident, Path, PathArguments, Result, Type,
     parse::{Parse, ParseStream},
     parse_macro_input,
 };
 
 struct FromAttr {
-    source_type: Ident,
+    source_type: Path,
 }
 
 impl Parse for FromAttr {
     fn parse(input: ParseStream) -> Result<Self> {
-        let source_type: Ident = input.parse()?;
+        let source_type: Path = input.parse()?;
         Ok(FromAttr { source_type })
     }
 }
@@ -31,10 +31,11 @@ pub fn derive_from(attr: TokenStream, item: TokenStream) -> TokenStream {
         syn::Data::Struct(data_struct) => {
             generate_struct_impl(source_type, target_name, data_struct)
         }
+        syn::Data::Enum(data_enum) => generate_enum_impl(source_type, target_name, data_enum),
         _ => {
             return syn::Error::new_spanned(
                 input.ident,
-                "derive_from can only be used with structs",
+                "derive_from can only be used with structs or enums",
             )
             .to_compile_error()
             .into();
@@ -88,7 +89,7 @@ fn is_option_vec_type(ty: &Type) -> bool {
 }
 
 fn generate_struct_impl(
-    source_type: Ident,
+    source_type: Path,
     target_name: &Ident,
     data_struct: &syn::DataStruct,
 ) -> proc_macro2::TokenStream {
@@ -150,6 +151,81 @@ fn generate_struct_impl(
                     fn from(_source: #source_type) -> Self {
                         Self
                     }
+                }
+            }
+        }
+    }
+}
+
+fn generate_enum_impl(
+    source_type: Path,
+    target_name: &Ident,
+    data_enum: &syn::DataEnum,
+) -> proc_macro2::TokenStream {
+    let variant_conversions = data_enum.variants.iter().map(|variant| {
+        let variant_name = &variant.ident;
+
+        match &variant.fields {
+            syn::Fields::Named(fields) => {
+                let field_names: Vec<_> = fields.named.iter().map(|f| &f.ident).collect();
+                let field_conversions = fields.named.iter().map(|field| {
+                    let field_name = &field.ident;
+
+                    // Handle different container types
+                    if is_option_vec_type(&field.ty) {
+                        quote! { #field_name: #field_name.map(|v| v.into_iter().map(Into::into).collect()) }
+                    } else if is_option_type(&field.ty) {
+                        quote! { #field_name: #field_name.map(Into::into) }
+                    } else if is_vec_type(&field.ty) {
+                        quote! { #field_name: #field_name.into_iter().map(Into::into).collect() }
+                    } else {
+                        quote! { #field_name: #field_name.into() }
+                    }
+                });
+
+                quote! {
+                    #source_type::#variant_name { #(#field_names),* } => #target_name::#variant_name {
+                        #(#field_conversions),*
+                    }
+                }
+            }
+            syn::Fields::Unnamed(fields) => {
+                let field_count = fields.unnamed.len();
+                let field_names: Vec<_> = (0..field_count)
+                    .map(|i| syn::Ident::new(&format!("field{}", i), variant_name.span()))
+                    .collect();
+
+                let field_conversions = fields.unnamed.iter().enumerate().map(|(i, field)| {
+                    let field_name = &field_names[i];
+
+                    if is_option_type(&field.ty) {
+                        quote! { #field_name.map(Into::into) }
+                    } else if is_vec_type(&field.ty) {
+                        quote! { #field_name.into_iter().map(Into::into).collect() }
+                    } else {
+                        quote! { #field_name.into() }
+                    }
+                });
+
+                quote! {
+                    #source_type::#variant_name(#(#field_names),*) => #target_name::#variant_name(
+                        #(#field_conversions),*
+                    )
+                }
+            }
+            syn::Fields::Unit => {
+                quote! {
+                    #source_type::#variant_name => #target_name::#variant_name
+                }
+            }
+        }
+    });
+
+    quote! {
+        impl From<#source_type> for #target_name {
+            fn from(source: #source_type) -> Self {
+                match source {
+                    #(#variant_conversions),*
                 }
             }
         }

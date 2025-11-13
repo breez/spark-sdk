@@ -8,7 +8,7 @@ use crate::{
     command::{
         deposit::DepositCommand, invoices::InvoicesCommand, leaves::LeavesCommand,
         lightning::LightningCommand, tokens::TokensCommand, transfer::TransferCommand,
-        withdraw::WithdrawCommand,
+        wallet_settings::WalletSettingsCommand, withdraw::WithdrawCommand,
     },
     config::Config,
 };
@@ -19,6 +19,7 @@ pub mod leaves;
 pub mod lightning;
 pub mod tokens;
 pub mod transfer;
+pub mod wallet_settings;
 pub mod withdraw;
 
 #[derive(Debug, Parser)]
@@ -57,6 +58,9 @@ pub enum Command {
     /// Invoices commands.
     #[command(subcommand)]
     Invoices(InvoicesCommand),
+    /// Wallet settings commands.
+    #[command(subcommand)]
+    WalletSettings(WalletSettingsCommand),
 }
 
 pub(crate) async fn handle_command(
@@ -119,6 +123,9 @@ pub(crate) async fn handle_command(
         }
         Command::Invoices(invoices_command) => {
             invoices::handle_command(config, wallet, invoices_command).await?
+        }
+        Command::WalletSettings(wallet_settings_command) => {
+            wallet_settings::handle_command(config, wallet, wallet_settings_command).await?
         }
     }
 

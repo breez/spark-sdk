@@ -17,7 +17,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
 #[serde(tag = "status")]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum LnurlCallbackStatus {
     /// On-wire format is: `{"status": "OK"}`
     Ok,
@@ -31,7 +30,6 @@ pub enum LnurlCallbackStatus {
 
 /// Wrapped in a [`LnUrlError`], this represents a LNURL-endpoint error.
 #[derive(Clone, Deserialize, Debug, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LnurlErrorDetails {
     pub reason: String,
 }

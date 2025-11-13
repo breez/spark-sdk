@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use axum::{
     Extension, Json,
     extract::{Path, Query},
@@ -10,16 +8,22 @@ use bitcoin::{
     hashes::{Hash, sha256},
     secp256k1::{PublicKey, XOnlyPublicKey, ecdsa::Signature},
 };
+use lightning_invoice::Bolt11Invoice;
 use lnurl_models::{
     CheckUsernameAvailableResponse, RecoverLnurlPayRequest, RecoverLnurlPayResponse,
     RegisterLnurlPayRequest, RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
     sanitize_username,
 };
+use nostr::{Alphabet, Event, JsonUtil, Kind, TagStandard};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::marker::PhantomData;
+use std::str::FromStr;
+use std::sync::Arc;
 use tracing::{debug, error, trace, warn};
 
+use crate::zap::Zap;
 use crate::{
     repository::{LnurlRepository, LnurlRepositoryError},
     state::State,
@@ -29,6 +33,7 @@ use crate::{
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LnurlPayCallbackParams {
     pub amount: Option<u64>,
+    pub nostr: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -82,7 +87,7 @@ pub struct LnurlServer<DB> {
 
 impl<DB> LnurlServer<DB>
 where
-    DB: LnurlRepository,
+    DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
     pub async fn available(
         Host(host): Host,
@@ -258,11 +263,16 @@ where
             tag: Tag::Pay,
             metadata: get_metadata(&user.domain, &user),
             comment_allowed: None,
-            allows_nostr: None,
-            nostr_pubkey: None,
+            allows_nostr: if state.nostr_keys.is_some() {
+                Some(true)
+            } else {
+                None
+            },
+            nostr_pubkey: state.nostr_keys.and_then(|n| n.public_key.xonly().ok()),
         }))
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn handle_invoice(
         Host(host): Host,
         Path(identifier): Path<String>,
@@ -297,10 +307,25 @@ where
             return Err(lnurl_error("amount must be a whole sat amount"));
         }
 
-        let metadata = get_metadata(&user.domain, &user);
-        let desc_hash = sha256::Hash::hash(metadata.as_bytes());
+        let desc_hash = if let Some(event) = &params.nostr {
+            if state.nostr_keys.is_none() {
+                trace!("nostr zap not supported");
+                return Err(lnurl_error("nostr zap not supported"));
+            }
+
+            let event = Event::from_json(event).map_err(|e| {
+                trace!("invalid nostr event, could not parse: {}", e);
+                lnurl_error("invalid nostr event")
+            })?;
+            validate_nostr_zap_request(amount_msat, &event)?;
+            sha256::Hash::hash(event.as_json().as_bytes())
+        } else {
+            let metadata = get_metadata(&user.domain, &user);
+            sha256::Hash::hash(metadata.as_bytes())
+        };
+
         let pubkey = parse_pubkey(&user.pubkey)?;
-        let invoice = state
+        let res = state
             .wallet
             .create_lightning_invoice(
                 amount_msat / 1000,
@@ -316,17 +341,154 @@ where
                 lnurl_error("failed to create invoice")
             })?;
 
-        debug!("Created lightning invoice: {:?}", invoice);
+        debug!("Created lightning invoice: {:?}", res);
+
+        let invoice = Bolt11Invoice::from_str(&res.invoice).map_err(|e| {
+            error!("failed to parse invoice: {}", e);
+            lnurl_error("internal server error")
+        })?;
+
+        // save to zap event to db
+        if let Some(zap_request) = params.nostr {
+            // Calculate expiry timestamp: current time + expiry duration from invoice
+            let expiry_timestamp = invoice.expires_at().ok_or_else(|| {
+                error!(
+                    "invoice has invalid expiry: duration since epoch {}s, expiry time: {}s",
+                    invoice.duration_since_epoch().as_secs(),
+                    invoice.expiry_time().as_secs()
+                );
+                lnurl_error("internal server error")
+            })?;
+
+            let invoice_expiry: i64 = i64::try_from(expiry_timestamp.as_secs()).map_err(|e| {
+                error!(
+                    "invoice has invalid expiry for i64: duration since epoch {}s, expiry time: {}s: {e}",
+                    invoice.duration_since_epoch().as_secs(),
+                    invoice.expiry_time().as_secs(),
+                );
+                lnurl_error("internal server error")
+            })?;
+
+            let zap = Zap {
+                payment_hash: invoice.payment_hash().to_string(),
+                zap_request,
+                zap_event: None,
+                user_pubkey: user.pubkey.clone(),
+                invoice_expiry,
+            };
+            if let Err(e) = state.db.upsert_zap(&zap).await {
+                error!("failed to save zap event: {}", e);
+                return Err(lnurl_error("internal server error"));
+            }
+
+            // Subscribe to user if not already subscribed (only if nostr is enabled)
+            if let Some(nostr_keys) = &state.nostr_keys {
+                crate::zap::create_rpc_client_and_subscribe(
+                    state.db.clone(),
+                    pubkey,
+                    &state.connection_manager,
+                    &state.coordinator,
+                    state.signer.clone(),
+                    state.session_manager.clone(),
+                    state.service_provider.clone(),
+                    nostr_keys.clone(),
+                    Arc::clone(&state.subscribed_keys),
+                )
+                .await
+                .map_err(|e| {
+                    error!("failed to subscribe to user for zaps: {}", e);
+                    lnurl_error("internal server error")
+                })?;
+            }
+        }
 
         // TODO: Save things like the invoice/preimage/transfer id?
         // TODO: Validate invoice?
         // TODO: Add lnurl-verify
 
         Ok(Json(json!({
-            "pr": invoice.invoice,
+            "pr": res.invoice,
             "routes": Vec::<String>::new(),
         })))
     }
+}
+
+fn validate_nostr_zap_request(
+    amount_msat: u64,
+    event: &Event,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    if event.kind != Kind::ZapRequest {
+        trace!("nostr event is incorrect kind");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 1. It MUST have a valid nostr signature
+    if event.verify().is_err() {
+        trace!("invalid nostr event, does not verify");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 2. It MUST have tags
+    if event.tags.is_empty() {
+        trace!("invalid nostr event, missing tags");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 3. It MUST have only one p tag
+    if event
+        .tags
+        .iter()
+        .filter_map(nostr::Tag::single_letter_tag)
+        .filter(|t| t.is_lowercase() && t.character == Alphabet::P)
+        .count()
+        != 1
+    {
+        trace!("invalid nostr event, missing or multiple 'p' tags");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 4. It MUST have 0 or 1 e tags
+    if event
+        .tags
+        .iter()
+        .filter_map(nostr::Tag::single_letter_tag)
+        .filter(|t| t.is_lowercase() && t.character == Alphabet::E)
+        .count()
+        > 1
+    {
+        trace!("invalid nostr event, multiple 'e' tags");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 5. There should be a relays tag with the relays to send the zap receipt to.
+    if !event
+        .tags
+        .iter()
+        .any(|t| matches!(t.as_standardized(), Some(TagStandard::Relays(_))))
+    {
+        trace!("invalid nostr event, missing relay tag");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 6. If there is an amount tag, it MUST be equal to the amount query parameter.
+    if let Some(millisats) = event.tags.iter().find_map(|t| {
+        if let Some(TagStandard::Amount { millisats, .. }) = t.as_standardized() {
+            Some(millisats)
+        } else {
+            None
+        }
+    }) && *millisats != amount_msat
+    {
+        trace!("invalid nostr event, amount does not match");
+        return Err(lnurl_error("invalid nostr event"));
+    }
+
+    // 7. If there is an 'a' tag, it MUST be a valid event coordinate
+    // NOTE: Assuming the tag is well-formed and contains the necessary fields, because it's standard.
+
+    // 8. There MUST be 0 or 1 P tags. If there is one, it MUST be equal to the zap receipt's pubkey.
+    // TODO: Implement this check.
+    Ok(())
 }
 
 fn validate_username(username: &str) -> Result<(), (StatusCode, Json<Value>)> {

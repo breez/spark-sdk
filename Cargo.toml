@@ -16,6 +16,7 @@ members = [
   "crates/breez-sdk/breez-itest",
   "crates/breez-sdk/wasm",
   "crates/macros",
+  "crates/macro_test",
   "crates/spark",
   "crates/spark-itest",
   "crates/spark-wallet",
@@ -73,6 +74,7 @@ hickory-resolver = "0.25.2"
 http = "1.3.1"
 http-body = "1.0.1"
 http-body-util = "0.1.3"
+js-sys = "0.3.77"
 k256 = { version = "0.13.0", features = ["arithmetic", "schnorr", "ecdsa"] }
 lightning = "0.1.3"
 lightning-invoice = "0.33.1"
@@ -136,6 +138,7 @@ uuid = { version = "1.17.0", features = ["v7", "v4"] }
 wasm-bindgen = "0.2.100"
 wasm-bindgen-futures = "0.4.50"
 wasm-bindgen-test = "0.3.50"
+web-sys = { version = "0.3.77", features = ["console", "DomException"] }
 web-time = "1.1.0"
 x509-parser = "0.18.0"
 xshell = "0.2"

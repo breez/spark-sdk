@@ -5,7 +5,6 @@ use tracing::{debug, trace};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RestResponse {
     pub status: u16,
     pub body: String,
@@ -17,7 +16,6 @@ impl RestResponse {
     }
 }
 
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
 pub trait RestClient: Send + Sync {
     /// Makes a GET request and logs on DEBUG.

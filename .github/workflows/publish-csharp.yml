@@ -1,0 +1,143 @@
+name: Publish C# Bindings
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: "SDK repository, defaults to current repository"
+        required: false
+        type: string
+      ref:
+        description: "Git commit, tag or branch reference"
+        required: true
+        type: string
+      package-version:
+        description: "Version for the C# library (MAJOR.MINOR.BUILD)"
+        required: true
+        type: string
+      publish:
+        description: "Should publish"
+        required: true
+        type: boolean
+        default: false
+    secrets:
+      NUGET_API_KEY:
+        description: "NuGet API key for publishing the C# library"
+        required: true
+
+jobs:
+  build-language-bindings:
+    name: Build language bindings
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Setup build
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download aarch64-unknown-linux-gnu
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-aarch64-unknown-linux-gnu
+          path: aarch64-unknown-linux-gnu
+
+      - name: Build C# bindings
+        working-directory: crates/breez-sdk/bindings
+        run: |
+          make install-uniffi-bindgen-cs
+          uniffi-bindgen-cs --library ../../../aarch64-unknown-linux-gnu/libbreez_sdk_spark_bindings.so --no-format -o ffi/csharp -c ./uniffi.toml
+
+      - name: Archive C# language bindings
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-csharp
+          path: crates/breez-sdk/bindings/ffi/csharp/breez_sdk_spark.cs
+
+  build-package:
+    runs-on: ubuntu-latest
+    needs: build-language-bindings
+    steps:
+      - name: Checkout spark-sdk repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-csharp
+          path: crates/breez-sdk/bindings/langs/csharp/src
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-aarch64-apple-darwin
+          path: crates/breez-sdk/bindings/langs/csharp/src/runtimes/osx-arm64/native
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-x86_64-apple-darwin
+          path: crates/breez-sdk/bindings/langs/csharp/src/runtimes/osx-x64/native
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-aarch64-unknown-linux-gnu
+          path: crates/breez-sdk/bindings/langs/csharp/src/runtimes/linux-arm64/native
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-x86_64-unknown-linux-gnu
+          path: crates/breez-sdk/bindings/langs/csharp/src/runtimes/linux-x64/native
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-i686-pc-windows-msvc
+          path: crates/breez-sdk/bindings/langs/csharp/src/runtimes/win-x86/native
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-x86_64-pc-windows-msvc
+          path: crates/breez-sdk/bindings/langs/csharp/src/runtimes/win-x64/native
+
+      - name: Update package version
+        if: ${{ inputs.package-version }}
+        working-directory: crates/breez-sdk/bindings/langs/csharp/src
+        run: sed -i.bak -e 's/<Version>.*<\/Version>/<Version>${{ inputs.package-version }}<\/Version>/' Breez.Sdk.Spark.csproj
+
+      - name: Setup dotnet
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: "6.0.x"
+
+      - name: Build the project
+        working-directory: crates/breez-sdk/bindings/langs/csharp/src
+        run: dotnet build Breez.Sdk.Spark.csproj
+
+      - name: Create the package
+        working-directory: crates/breez-sdk/bindings/langs/csharp/src
+        run: dotnet pack --configuration Release Breez.Sdk.Spark.csproj
+
+      - name: Archive the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Breez.Sdk.Spark.${{ inputs.package-version || '0.0.1' }}.nupkg
+          path: crates/breez-sdk/bindings/langs/csharp/src/bin/Release/Breez.Sdk.Spark.*.nupkg
+
+  publish-package:
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    needs: build-package
+    steps:
+      - name: Download archived package
+        uses: actions/download-artifact@v4
+        with:
+          name: Breez.Sdk.Spark.${{ inputs.package-version }}.nupkg
+
+      - name: Publish to nuget.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: dotnet nuget push Breez.Sdk.Spark.${{ inputs.package-version }}.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json

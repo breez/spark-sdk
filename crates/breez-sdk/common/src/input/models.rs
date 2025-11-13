@@ -9,7 +9,6 @@ use crate::{
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Amount {
     Bitcoin {
         amount_msat: u64,
@@ -24,7 +23,6 @@ pub enum Amount {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Bip21Details {
     pub amount_sat: Option<u64>,
     pub asset_id: Option<String>,
@@ -36,14 +34,12 @@ pub struct Bip21Details {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Bip21Extra {
     pub key: String,
     pub value: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct BitcoinAddressDetails {
     pub address: String,
     pub network: BitcoinNetwork,
@@ -51,20 +47,17 @@ pub struct BitcoinAddressDetails {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Bolt11Invoice {
     pub bolt11: String,
     pub source: PaymentRequestSource,
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Bolt11RouteHint {
     pub hops: Vec<Bolt11RouteHintHop>,
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Bolt11RouteHintHop {
     /// The `node_id` of the non-target end of the route
     pub src_node_id: String,
@@ -83,26 +76,22 @@ pub struct Bolt11RouteHintHop {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Bolt12Invoice {
     pub invoice: String,
     pub source: PaymentRequestSource,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Bolt12InvoiceRequestDetails {
     // TODO: Fill fields
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Bolt12OfferBlindedPath {
     pub blinded_hops: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Bolt11InvoiceDetails {
     pub amount_msat: Option<u64>,
     pub description: Option<String>,
@@ -119,7 +108,6 @@ pub struct Bolt11InvoiceDetails {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Bolt12InvoiceDetails {
     // TODO: Fill fields
     pub amount_msat: u64,
@@ -127,14 +115,12 @@ pub struct Bolt12InvoiceDetails {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Bolt12Offer {
     pub offer: String,
     pub source: PaymentRequestSource,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Bolt12OfferDetails {
     pub absolute_expiry: Option<u64>,
     pub chains: Vec<String>,
@@ -147,7 +133,6 @@ pub struct Bolt12OfferDetails {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum InputType {
     BitcoinAddress(BitcoinAddressDetails),
     Bolt11Invoice(Bolt11InvoiceDetails),
@@ -184,7 +169,6 @@ impl TryFrom<LnurlRequestDetails> for InputType {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SparkAddressDetails {
     /// The raw address string
     pub address: String,
@@ -195,7 +179,6 @@ pub struct SparkAddressDetails {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SparkInvoiceDetails {
     /// The raw invoice string
     pub invoice: String,
@@ -215,21 +198,18 @@ pub struct SparkInvoiceDetails {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LightningAddressDetails {
     pub address: String,
     pub pay_request: LnurlPayRequestDetails,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PaymentRequestSource {
     pub bip_21_uri: Option<String>,
     pub bip_353_address: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SilentPaymentAddressDetails {
     pub address: String,
     pub network: BitcoinNetwork,
@@ -261,7 +241,6 @@ pub enum LnurlRequestDetails {
 
 /// Configuration for an external input parser
 #[derive(Debug, Clone, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ExternalInputParser {
     /// An arbitrary parser provider id
     pub provider_id: String,
@@ -270,28 +249,4 @@ pub struct ExternalInputParser {
     /// The URL of the parser containing a placeholder `<input>` that will be replaced with the
     /// input to be parsed. The input is sanitized using percent encoding.
     pub parser_url: String,
-}
-
-// Uniffi bindings have issues if multiple crates define the same custom type. This is a workaround.
-#[allow(unused_imports)]
-use u128 as common_u128;
-
-#[cfg(feature = "uniffi")]
-uniffi::custom_type!(common_u128, String);
-
-#[cfg(feature = "uniffi")]
-impl crate::UniffiCustomTypeConverter for u128 {
-    type Builtin = String;
-
-    fn into_custom(val: Self::Builtin) -> ::uniffi::Result<Self>
-    where
-        Self: ::std::marker::Sized,
-    {
-        val.parse::<u128>()
-            .map_err(uniffi::deps::anyhow::Error::msg)
-    }
-
-    fn from_custom(obj: Self) -> Self::Builtin {
-        obj.to_string()
-    }
 }

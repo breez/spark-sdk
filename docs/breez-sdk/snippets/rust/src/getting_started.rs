@@ -43,13 +43,12 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     let mut config = default_config(Network::Mainnet);
     config.api_key = Some("<breez api key>".to_string());
 
-    // Create the default storage
-    let storage = default_storage("./.data".to_string())?;
-
-    // Build the SDK using the config, seed and storage
-    let builder = SdkBuilder::new(config, seed, storage);
-
+    // Build the SDK using the config, seed and default storage
+    let builder = SdkBuilder::new(config, seed)
+        .with_default_storage("./.data".to_string());
     // You can also pass your custom implementations:
+    // let builder = builder.with_storage(<your storage implementation>)
+    // let builder = builder.with_real_time_sync_storage(<your real-time sync storage implementation>)
     // let builder = builder.with_chain_service(<your chain service implementation>)
     // let builder = builder.with_rest_client(<your rest client implementation>)
     // let builder = builder.with_key_set(<your key set type>, <use address index>, <account number>)

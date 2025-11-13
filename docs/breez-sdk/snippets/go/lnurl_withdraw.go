@@ -3,7 +3,6 @@ package example
 import (
 	"log"
 
-	"github.com/breez/breez-sdk-spark-go/breez_sdk_common"
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
@@ -21,7 +20,7 @@ func LnurlWithdraw(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.LnurlWithdra
 	}
 
 	switch inputType := input.(type) {
-	case breez_sdk_common.InputTypeLnurlWithdraw:
+	case breez_sdk_spark.InputTypeLnurlWithdraw:
 		// Amount to withdraw in sats between min/max withdrawable amounts
 		amountSats := uint64(5_000)
 		withdrawRequest := inputType.Field0

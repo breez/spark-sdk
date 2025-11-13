@@ -1,4 +1,4 @@
-const { initLogging, defaultConfig, SdkBuilder, defaultStorage } = require('@breeztech/breez-sdk-spark/nodejs')
+const { initLogging, defaultConfig, SdkBuilder } = require('@breeztech/breez-sdk-spark/nodejs')
 const fs = require('fs')
 const qrcode = require('qrcode')
 const { question, confirm } = require('./prompt.js')
@@ -56,9 +56,8 @@ const initSdk = async () => {
     let config = defaultConfig('regtest')
     config.apiKey = process.env.BREEZ_API_KEY
 
-    const storage = await defaultStorage('./.data')
-
-    let sdkBuilder = SdkBuilder.new(config, { type: 'mnemonic', mnemonic: mnemonic }, storage)
+    let sdkBuilder = SdkBuilder.new(config, { type: 'mnemonic', mnemonic: mnemonic })
+    sdkBuilder = await sdkBuilder.withDefaultStorage('./.data')
     sdkBuilder = sdkBuilder.withPaymentObserver(paymentObserver)
     if (process.env.CHAIN_SERVICE_USERNAME && process.env.CHAIN_SERVICE_PASSWORD) {
         sdkBuilder = sdkBuilder.withRestChainService('https://regtest-mempool.us-west-2.sparkinfra.net/api', {

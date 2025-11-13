@@ -2,6 +2,7 @@ use std::{rc::Rc, sync::Arc};
 
 use crate::{
     error::WasmResult,
+    logger::{Logger, WASM_LOGGER},
     models::{
         Config, Credentials, KeySetType, Seed,
         chain_service::{BitcoinChainService, WasmBitcoinChainService},
@@ -17,19 +18,35 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 pub struct SdkBuilder {
     builder: breez_sdk_spark::SdkBuilder,
+    network: breez_sdk_spark::Network,
+    seed: breez_sdk_spark::Seed,
 }
 
 #[wasm_bindgen]
 impl SdkBuilder {
     #[wasm_bindgen(js_name = "new")]
-    pub fn new(config: Config, seed: Seed, storage: Storage) -> WasmResult<Self> {
-        Ok(Self {
-            builder: breez_sdk_spark::SdkBuilder::new(
-                config.into(),
-                seed.into(),
-                Arc::new(WasmStorage { storage }),
-            ),
-        })
+    pub fn new(config: Config, seed: Seed) -> Self {
+        let config: breez_sdk_spark::Config = config.into();
+        let seed: breez_sdk_spark::Seed = seed.into();
+
+        Self {
+            network: config.network,
+            seed: seed.clone(),
+            builder: breez_sdk_spark::SdkBuilder::new(config, seed),
+        }
+    }
+
+    #[wasm_bindgen(js_name = "withDefaultStorage")]
+    pub async fn with_default_storage(mut self, storage_dir: String) -> WasmResult<Self> {
+        let storage = default_storage(&storage_dir, &self.network, &self.seed).await?;
+        self.builder = self.builder.with_storage(Arc::new(WasmStorage { storage }));
+        Ok(self)
+    }
+
+    #[wasm_bindgen(js_name = "withStorage")]
+    pub fn with_storage(mut self, storage: Storage) -> Self {
+        self.builder = self.builder.with_storage(Arc::new(WasmStorage { storage }));
+        self
     }
 
     #[wasm_bindgen(js_name = "withKeySet")]
@@ -96,4 +113,33 @@ impl SdkBuilder {
         let sdk = self.builder.build().await?;
         Ok(BreezSdk { sdk: Rc::new(sdk) })
     }
+}
+
+async fn default_storage(
+    data_dir: &str,
+    network: &breez_sdk_spark::Network,
+    seed: &breez_sdk_spark::Seed,
+) -> WasmResult<Storage> {
+    let db_path = breez_sdk_spark::default_storage_path(data_dir, network, seed)?;
+    // SAFETY: In WASM, thread-local storage is stable and the logger reference
+    // will remain valid for the duration of this async function call.
+    // The WASM environment is single-threaded, so there's no risk of the
+    // logger being moved or deallocated during the async operation.
+    let logger_ref = unsafe {
+        WASM_LOGGER.with_borrow(|logger| {
+            logger
+                .as_ref()
+                .map(|l| std::mem::transmute::<&Logger, &'static Logger>(l))
+        })
+    };
+    Ok(create_default_storage(db_path.to_string_lossy().as_ref(), logger_ref).await?)
+}
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_name = "createDefaultStorage", catch)]
+    async fn create_default_storage(
+        data_dir: &str,
+        logger: Option<&Logger>,
+    ) -> Result<crate::persist::Storage, JsValue>;
 }
