@@ -92,10 +92,14 @@ async fn test_01_spark_idempotency_key(
                 idempotency_key: idempotency_key.clone(),
             }),
         })
-        .await;
-    assert!(
-        resend_resp.is_err(),
-        "Resending should fail before payment is synced"
+        .await?;
+    assert_eq!(
+        send_resp.payment.id, resend_resp.payment.id,
+        "Resent payment should have the same ID"
+    );
+    assert_eq!(
+        send_resp.payment.timestamp, resend_resp.payment.timestamp,
+        "Resent payment should have the same timestamp"
     );
 
     info!("Syncing Alice's wallet to finalize the payment...");
@@ -163,7 +167,7 @@ async fn test_01_spark_idempotency_key(
     Ok(())
 }
 
-/// Send on-chain from Alice to Bob's static deposit address and verify claim.
+/// Send on-chain from Alice to Bob's static deposit address with idempotency key
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_02_bitcoin_idempotency_key(
@@ -239,17 +243,15 @@ async fn test_02_bitcoin_idempotency_key(
                 idempotency_key: Some(idempotency_key.clone()),
             }),
         })
-        .await;
-    if let Ok(resend_resp) = resend_resp {
-        assert_eq!(
-            send_resp.payment.id, resend_resp.payment.id,
-            "Resent payment should have the same ID"
-        );
-        assert_eq!(
-            send_resp.payment.timestamp, resend_resp.payment.timestamp,
-            "Resent payment should have the same timestamp"
-        );
-    }
+        .await?;
+    assert_eq!(
+        send_resp.payment.id, resend_resp.payment.id,
+        "Resent payment should have the same ID"
+    );
+    assert_eq!(
+        send_resp.payment.timestamp, resend_resp.payment.timestamp,
+        "Resent payment should have the same timestamp"
+    );
 
     // Trigger Bob sync and wait for receive + claim
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;

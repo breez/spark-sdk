@@ -76,7 +76,7 @@ In the optional send payment options for Bitcoin addresses, you can set:
 ### Spark
 
 In the optional send payment options for Spark address and invoices, you can set:
-- **Idempotency Key** - An UUID that identifies the payment. Providing the same idempotency key for multiple requests will ensure that only one payment is made. This applies only to non-token Spark transfers.
+- **Idempotency Key** - A UUID that identifies the payment. Providing the same idempotency key for multiple requests will ensure that only one payment is made. This applies only to non-token Spark transfers.
 
 {{#tabs send_payment:send-payment-spark}}
 
