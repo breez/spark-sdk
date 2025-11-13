@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 pub struct State<DB> {
     pub db: DB,
@@ -7,7 +7,7 @@ pub struct State<DB> {
     pub min_sendable: u64,
     pub max_sendable: u64,
     pub include_spark_address: bool,
-    pub domains: HashSet<String>,
+    pub domain_validator: Arc<dyn domain_validator::DomainValidator>,
     pub ca_cert: Option<Vec<u8>>,
 }
 
@@ -23,7 +23,7 @@ where
             min_sendable: self.min_sendable,
             max_sendable: self.max_sendable,
             include_spark_address: self.include_spark_address,
-            domains: self.domains.clone(),
+            domain_validator: Arc::clone(&self.domain_validator),
             ca_cert: self.ca_cert.clone(),
         }
     }

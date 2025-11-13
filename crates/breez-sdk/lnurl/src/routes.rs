@@ -90,9 +90,10 @@ where
         Extension(state): Extension<State<DB>>,
     ) -> Result<Json<CheckUsernameAvailableResponse>, (StatusCode, Json<Value>)> {
         let username = sanitize_username(&identifier);
+        let domain = host.trim().to_lowercase();
         let user = state
             .db
-            .get_user_by_name(&sanitize_domain(&state, &host)?, &username)
+            .get_user_by_name(&domain, &username)
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -122,8 +123,15 @@ where
                 Json(Value::String("description too long".into())),
             ));
         }
+        let domain = host.trim().to_lowercase();
+
+        // Use domain validator from state
+        if let Err(e) = state.domain_validator.validate_domain(&domain).await {
+            warn!("domain not allowed for registration: {} - {}", domain, e);
+            return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
+        }
         let user = User {
-            domain: sanitize_domain(&state, &host)?,
+            domain,
             pubkey: pubkey.to_string(),
             name: username,
             description: payload.description,
@@ -162,9 +170,10 @@ where
         let username = sanitize_username(&payload.username);
         let pubkey = validate(&pubkey, &payload.signature, &username, &state).await?;
 
+        let domain = host.trim().to_lowercase();
         state
             .db
-            .delete_user(&sanitize_domain(&state, &host)?, &pubkey.to_string())
+            .delete_user(&domain, &pubkey.to_string())
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -185,9 +194,10 @@ where
     ) -> Result<Json<RecoverLnurlPayResponse>, (StatusCode, Json<Value>)> {
         let pubkey = validate(&pubkey, &payload.signature, &pubkey, &state).await?;
 
+        let domain = host.trim().to_lowercase();
         let user = state
             .db
-            .get_user_by_pubkey(&sanitize_domain(&state, &host)?, &pubkey.to_string())
+            .get_user_by_pubkey(&domain, &pubkey.to_string())
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -224,9 +234,10 @@ where
         }
 
         let username = sanitize_username(&identifier);
+        let domain = host.trim().to_lowercase();
         let user = state
             .db
-            .get_user_by_name(&sanitize_domain(&state, &host)?, &username)
+            .get_user_by_name(&domain, &username)
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -263,7 +274,7 @@ where
         }
 
         let username = sanitize_username(&identifier);
-        let domain = sanitize_domain(&state, &host)?;
+        let domain = host.trim().to_lowercase();
         let user = state
             .db
             .get_user_by_name(&domain, &username)
@@ -420,16 +431,4 @@ fn lnurl_error(message: &str) -> (StatusCode, Json<Value>) {
             .collect(),
         )),
     )
-}
-
-fn sanitize_domain<DB>(
-    state: &State<DB>,
-    domain: &str,
-) -> Result<String, (StatusCode, Json<Value>)> {
-    let domain = domain.trim().to_lowercase();
-    if !state.domains.contains(&domain) {
-        warn!("domain not allowed: {}", domain);
-        return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
-    }
-    Ok(domain)
 }

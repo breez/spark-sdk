@@ -15,6 +15,8 @@ use figment::{
     providers::{Env, Format, Serialized, Toml},
 };
 use serde::{Deserialize, Serialize};
+use domain_validator::ListDomainValidator;
+use fly_api::FlyDomainValidator;
 use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
 use sqlx::{PgPool, SqlitePool};
 use tower_http::cors::{Any, CorsLayer};
@@ -87,6 +89,16 @@ struct Args {
     /// If set, the server will use this certificate to validate api keys.
     #[arg(long)]
     pub ca_cert: Option<String>,
+
+    /// Fly.io app name for certificate-based domain validation.
+    /// If set along with --fly-api-token, enables Fly.io certificate validation.
+    #[arg(long)]
+    pub fly_app_name: Option<String>,
+
+    /// Fly.io API token for certificate-based domain validation.
+    /// If set along with --fly-app-name, enables Fly.io certificate validation.
+    #[arg(long)]
+    pub fly_api_token: Option<String>,
 }
 
 #[tokio::main]
@@ -159,11 +171,16 @@ where
         )
         .await?,
     );
-    let domains = args
-        .domains
-        .split(',')
-        .map(|d| d.trim().to_lowercase())
-        .collect();
+    let domain_validator: Box<dyn domain_validator::DomainValidator> = if let (Some(app_name), Some(api_token)) = (args.fly_app_name, args.fly_api_token) {
+        Box::new(FlyDomainValidator::new(app_name, api_token))
+    } else {
+        let domains: std::collections::HashSet<String> = args
+            .domains
+            .split(',')
+            .map(|s| s.trim().to_lowercase())
+            .collect();
+        Box::new(ListDomainValidator::new(domains))
+    };
 
     let ca_cert = args
         .ca_cert
@@ -176,6 +193,7 @@ where
             Ok::<_, anyhow::Error>(ca_cert.as_raw().to_vec())
         })
         .transpose()?;
+
     let state = State {
         db: repository,
         wallet,
@@ -183,7 +201,7 @@ where
         min_sendable: args.min_sendable,
         max_sendable: args.max_sendable,
         include_spark_address: args.include_spark_address,
-        domains,
+        domain_validator: Arc::new(domain_validator),
         ca_cert,
     };
 

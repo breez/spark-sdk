@@ -1,0 +1,25 @@
+[package]
+name = "fly-api"
+edition = "2024"
+version = "0.1.0"
+
+[dependencies]
+reqwest = { version = "0.12.10", features = ["json"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+thiserror = "2.0.12"
+tokio = { version = "1.45.1", features = ["rt-multi-thread"] }
+domain-validator = { path = "../domain-validator" }
+async-trait = "0.1.88"
+
+[lints]
+clippy.suspicious = { level = "warn", priority = -1 }
+clippy.complexity = { level = "warn", priority = -1 }
+clippy.perf = { level = "warn", priority = -1 }
+clippy.style = { level = "warn", priority = -1 }
+clippy.pedantic = { level = "warn", priority = -1 }
+clippy.missing_errors_doc = "allow"
+clippy.missing_panics_doc = "allow"
+clippy.must_use_candidate = "allow"
+clippy.struct_field_names = "allow"
+clippy.arithmetic_side_effects = "warn"
