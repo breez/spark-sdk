@@ -118,8 +118,10 @@ const exampleSendPaymentOnchain = async (
   prepareResponse: PrepareSendPaymentResponse
 ) => {
   // ANCHOR: send-payment-onchain
+  const optionalIdempotencyKey = '<idempotency key uuid>'
   const options = new SendPaymentOptions.BitcoinAddress({
-    confirmationSpeed: OnchainConfirmationSpeed.Medium
+    confirmationSpeed: OnchainConfirmationSpeed.Medium,
+    idempotencyKey: optionalIdempotencyKey
   })
   const sendResponse = await sdk.sendPayment({
     prepareResponse,
@@ -135,9 +137,12 @@ const exampleSendPaymentSpark = async (
   prepareResponse: PrepareSendPaymentResponse
 ) => {
   // ANCHOR: send-payment-spark
+  const options = new SendPaymentOptions.Spark({
+    idempotencyKey: '<idempotency key uuid>'
+  })
   const sendResponse = await sdk.sendPayment({
     prepareResponse,
-    options: undefined
+    options
   })
   const payment = sendResponse.payment
   // ANCHOR_END: send-payment-spark

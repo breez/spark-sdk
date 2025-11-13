@@ -142,8 +142,10 @@ async def send_payment_onchain(
 ):
     # ANCHOR: send-payment-onchain
     try:
+        optional_idempotency_key = "<idempotency key uuid>"
         options = SendPaymentOptions.BITCOIN_ADDRESS(
-            confirmation_speed=OnchainConfirmationSpeed.MEDIUM
+            confirmation_speed=OnchainConfirmationSpeed.MEDIUM,
+            idempotency_key=optional_idempotency_key
         )
         request = SendPaymentRequest(prepare_response=prepare_response, options=options)
         send_response = await sdk.send_payment(request=request)
@@ -159,7 +161,10 @@ async def send_payment_spark(
 ):
     # ANCHOR: send-payment-spark
     try:
-        request = SendPaymentRequest(prepare_response=prepare_response)
+        options = SendPaymentOptions.SPARK(
+            idempotency_key="<idempotency key uuid>"
+        )
+        request = SendPaymentRequest(prepare_response=prepare_response, options=options)
         send_response = await sdk.send_payment(request=request)
         payment = send_response.payment
     except Exception as error:

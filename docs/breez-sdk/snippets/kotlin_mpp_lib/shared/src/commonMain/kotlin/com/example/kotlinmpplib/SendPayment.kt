@@ -131,7 +131,11 @@ class SendPayment {
     suspend fun sendPaymentOnchain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) {
         // ANCHOR: send-payment-onchain
         try {
-            val options = SendPaymentOptions.BitcoinAddress(OnchainConfirmationSpeed.MEDIUM)
+            val optionalIdempotencyKey = "<idempotency key uuid>"
+            val options = SendPaymentOptions.BitcoinAddress(
+                OnchainConfirmationSpeed.MEDIUM,
+                optionalIdempotencyKey
+            )
             val sendResponse = sdk.sendPayment(SendPaymentRequest(prepareResponse, options))
             val payment = sendResponse.payment
         } catch (e: Exception) {
@@ -143,7 +147,8 @@ class SendPayment {
     suspend fun sendPaymentSpark(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) {
         // ANCHOR: send-payment-spark
         try {
-            val sendResponse = sdk.sendPayment(SendPaymentRequest(prepareResponse, null))
+            val options = SendPaymentOptions.Spark("<idempotency key uuid>")
+            val sendResponse = sdk.sendPayment(SendPaymentRequest(prepareResponse, options))
             val payment = sendResponse.payment
         } catch (e: Exception) {
             // handle error

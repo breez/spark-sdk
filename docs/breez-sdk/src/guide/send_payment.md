@@ -59,21 +59,24 @@ Once the payment has been prepared, pass the prepare response as an argument to 
 
 ### Lightning
 
-In the send payment options for BOLT11 invoices, you can set whether to prefer to use Spark to transfer the payment if the invoice contains a Spark address. By default, using Spark transfers are disabled.
-
-By default, this function returns immediately. You can override this behavior by specifying a completion timeout in seconds. If the timeout is reached, a pending payment object is returned. If the payment completes within the timeout, the completed payment object is returned.
+In the optional send payment options for BOLT11 invoices, you can set:
+- **Prefer Spark** - Set the preference to use Spark to transfer the payment if the invoice contains a Spark address. By default, using Spark transfers are disabled.
+- **Completion Timeout** - By default, this function returns immediately. You can override this behavior by specifying a completion timeout in seconds. If the timeout is reached, a pending payment object is returned. If the payment completes within the timeout, the completed payment object is returned.
 
 {{#tabs send_payment:send-payment-lightning-bolt11}}
 
 ### Bitcoin
 
-For Bitcoin addresses, you can set the confirmation speed in the send payment options. By default, it is set to Fast.
+In the optional send payment options for Bitcoin addresses, you can set:
+- **Confirmation Speed** - The priority that the Bitcoin transaction confirms, that also effects the fee paid. By default, it is set to Fast.
+- **Idempotency Key** - An optional UUID that identifies the payment. If set, providing the same idempotency key for multiple requests will ensure that only one payment is made.
 
 {{#tabs send_payment:send-payment-onchain}}
 
 ### Spark
 
-For Spark addresses and invoices no send payment options are needed.
+In the optional send payment options for Spark address and invoices, you can set:
+- **Idempotency Key** - An UUID that identifies the payment. Providing the same idempotency key for multiple requests will ensure that only one payment is made. This applies only to non-token Spark transfers.
 
 {{#tabs send_payment:send-payment-spark}}
 

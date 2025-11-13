@@ -125,14 +125,15 @@ async fn send_payment_onchain(
     prepare_response: PrepareSendPaymentResponse,
 ) -> Result<()> {
     // ANCHOR: send-payment-onchain
-    // Send the payment, using Medium speed (Default = Fast)
-    let options = Some(SendPaymentOptions::BitcoinAddress {
+    let optional_idempotency_key = Some("<idempotency key uuid>".to_string());
+    let options = SendPaymentOptions::BitcoinAddress {
         confirmation_speed: OnchainConfirmationSpeed::Medium,
-    });
+        idempotency_key: optional_idempotency_key,
+    };
     let send_response = sdk
         .send_payment(SendPaymentRequest {
             prepare_response,
-            options,
+            options: Some(options),
         })
         .await?;
     let payment = send_response.payment;
@@ -146,11 +147,13 @@ async fn send_payment_spark(
     prepare_response: PrepareSendPaymentResponse,
 ) -> Result<()> {
     // ANCHOR: send-payment-spark
-    // Send the payment
+    let options = SendPaymentOptions::Spark {
+        idempotency_key: "<idempotency key uuid>".to_string(),
+    };
     let send_response = sdk
         .send_payment(SendPaymentRequest {
             prepare_response,
-            options: None,
+            options: Some(options),
         })
         .await?;
     let payment = send_response.payment;

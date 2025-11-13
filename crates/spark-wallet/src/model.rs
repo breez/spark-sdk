@@ -3,7 +3,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use bitcoin::{Transaction, secp256k1::PublicKey};
+use bitcoin::{Address, Transaction, secp256k1::PublicKey};
 use serde::{Deserialize, Serialize};
 use spark::{
     Network,
@@ -12,11 +12,11 @@ use spark::{
         invoice_response::TransferType as InvoiceTransferType,
     },
     services::{
-        LightningSendPayment, TokenMetadata, TokenTransaction, Transfer, TransferId, TransferLeaf,
-        TransferStatus, TransferType,
+        ExitSpeed, LightningSendPayment, TokenMetadata, TokenTransaction, Transfer, TransferId,
+        TransferLeaf, TransferStatus, TransferType,
     },
     ssp::{SspTransfer, SspUserRequest},
-    tree::{Leaves, SigningKeyshare, TreeNode, TreeNodeId},
+    tree::{Leaves, LeavesReservation, SigningKeyshare, TargetAmounts, TreeNode, TreeNodeId},
     utils::paging::PagingFilter,
 };
 
@@ -318,4 +318,14 @@ impl From<WalletSetting> for WalletSettings {
             private_enabled: value.private_enabled,
         }
     }
+}
+
+pub(crate) struct WithdrawInnerParams<'a> {
+    pub address: Address,
+    pub exit_speed: ExitSpeed,
+    pub leaves_reservation: &'a LeavesReservation,
+    pub target_amounts: Option<&'a TargetAmounts>,
+    pub fee_sats: u64,
+    pub fee_quote_id: String,
+    pub transfer_id: Option<TransferId>,
 }

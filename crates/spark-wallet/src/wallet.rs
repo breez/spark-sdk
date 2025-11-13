@@ -21,19 +21,20 @@ use spark::{
         },
     },
     services::{
-        CoopExitFeeQuote, CoopExitService, CpfpUtxo, DepositService, ExitSpeed, Fee,
-        FreezeIssuerTokenResponse, InvoiceDescription, LeafTxCpfpPsbts, LightningReceivePayment,
-        LightningSendPayment, LightningService, QueryTokenTransactionsFilter, StaticDepositQuote,
-        Swap, TimelockManager, TokenMetadata, TokenOutputWithPrevOut, TokenService,
-        TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
-        TransferTokenOutput, UnilateralExitService, Utxo,
+        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpUtxo, DepositService, ExitSpeed,
+        Fee, FreezeIssuerTokenResponse, InvoiceDescription, LeafTxCpfpPsbts,
+        LightningReceivePayment, LightningSendPayment, LightningService,
+        QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager, TokenMetadata,
+        TokenOutputWithPrevOut, TokenService, TokenTransaction, Transfer, TransferId,
+        TransferObserver, TransferService, TransferStatus, TransferTokenOutput,
+        UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     tree::{
-        InMemoryTreeStore, LeavesReservation, SynchronousTreeService, TargetAmounts, TreeNode,
-        TreeNodeId, TreeService, TreeStore, select_leaves_by_amounts, with_reserved_leaves,
+        InMemoryTreeStore, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
+        TreeService, TreeStore, select_leaves_by_amounts, with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult},
 };
@@ -44,7 +45,7 @@ use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     FulfillSparkInvoiceResult, ListTokenTransactionsRequest, QuerySparkInvoiceResult, TokenBalance,
-    WalletEvent, WalletLeaves, WalletSettings,
+    WalletEvent, WalletLeaves, WalletSettings, WithdrawInnerParams,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
@@ -727,15 +728,15 @@ impl SparkWallet {
 
         let transfer = with_reserved_leaves(
             self.tree_service.as_ref(),
-            self.withdraw_inner(
-                withdrawal_address,
+            self.withdraw_inner(WithdrawInnerParams {
+                address: withdrawal_address,
                 exit_speed,
-                &leaves_reservation,
-                target_amounts.as_ref(),
+                leaves_reservation: &leaves_reservation,
+                target_amounts: target_amounts.as_ref(),
                 fee_sats,
-                fee_quote.id,
+                fee_quote_id: fee_quote.id,
                 transfer_id,
-            ),
+            }),
             &leaves_reservation,
         )
         .await?;
@@ -756,14 +757,17 @@ impl SparkWallet {
 
     async fn withdraw_inner(
         &self,
-        address: Address,
-        exit_speed: ExitSpeed,
-        leaves_reservation: &LeavesReservation,
-        target_amounts: Option<&TargetAmounts>,
-        fee_sats: u64,
-        fee_quote_id: String,
-        transfer_id: Option<TransferId>,
+        params: WithdrawInnerParams<'_>,
     ) -> Result<Transfer, SparkWalletError> {
+        let WithdrawInnerParams {
+            address,
+            exit_speed,
+            leaves_reservation,
+            target_amounts,
+            fee_sats,
+            fee_quote_id,
+            transfer_id,
+        } = params;
         let withdraw_all = target_amounts.is_none();
         let (withdraw_leaves, fee_leaves, fee_quote_id) = if withdraw_all {
             (leaves_reservation.leaves.clone(), None, None)
@@ -790,15 +794,15 @@ impl SparkWallet {
         // Perform the cooperative exit with the SSP
         let transfer = self
             .coop_exit_service
-            .coop_exit(
-                withdraw_leaves,
-                &address,
+            .coop_exit(CoopExitParams {
+                leaves: withdraw_leaves,
+                withdrawal_address: &address,
                 withdraw_all,
                 exit_speed,
                 fee_quote_id,
                 fee_leaves,
                 transfer_id,
-            )
+            })
             .await?;
 
         Ok(transfer)
