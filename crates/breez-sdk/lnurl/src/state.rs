@@ -1,10 +1,9 @@
-use spark::operator::OperatorConfig;
 use spark::operator::rpc::ConnectionManager;
+use spark::operator::OperatorConfig;
 use spark::session_manager::InMemorySessionManager;
 use spark::ssp::ServiceProvider;
 use spark_wallet::DefaultSigner;
 use std::sync::Arc;
-use std::{collections::HashSet, sync::Arc};
 use tokio::sync::Mutex;
 
 pub struct State<DB> {
@@ -22,7 +21,7 @@ pub struct State<DB> {
     pub signer: Arc<DefaultSigner>,
     pub session_manager: Arc<InMemorySessionManager>,
     pub service_provider: Arc<ServiceProvider>,
-    pub subscribed_keys: Arc<Mutex<HashSet<String>>>,
+    pub subscribed_keys: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 impl<DB> Clone for State<DB>

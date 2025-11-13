@@ -203,16 +203,16 @@ where
         )
         .await?,
     );
-    let domain_validator: Box<dyn domain_validator::DomainValidator> =
+    let domain_validator: Arc<dyn domain_validator::DomainValidator> =
         if let (Some(app_name), Some(api_token)) = (args.fly_app_name, args.fly_api_token) {
-            Box::new(FlyDomainValidator::new(app_name, api_token))
+            Arc::new(FlyDomainValidator::new(app_name, api_token))
         } else {
             let domains = args
                 .domains
                 .split(',')
                 .map(|d| d.trim().to_lowercase())
                 .collect();
-            Box::new(ListDomainValidator::new(domains))
+            Arc::new(ListDomainValidator::new(domains))
         };
 
     let ca_cert = args
@@ -267,7 +267,7 @@ where
         min_sendable: args.min_sendable,
         max_sendable: args.max_sendable,
         include_spark_address: args.include_spark_address,
-        domain_validator: Arc::new(domain_validator),
+        domain_validator: domain_validator,
         nostr_keys,
         ca_cert,
         connection_manager,
