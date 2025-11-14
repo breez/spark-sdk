@@ -1504,6 +1504,12 @@ impl BreezSdk {
         request: SendPaymentRequest,
         suppress_payment_event: bool,
     ) -> Result<SendPaymentResponse, SdkError> {
+        if request.idempotency_key.is_some() && request.prepare_response.token_identifier.is_some()
+        {
+            return Err(SdkError::InvalidInput(
+                "Idempotency key is not supported for token payments".to_string(),
+            ));
+        }
         if let Some(idempotency_key) = &request.idempotency_key {
             // If an idempotency key is provided, check if a payment with that id already exists
             if let Ok(payment) = self
@@ -1572,18 +1578,6 @@ impl BreezSdk {
         let spark_address = address
             .parse::<SparkAddress>()
             .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
-        let transfer_id = match (
-            &request.idempotency_key,
-            &request.prepare_response.token_identifier,
-        ) {
-            (Some(_), Some(_)) => {
-                return Err(SdkError::InvalidInput(
-                    "Idempotency key is not supported for token payments".to_string(),
-                ));
-            }
-            (Some(idempotency_key), None) => Some(TransferId::from_str(idempotency_key)?),
-            _ => None,
-        };
 
         let payment = if let Some(identifier) = token_identifier {
             self.send_spark_token_address(
@@ -1593,6 +1587,11 @@ impl BreezSdk {
             )
             .await?
         } else {
+            let transfer_id = request
+                .idempotency_key
+                .as_ref()
+                .map(|key| TransferId::from_str(key))
+                .transpose()?;
             let transfer = self
                 .spark_wallet
                 .transfer(
@@ -1635,18 +1634,11 @@ impl BreezSdk {
         invoice: &str,
         request: &SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
-        let transfer_id = match (
-            &request.idempotency_key,
-            &request.prepare_response.token_identifier,
-        ) {
-            (Some(_), Some(_)) => {
-                return Err(SdkError::InvalidInput(
-                    "Idempotency key is not supported for token payments".to_string(),
-                ));
-            }
-            (Some(idempotency_key), None) => Some(TransferId::from_str(idempotency_key)?),
-            _ => None,
-        };
+        let transfer_id = request
+            .idempotency_key
+            .as_ref()
+            .map(|key| TransferId::from_str(key))
+            .transpose()?;
 
         let payment = match self
             .spark_wallet
