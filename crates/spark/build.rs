@@ -20,4 +20,6 @@ fn main() {
         .unwrap();
 
     println!("cargo:rerun-if-changed=protos");
+
+    built::write_built_file().expect("Failed to acquire build-time information");
 }

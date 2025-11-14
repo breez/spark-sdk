@@ -104,6 +104,7 @@ impl SparkWalletConfig {
             identity_public_key: PublicKey::from_str(pubkey).map_err(|_| {
                 SparkWalletError::ValidationError("Invalid identity public key".to_string())
             })?,
+            user_agent: None,
         })
     }
 
@@ -129,6 +130,7 @@ impl SparkWalletConfig {
             identity_public_key: PublicKey::from_str(identity_public_key).map_err(|_| {
                 SparkWalletError::ValidationError("Invalid identity public key".to_string())
             })?,
+            user_agent: None,
         })
     }
 

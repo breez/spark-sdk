@@ -99,6 +99,7 @@ pub(crate) struct GraphQLClientConfig {
     pub schema_endpoint: Option<String>,
 
     pub ssp_identity_public_key: PublicKey,
+    pub user_agent: Option<String>,
 }
 
 /// Bitcoin network enum

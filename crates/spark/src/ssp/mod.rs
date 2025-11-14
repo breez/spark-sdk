@@ -22,6 +22,7 @@ pub struct ServiceProviderConfig {
     /// Identity public key of the service provider
     #[serde_as(as = "DisplayFromStr")]
     pub identity_public_key: PublicKey,
+    pub user_agent: Option<String>,
 }
 
 impl From<ServiceProviderConfig> for GraphQLClientConfig {
@@ -30,6 +31,7 @@ impl From<ServiceProviderConfig> for GraphQLClientConfig {
             base_url: opts.base_url,
             schema_endpoint: opts.schema_endpoint,
             ssp_identity_public_key: opts.identity_public_key,
+            user_agent: opts.user_agent,
         }
     }
 }
