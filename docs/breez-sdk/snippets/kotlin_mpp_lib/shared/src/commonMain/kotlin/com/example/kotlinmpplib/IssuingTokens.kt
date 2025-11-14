@@ -5,9 +5,9 @@ import com.ionspin.kotlin.bignum.integer.BigInteger
 
 class IssuingTokens {
     fun getTokenIssuer(sdk: BreezSdk): TokenIssuer {
-        // ANCHOR: get-issuer-sdk
+        // ANCHOR: get-token-issuer
         val tokenIssuer = sdk.getTokenIssuer()
-        // ANCHOR_END: get-issuer-sdk
+        // ANCHOR_END: get-token-issuer
         return tokenIssuer
     }
 

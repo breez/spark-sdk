@@ -1,9 +1,9 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 TokenIssuer getTokenIssuer(BreezSdk sdk) {
-  // ANCHOR: get-issuer-sdk
+  // ANCHOR: get-token-issuer
   TokenIssuer tokenIssuer = sdk.getTokenIssuer();
-  // ANCHOR_END: get-issuer-sdk
+  // ANCHOR_END: get-token-issuer
   return tokenIssuer;
 }
 

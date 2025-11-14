@@ -5,7 +5,7 @@
 
 The Breez SDK provides a specialized Token Issuer interface for managing custom token issuance on the Spark network using the using the [BTKN protocol](https://docs.spark.money/learn/tokens/hello-btkn). This functionality enables token creators to issue, manage, and control their own tokens with advanced features.
 
-{{#tabs issuing_tokens:get-issuer-sdk}}
+{{#tabs issuing_tokens:get-token-issuer}}
 
 <h2 id="token-creation">
     <a class="header" href="#token-creation">Token creation</a>

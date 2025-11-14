@@ -1,9 +1,9 @@
 import type { Payment, TokenMetadata, BreezSdk, TokenIssuer } from '@breeztech/breez-sdk-spark'
 
 const getTokenIssuer = (sdk: BreezSdk) => {
-  // ANCHOR: get-issuer-sdk
+  // ANCHOR: get-token-issuer
   const tokenIssuer = sdk.getTokenIssuer()
-  // ANCHOR_END: get-issuer-sdk
+  // ANCHOR_END: get-token-issuer
   return tokenIssuer
 }
 

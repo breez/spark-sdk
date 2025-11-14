@@ -11,9 +11,9 @@ from breez_sdk_spark import (
 
 
 def get_token_issuer(sdk: BreezSdk):
-    # ANCHOR: get-issuer-sdk
+    # ANCHOR: get-token-issuer
     token_issuer = sdk.get_token_issuer()
-    # ANCHOR_END: get-issuer-sdk
+    # ANCHOR_END: get-token-issuer
 
 
 async def create_token(token_issuer: TokenIssuer):

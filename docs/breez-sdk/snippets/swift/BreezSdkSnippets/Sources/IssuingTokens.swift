@@ -3,9 +3,9 @@ import BreezSdkSpark
 import Foundation
 
 func getTokenIssuer(sdk: BreezSdk) -> TokenIssuer {
-    // ANCHOR: get-issuer-sdk
+    // ANCHOR: get-token-issuer
     let tokenIssuer = sdk.getTokenIssuer()
-    // ANCHOR_END: get-issuer-sdk
+    // ANCHOR_END: get-token-issuer
     return tokenIssuer
 }
 
@@ -15,7 +15,7 @@ func createToken(tokenIssuer: TokenIssuer) async throws -> TokenMetadata {
         name: "My Token",
         ticker: "MTK",
         decimals: UInt32(6),
-        isFreezable: true,
+        isFreezable: false,
         maxSupply: BInt(1_000_000)
     )
     let tokenMetadata = try await tokenIssuer.createIssuerToken(request: request)
