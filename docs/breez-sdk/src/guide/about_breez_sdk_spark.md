@@ -19,6 +19,7 @@ It’s a nodeless integration that offers a self-custodial, end-to-end solution 
 - [x] On-chain interoperability
 - [x] Bindings to all popular languages & frameworks
 - [x] Keys are only held by users
+- [x] Multi-app & multi-device support via real-time sync service 
 - [x] Payments persistency including restore support
 - [x] Automatic claims
 - [x] WebAssembly support
