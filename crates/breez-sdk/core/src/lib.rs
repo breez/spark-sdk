@@ -16,7 +16,8 @@ mod sync;
 mod utils;
 
 pub use chain::{
-    BitcoinChainService, ChainServiceError, TxStatus, Utxo, rest_client::RestClientChainService,
+    BitcoinChainService, ChainServiceError, RecommendedFees, TxStatus, Utxo,
+    rest_client::{ChainApiType, RestClientChainService},
 };
 pub use common::{fiat::*, models::*, rest::*, sync_storage};
 pub use error::{DepositClaimError, SdkError};

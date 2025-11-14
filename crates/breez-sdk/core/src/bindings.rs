@@ -4,7 +4,8 @@ use tokio::sync::Mutex;
 
 use crate::{
     BitcoinChainService, BreezSdk, Config, Credentials, FiatService, KeySetType, PaymentObserver,
-    RestClient, SdkError, Seed, Storage, sync_storage::SyncStorage,
+    RestClient, SdkError, Seed, Storage, chain::rest_client::ChainApiType,
+    sync_storage::SyncStorage,
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -81,10 +82,18 @@ impl SdkBuilder {
     /// Sets the REST chain service to be used by the SDK.
     /// Arguments:
     /// - `url`: The base URL of the REST API.
+    /// - `api_type`: The API type to be used.
     /// - `credentials`: Optional credentials for basic authentication.
-    pub async fn with_rest_chain_service(&self, url: String, credentials: Option<Credentials>) {
+    pub async fn with_rest_chain_service(
+        &self,
+        url: String,
+        api_type: ChainApiType,
+        credentials: Option<Credentials>,
+    ) {
         let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_rest_chain_service(url, credentials);
+        *builder = builder
+            .clone()
+            .with_rest_chain_service(url, api_type, credentials);
     }
 
     /// Sets the fiat service to be used by the SDK.

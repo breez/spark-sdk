@@ -33,6 +33,7 @@ pub trait BitcoinChainService: Send + Sync {
     async fn get_transaction_status(&self, txid: String) -> Result<TxStatus, ChainServiceError>;
     async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError>;
     async fn broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError>;
+    async fn recommended_fees(&self) -> Result<RecommendedFees, ChainServiceError>;
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
@@ -50,4 +51,14 @@ pub struct Utxo {
     pub vout: u32,
     pub value: u64,
     pub status: TxStatus,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RecommendedFees {
+    pub fastest_fee: u64,
+    pub half_hour_fee: u64,
+    pub hour_fee: u64,
+    pub economy_fee: u64,
+    pub minimum_fee: u64,
 }

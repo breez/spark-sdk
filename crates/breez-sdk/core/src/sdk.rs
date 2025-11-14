@@ -48,6 +48,7 @@ use crate::{
     RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest,
     SignMessageResponse, UpdateUserSettingsRequest, UserSettings, WaitForPaymentIdentifier,
     WaitForPaymentRequest, WaitForPaymentResponse,
+    chain::RecommendedFees,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     issuer::TokenIssuer,
@@ -1345,6 +1346,11 @@ impl BreezSdk {
             .map(From::from)
             .collect();
         Ok(ListFiatRatesResponse { rates })
+    }
+
+    /// Get the recommended BTC fees based on the configured chain service.
+    pub async fn recommended_fees(&self) -> Result<RecommendedFees, SdkError> {
+        Ok(self.chain_service.recommended_fees().await?)
     }
 
     pub async fn wait_for_payment(

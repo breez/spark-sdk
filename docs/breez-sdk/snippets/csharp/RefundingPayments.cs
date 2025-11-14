@@ -58,8 +58,10 @@ namespace BreezSdkSnippets
             var vout = 0U;
             var destinationAddress = "bc1qexample...";  // Your Bitcoin address
 
-            // Set the fee for the refund transaction
-            var fee = new Fee.Fixed(amount: 500);
+            // Set the fee for the refund transaction using a rate
+            var fee = new Fee.Rate(satPerVbyte: 5);
+            // or using a fixed amount
+            //var fee = new Fee.Fixed(amount: 500);
 
             var request = new RefundDepositRequest(
                 txid: txid,
@@ -74,5 +76,17 @@ namespace BreezSdkSnippets
             Console.WriteLine($"Transaction hex: {response.txHex}");
             // ANCHOR_END: refund-deposit
         }
+
+        async Task RecommendedFees(BreezSdk sdk)
+        {
+            // ANCHOR: recommended-fees
+            var response = await sdk.RecommendedFees();
+            Console.WriteLine($"Fastest fee: {response.fastestFee}");
+            Console.WriteLine($"Half-hour fee: {response.halfHourFee}");
+            Console.WriteLine($"Hour fee: {response.hourFee}");
+            Console.WriteLine($"Economy fee: {response.economyFee}");
+            Console.WriteLine($"Minimum fee: {response.minimumFee}");
+        }
+        // ANCHOR_END: recommended-fees
     }
 }

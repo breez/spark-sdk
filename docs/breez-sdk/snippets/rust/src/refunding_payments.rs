@@ -55,8 +55,10 @@ async fn refund_deposit(sdk: &BreezSdk) -> Result<()> {
     let vout = 0;
     let destination_address = "bc1qexample...".to_string(); // Your Bitcoin address
     
-    // Set the fee for the refund transaction
-    let fee = Fee::Fixed { amount: 500 };
+    // Set the fee for the refund transaction using a rate
+    let fee = Fee::Rate { sat_per_vbyte: 5 };
+    // or using a fixed amount
+    //let fee = Fee::Fixed { amount: 500 };
     
     let request = RefundDepositRequest {
         txid,
@@ -70,5 +72,17 @@ async fn refund_deposit(sdk: &BreezSdk) -> Result<()> {
     info!("Transaction ID: {}", response.tx_id);
     info!("Transaction hex: {}", response.tx_hex);
     // ANCHOR_END: refund-deposit
+    Ok(())
+}
+
+async fn recommended_fees(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: recommended-fees
+    let response = sdk.recommended_fees().await?;
+    info!("Fastest fee: {} sats", response.fastest_fee);
+    info!("Half-hour fee: {} sats", response.half_hour_fee);
+    info!("Hour fee: {} sats", response.hour_fee);
+    info!("Economy fee: {} sats", response.economy_fee);
+    info!("Minimum fee: {} sats", response.minimum_fee);
+    // ANCHOR_END: recommended-fees
     Ok(())
 }

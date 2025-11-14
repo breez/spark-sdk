@@ -63,8 +63,10 @@ async def refund_deposit(sdk: BreezSdk):
         vout = 0
         destination_address = "bc1qexample..."  # Your Bitcoin address
 
-        # Set the fee for the refund transaction
-        fee = Fee.FIXED(amount=500)
+        # Set the fee for the refund transaction using a rate
+        fee = Fee.RATE(sat_per_vbyte=5)
+        # or using a fixed amount
+        #fee = Fee.FIXED(amount=500)
 
         request = RefundDepositRequest(
             txid=txid, vout=vout, destination_address=destination_address, fee=fee
@@ -78,3 +80,13 @@ async def refund_deposit(sdk: BreezSdk):
         logging.error(error)
         raise
     # ANCHOR_END: refund-deposit
+
+async def recommended_feeds(sdk: BreezSdk):
+    # ANCHOR: recommended-fees
+    response = await sdk.recommended_fees()
+    logging.info(f"Fastest fee: {response.fastest_fee} sats")
+    logging.info(f"Half-hour fee: {response.half_hour_fee} sats")
+    logging.info(f"Hour fee: {response.hour_fee} sats")
+    logging.info(f"Economy fee: {response.economy_fee} sats")
+    logging.info(f"Minimum fee: {response.minimum_fee} sats")
+    # ANCHOR_END: recommended-fees
