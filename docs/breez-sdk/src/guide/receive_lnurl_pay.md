@@ -22,17 +22,15 @@ In case you choose to point your domain to a hosted LNURL server, you will need 
 **Option 1: Using your domain without any subdomain**
 
 This points yourdomain.com directly to the LNURL server. Some DNS providers do not support this method. If yours doesn't support CNAME or ALIAS records for the root domain, you will need to configure your domain at the registrar level to use an external DNS provider (like Google Cloud DNS).
-
-- **Host/Name**: @
-- **Type**: CNAME (or ALIAS if available)
-- **Value/Target**: breez.tips
+* **Host/Name**: @
+* **Type**: CNAME (or ALIAS if available)
+* **Value/Target**: breez.tips
 
 **Option 2: Using a subdomain**
 This points a subdomain like pay.yourdomain.com to the LNURL server.
-
-- **Host/Name**: pay (or your chosen prefix like payment, tip, donate)
-- **Type**: CNAME
-- **Value/Target**: breez.tips
+* **Host/Name**: pay (or your chosen prefix like payment, tip, donate)
+* **Type**: CNAME
+* **Value/Target**: breez.tips
 
 Send us your domain name (e.g., yourdomain.com or pay.yourdomain.com).
 
