@@ -100,11 +100,12 @@ Future<SendPaymentResponse> sendPaymentLightningBolt11(
     BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-lightning-bolt11
   final options = SendPaymentOptions.bolt11Invoice(
-    preferSpark: false,
-    completionTimeoutSecs: 10,
-  );
-  final request =
-      SendPaymentRequest(prepareResponse: prepareResponse, options: options);
+      preferSpark: false, completionTimeoutSecs: 10);
+  String? optionalIdempotencyKey = "<idempotency key uuid>";
+  final request = SendPaymentRequest(
+      prepareResponse: prepareResponse,
+      options: options,
+      idempotencyKey: optionalIdempotencyKey);
   SendPaymentResponse response = await sdk.sendPayment(request: request);
   Payment payment = response.payment;
   // ANCHOR_END: send-payment-lightning-bolt11
@@ -115,13 +116,13 @@ Future<SendPaymentResponse> sendPaymentLightningBolt11(
 Future<SendPaymentResponse> sendPaymentOnchain(
     BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-onchain
-  String? optionalIdempotencyKey = "<idempotency key uuid>";
   final options = SendPaymentOptions.bitcoinAddress(
-      confirmationSpeed: OnchainConfirmationSpeed.medium,
-      idempotencyKey: optionalIdempotencyKey);
-  
-  final request =
-      SendPaymentRequest(prepareResponse: prepareResponse, options: options);
+    confirmationSpeed: OnchainConfirmationSpeed.medium);
+  String? optionalIdempotencyKey = "<idempotency key uuid>";
+  final request = SendPaymentRequest(
+    prepareResponse: prepareResponse,
+    options: options,
+    idempotencyKey: optionalIdempotencyKey);
   SendPaymentResponse response = await sdk.sendPayment(request: request);
   Payment payment = response.payment;
   // ANCHOR_END: send-payment-onchain
@@ -132,11 +133,10 @@ Future<SendPaymentResponse> sendPaymentOnchain(
 Future<SendPaymentResponse> sendPaymentSpark(
     BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-spark
-  final options = SendPaymentOptions.spark(
-    idempotencyKey: "<idempotency key uuid>",
-  );
-
-  final request = SendPaymentRequest(prepareResponse: prepareResponse, options: options);
+  String? optionalIdempotencyKey = "<idempotency key uuid>";
+  final request = SendPaymentRequest(
+    prepareResponse: prepareResponse,
+    idempotencyKey: optionalIdempotencyKey);
   SendPaymentResponse response = await sdk.sendPayment(request: request);
   Payment payment = response.payment;
   // ANCHOR_END: send-payment-spark

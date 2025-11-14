@@ -152,36 +152,47 @@ impl TransferService {
         let transfer = match (&transfer_id, transfer_res) {
             (_, Ok(t)) => t,
             (Some(transfer_id), Err(e)) => {
-                if let ServiceError::ServiceConnectionError(operator_rpc_error) = &e
-                    && let OperatorRpcError::Connection(status) = operator_rpc_error.as_ref()
-                    && status.code() == tonic::Code::Internal
-                {
-                    // There was an RPC connection error. Check if the transfer already exists remotely.
-                    let operator_transfers = self
-                        .operator_pool
-                        .get_coordinator()
-                        .client
-                        .query_all_transfers(TransferFilter {
-                            transfer_ids: vec![transfer_id.to_string()],
-                            network: self.network.to_proto_network() as i32,
-                            participant: Some(Participant::SenderIdentityPublicKey(
-                                self.signer.get_identity_public_key()?.serialize().to_vec(),
-                            )),
-                            ..Default::default()
-                        })
-                        .await?;
-                    if let Some(transfer) = operator_transfers.transfers.into_iter().nth(0) {
-                        debug!("Recovered transfer {} after connection error", transfer.id);
-                        return transfer.try_into();
-                    }
-                }
-
-                return Err(e);
+                return self
+                    .recover_transfer_on_rpc_connection_error(transfer_id, e)
+                    .await;
             }
             (None, Err(e)) => return Err(e),
         };
 
         Ok(transfer)
+    }
+
+    pub(crate) async fn recover_transfer_on_rpc_connection_error(
+        &self,
+        transfer_id: &TransferId,
+        error: ServiceError,
+    ) -> Result<Transfer, ServiceError> {
+        if let ServiceError::ServiceConnectionError(operator_rpc_error) = &error
+            && let OperatorRpcError::Connection(status) = operator_rpc_error.as_ref()
+            && status.code() == tonic::Code::Internal
+        {
+            // There was an RPC connection error. Check if the transfer already exists remotely.
+            let operator_transfers = self
+                .operator_pool
+                .get_coordinator()
+                .client
+                .query_all_transfers(TransferFilter {
+                    transfer_ids: vec![transfer_id.to_string()],
+                    network: self.network.to_proto_network() as i32,
+                    participant: Some(Participant::SenderIdentityPublicKey(
+                        self.signer.get_identity_public_key()?.serialize().to_vec(),
+                    )),
+                    ..Default::default()
+                })
+                .await?;
+            if let Some(transfer) = operator_transfers.transfers.into_iter().nth(0) {
+                debug!("Recovered transfer {} after connection error", transfer.id);
+
+                return transfer.try_into();
+            }
+        }
+
+        Err(error)
     }
 
     pub async fn send_transfer_with_key_tweaks(

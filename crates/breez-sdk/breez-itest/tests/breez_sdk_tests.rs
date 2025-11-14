@@ -72,6 +72,7 @@ async fn test_01_spark_transfer(
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
             options: None,
+            idempotency_key: None,
         })
         .await?;
 
@@ -325,6 +326,7 @@ async fn test_03_lightning_invoice_payment(
                 prefer_spark: false,
                 completion_timeout_secs: Some(10),
             }),
+            idempotency_key: None,
         })
         .await?;
 
@@ -590,6 +592,7 @@ async fn test_04_renew_timelocks(
             .send_payment(SendPaymentRequest {
                 prepare_response: prepare,
                 options: None,
+                idempotency_key: None,
             })
             .await?;
 
@@ -697,6 +700,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
                 prefer_spark: true,
                 completion_timeout_secs: Some(10),
             }),
+            idempotency_key: None,
         })
         .await?;
 
@@ -767,6 +771,7 @@ async fn test_06_lightning_timeout_and_wait(
                 prefer_spark: false,
                 completion_timeout_secs: Some(1),
             }),
+            idempotency_key: None,
         })
         .await?;
     info!("Immediate return status: {:?}", send_resp.payment.status);
@@ -872,6 +877,7 @@ async fn test_07_spark_invoice(
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
             options: None,
+            idempotency_key: None,
         })
         .await?;
 

@@ -202,6 +202,7 @@ pub struct _LnurlPayInfo {
 #[frb(mirror(LnurlPayRequest))]
 pub struct _LnurlPayRequest {
     pub prepare_response: PrepareLnurlPayResponse,
+    pub idempotency_key: Option<String>,
 }
 
 #[frb(mirror(LnurlPayResponse))]
@@ -351,14 +352,10 @@ pub enum _SendPaymentMethod {
 pub enum _SendPaymentOptions {
     BitcoinAddress {
         confirmation_speed: OnchainConfirmationSpeed,
-        idempotency_key: Option<String>,
     },
     Bolt11Invoice {
         prefer_spark: bool,
         completion_timeout_secs: Option<u32>,
-    },
-    Spark {
-        idempotency_key: String,
     },
 }
 
@@ -366,6 +363,7 @@ pub enum _SendPaymentOptions {
 pub struct _SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
     pub options: Option<SendPaymentOptions>,
+    pub idempotency_key: Option<String>,
 }
 
 #[frb(mirror(SendPaymentResponse))]

@@ -55,7 +55,10 @@ Spark invoices may require a token (non-Bitcoin) as the payment asset. To determ
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.send_payment">API docs</a>
 </h2>
 
-Once the payment has been prepared, pass the prepare response as an argument to the send method and set any selected payment options.
+Once the payment has been prepared and the fees are accepted, the payment can be sent by passing:
+- **Prepare Response** - The response from the [Preparing the Payment](send_payment.md#preparing-payments) step.
+- **Options** - Any payment method specific options for the payment (see below).
+- **Idempotency Key** - An optional UUID that identifies the payment. If set, providing the same idempotency key for multiple requests will ensure that only one payment is made.
 
 ### Lightning
 
@@ -69,14 +72,12 @@ In the optional send payment options for BOLT11 invoices, you can set:
 
 In the optional send payment options for Bitcoin addresses, you can set:
 - **Confirmation Speed** - The priority that the Bitcoin transaction confirms, that also effects the fee paid. By default, it is set to Fast.
-- **Idempotency Key** - An optional UUID that identifies the payment. If set, providing the same idempotency key for multiple requests will ensure that only one payment is made.
 
 {{#tabs send_payment:send-payment-onchain}}
 
 ### Spark
 
-In the optional send payment options for Spark address and invoices, you can set:
-- **Idempotency Key** - A UUID that identifies the payment. Providing the same idempotency key for multiple requests will ensure that only one payment is made. This applies only to non-token Spark transfers.
+For Spark addresses and invoices no send payment options are needed.
 
 {{#tabs send_payment:send-payment-spark}}
 

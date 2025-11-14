@@ -49,12 +49,13 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 
 func LnurlPay(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.PrepareLnurlPayResponse) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: lnurl-pay
+	optionalIdempotencyKey := "<idempotency key uuid>"
 	request := breez_sdk_spark.LnurlPayRequest{
 		PrepareResponse: prepareResponse,
+		IdempotencyKey:  &optionalIdempotencyKey,
 	}
 
 	response, err := sdk.LnurlPay(request)
-
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return nil, err
 	}

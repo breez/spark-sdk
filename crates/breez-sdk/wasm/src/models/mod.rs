@@ -687,6 +687,7 @@ pub struct PrepareLnurlPayResponse {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlPayRequest)]
 pub struct LnurlPayRequest {
     pub prepare_response: PrepareLnurlPayResponse,
+    pub idempotency_key: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlPayResponse)]
@@ -733,14 +734,10 @@ pub enum OnchainConfirmationSpeed {
 pub enum SendPaymentOptions {
     BitcoinAddress {
         confirmation_speed: OnchainConfirmationSpeed,
-        idempotency_key: Option<String>,
     },
     Bolt11Invoice {
         prefer_spark: bool,
         completion_timeout_secs: Option<u32>,
-    },
-    Spark {
-        idempotency_key: String,
     },
 }
 
@@ -748,6 +745,7 @@ pub enum SendPaymentOptions {
 pub struct SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
     pub options: Option<SendPaymentOptions>,
+    pub idempotency_key: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentResponse)]

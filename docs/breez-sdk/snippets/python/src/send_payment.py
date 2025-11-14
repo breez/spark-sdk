@@ -125,10 +125,14 @@ async def send_payment_lightning_bolt11(
     # ANCHOR: send-payment-lightning-bolt11
     try:
         options = SendPaymentOptions.BOLT11_INVOICE(
-            prefer_spark=False,
-            completion_timeout_secs=10
+            prefer_spark=False, completion_timeout_secs=10
         )
-        request = SendPaymentRequest(prepare_response=prepare_response, options=options)
+        optional_idempotency_key = "<idempotency key uuid>"
+        request = SendPaymentRequest(
+            prepare_response=prepare_response,
+            options=options,
+            idempotency_key=optional_idempotency_key,
+        )
         send_response = await sdk.send_payment(request=request)
         payment = send_response.payment
     except Exception as error:
@@ -142,12 +146,15 @@ async def send_payment_onchain(
 ):
     # ANCHOR: send-payment-onchain
     try:
-        optional_idempotency_key = "<idempotency key uuid>"
         options = SendPaymentOptions.BITCOIN_ADDRESS(
-            confirmation_speed=OnchainConfirmationSpeed.MEDIUM,
-            idempotency_key=optional_idempotency_key
+            confirmation_speed=OnchainConfirmationSpeed.MEDIUM
         )
-        request = SendPaymentRequest(prepare_response=prepare_response, options=options)
+        optional_idempotency_key = "<idempotency key uuid>"
+        request = SendPaymentRequest(
+            prepare_response=prepare_response,
+            options=options,
+            idempotency_key=optional_idempotency_key,
+        )
         send_response = await sdk.send_payment(request=request)
         payment = send_response.payment
     except Exception as error:
@@ -161,10 +168,10 @@ async def send_payment_spark(
 ):
     # ANCHOR: send-payment-spark
     try:
-        options = SendPaymentOptions.SPARK(
-            idempotency_key="<idempotency key uuid>"
+        optional_idempotency_key = "<idempotency key uuid>"
+        request = SendPaymentRequest(
+            prepare_response=prepare_response, idempotency_key=optional_idempotency_key
         )
-        request = SendPaymentRequest(prepare_response=prepare_response, options=options)
         send_response = await sdk.send_payment(request=request)
         payment = send_response.payment
     except Exception as error:

@@ -38,7 +38,8 @@ class LnurlPay {
     suspend fun lnurlPay(sdk: BreezSdk, prepareResponse: PrepareLnurlPayResponse) {
         // ANCHOR: lnurl-pay
         try {
-            val response = sdk.lnurlPay(LnurlPayRequest(prepareResponse))
+            val optionalIdempotencyKey = "<idempotency key uuid>"
+            val response = sdk.lnurlPay(LnurlPayRequest(prepareResponse, optionalIdempotencyKey))
         } catch (e: Exception) {
             // handle error
         }

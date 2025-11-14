@@ -90,10 +90,12 @@ func sendPaymentLightningBolt11(sdk: BreezSdk, prepareResponse: PrepareSendPayme
 {
     // ANCHOR: send-payment-lightning-bolt11
     let options = SendPaymentOptions.bolt11Invoice(preferSpark: false, completionTimeoutSecs: 10)
+    let optionalIdempotencyKey = "<idempotency key uuid>"
     let sendResponse = try await sdk.sendPayment(
         request: SendPaymentRequest(
             prepareResponse: prepareResponse,
-            options: options
+            options: options,
+            idempotencyKey: optionalIdempotencyKey
         ))
     let payment = sendResponse.payment
     // ANCHOR_END: send-payment-lightning-bolt11
@@ -102,15 +104,15 @@ func sendPaymentLightningBolt11(sdk: BreezSdk, prepareResponse: PrepareSendPayme
 
 func sendPaymentOnchain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) async throws {
     // ANCHOR: send-payment-onchain
-    let optionalIdempotencyKey = "<idempotency key uuid>"
     let options = SendPaymentOptions.bitcoinAddress(
-        confirmationSpeed: .medium,
-        idempotencyKey: optionalIdempotencyKey
+        confirmationSpeed: .medium
     )
+    let optionalIdempotencyKey = "<idempotency key uuid>"
     let sendResponse = try await sdk.sendPayment(
         request: SendPaymentRequest(
             prepareResponse: prepareResponse,
-            options: options
+            options: options,
+            idempotencyKey: optionalIdempotencyKey
         ))
     let payment = sendResponse.payment
     // ANCHOR_END: send-payment-onchain
@@ -119,11 +121,11 @@ func sendPaymentOnchain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentRespon
 
 func sendPaymentSpark(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) async throws {
     // ANCHOR: send-payment-spark
-    let options = SendPaymentOptions.spark(idempotencyKey: "<idempotency key uuid>")
+    let optionalIdempotencyKey = "<idempotency key uuid>"
     let sendResponse = try await sdk.sendPayment(
         request: SendPaymentRequest(
             prepareResponse: prepareResponse,
-            options: options
+            idempotencyKey: optionalIdempotencyKey
         ))
     let payment = sendResponse.payment
     // ANCHOR_END: send-payment-spark

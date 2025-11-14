@@ -90,8 +90,8 @@ async fn test_onchain_withdraw_to_static_address(
             prepare_response: prepare,
             options: Some(SendPaymentOptions::BitcoinAddress {
                 confirmation_speed: OnchainConfirmationSpeed::Medium,
-                idempotency_key: None,
             }),
+            idempotency_key: None,
         })
         .await?;
 

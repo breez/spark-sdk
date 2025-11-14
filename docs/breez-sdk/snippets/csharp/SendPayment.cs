@@ -105,9 +105,11 @@ namespace BreezSdkSnippets
                 preferSpark: false,
                 completionTimeoutSecs: 10
             );
+            var optionalIdempotencyKey = "<idempotency key uuid>";
             var request = new SendPaymentRequest(
                 prepareResponse: prepareResponse,
-                options: options
+                options: options,
+                idempotencyKey: optionalIdempotencyKey
             );
             var sendResponse = await sdk.SendPayment(request: request);
             var payment = sendResponse.payment;
@@ -117,14 +119,14 @@ namespace BreezSdkSnippets
         async Task SendPaymentOnchain(BreezSdk sdk, PrepareSendPaymentResponse prepareResponse)
         {
             // ANCHOR: send-payment-onchain
-            var optionalIdempotencyKey = "<idempotency key uuid>";
             var options = new SendPaymentOptions.BitcoinAddress(
-                confirmationSpeed: OnchainConfirmationSpeed.Medium,
-                idempotencyKey: optionalIdempotencyKey
+                confirmationSpeed: OnchainConfirmationSpeed.Medium
             );
+            var optionalIdempotencyKey = "<idempotency key uuid>";
             var request = new SendPaymentRequest(
                 prepareResponse: prepareResponse,
-                options: options
+                options: options,
+                idempotencyKey: optionalIdempotencyKey
             );
             var sendResponse = await sdk.SendPayment(request: request);
             var payment = sendResponse.payment;
@@ -134,12 +136,10 @@ namespace BreezSdkSnippets
         async Task SendPaymentSpark(BreezSdk sdk, PrepareSendPaymentResponse prepareResponse)
         {
             // ANCHOR: send-payment-spark
-            var options = new SendPaymentOptions.Spark(
-                idempotencyKey: "<idempotency key uuid>"
-            );
+            var optionalIdempotencyKey = "<idempotency key uuid>";
             var request = new SendPaymentRequest(
                 prepareResponse: prepareResponse,
-                options: options
+                idempotencyKey: optionalIdempotencyKey
             );
             var sendResponse = await sdk.SendPayment(request: request);
             var payment = sendResponse.payment;

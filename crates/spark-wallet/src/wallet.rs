@@ -242,6 +242,7 @@ impl SparkWallet {
         amount_to_send: Option<u64>,
         max_fee_sat: Option<u64>,
         prefer_spark: bool,
+        transfer_id: Option<TransferId>,
     ) -> Result<PayLightningInvoiceResult, SparkWalletError> {
         let (total_amount_sat, receiver_spark_address) = self
             .lightning_service
@@ -252,7 +253,7 @@ impl SparkWallet {
         if let Some(receiver_spark_address) = receiver_spark_address {
             return Ok(PayLightningInvoiceResult {
                 transfer: self
-                    .transfer(total_amount_sat, &receiver_spark_address, None)
+                    .transfer(total_amount_sat, &receiver_spark_address, transfer_id)
                     .await?,
                 lightning_payment: None,
             });
@@ -270,19 +271,32 @@ impl SparkWallet {
                 invoice,
                 amount_to_send,
                 &leaves_reservation.leaves,
+                transfer_id,
             ),
             &leaves_reservation,
         )
         .await?;
 
-        // finalize the lightning swap with the ssp - send the actual lightning payment
-        Ok(PayLightningInvoiceResult {
-            transfer: WalletTransfer::from_transfer(
+        // Collect the wallet transfer information from the lightning send payment result. If
+        // not present, we need to query for the SSP user request to get the transfer details.
+        let wallet_transfer = match lightning_payment.lightning_send_payment {
+            Some(_) => WalletTransfer::from_transfer(
                 lightning_payment.transfer,
                 None,
                 self.identity_public_key,
             ),
-            lightning_payment: Some(lightning_payment.lightning_send_payment),
+            None => {
+                create_transfer(
+                    lightning_payment.transfer,
+                    &self.ssp_client,
+                    self.identity_public_key,
+                )
+                .await?
+            }
+        };
+        Ok(PayLightningInvoiceResult {
+            transfer: wallet_transfer,
+            lightning_payment: lightning_payment.lightning_send_payment,
         })
     }
 
@@ -741,18 +755,7 @@ impl SparkWallet {
         )
         .await?;
 
-        create_transfers(
-            PagingResult::complete(vec![transfer]),
-            &self.ssp_client,
-            self.identity_public_key,
-        )
-        .await?
-        .items
-        .first()
-        .cloned()
-        .ok_or(SparkWalletError::Generic(
-            "Failed to create transfer".to_string(),
-        ))
+        create_transfer(transfer, &self.ssp_client, self.identity_public_key).await
     }
 
     async fn withdraw_inner(
@@ -1183,6 +1186,24 @@ async fn create_transfers(
             our_public_key,
         )
     }))
+}
+
+async fn create_transfer(
+    transfer: Transfer,
+    ssp_client: &Arc<ServiceProvider>,
+    our_public_key: PublicKey,
+) -> Result<WalletTransfer, SparkWalletError> {
+    let ssp_transfer = ssp_client
+        .get_transfers(vec![transfer.id.to_string()])
+        .await?
+        .into_iter()
+        .next();
+
+    Ok(WalletTransfer::from_transfer(
+        transfer,
+        ssp_transfer,
+        our_public_key,
+    ))
 }
 
 async fn claim_transfer(

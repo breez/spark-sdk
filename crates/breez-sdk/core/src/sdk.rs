@@ -835,6 +835,7 @@ impl BreezSdk {
                     token_identifier: None,
                 },
                 options: None,
+                idempotency_key: request.idempotency_key,
             },
             true,
         ))
@@ -1503,6 +1504,17 @@ impl BreezSdk {
         request: SendPaymentRequest,
         suppress_payment_event: bool,
     ) -> Result<SendPaymentResponse, SdkError> {
+        if let Some(idempotency_key) = &request.idempotency_key {
+            // If an idempotency key is provided, check if a payment with that id already exists
+            if let Ok(payment) = self
+                .storage
+                .get_payment_by_id(idempotency_key.clone())
+                .await
+            {
+                return Ok(SendPaymentResponse { payment });
+            }
+        }
+
         let res = match &request.prepare_response.payment_method {
             SendPaymentMethod::SparkAddress {
                 address,
@@ -1524,12 +1536,12 @@ impl BreezSdk {
                 spark_transfer_fee_sats,
                 lightning_fee_sats,
             } => {
-                self.send_bolt11_invoice(
+                Box::pin(self.send_bolt11_invoice(
                     invoice_details,
                     *spark_transfer_fee_sats,
                     *lightning_fee_sats,
                     &request,
-                )
+                ))
                 .await
             }
             SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
@@ -1560,23 +1572,16 @@ impl BreezSdk {
         let spark_address = address
             .parse::<SparkAddress>()
             .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
-        let transfer_id = match (&request.options, &request.prepare_response.token_identifier) {
+        let transfer_id = match (
+            &request.idempotency_key,
+            &request.prepare_response.token_identifier,
+        ) {
             (Some(_), Some(_)) => {
                 return Err(SdkError::InvalidInput(
                     "Idempotency key is not supported for token payments".to_string(),
                 ));
             }
-            (Some(SendPaymentOptions::Spark { idempotency_key }), None) => {
-                // If an idempotency key is provided, check if a payment with that id already exists
-                if let Ok(payment) = self
-                    .storage
-                    .get_payment_by_id(idempotency_key.clone())
-                    .await
-                {
-                    return Ok(SendPaymentResponse { payment });
-                }
-                Some(TransferId::from_str(idempotency_key)?)
-            }
+            (Some(idempotency_key), None) => Some(TransferId::from_str(idempotency_key)?),
             _ => None,
         };
 
@@ -1630,23 +1635,16 @@ impl BreezSdk {
         invoice: &str,
         request: &SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
-        let transfer_id = match (&request.options, &request.prepare_response.token_identifier) {
+        let transfer_id = match (
+            &request.idempotency_key,
+            &request.prepare_response.token_identifier,
+        ) {
             (Some(_), Some(_)) => {
                 return Err(SdkError::InvalidInput(
                     "Idempotency key is not supported for token payments".to_string(),
                 ));
             }
-            (Some(SendPaymentOptions::Spark { idempotency_key }), None) => {
-                // If an idempotency key is provided, check if a payment with that id already exists
-                if let Ok(payment) = self
-                    .storage
-                    .get_payment_by_id(idempotency_key.clone())
-                    .await
-                {
-                    return Ok(SendPaymentResponse { payment });
-                }
-                Some(TransferId::from_str(idempotency_key)?)
-            }
+            (Some(idempotency_key), None) => Some(TransferId::from_str(idempotency_key)?),
             _ => None,
         };
 
@@ -1695,6 +1693,11 @@ impl BreezSdk {
             (true, Some(fee), _) => fee,
             _ => lightning_fee_sats,
         };
+        let transfer_id = request
+            .idempotency_key
+            .as_ref()
+            .map(|idempotency_key| TransferId::from_str(idempotency_key))
+            .transpose()?;
 
         let payment_response = self
             .spark_wallet
@@ -1705,6 +1708,7 @@ impl BreezSdk {
                     .transpose()?,
                 Some(fee_sats),
                 prefer_spark,
+                transfer_id,
             )
             .await?;
         let payment = match payment_response.lightning_payment {
@@ -1748,32 +1752,20 @@ impl BreezSdk {
         fee_quote: &SendOnchainFeeQuote,
         request: &SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
-        let (exit_speed, transfer_id) = match &request.options {
-            Some(SendPaymentOptions::BitcoinAddress {
-                confirmation_speed,
-                idempotency_key,
-            }) => {
-                let transfer_id = match idempotency_key {
-                    Some(idempotency_key) => {
-                        // If an idempotency key is provided, check if a payment with that id already exists
-                        if let Ok(payment) = self
-                            .storage
-                            .get_payment_by_id(idempotency_key.clone())
-                            .await
-                        {
-                            return Ok(SendPaymentResponse { payment });
-                        }
-                        Some(TransferId::from_str(idempotency_key)?)
-                    }
-                    None => None,
-                };
-                (confirmation_speed.clone().into(), transfer_id)
+        let exit_speed = match &request.options {
+            Some(SendPaymentOptions::BitcoinAddress { confirmation_speed }) => {
+                confirmation_speed.clone().into()
             }
-            None => (ExitSpeed::Fast, None),
+            None => ExitSpeed::Fast,
             _ => {
                 return Err(SdkError::InvalidInput("Invalid options".to_string()));
             }
         };
+        let transfer_id = request
+            .idempotency_key
+            .as_ref()
+            .map(|idempotency_key| TransferId::from_str(idempotency_key))
+            .transpose()?;
         let response = self
             .spark_wallet
             .withdraw(
