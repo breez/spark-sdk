@@ -85,15 +85,5 @@ const exampleWaitForPayment = async (sdk: BreezSdk) => {
   })
 
   console.log(`Payment received with ID: ${paymentRequestResponse.payment.id}`)
-
-  // Waiting for a payment given its payment id
-  const paymentId = '<payment id>'
-
-  // Wait for a payment to be completed using a payment id
-  const paymentIdResponse = await sdk.waitForPayment({
-    identifier: new WaitForPaymentIdentifier.PaymentId(paymentId)
-  })
-
-  console.log(`Payment received with ID: ${paymentIdResponse.payment.id}`)
   // ANCHOR_END: wait-for-payment
 }

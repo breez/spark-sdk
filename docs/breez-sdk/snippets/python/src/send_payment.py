@@ -8,6 +8,8 @@ from breez_sdk_spark import (
     SendPaymentRequest,
     SendPaymentMethod,
     SendPaymentOptions,
+    WaitForPaymentRequest,
+    WaitForPaymentIdentifier,
 )
 
 
@@ -166,3 +168,23 @@ async def send_payment_spark(
         logging.error(error)
         raise
     # ANCHOR_END: send-payment-spark
+
+
+async def send_wait_for_payment(sdk: BreezSdk):
+    # ANCHOR: wait-for-payment
+    try:
+        # Waiting for a payment given its payment id
+        payment_id = "<payment id>"
+
+        # Wait for a payment to be completed using a payment id
+        payment_id_response = await sdk.wait_for_payment(
+            request=WaitForPaymentRequest(
+                identifier=WaitForPaymentIdentifier.PAYMENT_ID(payment_id)
+            )
+        )
+
+        logging.debug(f"Payment received with ID: {payment_id_response.payment.id}")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: wait-for-payment

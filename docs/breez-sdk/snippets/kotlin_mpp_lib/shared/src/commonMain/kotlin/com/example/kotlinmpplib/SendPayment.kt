@@ -150,4 +150,24 @@ class SendPayment {
         }
         // ANCHOR_END: send-payment-spark
     }
+
+    suspend fun sendWaitForPayment(sdk: BreezSdk) {
+        // ANCHOR: wait-for-payment
+        try {
+            // Waiting for a payment given its payment id
+            val paymentId = "<payment id>"
+
+            // Wait for a payment to be completed using a payment id
+            val paymentIdResponse = sdk.waitForPayment(
+                WaitForPaymentRequest(
+                    WaitForPaymentIdentifier.PaymentId(paymentId)
+                )
+            )
+
+            // Log.v("Breez", "Payment received with ID: ${paymentIdResponse.payment.id}")
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: wait-for-payment
+    }
 }
