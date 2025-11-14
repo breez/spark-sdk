@@ -20,4 +20,13 @@ class Config {
         // ANCHOR_END: max-deposit-claim-fee
         println("Config: $config")
     }
+
+    fun configurePrivateEnabledDefault() {
+        // ANCHOR: private-enabled-default
+        // Disable Spark private mode by default
+        val config = defaultConfig(Network.MAINNET)
+        config.privateEnabledDefault = false
+        // ANCHOR_END: private-enabled-default
+        println("Config: $config")
+    }
 }

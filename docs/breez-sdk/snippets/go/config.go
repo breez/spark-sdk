@@ -26,3 +26,12 @@ func ConfigureSdk() {
 	// ANCHOR_END: max-deposit-claim-fee
 	log.Printf("Config: %+v", config)
 }
+
+func ConfigurePrivateEnabledDefault() {
+	// ANCHOR: private-enabled-default
+	// Disable Spark private mode by default
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	config.PrivateEnabledDefault = false
+	// ANCHOR_END: private-enabled-default
+	log.Printf("Config: %+v", config)
+}
