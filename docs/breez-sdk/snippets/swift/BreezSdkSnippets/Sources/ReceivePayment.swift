@@ -103,17 +103,5 @@ func waitForPayment(sdk: BreezSdk) async throws {
     )
 
     print("Payment received with ID: \(paymentRequestResponse.payment.id)")
-
-    // Waiting for a payment given its payment id
-    let paymentId = "<payment id>"
-
-    // Wait for a payment to be completed using a payment id
-    let paymentIdResponse = try await sdk.waitForPayment(
-        request: WaitForPaymentRequest(
-            identifier: WaitForPaymentIdentifier.paymentId(paymentId)
-        )
-    )
-
-    print("Payment received with ID: \(paymentIdResponse.payment.id)")
     // ANCHOR_END: wait-for-payment
 }

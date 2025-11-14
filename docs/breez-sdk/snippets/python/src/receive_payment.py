@@ -114,18 +114,6 @@ async def wait_for_payment(sdk: BreezSdk):
         )
 
         logging.debug(f"Payment received with ID: {payment_request_response.payment.id}")
-
-        # Waiting for a payment given its payment id
-        payment_id = "<payment id>"
-
-        # Wait for a payment to be completed using a payment id
-        payment_id_response = await sdk.wait_for_payment(
-            request=WaitForPaymentRequest(
-                identifier=WaitForPaymentIdentifier.PAYMENT_ID(payment_id)
-            )
-        )
-
-        logging.debug(f"Payment received with ID: {payment_id_response.payment.id}")
     except Exception as error:
         logging.error(error)
         raise

@@ -1362,12 +1362,21 @@ impl BreezSdk {
             .add_event_listener(Box::new(InternalEventListener::new(tx)))
             .await;
 
-        // First check if we already have the payment in storage
-        if let WaitForPaymentIdentifier::PaymentRequest(payment_request) = &request.identifier
-            && let Some(payment) = self
+        // First check if we already have the completed payment in storage
+        let payment = match &request.identifier {
+            WaitForPaymentIdentifier::PaymentId(payment_id) => self
                 .storage
-                .get_payment_by_invoice(payment_request.clone())
-                .await?
+                .get_payment_by_id(payment_id.clone())
+                .await
+                .ok(),
+            WaitForPaymentIdentifier::PaymentRequest(payment_request) => {
+                self.storage
+                    .get_payment_by_invoice(payment_request.clone())
+                    .await?
+            }
+        };
+        if let Some(payment) = payment
+            && payment.status == PaymentStatus::Completed
         {
             self.remove_event_listener(&id).await;
             return Ok(WaitForPaymentResponse { payment });

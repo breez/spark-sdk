@@ -139,5 +139,22 @@ namespace BreezSdkSnippets
             var payment = sendResponse.payment;
             // ANCHOR_END: send-payment-spark
         }
+
+        async Task SendWaitForPayment(BreezSdk sdk)
+        {
+            // ANCHOR: wait-for-payment
+            // Waiting for a payment given its payment id
+            var paymentId = "<payment id>";
+
+            // Wait for a payment to be completed using a payment id
+            var paymentIdResponse = await sdk.WaitForPayment(
+                request: new WaitForPaymentRequest(
+                    identifier: new WaitForPaymentIdentifier.PaymentId(v1: paymentId)
+                )
+            );
+
+            Console.WriteLine($"Payment received with ID: {paymentIdResponse.payment.id}");
+            // ANCHOR_END: wait-for-payment
+        }
     }
 }
