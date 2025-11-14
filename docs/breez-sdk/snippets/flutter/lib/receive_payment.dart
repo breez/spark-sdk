@@ -94,17 +94,5 @@ Future<void> waitForPayment(BreezSdk sdk) async {
     ),
   );
   print("Payment received with ID: ${paymentRequestResponse.payment.id}");
-
-  // Waiting for a payment given its payment id
-  String paymentId = "<payment id>";
-
-  // Wait for a payment to be completed using a payment request
-  WaitForPaymentResponse paymentIdResponse = await sdk.waitForPayment(
-    request: WaitForPaymentRequest(
-      identifier: WaitForPaymentIdentifier.paymentId(paymentId),
-    ),
-  );
-  
-  print("Payment received with ID: ${paymentIdResponse.payment.id}"); 
   // ANCHOR_END: wait-for-payment
 }
