@@ -6,9 +6,9 @@ import type {
 } from '@breeztech/breez-sdk-spark-react-native'
 
 const getTokenIssuer = (sdk: BreezSdk) => {
-  // ANCHOR: get-issuer-sdk
+  // ANCHOR: get-token-issuer
   const tokenIssuer = sdk.getTokenIssuer()
-  // ANCHOR_END: get-issuer-sdk
+  // ANCHOR_END: get-token-issuer
 }
 
 const createToken = async (tokenIssuer: TokenIssuer): Promise<TokenMetadata> => {

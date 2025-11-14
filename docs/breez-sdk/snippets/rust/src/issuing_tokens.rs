@@ -6,9 +6,9 @@ use breez_sdk_spark::{
 use log::info;
 
 fn get_token_issuer(sdk: BreezSdk) -> TokenIssuer {
-    // ANCHOR: get-issuer-sdk
+    // ANCHOR: get-token-issuer
     let token_issuer = sdk.get_token_issuer();
-    // ANCHOR_END: get-issuer-sdk
+    // ANCHOR_END: get-token-issuer
     token_issuer
 }
 
@@ -18,7 +18,7 @@ async fn create_token(token_issuer: &TokenIssuer) -> Result<TokenMetadata> {
         name: "My Token".to_string(),
         ticker: "MTK".to_string(),
         decimals: 6,
-        is_freezable: true,
+        is_freezable: false,
         total_supply: 1_000_000,
     };
     let token_metadata = token_issuer.create_issuer_token(request).await?;
