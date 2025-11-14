@@ -108,14 +108,14 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Support Spark tokens (BTKN)
 - [x] LNURL-Withdraw
 - [x] Sign and verify arbitrary messages 
-- [ ] Real-time sync
-- [ ] C# language binding
+- [x] Real-time sync
+- [x] C# language binding
 - [ ] LNURL-Auth
 - [ ] External input parsers
 - [ ] Bolt12 
 - [ ] WebLN
 - [ ] NWC
-- [ ]  Add additional fees via a dedicated portal
+- [ ] Add additional fees via a dedicated portal
 
 
 
