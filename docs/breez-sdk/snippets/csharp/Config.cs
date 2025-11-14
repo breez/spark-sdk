@@ -23,5 +23,16 @@ namespace BreezSdkSnippets
             config = config with { maxDepositClaimFee = new Fee.Fixed(amount: 1000) };
             // ANCHOR_END: max-deposit-claim-fee
         }
+
+        void ConfigurePrivateEnabledDefault()
+        {
+            // ANCHOR: private-enabled-default
+            // Disable Spark private mode by default
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            {
+                privateEnabledDefault = false
+            };
+            // ANCHOR_END: private-enabled-default
+        }
     }
 }

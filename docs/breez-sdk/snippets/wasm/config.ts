@@ -18,4 +18,13 @@ const exampleConfigureSdk = async () => {
   console.log('Config:', config)
 }
 
-export { exampleConfigureSdk }
+const exampleConfigurePrivateEnabledDefault = async () => {
+  // ANCHOR: private-enabled-default
+  // Disable Spark private mode by default
+  const config = defaultConfig('mainnet')
+  config.privateEnabledDefault = false
+  // ANCHOR_END: private-enabled-default
+  console.log('Config:', config)
+}
+
+export { exampleConfigureSdk, exampleConfigurePrivateEnabledDefault }

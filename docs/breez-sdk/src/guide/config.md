@@ -43,6 +43,8 @@ The SDK synchronizes user data across different SDK instances using a [real-time
 
 Configures whether the Spark private mode should be enabled by default. By default, it is enabled. When enabled, the Spark private mode will be enabled on the first initialization of the SDK. If disabled, no changes will be made to the Spark private mode.
 
+{{#tabs config:private-enabled-default}}
+
 <div class="warning">
 <h4>Developer note</h4>
 

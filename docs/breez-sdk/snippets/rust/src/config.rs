@@ -20,3 +20,13 @@ pub(crate) fn configure_sdk() -> Result<()> {
     info!("Config: {:?}", config);
     Ok(())
 }
+
+pub(crate) fn configure_private_enabled_default() -> Result<()> {
+    // ANCHOR: private-enabled-default
+    // Disable Spark private mode by default
+    let mut config = default_config(Network::Mainnet);
+    config.private_enabled_default = false;
+    // ANCHOR_END: private-enabled-default
+    info!("Config: {:?}", config);
+    Ok(())
+}

@@ -22,3 +22,11 @@ async def configure_sdk():
     config.max_deposit_claim_fee = Fee.FIXED(amount=1000)
     # ANCHOR_END: max-deposit-claim-fee
     logging.info(f"Config: {config}")
+
+async def configure_private_enabled_default():
+    # ANCHOR: private-enabled-default
+    # Disable Spark private mode by default
+    config = default_config(network=Network.MAINNET)
+    config.private_enabled_default = False
+    # ANCHOR_END: private-enabled-default
+    logging.info(f"Config: {config}")

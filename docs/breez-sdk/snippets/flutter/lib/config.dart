@@ -19,3 +19,11 @@ Future<void> configureMaxDepositClaimFee() async {
   // ANCHOR_END: max-deposit-claim-fee
   print(config);
 }
+
+Future<void> configurePrivateEnabledDefault() async {
+  // ANCHOR: private-enabled-default
+  // Disable Spark private mode by default
+  var config = defaultConfig(network: Network.mainnet).copyWith(privateEnabledDefault: false);
+  // ANCHOR_END: private-enabled-default
+  print(config);
+}

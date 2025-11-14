@@ -17,3 +17,12 @@ func configureSdk() async throws {
     // ANCHOR_END: max-deposit-claim-fee
     print("Config: \(config)")
 }
+
+func configurePrivateEnabledDefault() async throws {
+    // ANCHOR: private-enabled-default
+    // Disable Spark private mode by default
+    var config = defaultConfig(network: Network.mainnet)
+    config.privateEnabledDefault = false
+    // ANCHOR_END: private-enabled-default
+    print("Config: \(config)")
+}
