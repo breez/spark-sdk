@@ -1,77 +1,13 @@
 use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
-use rand::RngCore;
 use rstest::*;
-use tempdir::TempDir;
 use tokio::time::{Duration, sleep};
 use tracing::{info, warn};
 
 // ---------------------
-// Fixtures
-// ---------------------
-
-#[fixture]
-async fn alice_sdk() -> Result<SdkInstance> {
-    let dir = TempDir::new("breez-sdk-alice-onchain")?;
-    let path = dir.path().to_string_lossy().to_string();
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-    build_sdk_with_dir(path, seed, Some(dir)).await
-}
-
-#[fixture]
-async fn bob_sdk() -> Result<SdkInstance> {
-    let dir = TempDir::new("breez-sdk-bob-onchain")?;
-    let path = dir.path().to_string_lossy().to_string();
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-    build_sdk_with_dir(path, seed, Some(dir)).await
-}
-
-#[fixture]
-async fn bob_no_fee_sdk() -> Result<SdkInstance> {
-    let dir = TempDir::new("breez-sdk-bob-no-fee")?;
-    let path = dir.path().to_string_lossy().to_string();
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    let mut cfg = default_config(Network::Regtest);
-    cfg.max_deposit_claim_fee = None;
-    build_sdk_with_custom_config(path, seed, cfg, Some(dir)).await
-}
-
-#[fixture]
-async fn bob_strict_fee_sdk() -> Result<SdkInstance> {
-    let dir = TempDir::new("breez-sdk-bob-fee")?;
-    let path = dir.path().to_string_lossy().to_string();
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    let mut cfg = default_config(Network::Regtest);
-    cfg.max_deposit_claim_fee = Some(Fee::Fixed { amount: 0 });
-    build_sdk_with_custom_config(path, seed, cfg, Some(dir)).await
-}
-
-// ---------------------
 // Local helpers
 // ---------------------
-
-async fn ensure_funded(sdk_instance: &mut SdkInstance, min_balance: u64) -> Result<()> {
-    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let info = sdk_instance
-        .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?;
-    if info.balance_sats < min_balance {
-        let needed = min_balance - info.balance_sats;
-        info!("Funding wallet via faucet: need {} sats", needed);
-        receive_and_fund(sdk_instance, 50_000).await?;
-    }
-    Ok(())
-}
 
 async fn wait_for_unclaimed_event(
     event_rx: &mut tokio::sync::mpsc::Receiver<SdkEvent>,
@@ -155,6 +91,7 @@ async fn test_onchain_withdraw_to_static_address(
             options: Some(SendPaymentOptions::BitcoinAddress {
                 confirmation_speed: OnchainConfirmationSpeed::Medium,
             }),
+            idempotency_key: None,
         })
         .await?;
 

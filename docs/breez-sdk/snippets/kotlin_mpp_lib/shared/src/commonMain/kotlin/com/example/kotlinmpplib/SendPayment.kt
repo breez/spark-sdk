@@ -120,7 +120,14 @@ class SendPayment {
                 preferSpark = false, 
                 completionTimeoutSecs = 10u
             )
-            val sendResponse = sdk.sendPayment(SendPaymentRequest(prepareResponse, options))
+            val optionalIdempotencyKey = "<idempotency key uuid>"
+            val sendResponse = sdk.sendPayment(
+                SendPaymentRequest(
+                    prepareResponse,
+                    options,
+                    optionalIdempotencyKey
+                )
+            )
             val payment = sendResponse.payment
         } catch (e: Exception) {
             // handle error
@@ -131,8 +138,17 @@ class SendPayment {
     suspend fun sendPaymentOnchain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) {
         // ANCHOR: send-payment-onchain
         try {
-            val options = SendPaymentOptions.BitcoinAddress(OnchainConfirmationSpeed.MEDIUM)
-            val sendResponse = sdk.sendPayment(SendPaymentRequest(prepareResponse, options))
+            val options = SendPaymentOptions.BitcoinAddress(
+                OnchainConfirmationSpeed.MEDIUM
+            )
+            val optionalIdempotencyKey = "<idempotency key uuid>"
+            val sendResponse = sdk.sendPayment(
+                SendPaymentRequest(
+                    prepareResponse,
+                    options,
+                    optionalIdempotencyKey
+                )
+            )
             val payment = sendResponse.payment
         } catch (e: Exception) {
             // handle error
@@ -143,7 +159,13 @@ class SendPayment {
     suspend fun sendPaymentSpark(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) {
         // ANCHOR: send-payment-spark
         try {
-            val sendResponse = sdk.sendPayment(SendPaymentRequest(prepareResponse, null))
+            val optionalIdempotencyKey = "<idempotency key uuid>"
+            val sendResponse = sdk.sendPayment(
+                SendPaymentRequest(
+                    prepareResponse,
+                    idempotencyKey = optionalIdempotencyKey
+                )
+            )
             val payment = sendResponse.payment
         } catch (e: Exception) {
             // handle error

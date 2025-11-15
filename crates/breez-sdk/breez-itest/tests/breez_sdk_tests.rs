@@ -3,80 +3,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
-use rand::RngCore;
 use rstest::*;
 use rstest_reuse::{apply, template};
-use tempdir::TempDir;
 use tracing::{debug, info};
-
-// ---------------------
-// Fixtures
-// ---------------------
-
-/// Fixture: Alice's SDK with temporary storage
-#[fixture]
-async fn alice_sdk() -> Result<SdkInstance> {
-    let alice_dir = TempDir::new("breez-sdk-alice")?;
-    let path = alice_dir.path().to_string_lossy().to_string();
-
-    // Generate random seed for Alice
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    info!("Initializing Alice's SDK at: {} with random seed", path);
-    build_sdk_with_dir(path, seed, Some(alice_dir)).await
-}
-
-/// Fixture: Bob's SDK with temporary storage
-#[fixture]
-async fn bob_sdk() -> Result<SdkInstance> {
-    let bob_dir = TempDir::new("breez-sdk-bob")?;
-    let path = bob_dir.path().to_string_lossy().to_string();
-
-    // Generate random seed for Bob
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    info!("Initializing Bob's SDK at: {} with random seed", path);
-    build_sdk_with_dir(path, seed, Some(bob_dir)).await
-}
-
-// ---------------------
-// Helper Functions
-// ---------------------
-
-/// Ensure SDK has at least the specified balance, funding if necessary
-async fn ensure_funded(sdk_instance: &mut SdkInstance, min_balance: u64) -> Result<()> {
-    // Sync to get latest balance
-    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
-
-    let info = sdk_instance
-        .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?;
-
-    if info.balance_sats < min_balance {
-        let needed = min_balance - info.balance_sats;
-        info!(
-            "Current balance: {} sats, need {} more sats. Funding with 50,000 sats...",
-            info.balance_sats, needed
-        );
-        receive_and_fund(sdk_instance, 50_000).await?;
-    } else {
-        info!(
-            "Already funded with {} sats (minimum: {} sats)",
-            info.balance_sats, min_balance
-        );
-    }
-
-    Ok(())
-}
-
-// ---------------------
-// Tests
-// ---------------------
 
 /// Test 1: Send payment from Alice to Bob using Spark transfer
 #[rstest]
@@ -143,6 +72,7 @@ async fn test_01_spark_transfer(
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
             options: None,
+            idempotency_key: None,
         })
         .await?;
 
@@ -396,6 +326,7 @@ async fn test_03_lightning_invoice_payment(
                 prefer_spark: false,
                 completion_timeout_secs: Some(10),
             }),
+            idempotency_key: None,
         })
         .await?;
 
@@ -661,6 +592,7 @@ async fn test_04_renew_timelocks(
             .send_payment(SendPaymentRequest {
                 prepare_response: prepare,
                 options: None,
+                idempotency_key: None,
             })
             .await?;
 
@@ -768,6 +700,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
                 prefer_spark: true,
                 completion_timeout_secs: Some(10),
             }),
+            idempotency_key: None,
         })
         .await?;
 
@@ -838,6 +771,7 @@ async fn test_06_lightning_timeout_and_wait(
                 prefer_spark: false,
                 completion_timeout_secs: Some(1),
             }),
+            idempotency_key: None,
         })
         .await?;
     info!("Immediate return status: {:?}", send_resp.payment.status);
@@ -943,6 +877,7 @@ async fn test_07_spark_invoice(
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
             options: None,
+            idempotency_key: None,
         })
         .await?;
 

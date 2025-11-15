@@ -128,9 +128,11 @@ func SendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk, prepareResponse b
 		CompletionTimeoutSecs: &completionTimeoutSecs,
 	}
 
+	optionalIdempotencyKey := "<idempotency key uuid>"
 	request := breez_sdk_spark.SendPaymentRequest{
 		PrepareResponse: prepareResponse,
 		Options:         &options,
+		IdempotencyKey:  &optionalIdempotencyKey,
 	}
 	response, err := sdk.SendPayment(request)
 
@@ -149,9 +151,11 @@ func SendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk
 		ConfirmationSpeed: breez_sdk_spark.OnchainConfirmationSpeedMedium,
 	}
 
+	optionalIdempotencyKey := "<idempotency key uuid>"
 	request := breez_sdk_spark.SendPaymentRequest{
 		PrepareResponse: prepareResponse,
 		Options:         &options,
+		IdempotencyKey:  &optionalIdempotencyKey,
 	}
 	response, err := sdk.SendPayment(request)
 
@@ -166,8 +170,10 @@ func SendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk
 
 func SendPaymentSpark(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.PrepareSendPaymentResponse) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: send-payment-spark
+	optionalIdempotencyKey := "<idempotency key uuid>"
 	request := breez_sdk_spark.SendPaymentRequest{
 		PrepareResponse: prepareResponse,
+		IdempotencyKey:  &optionalIdempotencyKey,
 	}
 	response, err := sdk.SendPayment(request)
 

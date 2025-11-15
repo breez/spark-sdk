@@ -112,6 +112,7 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
         .send_payment(SendPaymentRequest {
             prepare_response,
             options: None,
+            idempotency_key: None,
         })
         .await?;
     let payment = send_response.payment;

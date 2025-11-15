@@ -73,7 +73,7 @@ pub async fn handle_command(
             println!("Invoice: {}", invoice);
         }
         InvoicesCommand::Fulfill { invoice, amount } => {
-            let result = wallet.fulfill_spark_invoice(&invoice, amount).await?;
+            let result = wallet.fulfill_spark_invoice(&invoice, amount, None).await?;
             println!(
                 "Fulfillment result: {}",
                 serde_json::to_string_pretty(&result)?

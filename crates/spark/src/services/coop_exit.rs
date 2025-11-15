@@ -90,6 +90,16 @@ impl TryFrom<crate::ssp::CoopExitFeeQuote> for CoopExitFeeQuote {
     }
 }
 
+pub struct CoopExitParams<'a> {
+    pub leaves: Vec<TreeNode>,
+    pub withdrawal_address: &'a Address,
+    pub withdraw_all: bool,
+    pub exit_speed: ExitSpeed,
+    pub fee_quote_id: Option<String>,
+    pub fee_leaves: Option<Vec<TreeNode>>,
+    pub transfer_id: Option<TransferId>,
+}
+
 pub struct CoopExitService {
     operator_pool: Arc<OperatorPool>,
     ssp_client: Arc<ServiceProvider>,
@@ -132,15 +142,16 @@ impl CoopExitService {
             .try_into()
     }
 
-    pub async fn coop_exit(
-        &self,
-        leaves: Vec<TreeNode>,
-        withdrawal_address: &Address,
-        withdraw_all: bool,
-        exit_speed: ExitSpeed,
-        fee_quote_id: Option<String>,
-        fee_leaves: Option<Vec<TreeNode>>,
-    ) -> Result<Transfer, ServiceError> {
+    pub async fn coop_exit(&self, params: CoopExitParams<'_>) -> Result<Transfer, ServiceError> {
+        let CoopExitParams {
+            leaves,
+            withdrawal_address,
+            withdraw_all,
+            exit_speed,
+            fee_quote_id,
+            fee_leaves,
+            transfer_id,
+        } = params;
         debug!("Starting cooperative exit with leaves");
         let leaf_external_ids = leaves.iter().map(|l| l.id.clone().to_string()).collect();
         let fee_leaf_external_ids = fee_leaves.as_ref().map(|fee_leaves| {
@@ -152,7 +163,7 @@ impl CoopExitService {
         trace!("Leaf external IDs for cooperative exit: {leaf_external_ids:?}");
         trace!("Fee leaf external IDs for cooperative exit: {fee_leaf_external_ids:?}");
 
-        let transfer_id = TransferId::generate();
+        let transfer_id = transfer_id.unwrap_or_else(TransferId::generate);
         if let Some(transfer_observer) = &self.transfer_observer {
             let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
             transfer_observer

@@ -105,9 +105,11 @@ namespace BreezSdkSnippets
                 preferSpark: false,
                 completionTimeoutSecs: 10
             );
+            var optionalIdempotencyKey = "<idempotency key uuid>";
             var request = new SendPaymentRequest(
                 prepareResponse: prepareResponse,
-                options: options
+                options: options,
+                idempotencyKey: optionalIdempotencyKey
             );
             var sendResponse = await sdk.SendPayment(request: request);
             var payment = sendResponse.payment;
@@ -120,9 +122,11 @@ namespace BreezSdkSnippets
             var options = new SendPaymentOptions.BitcoinAddress(
                 confirmationSpeed: OnchainConfirmationSpeed.Medium
             );
+            var optionalIdempotencyKey = "<idempotency key uuid>";
             var request = new SendPaymentRequest(
                 prepareResponse: prepareResponse,
-                options: options
+                options: options,
+                idempotencyKey: optionalIdempotencyKey
             );
             var sendResponse = await sdk.SendPayment(request: request);
             var payment = sendResponse.payment;
@@ -132,8 +136,10 @@ namespace BreezSdkSnippets
         async Task SendPaymentSpark(BreezSdk sdk, PrepareSendPaymentResponse prepareResponse)
         {
             // ANCHOR: send-payment-spark
+            var optionalIdempotencyKey = "<idempotency key uuid>";
             var request = new SendPaymentRequest(
-                prepareResponse: prepareResponse
+                prepareResponse: prepareResponse,
+                idempotencyKey: optionalIdempotencyKey
             );
             var sendResponse = await sdk.SendPayment(request: request);
             var payment = sendResponse.payment;

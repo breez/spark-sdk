@@ -30,8 +30,10 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
 
 const exampleLnurlPay = async (sdk: BreezSdk, prepareResponse: PrepareLnurlPayResponse) => {
   // ANCHOR: lnurl-pay
+  const optionalIdempotencyKey = '<idempotency key uuid>'
   const response = await sdk.lnurlPay({
-    prepareResponse
+    prepareResponse,
+    idempotencyKey: optionalIdempotencyKey
   })
   // ANCHOR_END: lnurl-pay
   console.log(response)

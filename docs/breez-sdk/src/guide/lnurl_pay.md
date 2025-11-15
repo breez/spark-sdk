@@ -17,8 +17,9 @@ and also returns the fees related to the payment so they can be confirmed.
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.lnurl_pay">API docs</a>
 </h2>
 
-Once the payment has been prepared and the fees are accepted, all you have to do is pass the prepare response as an argument to the
-LNURL pay method.
+Once the payment has been prepared and the fees are accepted, the payment can be sent by passing:
+- **Prepare Response** - The response from the [Preparing LNURL Payments](lnurl_pay.md#preparing-lnurl-payments) step.
+- **Idempotency Key** - An optional UUID that identifies the payment. If set, providing the same idempotency key for multiple requests will ensure that only one payment is made.
 
 {{#tabs lnurl_pay:lnurl-pay}}
 
