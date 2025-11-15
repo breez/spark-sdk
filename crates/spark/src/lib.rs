@@ -7,6 +7,7 @@ pub mod services;
 pub mod session_manager;
 pub mod signer;
 pub mod ssp;
+pub mod token;
 pub mod tree;
 pub mod utils;
 

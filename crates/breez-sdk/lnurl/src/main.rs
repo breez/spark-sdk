@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use spark::operator::rpc::DefaultConnectionManager;
 use spark::session_manager::InMemorySessionManager;
 use spark::ssp::ServiceProvider;
+use spark::token::InMemoryTokenOutputStore;
 use spark::tree::InMemoryTreeStore;
 use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
 use sqlx::{PgPool, SqlitePool};
@@ -185,6 +186,7 @@ where
             signer.clone(),
             session_manager.clone(),
             Arc::new(InMemoryTreeStore::default()),
+            Arc::new(InMemoryTokenOutputStore::default()),
             Arc::clone(&connection_manager),
             None,
             true,

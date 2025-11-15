@@ -12,10 +12,11 @@ use spark::{
         invoice_response::TransferType as InvoiceTransferType,
     },
     services::{
-        LightningSendPayment, TokenMetadata, TokenTransaction, Transfer, TransferId, TransferLeaf,
-        TransferStatus, TransferType,
+        LightningSendPayment, TokenTransaction, Transfer, TransferId, TransferLeaf, TransferStatus,
+        TransferType,
     },
     ssp::{SspTransfer, SspUserRequest},
+    token::TokenMetadata,
     tree::{Leaves, SigningKeyshare, TreeNode, TreeNodeId},
     utils::paging::PagingFilter,
 };

@@ -20,6 +20,7 @@ use crate::operator::rpc as operator_rpc;
 use crate::services::{HashableTokenTransaction, bech32m_encode_token_id};
 use crate::signer::PrivateKeySource;
 use crate::ssp::BitcoinNetwork;
+use crate::token::{TokenMetadata, TokenOutput, TokenOutputWithPrevOut};
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
 use crate::utils::byte_padding::BytePadding;
 
@@ -646,18 +647,6 @@ impl From<ExitSpeed> for crate::ssp::ExitSpeed {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct TokenMetadata {
-    pub identifier: String,
-    pub issuer_public_key: PublicKey,
-    pub name: String,
-    pub ticker: String,
-    pub decimals: u32,
-    pub max_supply: u128,
-    pub is_freezable: bool,
-    pub creation_entity_public_key: Option<PublicKey>,
-}
-
 impl TryFrom<(operator_rpc::spark_token::TokenMetadata, Network)> for TokenMetadata {
     type Error = ServiceError;
 
@@ -697,18 +686,6 @@ impl TryFrom<(operator_rpc::spark_token::TokenMetadata, Network)> for TokenMetad
             creation_entity_public_key,
         })
     }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub struct TokenOutput {
-    pub id: String,
-    pub owner_public_key: PublicKey,
-    pub revocation_commitment: String,
-    pub withdraw_bond_sats: u64,
-    pub withdraw_relative_block_locktime: u64,
-    pub token_public_key: Option<PublicKey>,
-    pub token_identifier: String,
-    pub token_amount: u128,
 }
 
 impl TryFrom<(operator_rpc::spark_token::TokenOutput, Network)> for TokenOutput {
@@ -763,13 +740,6 @@ impl TryFrom<(operator_rpc::spark_token::TokenOutput, Network)> for TokenOutput 
             token_amount,
         })
     }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct TokenOutputWithPrevOut {
-    pub output: TokenOutput,
-    pub prev_tx_hash: String,
-    pub prev_tx_vout: u32,
 }
 
 impl
@@ -1177,9 +1147,10 @@ mod tests {
     use bitcoin::secp256k1::PublicKey;
     use macros::test_all;
 
+    use crate::Network;
     use crate::operator::rpc as operator_rpc;
     use crate::services::bech32m_decode_token_id;
-    use crate::{Network, services::TokenOutputWithPrevOut};
+    use crate::token::TokenOutputWithPrevOut;
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
