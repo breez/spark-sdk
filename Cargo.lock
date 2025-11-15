@@ -1270,6 +1270,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "domain-validator"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "thiserror 2.0.14",
+]
+
+[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1512,6 +1520,19 @@ name = "fixedbitset"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
+
+[[package]]
+name = "fly-api"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "domain-validator",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.14",
+ "tokio",
+]
 
 [[package]]
 name = "fnv"

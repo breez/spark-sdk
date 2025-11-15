@@ -1012,6 +1012,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "domain-validator"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "thiserror 2.0.16",
+]
+
+[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1213,6 +1221,19 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "spin",
+]
+
+[[package]]
+name = "fly-api"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "domain-validator",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.16",
+ "tokio",
 ]
 
 [[package]]
@@ -2210,7 +2231,9 @@ dependencies = [
  "base64",
  "bitcoin",
  "clap",
+ "domain-validator",
  "figment",
+ "fly-api",
  "hex",
  "lightning-invoice",
  "lnurl-models",
