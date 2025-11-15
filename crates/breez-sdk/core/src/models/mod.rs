@@ -485,7 +485,7 @@ pub struct TokenBalance {
     pub token_metadata: TokenMetadata,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct TokenMetadata {
     pub identifier: String,
