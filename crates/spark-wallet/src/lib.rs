@@ -18,13 +18,14 @@ pub use spark::{
     services::{
         CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,
         FreezeIssuerTokenResponse, InvoiceDescription, LightningSendPayment, LightningSendStatus,
-        ReceiverTokenOutput, TokenInputs, TokenMetadata, TokenOutputWithPrevOut, TokenTransaction,
-        TokenTransactionStatus, TransferId, TransferObserver, TransferObserverError,
-        TransferStatus, TransferTokenOutput, TransferType, Utxo,
+        ReceiverTokenOutput, TokenInputs, TokenTransaction, TokenTransactionStatus, TransferId,
+        TransferObserver, TransferObserverError, TransferStatus, TransferTokenOutput, TransferType,
+        Utxo,
     },
     session_manager::*,
     signer::{DefaultSigner, DefaultSignerError, KeySet, KeySetType, Signer},
     ssp::*,
+    token::{TokenMetadata, TokenOutputWithPrevOut},
     tree::{SigningKeyshare, TreeNodeId},
     utils::{
         paging::{Order, PagingFilter, PagingResult},

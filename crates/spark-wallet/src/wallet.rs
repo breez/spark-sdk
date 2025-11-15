@@ -24,14 +24,17 @@ use spark::{
         CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpUtxo, DepositService, ExitSpeed,
         Fee, FreezeIssuerTokenResponse, InvoiceDescription, LeafTxCpfpPsbts,
         LightningReceivePayment, LightningSendPayment, LightningService,
-        QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager, TokenMetadata,
-        TokenOutputWithPrevOut, TokenService, TokenTransaction, Transfer, TransferId,
-        TransferObserver, TransferService, TransferStatus, TransferTokenOutput,
-        UnilateralExitService, Utxo,
+        QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager, TokenService,
+        TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
+        TransferTokenOutput, UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer, SspUserRequest},
+    token::{
+        InMemoryTokenOutputStore, SynchronousTokenOutputService, TokenMetadata, TokenOutputService,
+        TokenOutputStore, TokenOutputWithPrevOut,
+    },
     tree::{
         InMemoryTreeStore, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
         TreeService, TreeStore, select_leaves_by_amounts, with_reserved_leaves,
@@ -62,6 +65,7 @@ pub struct SparkWallet {
     identity_public_key: PublicKey,
     signer: Arc<dyn Signer>,
     tree_service: Arc<dyn TreeService>,
+    token_output_service: Arc<dyn TokenOutputService>,
     coop_exit_service: Arc<CoopExitService>,
     unilateral_exit_service: Arc<UnilateralExitService>,
     transfer_service: Arc<TransferService>,
@@ -81,6 +85,7 @@ impl SparkWallet {
             signer,
             Arc::new(InMemorySessionManager::default()),
             Arc::new(InMemoryTreeStore::default()),
+            Arc::new(InMemoryTokenOutputStore::default()),
             Arc::new(DefaultConnectionManager::new()),
             None,
             true,
@@ -88,11 +93,13 @@ impl SparkWallet {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         config: SparkWalletConfig,
         signer: Arc<dyn Signer>,
         session_manager: Arc<dyn SessionManager>,
         tree_store: Arc<dyn TreeStore>,
+        token_output_store: Arc<dyn TokenOutputStore>,
         connection_manager: Arc<dyn ConnectionManager>,
         transfer_observer: Option<Arc<dyn TransferObserver>>,
         with_background_processing: bool,
@@ -181,7 +188,16 @@ impl SparkWallet {
             swap_service,
         ));
 
+        let token_output_service: Arc<dyn TokenOutputService> =
+            Arc::new(SynchronousTokenOutputService::new(
+                config.network,
+                operator_pool.clone(),
+                token_output_store,
+                Arc::clone(&signer),
+            ));
+
         let token_service = Arc::new(TokenService::new(
+            token_output_service.clone(),
             Arc::clone(&signer),
             operator_pool.clone(),
             config.network,
@@ -215,6 +231,7 @@ impl SparkWallet {
             identity_public_key,
             signer,
             tree_service,
+            token_output_service,
             coop_exit_service,
             unilateral_exit_service,
             transfer_service,
@@ -705,7 +722,7 @@ impl SparkWallet {
 
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
         self.tree_service.refresh_leaves().await?;
-        self.token_service.refresh_tokens().await?;
+        self.token_output_service.refresh_tokens_outputs().await?;
         Ok(())
     }
 
@@ -839,21 +856,17 @@ impl SparkWallet {
     pub async fn get_token_balances(
         &self,
     ) -> Result<HashMap<String, TokenBalance>, SparkWalletError> {
-        let tokens_outputs = self.token_service.get_tokens_outputs().await;
+        let token_outputs = self.token_output_service.list_tokens_outputs().await?;
 
-        let balances = tokens_outputs
-            .iter()
-            .map(|(token_id, token_outputs)| {
-                let balance = token_outputs
-                    .outputs
-                    .iter()
-                    .map(|output| output.output.token_amount)
-                    .sum();
+        let balances = token_outputs
+            .into_iter()
+            .map(|output| {
+                let balance = output.outputs.iter().map(|o| o.output.token_amount).sum();
                 (
-                    token_id.clone(),
+                    output.metadata.identifier.clone(),
                     TokenBalance {
                         balance,
-                        token_metadata: token_outputs.metadata.clone(),
+                        token_metadata: output.metadata,
                     },
                 )
             })

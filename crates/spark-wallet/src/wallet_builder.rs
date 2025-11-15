@@ -5,6 +5,7 @@ use spark::{
     services::TransferObserver,
     session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
+    token::{InMemoryTokenOutputStore, TokenOutputStore},
     tree::{InMemoryTreeStore, TreeStore},
 };
 
@@ -16,6 +17,7 @@ pub struct WalletBuilder {
     signer: Arc<dyn Signer>,
     session_manager: Option<Arc<dyn SessionManager>>,
     tree_store: Option<Arc<dyn TreeStore>>,
+    token_output_store: Option<Arc<dyn TokenOutputStore>>,
     connection_manager: Option<Arc<dyn ConnectionManager>>,
     transfer_observer: Option<Arc<dyn TransferObserver>>,
     with_background_processing: bool,
@@ -28,6 +30,7 @@ impl WalletBuilder {
             signer,
             session_manager: None,
             tree_store: None,
+            token_output_store: None,
             connection_manager: None,
             transfer_observer: None,
             with_background_processing: true,
@@ -41,6 +44,14 @@ impl WalletBuilder {
 
     pub fn with_tree_store(mut self, tree_store: Arc<dyn TreeStore>) -> Self {
         self.tree_store = Some(tree_store);
+        self
+    }
+
+    pub fn with_token_output_store(
+        mut self,
+        token_output_store: Arc<dyn TokenOutputStore>,
+    ) -> Self {
+        self.token_output_store = Some(token_output_store);
         self
     }
 
@@ -70,6 +81,8 @@ impl WalletBuilder {
                 .unwrap_or(Arc::new(InMemorySessionManager::default())),
             self.tree_store
                 .unwrap_or(Arc::new(InMemoryTreeStore::default())),
+            self.token_output_store
+                .unwrap_or(Arc::new(InMemoryTokenOutputStore::default())),
             self.connection_manager
                 .unwrap_or(Arc::new(DefaultConnectionManager::new())),
             self.transfer_observer,
