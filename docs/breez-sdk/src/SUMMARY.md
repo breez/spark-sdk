@@ -10,6 +10,7 @@
   - [Listening to events](guide/events.md)
   - [Adding logging](guide/logging.md)
   - [Custom configuration](guide/config.md)
+  - [Testing and development](guide/testing.md)
 - [Payment fundamentals](guide/payments.md)
   - [Parsing inputs](guide/parse.md)
   - [Receiving payments](guide/receive_payment.md)
