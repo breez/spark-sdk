@@ -45,8 +45,10 @@ Future<void> refundDeposit(BreezSdk sdk) async {
   int vout = 0;
   String destinationAddress = "bc1qexample..."; // Your Bitcoin address
 
-  // Set the fee for the refund transaction
-  Fee fee = Fee.fixed(amount: BigInt.from(500));
+  // Set the fee for the refund transaction using a rate
+  Fee fee = Fee.rate(satPerVbyte: BigInt.from(5));
+  // or using a fixed amount
+  //Fee fee = Fee.fixed(amount: BigInt.from(500));
 
   final request = RefundDepositRequest(
     txid: txid,
@@ -60,4 +62,15 @@ Future<void> refundDeposit(BreezSdk sdk) async {
   print("Transaction ID: ${response.txId}");
   print("Transaction hex: ${response.txHex}");
   // ANCHOR_END: refund-deposit
+}
+
+Future<void> recommendedFees(BreezSdk sdk) async {
+  // ANCHOR: recommended-fees
+  final response = await sdk.recommendedFees();
+  print("Fastest fee: ${response.fastestFee} sats");
+  print("Half-hour fee: ${response.halfHourFee} sats");
+  print("Hour fee: ${response.hourFee} sats");
+  print("Economy fee: ${response.economyFee} sats");
+  print("Minimum fee: ${response.minimumFee} sats");
+  // ANCHOR_END: recommended-fees
 }

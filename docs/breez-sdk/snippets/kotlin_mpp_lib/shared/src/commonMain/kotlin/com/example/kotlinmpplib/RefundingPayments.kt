@@ -63,8 +63,10 @@ class RefundingPayments {
             val vout = 0u
             val destinationAddress = "bc1qexample..." // Your Bitcoin address
             
-            // Set the fee for the refund transaction
-            val fee = Fee.Fixed(500u)
+            // Set the fee for the refund transaction using a rate
+            val fee = Fee.Rate(5u)
+            // or using a fixed amount
+            //val fee = Fee.Fixed(500u)
             
             val request = RefundDepositRequest(
                 txid = txid,
@@ -82,4 +84,15 @@ class RefundingPayments {
         }
         // ANCHOR_END: refund-deposit
     }
+}
+
+suspend fun recommendedFees(sdk: BreezSdk) {
+    // ANCHOR: recommended-fees
+    val response = sdk.recommendedFees()
+    println("Fastest fee: ${response.fastestFee} sats")
+    println("Half-hour fee: ${response.halfHourFee} sats")
+    println("Hour fee: ${response.hourFee} sats")
+    println("Economy fee: ${response.economyFee} sats")
+    println("Minimum fee: ${response.minimumFee} sats")
+    // ANCHOR_END: recommended-fees
 }

@@ -195,6 +195,8 @@ pub enum Command {
     ListFiatCurrencies,
     /// List available fiat rates
     ListFiatRates,
+    /// Get the recommended BTC fees based on the configured chain service
+    RecommendedFees,
     GetTokensMetadata {
         /// The token identifiers to get metadata for
         token_identifiers: Vec<String>,
@@ -531,6 +533,11 @@ pub(crate) async fn execute_command(
         }
         Command::ListFiatRates => {
             let res = sdk.list_fiat_rates().await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::RecommendedFees => {
+            let res = sdk.recommended_fees().await?;
             print_value(&res)?;
             Ok(true)
         }

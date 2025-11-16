@@ -69,8 +69,10 @@ const refundDeposit = async (sdk: BreezSdk) => {
   const vout = 0
   const destinationAddress = 'bc1qexample...' // Your Bitcoin address
 
-  // Set the fee for the refund transaction
-  const fee: Fee = { type: 'fixed', amount: 500 }
+  // Set the fee for the refund transaction using a rate
+  const fee: Fee = { type: 'rate', satPerVbyte: 5 }
+  // or using a fixed amount
+  // const fee: Fee = { type: 'fixed', amount: 500 }
 
   const request: RefundDepositRequest = {
     txid,
@@ -84,4 +86,15 @@ const refundDeposit = async (sdk: BreezSdk) => {
   console.log('Transaction ID:', response.txId)
   console.log('Transaction hex:', response.txHex)
   // ANCHOR_END: refund-deposit
+}
+
+const recommendedFees = async (sdk: BreezSdk) => {
+  // ANCHOR: recommended-fees
+  const response = await sdk.recommendedFees()
+  console.log('Fastest fee:', response.fastestFee)
+  console.log('Half-hour fee:', response.halfHourFee)
+  console.log('Hour fee:', response.hourFee)
+  console.log('Economy fee:', response.economyFee)
+  console.log('Minimum fee:', response.minimumFee)
+  // ANCHOR_END: recommended-fees
 }

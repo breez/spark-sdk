@@ -8,7 +8,7 @@ use crate::{
     event::{EventListener, WasmEventListener},
     issuer::TokenIssuer,
     logger::{Logger, WasmTracingLayer},
-    models::*,
+    models::{chain_service::RecommendedFees, *},
     sdk_builder::SdkBuilder,
 };
 
@@ -212,6 +212,11 @@ impl BreezSdk {
     #[wasm_bindgen(js_name = "listFiatRates")]
     pub async fn list_fiat_rates(&self) -> WasmResult<ListFiatRatesResponse> {
         Ok(self.sdk.list_fiat_rates().await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "recommendedFees")]
+    pub async fn recommended_fees(&self) -> WasmResult<RecommendedFees> {
+        Ok(self.sdk.recommended_fees().await?.into())
     }
 
     #[wasm_bindgen(js_name = "waitForPayment")]
