@@ -53,6 +53,7 @@ const LOG_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 // Database query constants
 const KEYSHARE_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 const KEYSHARE_CHECK_INTERVAL: Duration = Duration::from_millis(500);
+const KEYSHARE_POST_CHECK_DELAY: Duration = Duration::from_secs(5);
 const KEYSHARE_MIN_UUID: &str = "01954639-8d50-7e47-b3f0-ddb307fab7c2";
 const KEYSHARE_STATUS_AVAILABLE: &str = "AVAILABLE";
 
@@ -421,6 +422,7 @@ impl SparkSoFixture {
                 // If all operators have keyshares, we're done
                 if all_ready {
                     info!("All operators have available keyshares");
+                    sleep(KEYSHARE_POST_CHECK_DELAY).await;
                     return Ok(());
                 }
 
