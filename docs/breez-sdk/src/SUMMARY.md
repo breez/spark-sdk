@@ -5,6 +5,7 @@
 - [About Breez SDK - Nodeless](guide/about_breez_sdk_spark.md)
 - [Getting started](guide/getting_started.md)
   - [Installing the SDK](guide/install.md)
+  - [Testing and development](guide/testing.md)
   - [Initializing the SDK](guide/initializing.md)
   - [Fetching the balance](guide/get_info.md)
   - [Listening to events](guide/events.md)
