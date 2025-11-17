@@ -4,7 +4,7 @@ use futures::{FutureExt, future::BoxFuture};
 
 use testcontainers::core::logs::{LogFrame, consumer::LogConsumer};
 
-/// A consumer that logs the output of container with the [`log`] crate.
+/// A consumer that logs the output of container with the [`tracing`] crate.
 ///
 /// By default, both standard out and standard error will both be emitted at INFO level.
 #[derive(Debug)]

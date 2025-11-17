@@ -589,11 +589,8 @@ fn sanitize_domain<DB>(
     domain: &str,
 ) -> Result<String, (StatusCode, Json<Value>)> {
     let domain = domain.trim().to_lowercase();
-    // If domains list is empty or contains empty string, allow all domains (for testing)
-    if state.domains.is_empty()
-        || state.domains.contains(&String::new())
-        || state.domains.contains(&domain)
-    {
+    // If domains list is empty allow all domains (for testing)
+    if state.domains.is_empty() || state.domains.contains(&domain) {
         return Ok(domain);
     }
     warn!("domain not allowed: {}", domain);

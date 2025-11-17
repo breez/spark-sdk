@@ -27,7 +27,6 @@ impl Default for DataSyncImageConfig {
 pub struct DataSyncFixture {
     pub container: ContainerAsync<GenericImage>,
     pub grpc_url: String,
-    _config: DataSyncImageConfig,
 }
 
 impl DataSyncFixture {
@@ -62,7 +61,6 @@ impl DataSyncFixture {
         Ok(Self {
             container,
             grpc_url,
-            _config: config,
         })
     }
 

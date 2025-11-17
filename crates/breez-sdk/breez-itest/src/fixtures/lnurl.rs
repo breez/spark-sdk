@@ -60,7 +60,6 @@ impl LnurlImageConfig {
 pub struct LnurlFixture {
     pub container: ContainerAsync<GenericImage>,
     pub http_url: String,
-    _config: LnurlImageConfig,
 }
 
 impl LnurlFixture {
@@ -113,7 +112,6 @@ impl LnurlFixture {
         Ok(Self {
             container,
             http_url,
-            _config: config,
         })
     }
 

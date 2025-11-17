@@ -198,6 +198,7 @@ where
         .domains
         .split(',')
         .map(|d| d.trim().to_lowercase())
+        .filter(|d| !d.is_empty())
         .collect();
 
     let ca_cert = args
