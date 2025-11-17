@@ -4,6 +4,9 @@ use crate::{operator::rpc::OperatorRpcError, signer::SignerError};
 
 #[derive(Debug, Error, Clone)]
 pub enum TokenOutputServiceError {
+    #[error("insufficient funds")]
+    InsufficientFunds,
+
     #[error("rpc error: {0}")]
     RpcError(Box<OperatorRpcError>),
 

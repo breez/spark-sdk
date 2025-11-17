@@ -96,7 +96,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
     async fn get_token_outputs(
         &self,
         filter: GetTokenOutputsFilter<'_>,
-    ) -> Result<Option<TokenOutputs>, TokenOutputServiceError> {
+    ) -> Result<TokenOutputs, TokenOutputServiceError> {
         let token_outputs_state = self.token_outputs.lock().await;
         let token_outputs = match filter {
             GetTokenOutputsFilter::Identifier(token_id) => {
@@ -110,7 +110,9 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
                 .cloned(),
         };
 
-        Ok(token_outputs)
+        token_outputs.ok_or(TokenOutputServiceError::Generic(
+            "Token outputs not found".to_string(),
+        ))
     }
 
     async fn insert_token_outputs(
@@ -183,41 +185,36 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         };
 
         if outputs.iter().map(|o| o.output.token_amount).sum::<u128>() < amount {
-            return Err(TokenOutputServiceError::Generic(
-                "Not enough outputs to transfer tokens".to_string(),
-            ));
+            return Err(TokenOutputServiceError::InsufficientFunds);
         }
 
-        let selected_outputs = if let Some(output) =
-            outputs.iter().find(|o| o.output.token_amount == amount)
-        {
-            // If there's an exact match, return it
-            vec![output.clone()]
-        } else {
-            // TODO: support other selection strategies (JS supports either smallest or largest first)
-            // Sort outputs by amount, smallest first
-            outputs.sort_by_key(|o| o.output.token_amount);
+        let selected_outputs =
+            if let Some(output) = outputs.iter().find(|o| o.output.token_amount == amount) {
+                // If there's an exact match, return it
+                vec![output.clone()]
+            } else {
+                // TODO: support other selection strategies (JS supports either smallest or largest first)
+                // Sort outputs by amount, smallest first
+                outputs.sort_by_key(|o| o.output.token_amount);
 
-            // Select outputs to match the amount
-            let mut selected_outputs = Vec::new();
-            let mut remaining_amount = amount;
-            for output in outputs {
-                if remaining_amount == 0 {
-                    break;
+                // Select outputs to match the amount
+                let mut selected_outputs = Vec::new();
+                let mut remaining_amount = amount;
+                for output in outputs {
+                    if remaining_amount == 0 {
+                        break;
+                    }
+                    selected_outputs.push(output.clone());
+                    remaining_amount = remaining_amount.saturating_sub(output.output.token_amount);
                 }
-                selected_outputs.push(output.clone());
-                remaining_amount = remaining_amount.saturating_sub(output.output.token_amount);
-            }
 
-            // We should never get here, but just in case
-            if remaining_amount > 0 {
-                return Err(TokenOutputServiceError::Generic(format!(
-                    "Not enough outputs to transfer tokens, remaining amount: {remaining_amount}"
-                )));
-            }
+                // We should never get here, but just in case
+                if remaining_amount > 0 {
+                    return Err(TokenOutputServiceError::InsufficientFunds);
+                }
 
-            selected_outputs
-        };
+                selected_outputs
+            };
 
         let reservation_id = Uuid::now_v7().to_string();
         let reservation_token_outputs = TokenOutputs {
@@ -382,7 +379,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.metadata.identifier, "token-1");
         assert_eq!(stored_token1.outputs.len(), 3);
@@ -391,7 +387,6 @@ mod tests {
         let stored_token1_by_pk = store
             .get_token_outputs(GetTokenOutputsFilter::IssuerPublicKey(&pk1))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1_by_pk.metadata.identifier, "token-1");
         assert_eq!(stored_token1_by_pk.outputs.len(), 3);
@@ -400,7 +395,6 @@ mod tests {
         let stored_token2 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-2"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token2.metadata.identifier, "token-2");
         assert_eq!(stored_token2.outputs.len(), 2);
@@ -409,7 +403,6 @@ mod tests {
         let stored_token2_by_pk = store
             .get_token_outputs(GetTokenOutputsFilter::IssuerPublicKey(&pk2))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token2_by_pk.metadata.identifier, "token-2");
         assert_eq!(stored_token2_by_pk.outputs.len(), 2);
@@ -444,7 +437,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 2);
         assert_eq!(stored_token1.outputs[0].output.token_amount, 150);
@@ -483,7 +475,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 5);
 
@@ -496,7 +487,6 @@ mod tests {
         let stored_token2 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-2"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token2.outputs.len(), 3);
     }
@@ -527,7 +517,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 2);
     }
@@ -556,7 +545,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 2);
 
@@ -568,7 +556,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 3);
     }
@@ -597,7 +584,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 2);
 
@@ -609,7 +595,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 2);
     }
@@ -638,7 +623,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 2);
 
@@ -662,7 +646,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 3);
     }
@@ -691,7 +674,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 2);
 
@@ -712,7 +694,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 3);
 
@@ -726,7 +707,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 1);
 
@@ -750,7 +730,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 1);
     }
@@ -803,7 +782,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 2);
 
@@ -815,7 +793,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 3);
 
@@ -827,7 +804,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 3);
 
@@ -839,7 +815,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 4);
     }
@@ -857,7 +832,6 @@ mod tests {
         let all_outputs = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
 
         let preferred = vec![
@@ -882,7 +856,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 4);
     }
@@ -949,7 +922,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 4);
     }
@@ -1001,7 +973,6 @@ mod tests {
         let stored_token1 = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(stored_token1.outputs.len(), 0);
     }
@@ -1018,7 +989,6 @@ mod tests {
         let all_outputs = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
-            .unwrap()
             .unwrap();
 
         let preferred = vec![
@@ -1132,17 +1102,15 @@ mod tests {
         // Try to get non-existent token by identifier
         let result = store
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-999"))
-            .await
-            .unwrap();
-        assert!(result.is_none());
+            .await;
+        assert!(result.is_err());
 
         // Try to get non-existent token by public key
         let pk = create_public_key(99);
         let result = store
             .get_token_outputs(GetTokenOutputsFilter::IssuerPublicKey(&pk))
-            .await
-            .unwrap();
-        assert!(result.is_none());
+            .await;
+        assert!(result.is_err());
     }
 
     #[async_test_all]

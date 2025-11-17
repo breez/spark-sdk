@@ -1,6 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use tracing::warn;
+use tokio_with_wasm::alias as tokio;
+use tracing::{info, warn};
 
 use crate::{
     Network,
@@ -18,6 +19,8 @@ use crate::{
         error::TokenOutputServiceError,
     },
 };
+
+const SELECT_TOKEN_OUTPUTS_MAX_RETRIES: u32 = 3;
 
 pub struct SynchronousTokenOutputService {
     network: Network,
@@ -99,11 +102,8 @@ impl TokenOutputService for SynchronousTokenOutputService {
     async fn get_token_metadata(
         &self,
         filter: GetTokenOutputsFilter<'_>,
-    ) -> Result<Option<TokenMetadata>, TokenOutputServiceError> {
-        self.state
-            .get_token_outputs(filter)
-            .await
-            .map(|to| to.map(|to| to.metadata))
+    ) -> Result<TokenMetadata, TokenOutputServiceError> {
+        Ok(self.state.get_token_outputs(filter).await?.metadata)
     }
 
     async fn insert_token_outputs(
@@ -119,9 +119,41 @@ impl TokenOutputService for SynchronousTokenOutputService {
         amount: u128,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
-        self.state
-            .reserve_token_outputs(token_identifier, amount, preferred_outputs)
-            .await
+        let mut reservation: Option<TokenOutputsReservation> = None;
+
+        for i in 0..SELECT_TOKEN_OUTPUTS_MAX_RETRIES {
+            let reserve_res = self
+                .state
+                .reserve_token_outputs(token_identifier, amount, preferred_outputs.clone())
+                .await;
+            if let Ok(token_outputs_reservation) = reserve_res {
+                reservation = Some(token_outputs_reservation);
+                break;
+            }
+
+            info!("Failed to reserve token outputs, refreshing and retrying");
+            self.refresh_tokens_outputs().await?;
+            let available_amount: u128 = self
+                .state
+                .get_token_outputs(GetTokenOutputsFilter::Identifier(token_identifier))
+                .await?
+                .outputs
+                .iter()
+                .map(|o| o.output.token_amount)
+                .sum();
+            if amount > available_amount {
+                info!(
+                    "Insufficient funds to select token outputs after refresh: requested {amount}, available {available_amount}"
+                );
+                break;
+            }
+
+            if i < SELECT_TOKEN_OUTPUTS_MAX_RETRIES - 1 {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+
+        reservation.ok_or_else(|| TokenOutputServiceError::InsufficientFunds)
     }
 
     async fn cancel_reservation(

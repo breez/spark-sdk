@@ -96,10 +96,10 @@ impl TokenService {
         let mut uncached_issuer_public_keys = Vec::new();
 
         for token_id in token_identifiers {
-            if let Some(metadata) = self
+            if let Ok(metadata) = self
                 .token_output_service
                 .get_token_metadata(GetTokenOutputsFilter::Identifier(token_id))
-                .await?
+                .await
             {
                 cached_metadata.push(metadata);
             } else {
@@ -108,10 +108,10 @@ impl TokenService {
         }
 
         for issuer_pk in issuer_public_keys {
-            if let Some(metadata) = self
+            if let Ok(metadata) = self
                 .token_output_service
                 .get_token_metadata(GetTokenOutputsFilter::IssuerPublicKey(issuer_pk))
-                .await?
+                .await
             {
                 cached_metadata.push(metadata);
             } else {

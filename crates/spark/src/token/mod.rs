@@ -116,7 +116,7 @@ pub trait TokenOutputStore: Send + Sync {
     async fn get_token_outputs(
         &self,
         filter: GetTokenOutputsFilter<'_>,
-    ) -> Result<Option<TokenOutputs>, TokenOutputServiceError>;
+    ) -> Result<TokenOutputs, TokenOutputServiceError>;
 
     async fn insert_token_outputs(
         &self,
@@ -150,7 +150,7 @@ pub trait TokenOutputService: Send + Sync {
     async fn get_token_metadata(
         &self,
         filter: GetTokenOutputsFilter<'_>,
-    ) -> Result<Option<TokenMetadata>, TokenOutputServiceError>;
+    ) -> Result<TokenMetadata, TokenOutputServiceError>;
 
     async fn insert_token_outputs(
         &self,
