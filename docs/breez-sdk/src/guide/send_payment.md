@@ -77,14 +77,6 @@ For Spark addresses and invoices no send payment options are needed.
 
 {{#tabs send_payment:send-payment-spark}}
 
-## Waiting for a payment
-
-It is generally recommended to use [event flows] to react to payment completion. However, there is a convenience function to wait for payment completion.
-
-{{#tabs send_payment:wait-for-payment}}
-
-[event flows]: #event-flows
-
 ## Event Flows
 
 Once a send payment is initiated, you can follow and react to the different payment events using the guide below for each payment method. See [Listening to events](/guide/events.html) for how to subscribe to events.
