@@ -219,14 +219,6 @@ impl BreezSdk {
         Ok(self.sdk.recommended_fees().await?.into())
     }
 
-    #[wasm_bindgen(js_name = "waitForPayment")]
-    pub async fn wait_for_payment(
-        &self,
-        request: WaitForPaymentRequest,
-    ) -> WasmResult<WaitForPaymentResponse> {
-        Ok(self.sdk.wait_for_payment(request.into()).await?.into())
-    }
-
     #[wasm_bindgen(js_name = "getTokensMetadata")]
     pub async fn get_tokens_metadata(
         &self,

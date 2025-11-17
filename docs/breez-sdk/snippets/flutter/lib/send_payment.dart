@@ -136,19 +136,3 @@ Future<SendPaymentResponse> sendPaymentSpark(
   print(payment);
   return response;
 }
-
-Future<void> sendWaitForPayment(BreezSdk sdk) async {
-  // ANCHOR: wait-for-payment
-  // Waiting for a payment given its payment id
-  String paymentId = "<payment id>";
-
-  // Wait for a payment to be completed using a payment request
-  WaitForPaymentResponse paymentIdResponse = await sdk.waitForPayment(
-    request: WaitForPaymentRequest(
-      identifier: WaitForPaymentIdentifier.paymentId(paymentId),
-    ),
-  );
-  
-  print("Payment received with ID: ${paymentIdResponse.payment.id}"); 
-  // ANCHOR_END: wait-for-payment
-}

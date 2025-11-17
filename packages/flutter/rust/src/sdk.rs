@@ -171,13 +171,6 @@ impl BreezSdk {
         self.inner.recommended_fees().await
     }
 
-    pub async fn wait_for_payment(
-        &self,
-        request: WaitForPaymentRequest,
-    ) -> Result<WaitForPaymentResponse, SdkError> {
-        self.inner.wait_for_payment(request).await
-    }
-
     pub async fn get_tokens_metadata(
         &self,
         request: GetTokensMetadataRequest,

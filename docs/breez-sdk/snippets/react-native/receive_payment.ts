@@ -1,6 +1,5 @@
 import {
   ReceivePaymentMethod,
-  WaitForPaymentIdentifier,
   type BreezSdk
 } from '@breeztech/breez-sdk-spark-react-native'
 
@@ -72,18 +71,4 @@ const exampleReceiveSparkInvoice = async (sdk: BreezSdk) => {
   const receiveFeeSats = response.fee
   console.log(`Fees: ${receiveFeeSats} sats`)
   // ANCHOR_END: receive-payment-spark-invoice
-}
-
-const exampleWaitForPayment = async (sdk: BreezSdk) => {
-  // ANCHOR: wait-for-payment
-  // Waiting for a payment given its payment request (Bolt11 or Spark invoice)
-  const paymentRequest = '<Bolt11 or Spark invoice>'
-
-  // Wait for a payment to be completed using a payment request
-  const paymentRequestResponse = await sdk.waitForPayment({
-    identifier: new WaitForPaymentIdentifier.PaymentRequest(paymentRequest)
-  })
-
-  console.log(`Payment received with ID: ${paymentRequestResponse.payment.id}`)
-  // ANCHOR_END: wait-for-payment
 }

@@ -81,18 +81,3 @@ Future<ReceivePaymentResponse> receivePaymentSparkInvoice(BreezSdk sdk) async {
   // ANCHOR_END: receive-payment-spark-invoice
   return response;
 }
-
-Future<void> waitForPayment(BreezSdk sdk) async {
-  // ANCHOR: wait-for-payment
-  // Waiting for a payment given its payment request (Bolt11 or Spark invoice)
-  String paymentRequest = "<Bolt11 or Spark invoice>"; 
-
-  // Wait for a payment to be completed using a payment request
-  WaitForPaymentResponse paymentRequestResponse = await sdk.waitForPayment(
-    request: WaitForPaymentRequest(
-      identifier: WaitForPaymentIdentifier.paymentRequest(paymentRequest),
-    ),
-  );
-  print("Payment received with ID: ${paymentRequestResponse.payment.id}");
-  // ANCHOR_END: wait-for-payment
-}

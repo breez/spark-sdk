@@ -103,24 +103,3 @@ func ReceiveSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Receiv
 	// ANCHOR_END: receive-payment-spark-invoice
 	return &response, nil
 }
-
-func WaitForPayment(sdk *breez_sdk_spark.BreezSdk) error {
-	// ANCHOR: wait-for-payment
-	// Waiting for a payment given its payment request (Bolt11 or Spark invoice)
-	paymentRequest := "<Bolt11 or Spark invoice>"
-
-	// Wait for a payment to be completed using a payment request
-	paymentRequestResponse, err := sdk.WaitForPayment(breez_sdk_spark.WaitForPaymentRequest{
-		Identifier: breez_sdk_spark.WaitForPaymentIdentifierPaymentRequest{
-			Field0: paymentRequest,
-		},
-	})
-
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
-		return err
-	}
-
-	log.Printf("Payment received with ID: %v", paymentRequestResponse.Payment.Id)
-	// ANCHOR_END: wait-for-payment
-	return nil
-}

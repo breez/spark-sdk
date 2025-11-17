@@ -4,8 +4,6 @@ from breez_sdk_spark import (
     BreezSdk,
     ReceivePaymentMethod,
     ReceivePaymentRequest,
-    WaitForPaymentRequest,
-    WaitForPaymentIdentifier,
 )
 
 
@@ -98,23 +96,3 @@ async def receive_spark_invoice(sdk: BreezSdk):
         logging.error(error)
         raise
     # ANCHOR_END: receive-payment-spark-invoice
-
-
-async def wait_for_payment(sdk: BreezSdk):
-    # ANCHOR: wait-for-payment
-    try:
-        # Waiting for a payment given its payment request (Bolt11 or Spark invoice)
-        payment_request = "<Bolt11 or Spark invoice>"
-
-        # Wait for a payment to be completed using a payment request
-        payment_request_response = await sdk.wait_for_payment(
-            request=WaitForPaymentRequest(
-                identifier=WaitForPaymentIdentifier.PAYMENT_REQUEST(payment_request)
-            )
-        )
-
-        logging.debug(f"Payment received with ID: {payment_request_response.payment.id}")
-    except Exception as error:
-        logging.error(error)
-        raise
-    # ANCHOR_END: wait-for-payment
