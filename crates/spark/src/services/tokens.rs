@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Not, sync::Arc};
+use std::{ops::Not, sync::Arc};
 
 use bitcoin::{
     bech32::{self, Bech32m, Hrp},
@@ -6,8 +6,7 @@ use bitcoin::{
     secp256k1::PublicKey,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::info;
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
@@ -18,17 +17,20 @@ use crate::{
         rpc::{
             self,
             spark_token::{
-                CommitTransactionRequest, QueryTokenMetadataRequest, QueryTokenOutputsRequest,
-                QueryTokenTransactionsRequest, SignatureWithIndex, StartTransactionRequest,
+                CommitTransactionRequest, QueryTokenMetadataRequest, QueryTokenTransactionsRequest,
+                SignatureWithIndex, StartTransactionRequest,
             },
         },
     },
     services::{
         FreezeIssuerTokenResponse, QueryTokenTransactionsFilter, ReceiverTokenOutput, ServiceError,
-        TokenMetadata, TokenOutputWithPrevOut, TokenTransaction, TransferObserver,
-        TransferTokenOutput,
+        TokenTransaction, TransferObserver, TransferTokenOutput,
     },
     signer::Signer,
+    token::{
+        GetTokenOutputsFilter, TokenMetadata, TokenOutputService, TokenOutputWithPrevOut,
+        TokenOutputs, with_reserved_token_outputs,
+    },
     utils::{
         paging::{PagingFilter, PagingResult, pager},
         time::web_time_to_prost_timestamp,
@@ -42,12 +44,6 @@ const HRP_STR_TESTNET: &str = "btknt";
 const HRP_STR_REGTEST: &str = "btknrt";
 const HRP_STR_SIGNET: &str = "btkns";
 
-#[derive(Clone)]
-pub struct TokenOutputs {
-    pub metadata: TokenMetadata,
-    pub outputs: Vec<TokenOutputWithPrevOut>,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TokensConfig {
     pub expected_withdraw_bond_sats: u64,
@@ -56,7 +52,7 @@ pub struct TokensConfig {
 }
 
 pub struct TokenService {
-    tokens_outputs: Mutex<HashMap<String, TokenOutputs>>,
+    token_output_service: Arc<dyn TokenOutputService>,
     signer: Arc<dyn Signer>,
     operator_pool: Arc<OperatorPool>,
     network: Network,
@@ -67,6 +63,7 @@ pub struct TokenService {
 
 impl TokenService {
     pub fn new(
+        token_output_service: Arc<dyn TokenOutputService>,
         signer: Arc<dyn Signer>,
         operator_pool: Arc<OperatorPool>,
         network: Network,
@@ -75,7 +72,7 @@ impl TokenService {
         transfer_observer: Option<Arc<dyn TransferObserver>>,
     ) -> Self {
         Self {
-            tokens_outputs: Mutex::new(HashMap::new()),
+            token_output_service,
             signer,
             operator_pool,
             network,
@@ -83,75 +80,6 @@ impl TokenService {
             tokens_config,
             transfer_observer,
         }
-    }
-
-    /// Fetches all owned token outputs from the SE and updates the local cache.
-    pub async fn refresh_tokens(&self) -> Result<(), ServiceError> {
-        let outputs = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .query_token_outputs(QueryTokenOutputsRequest {
-                owner_public_keys: vec![
-                    self.signer.get_identity_public_key()?.serialize().to_vec(),
-                ],
-                network: self.network.to_proto_network().into(),
-                ..Default::default()
-            })
-            .await?
-            .outputs_with_previous_transaction_data;
-
-        if outputs.is_empty() {
-            return Ok(());
-        }
-
-        // Raw token id to token outputs map
-        let mut outputs_map: HashMap<Vec<u8>, Vec<TokenOutputWithPrevOut>> = HashMap::new();
-
-        for output_with_previous_transaction_data in outputs {
-            let Some(output) = &output_with_previous_transaction_data.output else {
-                warn!("An empty output was returned from query_token_outputs, skipping");
-                continue;
-            };
-
-            let token_id = output.token_identifier().to_vec();
-            let token_output: TokenOutputWithPrevOut =
-                (output_with_previous_transaction_data, self.network).try_into()?;
-
-            outputs_map.entry(token_id).or_default().push(token_output);
-        }
-
-        // Fetch metadata for owned tokens
-        let token_identifiers = outputs_map.keys().cloned().collect();
-        let metadata = self
-            .query_tokens_metadata_inner(token_identifiers, vec![])
-            .await?;
-
-        if metadata.len() != outputs_map.keys().len() {
-            return Err(ServiceError::Generic(
-                "Metadata not found for all tokens".to_string(),
-            ));
-        }
-
-        let outputs_with_metadata_map = outputs_map
-            .into_iter()
-            .map(|(token_id, outputs)| {
-                let metadata = metadata
-                    .iter()
-                    .find(|m| m.token_identifier == token_id)
-                    .ok_or_else(|| ServiceError::Generic("Metadata not found".to_string()))?;
-                let metadata: TokenMetadata = (metadata.clone(), self.network).try_into()?;
-                Ok((
-                    metadata.identifier.clone(),
-                    TokenOutputs { metadata, outputs },
-                ))
-            })
-            .collect::<Result<HashMap<String, TokenOutputs>, ServiceError>>()?;
-
-        let mut tokens_outputs = self.tokens_outputs.lock().await;
-        *tokens_outputs = outputs_with_metadata_map;
-
-        Ok(())
     }
 
     /// Returns the metadata for the given token identifiers.
@@ -162,32 +90,32 @@ impl TokenService {
         token_identifiers: &[&str],
         issuer_public_keys: &[PublicKey],
     ) -> Result<Vec<TokenMetadata>, ServiceError> {
-        let cached_outputs = { self.tokens_outputs.lock().await.clone() };
-
         // Separate token identifiers into cached and uncached
         let mut cached_metadata = Vec::new();
         let mut uncached_identifiers = Vec::new();
         let mut uncached_issuer_public_keys = Vec::new();
 
         for token_id in token_identifiers {
-            if let Some(outputs) = cached_outputs.get(*token_id) {
-                cached_metadata.push(outputs.metadata.clone());
+            if let Ok(metadata) = self
+                .token_output_service
+                .get_token_metadata(GetTokenOutputsFilter::Identifier(token_id))
+                .await
+            {
+                cached_metadata.push(metadata);
             } else {
                 uncached_identifiers.push(*token_id);
             }
         }
 
-        if !issuer_public_keys.is_empty() {
-            let cached_outputs_by_issuer_public_key = cached_outputs
-                .values()
-                .map(|output| (output.metadata.issuer_public_key, output))
-                .collect::<HashMap<_, _>>();
-            for pubkey in issuer_public_keys {
-                if let Some(outputs) = cached_outputs_by_issuer_public_key.get(pubkey) {
-                    cached_metadata.push(outputs.metadata.clone());
-                } else {
-                    uncached_issuer_public_keys.push(*pubkey);
-                }
+        for issuer_pk in issuer_public_keys {
+            if let Ok(metadata) = self
+                .token_output_service
+                .get_token_metadata(GetTokenOutputsFilter::IssuerPublicKey(issuer_pk))
+                .await
+            {
+                cached_metadata.push(metadata);
+            } else {
+                uncached_issuer_public_keys.push(*issuer_pk);
             }
         }
 
@@ -248,11 +176,6 @@ impl TokenService {
             .await?
             .token_metadata;
         Ok(metadata)
-    }
-
-    /// Returns owned token outputs from the local cache.
-    pub async fn get_tokens_outputs(&self) -> HashMap<String, TokenOutputs> {
-        self.tokens_outputs.lock().await.clone()
     }
 
     pub async fn query_token_transactions_inner(
@@ -351,6 +274,13 @@ impl TokenService {
         is_freezable: bool,
         max_supply: u128,
     ) -> Result<TokenTransaction, ServiceError> {
+        // Check if issuer token already exists and return a clear error
+        if self.get_issuer_token_metadata().await.is_ok() {
+            return Err(ServiceError::Generic(
+                "Issuer token already exists".to_string(),
+            ));
+        }
+
         validate_create_token_params(name, ticker, decimals)?;
 
         let partial_tx =
@@ -473,20 +403,50 @@ impl TokenService {
 
         let total_amount: u128 = receiver_outputs.iter().map(|o| o.amount).sum();
 
-        // Get outputs matching token id
-        let mut outputs = self.tokens_outputs.lock().await;
-        let Some(this_token_outputs) = outputs.get_mut(&token_id) else {
-            return Err(ServiceError::Generic(format!(
-                "No tokens available for token id: {token_id}"
-            )));
-        };
+        let reservation = self
+            .token_output_service
+            .reserve_token_outputs(&token_id, total_amount, preferred_outputs.clone())
+            .await?;
 
-        let inputs = Self::select_token_outputs(
-            &this_token_outputs.outputs,
-            total_amount,
-            preferred_outputs,
-        )?;
+        let token_transaction = with_reserved_token_outputs(
+            self.token_output_service.as_ref(),
+            self.transfer_tokens_inner(
+                &token_id,
+                reservation.token_outputs.outputs.clone(),
+                receiver_outputs.clone(),
+            ),
+            &reservation,
+        )
+        .await?;
 
+        let identity_public_key = self.signer.get_identity_public_key()?;
+        let outputs = token_transaction
+            .outputs
+            .iter()
+            .enumerate()
+            .filter(|(_, output)| output.owner_public_key == identity_public_key)
+            .map(|(vout, output)| TokenOutputWithPrevOut {
+                output: output.clone(),
+                prev_tx_hash: token_transaction.hash.clone(),
+                prev_tx_vout: vout as u32,
+            })
+            .collect::<Vec<_>>();
+        self.token_output_service
+            .insert_token_outputs(&TokenOutputs {
+                metadata: reservation.token_outputs.metadata,
+                outputs,
+            })
+            .await?;
+
+        Ok(token_transaction)
+    }
+
+    async fn transfer_tokens_inner(
+        &self,
+        token_id: &str,
+        inputs: Vec<TokenOutputWithPrevOut>,
+        receiver_outputs: Vec<TransferTokenOutput>,
+    ) -> Result<TokenTransaction, ServiceError> {
         if inputs.len() > MAX_TOKEN_TX_INPUTS {
             // We may consider doing an intermediate self transfer here to aggregate the inputs
             return Err(ServiceError::Generic(format!(
@@ -505,7 +465,7 @@ impl TokenService {
             observer
                 .before_send_token(
                     &txid,
-                    &token_id,
+                    token_id,
                     receiver_outputs
                         .into_iter()
                         .map(|o| {
@@ -526,85 +486,7 @@ impl TokenService {
 
         self.commit_transaction(final_tx.clone()).await?;
 
-        // Remove used outputs from local cache and add any change outputs
-        this_token_outputs.outputs.retain(|o| !inputs.contains(o));
-        let identity_public_key_bytes = self.signer.get_identity_public_key()?.serialize();
-        final_tx
-            .token_outputs
-            .clone()
-            .into_iter()
-            .enumerate()
-            .filter(|(_, o)| o.owner_public_key == identity_public_key_bytes)
-            .try_for_each(|(vout, o)| -> Result<(), ServiceError> {
-                this_token_outputs.outputs.push(TokenOutputWithPrevOut {
-                    output: (o, self.network).try_into()?,
-                    prev_tx_hash: txid.clone(),
-                    prev_tx_vout: vout as u32,
-                });
-                Ok(())
-            })?;
-
         (final_tx, self.network).try_into()
-    }
-
-    /// Selects tokens to match a given amount.
-    /// Prioritizes smaller outputs.
-    ///
-    /// # Arguments
-    ///
-    /// * `available_outputs` - Available token outputs to select from
-    /// * `amount` - Total amount to select
-    /// * `preferred_outputs` - Optional list of preferred outputs to use for the transfer
-    fn select_token_outputs(
-        available_outputs: &[TokenOutputWithPrevOut],
-        amount: u128,
-        preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
-    ) -> Result<Vec<TokenOutputWithPrevOut>, ServiceError> {
-        let mut outputs = if let Some(preferred_outputs) = preferred_outputs {
-            // Filter available outputs to only include preferred ones
-            available_outputs
-                .iter()
-                .filter(|o| preferred_outputs.iter().any(|p| o.output.id == p.output.id))
-                .cloned()
-                .collect::<Vec<_>>()
-        } else {
-            available_outputs.to_vec()
-        };
-
-        if outputs.iter().map(|o| o.output.token_amount).sum::<u128>() < amount {
-            return Err(ServiceError::Generic(
-                "Not enough outputs to transfer tokens".to_string(),
-            ));
-        }
-
-        // If there's an exact match, return it
-        if let Some(output) = outputs.iter().find(|o| o.output.token_amount == amount) {
-            return Ok(vec![output.clone()]);
-        }
-
-        // TODO: support other selection strategies (JS supports either smallest or largest first)
-        // Sort outputs by amount, smallest first
-        outputs.sort_by_key(|o| o.output.token_amount);
-
-        // Select outputs to match the amount
-        let mut selected_outputs = Vec::new();
-        let mut remaining_amount = amount;
-        for output in outputs {
-            if remaining_amount == 0 {
-                break;
-            }
-            selected_outputs.push(output.clone());
-            remaining_amount = remaining_amount.saturating_sub(output.output.token_amount);
-        }
-
-        // We should never get here, but just in case
-        if remaining_amount > 0 {
-            return Err(ServiceError::Generic(format!(
-                "Not enough outputs to transfer tokens, remaining amount: {remaining_amount}"
-            )));
-        }
-
-        Ok(selected_outputs)
     }
 
     fn build_create_token_transaction(

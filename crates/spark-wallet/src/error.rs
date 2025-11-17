@@ -41,6 +41,9 @@ pub enum SparkWalletError {
     #[error("Tree service error: {0}")]
     TreeServiceError(#[from] spark::tree::TreeServiceError),
 
+    #[error("Token output service error: {0}")]
+    TokenOutputServiceError(#[from] spark::token::TokenOutputServiceError),
+
     #[error("Service error: {0}")]
     ServiceError(#[from] spark::services::ServiceError),
 
