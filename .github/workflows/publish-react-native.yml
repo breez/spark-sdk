@@ -98,6 +98,7 @@ jobs:
             packages/react-native/cpp
             packages/react-native/lib
             packages/react-native/src
+            packages/react-native/*.podspec
 
       - name: Compress Android binaries
         working-directory: packages/react-native
@@ -148,6 +149,7 @@ jobs:
           git rm -r cpp || true
           git rm -r lib || true
           git rm -r src || true
+          git rm *.podspec || true
 
       - name: Download React Native bindings
         uses: actions/download-artifact@v4
