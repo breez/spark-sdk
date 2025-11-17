@@ -210,7 +210,7 @@ struct SwapNodesForPreimageRequest<'a> {
 
 pub struct PayLightningResult {
     pub transfer: Transfer,
-    pub lightning_send_payment: LightningSendPayment,
+    pub lightning_send_payment: Option<LightningSendPayment>,
 }
 
 pub struct LightningService {
@@ -342,10 +342,14 @@ impl LightningService {
         invoice: &str,
         amount_to_send: Option<u64>,
         leaves: &[TreeNode],
+        transfer_id: Option<TransferId>,
     ) -> Result<PayLightningResult, ServiceError> {
         let ssp_identity_public_key = self.ssp_client.identity_public_key();
         let expiry_time = SystemTime::now() + Duration::from_secs(DEFAULT_SEND_EXPIRY_SECS);
-        let transfer_id = TransferId::generate();
+        let unwrapped_transfer_id = match &transfer_id {
+            Some(transfer_id) => transfer_id.clone(),
+            None => TransferId::generate(),
+        };
 
         // Decode invoice and validate amount
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
@@ -355,7 +359,7 @@ impl LightningService {
 
         if let Some(transfer_observer) = &self.transfer_observer {
             transfer_observer
-                .before_send_lightning_payment(&transfer_id, invoice, amount_sats)
+                .before_send_lightning_payment(&unwrapped_transfer_id, invoice, amount_sats)
                 .await?;
         }
 
@@ -365,7 +369,7 @@ impl LightningService {
         let transfer_request = self
             .transfer_service
             .prepare_transfer_request(
-                &transfer_id,
+                &unwrapped_transfer_id,
                 &leaf_tweaks,
                 &ssp_identity_public_key,
                 Default::default(),
@@ -374,9 +378,9 @@ impl LightningService {
             )
             .await?;
 
-        let transfer: Transfer = self
+        let initiate_preimage_swap_res = self
             .swap_nodes_for_preimage(SwapNodesForPreimageRequest {
-                transfer_id: &transfer_id,
+                transfer_id: &unwrapped_transfer_id,
                 leaves: &leaf_tweaks,
                 receiver_pubkey: &ssp_identity_public_key,
                 payment_hash,
@@ -387,12 +391,26 @@ impl LightningService {
                 transfer_request: Some(transfer_request),
                 expiry_time: &expiry_time,
             })
-            .await?
-            .transfer
-            .ok_or(ServiceError::SSPswapError(
-                "Swap response did not contain a transfer".to_string(),
-            ))?
-            .try_into()?;
+            .await;
+        let transfer: Transfer = match (&transfer_id, initiate_preimage_swap_res) {
+            (_, Ok(initiate_preimage_swap)) => initiate_preimage_swap
+                .transfer
+                .ok_or(ServiceError::SSPswapError(
+                    "Swap response did not contain a transfer".to_string(),
+                ))?
+                .try_into()?,
+            (Some(transfer_id), Err(e)) => {
+                let transfer = self
+                    .transfer_service
+                    .recover_transfer_on_rpc_connection_error(transfer_id, e)
+                    .await?;
+                return Ok(PayLightningResult {
+                    transfer,
+                    lightning_send_payment: None,
+                });
+            }
+            (_, Err(e)) => return Err(e),
+        };
 
         let mut lightning_send_payment: LightningSendPayment = self
             .ssp_client
@@ -400,7 +418,7 @@ impl LightningService {
                 encoded_invoice: invoice.to_string(),
                 idempotency_key: None,
                 amount_sats: amount_to_send,
-                user_outbound_transfer_external_id: Some(transfer_id.to_string()),
+                user_outbound_transfer_external_id: Some(unwrapped_transfer_id.to_string()),
             })
             .await?
             .try_into()?;
@@ -410,7 +428,7 @@ impl LightningService {
         }
 
         Ok(PayLightningResult {
-            lightning_send_payment,
+            lightning_send_payment: Some(lightning_send_payment),
             transfer,
         })
     }

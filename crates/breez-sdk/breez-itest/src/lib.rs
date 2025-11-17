@@ -1,7 +1,9 @@
 pub mod faucet;
+pub mod fixtures;
 pub mod helpers;
 
 pub use faucet::RegtestFaucet;
+pub use fixtures::*;
 pub use helpers::*;
 
 use anyhow::Result;

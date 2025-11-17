@@ -40,8 +40,12 @@ namespace BreezSdkSnippets
         async Task Pay(BreezSdk sdk, PrepareLnurlPayResponse prepareResponse)
         {
             // ANCHOR: lnurl-pay
+            var optionalIdempotencyKey = "<idempotency key uuid>";
             var response = await sdk.LnurlPay(
-                new LnurlPayRequest(prepareResponse: prepareResponse)
+                new LnurlPayRequest(
+                    prepareResponse: prepareResponse,
+                    idempotencyKey: optionalIdempotencyKey
+                )
             );
             // ANCHOR_END: lnurl-pay
         }

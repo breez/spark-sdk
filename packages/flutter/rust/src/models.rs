@@ -202,6 +202,7 @@ pub struct _LnurlPayInfo {
 #[frb(mirror(LnurlPayRequest))]
 pub struct _LnurlPayRequest {
     pub prepare_response: PrepareLnurlPayResponse,
+    pub idempotency_key: Option<String>,
 }
 
 #[frb(mirror(LnurlPayResponse))]
@@ -362,6 +363,7 @@ pub enum _SendPaymentOptions {
 pub struct _SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
     pub options: Option<SendPaymentOptions>,
+    pub idempotency_key: Option<String>,
 }
 
 #[frb(mirror(SendPaymentResponse))]

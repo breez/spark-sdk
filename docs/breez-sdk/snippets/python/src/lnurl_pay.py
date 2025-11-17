@@ -48,8 +48,12 @@ async def prepare_pay(sdk: BreezSdk):
 async def pay(sdk: BreezSdk, prepare_response: PrepareLnurlPayResponse):
     # ANCHOR: lnurl-pay
     try:
+        optional_idempotency_key = "<idempotency key uuid>"
         response = await sdk.lnurl_pay(
-            LnurlPayRequest(prepare_response=prepare_response)
+            LnurlPayRequest(
+                prepare_response=prepare_response,
+                idempotency_key=optional_idempotency_key,
+            )
         )
     except Exception as error:
         logging.error(error)

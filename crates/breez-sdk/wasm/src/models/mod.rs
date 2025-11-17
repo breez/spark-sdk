@@ -687,6 +687,7 @@ pub struct PrepareLnurlPayResponse {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlPayRequest)]
 pub struct LnurlPayRequest {
     pub prepare_response: PrepareLnurlPayResponse,
+    pub idempotency_key: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlPayResponse)]
@@ -744,6 +745,7 @@ pub enum SendPaymentOptions {
 pub struct SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
     pub options: Option<SendPaymentOptions>,
+    pub idempotency_key: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentResponse)]

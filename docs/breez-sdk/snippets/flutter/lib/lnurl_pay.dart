@@ -32,8 +32,11 @@ Future<void> prepareLnurlPay(BreezSdk sdk) async {
 Future<void> lnurlPay(
     BreezSdk sdk, PrepareLnurlPayResponse prepareResponse) async {
   // ANCHOR: lnurl-pay
+  String? optionalIdempotencyKey = "<idempotency key uuid>";
   LnurlPayResponse response = await sdk.lnurlPay(
-    request: LnurlPayRequest(prepareResponse: prepareResponse),
+    request: LnurlPayRequest(
+      prepareResponse: prepareResponse,
+      idempotencyKey: optionalIdempotencyKey),
   );
   // ANCHOR_END: lnurl-pay
   print(response);

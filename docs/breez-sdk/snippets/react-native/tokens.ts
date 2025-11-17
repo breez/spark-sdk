@@ -94,7 +94,8 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   // Send the token payment
   const sendResponse = await sdk.sendPayment({
     prepareResponse,
-    options: undefined
+    options: undefined,
+    idempotencyKey: undefined
   })
   const payment = sendResponse.payment
   console.log(`Payment: ${JSON.stringify(payment)}`)

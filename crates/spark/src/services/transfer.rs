@@ -109,10 +109,14 @@ impl TransferService {
         &self,
         leaves: Vec<TreeNode>,
         receiver_id: &PublicKey,
+        transfer_id: Option<TransferId>,
         signing_key_source: Option<PrivateKeySource>,
         spark_invoice: Option<String>,
     ) -> Result<Transfer, ServiceError> {
-        let transfer_id = TransferId::generate();
+        let unwrapped_transfer_id = match &transfer_id {
+            Some(transfer_id) => transfer_id.clone(),
+            None => TransferId::generate(),
+        };
 
         if let Some(transfer_observer) = &self.transfer_observer {
             let identity_public_key = &self.signer.get_identity_public_key()?;
@@ -121,7 +125,7 @@ impl TransferService {
                 let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
                 transfer_observer
                     .before_send_transfer(
-                        &transfer_id,
+                        &unwrapped_transfer_id,
                         &spark_invoice
                             .clone()
                             .or(receiver_address.to_address_string().ok())
@@ -137,42 +141,58 @@ impl TransferService {
         // build leaf key tweaks with new signing keys that we will send to the receiver
         let leaf_key_tweaks =
             prepare_leaf_key_tweaks_to_send(&self.signer, leaves, signing_key_source)?;
-        let transfer = self
+        let transfer_res = self
             .send_transfer_with_key_tweaks(
-                &transfer_id,
+                &unwrapped_transfer_id,
                 &leaf_key_tweaks,
                 receiver_id,
                 spark_invoice,
             )
-            .await?;
+            .await;
+        let transfer = match (&transfer_id, transfer_res) {
+            (_, Ok(t)) => t,
+            (Some(transfer_id), Err(e)) => {
+                return self
+                    .recover_transfer_on_rpc_connection_error(transfer_id, e)
+                    .await;
+            }
+            (None, Err(e)) => return Err(e),
+        };
 
         Ok(transfer)
     }
 
-    pub async fn transfer_leaves_to_self(
+    pub(crate) async fn recover_transfer_on_rpc_connection_error(
         &self,
-        leaves: Vec<TreeNode>,
-        signing_key_source: Option<PrivateKeySource>,
-    ) -> Result<Vec<TreeNode>, ServiceError> {
-        let transfer = self
-            .transfer_leaves_to(
-                leaves,
-                &self.signer.get_identity_public_key()?,
-                signing_key_source,
-                None,
-            )
-            .await?;
+        transfer_id: &TransferId,
+        error: ServiceError,
+    ) -> Result<Transfer, ServiceError> {
+        if let ServiceError::ServiceConnectionError(operator_rpc_error) = &error
+            && let OperatorRpcError::Connection(status) = operator_rpc_error.as_ref()
+            && status.code() == tonic::Code::Internal
+        {
+            // There was an RPC connection error. Check if the transfer already exists remotely.
+            let operator_transfers = self
+                .operator_pool
+                .get_coordinator()
+                .client
+                .query_all_transfers(TransferFilter {
+                    transfer_ids: vec![transfer_id.to_string()],
+                    network: self.network.to_proto_network() as i32,
+                    participant: Some(Participant::SenderIdentityPublicKey(
+                        self.signer.get_identity_public_key()?.serialize().to_vec(),
+                    )),
+                    ..Default::default()
+                })
+                .await?;
+            if let Some(transfer) = operator_transfers.transfers.into_iter().nth(0) {
+                debug!("Recovered transfer {} after connection error", transfer.id);
 
-        let pending_transfer =
-            self.query_transfer(&transfer.id)
-                .await?
-                .ok_or(ServiceError::Generic(
-                    "Pending transfer not found".to_string(),
-                ))?;
+                return transfer.try_into();
+            }
+        }
 
-        let resulting_nodes = self.claim_transfer(&pending_transfer, None).await?;
-
-        Ok(resulting_nodes)
+        Err(error)
     }
 
     pub async fn send_transfer_with_key_tweaks(

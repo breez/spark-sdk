@@ -31,3 +31,4 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 dotenvy.workspace = true
 rand.workspace = true
+uuid.workspace = true

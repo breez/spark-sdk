@@ -33,9 +33,11 @@ func preparePay(sdk: BreezSdk) async throws {
 
 func pay(sdk: BreezSdk, prepareResponse: PrepareLnurlPayResponse) async throws {
     // ANCHOR: lnurl-pay
+    let optionalIdempotencyKey = "<idempotency key uuid>"
     let response = try await sdk.lnurlPay(
         request: LnurlPayRequest(
-            prepareResponse: prepareResponse
+            prepareResponse: prepareResponse,
+            idempotencyKey: optionalIdempotencyKey
         ))
     // ANCHOR_END: lnurl-pay
     print("Response: \(response)")

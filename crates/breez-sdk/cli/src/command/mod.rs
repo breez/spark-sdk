@@ -115,6 +115,10 @@ pub enum Command {
         /// Optional token identifier. May only be provided if the payment request is a spark address.
         #[arg(short = 't', long)]
         token_identifier: Option<String>,
+
+        /// Optional idempotency key to ensure only one payment is made for multiple requests.
+        #[arg(short = 'i', long)]
+        idempotency_key: Option<String>,
     },
 
     /// Pay using LNURL
@@ -129,6 +133,10 @@ pub enum Command {
         /// Validates the success action URL
         #[clap(name = "validate_success_url", short = 'v', long = "validate")]
         validate_success_url: Option<bool>,
+
+        /// Optional idempotency key to ensure only one payment is made for multiple requests.
+        #[arg(short = 'i', long)]
+        idempotency_key: Option<String>,
     },
 
     /// Withdraw using LNURL
@@ -398,6 +406,7 @@ pub(crate) async fn execute_command(
             payment_request,
             amount,
             token_identifier,
+            idempotency_key,
         } => {
             let prepared_payment = sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
@@ -420,6 +429,7 @@ pub(crate) async fn execute_command(
             let send_payment_response = Box::pin(sdk.send_payment(SendPaymentRequest {
                 prepare_response,
                 options: payment_options,
+                idempotency_key,
             }))
             .await?;
 
@@ -430,6 +440,7 @@ pub(crate) async fn execute_command(
             lnurl,
             comment,
             validate_success_url,
+            idempotency_key,
         } => {
             let input = sdk.parse(&lnurl).await?;
             let res = match input {
@@ -458,8 +469,11 @@ pub(crate) async fn execute_command(
                         return Ok(true);
                     }
 
-                    let pay_res =
-                        Box::pin(sdk.lnurl_pay(LnurlPayRequest { prepare_response })).await?;
+                    let pay_res = Box::pin(sdk.lnurl_pay(LnurlPayRequest {
+                        prepare_response,
+                        idempotency_key,
+                    }))
+                    .await?;
                     Ok(pay_res)
                 }
                 _ => Err(anyhow::anyhow!("Invalid input")),

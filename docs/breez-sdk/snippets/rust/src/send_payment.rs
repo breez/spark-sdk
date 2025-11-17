@@ -108,10 +108,12 @@ async fn send_payment_lightning_bolt11(
         prefer_spark: false,
         completion_timeout_secs: Some(10),
     });
+    let optional_idempotency_key = Some("<idempotency key uuid>".to_string());
     let send_response = sdk
         .send_payment(SendPaymentRequest {
             prepare_response,
             options,
+            idempotency_key: optional_idempotency_key,
         })
         .await?;
     let payment = send_response.payment;
@@ -125,14 +127,15 @@ async fn send_payment_onchain(
     prepare_response: PrepareSendPaymentResponse,
 ) -> Result<()> {
     // ANCHOR: send-payment-onchain
-    // Send the payment, using Medium speed (Default = Fast)
-    let options = Some(SendPaymentOptions::BitcoinAddress {
+    let options = SendPaymentOptions::BitcoinAddress {
         confirmation_speed: OnchainConfirmationSpeed::Medium,
-    });
+    };
+    let optional_idempotency_key = Some("<idempotency key uuid>".to_string());
     let send_response = sdk
         .send_payment(SendPaymentRequest {
             prepare_response,
-            options,
+            options: Some(options),
+            idempotency_key: optional_idempotency_key,
         })
         .await?;
     let payment = send_response.payment;
@@ -146,11 +149,12 @@ async fn send_payment_spark(
     prepare_response: PrepareSendPaymentResponse,
 ) -> Result<()> {
     // ANCHOR: send-payment-spark
-    // Send the payment
+    let optional_idempotency_key = Some("<idempotency key uuid>".to_string());
     let send_response = sdk
         .send_payment(SendPaymentRequest {
             prepare_response,
             options: None,
+            idempotency_key: optional_idempotency_key,
         })
         .await?;
     let payment = send_response.payment;

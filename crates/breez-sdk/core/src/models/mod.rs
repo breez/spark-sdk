@@ -626,6 +626,11 @@ pub struct PrepareLnurlPayResponse {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LnurlPayRequest {
     pub prepare_response: PrepareLnurlPayResponse,
+    /// If set, providing the same idempotency key for multiple requests will ensure that only one
+    /// payment is made. If an idempotency key is re-used, the same payment will be returned.
+    /// The idempotency key must be a valid UUID.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -752,6 +757,12 @@ pub struct SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub options: Option<SendPaymentOptions>,
+    /// The optional idempotency key for all Spark based transfers (excludes token payments).
+    /// If set, providing the same idempotency key for multiple requests will ensure that only one
+    /// payment is made. If an idempotency key is re-used, the same payment will be returned.
+    /// The idempotency key must be a valid UUID.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -115,6 +115,7 @@ pub async fn handle_command(
                     amount_sats,
                     exit_speed.into(),
                     fee_quote,
+                    None,
                 )
                 .await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
