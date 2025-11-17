@@ -5,12 +5,12 @@ Integrating Breez SDK - Nodeless _(Spark Implementation)_ into your application 
 Before you begin, make sure to read the [repository README](https://github.com/breez/spark-sdk#breez-sdk---nodeless-spark-implementation) carefully. Then follow these steps to get started:
 
 - **[Installing the SDK](/guide/install.md)**
+- **[Testing and development](/guide/testing.md)**
 - **[Initializing the SDK](/guide/initializing.md)**
 - **[Fetching the balance](/guide/get_info.md)**
 - **[Listening to events](/guide/events.md)**
 - **[Adding logging](/guide/logging.md)**
 - **[Custom configuration](/guide/config.md)**
-- **[Testing and development](/guide/testing.md)**
 
 ## API Key
 
