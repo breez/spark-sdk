@@ -1,13 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use bitcoin::secp256k1::PublicKey;
 use tokio::sync::Mutex;
 use tracing::{trace, warn};
 use uuid::Uuid;
 
 use crate::token::{
-    TokenOutputServiceError, TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs,
-    TokenOutputsReservation, TokenOutputsReservationId,
+    GetTokenOutputsFilter, TokenOutputServiceError, TokenOutputStore, TokenOutputWithPrevOut,
+    TokenOutputs, TokenOutputsReservation, TokenOutputsReservationId,
 };
 
 #[derive(Default)]
@@ -63,7 +62,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             let reserved_output_ids = reserved_outputs
                 .iter()
                 .map(|o| o.output.id.clone())
-                .collect::<Vec<_>>();
+                .collect::<HashSet<_>>();
             token_outputs
                 .outputs
                 .retain(|o| !reserved_output_ids.contains(&o.output.id));
@@ -96,23 +95,22 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
 
     async fn get_token_outputs(
         &self,
-        token_identifier: Option<&str>,
-        issuer_public_key: Option<&PublicKey>,
+        filter: GetTokenOutputsFilter<'_>,
     ) -> Result<Option<TokenOutputs>, TokenOutputServiceError> {
         let token_outputs_state = self.token_outputs.lock().await;
-        if let Some(token_id) = token_identifier
-            && let Some(token_outputs) = token_outputs_state.token_outputs.get(token_id)
-        {
-            return Ok(Some(token_outputs.clone()));
-        }
-        if let Some(issuer_pk) = issuer_public_key {
-            for token_outputs in token_outputs_state.token_outputs.values() {
-                if &token_outputs.metadata.issuer_public_key == issuer_pk {
-                    return Ok(Some(token_outputs.clone()));
-                }
+        let token_outputs = match filter {
+            GetTokenOutputsFilter::Identifier(token_id) => {
+                token_outputs_state.token_outputs.get(token_id).cloned()
             }
-        }
-        Ok(None)
+            GetTokenOutputsFilter::IssuerPublicKey(issuer_pk) => token_outputs_state
+                .token_outputs
+                .values()
+                .into_iter()
+                .find(|to| &to.metadata.issuer_public_key == issuer_pk)
+                .cloned(),
+        };
+
+        Ok(token_outputs)
     }
 
     async fn insert_token_outputs(
@@ -231,7 +229,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         let selected_output_ids = selected_outputs
             .iter()
             .map(|so| so.output.id.clone())
-            .collect::<Vec<_>>();
+            .collect::<HashSet<_>>();
         token_outputs
             .outputs
             .retain(|to| !selected_output_ids.contains(&to.output.id));
@@ -284,6 +282,7 @@ mod tests {
 
     use super::*;
     use crate::token::{TokenMetadata, TokenOutput};
+    use bitcoin::secp256k1::PublicKey;
     use macros::async_test_all;
 
     #[cfg(feature = "browser-tests")]
@@ -381,7 +380,7 @@ mod tests {
 
         // Verify token1
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -390,7 +389,7 @@ mod tests {
 
         let pk1 = create_public_key(1);
         let stored_token1_by_pk = store
-            .get_token_outputs(None, Some(&pk1))
+            .get_token_outputs(GetTokenOutputsFilter::IssuerPublicKey(&pk1))
             .await
             .unwrap()
             .unwrap();
@@ -399,7 +398,7 @@ mod tests {
 
         // Verify token2
         let stored_token2 = store
-            .get_token_outputs(Some("token-2"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-2"))
             .await
             .unwrap()
             .unwrap();
@@ -408,7 +407,7 @@ mod tests {
 
         let pk2 = create_public_key(2);
         let stored_token2_by_pk = store
-            .get_token_outputs(None, Some(&pk2))
+            .get_token_outputs(GetTokenOutputsFilter::IssuerPublicKey(&pk2))
             .await
             .unwrap()
             .unwrap();
@@ -443,7 +442,7 @@ mod tests {
 
         // Verify token1 was updated
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -482,7 +481,7 @@ mod tests {
 
         // Verify token1 now has 5 outputs
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -495,7 +494,7 @@ mod tests {
 
         // Verify token2 now has 3 unique outputs
         let stored_token2 = store
-            .get_token_outputs(Some("token-2"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-2"))
             .await
             .unwrap()
             .unwrap();
@@ -526,7 +525,7 @@ mod tests {
 
         // Verify token1 now has 2 outputs left
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -555,7 +554,7 @@ mod tests {
 
         // Verify token1 now has 2 outputs left
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -567,7 +566,7 @@ mod tests {
 
         // Verify token1 has all 3 outputs back
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -596,7 +595,7 @@ mod tests {
 
         // Verify token1 now has 2 outputs left
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -608,7 +607,7 @@ mod tests {
 
         // Verify token1 still has 2 outputs left
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -637,7 +636,7 @@ mod tests {
 
         // Verify token1 now has 2 outputs left
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -661,7 +660,7 @@ mod tests {
 
         // Verify token1 has 3 outputs (400 added, 300 reserved)
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -690,7 +689,7 @@ mod tests {
 
         // Verify token1 now has 2 outputs left
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -711,7 +710,7 @@ mod tests {
 
         // Verify token1 has 3 outputs (400 added, 300 removed)
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -725,7 +724,7 @@ mod tests {
 
         // Verify token1 now has 1 output left
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -749,7 +748,7 @@ mod tests {
 
         // Verify token1 has 1 output (100 reserved, 200 removed, 400)
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -802,7 +801,7 @@ mod tests {
 
         // Verify only 2 outputs remain available (400, 500)
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -814,7 +813,7 @@ mod tests {
 
         // Verify 3 outputs are now available (200, 400, 500)
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -826,7 +825,7 @@ mod tests {
 
         // Verify still 3 outputs available (finalize doesn't return outputs)
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -838,7 +837,7 @@ mod tests {
 
         // Verify 4 outputs are now available (200, 300, 400, 500)
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -856,7 +855,7 @@ mod tests {
 
         // Get specific outputs to use as preferred
         let all_outputs = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -881,7 +880,7 @@ mod tests {
 
         // Verify 4 outputs remain (100, 200, 400, 500)
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -948,7 +947,7 @@ mod tests {
 
         // Verify 4 outputs remain
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -1000,7 +999,7 @@ mod tests {
 
         // Verify no outputs remain
         let stored_token1 = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -1017,7 +1016,7 @@ mod tests {
         assert!(result.is_ok());
 
         let all_outputs = store
-            .get_token_outputs(Some("token-1"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap()
             .unwrap();
@@ -1132,14 +1131,17 @@ mod tests {
 
         // Try to get non-existent token by identifier
         let result = store
-            .get_token_outputs(Some("token-999"), None)
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-999"))
             .await
             .unwrap();
         assert!(result.is_none());
 
         // Try to get non-existent token by public key
         let pk = create_public_key(99);
-        let result = store.get_token_outputs(None, Some(&pk)).await.unwrap();
+        let result = store
+            .get_token_outputs(GetTokenOutputsFilter::IssuerPublicKey(&pk))
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
 

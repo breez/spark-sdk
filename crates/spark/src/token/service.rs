@@ -1,6 +1,5 @@
 use std::{collections::HashMap, sync::Arc};
 
-use bitcoin::secp256k1::PublicKey;
 use tracing::warn;
 
 use crate::{
@@ -14,8 +13,9 @@ use crate::{
     },
     signer::Signer,
     token::{
-        TokenMetadata, TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs,
-        TokenOutputsReservation, TokenOutputsReservationId, error::TokenOutputServiceError,
+        GetTokenOutputsFilter, TokenMetadata, TokenOutputService, TokenOutputStore,
+        TokenOutputWithPrevOut, TokenOutputs, TokenOutputsReservation, TokenOutputsReservationId,
+        error::TokenOutputServiceError,
     },
 };
 
@@ -98,11 +98,10 @@ impl TokenOutputService for SynchronousTokenOutputService {
 
     async fn get_token_metadata(
         &self,
-        token_identifier: Option<&str>,
-        issuer_public_key: Option<&PublicKey>,
+        filter: GetTokenOutputsFilter<'_>,
     ) -> Result<Option<TokenMetadata>, TokenOutputServiceError> {
         self.state
-            .get_token_outputs(token_identifier, issuer_public_key)
+            .get_token_outputs(filter)
             .await
             .map(|to| to.map(|to| to.metadata))
     }

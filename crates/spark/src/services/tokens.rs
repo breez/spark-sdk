@@ -28,8 +28,8 @@ use crate::{
     },
     signer::Signer,
     token::{
-        TokenMetadata, TokenOutputService, TokenOutputWithPrevOut, TokenOutputs,
-        with_reserved_token_outputs,
+        GetTokenOutputsFilter, TokenMetadata, TokenOutputService, TokenOutputWithPrevOut,
+        TokenOutputs, with_reserved_token_outputs,
     },
     utils::{
         paging::{PagingFilter, PagingResult, pager},
@@ -98,7 +98,7 @@ impl TokenService {
         for token_id in token_identifiers {
             if let Some(metadata) = self
                 .token_output_service
-                .get_token_metadata(Some(token_id), None)
+                .get_token_metadata(GetTokenOutputsFilter::Identifier(token_id))
                 .await?
             {
                 cached_metadata.push(metadata);
@@ -110,7 +110,7 @@ impl TokenService {
         for issuer_pk in issuer_public_keys {
             if let Some(metadata) = self
                 .token_output_service
-                .get_token_metadata(None, Some(issuer_pk))
+                .get_token_metadata(GetTokenOutputsFilter::IssuerPublicKey(issuer_pk))
                 .await?
             {
                 cached_metadata.push(metadata);
@@ -274,6 +274,13 @@ impl TokenService {
         is_freezable: bool,
         max_supply: u128,
     ) -> Result<TokenTransaction, ServiceError> {
+        // Check if issuer token already exists and return a clear error
+        if self.get_issuer_token_metadata().await.is_ok() {
+            return Err(ServiceError::Generic(
+                "Issuer token already exists".to_string(),
+            ));
+        }
+
         validate_create_token_params(name, ticker, decimals)?;
 
         let partial_tx =

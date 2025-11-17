@@ -2,6 +2,8 @@ mod error;
 mod service;
 mod store;
 
+use std::collections::HashSet;
+
 pub use error::TokenOutputServiceError;
 pub use service::SynchronousTokenOutputService;
 pub use store::InMemoryTokenOutputStore;
@@ -9,6 +11,11 @@ pub use store::InMemoryTokenOutputStore;
 use bitcoin::secp256k1::PublicKey;
 use serde::{Deserialize, Serialize};
 use tracing::error;
+
+pub enum GetTokenOutputsFilter<'a> {
+    Identifier(&'a str),
+    IssuerPublicKey(&'a PublicKey),
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TokenMetadata {
@@ -48,7 +55,7 @@ pub struct TokenOutputs {
 }
 
 impl TokenOutputs {
-    pub fn ids(&self) -> Vec<String> {
+    pub fn ids(&self) -> HashSet<String> {
         self.outputs.iter().map(|o| o.output.id.clone()).collect()
     }
 }
@@ -108,8 +115,7 @@ pub trait TokenOutputStore: Send + Sync {
 
     async fn get_token_outputs(
         &self,
-        token_identifier: Option<&str>,
-        issuer_public_key: Option<&PublicKey>,
+        filter: GetTokenOutputsFilter<'_>,
     ) -> Result<Option<TokenOutputs>, TokenOutputServiceError>;
 
     async fn insert_token_outputs(
@@ -143,8 +149,7 @@ pub trait TokenOutputService: Send + Sync {
 
     async fn get_token_metadata(
         &self,
-        token_identifier: Option<&str>,
-        issuer_public_key: Option<&PublicKey>,
+        filter: GetTokenOutputsFilter<'_>,
     ) -> Result<Option<TokenMetadata>, TokenOutputServiceError>;
 
     async fn insert_token_outputs(
