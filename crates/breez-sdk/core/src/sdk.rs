@@ -179,12 +179,16 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn default_config(network: Network) -> Config {
+    let lnurl_domain = match network {
+        Network::Mainnet => Some("breez.tips".to_string()),
+        Network::Regtest => None,
+    };
     Config {
         api_key: None,
         network,
         sync_interval_secs: 60, // every 1 minute
         max_deposit_claim_fee: Some(Fee::Rate { sat_per_vbyte: 1 }),
-        lnurl_domain: Some("breez.tips".to_string()),
+        lnurl_domain,
         prefer_spark_over_lightning: false,
         external_input_parsers: None,
         use_default_external_input_parsers: true,

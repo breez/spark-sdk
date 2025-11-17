@@ -1,8 +1,13 @@
 pub mod faucet;
 pub mod fixtures;
 pub mod helpers;
+mod log;
+
+use std::sync::Arc;
 
 pub use faucet::RegtestFaucet;
+pub use fixtures::data_sync::{DataSyncFixture, DataSyncImageConfig};
+pub use fixtures::lnurl::{LnurlFixture, LnurlImageConfig};
 pub use fixtures::*;
 pub use helpers::*;
 
@@ -19,6 +24,10 @@ pub struct SdkInstance {
     pub events: mpsc::Receiver<SdkEvent>,
     #[allow(dead_code)]
     temp_dir: Option<TempDir>,
+    #[allow(dead_code)]
+    pub data_sync_fixture: Option<Arc<DataSyncFixture>>,
+    #[allow(dead_code)]
+    pub lnurl_fixture: Option<Arc<LnurlFixture>>,
 }
 
 /// Persistent SDK fixture that allows reinitialization with the same configuration
@@ -52,6 +61,7 @@ impl ReinitializableSdkInstance {
             self.seed,
             self.config.clone(),
             None,
+            true,
         )
         .await
     }

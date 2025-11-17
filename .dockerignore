@@ -426,6 +426,26 @@ packages/react-native/src/generated/**/*
 packages/react-native/nitrogen/
 packages/react-native/nitrogen/**/*
 
+# Additional Docker-specific exclusions for better caching
+# Test artifacts that may be created during testing
+*.tmp
+*.temp
+.cache/
+__pycache__/
+*.pyc
+
+# Temporary directories created by tests
+temp*/
+tmp*/
+test-data/
+
+# Log files that may be created during builds/tests
+*.log
+
+# Cargo registry and build artifacts not already covered
+.cargo/registry/
+.cargo/git/
+
 # From: packages/wasm/examples/web/.gitignore
 # Logs
 packages/wasm/examples/web/logs

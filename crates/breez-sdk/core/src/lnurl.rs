@@ -93,6 +93,17 @@ impl ReqwestLnurlServerClient {
             wallet,
         })
     }
+
+    /// Construct the base URL for the lnurl server.
+    /// If the domain already contains a protocol (e.g., <http://localhost:8080>),
+    /// use it as-is. Otherwise, prepend "https://" for production domains.
+    fn base_url(&self) -> String {
+        if self.domain.contains("://") {
+            self.domain.clone()
+        } else {
+            format!("https://{}", self.domain)
+        }
+    }
 }
 
 #[macros::async_trait]
@@ -102,7 +113,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
     }
 
     async fn check_username_available(&self, username: &str) -> Result<bool, LnurlServerError> {
-        let url = format!("https://{}/lnurlpay/available/{}", self.domain, username);
+        let url = format!("{}/lnurlpay/available/{}", self.base_url(), username);
         let result = self.client.get(url).send().await;
         let response = match result {
             Ok(response) => response,
@@ -149,7 +160,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
             .to_lower_hex_string();
 
         let request = RecoverLnurlPayRequest { signature };
-        let url = format!("https://{}/lnurlpay/{}/recover", self.domain, pubkey);
+        let url = format!("{}/lnurlpay/{}/recover", self.base_url(), pubkey);
         let result = self.client.post(url).json(&request).send().await;
         let response = match result {
             Ok(response) => response,
@@ -203,7 +214,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
             signature,
         };
 
-        let url = format!("https://{}/lnurlpay/{}", self.domain, pubkey);
+        let url = format!("{}/lnurlpay/{}", self.base_url(), pubkey);
         let result = self.client.post(url).json(&request).send().await;
         let response = match result {
             Ok(response) => response,
@@ -255,7 +266,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
             signature,
         };
 
-        let url = format!("https://{}/lnurlpay/{}", self.domain, pubkey);
+        let url = format!("{}/lnurlpay/{}", self.base_url(), pubkey);
         let result = self.client.delete(url).json(&request).send().await;
         let response = match result {
             Ok(response) => response,

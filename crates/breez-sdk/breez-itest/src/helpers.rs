@@ -59,6 +59,8 @@ pub async fn build_sdk_with_dir(
         sdk,
         events: rx,
         temp_dir,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
     })
 }
 
@@ -84,21 +86,20 @@ pub async fn build_sdk_with_custom_config(
     seed_bytes: [u8; 32],
     mut config: Config,
     temp_dir: Option<tempdir::TempDir>,
+    apply_sensible_test_defaults: bool,
 ) -> Result<SdkInstance> {
     // Apply sensible test defaults if not already configured
     if config.api_key.is_some() && matches!(config.network, Network::Regtest) {
         // In regtest we don't need an API key; drop it if present to avoid network calls
         config.api_key = None;
     }
-    if config.lnurl_domain.is_some() {
-        // Avoid lnurl server interactions in tests unless explicitly required
-        config.lnurl_domain = None;
-    }
     // Speed up tests and prefer spark routing
     config.prefer_spark_over_lightning = true;
     config.sync_interval_secs = 5;
-    // Disable real-time sync for tests
-    config.real_time_sync_server_url = None;
+    if apply_sensible_test_defaults {
+        config.real_time_sync_server_url = None;
+        config.lnurl_domain = None;
+    }
 
     let seed = Seed::Entropy(seed_bytes.to_vec());
 
@@ -121,6 +122,8 @@ pub async fn build_sdk_with_custom_config(
         sdk,
         events: rx,
         temp_dir,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
     })
 }
 
@@ -144,7 +147,7 @@ pub async fn wait_for_balance(
     timeout_secs: u64,
 ) -> Result<u64> {
     let start = std::time::Instant::now();
-    let poll_interval = std::time::Duration::from_millis(100);
+    let poll_interval = std::time::Duration::from_secs(1);
 
     loop {
         // Check current balance
@@ -209,7 +212,7 @@ pub async fn ensure_funded(sdk_instance: &mut SdkInstance, min_balance: u64) -> 
     if info.balance_sats < min_balance {
         let needed = min_balance - info.balance_sats;
         info!("Funding wallet via faucet: need {} sats", needed);
-        receive_and_fund(sdk_instance, needed.clamp(10000, 50000)).await?;
+        receive_and_fund(sdk_instance, needed.clamp(10000, 50000), true).await?;
     }
     Ok(())
 }
@@ -221,12 +224,14 @@ pub async fn ensure_funded(sdk_instance: &mut SdkInstance, min_balance: u64) -> 
 /// # Arguments
 /// * `sdk_instance` - The SdkInstance with SDK and event channel
 /// * `amount_sats` - Amount to request from faucet
+/// * `must_be_claimer` - Whether the SDK instance must be the claimer
 ///
 /// # Returns
 /// Tuple of (deposit_address, funding_txid)
 pub async fn receive_and_fund(
     sdk_instance: &mut SdkInstance,
     amount_sats: u64,
+    must_be_claimer: bool,
 ) -> Result<(String, String)> {
     let initial_balance = sdk_instance
         .sdk
@@ -259,9 +264,12 @@ pub async fn receive_and_fund(
         txid
     );
 
-    // Wait for the ClaimedDeposits event
-    wait_for_claimed_event(&mut sdk_instance.events, 180).await?;
-    wait_for_balance(&sdk_instance.sdk, Some(initial_balance + 1), None, 20).await?;
+    if must_be_claimer {
+        wait_for_claimed_event(&mut sdk_instance.events, 180).await?;
+        wait_for_balance(&sdk_instance.sdk, Some(initial_balance + 1), None, 20).await?;
+    } else {
+        wait_for_balance(&sdk_instance.sdk, Some(initial_balance + 1), None, 200).await?;
+    }
     sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     Ok((deposit_address, txid))
@@ -277,6 +285,8 @@ pub enum EventResult {
     PaymentPending(Box<Payment>),
     /// Synced event occurred
     Synced,
+    /// Data synced event occurred
+    DataSynced(bool),
 }
 
 /// Generic event waiter with timeout
@@ -455,6 +465,35 @@ pub async fn wait_for_synced_event(
 ) -> Result<()> {
     wait_for_event(event_rx, timeout_secs, "Synced", |event| match event {
         SdkEvent::Synced => Ok(Some(EventResult::Synced)),
+        other => {
+            info!("Received SDK event: {:?}", other);
+            Ok(None)
+        }
+    })
+    .await
+    .map(|_| ())
+}
+
+pub async fn wait_for_data_synced_event(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    timeout_secs: u64,
+    must_pull_new_records: bool,
+) -> Result<()> {
+    wait_for_event(event_rx, timeout_secs, "DataSynced", |event| match event {
+        SdkEvent::DataSynced {
+            did_pull_new_records,
+        } => {
+            if must_pull_new_records {
+                if did_pull_new_records {
+                    Ok(Some(EventResult::DataSynced(did_pull_new_records)))
+                } else {
+                    info!("Received DataSynced but did not pull new records");
+                    Ok(None)
+                }
+            } else {
+                Ok(Some(EventResult::DataSynced(did_pull_new_records)))
+            }
+        }
         other => {
             info!("Received SDK event: {:?}", other);
             Ok(None)
