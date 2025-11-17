@@ -73,5 +73,6 @@ uuid = { workspace = true, features = ["js"] }
 wasm-bindgen-test.workspace = true
 
 [build-dependencies]
+built.workspace = true
 tonic.workspace = true
 tonic-build.workspace = true

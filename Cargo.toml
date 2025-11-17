@@ -51,6 +51,7 @@ bip39 = "2.2.0"
 bitcoin = { version = "0.32.6", features = ["serde"] }
 breez-sdk-common = { path = "crates/breez-sdk/common", default-features = false }
 breez-sdk-spark = { path = "crates/breez-sdk/core" }
+built = { version = "0.8.0", features = ["git2"] }
 bytes = "1.10.1"
 cargo_metadata = "0.18"
 cbc = "0.1.2"

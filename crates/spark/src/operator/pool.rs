@@ -62,6 +62,15 @@ impl OperatorPoolConfig {
     pub fn get_operator_by_id(&self, id: usize) -> Option<&OperatorConfig> {
         self.operators.get(id)
     }
+
+    /// Sets the user agent for all operators in the pool.
+    #[must_use]
+    pub fn with_user_agent(mut self, user_agent: Option<String>) -> Self {
+        for operator in &mut self.operators {
+            operator.user_agent = user_agent.clone();
+        }
+        self
+    }
 }
 
 #[serde_as]
@@ -73,6 +82,7 @@ pub struct OperatorConfig {
     pub ca_cert: Option<Vec<u8>>,
     #[serde_as(as = "DisplayFromStr")]
     pub identity_public_key: PublicKey,
+    pub user_agent: Option<String>,
 }
 
 impl OperatorConfig {}

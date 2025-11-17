@@ -67,6 +67,7 @@ impl TestFixtures {
                 id: operator.index,
                 identifier: operator.identifier,
                 identity_public_key: operator.public_key,
+                user_agent: None,
             });
         }
 
@@ -79,6 +80,7 @@ impl TestFixtures {
                 base_url: "".to_string(),
                 schema_endpoint: None,
                 identity_public_key: PublicKey::from_slice(&[2; 33])?,
+                user_agent: Some("spark-wallet-itest/0.1.0".to_string()),
             },
             tokens_config: SparkWalletConfig::default_tokens_config(),
         })

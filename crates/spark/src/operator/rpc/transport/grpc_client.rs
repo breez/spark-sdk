@@ -3,7 +3,7 @@ use std::time::Duration;
 use tonic::transport::ClientTlsConfig;
 
 use super::retry_channel::RetryChannel;
-use crate::operator::rpc::OperatorRpcError;
+use crate::{default_user_agent, operator::rpc::OperatorRpcError};
 pub type Transport = RetryChannel<tonic::transport::Channel>;
 
 #[derive(Clone)]
@@ -12,9 +12,15 @@ pub struct GrpcClient {
 }
 
 impl GrpcClient {
-    pub fn new(url: String, ca_cert: Option<Vec<u8>>) -> Result<Self, OperatorRpcError> {
+    pub fn new(
+        url: String,
+        ca_cert: Option<Vec<u8>>,
+        user_agent: Option<String>,
+    ) -> Result<Self, OperatorRpcError> {
         Ok(Self {
-            inner: RetryChannel::new(Self::create_endpoint(&url, ca_cert)?.connect_lazy()),
+            inner: RetryChannel::new(
+                Self::create_endpoint(&url, ca_cert, user_agent)?.connect_lazy(),
+            ),
         })
     }
 
@@ -25,6 +31,7 @@ impl GrpcClient {
     fn create_endpoint(
         server_url: &str,
         ca_cert: Option<Vec<u8>>,
+        user_agent: Option<String>,
     ) -> Result<tonic::transport::Endpoint, OperatorRpcError> {
         let client_tls_config = match ca_cert {
             Some(ca_cert) => ClientTlsConfig::new()
@@ -37,7 +44,8 @@ impl GrpcClient {
                 .http2_keep_alive_interval(Duration::new(5, 0))
                 .tcp_keepalive(Some(Duration::from_secs(5)))
                 .keep_alive_timeout(Duration::from_secs(5))
-                .keep_alive_while_idle(true),
+                .keep_alive_while_idle(true)
+                .user_agent(user_agent.unwrap_or_else(default_user_agent))?,
         )
     }
 }

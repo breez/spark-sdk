@@ -10,7 +10,7 @@ use breez_sdk_common::{
 };
 use spark_wallet::{DefaultSigner, Signer};
 use tokio::sync::watch;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::{
     Credentials, EventEmitter, FiatService, FiatServiceWrapper, KeySetType, Network, RestClient,
@@ -289,8 +289,18 @@ impl SdkBuilder {
                 CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?,
             ),
         };
-        let spark_wallet_config =
+        let user_agent = format!(
+            "{}/{}",
+            crate::built_info::PKG_NAME,
+            crate::built_info::GIT_VERSION.unwrap_or(crate::built_info::PKG_VERSION),
+        );
+        info!("Building SparkWallet with user agent: {}", user_agent);
+        let mut spark_wallet_config =
             spark_wallet::SparkWalletConfig::default_config(self.config.network.into());
+        spark_wallet_config.operator_pool = spark_wallet_config
+            .operator_pool
+            .with_user_agent(Some(user_agent.clone()));
+        spark_wallet_config.service_provider_config.user_agent = Some(user_agent);
 
         let mut wallet_builder =
             spark_wallet::WalletBuilder::new(spark_wallet_config, Arc::clone(&signer));
