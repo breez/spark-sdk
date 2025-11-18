@@ -11,6 +11,7 @@ const CONFIG = {
   mnemonic: import.meta.env.VITE_MNEMONIC || "",
   network: "regtest",
   chainServiceUrl: "https://regtest-mempool.us-west-2.sparkinfra.net/api",
+  chainServiceApiType: "mempoolSpace",
   chainServiceUsername: import.meta.env.VITE_CHAIN_SERVICE_USERNAME || "",
   chainServicePassword: import.meta.env.VITE_CHAIN_SERVICE_PASSWORD || "",
   apiKey: import.meta.env.VITE_BREEZ_API_KEY || "",
@@ -216,13 +217,18 @@ async function initializeSdk() {
     // Add chain service if configured
     if (
       CONFIG.chainServiceUrl &&
+      CONFIG.chainServiceApiType &&
       CONFIG.chainServiceUsername &&
       CONFIG.chainServicePassword
     ) {
-      sdkBuilder = sdkBuilder.withRestChainService(CONFIG.chainServiceUrl, {
-        username: CONFIG.chainServiceUsername,
-        password: CONFIG.chainServicePassword,
-      });
+      sdkBuilder = sdkBuilder.withRestChainService(
+        CONFIG.chainServiceUrl,
+        CONFIG.chainServiceApiType,
+        {
+          username: CONFIG.chainServiceUsername,
+          password: CONFIG.chainServicePassword,
+        }
+      );
     }
 
     showLoading("Building SDK...");
