@@ -9,10 +9,12 @@ use axum::{
 };
 use base64::{Engine, prelude::BASE64_STANDARD};
 use clap::Parser;
+use domain_validator::ListDomainValidator;
 use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
 };
+use fly_api::FlyDomainValidator;
 use serde::{Deserialize, Serialize};
 use spark::operator::rpc::DefaultConnectionManager;
 use spark::session_manager::InMemorySessionManager;
@@ -98,6 +100,16 @@ struct Args {
     /// If set, the server will use this certificate to validate api keys.
     #[arg(long)]
     pub ca_cert: Option<String>,
+
+    /// Fly.io app name for certificate-based domain validation.
+    /// If set along with --fly-api-token, enables Fly.io certificate validation.
+    #[arg(long)]
+    pub fly_app_name: Option<String>,
+
+    /// Fly.io API token for certificate-based domain validation.
+    /// If set along with --fly-app-name, enables Fly.io certificate validation.
+    #[arg(long)]
+    pub fly_api_token: Option<String>,
 }
 
 #[tokio::main]
@@ -193,12 +205,17 @@ where
         )
         .await?,
     );
-
-    let domains = args
-        .domains
-        .split(',')
-        .map(|d| d.trim().to_lowercase())
-        .collect();
+    let domain_validator: Arc<dyn domain_validator::DomainValidator> =
+        if let (Some(app_name), Some(api_token)) = (args.fly_app_name, args.fly_api_token) {
+            Arc::new(FlyDomainValidator::new(app_name, api_token))
+        } else {
+            let domains = args
+                .domains
+                .split(',')
+                .map(|d| d.trim().to_lowercase())
+                .collect();
+            Arc::new(ListDomainValidator::new(domains))
+        };
 
     let ca_cert = args
         .ca_cert
@@ -252,7 +269,7 @@ where
         min_sendable: args.min_sendable,
         max_sendable: args.max_sendable,
         include_spark_address: args.include_spark_address,
-        domains,
+        domain_validator: domain_validator,
         nostr_keys,
         ca_cert,
         connection_manager,
