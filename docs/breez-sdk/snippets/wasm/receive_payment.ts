@@ -70,27 +70,3 @@ const exampleReceiveSparkInvoice = async (sdk: BreezSdk) => {
   console.log(`Fees: ${receiveFeeSats} sats`)
   // ANCHOR_END: receive-payment-spark-invoice
 }
-
-const exampleWaitForPayment = async (sdk: BreezSdk) => {
-  // ANCHOR: wait-for-payment
-  // Waiting for a payment given its payment request (Bolt11 or Spark invoice)
-  const paymentRequest = '<Bolt11 or Spark invoice>'
-
-  // Wait for a payment to be completed using a payment request
-  const paymentRequestResponse = await sdk.waitForPayment({
-    identifier: paymentRequest as { type: 'paymentRequest' } & string
-  })
-
-  console.log(`Payment received with ID: ${paymentRequestResponse.payment.id}`)
-
-  // Waiting for a payment given its payment id
-  const paymentId = '<payment id>'
-
-  // Wait for a payment to be completed using a payment id
-  const paymentIdResponse = await sdk.waitForPayment({
-    identifier: paymentId as { type: 'paymentId' } & string
-  })
-
-  console.log(`Payment received with ID: ${paymentIdResponse.payment.id}`)
-  // ANCHOR_END: wait-for-payment
-}

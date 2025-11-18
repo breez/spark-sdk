@@ -83,32 +83,3 @@ async fn receive_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR_END: receive-payment-spark-invoice
     Ok(())
 }
-
-async fn wait_for_payment_example(sdk: &BreezSdk) -> Result<()> {
-    // ANCHOR: wait-for-payment
-    // Waiting for a payment given its payment request (Bolt11 or Spark invoice)
-    let payment_request = "<Bolt11 or Spark invoice>".to_string();
-
-    // Wait for a payment to be completed using a payment request
-    let payment_request_response = sdk
-        .wait_for_payment(WaitForPaymentRequest {
-            identifier: WaitForPaymentIdentifier::PaymentRequest(payment_request),
-        })
-        .await?;
-
-    info!("Payment received with ID: {}", payment_request_response.payment.id);
-
-    // Waiting for a payment given its payment id
-    let payment_id = "<payment id>".to_string();
-
-    // Wait for a payment to be completed using a payment id
-    let payment_id_response = sdk
-        .wait_for_payment(WaitForPaymentRequest {
-            identifier: WaitForPaymentIdentifier::PaymentId(payment_id),
-        })
-        .await?;
-
-    info!("Payment received with ID: {}", payment_id_response.payment.id);
-    // ANCHOR_END: wait-for-payment
-    Ok(())
-}

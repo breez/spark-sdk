@@ -162,3 +162,4 @@ async fn send_payment_spark(
     // ANCHOR_END: send-payment-spark
     Ok(())
 }
+

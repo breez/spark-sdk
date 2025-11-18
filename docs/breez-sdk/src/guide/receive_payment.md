@@ -45,14 +45,6 @@ Spark invoices are single-use and may impose restrictions on the payment, such a
 
 {{#tabs receive_payment:receive-payment-spark-invoice}}
 
-## Waiting for a payment
-
-It is generally recommended to use [event flows] to react to payment completion. However, there is a convenience function to wait for payment completion.
-
-{{#tabs receive_payment:wait-for-payment}}
-
-[event flows]: #event-flows
-
 ## Event Flows
 
 Once a receive payment is initiated, you can follow and react to the different payment events using the guide below for each payment method. See [Listening to events](/guide/events.md) for how to subscribe to events.

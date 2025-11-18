@@ -92,36 +92,4 @@ class ReceivePayment {
         }
         // ANCHOR_END: receive-payment-spark-invoice
     }
-
-    suspend fun waitForPayment(sdk: BreezSdk) {
-        // ANCHOR: wait-for-payment
-        try {
-            // Waiting for a payment given its payment request (Bolt11 or Spark invoice)
-            val paymentRequest = "<Bolt11 or Spark invoice>"
-
-            // Wait for a payment to be completed using a payment request
-            val paymentRequestResponse = sdk.waitForPayment(
-                WaitForPaymentRequest(
-                    WaitForPaymentIdentifier.PaymentRequest(paymentRequest)
-                )
-            )
-
-            // Log.v("Breez", "Payment received with ID: ${paymentRequestResponse.payment.id}")
-
-            // Waiting for a payment given its payment id
-            val paymentId = "<payment id>"
-
-            // Wait for a payment to be completed using a payment id
-            val paymentIdResponse = sdk.waitForPayment(
-                WaitForPaymentRequest(
-                    WaitForPaymentIdentifier.PaymentId(paymentId)
-                )
-            )
-
-            // Log.v("Breez", "Payment received with ID: ${paymentIdResponse.payment.id}")
-        } catch (e: Exception) {
-            // handle error
-        }
-        // ANCHOR_END: wait-for-payment
-    }
 }

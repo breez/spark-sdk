@@ -47,7 +47,6 @@ use crate::{
     PrepareLnurlPayRequest, PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
     RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest,
     SignMessageResponse, UpdateUserSettingsRequest, UserSettings, WaitForPaymentIdentifier,
-    WaitForPaymentRequest, WaitForPaymentResponse,
     chain::RecommendedFees,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
@@ -981,20 +980,13 @@ impl BreezSdk {
         };
 
         // Wait for the payment to be completed
-        let fut = self.wait_for_payment(WaitForPaymentRequest {
-            identifier: WaitForPaymentIdentifier::PaymentRequest(payment_request.clone()),
-        });
-
-        let payment = match timeout(Duration::from_secs(completion_timeout_secs.into()), fut).await
-        {
-            // Payment completed successfully
-            Ok(Ok(res)) => Some(res.payment),
-            // Error occurred while waiting for payment
-            Ok(Err(e)) => return Err(SdkError::Generic(format!("Error waiting for payment: {e}"))),
-            // Timeout occurred
-            Err(_) => None,
-        };
-
+        let payment = self
+            .wait_for_payment(
+                WaitForPaymentIdentifier::PaymentRequest(payment_request.clone()),
+                completion_timeout_secs,
+            )
+            .await
+            .ok();
         Ok(LnurlWithdrawResponse {
             payment_request,
             payment,
@@ -1354,47 +1346,6 @@ impl BreezSdk {
         Ok(self.chain_service.recommended_fees().await?)
     }
 
-    pub async fn wait_for_payment(
-        &self,
-        request: WaitForPaymentRequest,
-    ) -> Result<WaitForPaymentResponse, SdkError> {
-        let (tx, mut rx) = mpsc::channel(20);
-        let id = self
-            .add_event_listener(Box::new(InternalEventListener::new(tx)))
-            .await;
-
-        // First check if we already have the payment in storage
-        if let WaitForPaymentIdentifier::PaymentRequest(payment_request) = &request.identifier
-            && let Some(payment) = self
-                .storage
-                .get_payment_by_invoice(payment_request.clone())
-                .await?
-        {
-            self.remove_event_listener(&id).await;
-            return Ok(WaitForPaymentResponse { payment });
-        }
-
-        // Otherwise, we wait for a matching payment event
-        let payment_result = loop {
-            let Some(event) = rx.recv().await else {
-                break Err(SdkError::Generic("Event channel closed".to_string()));
-            };
-
-            let SdkEvent::PaymentSucceeded { payment } = event else {
-                continue;
-            };
-
-            if is_payment_match(&payment, &request) {
-                break Ok(payment);
-            }
-        };
-
-        self.remove_event_listener(&id).await;
-        Ok(WaitForPaymentResponse {
-            payment: payment_result?,
-        })
-    }
-
     /// Returns the metadata for the given token identifiers.
     ///
     /// Results are not guaranteed to be in the same order as the input token identifiers.    
@@ -1731,16 +1682,13 @@ impl BreezSdk {
             return Ok(SendPaymentResponse { payment });
         }
 
-        let fut = self.wait_for_payment(WaitForPaymentRequest {
-            identifier: WaitForPaymentIdentifier::PaymentId(payment.id.clone()),
-        });
-        let payment = match timeout(Duration::from_secs(completion_timeout_secs.into()), fut).await
-        {
-            Ok(res) => res?.payment,
-            // On timeout return the pending payment.
-            Err(_) => payment,
-        };
-
+        let payment = self
+            .wait_for_payment(
+                WaitForPaymentIdentifier::PaymentId(payment.id.clone()),
+                completion_timeout_secs,
+            )
+            .await
+            .unwrap_or(payment);
         Ok(SendPaymentResponse { payment })
     }
 
@@ -1777,6 +1725,58 @@ impl BreezSdk {
         Ok(SendPaymentResponse {
             payment: response.try_into()?,
         })
+    }
+
+    async fn wait_for_payment(
+        &self,
+        identifier: WaitForPaymentIdentifier,
+        completion_timeout_secs: u32,
+    ) -> Result<Payment, SdkError> {
+        let (tx, mut rx) = mpsc::channel(20);
+        let id = self
+            .add_event_listener(Box::new(InternalEventListener::new(tx)))
+            .await;
+
+        // First check if we already have the completed payment in storage
+        let payment = match &identifier {
+            WaitForPaymentIdentifier::PaymentId(payment_id) => self
+                .storage
+                .get_payment_by_id(payment_id.clone())
+                .await
+                .ok(),
+            WaitForPaymentIdentifier::PaymentRequest(payment_request) => {
+                self.storage
+                    .get_payment_by_invoice(payment_request.clone())
+                    .await?
+            }
+        };
+        if let Some(payment) = payment
+            && payment.status == PaymentStatus::Completed
+        {
+            self.remove_event_listener(&id).await;
+            return Ok(payment);
+        }
+
+        let timeout_res = timeout(Duration::from_secs(completion_timeout_secs.into()), async {
+            loop {
+                let Some(event) = rx.recv().await else {
+                    return Err(SdkError::Generic("Event channel closed".to_string()));
+                };
+
+                let SdkEvent::PaymentSucceeded { payment } = event else {
+                    continue;
+                };
+
+                if is_payment_match(&payment, &identifier) {
+                    return Ok(payment);
+                }
+            }
+        })
+        .await
+        .map_err(|_| SdkError::Generic("Timeout waiting for payment".to_string()));
+
+        self.remove_event_listener(&id).await;
+        timeout_res?
     }
 
     // Pools the lightning send payment untill it is in completed state.
@@ -1852,8 +1852,8 @@ impl BreezSdk {
     }
 }
 
-fn is_payment_match(payment: &Payment, request: &WaitForPaymentRequest) -> bool {
-    match &request.identifier {
+fn is_payment_match(payment: &Payment, identifier: &WaitForPaymentIdentifier) -> bool {
+    match identifier {
         WaitForPaymentIdentifier::PaymentId(payment_id) => payment.id == *payment_id,
         WaitForPaymentIdentifier::PaymentRequest(payment_request) => {
             if let Some(details) = &payment.details {

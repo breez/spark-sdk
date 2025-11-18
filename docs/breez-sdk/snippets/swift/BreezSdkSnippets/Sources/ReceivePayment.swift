@@ -89,31 +89,3 @@ func receiveSparkInvoice(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
 
     return response
 }
-
-func waitForPayment(sdk: BreezSdk) async throws {
-    // ANCHOR: wait-for-payment
-    // Waiting for a payment given its payment request (Bolt11 or Spark invoice)
-    let paymentRequest = "<Bolt11 or Spark invoice>"
-
-    // Wait for a payment to be completed using a payment request
-    let paymentRequestResponse = try await sdk.waitForPayment(
-        request: WaitForPaymentRequest(
-            identifier: WaitForPaymentIdentifier.paymentRequest(paymentRequest)
-        )
-    )
-
-    print("Payment received with ID: \(paymentRequestResponse.payment.id)")
-
-    // Waiting for a payment given its payment id
-    let paymentId = "<payment id>"
-
-    // Wait for a payment to be completed using a payment id
-    let paymentIdResponse = try await sdk.waitForPayment(
-        request: WaitForPaymentRequest(
-            identifier: WaitForPaymentIdentifier.paymentId(paymentId)
-        )
-    )
-
-    print("Payment received with ID: \(paymentIdResponse.payment.id)")
-    // ANCHOR_END: wait-for-payment
-}

@@ -790,22 +790,6 @@ pub struct _Symbol {
     pub position: Option<u32>,
 }
 
-#[frb(mirror(WaitForPaymentRequest))]
-pub struct _WaitForPaymentRequest {
-    pub identifier: WaitForPaymentIdentifier,
-}
-
-#[frb(mirror(WaitForPaymentIdentifier))]
-pub enum _WaitForPaymentIdentifier {
-    PaymentId(String),
-    PaymentRequest(String),
-}
-
-#[frb(mirror(WaitForPaymentResponse))]
-pub struct _WaitForPaymentResponse {
-    pub payment: Payment,
-}
-
 #[frb(mirror(GetTokensMetadataRequest))]
 pub struct _GetTokensMetadataRequest {
     pub token_identifiers: Vec<String>,
