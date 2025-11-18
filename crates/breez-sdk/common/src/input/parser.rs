@@ -207,7 +207,11 @@ where
             return None;
         }
 
-        let scheme = if has_extension(&domain, "onion") {
+        // Use http:// for Tor or local domains (latter being commonly used for testing)
+        let scheme = if has_extension(&domain, "onion")
+            || domain.starts_with("127.0.0.1")
+            || domain.starts_with("localhost")
+        {
             "http://"
         } else {
             "https://"

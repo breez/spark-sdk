@@ -186,7 +186,7 @@ async fn test_02_deposit_claim(#[future] alice_sdk: Result<SdkInstance>) -> Resu
 
     // Fund with a small amount to test claim (10,000 sats)
     info!("Funding additional 10,000 sats to test auto-claim...");
-    let (deposit_address, txid) = receive_and_fund(&mut alice, 10_000).await?;
+    let (deposit_address, txid) = receive_and_fund(&mut alice, 10_000, true).await?;
 
     info!(
         "Funded deposit address: {}, txid: {}",

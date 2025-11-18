@@ -1,3 +1,7 @@
+pub mod data_sync;
+pub mod docker;
+pub mod lnurl;
+
 use anyhow::Result;
 use breez_sdk_spark::{Fee, Network, default_config};
 use rand::RngCore;
@@ -44,7 +48,7 @@ pub async fn bob_no_fee_sdk() -> Result<SdkInstance> {
 
     let mut cfg = default_config(Network::Regtest);
     cfg.max_deposit_claim_fee = None;
-    build_sdk_with_custom_config(path, seed, cfg, Some(dir)).await
+    build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
 }
 
 #[fixture]
@@ -56,5 +60,5 @@ pub async fn bob_strict_fee_sdk() -> Result<SdkInstance> {
 
     let mut cfg = default_config(Network::Regtest);
     cfg.max_deposit_claim_fee = Some(Fee::Fixed { amount: 0 });
-    build_sdk_with_custom_config(path, seed, cfg, Some(dir)).await
+    build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
 }
