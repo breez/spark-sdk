@@ -1,4 +1,17 @@
-import type { Payment, TokenMetadata, BreezSdk, TokenIssuer } from '@breeztech/breez-sdk-spark'
+import {
+  type Payment,
+  type TokenMetadata,
+  type BreezSdk,
+  type TokenIssuer,
+  type Seed,
+  defaultConfig,
+  SdkBuilder,
+  KeySetType
+} from '@breeztech/breez-sdk-spark'
+import { Network } from 'node:inspector'
+
+// Init stub
+const init = async () => {}
 
 const getTokenIssuer = (sdk: BreezSdk) => {
   // ANCHOR: get-token-issuer
@@ -19,6 +32,26 @@ const createToken = async (tokenIssuer: TokenIssuer): Promise<TokenMetadata> => 
   console.debug(`Token identifier: ${tokenMetadata.identifier}`)
   // ANCHOR_END: create-token
   return tokenMetadata
+}
+
+const createTokenWithCustomAccountNumber = async () => {
+  // ANCHOR: custom-account-number
+  await init()
+
+  const accountNumber = 21
+
+  const mnemonic = '<mnemonic words>'
+  const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
+  const config = defaultConfig('mainnet')
+  config.apiKey = '<breez api key>'
+  let builder = SdkBuilder.new(config, seed)
+  builder = await builder.withDefaultStorage('./.data')
+
+  // Set the account number for the SDK
+  builder = builder.withKeySet('default', false, accountNumber)
+
+  const sdk = await builder.build()
+  // ANCHOR_END: custom-account-number
 }
 
 const mintToken = async (tokenIssuer: TokenIssuer): Promise<Payment> => {

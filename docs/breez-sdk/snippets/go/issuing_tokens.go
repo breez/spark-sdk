@@ -32,6 +32,29 @@ func CreateToken(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.Tok
 	return &tokenMetadata, nil
 }
 
+func CreateTokenWithCustomAccountNumber() (*breez_sdk_spark.BreezSdk, error) {
+	// ANCHOR: custom-account-number
+	accountNumber := uint32(21)
+
+	mnemonic := "<mnemonic words>"
+	var seed breez_sdk_spark.Seed = breez_sdk_spark.SeedMnemonic{
+		Mnemonic:   mnemonic,
+		Passphrase: nil,
+	}
+	apiKey := "<breez api key>"
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	config.ApiKey = &apiKey
+	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
+	builder.WithDefaultStorage("./.data")
+
+	// Set the account number for the SDK
+	builder.WithKeySet(breez_sdk_spark.KeySetTypeDefault, false, &accountNumber)
+
+	sdk, err := builder.Build()
+	// ANCHOR_END: custom-account-number
+	return sdk, err
+}
+
 func MintToken(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: mint-token
 	request := breez_sdk_spark.MintIssuerTokenRequest{

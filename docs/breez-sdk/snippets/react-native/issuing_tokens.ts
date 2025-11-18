@@ -1,9 +1,15 @@
-import type {
-  BreezSdk,
-  TokenIssuer,
-  TokenMetadata,
-  Payment
+import {
+  defaultConfig,
+  type BreezSdk,
+  Network,
+  Seed,
+  type TokenIssuer,
+  type TokenMetadata,
+  type Payment,
+  KeySetType,
+  SdkBuilder
 } from '@breeztech/breez-sdk-spark-react-native'
+import RNFS from 'react-native-fs'
 
 const getTokenIssuer = (sdk: BreezSdk) => {
   // ANCHOR: get-token-issuer
@@ -23,6 +29,24 @@ const createToken = async (tokenIssuer: TokenIssuer): Promise<TokenMetadata> => 
   console.debug(`Token identifier: ${tokenMetadata.identifier}`)
   // ANCHOR_END: create-token
   return tokenMetadata
+}
+
+const createTokenWithCustomAccountNumber = async () => {
+  // ANCHOR: custom-account-number
+  const accountNumber = 21
+
+  const mnemonic = '<mnemonics words>'
+  const seed = new Seed.Mnemonic({ mnemonic, passphrase: undefined })
+  const config = defaultConfig(Network.Mainnet)
+  config.apiKey = '<breez api key>'
+  const builder = new SdkBuilder(config, seed)
+  await builder.withDefaultStorage(`${RNFS.DocumentDirectoryPath}/data`)
+
+  // Set the account number for the SDK
+  await builder.withKeySet(KeySetType.Default, false, accountNumber)
+
+  const sdk = await builder.build()
+  // ANCHOR_END: custom-account-number
 }
 
 const mintToken = async (tokenIssuer: TokenIssuer): Promise<Payment> => {

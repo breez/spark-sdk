@@ -1,4 +1,5 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'helper.dart';
 
 TokenIssuer getTokenIssuer(BreezSdk sdk) {
   // ANCHOR: get-token-issuer
@@ -21,6 +22,28 @@ Future<TokenMetadata> createToken(TokenIssuer tokenIssuer) async {
   print("Token identifier: ${tokenMetadata.identifier}");
   // ANCHOR_END: create-token
   return tokenMetadata;
+}
+
+Future<BreezSdk> createTokenWithCustomAccountNumber() async {
+  // ANCHOR: custom-account-number
+  var accountNumber = 21;
+
+  String mnemonic = "<mnemonic words>";
+  final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
+  final config = defaultConfig(network: Network.mainnet)
+      .copyWith(apiKey: "<breez api key>");
+  final builder = SdkBuilder(config: config, seed: seed);
+  builder.withDefaultStorage(storageDir: "./.data");
+
+  // Set the account number for the SDK
+  builder.withKeySet(
+      keySetType: KeySetType.default_,
+      useAddressIndex: false,
+      accountNumber: accountNumber);
+
+  var sdk = await builder.build();
+  // ANCHOR_END: custom-account-number
+  return sdk;
 }
 
 Future<Payment> mintTokens(TokenIssuer tokenIssuer) async {

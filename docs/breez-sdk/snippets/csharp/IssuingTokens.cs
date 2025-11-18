@@ -29,6 +29,27 @@ namespace BreezSdkSnippets
             // ANCHOR_END: create-token
         }
 
+        async Task InitializeSdkWithCustomAccountNumber()
+        {
+            // ANCHOR: custom-account-number
+            var accountNumber = 21u;
+
+            var mnemonic = "<mnemonic words>";
+            var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            {
+                apiKey = "<breez api key>"
+            };
+            var builder = new SdkBuilder(config: config, seed: seed);
+            await builder.WithDefaultStorage(storageDir: "./.data");
+
+            // Set the account number for the SDK
+            await builder.WithKeySet(KeySetType.Default, false, accountNumber);
+
+            var sdk = await builder.Build();
+            // ANCHOR_END: custom-account-number
+        }
+
         async Task MintToken(TokenIssuer tokenIssuer)
         {
             // ANCHOR: mint-token
