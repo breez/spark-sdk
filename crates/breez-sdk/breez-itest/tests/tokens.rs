@@ -1,9 +1,7 @@
 use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
-use rand::RngCore;
 use rstest::*;
-use tempdir::TempDir;
 use tracing::info;
 
 async fn create_mint_test_token(instance: &SdkInstance) -> Result<TokenMetadata> {
@@ -27,38 +25,6 @@ async fn create_mint_test_token(instance: &SdkInstance) -> Result<TokenMetadata>
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
     Ok(token_metadata)
-}
-
-// ---------------------
-// Fixtures
-// ---------------------
-
-/// Fixture: Alice's SDK with temporary storage
-#[fixture]
-async fn alice_sdk() -> Result<SdkInstance> {
-    let alice_dir = TempDir::new("breez-sdk-alice")?;
-    let path = alice_dir.path().to_string_lossy().to_string();
-
-    // Generate random seed for Alice
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    info!("Initializing Alice's SDK at: {} with random seed", path);
-    build_sdk_with_dir(path, seed, Some(alice_dir)).await
-}
-
-/// Fixture: Bob's SDK with temporary storage
-#[fixture]
-async fn bob_sdk() -> Result<SdkInstance> {
-    let bob_dir = TempDir::new("breez-sdk-bob")?;
-    let path = bob_dir.path().to_string_lossy().to_string();
-
-    // Generate random seed for Bob
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    info!("Initializing Bob's SDK at: {} with random seed", path);
-    build_sdk_with_dir(path, seed, Some(bob_dir)).await
 }
 
 // ---------------------
@@ -142,6 +108,7 @@ async fn test_01_token_transfer(
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
             options: None,
+            idempotency_key: None,
         })
         .await?;
 
@@ -351,6 +318,7 @@ async fn test_02_token_invoice(
         .send_payment(SendPaymentRequest {
             prepare_response,
             options: None,
+            idempotency_key: None,
         })
         .await?;
 
@@ -620,6 +588,7 @@ async fn test_04_token_freeze_unfreeze(
         .send_payment(SendPaymentRequest {
             prepare_response: prepare_send,
             options: None,
+            idempotency_key: None,
         })
         .await?;
 
@@ -698,6 +667,7 @@ async fn test_04_token_freeze_unfreeze(
             .send_payment(SendPaymentRequest {
                 prepare_response: bob_prepare,
                 options: None,
+                idempotency_key: None,
             })
             .await;
 
@@ -733,10 +703,10 @@ async fn test_04_token_freeze_unfreeze(
         "Should unfreeze the 100 frozen tokens"
     );
 
-    // Wait for unfreeze operation to complete
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    // When attempting to send tokens, the SO temporarily locks outputs
+    // (~3 minutes) even when they are frozen (low priority issue on SO side)
+    // TODO: remove this sleep if/when the issue is fixed
+    tokio::time::sleep(std::time::Duration::from_secs(60 * 3 + 30)).await;
 
     // Now Bob should be able to send tokens
     let bob_prepare_after_unfreeze = bob
@@ -753,6 +723,7 @@ async fn test_04_token_freeze_unfreeze(
         .send_payment(SendPaymentRequest {
             prepare_response: bob_prepare_after_unfreeze,
             options: None,
+            idempotency_key: None,
         })
         .await?;
 
@@ -848,6 +819,7 @@ async fn test_05_invoice_expiry(
         .send_payment(SendPaymentRequest {
             prepare_response: alice_prepare,
             options: None,
+            idempotency_key: None,
         })
         .await;
 
