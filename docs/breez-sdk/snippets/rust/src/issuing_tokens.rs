@@ -27,6 +27,24 @@ async fn create_token(token_issuer: &TokenIssuer) -> Result<TokenMetadata> {
     Ok(token_metadata)
 }
 
+async fn create_token_with_custom_account_number() -> Result<BreezSdk> {
+    // ANCHOR: custom-account-number
+    let account_number = 21;
+
+    let mnemonic = "<mnemonic words>";
+    let seed = Seed::Mnemonic(mnemonic, None);
+    let config = default_config(Network::Mainnet);
+    let builder = SdkBuilder::new(config, seed);
+    builder.with_default_storage("./.data");
+
+    // Set the account number for the SDK
+    builder.with_key_set(KeySetType::Default, false, Some(account_number));
+
+    let sdk = builder.build().await?;
+    // ANCHOR_END: custom-account-number
+    Ok(sdk)
+}
+
 async fn mint_token(token_issuer: &TokenIssuer) -> Result<Payment> {
     // ANCHOR: mint-token
     let request = MintIssuerTokenRequest {

@@ -14,13 +14,14 @@ class IssuingTokens {
     suspend fun createToken(tokenIssuer: TokenIssuer) {
         // ANCHOR: create-token
         try {
-            val request = CreateIssuerTokenRequest(
-                name = "My Token",
-                ticker = "MTK",
-                decimals = 6.toUInt(),
-                isFreezable = false,
-                maxSupply = BigInteger.fromLong(1_000_000L)
-            )
+            val request =
+                    CreateIssuerTokenRequest(
+                            name = "My Token",
+                            ticker = "MTK",
+                            decimals = 6.toUInt(),
+                            isFreezable = false,
+                            maxSupply = BigInteger.fromLong(1_000_000L)
+                    )
             val tokenMetadata = tokenIssuer.createIssuerToken(request)
             // Log.v("Breez", "Token identifier: ${tokenMetadata.identifier}")
         } catch (e: Exception) {
@@ -29,12 +30,36 @@ class IssuingTokens {
         // ANCHOR_END: create-token
     }
 
+    suspend fun createTokenWithCustomAccountNumber() {
+        // ANCHOR: custom-account-number
+        val accountNumber = 21u
+
+        val mnemonic = "<mnemonic words>"
+        val seed = Seed.Mnemonic(mnemonic, null)
+        val config = defaultConfig(Network.MAINNET)
+        config.apiKey = "<breez api key>"
+
+        try {
+            val builder = SdkBuilder(config, seed)
+            builder.withDefaultStorage("./.data")
+
+            // Set the account number for the SDK
+            builder.withKeySet(KeySetType.DEFAULT, false, accountNumber)
+
+            val sdk = builder.build()
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: custom-account-number
+    }
+
     suspend fun mintToken(tokenIssuer: TokenIssuer) {
         // ANCHOR: mint-token
         try {
-            val request = MintIssuerTokenRequest(
-                amount = BigInteger.fromLong(1_000L),
-            )
+            val request =
+                    MintIssuerTokenRequest(
+                            amount = BigInteger.fromLong(1_000L),
+                    )
             val payment = tokenIssuer.mintIssuerToken(request)
         } catch (e: Exception) {
             // Handle exception
@@ -45,9 +70,10 @@ class IssuingTokens {
     suspend fun burnToken(tokenIssuer: TokenIssuer) {
         // ANCHOR: burn-token
         try {
-            val request = BurnIssuerTokenRequest(
-                amount = BigInteger.fromLong(1_000L),
-            )
+            val request =
+                    BurnIssuerTokenRequest(
+                            amount = BigInteger.fromLong(1_000L),
+                    )
             val payment = tokenIssuer.burnIssuerToken(request)
         } catch (e: Exception) {
             // Handle exception
@@ -74,15 +100,17 @@ class IssuingTokens {
         try {
             val sparkAddress = "<spark address>"
             // Freeze the tokens held at the specified Spark address
-            val freezeRequest = FreezeIssuerTokenRequest(
-                address = sparkAddress,
-            )
+            val freezeRequest =
+                    FreezeIssuerTokenRequest(
+                            address = sparkAddress,
+                    )
             val freezeResponse = tokenIssuer.freezeIssuerToken(freezeRequest)
 
             // Unfreeze the tokens held at the specified Spark address
-            val unfreezeRequest = UnfreezeIssuerTokenRequest(
-                address = sparkAddress,
-            )
+            val unfreezeRequest =
+                    UnfreezeIssuerTokenRequest(
+                            address = sparkAddress,
+                    )
             val unfreezeResponse = tokenIssuer.unfreezeIssuerToken(unfreezeRequest)
         } catch (e: Exception) {
             // Handle exception

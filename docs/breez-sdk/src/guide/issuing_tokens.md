@@ -14,9 +14,13 @@ The Breez SDK provides a specialized Token Issuer interface for managing custom 
 
 Create a custom token with configurable parameters. Define the decimal precision, max supply and if the token can be frozen.
 
-**Note:** Token creation is limited to one token per issuer wallet
-
 {{#tabs issuing_tokens:create-token}}
+
+### Creating multiple tokens
+
+Token creation is limited to one token per issuer wallet. If you need to create and then manage more than one token using the same mnemonic, we recommend using different account numbers when initializing the SDK.
+
+{{#tabs issuing_tokens:custom-account-number}}
 
 ## Supply Management
 

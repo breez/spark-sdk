@@ -1,3 +1,4 @@
+# pylint: disable=duplicate-code
 import logging
 from breez_sdk_spark import (
     BreezSdk,
@@ -7,6 +8,11 @@ from breez_sdk_spark import (
     FreezeIssuerTokenRequest,
     BurnIssuerTokenRequest,
     UnfreezeIssuerTokenRequest,
+    Seed,
+    Network,
+    SdkBuilder,
+    KeySetType,
+    default_config,
 )
 
 
@@ -32,6 +38,32 @@ async def create_token(token_issuer: TokenIssuer):
         logging.error(error)
         raise
     # ANCHOR_END: create-token
+
+async def create_token_with_custom_account_number():
+    # ANCHOR: custom-account-number
+    account_number = 21
+
+    mnemonic = "<mnemonic words>"
+    seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
+    config = default_config(network=Network.MAINNET)
+    config.api_key = "<breez api key>"
+    try:
+        builder = SdkBuilder(config=config, seed=seed)
+        await builder.with_default_storage(storage_dir="./.data")
+
+        # Set the account number for the SDK
+        builder.with_key_set(
+            key_set_type=KeySetType.DEFAULT,
+            use_address_index=False,
+            account_number=account_number,
+        )
+
+        sdk = await builder.build()
+        return sdk
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: custom-account-number
 
 
 async def mint_token(token_issuer: TokenIssuer):

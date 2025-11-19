@@ -24,6 +24,25 @@ func createToken(tokenIssuer: TokenIssuer) async throws -> TokenMetadata {
     return tokenMetadata
 }
 
+func createTokenWithCustomAccountNumber() async throws -> BreezSdk {
+    // ANCHOR: custom-account-number
+    let accountNumber = UInt32(21)
+
+    let mnemonic = "<mnemonic words>"
+    let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
+    let config = defaultConfig(network: Network.mainnet)
+    let builder = SdkBuilder(config: config, seed: seed)
+    await builder.withDefaultStorage(storageDir: "./.data")
+
+    // Set the account number for the SDK
+    await builder.withKeySet(
+        keySetType: KeySetType.default, useAddressIndex: false, accountNumber: accountNumber)
+
+    let sdk = try await builder.build()
+    // ANCHOR_END: custom-account-number
+    return sdk
+}
+
 func mintToken(tokenIssuer: TokenIssuer) async throws -> Payment {
     // ANCHOR: mint-token
     let request = MintIssuerTokenRequest(
