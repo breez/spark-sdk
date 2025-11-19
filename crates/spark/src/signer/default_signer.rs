@@ -133,6 +133,7 @@ impl DerivedKeySet {
         }
         Ok(KeySet {
             identity_key_pair: identity_master_key.private_key.keypair(&secp),
+            identity_master_key,
             encryption_master_key,
             signing_master_key,
             static_deposit_master_key,
@@ -143,12 +144,38 @@ impl DerivedKeySet {
 #[derive(Clone)]
 pub struct KeySet {
     pub identity_key_pair: Keypair,
+    pub identity_master_key: Xpriv,
     pub encryption_master_key: Xpriv,
     pub signing_master_key: Xpriv,
     pub static_deposit_master_key: Xpriv,
 }
 
 impl KeySet {
+    pub fn new(
+        seed: &[u8],
+        network: Network,
+        key_type: KeySetType,
+        use_address_index: bool,
+        account_no: Option<u32>,
+    ) -> Result<Self, DefaultSignerError> {
+        let account_number = account_no.unwrap_or_else(|| account_number(network));
+        match key_type {
+            KeySetType::Default => Self::default_keys(seed, network, account_number),
+            KeySetType::Taproot => {
+                Self::taproot_keys(seed, network, use_address_index, account_number)
+            }
+            KeySetType::NativeSegwit => {
+                Self::native_segwit_keys(seed, network, use_address_index, account_number)
+            }
+            KeySetType::WrappedSegwit => {
+                Self::wrapped_segwit_keys(seed, network, use_address_index, account_number)
+            }
+            KeySetType::Legacy => {
+                Self::legacy_bitcoin_keys(seed, network, use_address_index, account_number)
+            }
+        }
+    }
+
     fn default_keys(
         seed: &[u8],
         network: Network,
@@ -271,33 +298,13 @@ impl From<bitcoin::bip32::Error> for DefaultSignerError {
 
 impl DefaultSigner {
     pub fn new(seed: &[u8], network: Network) -> Result<Self, DefaultSignerError> {
-        Self::with_keyset_type(seed, network, KeySetType::Default, false, None)
-    }
-
-    pub fn with_keyset_type(
-        seed: &[u8],
-        network: Network,
-        key_type: KeySetType,
-        use_address_index: bool,
-        account_no: Option<u32>,
-    ) -> Result<Self, DefaultSignerError> {
-        let account_number = account_no.unwrap_or_else(|| account_number(network));
-        let key_set = match key_type {
-            KeySetType::Default => KeySet::default_keys(seed, network, account_number),
-            KeySetType::Taproot => {
-                KeySet::taproot_keys(seed, network, use_address_index, account_number)
-            }
-            KeySetType::NativeSegwit => {
-                KeySet::native_segwit_keys(seed, network, use_address_index, account_number)
-            }
-            KeySetType::WrappedSegwit => {
-                KeySet::wrapped_segwit_keys(seed, network, use_address_index, account_number)
-            }
-            KeySetType::Legacy => {
-                KeySet::legacy_bitcoin_keys(seed, network, use_address_index, account_number)
-            }
-        }?;
-        Ok(Self::from_key_set(key_set))
+        Ok(Self::from_key_set(KeySet::new(
+            seed,
+            network,
+            KeySetType::Default,
+            false,
+            None,
+        )?))
     }
 
     pub fn from_key_set(key_set: KeySet) -> Self {

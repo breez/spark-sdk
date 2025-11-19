@@ -1,7 +1,7 @@
 use std::{rc::Rc, sync::Arc};
 
 use crate::{
-    error::WasmResult,
+    error::{WasmError, WasmResult},
     logger::{Logger, WASM_LOGGER},
     models::{
         Config, Credentials, KeySetType, Seed,
@@ -13,6 +13,8 @@ use crate::{
     persist::{Storage, WasmStorage},
     sdk::BreezSdk,
 };
+use bitcoin::secp256k1::PublicKey;
+use breez_sdk_spark::KeySet;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -20,6 +22,11 @@ pub struct SdkBuilder {
     builder: breez_sdk_spark::SdkBuilder,
     network: breez_sdk_spark::Network,
     seed: breez_sdk_spark::Seed,
+    default_storage_dir: Option<String>,
+    storage: Option<Storage>,
+    key_set_type: breez_sdk_spark::KeySetType,
+    use_address_index: bool,
+    account_number: Option<u32>,
 }
 
 #[wasm_bindgen]
@@ -33,24 +40,23 @@ impl SdkBuilder {
             network: config.network,
             seed: seed.clone(),
             builder: breez_sdk_spark::SdkBuilder::new(config, seed),
+            default_storage_dir: None,
+            storage: None,
+            key_set_type: breez_sdk_spark::KeySetType::Default,
+            use_address_index: false,
+            account_number: None,
         }
     }
 
     #[wasm_bindgen(js_name = "withDefaultStorage")]
     pub async fn with_default_storage(mut self, storage_dir: String) -> WasmResult<Self> {
-        let storage = Arc::new(WasmStorage {
-            storage: default_storage(&storage_dir, &self.network, &self.seed).await?,
-        });
-        self.builder = self.builder.with_storage(storage.clone());
-        self.builder = self.builder.with_real_time_sync_storage(storage);
+        self.default_storage_dir = Some(storage_dir);
         Ok(self)
     }
 
     #[wasm_bindgen(js_name = "withStorage")]
     pub fn with_storage(mut self, storage: Storage) -> Self {
-        let storage_arc = Arc::new(WasmStorage { storage });
-        self.builder = self.builder.with_storage(storage_arc.clone());
-        self.builder = self.builder.with_real_time_sync_storage(storage_arc);
+        self.storage = Some(storage);
         self
     }
 
@@ -61,6 +67,9 @@ impl SdkBuilder {
         use_address_index: bool,
         account_number: Option<u32>,
     ) -> Self {
+        self.key_set_type = key_set_type.clone().into();
+        self.use_address_index = use_address_index;
+        self.account_number = account_number;
         self.builder =
             self.builder
                 .with_key_set(key_set_type.into(), use_address_index, account_number);
@@ -117,7 +126,40 @@ impl SdkBuilder {
     }
 
     #[wasm_bindgen(js_name = "build")]
-    pub async fn build(self) -> WasmResult<BreezSdk> {
+    pub async fn build(mut self) -> WasmResult<BreezSdk> {
+        match (self.default_storage_dir, self.storage) {
+            (Some(storage_dir), None) => {
+                // Create key set to get identity_pub_key for WASM-compatible storage
+                let key_set = KeySet::new(
+                    &self.seed.to_bytes()?,
+                    self.network.into(),
+                    self.key_set_type.into(),
+                    self.use_address_index,
+                    self.account_number,
+                )
+                .map_err(WasmError::new)?;
+
+                let identity_pub_key = key_set.identity_key_pair.public_key();
+
+                let storage = Arc::new(WasmStorage {
+                    storage: default_storage(&storage_dir, &self.network, &identity_pub_key)
+                        .await?,
+                });
+                self.builder = self.builder.with_storage(storage.clone());
+                self.builder = self.builder.with_real_time_sync_storage(storage);
+            }
+            (None, Some(storage)) => {
+                let storage_arc = Arc::new(WasmStorage { storage });
+                self.builder = self.builder.with_storage(storage_arc.clone());
+                self.builder = self.builder.with_real_time_sync_storage(storage_arc);
+            }
+            _ => {
+                return Err(WasmError::new(
+                    "One and only one of default storage directory or storage must be set",
+                ));
+            }
+        }
+
         let sdk = self.builder.build().await?;
         Ok(BreezSdk { sdk: Rc::new(sdk) })
     }
@@ -126,9 +168,9 @@ impl SdkBuilder {
 async fn default_storage(
     data_dir: &str,
     network: &breez_sdk_spark::Network,
-    seed: &breez_sdk_spark::Seed,
+    identity_pub_key: &PublicKey,
 ) -> WasmResult<Storage> {
-    let db_path = breez_sdk_spark::default_storage_path(data_dir, network, seed)?;
+    let db_path = breez_sdk_spark::default_storage_path(data_dir, network, identity_pub_key)?;
     // SAFETY: In WASM, thread-local storage is stable and the logger reference
     // will remain valid for the duration of this async function call.
     // The WASM environment is single-threaded, so there's no risk of the

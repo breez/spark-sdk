@@ -10,8 +10,8 @@ use std::{collections::HashMap, fmt::Display, str::FromStr};
 
 use crate::{
     BitcoinAddressDetails, BitcoinNetwork, Bolt11InvoiceDetails, ExternalInputParser, FiatCurrency,
-    LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate, SparkInvoiceDetails, SuccessAction,
-    SuccessActionProcessed, error::DepositClaimError,
+    LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate, SdkError, SparkInvoiceDetails,
+    SuccessAction, SuccessActionProcessed, error::DepositClaimError,
 };
 
 /// A list of external input parsers that are used by default.
@@ -43,6 +43,25 @@ pub enum Seed {
     },
     /// Raw entropy bytes.
     Entropy(Vec<u8>),
+}
+
+impl Seed {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, SdkError> {
+        match self {
+            Seed::Mnemonic {
+                mnemonic,
+                passphrase,
+            } => {
+                let mnemonic = bip39::Mnemonic::parse(mnemonic)
+                    .map_err(|e| SdkError::Generic(e.to_string()))?;
+
+                Ok(mnemonic
+                    .to_seed(passphrase.as_deref().unwrap_or(""))
+                    .to_vec())
+            }
+            Seed::Entropy(entropy) => Ok(entropy.clone()),
+        }
+    }
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
