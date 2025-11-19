@@ -60,10 +60,14 @@ const initSdk = async () => {
     sdkBuilder = await sdkBuilder.withDefaultStorage('./.data')
     sdkBuilder = sdkBuilder.withPaymentObserver(paymentObserver)
     if (process.env.CHAIN_SERVICE_USERNAME && process.env.CHAIN_SERVICE_PASSWORD) {
-        sdkBuilder = sdkBuilder.withRestChainService('https://regtest-mempool.us-west-2.sparkinfra.net/api', {
-            username: process.env.CHAIN_SERVICE_USERNAME,
-            password: process.env.CHAIN_SERVICE_PASSWORD
-        })
+        sdkBuilder = sdkBuilder.withRestChainService(
+            'https://regtest-mempool.us-west-2.sparkinfra.net/api',
+            'mempoolSpace',
+            {
+                username: process.env.CHAIN_SERVICE_USERNAME,
+                password: process.env.CHAIN_SERVICE_PASSWORD
+            }
+        )
     }
     sdk = await sdkBuilder.build()
 
