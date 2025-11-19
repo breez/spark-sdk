@@ -68,7 +68,7 @@ interface SyncStorage {
   completeOutgoingSync: (record: Record) => Promise<void>
   getPendingOutgoingChanges: (limit: number) => Promise<OutgoingChange[]>
   getLastRevision: () => Promise<bigint>
-  insertIncomingRecords: (records: Array<Record>) => Promise<void>
+  insertIncomingRecords: (records: Record[]) => Promise<void>
   deleteIncomingRecord: (record: Record) => Promise<void>
   rebasePendingOutgoingRecords: (revision: bigint) => Promise<void>
   getIncomingRecords: (limit: number) => Promise<IncomingChange[]>

@@ -30,7 +30,8 @@ namespace BreezSdkSnippets
         }
 
         // ANCHOR: with-storage
-        public interface Storage {
+        public interface Storage
+        {
             Task DeleteCachedItem(string @key);
             Task<string?> GetCachedItem(string @key);
             Task SetCachedItem(string @key, string @value);
@@ -47,7 +48,8 @@ namespace BreezSdkSnippets
         // ANCHOR_END: with-storage
 
         // ANCHOR: with-sync-storage
-        public interface SyncStorage {
+        public interface SyncStorage
+        {
             Task<ulong> AddOutgoingChange(UnversionedRecordChange @record);
             Task CompleteOutgoingSync(Record @record);
             Task<List<OutgoingChange>> GetPendingOutgoingChanges(uint @limit);
@@ -73,7 +75,8 @@ namespace BreezSdkSnippets
         // ANCHOR_END: with-bitcoin-chain-service
 
         // ANCHOR: with-rest-client
-        public interface RestClient {
+        public interface RestClient
+        {
             Task<RestResponse> GetRequest(string @url, Dictionary<string, string>? @headers);
             Task<RestResponse> PostRequest(string @url, Dictionary<string, string>? @headers, string? @body);
             Task<RestResponse> DeleteRequest(string @url, Dictionary<string, string>? @headers, string? @body);
@@ -81,7 +84,8 @@ namespace BreezSdkSnippets
         // ANCHOR_END: with-rest-client
 
         // ANCHOR: with-fiat-service
-        public interface FiatService {
+        public interface FiatService
+        {
             Task<List<FiatCurrency>> FetchFiatCurrencies();
             Task<List<Rate>> FetchFiatRates();
         }

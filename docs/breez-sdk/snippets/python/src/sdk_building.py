@@ -48,25 +48,27 @@ class Storage(typing.Protocol):
         raise NotImplementedError
     def get_cached_item(self, key: "str"):
         raise NotImplementedError
-    def set_cached_item(self, key: "str",value: "str"):
+    def set_cached_item(self, key: "str", value: "str"):
         raise NotImplementedError
     def list_payments(self, request: "ListPaymentsRequest"):
         raise NotImplementedError
     def insert_payment(self, payment: "Payment"):
         raise NotImplementedError
-    def set_payment_metadata(self, payment_id: "str",metadata: "PaymentMetadata"):
+    def set_payment_metadata(self, payment_id: "str", metadata: "PaymentMetadata"):
         raise NotImplementedError
     def get_payment_by_id(self, id: "str"):
         raise NotImplementedError
     def get_payment_by_invoice(self, invoice: "str"):
         raise NotImplementedError
-    def add_deposit(self, txid: "str",vout: "int",amount_sats: "int"):
+    def add_deposit(self, txid: "str", vout: "int", amount_sats: "int"):
         raise NotImplementedError
-    def delete_deposit(self, txid: "str",vout: "int"):
+    def delete_deposit(self, txid: "str", vout: "int"):
         raise NotImplementedError
-    def list_deposits(self, ):
+    def list_deposits(
+        self,
+    ):
         raise NotImplementedError
-    def update_deposit(self, txid: "str",vout: "int",payload: "UpdateDepositPayload"):
+    def update_deposit(self, txid: "str", vout: "int", payload: "UpdateDepositPayload"):
         raise NotImplementedError
 # ANCHOR_END: with-storage
 
@@ -79,7 +81,9 @@ class SyncStorage(typing.Protocol):
         raise NotImplementedError
     def get_pending_outgoing_changes(self, limit: "int"):
         raise NotImplementedError
-    def get_last_revision(self, ):
+    def get_last_revision(
+        self,
+    ):
         raise NotImplementedError
     def insert_incoming_records(self, records: "typing.List[Record]"):
         raise NotImplementedError
@@ -89,7 +93,9 @@ class SyncStorage(typing.Protocol):
         raise NotImplementedError
     def get_incoming_records(self, limit: "int"):
         raise NotImplementedError
-    def get_latest_outgoing_change(self, ):
+    def get_latest_outgoing_change(
+        self,
+    ):
         raise NotImplementedError
     def update_record_from_incoming(self, record: "Record"):
         raise NotImplementedError
@@ -98,20 +104,34 @@ class SyncStorage(typing.Protocol):
 
 # ANCHOR: with-rest-client
 class RestClient(typing.Protocol):
-    def get_request(self, url: "str",headers: "typing.Optional[dict[str, str]]"):
+    def get_request(self, url: "str", headers: "typing.Optional[dict[str, str]]"):
         raise NotImplementedError
-    def post_request(self, url: "str",headers: "typing.Optional[dict[str, str]]",body: "typing.Optional[str]"):
+    def post_request(
+        self,
+        url: "str",
+        headers: "typing.Optional[dict[str, str]]",
+        body: "typing.Optional[str]",
+    ):
         raise NotImplementedError
-    def delete_request(self, url: "str",headers: "typing.Optional[dict[str, str]]",body: "typing.Optional[str]"):
+    def delete_request(
+        self,
+        url: "str",
+        headers: "typing.Optional[dict[str, str]]",
+        body: "typing.Optional[str]",
+    ):
         raise NotImplementedError
 # ANCHOR_END: with-rest-client
 
 
 # ANCHOR: with-fiat-service
 class FiatService(typing.Protocol):
-    def fetch_fiat_currencies(self, ):
+    def fetch_fiat_currencies(
+        self,
+    ):
         raise NotImplementedError
-    def fetch_fiat_rates(self, ):
+    def fetch_fiat_rates(
+        self,
+    ):
         raise NotImplementedError
 # ANCHOR_END: with-fiat-service
 
