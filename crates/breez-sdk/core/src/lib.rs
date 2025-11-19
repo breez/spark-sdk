@@ -29,6 +29,7 @@ pub use persist::{
 };
 pub use sdk::{BreezSdk, default_config, init_logging, parse_input};
 pub use sdk_builder::SdkBuilder;
+pub use spark_wallet::KeySet;
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use {persist::sqlite::SqliteStorage, sdk::connect};

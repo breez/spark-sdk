@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use bitcoin::bip32::Xpriv;
 use breez_sdk_common::sync::{BreezSyncerClient, SigningClient, SyncProcessor, SyncService};
 use tracing::debug;
 use uuid::Uuid;
@@ -16,7 +17,7 @@ pub struct RealTimeSyncParams {
     pub server_url: String,
     pub api_key: Option<String>,
     pub network: Network,
-    pub seed: Vec<u8>,
+    pub master_key: Xpriv,
     pub storage: Arc<dyn Storage>,
     pub sync_storage: Arc<dyn SyncStorage>,
     pub shutdown_receiver: tokio::sync::watch::Receiver<()>,
@@ -42,7 +43,7 @@ pub async fn init_and_start_real_time_sync(
         .map_err(|e| SdkError::Generic(e.to_string()))?;
 
     let sync_signer = Arc::new(
-        DefaultSyncSigner::new(&params.seed, params.network)
+        DefaultSyncSigner::new(&params.master_key, params.network)
             .map_err(|e| SdkError::Generic(e.to_string()))?,
     );
     let signing_sync_client = SigningClient::new(

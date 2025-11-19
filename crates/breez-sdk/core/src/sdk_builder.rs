@@ -4,11 +4,12 @@
 )]
 use std::sync::Arc;
 
+use bitcoin::bip32::Xpriv;
 use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
     rest::ReqwestRestClient as CommonRequestRestClient,
 };
-use spark_wallet::{DefaultSigner, Signer};
+use spark_wallet::{DefaultSigner, KeySet, Signer};
 use tokio::sync::watch;
 use tracing::{debug, info};
 
@@ -187,60 +188,18 @@ impl SdkBuilder {
     /// Builds the `BreezSdk` instance with the configured components.
     #[allow(clippy::too_many_lines)]
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
-        let (storage, sync_storage) = match (self.storage, self.storage_dir) {
-            // Use provided storages directly
-            (Some(storage), _) => (storage, self.sync_storage),
-            // Initialize default storages based on provided directory
-            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-            (None, Some(storage_dir)) => {
-                let storage = default_storage(&storage_dir, self.config.network, &self.seed)?;
-                let sync_storage = match (self.sync_storage, &self.config.real_time_sync_server_url)
-                {
-                    // Use provided sync storage directly
-                    (Some(sync_storage), _) => Some(sync_storage),
-                    // Initialize default sync storage based on provided directory
-                    // if real-time sync is enabled
-                    (None, Some(_)) => Some(default_sync_storage(
-                        &storage_dir,
-                        self.config.network,
-                        &self.seed,
-                    )?),
-                    _ => None,
-                };
-                (storage, sync_storage)
-            }
-            _ => {
-                return Err(SdkError::Generic(
-                    "Either storage or storage_dir must be set before building the SDK".to_string(),
-                ));
-            }
-        };
         // Create the signer from seed
-        let seed = match self.seed {
-            Seed::Mnemonic {
-                mnemonic,
-                passphrase,
-            } => {
-                let mnemonic = bip39::Mnemonic::parse(&mnemonic)
-                    .map_err(|e| SdkError::Generic(e.to_string()))?;
+        let seed_bytes = self.seed.to_bytes()?;
+        let key_set = KeySet::new(
+            &seed_bytes,
+            self.config.network.into(),
+            self.key_set_type.into(),
+            self.use_address_index,
+            self.account_number,
+        )
+        .map_err(|e| SdkError::Generic(e.to_string()))?;
+        let signer: Arc<dyn Signer> = Arc::new(DefaultSigner::from_key_set(key_set.clone()));
 
-                mnemonic
-                    .to_seed(passphrase.as_deref().unwrap_or(""))
-                    .to_vec()
-            }
-            Seed::Entropy(entropy) => entropy,
-        };
-
-        let signer: Arc<dyn Signer> = Arc::new(
-            DefaultSigner::with_keyset_type(
-                &seed,
-                self.config.network.into(),
-                self.key_set_type.into(),
-                self.use_address_index,
-                self.account_number,
-            )
-            .map_err(|e| SdkError::Generic(e.to_string()))?,
-        );
         let chain_service = if let Some(service) = self.chain_service {
             service
         } else {
@@ -272,6 +231,39 @@ impl SdkBuilder {
                     },
                     ChainApiType::MempoolSpace,
                 )),
+            }
+        };
+
+        let (storage, sync_storage) = match (self.storage, self.storage_dir) {
+            // Use provided storages directly
+            (Some(storage), _) => (storage, self.sync_storage),
+            // Initialize default storages based on provided directory
+            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+            (None, Some(storage_dir)) => {
+                let identity_pub_key = signer
+                    .get_identity_public_key()
+                    .map_err(|e| SdkError::Generic(e.to_string()))?;
+                let storage =
+                    default_storage(&storage_dir, self.config.network, &identity_pub_key)?;
+                let sync_storage = match (self.sync_storage, &self.config.real_time_sync_server_url)
+                {
+                    // Use provided sync storage directly
+                    (Some(sync_storage), _) => Some(sync_storage),
+                    // Initialize default sync storage based on provided directory
+                    // if real-time sync is enabled
+                    (None, Some(_)) => Some(default_sync_storage(
+                        &storage_dir,
+                        self.config.network,
+                        &identity_pub_key,
+                    )?),
+                    _ => None,
+                };
+                (storage, sync_storage)
+            }
+            _ => {
+                return Err(SdkError::Generic(
+                    "Either storage or storage_dir must be set before building the SDK".to_string(),
+                ));
             }
         };
 
@@ -335,11 +327,22 @@ impl SdkBuilder {
                     "Real-time sync is enabled, but no sync storage is supplied".to_string(),
                 ));
             };
+
+            // Use legacy master key when using default key set and default derivation path for backwards compatibility
+            let master_key =
+                if self.key_set_type == KeySetType::Default && self.account_number.is_none() {
+                    let bitcoin_network: bitcoin::Network = self.config.network.into();
+                    Xpriv::new_master(bitcoin_network, &seed_bytes)
+                        .map_err(|e| SdkError::Generic(e.to_string()))?
+                } else {
+                    key_set.identity_master_key
+                };
+
             init_and_start_real_time_sync(RealTimeSyncParams {
                 server_url: server_url.clone(),
                 api_key: self.config.api_key.clone(),
                 network: self.config.network,
-                seed,
+                master_key,
                 storage: Arc::clone(&storage),
                 sync_storage,
                 shutdown_receiver: shutdown_sender.subscribe(),
@@ -372,9 +375,9 @@ impl SdkBuilder {
 fn default_storage(
     data_dir: &str,
     network: Network,
-    seed: &Seed,
+    identity_pub_key: &spark_wallet::PublicKey,
 ) -> Result<Arc<dyn Storage>, SdkError> {
-    let db_path = crate::default_storage_path(data_dir, &network, seed)?;
+    let db_path = crate::default_storage_path(data_dir, &network, identity_pub_key)?;
     let storage = Arc::new(crate::SqliteStorage::new(&db_path)?);
     Ok(storage)
 }
@@ -383,9 +386,9 @@ fn default_storage(
 fn default_sync_storage(
     data_dir: &str,
     network: Network,
-    seed: &Seed,
+    identity_pub_key: &spark_wallet::PublicKey,
 ) -> Result<Arc<dyn SyncStorage>, SdkError> {
-    let db_path = crate::default_storage_path(data_dir, &network, seed)?;
+    let db_path = crate::default_storage_path(data_dir, &network, identity_pub_key)?;
     let storage = Arc::new(crate::SqliteStorage::new(&db_path)?);
     Ok(storage)
 }

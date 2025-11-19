@@ -5,7 +5,7 @@ use crate::command::CliHelper;
 use crate::persist::CliPersistence;
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::{
-    ConnectRequest, EventListener, Network, SdkEvent, Seed, connect, default_config,
+    EventListener, KeySetType, Network, SdkBuilder, SdkEvent, Seed, default_config,
 };
 use clap::Parser;
 use command::{Command, execute_command};
@@ -26,6 +26,10 @@ struct Cli {
     /// Network to use (mainnet, regtest)
     #[arg(long, default_value = "regtest")]
     network: String,
+
+    /// Account number to use for the Spark signer
+    #[arg(long)]
+    account_number: Option<u32>,
 }
 
 fn expand_path(path: &str) -> PathBuf {
@@ -72,7 +76,11 @@ impl EventListener for CliEventListener {
     }
 }
 
-async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()> {
+async fn run_interactive_mode(
+    data_dir: PathBuf,
+    network: Network,
+    account_number: Option<u32>,
+) -> Result<()> {
     breez_sdk_spark::init_logging(Some(data_dir.to_string_lossy().into()), None, None)?;
     let persistence = CliPersistence {
         data_dir: data_dir.clone(),
@@ -101,12 +109,13 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
         passphrase: None,
     };
 
-    let sdk = connect(ConnectRequest {
-        config,
-        seed,
-        storage_dir: data_dir.to_string_lossy().to_string(),
-    })
-    .await?;
+    let mut sdk_builder =
+        SdkBuilder::new(config, seed).with_default_storage(data_dir.to_string_lossy().to_string());
+    if let Some(account_number) = account_number {
+        sdk_builder = sdk_builder.with_key_set(KeySetType::Default, false, Some(account_number));
+    }
+
+    let sdk = sdk_builder.build().await?;
 
     let listener = Box::new(CliEventListener {});
     sdk.add_event_listener(listener).await;
@@ -187,7 +196,7 @@ async fn main() -> Result<(), anyhow::Error> {
         _ => return Err(anyhow!("Invalid network. Use 'regtest' or 'mainnet'")),
     };
 
-    Box::pin(run_interactive_mode(data_dir, network)).await?;
+    Box::pin(run_interactive_mode(data_dir, network, cli.account_number)).await?;
 
     Ok(())
 }
