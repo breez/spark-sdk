@@ -4,6 +4,7 @@
 )]
 use std::sync::Arc;
 
+use bitcoin::bip32::Xpriv;
 use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
     rest::ReqwestRestClient as CommonRequestRestClient,
@@ -326,11 +327,22 @@ impl SdkBuilder {
                     "Real-time sync is enabled, but no sync storage is supplied".to_string(),
                 ));
             };
+
+            // Use legacy master key when using default key set and default derivation path for backwards compatibility
+            let master_key =
+                if self.key_set_type == KeySetType::Default && self.account_number.is_none() {
+                    let bitcoin_network: bitcoin::Network = self.config.network.into();
+                    Xpriv::new_master(bitcoin_network, &seed_bytes)
+                        .map_err(|e| SdkError::Generic(e.to_string()))?
+                } else {
+                    key_set.identity_master_key
+                };
+
             init_and_start_real_time_sync(RealTimeSyncParams {
                 server_url: server_url.clone(),
                 api_key: self.config.api_key.clone(),
                 network: self.config.network,
-                identity_master_key: key_set.identity_master_key,
+                master_key,
                 storage: Arc::clone(&storage),
                 sync_storage,
                 shutdown_receiver: shutdown_sender.subscribe(),

@@ -21,10 +21,7 @@ pub struct DefaultSyncSigner {
 }
 
 impl DefaultSyncSigner {
-    pub fn new(
-        identity_master_key: &Xpriv,
-        network: Network,
-    ) -> Result<Self, bitcoin::bip32::Error> {
+    pub fn new(master_key: &Xpriv, network: Network) -> Result<Self, bitcoin::bip32::Error> {
         let secp = Secp256k1::new();
 
         let signing_derivation_path: DerivationPath = match network {
@@ -38,10 +35,10 @@ impl DefaultSyncSigner {
         }
         .parse()?;
 
-        let signing_key = identity_master_key
+        let signing_key = master_key
             .derive_priv(&secp, &signing_derivation_path)?
             .private_key;
-        let encryption_key = identity_master_key
+        let encryption_key = master_key
             .derive_priv(&secp, &encryption_derivation_path)?
             .private_key;
 
