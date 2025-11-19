@@ -11,6 +11,7 @@ use web_time::SystemTime;
 use crate::core::Network;
 use crate::operator::OperatorPool;
 use crate::operator::rpc as operator_rpc;
+use crate::operator::rpc::spark::transfer_filter::Participant;
 use crate::services::{
     ExitSpeed, LeafKeyTweak, LeafRefundSigningData, Transfer, TransferId, TransferService,
 };
@@ -177,7 +178,7 @@ impl CoopExitService {
 
         // Request cooperative exit from the SSP
         trace!("Requesting cooperative exit");
-        let coop_exit_request = self
+        let coop_exit_request = match self
             .ssp_client
             .request_coop_exit(RequestCoopExitInput {
                 leaf_external_ids,
@@ -189,7 +190,18 @@ impl CoopExitService {
                 fee_quote_id,
                 user_outbound_transfer_external_id: Some(transfer_id.to_string()),
             })
-            .await?;
+            .await
+        {
+            Ok(request) => request,
+            Err(e) => {
+                return self
+                    .recover_transfer_on_ssp_error(
+                        &transfer_id,
+                        ServiceError::ServiceProviderError(e),
+                    )
+                    .await;
+            }
+        };
 
         // Convert the raw connector transaction to a Bitcoin Transaction
         trace!("Processing cooperative exit request: {coop_exit_request:?}",);
@@ -215,10 +227,21 @@ impl CoopExitService {
         trace!("Got connector refund signatures: {coop_exit_refund_signatures:?}",);
         let transfer = coop_exit_refund_signatures.transfer;
 
-        let complete_response = self
+        let complete_response = match self
             .ssp_client
             .complete_coop_exit(&transfer.id.to_string(), &coop_exit_request.id)
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(e) => {
+                return self
+                    .recover_transfer_on_ssp_error(
+                        &transfer.id,
+                        ServiceError::ServiceProviderError(e),
+                    )
+                    .await;
+            }
+        };
         trace!("Completed cooperative exit: {complete_response:?}",);
 
         Ok(transfer)
@@ -252,6 +275,35 @@ impl CoopExitService {
             transfer: transfer_tweaked,
             refund_signatures: coop_exit_refund_signatures.refund_signatures,
         })
+    }
+
+    async fn recover_transfer_on_ssp_error(
+        &self,
+        transfer_id: &TransferId,
+        error: ServiceError,
+    ) -> Result<Transfer, ServiceError> {
+        if let ServiceError::ServiceProviderError(_) = &error {
+            // Check if transfer already exists remotely
+            let operator_transfers = self
+                .operator_pool
+                .get_coordinator()
+                .client
+                .query_all_transfers(operator_rpc::spark::TransferFilter {
+                    transfer_ids: vec![transfer_id.to_string()],
+                    network: self.network.to_proto_network() as i32,
+                    participant: Some(Participant::SenderIdentityPublicKey(
+                        self.signer.get_identity_public_key()?.serialize().to_vec(),
+                    )),
+                    ..Default::default()
+                })
+                .await?;
+            if let Some(transfer) = operator_transfers.transfers.into_iter().nth(0) {
+                debug!("Recovered transfer {} after SSP error", transfer_id);
+                return transfer.try_into();
+            }
+        }
+
+        Err(error)
     }
 
     async fn sign_coop_exit_refunds(
