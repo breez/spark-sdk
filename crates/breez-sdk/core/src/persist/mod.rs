@@ -16,7 +16,7 @@ use crate::{
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
 const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
-const LNURL_METADATA_OFFSET_KEY: &str = "lnurl_metadata_offset";
+const LNURL_METADATA_UPDATED_AFTER_KEY: &str = "lnurl_metadata_updated_after";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
 const TX_CACHE_KEY: &str = "tx_cache";
 const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
@@ -40,6 +40,7 @@ pub struct AddLnurlMetadataItem {
     pub payment_hash: String,
     pub sender_comment: Option<String>,
     pub nostr_zap_request: Option<String>,
+    pub nostr_zap_receipt: Option<String>,
 }
 
 impl From<lnurl_models::ListMetadataMetadata> for AddLnurlMetadataItem {
@@ -48,6 +49,7 @@ impl From<lnurl_models::ListMetadataMetadata> for AddLnurlMetadataItem {
             payment_hash: value.payment_hash,
             sender_comment: value.sender_comment,
             nostr_zap_request: value.nostr_zap_request,
+            nostr_zap_receipt: value.nostr_zap_receipt,
         }
     }
 }
@@ -431,21 +433,27 @@ impl ObjectCacheRepository {
         }
     }
 
-    pub(crate) async fn save_lnurl_metadata_offset(&self, offset: u32) -> Result<(), StorageError> {
+    pub(crate) async fn save_lnurl_metadata_updated_after(
+        &self,
+        offset: i64,
+    ) -> Result<(), StorageError> {
         self.storage
-            .set_cached_item(LNURL_METADATA_OFFSET_KEY.to_string(), offset.to_string())
+            .set_cached_item(
+                LNURL_METADATA_UPDATED_AFTER_KEY.to_string(),
+                offset.to_string(),
+            )
             .await?;
         Ok(())
     }
 
-    pub(crate) async fn fetch_lnurl_metadata_offset(&self) -> Result<u32, StorageError> {
+    pub(crate) async fn fetch_lnurl_metadata_updated_after(&self) -> Result<i64, StorageError> {
         let value = self
             .storage
-            .get_cached_item(LNURL_METADATA_OFFSET_KEY.to_string())
+            .get_cached_item(LNURL_METADATA_UPDATED_AFTER_KEY.to_string())
             .await?;
         match value {
             Some(value) => Ok(value.parse().map_err(|_| {
-                StorageError::Serialization("invalid lnurl_metadata_offset".to_string())
+                StorageError::Serialization("invalid lnurl_metadata_updated_after".to_string())
             })?),
             None => Ok(0),
         }
@@ -1246,6 +1254,9 @@ pub mod tests {
                 nostr_zap_request: Some(
                     r#"{"kind":9734,"content":"zap request","tags":[]}"#.to_string(),
                 ),
+                nostr_zap_receipt: Some(
+                    r#"{"kind":9735,"content":"zap receipt","tags":[]}"#.to_string(),
+                ),
             }])
             .await
             .unwrap();
@@ -1270,6 +1281,11 @@ pub mod tests {
                     metadata.nostr_zap_request,
                     Some(r#"{"kind":9734,"content":"zap request","tags":[]}"#.to_string()),
                     "Nostr zap request should match"
+                );
+                assert_eq!(
+                    metadata.nostr_zap_receipt,
+                    Some(r#"{"kind":9735,"content":"zap receipt","tags":[]}"#.to_string()),
+                    "Nostr zap receipt should match"
                 );
             }
             _ => panic!("Expected Lightning payment with lnurl receive metadata"),
@@ -1332,11 +1348,13 @@ pub mod tests {
                     payment_hash: "zaphash2".to_string(),
                     sender_comment: Some("Nice work!".to_string()),
                     nostr_zap_request: None,
+                    nostr_zap_receipt: None,
                 },
                 AddLnurlMetadataItem {
                     payment_hash: "zaphash3".to_string(),
                     sender_comment: None,
                     nostr_zap_request: Some(r#"{"kind":9734,"content":"zap3"}"#.to_string()),
+                    nostr_zap_receipt: None,
                 },
             ])
             .await

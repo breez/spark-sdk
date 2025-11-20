@@ -187,6 +187,9 @@ impl From<NostrError> for SdkError {
             NostrError::KeyDerivationError(e) => {
                 SdkError::Generic(format!("Nostr key derivation error: {e}"))
             }
+            NostrError::ZapReceiptCreationError(e) => {
+                SdkError::Generic(format!("Nostr zap receipt creation error: {e}"))
+            }
         }
     }
 }

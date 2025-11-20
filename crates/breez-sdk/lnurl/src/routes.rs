@@ -11,10 +11,11 @@ use bitcoin::{
 use lightning_invoice::Bolt11Invoice;
 use lnurl_models::{
     CheckUsernameAvailableResponse, ListMetadataRequest, ListMetadataResponse,
-    RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
-    RegisterLnurlPayResponse, UnregisterLnurlPayRequest, sanitize_username,
+    PublishZapReceiptRequest, PublishZapReceiptResponse, RecoverLnurlPayRequest,
+    RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
+    UnregisterLnurlPayRequest, sanitize_username,
 };
-use nostr::{Alphabet, Event, JsonUtil, Kind, TagStandard};
+use nostr::{Alphabet, Event, JsonUtil, Kind, TagStandard, key::Keys};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -23,7 +24,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, trace, warn};
 
-use crate::{repository::LnurlSenderComment, zap::Zap};
+use crate::{repository::LnurlSenderComment, time::now_millis, zap::Zap};
 use crate::{
     repository::{LnurlRepository, LnurlRepositoryError},
     state::State,
@@ -261,6 +262,150 @@ where
         Ok(Json(ListMetadataResponse { metadata }))
     }
 
+    #[allow(clippy::too_many_lines)]
+    pub async fn publish_zap_receipt(
+        Path((pubkey, payment_hash)): Path<(String, String)>,
+        Extension(state): Extension<State<DB>>,
+        Json(payload): Json<PublishZapReceiptRequest>,
+    ) -> Result<Json<PublishZapReceiptResponse>, (StatusCode, Json<Value>)> {
+        let pubkey = validate(&pubkey, &payload.signature, &payload.zap_receipt, &state).await?;
+
+        // Parse and validate the zap receipt
+        let zap_receipt = Event::from_json(&payload.zap_receipt).map_err(|e| {
+            trace!("invalid zap receipt, could not parse: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid zap receipt"})),
+            )
+        })?;
+
+        // Validate it's a zap receipt (kind 9735)
+        if zap_receipt.kind != Kind::ZapReceipt {
+            trace!(
+                "event is not a zap receipt, got kind: {:?}",
+                zap_receipt.kind
+            );
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "event is not a zap receipt"})),
+            ));
+        }
+
+        // Verify the zap receipt signature
+        if zap_receipt.verify().is_err() {
+            trace!("invalid zap receipt signature");
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid zap receipt signature"})),
+            ));
+        }
+
+        // Get the existing zap record
+        let mut zap = state
+            .db
+            .get_zap_by_payment_hash(&payment_hash)
+            .await
+            .map_err(|e| {
+                error!("failed to query zap: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "internal server error"})),
+                )
+            })?
+            .ok_or_else(|| {
+                trace!("zap not found for payment hash: {}", payment_hash);
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": "zap not found"})),
+                )
+            })?;
+
+        // Verify the zap belongs to this user
+        if zap.user_pubkey != pubkey.to_string() {
+            trace!("zap does not belong to this user");
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "unauthorized"})),
+            ));
+        }
+
+        // Check if zap receipt already exists
+        let mut published = false;
+        if zap.zap_event.is_some() {
+            debug!(
+                "Zap receipt already exists for payment hash {}",
+                payment_hash
+            );
+            return Ok(Json(PublishZapReceiptResponse { published }));
+        }
+
+        // Parse the zap request to get relay info
+        let zap_request = Event::from_json(&zap.zap_request).map_err(|e| {
+            error!("failed to parse stored zap request: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "internal server error"})),
+            )
+        })?;
+
+        // The nostr keys are not really needed here, but we use them to create the client
+        let nostr_keys = match &state.nostr_keys {
+            Some(keys) => keys.clone(),
+            None => Keys::generate(),
+        };
+        let nostr_client = nostr_sdk::Client::new(nostr_keys);
+
+        let relays = zap_request
+            .tags
+            .iter()
+            .filter_map(|t| {
+                if let Some(TagStandard::Relays(r)) = t.as_standardized() {
+                    Some(r.clone())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+
+        if relays.is_empty() {
+            debug!(
+                "No relays to publish zap receipt for payment hash {}",
+                payment_hash
+            );
+            return Ok(Json(PublishZapReceiptResponse { published }));
+        }
+
+        for r in &relays {
+            if let Err(e) = nostr_client.add_relay(r).await {
+                warn!("Failed to add relay {r}: {e}");
+            }
+        }
+
+        nostr_client.connect().await;
+
+        if let Err(e) = nostr_client.send_event(&zap_receipt).await {
+            error!("Failed to publish zap receipt to relays: {e}");
+        } else {
+            debug!("Published zap receipt to {} relays", relays.len());
+            published = true;
+        }
+
+        nostr_client.disconnect().await;
+
+        zap.zap_event = Some(payload.zap_receipt);
+        zap.updated_at = now_millis();
+        state.db.upsert_zap(&zap).await.map_err(|e| {
+            error!("failed to save zap receipt: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "internal server error"})),
+            )
+        })?;
+
+        Ok(Json(PublishZapReceiptResponse { published }))
+    }
+
     pub async fn handle_lnurl_pay(
         Host(host): Host,
         Path(identifier): Path<String>,
@@ -439,6 +584,7 @@ where
             lnurl_error("internal server error")
         })?;
 
+        let updated_at = now_millis();
         // save to zap event to db
         if let Some(zap_request) = params.nostr {
             let zap = Zap {
@@ -447,6 +593,7 @@ where
                 zap_event: None,
                 user_pubkey: user.pubkey.clone(),
                 invoice_expiry,
+                updated_at,
             };
             if let Err(e) = state.db.upsert_zap(&zap).await {
                 error!("failed to save zap event: {}", e);
@@ -485,6 +632,7 @@ where
                         payment_hash: invoice.payment_hash().to_string(),
                         user_pubkey: user.pubkey.clone(),
                         invoice_expiry,
+                        updated_at,
                     })
                     .await
             {

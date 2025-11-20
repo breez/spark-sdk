@@ -839,6 +839,7 @@ class IndexedDBStorage {
         const request = store.put({
           paymentHash: item.paymentHash,
           nostrZapRequest: item.nostrZapRequest || null,
+          nostrZapReceipt: item.nostrZapReceipt || null,
           senderComment: item.senderComment || null,
         });
 
@@ -1602,6 +1603,7 @@ class IndexedDBStorage {
         if (lnurlReceiveMetadata && (lnurlReceiveMetadata.nostrZapRequest || lnurlReceiveMetadata.senderComment)) {
           payment.details.lnurlReceiveMetadata = {
             nostrZapRequest: lnurlReceiveMetadata.nostrZapRequest || null,
+            nostrZapReceipt: lnurlReceiveMetadata.nostrZapReceipt || null,
             senderComment: lnurlReceiveMetadata.senderComment || null,
           };
         }

@@ -1104,5 +1104,6 @@ pub struct ClaimHtlcPaymentResponse {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LnurlReceiveMetadata {
     pub nostr_zap_request: Option<String>,
+    pub nostr_zap_receipt: Option<String>,
     pub sender_comment: Option<String>,
 }

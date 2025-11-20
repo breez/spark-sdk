@@ -56,6 +56,21 @@ pub struct ListMetadataMetadata {
     pub payment_hash: String,
     pub sender_comment: Option<String>,
     pub nostr_zap_request: Option<String>,
+    /// The zap receipt event (kind 9735) as JSON, if created
+    pub nostr_zap_receipt: Option<String>,
+    /// Unix timestamp (milliseconds) when this metadata was last updated
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PublishZapReceiptRequest {
+    pub signature: String,
+    pub zap_receipt: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PublishZapReceiptResponse {
+    pub published: bool,
 }
 
 pub fn sanitize_username(username: &str) -> String {

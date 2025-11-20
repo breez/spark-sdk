@@ -283,6 +283,7 @@ class MigrationManager {
         sql: `CREATE TABLE lnurl_receive_metadata (
                 payment_hash TEXT NOT NULL PRIMARY KEY,
                 nostr_zap_request TEXT,
+                nostr_zap_receipt TEXT,
                 sender_comment TEXT
             )`
       }

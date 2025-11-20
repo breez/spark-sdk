@@ -16,6 +16,7 @@ pub struct LnurlSenderComment {
     pub invoice_expiry: i64,
     pub payment_hash: String,
     pub user_pubkey: String,
+    pub updated_at: i64,
 }
 
 #[async_trait::async_trait]

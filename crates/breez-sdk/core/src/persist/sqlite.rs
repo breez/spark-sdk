@@ -245,6 +245,7 @@ impl SqliteStorage {
             "CREATE TABLE lnurl_receive_metadata (
                 payment_hash TEXT NOT NULL PRIMARY KEY,
                 nostr_zap_request TEXT,
+                nostr_zap_receipt TEXT,
                 sender_comment TEXT
             );",
         ]
@@ -390,6 +391,7 @@ impl Storage for SqliteStorage {
             ,       s.invoice_details AS spark_invoice_details
             ,       s.htlc_details AS spark_htlc_details
             ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
             ,       lrm.sender_comment AS lnurl_sender_comment
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -579,6 +581,7 @@ impl Storage for SqliteStorage {
             ,       s.invoice_details AS spark_invoice_details
             ,       s.htlc_details AS spark_htlc_details
             ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
             ,       lrm.sender_comment AS lnurl_sender_comment
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -623,6 +626,7 @@ impl Storage for SqliteStorage {
             ,       s.invoice_details AS spark_invoice_details
             ,       s.htlc_details AS spark_htlc_details
             ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
             ,       lrm.sender_comment AS lnurl_sender_comment
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -720,12 +724,13 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
         for metadata in metadata {
             connection.execute(
-                "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, sender_comment)
-                 VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
+                 VALUES (?, ?, ?, ?)",
                 params![
                     metadata.payment_hash,
                     metadata.nostr_zap_request,
-                    metadata.sender_comment
+                    metadata.nostr_zap_receipt,
+                    metadata.sender_comment,
                 ],
             )?;
         }
@@ -1146,11 +1151,13 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             let lnurl_pay_info: Option<LnurlPayInfo> = row.get(15)?;
             let lnurl_withdraw_info: Option<LnurlWithdrawInfo> = row.get(16)?;
             let lnurl_nostr_zap_request: Option<String> = row.get(22)?;
-            let lnurl_sender_comment: Option<String> = row.get(23)?;
+            let lnurl_nostr_zap_receipt: Option<String> = row.get(23)?;
+            let lnurl_sender_comment: Option<String> = row.get(24)?;
             let lnurl_receive_metadata =
                 if lnurl_nostr_zap_request.is_some() || lnurl_sender_comment.is_some() {
                     Some(LnurlReceiveMetadata {
                         nostr_zap_request: lnurl_nostr_zap_request,
+                        nostr_zap_receipt: lnurl_nostr_zap_receipt,
                         sender_comment: lnurl_sender_comment,
                     })
                 } else {

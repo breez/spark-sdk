@@ -213,6 +213,7 @@ class SqliteStorage {
             ,       s.invoice_details AS spark_invoice_details
             ,       s.htlc_details AS spark_htlc_details
             ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
             ,       lrm.sender_comment AS lnurl_sender_comment
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -367,6 +368,7 @@ class SqliteStorage {
             ,       s.invoice_details AS spark_invoice_details
             ,       s.htlc_details AS spark_htlc_details
             ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
             ,       lrm.sender_comment AS lnurl_sender_comment
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -429,6 +431,7 @@ class SqliteStorage {
             ,       s.invoice_details AS spark_invoice_details
             ,       s.htlc_details AS spark_htlc_details
             ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
             ,       lrm.sender_comment AS lnurl_sender_comment
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -585,7 +588,7 @@ class SqliteStorage {
   addLnurlMetadata(metadata) {
     try {
       const stmt = this.db.prepare(
-        "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, sender_comment) VALUES (?, ?, ?)"
+        "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment) VALUES (?, ?, ?, ?)"
       );
 
       const transaction = this.db.transaction(() => {
@@ -593,6 +596,7 @@ class SqliteStorage {
           stmt.run(
             item.paymentHash,
             item.nostrZapRequest || null,
+            item.nostrZapReceipt || null,
             item.senderComment || null
           );
         }
@@ -649,6 +653,7 @@ class SqliteStorage {
       if (row.lnurl_nostr_zap_request || row.lnurl_sender_comment) {
         details.lnurlReceiveMetadata = {
           nostrZapRequest: row.lnurl_nostr_zap_request || null,
+          nostrZapReceipt: row.lnurl_nostr_zap_receipt || null,
           senderComment: row.lnurl_sender_comment || null,
         };
       }

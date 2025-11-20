@@ -39,6 +39,7 @@ figment = { workspace = true, features = ["env", "yaml"] }
 hex.workspace = true
 lnurl-models.workspace = true
 macros.workspace = true
+nostr.workspace = true
 openssl = { workspace = true, optional = true }
 qrcode-rs.workspace = true
 reqwest.workspace = true

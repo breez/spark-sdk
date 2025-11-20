@@ -832,6 +832,7 @@ pub struct AddLnurlMetadataItem {
     pub payment_hash: String,
     pub sender_comment: Option<String>,
     pub nostr_zap_request: Option<String>,
+    pub nostr_zap_receipt: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateDepositPayload)]
@@ -1041,5 +1042,6 @@ pub struct ClaimHtlcPaymentResponse {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlReceiveMetadata)]
 pub struct LnurlReceiveMetadata {
     pub nostr_zap_request: Option<String>,
+    pub nostr_zap_receipt: Option<String>,
     pub sender_comment: Option<String>,
 }

@@ -93,14 +93,15 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn upsert_zap(&self, zap: &Zap) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "REPLACE INTO zaps (payment_hash, zap_request, zap_event, user_pubkey, invoice_expiry)
-            VALUES ($1, $2, $3, $4, $5)",
+            "REPLACE INTO zaps (payment_hash, zap_request, zap_event, user_pubkey, invoice_expiry, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(&zap.payment_hash)
         .bind(&zap.zap_request)
         .bind(&zap.zap_event)
         .bind(&zap.user_pubkey)
         .bind(zap.invoice_expiry)
+        .bind(zap.updated_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -111,7 +112,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         payment_hash: &str,
     ) -> Result<Option<Zap>, LnurlRepositoryError> {
         let maybe_zap = sqlx::query(
-            "SELECT payment_hash, zap_request, zap_event, user_pubkey, invoice_expiry
+            "SELECT payment_hash, zap_request, zap_event, user_pubkey, invoice_expiry, updated_at
                 FROM zaps
                 WHERE payment_hash = $1",
         )
@@ -124,6 +125,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             zap_event: row.get(2),
             user_pubkey: row.get(3),
             invoice_expiry: row.get(4),
+            updated_at: row.get(5),
         });
         Ok(maybe_zap)
     }
@@ -164,17 +166,19 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         comment: &LnurlSenderComment,
     ) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "INSERT INTO sender_comments (payment_hash, user_pubkey, sender_comment, invoice_expiry)
-             VALUES ($1, $2, $3, $4)
+            "INSERT INTO sender_comments (payment_hash, user_pubkey, sender_comment, invoice_expiry, updated_at)
+             VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT(payment_hash) DO UPDATE
              SET user_pubkey = excluded.user_pubkey
              ,   sender_comment = excluded.sender_comment
-             ,   invoice_expiry = excluded.invoice_expiry",
+             ,   invoice_expiry = excluded.invoice_expiry
+             ,   updated_at = excluded.updated_at",
         )
         .bind(&comment.payment_hash)
         .bind(&comment.user_pubkey)
         .bind(&comment.comment)
         .bind(comment.invoice_expiry)
+        .bind(comment.updated_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -190,10 +194,12 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             "SELECT COALESCE(z.payment_hash, sc.payment_hash) AS payment_hash
              ,      sc.sender_comment
              ,      z.zap_request
+             ,      z.zap_event
+             ,      COALESCE(z.updated_at, sc.updated_at) AS updated_at
              FROM zaps z
              FULL JOIN sender_comments sc ON z.payment_hash = sc.payment_hash
              WHERE z.user_pubkey = $1 OR sc.user_pubkey = $1
-             ORDER BY COALESCE(z.invoice_expiry, sc.invoice_expiry) ASC
+             ORDER BY COALESCE(z.updated_at, sc.updated_at) ASC
              LIMIT $3 OFFSET $2",
         )
         .bind(pubkey)
@@ -207,6 +213,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                 payment_hash: row.get(0),
                 sender_comment: row.get(1),
                 nostr_zap_request: row.get(2),
+                nostr_zap_receipt: row.get(3),
+                updated_at: row.get(4),
             })
             .collect();
         Ok(metadata)

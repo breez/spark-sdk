@@ -1,4 +1,5 @@
 use crate::repository::LnurlRepository;
+use crate::time::now_millis;
 use lightning_invoice::Bolt11Invoice;
 use nostr::{EventBuilder, JsonUtil, Keys, TagStandard};
 use spark::operator::OperatorConfig;
@@ -22,6 +23,7 @@ pub struct Zap {
     pub zap_event: Option<String>,
     pub user_pubkey: String,
     pub invoice_expiry: i64,
+    pub updated_at: i64,
 }
 
 /// Helper function to create an RPC client and subscribe to a user for zaps.
@@ -267,6 +269,7 @@ pub fn subscribe_to_user_for_zaps<DB>(
                 };
 
                 zap.zap_event = Some(zap_event.as_json());
+                zap.updated_at = now_millis();
                 db.upsert_zap(&zap).await.unwrap();
 
                 let nostr_client = nostr_sdk::Client::new(nostr_keys.clone());
