@@ -32,6 +32,31 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     Ok(sdk)
 }
 
+pub(crate) fn with_rest_chain_service(builder: &mut SdkBuilder) {
+    // ANCHOR: with-rest-chain-service
+    let url = "<your REST chain service URL>".to_string();
+    let chain_api_type = ChainApiType::MempoolSpace;
+    let optional_credentials = Credentials {
+        username: "<username>".to_string(),
+        password: "<password>".to_string(),
+    };
+    builder.with_rest_chain_service(
+        url,
+        chain_api_type,
+        Some(optional_credentials),
+    )
+    // ANCHOR_END: with-rest-chain-service
+}
+
+pub(crate) fn with_key_set(builder: &mut SdkBuilder) {
+    // ANCHOR: with-key-set
+    let key_set_type = KeySetType::Default;
+    let use_address_index = false;
+    let optional_account_number = 21;
+    builder.with_key_set(key_set_type, use_address_index, Some(optional_account_number));
+    // ANCHOR_END: with-key-set
+}
+
 // ANCHOR: with-storage
 #[async_trait]
 pub trait Storage: Send + Sync {
@@ -95,7 +120,7 @@ pub trait SyncStorage: Send + Sync {
 }
 // ANCHOR_END: with-sync-storage
 
-// ANCHOR: with-bitcoin-chain-service
+// ANCHOR: with-chain-service
 #[async_trait]
 pub trait BitcoinChainService: Send + Sync {
     async fn get_address_utxos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError>;
@@ -103,7 +128,7 @@ pub trait BitcoinChainService: Send + Sync {
     async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError>;
     async fn broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError>;
 }
-// ANCHOR_END: with-bitcoin-chain-service
+// ANCHOR_END: with-chain-service
 
 // ANCHOR: with-rest-client
 #[async_trait]

@@ -12,7 +12,6 @@ Future<void> initSdkAdvanced() async {
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: "<breez api key>");
 
-
   // Build the SDK using the config, seed and default storage
   final builder = SdkBuilder(config: config, seed: seed);
   builder.withDefaultStorage(storageDir: "./.data");
@@ -26,3 +25,50 @@ Future<void> initSdkAdvanced() async {
   // ANCHOR_END: init-sdk-advanced
   print(sdk);
 }
+
+Future<void> withRestChainService(SdkBuilder builder) async {
+  // ANCHOR: with-rest-chain-service
+  String url = "<your REST chain service URL>";
+  var chainApiType = ChainApiType.mempoolSpace;
+  var optionalCredentials = Credentials(
+    username: "<username>",
+    password: "<password>",
+  );
+  builder.withRestChainService(
+    url: url,
+    apiType: chainApiType,
+    credentials: optionalCredentials,
+  );
+  // ANCHOR_END: with-rest-chain-service
+}
+
+Future<void> withKeySet(SdkBuilder builder) async {
+  // ANCHOR: with-key-set
+  var keySetType = KeySetType.default_;
+  var useAddressIndex = false;
+  var optionalAccountNumber = 21;
+  builder.withKeySet(
+    keySetType: keySetType,
+    useAddressIndex: useAddressIndex,
+    accountNumber: optionalAccountNumber,
+  );
+  // ANCHOR_END: with-key-set
+}
+
+// ANCHOR: with-storage
+// ANCHOR_END: with-storage
+
+// ANCHOR: with-sync-storage
+// ANCHOR_END: with-sync-storage
+
+// ANCHOR: with-chain-service
+// ANCHOR_END: with-chain-service
+
+// ANCHOR: with-rest-client
+// ANCHOR_END: with-rest-client
+
+// ANCHOR: with-fiat-service
+// ANCHOR_END: with-fiat-service
+
+// ANCHOR: with-payment-observer
+// ANCHOR_END: with-payment-observer

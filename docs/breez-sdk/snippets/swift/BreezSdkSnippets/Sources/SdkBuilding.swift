@@ -26,6 +26,35 @@ func initSdkAdvanced() async throws -> BreezSdk {
     return sdk
 }
 
+func withRestChainService(builder: SdkBuilder) async {
+    // ANCHOR: with-rest-chain-service
+    let url = "<your REST chain service URL>"
+    let chainApiType = ChainApiType.mempoolSpace
+    let optionalCredentials = Credentials(
+        username: "<username>",
+        password: "<password>"
+    )
+    await builder.withRestChainService(
+        url: url,
+        apiType: chainApiType,
+        credentials: optionalCredentials
+    )
+    // ANCHOR_END: with-rest-chain-service
+}
+
+func withKeySet(builder: SdkBuilder) async {
+    // ANCHOR: with-key-set
+    let keySetType = KeySetType.default
+    let useAddressIndex = false
+    let optionalAccountNumber = UInt32(21)
+    await builder.withKeySet(
+        keySetType: keySetType,
+        useAddressIndex: useAddressIndex,
+        accountNumber: optionalAccountNumber
+    )
+    // ANCHOR_END: with-key-set
+}
+
 // ANCHOR: with-storage
 public protocol Storage {
     func deleteCachedItem(key: String) async throws 
@@ -58,14 +87,14 @@ public protocol SyncStorage {
 }
 // ANCHOR_END: with-sync-storage
 
-// ANCHOR: with-bitcoin-chain-service
+// ANCHOR: with-chain-service
 protocol BitcoinChainService {
     func getAddressUtxos(address: String) async throws -> [Utxo]
     func getTransactionStatus(txid: String) async throws -> TxStatus
     func getTransactionHex(txid: String) async throws -> String
     func broadcastTransaction(tx: String) async throws
 }
-// ANCHOR_END: with-bitcoin-chain-service
+// ANCHOR_END: with-chain-service
 
 // ANCHOR: with-rest-client
 public protocol RestClient {

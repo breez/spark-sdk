@@ -12,6 +12,9 @@ from breez_sdk_spark import (
     UpdateDepositPayload,
     UnversionedRecordChange,
     Record,
+    ChainApiType,
+    Credentials,
+    KeySetType,
 )
 
 
@@ -40,6 +43,35 @@ async def init_sdk_advanced():
         logging.error(error)
         raise
     # ANCHOR_END: init-sdk-advanced
+
+
+async def with_rest_chain_service(builder: SdkBuilder):
+    # ANCHOR: with-rest-chain-service
+    url = "<your REST chain service URL>"
+    chain_api_type = ChainApiType.MEMPOOL_SPACE
+    optional_credentials = Credentials(
+        username="<username>",
+        password="<password>",
+    )
+    await builder.with_rest_chain_service(
+        url=url,
+        api_type=chain_api_type,
+        credentials=optional_credentials,
+    )
+    # ANCHOR_END: with-rest-chain-service
+
+
+async def with_key_set(builder: SdkBuilder):
+    # ANCHOR: with-key-set
+    key_set_type = KeySetType.DEFAULT
+    use_address_index = False
+    optional_account_number = 21
+    await builder.with_key_set(
+        key_set_type=key_set_type,
+        use_address_index=use_address_index,
+        account_number=optional_account_number,
+    )
+    # ANCHOR_END: with-key-set
 
 
 # ANCHOR: with-storage
@@ -136,7 +168,7 @@ class FiatService(typing.Protocol):
 # ANCHOR_END: with-fiat-service
 
 
-# ANCHOR: with-bitcoin-chain-service
+# ANCHOR: with-chain-service
 class BitcoinChainService(typing.Protocol):
     def get_address_utxos(self, address: "str"):
         raise NotImplementedError
@@ -146,7 +178,7 @@ class BitcoinChainService(typing.Protocol):
         raise NotImplementedError
     def broadcast_transaction(self, tx: "str"):
         raise NotImplementedError
-# ANCHOR_END: with-bitcoin-chain-service
+# ANCHOR_END: with-chain-service
 
 
 # ANCHOR: with-payment-observer

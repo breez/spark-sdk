@@ -29,6 +29,37 @@ namespace BreezSdkSnippets
             // ANCHOR_END: init-sdk-advanced
         }
 
+        async Task WithRestChainService(SdkBuilder builder)
+        {
+            // ANCHOR: with-rest-chain-service
+            var url = "<your REST chain service URL>";
+            var chainApiType = ChainApiType.MempoolSpace;
+            var optionalCredentials = new Credentials(
+                username: "<username>",
+                password: "<password>"
+            );
+            await builder.WithRestChainService(
+                url: url,
+                apiType: chainApiType,
+                credentials: optionalCredentials
+            );
+            // ANCHOR_END: with-rest-chain-service
+        }
+
+        async Task WithKeySet(SdkBuilder builder)
+        {
+            // ANCHOR: with-key-set
+            var keySetType = KeySetType.Default;
+            var useAddressIndex = false;
+            var optionalAccountNumber = 21u;
+            await builder.WithKeySet(
+                keySetType: keySetType,
+                useAddressIndex: useAddressIndex,
+                accountNumber: optionalAccountNumber
+            );
+            // ANCHOR_END: with-key-set
+        }
+
         // ANCHOR: with-storage
         public interface Storage
         {
@@ -63,7 +94,7 @@ namespace BreezSdkSnippets
         }
         // ANCHOR_END: with-sync-storage
 
-        // ANCHOR: with-bitcoin-chain-service
+        // ANCHOR: with-chain-service
         public interface BitcoinChainService
         {
             Task<List<Utxo>> GetAddressUtxos(string @address);
@@ -72,7 +103,7 @@ namespace BreezSdkSnippets
             Task BroadcastTransaction(string @tx);
             Task<RecommendedFees> RecommendedFees();
         }
-        // ANCHOR_END: with-bitcoin-chain-service
+        // ANCHOR_END: with-chain-service
 
         // ANCHOR: with-rest-client
         public interface RestClient

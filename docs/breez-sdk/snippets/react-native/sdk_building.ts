@@ -1,23 +1,28 @@
 import {
   SdkBuilder,
-  type ProvisionalPayment,
   Seed,
   defaultConfig,
   Network,
-  type TxStatus,
-  type Utxo,
-  type RestResponse,
-  type FiatCurrency,
-  type Rate,
-  type Payment,
-  type PaymentMetadata,
-  type ListPaymentsRequest,
-  type DepositInfo,
-  type UpdateDepositPayload,
-  type Record,
-  type UnversionedRecordChange,
-  type OutgoingChange,
-  type IncomingChange
+  ChainApiType,
+  KeySetType
+} from '@breeztech/breez-sdk-spark-react-native'
+import type {
+  ProvisionalPayment,
+  TxStatus,
+  Utxo,
+  RestResponse,
+  FiatCurrency,
+  Rate,
+  Payment,
+  PaymentMetadata,
+  ListPaymentsRequest,
+  DepositInfo,
+  UpdateDepositPayload,
+  Record,
+  UnversionedRecordChange,
+  OutgoingChange,
+  IncomingChange,
+  Credentials
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 
@@ -43,6 +48,27 @@ const exampleGettingStartedAdvanced = async () => {
   // await builder.withPaymentObserver(<your payment observer implementation>)
   const sdk = await builder.build()
   // ANCHOR_END: init-sdk-advanced
+}
+
+const exampleWithRestChainService = async (builder: SdkBuilder) => {
+  // ANCHOR: with-rest-chain-service
+  const url = '<your REST chain service URL>'
+  const chainApiType = ChainApiType.MempoolSpace
+  const optionalCredentials: Credentials = {
+    username: '<username>',
+    password: '<password>'
+  }
+  await builder.withRestChainService(url, chainApiType, optionalCredentials)
+  // ANCHOR_END: with-rest-chain-service
+}
+
+const exampleWithKeySet = async (builder: SdkBuilder) => {
+  // ANCHOR: with-key-set
+  const keySetType = KeySetType.Default
+  const useAddressIndex = false
+  const optionalAccountNumber = 21
+  await builder.withKeySet(keySetType, useAddressIndex, optionalAccountNumber)
+  // ANCHOR_END: with-key-set
 }
 
 // ANCHOR: with-storage
@@ -77,14 +103,14 @@ interface SyncStorage {
 }
 // ANCHOR_END: with-sync-storage
 
-// ANCHOR: with-bitcoin-chain-service
+// ANCHOR: with-chain-service
 interface BitcoinChainService {
   getAddressUtxos: (address: string) => Promise<Utxo[]>
   getTransactionStatus: (txid: string) => Promise<TxStatus>
   getTransactionHex: (txid: string) => Promise<string>
   broadcastTransaction: (tx: string) => Promise<void>
 }
-// ANCHOR_END: with-bitcoin-chain-service
+// ANCHOR_END: with-chain-service
 
 // ANCHOR: with-rest-client
 interface RestClient {

@@ -18,14 +18,22 @@ Using the SDK Builder gives you more control over the initialization and modular
 
 When using the SDK Builder, you either have to provide a Storage implementation or use the default storage from the SDK.
 
+**Note:** Javascript (Wasm) has both Storage and Real-Time Sync Storage in a single interface.
+
+**Note:** Flutter currently only supports using the default storage.
+
 {{#tabs sdk_building:with-storage}}
 
 <h2 id="with-real-time-storage">
-    <a class="header" href="#with-real-time-storage">With Real-Time Storage</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_real_time_storage">API docs</a>
+    <a class="header" href="#with-real-time-storage">With Real-Time Sync Storage</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_real_time_sync_storage">API docs</a>
 </h2>
 
-If you are providing your own Storage implementation, you also need to provide a Real-Time Storage implementation when real-time sync is enabled. When using the default storage from the SDK, this is already provided.
+If you are providing your own Storage implementation, you also need to provide a Real-Time Sync Storage implementation when real-time sync is enabled. When using the default storage from the SDK, this is already provided.
+
+**Note:** Javascript (Wasm) has both Storage and Real-Time Sync Storage in a single interface. See [With Storage](#with-storage).
+
+**Note:** Flutter currently only supports using the default storage.
 
 {{#tabs sdk_building:with-sync-storage}}
 
@@ -34,9 +42,17 @@ If you are providing your own Storage implementation, you also need to provide a
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_chain_service">API docs</a>
 </h2>
 
-The SDK provides a default Bitcoin Chain Service implementation. If you want to use your own, you can provide it either via a URL and optional credentials or by implementing the Bitcoin Chain Service interface.
+The SDK provides a default Bitcoin Chain Service implementation. If you want to use your own, you can provide it in two ways.
 
-{{#tabs sdk_building:with-bitcoin-chain-service}}
+By providing a URL and optional credentials.
+
+{{#tabs sdk_building:with-rest-chain-service}}
+
+By implementing the Bitcoin Chain Service interface.
+
+**Note:** Flutter currently does not support this.
+
+{{#tabs sdk_building:with-chain-service}}
 
 <h2 id="with-fiat-service">
     <a class="header" href="#with-fiat-service">With Fiat Service</a>
@@ -44,6 +60,8 @@ The SDK provides a default Bitcoin Chain Service implementation. If you want to 
 </h2>
 
 The SDK by default provides a list of available Fiat currencies and current exchange rates. If you want to use own own, you can provide it by implementing the Fiat Service interface.
+
+**Note:** Flutter currently does not support this.
 
 {{#tabs sdk_building:with-fiat-service}}
 
@@ -54,6 +72,8 @@ The SDK by default provides a list of available Fiat currencies and current exch
 
 The LNURL Client is used to make REST requests specifically when interacting with LNURL. If you want to use your own, you can it provide by implementing the REST Service interface.
 
+**Note:** Flutter currently does not support this.
+
 {{#tabs sdk_building:with-rest-client}}
 
 <h2 id="with-key-set">
@@ -61,7 +81,7 @@ The LNURL Client is used to make REST requests specifically when interacting wit
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_key_set">API docs</a>
 </h2>
 
-The SDK uses by default the Default key set with the account number 0. You can change this to alter the derivation path used with the provided seed:
+The SDK uses by default the Default key set with the account number 1 on Mainnet (0 on Regtest). You can change this to alter the derivation path used with the provided seed:
 
 - **Default** - Uses derivation path `m/8797555'/<account number>` (use address index is ignored)
 - **Taproot** - Uses derivation path `m/86'/0'/<account number>'/0/0`<br/>(or `m/86'/0'/0'/0/<account number>` when use address index is enabled)
@@ -69,11 +89,15 @@ The SDK uses by default the Default key set with the account number 0. You can c
 - **Wrapped Segwit** - Uses derivation path `m/49'/0'/<account number>'/0/0`<br/>(or `m/49'/0'/0'/0/<account number>` when use address index is enabled)
 - **Legacy** - Uses derivation path `m/44'/0'/<account number>'/0/0`<br/>(or `m/44'/0'/0'/0/<account number>` when use address index is enabled)
 
+{{#tabs sdk_building:with-key-set}}
+
 <h2 id="with-payment-observer">
     <a class="header" href="#with-payment-observer">With Payment Observer</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_payment_observer">API docs</a>
 </h2>
 
 By implementing the Payment Observer interface you can be notified before a payment is sent. It includes information about the provisional payment including the payment ID, amount to be sent (in satoshis or token base units) and payment details based on the payment method.
+
+**Note:** Flutter currently does not support this.
 
 {{#tabs sdk_building:with-payment-observer}}

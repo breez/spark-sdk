@@ -34,6 +34,27 @@ func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
 	// ANCHOR_END: init-sdk-advanced
 }
 
+func WithRestChainService(builder *breez_sdk_spark.SdkBuilder) {
+	// ANCHOR: with-rest-chain-service
+	url := "<your REST chain service URL>"
+	chainApiType := breez_sdk_spark.ChainApiTypeMempoolSpace
+	optionalCredentials := &breez_sdk_spark.Credentials{
+		Username: "<username>",
+		Password: "<password>",
+	}
+	builder.WithRestChainService(url, chainApiType, optionalCredentials)
+	// ANCHOR_END: with-rest-chain-service
+}
+
+func WithKeySet(builder *breez_sdk_spark.SdkBuilder) {
+	// ANCHOR: with-key-set
+	keySetType := breez_sdk_spark.KeySetTypeDefault
+	useAccountIndex := true
+	optionalAccountNumber := uint32(21)
+	builder.WithKeySet(keySetType, useAccountIndex, &optionalAccountNumber)
+	// ANCHOR_END: with-key-set
+}
+
 // ANCHOR: with-storage
 type Storage interface {
 	DeleteCachedItem(key string) error
@@ -66,14 +87,14 @@ type SyncStorage interface {
 }
 // ANCHOR_END: with-sync-storage
 
-// ANCHOR: with-bitcoin-chain-service
+// ANCHOR: with-chain-service
 type BitcoinChainService interface {
 	GetAddressUtxos(address string) ([]breez_sdk_spark.Utxo, error)
 	GetTransactionStatus(txid string) (breez_sdk_spark.TxStatus, error)
 	GetTransactionHex(txid string) (string, error)
 	BroadcastTransaction(tx string) error
 }
-// ANCHOR_END: with-bitcoin-chain-service
+// ANCHOR_END: with-chain-service
 
 // ANCHOR: with-rest-client
 type RestClient interface {
@@ -95,4 +116,3 @@ type PaymentObserver interface {
 	BeforeSend(payments []breez_sdk_spark.ProvisionalPayment) error
 }
 // ANCHOR_END: with-payment-observer
-

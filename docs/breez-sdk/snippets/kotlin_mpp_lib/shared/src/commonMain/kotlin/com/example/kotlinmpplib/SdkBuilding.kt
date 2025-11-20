@@ -29,6 +29,35 @@ class SdkBuilding {
         }
         // ANCHOR_END: init-sdk-advanced
     }
+
+    suspend fun withRestChainService(builder: SdkBuilder) { 
+        // ANCHOR: with-rest-chain-service
+        val url = "<your REST chain service URL>"
+        val chainApiType = ChainApiType.MEMPOOL_SPACE
+        val optionalCredentials = Credentials(
+            username = "<username>",
+            password = "<password>"
+        )
+        builder.withRestChainService(
+            url = url,
+            apiType = chainApiType,
+            credentials = optionalCredentials
+        )
+        // ANCHOR_END: with-rest-chain-service
+    }
+
+    suspend fun withKeySet(builder: SdkBuilder) {
+        // ANCHOR: with-key-set
+        val keySetType = KeySetType.DEFAULT
+        val useAddressIndex = false
+        val optionalAccountNumber = 21u
+        builder.withKeySet(
+            keySetType = keySetType,
+            useAddressIndex = useAddressIndex,
+            accountNumber = optionalAccountNumber
+        )
+        // ANCHOR_END: with-key-set
+    }
 }
 
 // ANCHOR: with-storage
@@ -63,14 +92,14 @@ interface SyncStorage {
 }
 // ANCHOR_END: with-sync-storage
 
-// ANCHOR: with-bitcoin-chain-service
+// ANCHOR: with-chain-service
 interface BitcoinChainService {
     suspend fun `getAddressUtxos`(`address`: String): List<Utxo>
     suspend fun `getTransactionStatus`(`txid`: String): TxStatus
     suspend fun `getTransactionHex`(`txid`: String): String
     suspend fun `broadcastTransaction`(`tx`: String)
 }
-// ANCHOR_END: with-bitcoin-chain-service
+// ANCHOR_END: with-chain-service
 
 // ANCHOR: with-rest-client
 interface RestClient {
