@@ -29,6 +29,7 @@ async-trait.workspace = true
 base64.workspace = true
 bip39.workspace = true
 bitcoin.workspace = true
+bitflags.workspace = true
 breez-sdk-common.workspace = true
 chrono.workspace = true
 clap = { workspace = true, features = ["derive"] }
