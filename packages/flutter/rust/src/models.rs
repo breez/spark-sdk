@@ -943,11 +943,3 @@ pub struct _ClaimHtlcPaymentRequest {
 pub struct _ClaimHtlcPaymentResponse {
     pub payment: Payment,
 }
-
-#[frb(mirror(ListUnclaimedHtlcTransferPaymentsRequest))]
-pub struct _ListUnclaimedHtlcTransferPaymentsRequest {}
-
-#[frb(mirror(ListUnclaimedHtlcTransferPaymentsResponse))]
-pub struct _ListUnclaimedHtlcTransferPaymentsResponse {
-    pub payments: Vec<Payment>,
-}
