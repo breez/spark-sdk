@@ -217,6 +217,13 @@ pub struct _LnurlWithdrawInfo {
     pub withdraw_url: String,
 }
 
+#[frb(mirror(LnurlReceiveMetadata))]
+pub struct _LnurlReceiveMetadata {
+    pub nostr_zap_request: Option<String>,
+    pub nostr_zap_receipt: Option<String>,
+    pub sender_comment: Option<String>,
+}
+
 #[frb(mirror(LnurlWithdrawRequest))]
 pub struct _LnurlWithdrawRequest {
     pub amount_sats: u64,
@@ -481,6 +488,7 @@ pub enum _PaymentDetails {
         destination_pubkey: String,
         lnurl_pay_info: Option<LnurlPayInfo>,
         lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
+        lnurl_receive_metadata: Option<LnurlReceiveMetadata>,
     },
     Withdraw {
         tx_id: String,
