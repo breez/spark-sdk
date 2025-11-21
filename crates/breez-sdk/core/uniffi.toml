@@ -39,7 +39,7 @@ access_modifier = "public"
 [bindings.csharp.custom_types.u128]
 imports = ["System.Numerics", "System.Text"]
 type_name = "BigInteger"
-into_custom = "new BigInteger(Encoding.UTF8.GetBytes({}))"
+into_custom = "BigInteger.Parse({})"
 from_custom = "{}.ToString()"
 
 [bindings.typescript.customTypes.u128]
