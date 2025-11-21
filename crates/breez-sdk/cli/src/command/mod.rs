@@ -1,5 +1,6 @@
 mod issuer;
 
+use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
     ClaimHtlcPaymentRequest, Fee, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
@@ -656,15 +657,18 @@ fn read_payment_options(
                 return Ok(None);
             }
 
-            let preimage = rl.readline("Please enter the HTLC preimage (hex string) or leave empty to generate a random one:")?;
-            let preimage = if preimage.is_empty() {
+            let payment_hash = rl.readline("Please enter the HTLC payment hash (hex string) or leave empty to generate a new preimage and associated hash:")?;
+            let payment_hash = if payment_hash.is_empty() {
                 let mut preimage_bytes = [0u8; 32];
                 rand::thread_rng().fill_bytes(&mut preimage_bytes);
                 let preimage = hex::encode(preimage_bytes);
+                let payment_hash = sha256::Hash::hash(&preimage_bytes).to_string();
+
                 println!("Generated preimage: {preimage}");
-                preimage
+                println!("Associated payment hash: {payment_hash}");
+                payment_hash
             } else {
-                preimage
+                payment_hash
             };
 
             let expiry_duration_secs = rl
@@ -673,7 +677,7 @@ fn read_payment_options(
 
             Ok(Some(SendPaymentOptions::SparkAddress {
                 htlc_options: Some(SparkHtlcOptions {
-                    preimage,
+                    payment_hash,
                     expiry_duration_secs,
                 }),
             }))

@@ -3,6 +3,7 @@ use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 use bitcoin::{
     Address, Transaction,
     address::NetworkUnchecked,
+    hashes::sha256::Hash,
     key::Secp256k1,
     secp256k1::{PublicKey, ecdsa::Signature},
 };
@@ -618,8 +619,9 @@ impl SparkWallet {
         &self,
         amount_sat: u64,
         receiver_address: &SparkAddress,
-        preimage: &Preimage,
+        payment_hash: &Hash,
         expiry_duration: Duration,
+        transfer_id: Option<TransferId>,
     ) -> Result<WalletTransfer, SparkWalletError> {
         // validate receiver address and get its pubkey
         if self.config.network != receiver_address.network {
@@ -640,22 +642,23 @@ impl SparkWallet {
             self.htlc_service.create_htlc(
                 leaves_reservation.leaves.clone(),
                 &receiver_pubkey,
-                preimage,
+                payment_hash,
                 expiry_time,
+                transfer_id,
             ),
             &leaves_reservation,
         )
         .await?;
 
         let htlc_preimage_request = PreimageRequest {
-            payment_hash: preimage.compute_hash(),
+            payment_hash: *payment_hash,
             status: PreimageRequestStatus::WaitingForPreimage,
             created_time: transfer
                 .created_time
                 .map(|t| UNIX_EPOCH + Duration::from_secs(t))
                 .unwrap_or(SystemTime::now()),
             expiry_time,
-            preimage: Some(preimage.clone()),
+            preimage: None,
         };
 
         Ok(WalletTransfer::from_transfer(

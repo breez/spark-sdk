@@ -365,7 +365,7 @@ pub enum _SendPaymentOptions {
 
 #[frb(mirror(SparkHtlcOptions))]
 pub struct _SparkHtlcOptions {
-    pub preimage: String,
+    pub payment_hash: String,
     pub expiry_duration_secs: u64,
 }
 

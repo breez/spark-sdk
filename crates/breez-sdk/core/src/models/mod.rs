@@ -824,8 +824,8 @@ pub enum SendPaymentOptions {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SparkHtlcOptions {
-    /// The preimage of the HTLC. The receiver will need to provide this to claim it.
-    pub preimage: String,
+    /// The payment hash of the HTLC. The receiver will need to provide the associated preimage to claim it.
+    pub payment_hash: String,
     /// The duration of the HTLC in seconds.
     /// After this time, the HTLC will be reverted.
     pub expiry_duration_secs: u64,

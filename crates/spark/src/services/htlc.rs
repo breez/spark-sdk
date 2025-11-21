@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use bitcoin::hashes::Hash;
+use bitcoin::hashes::Hash as _;
+use bitcoin::hashes::sha256::Hash;
 use bitcoin::secp256k1::PublicKey;
 use web_time::SystemTime;
 
@@ -44,40 +45,42 @@ impl HtlcService {
         &self,
         leaves: Vec<TreeNode>,
         receiver_id: &PublicKey,
-        preimage: &Preimage,
+        payment_hash: &Hash,
         expiry_time: SystemTime,
+        transfer_id: Option<TransferId>,
     ) -> Result<Transfer, ServiceError> {
-        let transfer_id = TransferId::generate();
+        let unwrapped_transfer_id = match &transfer_id {
+            Some(transfer_id) => transfer_id.clone(),
+            None => TransferId::generate(),
+        };
 
         // TODO: run transfer observer method
 
         let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves, None)?;
 
-        let payment_hash = preimage.compute_hash();
-
         let transfer_request = self
             .transfer_service
             .prepare_transfer_request(
-                &transfer_id,
+                &unwrapped_transfer_id,
                 &leaf_key_tweaks,
                 receiver_id,
                 Default::default(),
-                Some(&payment_hash),
+                Some(payment_hash),
                 Some(expiry_time),
             )
             .await?;
 
         let amount_sats = leaf_key_tweaks.iter().map(|l| l.node.value).sum();
 
-        let transfer: Transfer = swap_nodes_for_preimage(
+        let transfer: Transfer = match swap_nodes_for_preimage(
             &self.operator_pool,
             &self.signer,
             self.network,
             SwapNodesForPreimageRequest {
-                transfer_id: &transfer_id,
+                transfer_id: &unwrapped_transfer_id,
                 leaves: &leaf_key_tweaks,
                 receiver_pubkey: receiver_id,
-                payment_hash: &payment_hash,
+                payment_hash,
                 invoice_str: None,
                 amount_sats,
                 fee_sats: 0,
@@ -86,12 +89,20 @@ impl HtlcService {
                 expiry_time: &expiry_time,
             },
         )
-        .await?
-        .transfer
-        .ok_or(ServiceError::SSPswapError(
-            "Swap response did not contain a transfer".to_string(),
-        ))?
-        .try_into()?;
+        .await
+        {
+            Ok(response) => response
+                .transfer
+                .ok_or(ServiceError::SSPswapError(
+                    "Swap response did not contain a transfer".to_string(),
+                ))?
+                .try_into()?,
+            Err(e) => {
+                self.transfer_service
+                    .recover_transfer_on_rpc_connection_error(&unwrapped_transfer_id, e)
+                    .await?
+            }
+        };
 
         Ok(transfer)
     }

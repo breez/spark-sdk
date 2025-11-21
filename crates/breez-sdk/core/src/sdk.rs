@@ -1588,7 +1588,12 @@ impl BreezSdk {
             }
 
             return self
-                .send_spark_htlc(&spark_address, amount.try_into()?, htlc_options)
+                .send_spark_htlc(
+                    &spark_address,
+                    amount.try_into()?,
+                    htlc_options,
+                    idempotency_key,
+                )
                 .await;
         }
 
@@ -1615,15 +1620,26 @@ impl BreezSdk {
         address: &SparkAddress,
         amount_sat: u64,
         htlc_options: &SparkHtlcOptions,
+        idempotency_key: Option<String>,
     ) -> Result<SendPaymentResponse, SdkError> {
-        let preimage = Preimage::from_hex(&htlc_options.preimage)
-            .map_err(|_| SdkError::InvalidInput("Invalid preimage".to_string()))?;
+        let payment_hash = sha256::Hash::from_str(&htlc_options.payment_hash)
+            .map_err(|_| SdkError::InvalidInput("Invalid payment hash".to_string()))?;
 
         let expiry_duration = Duration::from_secs(htlc_options.expiry_duration_secs);
 
+        let transfer_id = idempotency_key
+            .as_ref()
+            .map(|key| TransferId::from_str(key))
+            .transpose()?;
         let transfer = self
             .spark_wallet
-            .create_htlc(amount_sat, address, &preimage, expiry_duration)
+            .create_htlc(
+                amount_sat,
+                address,
+                &payment_hash,
+                expiry_duration,
+                transfer_id,
+            )
             .await?;
 
         Ok(SendPaymentResponse {

@@ -763,7 +763,7 @@ pub enum SendPaymentOptions {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SparkHtlcOptions)]
 pub struct SparkHtlcOptions {
-    pub preimage: String,
+    pub payment_hash: String,
     pub expiry_duration_secs: u64,
 }
 

@@ -73,8 +73,15 @@ pub async fn handle_command(
                 preimage.encode_hex()
             );
 
+            let payment_hash = preimage.compute_hash();
             let transfer = wallet
-                .create_htlc(amount_sat, &receiver_addr, &preimage, expiry_duration)
+                .create_htlc(
+                    amount_sat,
+                    &receiver_addr,
+                    &payment_hash,
+                    expiry_duration,
+                    None,
+                )
                 .await?;
             println!("Transfer: {}", serde_json::to_string_pretty(&transfer)?);
         }
