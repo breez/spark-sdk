@@ -5,9 +5,10 @@ use bitcoin::hashes::sha256::Hash;
 use bitcoin::secp256k1::PublicKey;
 use web_time::SystemTime;
 
+use crate::address::SparkAddress;
 use crate::operator::rpc as operator_rpc;
 use crate::operator::rpc::spark::ProvidePreimageRequest;
-use crate::services::{Preimage, Transfer, TransferId};
+use crate::services::{Preimage, Transfer, TransferId, TransferObserver};
 use crate::tree::TreeNode;
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_preimage};
@@ -24,6 +25,7 @@ pub struct HtlcService {
     network: Network,
     signer: Arc<dyn Signer>,
     transfer_service: Arc<TransferService>,
+    transfer_observer: Option<Arc<dyn TransferObserver>>,
 }
 
 impl HtlcService {
@@ -32,12 +34,14 @@ impl HtlcService {
         network: Network,
         signer: Arc<dyn Signer>,
         transfer_service: Arc<TransferService>,
+        transfer_observer: Option<Arc<dyn TransferObserver>>,
     ) -> Self {
         HtlcService {
             operator_pool,
             network,
             signer,
             transfer_service,
+            transfer_observer,
         }
     }
 
@@ -54,7 +58,22 @@ impl HtlcService {
             None => TransferId::generate(),
         };
 
-        // TODO: run transfer observer method
+        if let Some(transfer_observer) = &self.transfer_observer {
+            let identity_public_key = &self.signer.get_identity_public_key()?;
+            if identity_public_key != receiver_id {
+                let receiver_address = SparkAddress::new(*receiver_id, self.network, None);
+                let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
+                transfer_observer
+                    .before_send_transfer(
+                        &unwrapped_transfer_id,
+                        &receiver_address.to_address_string().map_err(|_| {
+                            ServiceError::Generic("Failed to get pay request".to_string())
+                        })?,
+                        amount_sats,
+                    )
+                    .await?;
+            }
+        }
 
         let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves, None)?;
 

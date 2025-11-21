@@ -207,7 +207,7 @@ impl SparkWallet {
             config.network,
             config.split_secret_threshold,
             config.tokens_config.clone(),
-            transfer_observer,
+            transfer_observer.clone(),
         ));
 
         let htlc_service = Arc::new(HtlcService::new(
@@ -215,6 +215,7 @@ impl SparkWallet {
             config.network,
             Arc::clone(&signer),
             Arc::clone(&transfer_service),
+            transfer_observer,
         ));
 
         let event_manager = Arc::new(EventManager::new());
