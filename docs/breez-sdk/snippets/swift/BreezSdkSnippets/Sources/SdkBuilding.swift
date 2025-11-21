@@ -55,64 +55,17 @@ func withKeySet(builder: SdkBuilder) async {
     // ANCHOR_END: with-key-set
 }
 
-// ANCHOR: with-storage
-public protocol Storage {
-    func deleteCachedItem(key: String) async throws 
-    func getCachedItem(key: String) async throws  -> String?
-    func setCachedItem(key: String, value: String) async throws 
-    func listPayments(request: ListPaymentsRequest) async throws  -> [Payment]
-    func insertPayment(payment: Payment) async throws 
-    func setPaymentMetadata(paymentId: String, metadata: PaymentMetadata) async throws 
-    func getPaymentById(id: String) async throws  -> Payment
-    func getPaymentByInvoice(invoice: String) async throws  -> Payment?
-    func addDeposit(txid: String, vout: UInt32, amountSats: UInt64) async throws 
-    func deleteDeposit(txid: String, vout: UInt32) async throws 
-    func listDeposits() async throws  -> [DepositInfo]
-    func updateDeposit(txid: String, vout: UInt32, payload: UpdateDepositPayload) async throws 
-}
-// ANCHOR_END: with-storage
-
-// ANCHOR: with-sync-storage
-public protocol SyncStorage {
-    func addOutgoingChange(record: UnversionedRecordChange) async throws  -> UInt64
-    func completeOutgoingSync(record: Record) async throws 
-    func getPendingOutgoingChanges(limit: UInt32) async throws  -> [OutgoingChange]
-    func getLastRevision() async throws  -> UInt64
-    func insertIncomingRecords(records: [Record]) async throws 
-    func deleteIncomingRecord(record: Record) async throws 
-    func rebasePendingOutgoingRecords(revision: UInt64) async throws 
-    func getIncomingRecords(limit: UInt32) async throws  -> [IncomingChange]
-    func getLatestOutgoingChange() async throws  -> OutgoingChange?
-    func updateRecordFromIncoming(record: Record) async throws 
-}
-// ANCHOR_END: with-sync-storage
-
-// ANCHOR: with-chain-service
-protocol BitcoinChainService {
-    func getAddressUtxos(address: String) async throws -> [Utxo]
-    func getTransactionStatus(txid: String) async throws -> TxStatus
-    func getTransactionHex(txid: String) async throws -> String
-    func broadcastTransaction(tx: String) async throws
-}
-// ANCHOR_END: with-chain-service
-
-// ANCHOR: with-rest-client
-public protocol RestClient {
-    func getRequest(url: String, headers: [String: String]?) async throws  -> RestResponse
-    func postRequest(url: String, headers: [String: String]?, body: String?) async throws  -> RestResponse
-    func deleteRequest(url: String, headers: [String: String]?, body: String?) async throws  -> RestResponse
-}
-// ANCHOR_END: with-rest-client
-
-// ANCHOR: with-fiat-service
-public protocol FiatService {
-    func fetchFiatCurrencies() async throws  -> [FiatCurrency]
-    func fetchFiatRates() async throws  -> [Rate]
-}
-// ANCHOR_END: with-fiat-service
-
 // ANCHOR: with-payment-observer
-protocol PaymentObserver {
-    func beforeSend(payments: [ProvisionalPayment]) async throws
+class ExamplePaymentObserver: PaymentObserver {
+    func beforeSend(payments: [ProvisionalPayment]) async {
+        for payment in payments {
+            print("About to send payment: \(payment.paymentId) of amount \(payment.amount)")
+        }
+    }
+}
+
+func withPaymentObserver(builder: SdkBuilder) async {
+    let paymentObserver = ExamplePaymentObserver()
+    await builder.withPaymentObserver(paymentObserver: paymentObserver)
 }
 // ANCHOR_END: with-payment-observer

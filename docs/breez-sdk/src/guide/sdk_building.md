@@ -18,11 +18,7 @@ Using the SDK Builder gives you more control over the initialization and modular
 
 When using the SDK Builder, you either have to provide a Storage implementation or use the default storage from the SDK.
 
-**Note:** Javascript (Wasm) has both Storage and Real-Time Sync Storage in a single interface.
-
 **Note:** Flutter currently only supports using the default storage.
-
-{{#tabs sdk_building:with-storage}}
 
 <h2 id="with-real-time-storage">
     <a class="header" href="#with-real-time-storage">With Real-Time Sync Storage</a>
@@ -31,28 +27,23 @@ When using the SDK Builder, you either have to provide a Storage implementation 
 
 If you are providing your own Storage implementation, you also need to provide a Real-Time Sync Storage implementation when real-time sync is enabled. When using the default storage from the SDK, this is already provided.
 
-**Note:** Javascript (Wasm) has both Storage and Real-Time Sync Storage in a single interface. See [With Storage](#with-storage).
-
 **Note:** Flutter currently only supports using the default storage.
-
-{{#tabs sdk_building:with-sync-storage}}
 
 <h2 id="with-chain-service">
     <a class="header" href="#with-chain-service">With Chain Service</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_chain_service">API docs</a>
 </h2>
 
-The SDK provides a default Bitcoin Chain Service implementation. If you want to use your own, you can provide it in two ways.
+The SDK provides a default Bitcoin Chain Service implementation. If you want to use your own, you can provide it either by using [With REST Chain Service](#with-rest-chain-service) or by implementing the Bitcoin Chain Service interface.
 
-By providing a URL and optional credentials.
+<h2 id="with-rest-chain-service">
+    <a class="header" href="#with-rest-chain-service">With REST Chain Service</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_rest_chain_service">API docs</a>
+</h2>
+
+The SDK provides a default Bitcoin Chain Service implementation. If you want to use your own, you can provide it either by using [With Chain Service](#with-chain-service) or by providing a URL and optional credentials.
 
 {{#tabs sdk_building:with-rest-chain-service}}
-
-By implementing the Bitcoin Chain Service interface.
-
-**Note:** Flutter currently does not support this.
-
-{{#tabs sdk_building:with-chain-service}}
 
 <h2 id="with-fiat-service">
     <a class="header" href="#with-fiat-service">With Fiat Service</a>
@@ -61,20 +52,12 @@ By implementing the Bitcoin Chain Service interface.
 
 The SDK by default provides a list of available Fiat currencies and current exchange rates. If you want to use own own, you can provide it by implementing the Fiat Service interface.
 
-**Note:** Flutter currently does not support this.
-
-{{#tabs sdk_building:with-fiat-service}}
-
 <h2 id="with-lnurl-client">
     <a class="header" href="#with-lnurl-client">With LNURL Client</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_lnurl_client">API docs</a>
 </h2>
 
 The LNURL Client is used to make REST requests specifically when interacting with LNURL. If you want to use your own, you can it provide by implementing the REST Service interface.
-
-**Note:** Flutter currently does not support this.
-
-{{#tabs sdk_building:with-rest-client}}
 
 <h2 id="with-key-set">
     <a class="header" href="#with-key-set">With Key Set</a>

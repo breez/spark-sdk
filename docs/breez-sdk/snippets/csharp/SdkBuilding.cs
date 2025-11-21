@@ -60,72 +60,22 @@ namespace BreezSdkSnippets
             // ANCHOR_END: with-key-set
         }
 
-        // ANCHOR: with-storage
-        public interface Storage
-        {
-            Task DeleteCachedItem(string @key);
-            Task<string?> GetCachedItem(string @key);
-            Task SetCachedItem(string @key, string @value);
-            Task<List<Payment>> ListPayments(ListPaymentsRequest @request);
-            Task InsertPayment(Payment @payment);
-            Task SetPaymentMetadata(string @paymentId, PaymentMetadata @metadata);
-            Task<Payment> GetPaymentById(string @id);
-            Task<Payment?> GetPaymentByInvoice(string @invoice);
-            Task AddDeposit(string @txid, uint @vout, ulong @amountSats);
-            Task DeleteDeposit(string @txid, uint @vout);
-            Task<List<DepositInfo>> ListDeposits();
-            Task UpdateDeposit(string @txid, uint @vout, UpdateDepositPayload @payload);
-        }
-        // ANCHOR_END: with-storage
-
-        // ANCHOR: with-sync-storage
-        public interface SyncStorage
-        {
-            Task<ulong> AddOutgoingChange(UnversionedRecordChange @record);
-            Task CompleteOutgoingSync(Record @record);
-            Task<List<OutgoingChange>> GetPendingOutgoingChanges(uint @limit);
-            Task<ulong> GetLastRevision();
-            Task InsertIncomingRecords(List<Record> @records);
-            Task DeleteIncomingRecord(Record @record);
-            Task RebasePendingOutgoingRecords(ulong @revision);
-            Task<List<IncomingChange>> GetIncomingRecords(uint @limit);
-            Task<OutgoingChange?> GetLatestOutgoingChange();
-            Task UpdateRecordFromIncoming(Record @record);
-        }
-        // ANCHOR_END: with-sync-storage
-
-        // ANCHOR: with-chain-service
-        public interface BitcoinChainService
-        {
-            Task<List<Utxo>> GetAddressUtxos(string @address);
-            Task<TxStatus> GetTransactionStatus(string @txid);
-            Task<string> GetTransactionHex(string @txid);
-            Task BroadcastTransaction(string @tx);
-            Task<RecommendedFees> RecommendedFees();
-        }
-        // ANCHOR_END: with-chain-service
-
-        // ANCHOR: with-rest-client
-        public interface RestClient
-        {
-            Task<RestResponse> GetRequest(string @url, Dictionary<string, string>? @headers);
-            Task<RestResponse> PostRequest(string @url, Dictionary<string, string>? @headers, string? @body);
-            Task<RestResponse> DeleteRequest(string @url, Dictionary<string, string>? @headers, string? @body);
-        }
-        // ANCHOR_END: with-rest-client
-
-        // ANCHOR: with-fiat-service
-        public interface FiatService
-        {
-            Task<List<FiatCurrency>> FetchFiatCurrencies();
-            Task<List<Rate>> FetchFiatRates();
-        }
-        // ANCHOR_END: with-fiat-service
-
         // ANCHOR: with-payment-observer
-        public interface PaymentObserver
+        class ExamplePaymentObserver : PaymentObserver
         {
-            Task BeforeSend(List<ProvisionalPayment> payments);
+            public async Task BeforeSend(List<ProvisionalPayment> payments)
+            {
+                foreach (var payment in payments)
+                {
+                    Console.WriteLine($"About to send payment {payment.paymentId} of amount {payment.amount}");
+                }
+            }
+        }
+
+        async Task WithPaymentObserver(SdkBuilder builder)
+        {
+            var paymentObserver = new ExamplePaymentObserver();
+            await builder.WithPaymentObserver(paymentObserver);
         }
         // ANCHOR_END: with-payment-observer
     }

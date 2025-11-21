@@ -71,62 +71,17 @@ const exampleWithKeySet = async (builder: SdkBuilder) => {
   // ANCHOR_END: with-key-set
 }
 
-// ANCHOR: with-storage
-export interface Storage {
-  getCachedItem: (key: string) => Promise<string | null>
-  setCachedItem: (key: string, value: string) => Promise<void>
-  deleteCachedItem: (key: string) => Promise<void>
-  listPayments: (request: ListPaymentsRequest) => Promise<Payment[]>
-  insertPayment: (payment: Payment) => Promise<void>
-  setPaymentMetadata: (paymentId: string, metadata: PaymentMetadata) => Promise<void>
-  getPaymentById: (id: string) => Promise<Payment>
-  getPaymentByInvoice: (invoice: string) => Promise<Payment>
-  addDeposit: (txid: string, vout: number, amount_sats: number) => Promise<void>
-  deleteDeposit: (txid: string, vout: number) => Promise<void>
-  listDeposits: () => Promise<DepositInfo[]>
-  updateDeposit: (txid: string, vout: number, payload: UpdateDepositPayload) => Promise<void>
-  syncAddOutgoingChange: (record: UnversionedRecordChange) => Promise<number>
-  syncCompleteOutgoingSync: (record: Record) => Promise<void>
-  syncGetPendingOutgoingChanges: (limit: number) => Promise<OutgoingChange[]>
-  syncGetLastRevision: () => Promise<number>
-  syncInsertIncomingRecords: (records: Record[]) => Promise<void>
-  syncDeleteIncomingRecord: (record: Record) => Promise<void>
-  syncRebasePendingOutgoingRecords: (revision: number) => Promise<void>
-  syncGetIncomingRecords: (limit: number) => Promise<IncomingChange[]>
-  syncGetLatestOutgoingChange: () => Promise<OutgoingChange | null>
-  syncUpdateRecordFromIncoming: (record: Record) => Promise<void>
-}
-// ANCHOR_END: with-storage
-
-// ANCHOR: with-sync-storage
-// ANCHOR_END: with-sync-storage
-
-// ANCHOR: with-chain-service
-interface BitcoinChainService {
-  getAddressUtxos: (address: string) => Promise<Utxo[]>
-  getTransactionStatus: (txid: string) => Promise<TxStatus>
-  getTransactionHex: (txid: string) => Promise<string>
-  broadcastTransaction: (tx: string) => Promise<void>
-}
-// ANCHOR_END: with-chain-service
-
-// ANCHOR: with-rest-client
-interface RestClient {
-  getRequest: (url: string, headers?: any) => Promise<RestResponse>
-  postRequest: (url: string, headers?: any, body?: string) => Promise<RestResponse>
-  deleteRequest: (url: string, headers?: any, body?: string) => Promise<RestResponse>
-}
-// ANCHOR_END: with-rest-client
-
-// ANCHOR: with-fiat-service
-export interface FiatService {
-  fetchFiatCurrencies: () => Promise<FiatCurrency[]>
-  fetchFiatRates: () => Promise<Rate[]>
-}
-// ANCHOR_END: with-fiat-service
-
 // ANCHOR: with-payment-observer
-interface PaymentObserver {
-  beforeSend: (payments: ProvisionalPayment[]) => Promise<void>
+class ExamplePaymentObserver {
+  beforeSend = async (payments: ProvisionalPayment[]) => {
+    for (const payment of payments) {
+      console.log(`About to send payment: ${payment.paymentId} of amount ${payment.amount}`)
+    }
+  }
+}
+
+const exampleWithPaymentObserver = (builder: SdkBuilder): SdkBuilder => {
+  const paymentObserver = new ExamplePaymentObserver()
+  return builder.withPaymentObserver(paymentObserver)
 }
 // ANCHOR_END: with-payment-observer

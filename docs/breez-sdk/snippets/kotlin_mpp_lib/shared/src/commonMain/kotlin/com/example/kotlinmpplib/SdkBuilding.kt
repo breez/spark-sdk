@@ -58,66 +58,19 @@ class SdkBuilding {
         )
         // ANCHOR_END: with-key-set
     }
-}
 
-// ANCHOR: with-storage
-interface Storage {
-    suspend fun `deleteCachedItem`(`key`: String)
-    suspend fun `getCachedItem`(`key`: String): String?
-    suspend fun `setCachedItem`(`key`: String, `value`: String)
-    suspend fun `listPayments`(`request`: ListPaymentsRequest): List<Payment>
-    suspend fun `insertPayment`(`payment`: Payment)
-    suspend fun `setPaymentMetadata`(`paymentId`: String, `metadata`: PaymentMetadata)
-    suspend fun `getPaymentById`(`id`: String): Payment
-    suspend fun `getPaymentByInvoice`(`invoice`: String): Payment?
-    suspend fun `addDeposit`(`txid`: String, `vout`: UInt, `amountSats`: ULong)
-    suspend fun `deleteDeposit`(`txid`: String, `vout`: UInt)
-    suspend fun `listDeposits`(): List<DepositInfo>
-    suspend fun `updateDeposit`(`txid`: String, `vout`: UInt, `payload`: UpdateDepositPayload)
-}
-// ANCHOR_END: with-storage
+    // ANCHOR: with-payment-observer
+    class ExamplePaymentObserver : PaymentObserver {
+        override suspend fun beforeSend(payments: List<ProvisionalPayment>) {
+            for (payment in payments) {
+                // Log.v("PaymentObserver", "About to send payment: ${payment.paymentId} of amount ${payment.amount}")
+            }
+        }
+    }
 
-// ANCHOR: with-sync-storage
-interface SyncStorage {
-    suspend fun `addOutgoingChange`(`record`: UnversionedRecordChange): ULong
-    suspend fun `completeOutgoingSync`(`record`: Record)
-    suspend fun `getPendingOutgoingChanges`(`limit`: UInt): List<OutgoingChange>
-    suspend fun `getLastRevision`(): ULong
-    suspend fun `insertIncomingRecords`(`records`: List<Record>)
-    suspend fun `deleteIncomingRecord`(`record`: Record)
-    suspend fun `rebasePendingOutgoingRecords`(`revision`: ULong)
-    suspend fun `getIncomingRecords`(`limit`: UInt): List<IncomingChange>
-    suspend fun `getLatestOutgoingChange`(): OutgoingChange?
-    suspend fun `updateRecordFromIncoming`(`record`: Record)
+    suspend fun withPaymentObserver(builder: SdkBuilder) {
+        val paymentObserver = ExamplePaymentObserver()
+        builder.withPaymentObserver(paymentObserver)
+    }
+    // ANCHOR_END: with-payment-observer
 }
-// ANCHOR_END: with-sync-storage
-
-// ANCHOR: with-chain-service
-interface BitcoinChainService {
-    suspend fun `getAddressUtxos`(`address`: String): List<Utxo>
-    suspend fun `getTransactionStatus`(`txid`: String): TxStatus
-    suspend fun `getTransactionHex`(`txid`: String): String
-    suspend fun `broadcastTransaction`(`tx`: String)
-}
-// ANCHOR_END: with-chain-service
-
-// ANCHOR: with-rest-client
-interface RestClient {
-    suspend fun `getRequest`(`url`: String, `headers`: Map<String, String>?): RestResponse
-    suspend fun `postRequest`(`url`: String, `headers`: Map<String, String>?, `body`: String?): RestResponse
-    suspend fun `deleteRequest`(`url`: String, `headers`: Map<String, String>?, `body`: String?): RestResponse
-}
-// ANCHOR_END: with-rest-client
-
-// ANCHOR: with-fiat-service
-interface FiatService {
-    suspend fun `fetchFiatCurrencies`(): List<FiatCurrency>
-    suspend fun `fetchFiatRates`(): List<Rate>
-}
-// ANCHOR_END: with-fiat-service
-
-// ANCHOR: with-payment-observer
-interface PaymentObserver {
-    suspend fun `beforeSend`(`payments`: List<ProvisionalPayment>)
-}
-// ANCHOR_END: with-payment-observer

@@ -27,8 +27,6 @@ func ListUnclaimedDeposits(sdk *breez_sdk_spark.BreezSdk) error {
 				log.Print("UTXO not found when claiming deposit")
 			case breez_sdk_spark.DepositClaimErrorGeneric:
 				log.Printf("Claim failed: %v", claimErr.Message)
-			case nil:
-				log.Printf("No claim error")
 			}
 		}
 	}

@@ -55,20 +55,5 @@ Future<void> withKeySet(SdkBuilder builder) async {
   // ANCHOR_END: with-key-set
 }
 
-// ANCHOR: with-storage
-// ANCHOR_END: with-storage
-
-// ANCHOR: with-sync-storage
-// ANCHOR_END: with-sync-storage
-
-// ANCHOR: with-chain-service
-// ANCHOR_END: with-chain-service
-
-// ANCHOR: with-rest-client
-// ANCHOR_END: with-rest-client
-
-// ANCHOR: with-fiat-service
-// ANCHOR_END: with-fiat-service
-
 // ANCHOR: with-payment-observer
 // ANCHOR_END: with-payment-observer

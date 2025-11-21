@@ -1,6 +1,8 @@
 package example
 
 import (
+	"log"
+
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
@@ -55,64 +57,18 @@ func WithKeySet(builder *breez_sdk_spark.SdkBuilder) {
 	// ANCHOR_END: with-key-set
 }
 
-// ANCHOR: with-storage
-type Storage interface {
-	DeleteCachedItem(key string) error
-	GetCachedItem(key string) (*string, error)
-	SetCachedItem(key string, value string) error
-	ListPayments(request breez_sdk_spark.ListPaymentsRequest) ([]breez_sdk_spark.Payment, error)
-	InsertPayment(payment breez_sdk_spark.Payment) error
-	SetPaymentMetadata(paymentId string, metadata breez_sdk_spark.PaymentMetadata) error
-	GetPaymentById(id string) (breez_sdk_spark.Payment, error)
-	GetPaymentByInvoice(invoice string) (*breez_sdk_spark.Payment, error)
-	AddDeposit(txid string, vout uint32, amountSats uint64) error
-	DeleteDeposit(txid string, vout uint32) error
-	ListDeposits() ([]breez_sdk_spark.DepositInfo, error)
-	UpdateDeposit(txid string, vout uint32, payload breez_sdk_spark.UpdateDepositPayload) error
-}
-// ANCHOR_END: with-storage
-
-// ANCHOR: with-sync-storage
-type SyncStorage interface {
-	AddOutgoingChange(record breez_sdk_spark.UnversionedRecordChange) (uint64, error)
-	CompleteOutgoingSync(record breez_sdk_spark.Record) error
-	GetPendingOutgoingChanges(limit uint32) ([]breez_sdk_spark.OutgoingChange, error)
-	GetLastRevision() (uint64, error)
-	InsertIncomingRecords(records []breez_sdk_spark.Record) error
-	DeleteIncomingRecord(record breez_sdk_spark.Record) error
-	RebasePendingOutgoingRecords(revision uint64) error
-	GetIncomingRecords(limit uint32) ([]breez_sdk_spark.IncomingChange, error)
-	GetLatestOutgoingChange() (*breez_sdk_spark.OutgoingChange, error)
-	UpdateRecordFromIncoming(record breez_sdk_spark.Record) error
-}
-// ANCHOR_END: with-sync-storage
-
-// ANCHOR: with-chain-service
-type BitcoinChainService interface {
-	GetAddressUtxos(address string) ([]breez_sdk_spark.Utxo, error)
-	GetTransactionStatus(txid string) (breez_sdk_spark.TxStatus, error)
-	GetTransactionHex(txid string) (string, error)
-	BroadcastTransaction(tx string) error
-}
-// ANCHOR_END: with-chain-service
-
-// ANCHOR: with-rest-client
-type RestClient interface {
-	GetRequest(url string, headers *map[string]string) (breez_sdk_spark.RestResponse, error)
-	PostRequest(url string, headers *map[string]string, body *string) (breez_sdk_spark.RestResponse, error)
-	DeleteRequest(url string, headers *map[string]string, body *string) (breez_sdk_spark.RestResponse, error)
-}
-// ANCHOR_END: with-rest-client
-
-// ANCHOR: with-fiat-service
-type FiatService interface {
-	FetchFiatCurrencies() ([]breez_sdk_spark.FiatCurrency, error)
-	FetchFiatRates() ([]breez_sdk_spark.Rate, error)
-}
-// ANCHOR_END: with-fiat-service
-
 // ANCHOR: with-payment-observer
-type PaymentObserver interface {
-	BeforeSend(payments []breez_sdk_spark.ProvisionalPayment) error
+type ExamplePaymentObserver struct{}
+
+func (ExamplePaymentObserver) BeforeSend(payments []breez_sdk_spark.ProvisionalPayment) error {
+	for _, payment := range payments {
+		log.Printf("About to send payment: %v of amount %v", payment.PaymentId, payment.Amount)
+	}
+	return nil
+}
+
+func WithPaymentObserver(builder *breez_sdk_spark.SdkBuilder) {
+	observer := ExamplePaymentObserver{}
+	builder.WithPaymentObserver(observer)
 }
 // ANCHOR_END: with-payment-observer
