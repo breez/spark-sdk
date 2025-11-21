@@ -330,6 +330,23 @@ impl Storage for SqliteStorage {
             }
         }
 
+        // Filter by Spark HTLC status
+        if let Some(ref htlc_status_filter) = request.spark_htlc_status_filter
+            && !htlc_status_filter.is_empty()
+        {
+            let placeholders = htlc_status_filter
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(", ");
+            where_clauses.push(format!(
+                "json_extract(s.htlc_details, '$.status') IN ({placeholders})"
+            ));
+            for htlc_status in htlc_status_filter {
+                params.push(Box::new(htlc_status.to_string()));
+            }
+        }
+
         // Build the WHERE clause
         let where_sql = if where_clauses.is_empty() {
             String::new()
@@ -1357,6 +1374,14 @@ mod tests {
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
         crate::persist::tests::test_timestamp_filtering(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_spark_htlc_status_filtering() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_htlc_filter").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_spark_htlc_status_filtering(Box::new(storage)).await;
     }
 
     #[tokio::test]

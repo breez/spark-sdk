@@ -305,6 +305,29 @@ pub enum SparkHtlcStatus {
     Returned,
 }
 
+impl fmt::Display for SparkHtlcStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SparkHtlcStatus::WaitingForPreimage => write!(f, "WaitingForPreimage"),
+            SparkHtlcStatus::PreimageShared => write!(f, "PreimageShared"),
+            SparkHtlcStatus::Returned => write!(f, "Returned"),
+        }
+    }
+}
+
+impl FromStr for SparkHtlcStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "WaitingForPreimage" => Ok(SparkHtlcStatus::WaitingForPreimage),
+            "PreimageShared" => Ok(SparkHtlcStatus::PreimageShared),
+            "Returned" => Ok(SparkHtlcStatus::Returned),
+            _ => Err("Invalid Spark HTLC status".to_string()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Network {
@@ -837,6 +860,9 @@ pub struct ListPaymentsRequest {
     pub status_filter: Option<Vec<PaymentStatus>>,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub asset_filter: Option<AssetFilter>,
+    /// Only include payments with specific Spark HTLC statuses
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
     /// Only include payments created after this timestamp (inclusive)
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub from_timestamp: Option<u64>,
@@ -1059,20 +1085,11 @@ pub struct UpdateUserSettingsRequest {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct ClaimSparkHtlcRequest {
+pub struct ClaimHtlcPaymentRequest {
     pub preimage: String,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct ClaimSparkHtlcResponse {
+pub struct ClaimHtlcPaymentResponse {
     pub payment: Payment,
-}
-
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct ListUnclaimedHtlcTransferPaymentsRequest {}
-
-#[derive(Debug, Clone, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct ListUnclaimedHtlcTransferPaymentsResponse {
-    pub payments: Vec<Payment>,
 }

@@ -101,6 +101,13 @@ async fn test_payment_request_metadata() {
 }
 
 #[wasm_bindgen_test]
+async fn test_spark_htlc_status_filtering() {
+    let storage = create_test_storage("spark_htlc_status_filtering").await;
+
+    breez_sdk_spark::storage_tests::test_spark_htlc_status_filtering(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_sync_storage() {
     let storage = create_test_storage("sync_storage").await;
 
@@ -160,6 +167,7 @@ async fn test_migration_from_v2_to_v3() {
         type_filter: None,
         status_filter: None,
         asset_filter: None,
+        spark_htlc_status_filter: None,
         from_timestamp: None,
         to_timestamp: None,
         offset: None,

@@ -163,6 +163,7 @@ pub struct _ListPaymentsRequest {
     pub type_filter: Option<Vec<PaymentType>>,
     pub status_filter: Option<Vec<PaymentStatus>>,
     pub asset_filter: Option<AssetFilter>,
+    pub spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
     pub from_timestamp: Option<u64>,
     pub to_timestamp: Option<u64>,
     pub offset: Option<u32>,
@@ -933,13 +934,13 @@ pub enum _ChainApiType {
     MempoolSpace,
 }
 
-#[frb(mirror(ClaimSparkHtlcRequest))]
-pub struct _ClaimSparkHtlcRequest {
+#[frb(mirror(ClaimHtlcPaymentRequest))]
+pub struct _ClaimHtlcPaymentRequest {
     pub preimage: String,
 }
 
-#[frb(mirror(ClaimSparkHtlcResponse))]
-pub struct _ClaimSparkHtlcResponse {
+#[frb(mirror(ClaimHtlcPaymentResponse))]
+pub struct _ClaimHtlcPaymentResponse {
     pub payment: Payment,
 }
 

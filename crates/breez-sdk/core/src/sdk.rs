@@ -39,17 +39,15 @@ use x509_parser::parse_x509_certificate;
 use crate::{
     BitcoinAddressDetails, BitcoinChainService, Bolt11InvoiceDetails, CheckLightningAddressRequest,
     CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest, ClaimDepositResponse,
-    ClaimSparkHtlcRequest, ClaimSparkHtlcResponse, DepositInfo, ExternalInputParser, Fee,
+    ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, DepositInfo, ExternalInputParser, Fee,
     GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
     InputType, LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse,
-    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
-    ListUnclaimedHtlcTransferPaymentsRequest, ListUnclaimedHtlcTransferPaymentsResponse,
-    LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse,
-    Logger, Network, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, RecommendedFees, RefundDepositRequest, RefundDepositResponse,
-    RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest,
-    SignMessageResponse, SparkHtlcOptions, SparkHtlcStatus, UpdateUserSettingsRequest,
-    UserSettings, WaitForPaymentIdentifier,
+    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest,
+    LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, Network, PaymentDetails,
+    PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse, RecommendedFees,
+    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
+    SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest, SignMessageResponse,
+    SparkHtlcOptions, UpdateUserSettingsRequest, UserSettings, WaitForPaymentIdentifier,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     issuer::TokenIssuer,
@@ -778,40 +776,10 @@ impl BreezSdk {
         }
     }
 
-    #[allow(unused_variables)]
-    pub async fn list_unclaimed_htlc_transfer_payments(
+    pub async fn claim_htlc_payment(
         &self,
-        req: ListUnclaimedHtlcTransferPaymentsRequest,
-    ) -> Result<ListUnclaimedHtlcTransferPaymentsResponse, SdkError> {
-        // We can move the following filtering to the storage layer in the future if it becomes an issue.
-        let payments = self
-            .list_payments(ListPaymentsRequest {
-                type_filter: Some(vec![PaymentType::Receive]),
-                status_filter: Some(vec![PaymentStatus::Pending]),
-                ..Default::default()
-            })
-            .await?
-            .payments
-            .into_iter()
-            .filter_map(|p| {
-                if let Some(PaymentDetails::Spark { htlc_details, .. }) = &p.details
-                    && let Some(htlc_details) = htlc_details
-                    && htlc_details.status == SparkHtlcStatus::WaitingForPreimage
-                {
-                    Some(p)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(ListUnclaimedHtlcTransferPaymentsResponse { payments })
-    }
-
-    pub async fn claim_spark_htlc(
-        &self,
-        request: ClaimSparkHtlcRequest,
-    ) -> Result<ClaimSparkHtlcResponse, SdkError> {
+        request: ClaimHtlcPaymentRequest,
+    ) -> Result<ClaimHtlcPaymentResponse, SdkError> {
         let preimage = Preimage::from_hex(&request.preimage)
             .map_err(|_| SdkError::InvalidInput("Invalid preimage".to_string()))?;
         let payment_hash = preimage.compute_hash();
@@ -832,7 +800,7 @@ impl BreezSdk {
         }
 
         let transfer = self.spark_wallet.claim_htlc(&preimage).await?;
-        Ok(ClaimSparkHtlcResponse {
+        Ok(ClaimHtlcPaymentResponse {
             payment: transfer.try_into()?,
         })
     }

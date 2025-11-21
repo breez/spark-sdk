@@ -2,13 +2,13 @@ mod issuer;
 
 use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimSparkHtlcRequest, Fee, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
+    ClaimHtlcPaymentRequest, Fee, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    ListUnclaimedHtlcTransferPaymentsRequest, LnurlPayRequest, LnurlWithdrawRequest,
-    OnchainConfirmationSpeed, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
-    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
-    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SparkHtlcOptions, SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
+    LnurlPayRequest, LnurlWithdrawRequest, OnchainConfirmationSpeed, PaymentStatus, PaymentType,
+    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
+    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
+    UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -55,6 +55,10 @@ pub enum Command {
         /// Filter by payment details
         #[arg(short, long)]
         asset_filter: Option<AssetFilter>,
+
+        /// Filter by Spark HTLC status
+        #[arg(long)]
+        spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
 
         /// Only include payments created after this timestamp (inclusive)
         #[arg(long)]
@@ -151,10 +155,8 @@ pub enum Command {
         completion_timeout_secs: Option<u32>,
     },
 
-    /// List unclaimed HTLC transfer payments
-    ListUnclaimedHtlcTransferPayments,
-    /// Claim a Spark HTLC
-    ClaimSparkHtlc {
+    /// Claim an HTLC payment
+    ClaimHtlcPayment {
         /// The preimage of the HTLC (hex string)
         preimage: String,
     },
@@ -270,6 +272,7 @@ pub(crate) async fn execute_command(
             offset,
             type_filter,
             status_filter,
+            spark_htlc_status_filter,
             asset_filter,
             from_timestamp,
             to_timestamp,
@@ -282,6 +285,7 @@ pub(crate) async fn execute_command(
                     type_filter,
                     status_filter,
                     asset_filter,
+                    spark_htlc_status_filter,
                     from_timestamp,
                     to_timestamp,
                     sort_ascending,
@@ -521,16 +525,10 @@ pub(crate) async fn execute_command(
             print_value(&res)?;
             Ok(true)
         }
-        Command::ListUnclaimedHtlcTransferPayments => {
+
+        Command::ClaimHtlcPayment { preimage } => {
             let res = sdk
-                .list_unclaimed_htlc_transfer_payments(ListUnclaimedHtlcTransferPaymentsRequest {})
-                .await?;
-            print_value(&res)?;
-            Ok(true)
-        }
-        Command::ClaimSparkHtlc { preimage } => {
-            let res = sdk
-                .claim_spark_htlc(ClaimSparkHtlcRequest { preimage })
+                .claim_htlc_payment(ClaimHtlcPaymentRequest { preimage })
                 .await?;
             print_value(&res.payment)?;
             Ok(true)

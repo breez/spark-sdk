@@ -154,6 +154,20 @@ class SqliteStorage {
         params.push(request.toTimestamp);
       }
 
+      // Filter by Spark HTLC status
+      if (
+        request.sparkHtlcStatusFilter &&
+        request.sparkHtlcStatusFilter.length > 0
+      ) {
+        const placeholders = request.sparkHtlcStatusFilter
+          .map(() => "?")
+          .join(", ");
+        whereClauses.push(
+          `json_extract(s.htlc_details, '$.status') IN (${placeholders})`
+        );
+        params.push(...request.sparkHtlcStatusFilter);
+      }
+
       // Filter by payment details/method
       if (request.assetFilter) {
         const assetFilter = request.assetFilter;

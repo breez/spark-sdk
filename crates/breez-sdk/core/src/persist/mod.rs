@@ -1559,6 +1559,154 @@ pub mod tests {
         assert_eq!(token_no_match.len(), 0);
     }
 
+    #[allow(clippy::too_many_lines)]
+    pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
+        // Create payments with different HTLC statuses
+        let htlc_waiting = Payment {
+            id: "htlc_waiting".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Pending,
+            amount: 10_000,
+            fees: 0,
+            timestamp: 1000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: Some(SparkHtlcDetails {
+                    payment_hash: "hash1".to_string(),
+                    preimage: None,
+                    expiry_time: 2000,
+                    status: SparkHtlcStatus::WaitingForPreimage,
+                }),
+            }),
+        };
+
+        let htlc_shared = Payment {
+            id: "htlc_shared".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 20_000,
+            fees: 0,
+            timestamp: 2000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: Some(SparkHtlcDetails {
+                    payment_hash: "hash2".to_string(),
+                    preimage: Some("preimage123".to_string()),
+                    expiry_time: 3000,
+                    status: SparkHtlcStatus::PreimageShared,
+                }),
+            }),
+        };
+
+        let htlc_returned = Payment {
+            id: "htlc_returned".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Failed,
+            amount: 30_000,
+            fees: 0,
+            timestamp: 3000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: Some(SparkHtlcDetails {
+                    payment_hash: "hash3".to_string(),
+                    preimage: None,
+                    expiry_time: 4000,
+                    status: SparkHtlcStatus::Returned,
+                }),
+            }),
+        };
+
+        // Create a payment that is not HTLC-related
+        let non_htlc_payment = Payment {
+            id: "non_htlc".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 40_000,
+            fees: 100,
+            timestamp: 4000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: Some(crate::SparkInvoicePaymentDetails {
+                    description: Some("Test invoice".to_string()),
+                    invoice: "spark_invoice".to_string(),
+                }),
+                htlc_details: None,
+            }),
+        };
+
+        // Insert all payments
+        storage.insert_payment(htlc_waiting).await.unwrap();
+        storage.insert_payment(htlc_shared).await.unwrap();
+        storage.insert_payment(htlc_returned).await.unwrap();
+        storage.insert_payment(non_htlc_payment).await.unwrap();
+
+        // Test filter for WaitingForPreimage
+        let waiting_filter = storage
+            .list_payments(ListPaymentsRequest {
+                spark_htlc_status_filter: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(waiting_filter.len(), 1);
+        assert_eq!(waiting_filter[0].id, "htlc_waiting");
+
+        // Test filter for PreimageShared
+        let shared_filter = storage
+            .list_payments(ListPaymentsRequest {
+                spark_htlc_status_filter: Some(vec![SparkHtlcStatus::PreimageShared]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(shared_filter.len(), 1);
+        assert_eq!(shared_filter[0].id, "htlc_shared");
+
+        // Test filter for Returned
+        let returned_filter = storage
+            .list_payments(ListPaymentsRequest {
+                spark_htlc_status_filter: Some(vec![SparkHtlcStatus::Returned]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(returned_filter.len(), 1);
+        assert_eq!(returned_filter[0].id, "htlc_returned");
+
+        // Test filter for multiple statuses (WaitingForPreimage and PreimageShared)
+        let multiple_filter = storage
+            .list_payments(ListPaymentsRequest {
+                spark_htlc_status_filter: Some(vec![
+                    SparkHtlcStatus::WaitingForPreimage,
+                    SparkHtlcStatus::PreimageShared,
+                ]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(multiple_filter.len(), 2);
+        assert!(multiple_filter.iter().any(|p| p.id == "htlc_waiting"));
+        assert!(multiple_filter.iter().any(|p| p.id == "htlc_shared"));
+
+        // Test that non-HTLC payment is not included in any HTLC status filter
+        let all_htlc_filter = storage
+            .list_payments(ListPaymentsRequest {
+                spark_htlc_status_filter: Some(vec![
+                    SparkHtlcStatus::WaitingForPreimage,
+                    SparkHtlcStatus::PreimageShared,
+                    SparkHtlcStatus::Returned,
+                ]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(all_htlc_filter.len(), 3);
+        assert!(all_htlc_filter.iter().all(|p| p.id != "non_htlc"));
+    }
+
     pub async fn test_timestamp_filtering(storage: Box<dyn Storage>) {
         // Create payments at different timestamps
         let payment1 = Payment {

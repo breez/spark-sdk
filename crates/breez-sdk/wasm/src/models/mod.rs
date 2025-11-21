@@ -784,6 +784,7 @@ pub struct ListPaymentsRequest {
     pub type_filter: Option<Vec<PaymentType>>,
     pub status_filter: Option<Vec<PaymentStatus>>,
     pub asset_filter: Option<AssetFilter>,
+    pub spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
     pub from_timestamp: Option<u64>,
     pub to_timestamp: Option<u64>,
     pub offset: Option<u32>,
@@ -1019,20 +1020,12 @@ pub struct UpdateUserSettingsRequest {
     pub spark_private_mode_enabled: Option<bool>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimSparkHtlcRequest)]
-pub struct ClaimSparkHtlcRequest {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimHtlcPaymentRequest)]
+pub struct ClaimHtlcPaymentRequest {
     pub preimage: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimSparkHtlcResponse)]
-pub struct ClaimSparkHtlcResponse {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimHtlcPaymentResponse)]
+pub struct ClaimHtlcPaymentResponse {
     pub payment: Payment,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::ListUnclaimedHtlcTransferPaymentsRequest)]
-pub struct ListUnclaimedHtlcTransferPaymentsRequest {}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::ListUnclaimedHtlcTransferPaymentsResponse)]
-pub struct ListUnclaimedHtlcTransferPaymentsResponse {
-    pub payments: Vec<Payment>,
 }

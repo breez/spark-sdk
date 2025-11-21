@@ -18,6 +18,7 @@ use web_time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
+use crate::operator::rpc::spark::PreimageRequestRole;
 use crate::services::{HashableTokenTransaction, bech32m_encode_token_id};
 use crate::signer::PrivateKeySource;
 use crate::ssp::BitcoinNetwork;
@@ -1147,8 +1148,9 @@ impl TryFrom<operator_rpc::spark_token::FreezeIssuerTokenResponse> for FreezeIss
 pub struct QueryHtlcFilter {
     pub transfer_ids: Vec<String>,
     pub payment_hashes: Vec<String>,
-    pub receiver_identity_public_key: PublicKey,
+    pub identity_public_key: PublicKey,
     pub status: Option<PreimageRequestStatus>,
+    pub match_role: PreimageRequestRole,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

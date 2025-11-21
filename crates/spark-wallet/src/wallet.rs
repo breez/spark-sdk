@@ -17,7 +17,7 @@ use spark::{
         OperatorPool,
         rpc::{
             ConnectionManager, DefaultConnectionManager,
-            spark::{QuerySparkInvoicesRequest, UpdateWalletSettingRequest},
+            spark::{PreimageRequestRole, QuerySparkInvoicesRequest, UpdateWalletSettingRequest},
         },
     },
     services::{
@@ -676,9 +676,10 @@ impl SparkWallet {
             .query_htlc(
                 QueryHtlcFilter {
                     payment_hashes: vec![preimage.compute_hash().to_string()],
-                    receiver_identity_public_key: self.identity_public_key,
+                    identity_public_key: self.identity_public_key,
                     status: None,
                     transfer_ids: Vec::new(),
+                    match_role: PreimageRequestRole::Receiver,
                 },
                 None,
             )
@@ -703,10 +704,11 @@ impl SparkWallet {
             .htlc_service
             .query_htlc(
                 QueryHtlcFilter {
-                    receiver_identity_public_key: self.identity_public_key,
+                    identity_public_key: self.identity_public_key,
                     status: Some(PreimageRequestStatus::WaitingForPreimage),
                     transfer_ids: Vec::new(),
                     payment_hashes: Vec::new(),
+                    match_role: PreimageRequestRole::Receiver,
                 },
                 paging,
             )
@@ -1327,11 +1329,13 @@ async fn create_transfers(
         .filter_map(|t| t.spark_id.clone().map(|spark_id| (spark_id, t.clone())))
         .collect();
 
-    let htlc_requests = htlc_service
+    // TODO: ask for the addition of a 3rd match role that is both receiver and sender to avoid two separate queries
+    let incoming_htlc_requests = htlc_service
         .query_htlc(
             QueryHtlcFilter {
-                transfer_ids,
-                receiver_identity_public_key: our_public_key, // TODO: this should be receiver or sender pubkey or made optional
+                transfer_ids: transfer_ids.clone(),
+                match_role: PreimageRequestRole::Receiver,
+                identity_public_key: our_public_key,
                 status: None,
                 payment_hashes: Vec::new(),
             },
@@ -1339,6 +1343,21 @@ async fn create_transfers(
         )
         .await?
         .items;
+    let outgoing_htlc_requests = htlc_service
+        .query_htlc(
+            QueryHtlcFilter {
+                transfer_ids,
+                match_role: PreimageRequestRole::Sender,
+                identity_public_key: our_public_key,
+                status: None,
+                payment_hashes: Vec::new(),
+            },
+            None,
+        )
+        .await?
+        .items;
+    let htlc_requests = [incoming_htlc_requests, outgoing_htlc_requests].concat();
+
     let htlc_requests_map: HashMap<String, PreimageRequestWithTransfer> = htlc_requests
         .into_iter()
         .filter_map(|t| {
@@ -1373,11 +1392,13 @@ async fn create_transfer(
         .into_iter()
         .next();
 
+    // TODO: ask for the addition of a 3rd match role that is both receiver and sender to avoid two separate queries
     let preimage_request = htlc_service
         .query_htlc(
             QueryHtlcFilter {
                 transfer_ids: vec![transfer.id.to_string()],
-                receiver_identity_public_key: our_public_key, // TODO: this should be receiver or sender pubkey or made optional
+                match_role: PreimageRequestRole::Receiver,
+                identity_public_key: our_public_key,
                 status: None,
                 payment_hashes: Vec::new(),
             },
@@ -1387,6 +1408,25 @@ async fn create_transfer(
         .items
         .first()
         .cloned();
+    let preimage_request = if preimage_request.is_some() {
+        preimage_request
+    } else {
+        htlc_service
+            .query_htlc(
+                QueryHtlcFilter {
+                    transfer_ids: vec![transfer.id.to_string()],
+                    match_role: PreimageRequestRole::Sender,
+                    identity_public_key: our_public_key,
+                    status: None,
+                    payment_hashes: Vec::new(),
+                },
+                None,
+            )
+            .await?
+            .items
+            .first()
+            .cloned()
+    };
 
     Ok(WalletTransfer::from_transfer(
         transfer,

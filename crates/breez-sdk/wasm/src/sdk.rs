@@ -84,24 +84,12 @@ impl BreezSdk {
         Ok(self.sdk.receive_payment(request.into()).await?.into())
     }
 
-    #[wasm_bindgen(js_name = "listUnclaimedHtlcTransferPayments")]
-    pub async fn list_unclaimed_htlc_transfer_payments(
+    #[wasm_bindgen(js_name = "claimHtlcPayment")]
+    pub async fn claim_htlc_payment(
         &self,
-        request: ListUnclaimedHtlcTransferPaymentsRequest,
-    ) -> WasmResult<ListUnclaimedHtlcTransferPaymentsResponse> {
-        Ok(self
-            .sdk
-            .list_unclaimed_htlc_transfer_payments(request.into())
-            .await?
-            .into())
-    }
-
-    #[wasm_bindgen(js_name = "claimSparkHtlc")]
-    pub async fn claim_spark_htlc(
-        &self,
-        request: ClaimSparkHtlcRequest,
-    ) -> WasmResult<ClaimSparkHtlcResponse> {
-        Ok(self.sdk.claim_spark_htlc(request.into()).await?.into())
+        request: ClaimHtlcPaymentRequest,
+    ) -> WasmResult<ClaimHtlcPaymentResponse> {
+        Ok(self.sdk.claim_htlc_payment(request.into()).await?.into())
     }
 
     #[wasm_bindgen(js_name = "prepareSendPayment")]
