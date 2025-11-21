@@ -658,6 +658,7 @@ dependencies = [
  "futures",
  "hex",
  "macros",
+ "nostr",
  "rand 0.8.5",
  "reqwest",
  "rstest",

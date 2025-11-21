@@ -91,6 +91,7 @@ impl LnurlFixture {
 
         // Add additional test-friendly defaults
         container = container
+            .with_env_var("BREEZ_LNURL_LOG_LEVEL", "lnurl=trace,info")
             // Allow all domains for testing (empty string means no domain validation)
             .with_env_var("BREEZ_LNURL_DOMAINS", "")
             // Use HTTP scheme for testing

@@ -34,3 +34,4 @@ dotenvy.workspace = true
 rand.workspace = true
 uuid.workspace = true
 futures.workspace = true
+nostr.workspace = true
