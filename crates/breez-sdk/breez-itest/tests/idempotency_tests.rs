@@ -466,3 +466,114 @@ async fn test_03_bitcoin_idempotency_key(
     info!("=== Test test_03_bitcoin_idempotency_key PASSED ===");
     Ok(())
 }
+
+/// Test 4: Send payment from Alice to Bob using Spark HTLC with idempotency key
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_04_spark_htlc_idempotency_key(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_04_spark_htlc_idempotency_key ===");
+
+    let mut alice = alice_sdk.await?;
+    let bob = bob_sdk.await?;
+
+    ensure_funded(&mut alice, 10000).await?;
+
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    info!("Alice balance: {} sats", alice_balance);
+
+    // Get Bob's initial balance
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_initial_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    info!("Bob initial balance: {} sats", bob_initial_balance);
+
+    // Bob exposes a Spark address
+    let bob_spark_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+
+    info!("Bob's Spark address: {}", bob_spark_address);
+
+    // Alice prepares and sends 5 sats to Bob
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_spark_address.clone(),
+            amount: Some(5),
+            token_identifier: None,
+        })
+        .await?;
+
+    info!("Sending 5 sats from Alice to Bob via Spark HTLC...");
+
+    let idempotency_key = Uuid::now_v7().to_string();
+    info!("Idempotency key: {}", idempotency_key);
+
+    let (_, payment_hash) = generate_preimage_hash_pair();
+
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare.clone(),
+            options: Some(SendPaymentOptions::SparkAddress {
+                htlc_options: Some(SparkHtlcOptions {
+                    payment_hash: payment_hash.clone(),
+                    expiry_duration_secs: 180,
+                }),
+            }),
+            idempotency_key: Some(idempotency_key.clone()),
+        })
+        .await?;
+
+    info!("Alice send payment id: {:?}", send_resp.payment.id);
+    assert_eq!(
+        send_resp.payment.id, idempotency_key,
+        "Payment ID should match idempotency key"
+    );
+
+    info!("Resending the same payment with the same idempotency key before payment is synced");
+    let resend_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare.clone(),
+            options: Some(SendPaymentOptions::SparkAddress {
+                htlc_options: Some(SparkHtlcOptions {
+                    payment_hash: payment_hash.clone(),
+                    expiry_duration_secs: 180,
+                }),
+            }),
+            idempotency_key: Some(idempotency_key.clone()),
+        })
+        .await?;
+    assert_eq!(
+        send_resp.payment.id, resend_resp.payment.id,
+        "Resent payment should have the same ID"
+    );
+    assert_eq!(
+        send_resp.payment.timestamp, resend_resp.payment.timestamp,
+        "Resent payment should have the same timestamp"
+    );
+
+    info!("=== Test test_04_spark_htlc_idempotency_key PASSED ===");
+    Ok(())
+}

@@ -1,5 +1,7 @@
 use anyhow::Result;
+use bitcoin::hashes::{Hash as _, sha256};
 use breez_sdk_spark::*;
+use rand::RngCore;
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -501,4 +503,12 @@ pub async fn wait_for_data_synced_event(
     })
     .await
     .map(|_| ())
+}
+
+pub fn generate_preimage_hash_pair() -> (String, String) {
+    let mut preimage_bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut preimage_bytes);
+    let preimage = hex::encode(preimage_bytes);
+    let payment_hash = sha256::Hash::hash(&preimage_bytes).to_string();
+    (preimage, payment_hash)
 }

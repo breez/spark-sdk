@@ -1579,15 +1579,36 @@ impl BackgroundProcessor {
                 .next()
         };
 
-        // TODO: add htlc once we can query it by transfer id
-        let htlc = None;
+        // If there is an SSP transfer, we can avoid looking for the HTLC as it will not be present
+        let htlc = if transfer.transfer_type == spark::services::TransferType::PreimageSwap
+            && ssp_transfer.is_none()
+        {
+            self.htlc_service
+                .query_htlc(
+                    QueryHtlcFilter {
+                        transfer_ids: vec![transfer.id.to_string()],
+                        match_role: PreimageRequestRole::Receiver,
+                        identity_public_key: self.identity_public_key,
+                        payment_hashes: vec![],
+                        status: None,
+                    },
+                    None,
+                )
+                .await?
+                .items
+                .first()
+                .cloned()
+                .map(Into::into)
+        } else {
+            None
+        };
 
         self.event_manager
             .notify_listeners(WalletEvent::TransferClaimStarting(
                 WalletTransfer::from_transfer(
                     transfer.clone(),
                     ssp_transfer.clone(),
-                    htlc,
+                    htlc.clone(),
                     self.identity_public_key,
                 ),
             ));
@@ -1603,7 +1624,7 @@ impl BackgroundProcessor {
             .notify_listeners(WalletEvent::TransferClaimed(WalletTransfer::from_transfer(
                 claimed_transfer,
                 ssp_transfer,
-                None, // TODO: add htlc once we can query it by transfer id
+                htlc,
                 self.identity_public_key,
             )));
         Ok(())
