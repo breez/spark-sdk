@@ -98,19 +98,17 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Send/Receive Spark payments
 - [x] Send/Receive via on-chain addresses
 - [x] CLI Interface
-- [x] Go, JS, Kotlin, Python & Swift languages bindings
+- [x] Go, C#, React Native, Python, JS, Flutter, Kotlin & Swift languages bindings
+- [x] WebAssembly support
 - [x] Send via LNURL-Pay
 - [x] Send to a Lightning address
 - [x] Payments persistency including restore support
-- [x] Automatic claims 
-- [x] WebAssembly support
-- [x] Flutter & React Native bindings 
+- [x] Automatic on-chain claims 
 - [x] Receive via LNURL-Pay w/ offline & Lightning address support
 - [x] Full support (issue, send & receive) for Spark tokens (BTKN)
 - [x] LNURL-Withdraw
 - [x] Sign and verify arbitrary messages 
 - [x] Real-time sync
-- [x] C# language binding
 - [ ] NWC
 - [ ] WebLN
 - [ ] LNURL-Auth
