@@ -114,6 +114,8 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [ ] LNURL-Auth
 - [ ] Fiat on-ramp
 - [ ] External input parsers
+- [ ] BTC <> USDX swaps
+- [ ] Hodl invoice support 
 - [ ] Bolt12
 - [ ] Add additional fees via a dedicated portal
 
