@@ -15,7 +15,7 @@ It’s a nodeless integration that offers a self-custodial, end-to-end solution 
 - [x] Send and receive Lightning payments
 - [x] Send and receive via LNURL-pay & Lightning addresses 
 - [x] Send and receive Spark payments (BTC)
-- [x] Send and receive Spark tokens (BTKN)
+- [x] Issue, send and receive Spark tokens (BTKN)
 - [x] On-chain interoperability
 - [x] Bindings to all popular languages & frameworks
 - [x] Keys are only held by users
