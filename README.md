@@ -19,7 +19,7 @@ It’s a nodeless integration that offers a self-custodial, end-to-end solution 
 - [x] Send and receive Lightning payments
 - [x] Send and receive via LNURL-pay & Lightning addresses 
 - [x] Send and receive Spark payments (BTC)
-- [x] Send and receive Spark tokens (BTKN)
+- [x] Issue, send and receive Spark tokens (BTKN)
 - [x] On-chain interoperability
 - [x] Bindings to all popular languages & frameworks
 - [x] Keys are only held by users
@@ -106,16 +106,17 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] WebAssembly support
 - [x] Flutter & React Native bindings 
 - [x] Receive via LNURL-Pay w/ offline & Lightning address support
-- [x] Support Spark tokens (BTKN)
+- [x] Full support (issue, send & receive) for Spark tokens (BTKN)
 - [x] LNURL-Withdraw
 - [x] Sign and verify arbitrary messages 
 - [x] Real-time sync
 - [x] C# language binding
-- [ ] LNURL-Auth
-- [ ] External input parsers
-- [ ] Bolt12 
-- [ ] WebLN
 - [ ] NWC
+- [ ] WebLN
+- [ ] LNURL-Auth
+- [ ] Fiat on-ramp
+- [ ] External input parsers
+- [ ] Bolt12
 - [ ] Add additional fees via a dedicated portal
 
 
