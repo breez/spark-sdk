@@ -800,9 +800,12 @@ impl BreezSdk {
         }
 
         let transfer = self.spark_wallet.claim_htlc(&preimage).await?;
-        Ok(ClaimHtlcPaymentResponse {
-            payment: transfer.try_into()?,
-        })
+        let payment: Payment = transfer.try_into()?;
+
+        // Insert the payment into storage to make it immediately available for listing
+        self.storage.insert_payment(payment.clone()).await?;
+
+        Ok(ClaimHtlcPaymentResponse { payment })
     }
 
     pub async fn prepare_lnurl_pay(
@@ -1552,9 +1555,6 @@ impl BreezSdk {
             }
         };
         if let Ok(response) = &res {
-            //TODO: We get incomplete payments here from the ssp so better not to persist for now.
-            // we trigger the sync here anyway to get the fresh payment.
-            //self.storage.insert_payment(response.payment.clone()).await?;
             if !suppress_payment_event {
                 emit_payment_status(&self.event_emitter, response.payment.clone()).await;
             }
@@ -1612,6 +1612,9 @@ impl BreezSdk {
             transfer.try_into()?
         };
 
+        // Insert the payment into storage to make it immediately available for listing
+        self.storage.insert_payment(payment.clone()).await?;
+
         Ok(SendPaymentResponse { payment })
     }
 
@@ -1642,9 +1645,12 @@ impl BreezSdk {
             )
             .await?;
 
-        Ok(SendPaymentResponse {
-            payment: transfer.try_into()?,
-        })
+        let payment: Payment = transfer.try_into()?;
+
+        // Insert the payment into storage to make it immediately available for listing
+        self.storage.insert_payment(payment.clone()).await?;
+
+        Ok(SendPaymentResponse { payment })
     }
 
     async fn send_spark_token_address(
@@ -1698,6 +1704,9 @@ impl BreezSdk {
                 .await?
             }
         };
+
+        // Insert the payment into storage to make it immediately available for listing
+        self.storage.insert_payment(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
     }
@@ -1773,6 +1782,10 @@ impl BreezSdk {
             )
             .await
             .unwrap_or(payment);
+
+        // TODO: We get incomplete payments here from the ssp so better not to persist for now.
+        //self.storage.insert_payment(payment.clone()).await?;
+
         Ok(SendPaymentResponse { payment })
     }
 
@@ -1806,9 +1819,13 @@ impl BreezSdk {
                 transfer_id,
             )
             .await?;
-        Ok(SendPaymentResponse {
-            payment: response.try_into()?,
-        })
+
+        let payment: Payment = response.try_into()?;
+
+        // TODO: We get incomplete payments here from the ssp so better not to persist for now.
+        //self.storage.insert_payment(payment.clone()).await?;
+
+        Ok(SendPaymentResponse { payment })
     }
 
     async fn wait_for_payment(
