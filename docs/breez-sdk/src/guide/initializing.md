@@ -32,14 +32,14 @@ On some platforms (e.g., Android, iOS), you must use an application-specific wri
 
 For advanced use cases where you need more control, you can configure the SDK using the Builder pattern. With the SDK Builder you can define:
 
-- [Storage](sdk_building.md#with-storage) and [Real-Time Storage](sdk_building.md#with-real-time-storage) to manage stored data
-- [Bitcoin Chain Service](sdk_building.md#with-chain-service) to provide network data
-- [LNURL Client](sdk_building.md#with-lnurl-client) to make REST requests
-- [Fiat Service](sdk_building.md#with-fiat-service) to provide Fiat currencies and exchange rates 
-- Change the [Key Set](sdk_building.md#with-key-set) to alter the derivation path used
-- [Payment Observer](sdk_building.md#with-payment-observer) to be notified before payments occur
+- [Storage](customizing.md#with-storage) and [Real-Time Storage](customizing.md#with-real-time-storage) to manage stored data
+- [Bitcoin Chain Service](customizing.md#with-chain-service) to provide network data
+- [LNURL Client](customizing.md#with-lnurl-client) to make REST requests
+- [Fiat Service](customizing.md#with-fiat-service) to provide Fiat currencies and exchange rates 
+- Change the [Key Set](customizing.md#with-key-set) to alter the derivation path used
+- [Payment Observer](customizing.md#with-payment-observer) to be notified before payments occur
 
-See [Building the SDK](sdk_building.md) for examples of this advanced initialization pattern.
+See [Customizing the SDK](customizing.md) for examples of this advanced initialization pattern.
 
 <h2 id="disconnecting">
     <a class="header" href="#disconnecting">Disconnecting</a>

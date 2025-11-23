@@ -1,4 +1,4 @@
-# Building the SDK
+# Customizing the SDK
 
 Using the SDK Builder gives you more control over the initialization and modular components used when the SDK is running. Below you can find examples of initializing the SDK using the SDK Builder and implementing modular components:
 
