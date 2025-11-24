@@ -26,7 +26,7 @@ pub use events::{EventEmitter, EventListener, SdkEvent};
 pub use issuer::*;
 pub use models::*;
 pub use persist::{
-    AddLnurlMetadataItem, PaymentMetadata, Storage, StorageError, UpdateDepositPayload,
+    PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, UpdateDepositPayload,
     path::default_storage_path,
 };
 pub use sdk::{BreezSdk, default_config, init_logging, parse_input};

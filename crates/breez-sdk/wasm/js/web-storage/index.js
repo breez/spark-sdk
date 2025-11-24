@@ -815,7 +815,7 @@ class IndexedDBStorage {
     });
   }
 
-  async addLnurlMetadata(metadata) {
+  async setLnurlMetadata(metadata) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }

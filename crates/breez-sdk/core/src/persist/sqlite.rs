@@ -11,7 +11,7 @@ use crate::{
     AssetFilter, DepositInfo, ListPaymentsRequest, LnurlPayInfo, LnurlReceiveMetadata,
     LnurlWithdrawInfo, PaymentDetails, PaymentMethod,
     error::DepositClaimError,
-    persist::{AddLnurlMetadataItem, PaymentMetadata, UpdateDepositPayload},
+    persist::{PaymentMetadata, SetLnurlMetadataItem, UpdateDepositPayload},
     sync_storage::{
         IncomingChange, OutgoingChange, Record, RecordChange, RecordId, SyncStorage,
         SyncStorageError, UnversionedRecordChange,
@@ -717,9 +717,9 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    async fn add_lnurl_metadata(
+    async fn set_lnurl_metadata(
         &self,
-        metadata: Vec<AddLnurlMetadataItem>,
+        metadata: Vec<SetLnurlMetadataItem>,
     ) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
         for metadata in metadata {

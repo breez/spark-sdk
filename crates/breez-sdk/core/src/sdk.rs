@@ -38,16 +38,16 @@ use web_time::Instant;
 use x509_parser::parse_x509_certificate;
 
 use crate::{
-    AddLnurlMetadataItem, BitcoinAddressDetails, BitcoinChainService, Bolt11InvoiceDetails,
-    CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest,
-    ClaimDepositResponse, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, DepositInfo,
-    ExternalInputParser, Fee, GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest,
-    GetTokensMetadataResponse, InputType, LightningAddressInfo, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
-    LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse,
-    Logger, Network, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
-    RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest,
+    BitcoinAddressDetails, BitcoinChainService, Bolt11InvoiceDetails, CheckLightningAddressRequest,
+    CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest, ClaimDepositResponse,
+    ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, DepositInfo, ExternalInputParser, Fee,
+    GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
+    InputType, LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse,
+    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest,
+    LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, Network, PaymentDetails,
+    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
+    SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem, SignMessageRequest,
     SignMessageResponse, SparkHtlcOptions, UpdateUserSettingsRequest, UserSettings,
     WaitForPaymentIdentifier,
     chain::RecommendedFees,
@@ -409,7 +409,7 @@ impl BreezSdk {
 
                 if let Err(e) = sdk
                     .storage
-                    .add_lnurl_metadata(vec![AddLnurlMetadataItem {
+                    .set_lnurl_metadata(vec![SetLnurlMetadataItem {
                         sender_comment: lnurl_receive_metadata.sender_comment.clone(),
                         nostr_zap_request: Some(zap_request.clone()),
                         nostr_zap_receipt: Some(zap_receipt),
@@ -831,7 +831,7 @@ impl BreezSdk {
             let len = u32::try_from(metadata.metadata.len())?;
             let last_updated_at = metadata.metadata.last().map(|m| m.updated_at);
             self.storage
-                .add_lnurl_metadata(metadata.metadata.into_iter().map(From::from).collect())
+                .set_lnurl_metadata(metadata.metadata.into_iter().map(From::from).collect())
                 .await?;
 
             debug!(

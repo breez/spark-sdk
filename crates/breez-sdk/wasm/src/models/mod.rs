@@ -827,8 +827,8 @@ pub struct PaymentMetadata {
     pub lnurl_description: Option<String>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::AddLnurlMetadataItem)]
-pub struct AddLnurlMetadataItem {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SetLnurlMetadataItem)]
+pub struct SetLnurlMetadataItem {
     pub payment_hash: String,
     pub sender_comment: Option<String>,
     pub nostr_zap_request: Option<String>,

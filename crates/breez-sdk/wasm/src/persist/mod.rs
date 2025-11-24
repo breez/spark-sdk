@@ -8,8 +8,8 @@ use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::js_sys::Promise;
 
 use crate::models::{
-    AddLnurlMetadataItem, DepositInfo, IncomingChange, ListPaymentsRequest, OutgoingChange,
-    Payment, PaymentMetadata, Record, UnversionedRecordChange, UpdateDepositPayload,
+    DepositInfo, IncomingChange, ListPaymentsRequest, OutgoingChange, Payment, PaymentMetadata,
+    Record, SetLnurlMetadataItem, UnversionedRecordChange, UpdateDepositPayload,
 };
 
 pub struct WasmStorage {
@@ -242,14 +242,14 @@ impl breez_sdk_spark::Storage for WasmStorage {
         Ok(())
     }
 
-    async fn add_lnurl_metadata(
+    async fn set_lnurl_metadata(
         &self,
-        metadata: Vec<breez_sdk_spark::AddLnurlMetadataItem>,
+        metadata: Vec<breez_sdk_spark::SetLnurlMetadataItem>,
     ) -> Result<(), StorageError> {
-        let metadata: Vec<AddLnurlMetadataItem> = metadata.into_iter().map(|m| m.into()).collect();
+        let metadata: Vec<SetLnurlMetadataItem> = metadata.into_iter().map(|m| m.into()).collect();
         let promise = self
             .storage
-            .add_lnurl_metadata(metadata)
+            .set_lnurl_metadata(metadata)
             .map_err(js_error_to_storage_error)?;
         let future = JsFuture::from(promise);
         future.await.map_err(js_error_to_storage_error)?;
@@ -417,7 +417,7 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     deleteDeposit: (txid: string, vout: number) => Promise<void>;
     listDeposits: () => Promise<DepositInfo[]>;
     updateDeposit: (txid: string, vout: number, payload: UpdateDepositPayload) => Promise<void>;
-    addLnurlMetadata: (metadata: AddLnurlMetadataItem[]) => Promise<void>;
+    setLnurlMetadata: (metadata: SetLnurlMetadataItem[]) => Promise<void>;
     syncAddOutgoingChange: (record: UnversionedRecordChange) => Promise<number>;
     syncCompleteOutgoingSync: (record: Record) => Promise<void>;
     syncGetPendingOutgoingChanges: (limit: number) => Promise<OutgoingChange[]>;
@@ -485,10 +485,10 @@ extern "C" {
         payload: UpdateDepositPayload,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = addLnurlMetadata, catch)]
-    pub fn add_lnurl_metadata(
+    #[wasm_bindgen(structural, method, js_name = setLnurlMetadata, catch)]
+    pub fn set_lnurl_metadata(
         this: &Storage,
-        metadata: Vec<AddLnurlMetadataItem>,
+        metadata: Vec<SetLnurlMetadataItem>,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = syncAddOutgoingChange, catch)]

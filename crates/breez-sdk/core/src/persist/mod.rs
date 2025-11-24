@@ -36,16 +36,16 @@ pub enum UpdateDepositPayload {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct AddLnurlMetadataItem {
+pub struct SetLnurlMetadataItem {
     pub payment_hash: String,
     pub sender_comment: Option<String>,
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
 }
 
-impl From<lnurl_models::ListMetadataMetadata> for AddLnurlMetadataItem {
+impl From<lnurl_models::ListMetadataMetadata> for SetLnurlMetadataItem {
     fn from(value: lnurl_models::ListMetadataMetadata) -> Self {
-        AddLnurlMetadataItem {
+        SetLnurlMetadataItem {
             payment_hash: value.payment_hash,
             sender_comment: value.sender_comment,
             nostr_zap_request: value.nostr_zap_request,
@@ -205,9 +205,9 @@ pub trait Storage: Send + Sync {
         payload: UpdateDepositPayload,
     ) -> Result<(), StorageError>;
 
-    async fn add_lnurl_metadata(
+    async fn set_lnurl_metadata(
         &self,
-        metadata: Vec<AddLnurlMetadataItem>,
+        metadata: Vec<SetLnurlMetadataItem>,
     ) -> Result<(), StorageError>;
 }
 
@@ -808,7 +808,7 @@ pub mod tests {
 
     #[allow(clippy::too_many_lines)]
     pub async fn test_sqlite_storage(storage: Box<dyn Storage>) {
-        use crate::AddLnurlMetadataItem;
+        use crate::SetLnurlMetadataItem;
         use crate::models::{LnurlPayInfo, TokenMetadata};
 
         // Test 1: Spark invoice payment
@@ -1247,7 +1247,7 @@ pub mod tests {
 
         // Add lnurl receive metadata for the zap payment
         storage
-            .add_lnurl_metadata(vec![AddLnurlMetadataItem {
+            .set_lnurl_metadata(vec![SetLnurlMetadataItem {
                 payment_hash: "zaphash1234567890abcdef1234567890abcdef1234567890abcdef12345678"
                     .to_string(),
                 sender_comment: Some("Great content!".to_string()),
@@ -1343,14 +1343,14 @@ pub mod tests {
 
         // Add multiple metadata items at once
         storage
-            .add_lnurl_metadata(vec![
-                AddLnurlMetadataItem {
+            .set_lnurl_metadata(vec![
+                SetLnurlMetadataItem {
                     payment_hash: "zaphash2".to_string(),
                     sender_comment: Some("Nice work!".to_string()),
                     nostr_zap_request: None,
                     nostr_zap_receipt: None,
                 },
-                AddLnurlMetadataItem {
+                SetLnurlMetadataItem {
                     payment_hash: "zaphash3".to_string(),
                     sender_comment: None,
                     nostr_zap_request: Some(r#"{"kind":9734,"content":"zap3"}"#.to_string()),
