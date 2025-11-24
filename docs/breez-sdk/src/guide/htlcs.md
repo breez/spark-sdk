@@ -2,13 +2,11 @@
 
 Hash Time-Locked Contract (HTLC) payments are conditional payments that enable atomic cross-chain swaps. The SDK supports Spark HTLCs through a simple API.
 
-This feature is available when paying to **Spark addresses only** (Spark invoices are not supported).
-
 In an HTLC payment, the sender locks funds using a cryptographic hash of a secret preimage and sets an expiration time. The receiver can claim the payment by revealing the preimage before expiration. If the receiver fails to claim the payment in time, the funds are automatically returned to the sender.
 
 ## Sending HTLC Payments
 
-HTLC payments use the standard payment API described in the [Sending payments](send_payment.md) guide. To create an HTLC payment, prepare the payment normally, then provide the Spark HTLC options when [sending](send_payment.md#spark). These options include the payment hash (SHA-256 hash of the preimage) and the expiry duration.
+HTLC payments use the standard payment API described in [Sending payments](send_payment.md). To create an HTLC payment, prepare the payment normally, then provide the Spark HTLC options when [sending](send_payment.md#spark). These options include the payment hash (SHA-256 hash of the preimage) and the expiry duration.
 
 {{#tabs htlcs:send-htlc-payment}}
 
