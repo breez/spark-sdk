@@ -1248,12 +1248,12 @@ impl TransferService {
         Ok(transfers)
     }
 
-    async fn query_pending_receiver_transfers_inner(
+    async fn query_claimable_receiver_transfers_inner(
         &self,
         paging: PagingFilter,
     ) -> Result<PagingResult<Transfer>, ServiceError> {
         trace!(
-            "Querying pending receiver transfers with limit: {:?}, offset: {:?}",
+            "Querying pending (claimable) receiver transfers with limit: {:?}, offset: {:?}",
             paging.limit, paging.offset
         );
         let resp = self
@@ -1282,15 +1282,18 @@ impl TransferService {
     }
 
     /// Queries pending transfers from the operator
-    pub async fn query_pending_receiver_transfers(
+    pub async fn query_claimable_receiver_transfers(
         &self,
         paging: Option<PagingFilter>,
     ) -> Result<PagingResult<Transfer>, ServiceError> {
         let transfers = match paging {
-            Some(paging) => self.query_pending_receiver_transfers_inner(paging).await?,
+            Some(paging) => {
+                self.query_claimable_receiver_transfers_inner(paging)
+                    .await?
+            }
             None => {
                 pager(
-                    |f| self.query_pending_receiver_transfers_inner(f),
+                    |f| self.query_claimable_receiver_transfers_inner(f),
                     PagingFilter::default(),
                 )
                 .await?

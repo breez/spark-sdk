@@ -1628,6 +1628,11 @@ impl BreezSdk {
         let payment_hash = sha256::Hash::from_str(&htlc_options.payment_hash)
             .map_err(|_| SdkError::InvalidInput("Invalid payment hash".to_string()))?;
 
+        if htlc_options.expiry_duration_secs == 0 {
+            return Err(SdkError::InvalidInput(
+                "Expiry duration must be greater than 0".to_string(),
+            ));
+        }
         let expiry_duration = Duration::from_secs(htlc_options.expiry_duration_secs);
 
         let transfer_id = idempotency_key

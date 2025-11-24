@@ -1289,7 +1289,7 @@ async fn claim_pending_transfers(
 ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
     debug!("Claiming all pending transfers");
     let transfers = transfer_service
-        .query_pending_receiver_transfers(None)
+        .query_claimable_receiver_transfers(None)
         .await?;
 
     if transfers.is_empty() {

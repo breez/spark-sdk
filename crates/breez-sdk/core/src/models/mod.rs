@@ -300,8 +300,11 @@ pub struct SparkHtlcDetails {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SparkHtlcStatus {
+    /// The HTLC is waiting for the preimage to be shared by the receiver
     WaitingForPreimage,
+    /// The HTLC preimage has been shared and the transfer can be or has been claimed by the receiver
     PreimageShared,
+    /// The HTLC has been returned to the sender due to expiry
     Returned,
 }
 
@@ -827,7 +830,7 @@ pub struct SparkHtlcOptions {
     /// The payment hash of the HTLC. The receiver will need to provide the associated preimage to claim it.
     pub payment_hash: String,
     /// The duration of the HTLC in seconds.
-    /// After this time, the HTLC will be reverted.
+    /// After this time, the HTLC will be returned.
     pub expiry_duration_secs: u64,
 }
 
