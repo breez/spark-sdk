@@ -28,6 +28,8 @@
 - [Handling tokens](guide/tokens.md)
   - [Token payments](guide/token_payments.md)
   - [Issuing tokens](guide/issuing_tokens.md)
+- [Advanced features](guide/advanced.md)
+  - [Spark HTLC Payments](guide/htlcs.md)
 
 ---
 

@@ -27,6 +27,8 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
+            implementation(platform("org.kotlincrypto.hash:bom:0.6.0"))
+            implementation("org.kotlincrypto.hash:sha2")
             implementation(libs.breez)
             implementation(libs.kotlinx.coroutines.core)
         }

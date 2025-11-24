@@ -325,7 +325,7 @@ pub struct LnurlPayRequestDetails {
     pub nostr_pubkey: Option<String>,
 }
 
-/// Wrapped in a [`LnurlAuth`], this is the result of [`parse`] when given a LNURL-auth endpoint.
+/// Wrapped in a [`InputType::LnurlAuth`], this is the result of [`parse`](breez_sdk_common::input::parse) when given a LNURL-auth endpoint.
 ///
 /// It represents the endpoint's parameters for the LNURL workflow.
 ///
