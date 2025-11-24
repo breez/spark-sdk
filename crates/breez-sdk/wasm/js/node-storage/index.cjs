@@ -154,6 +154,20 @@ class SqliteStorage {
         params.push(request.toTimestamp);
       }
 
+      // Filter by Spark HTLC status
+      if (
+        request.sparkHtlcStatusFilter &&
+        request.sparkHtlcStatusFilter.length > 0
+      ) {
+        const placeholders = request.sparkHtlcStatusFilter
+          .map(() => "?")
+          .join(", ");
+        whereClauses.push(
+          `json_extract(s.htlc_details, '$.status') IN (${placeholders})`
+        );
+        params.push(...request.sparkHtlcStatusFilter);
+      }
+
       // Filter by payment details/method
       if (request.assetFilter) {
         const assetFilter = request.assetFilter;
@@ -197,6 +211,7 @@ class SqliteStorage {
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
             ,       s.invoice_details AS spark_invoice_details
+            ,       s.htlc_details AS spark_htlc_details
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
@@ -247,8 +262,8 @@ class SqliteStorage {
       );
       const sparkInsert = this.db.prepare(
         `INSERT OR REPLACE INTO payment_details_spark 
-          (payment_id, invoice_details) 
-          VALUES (@id, @invoiceDetails)`
+          (payment_id, invoice_details, htlc_details) 
+          VALUES (@id, @invoiceDetails, @htlcDetails)`
       );
       const transaction = this.db.transaction(() => {
         paymentInsert.run({
@@ -268,12 +283,16 @@ class SqliteStorage {
 
         if (
           payment.details?.type === "spark" &&
-          payment.details.invoiceDetails != null
+          (payment.details.invoiceDetails != null ||
+            payment.details.htlcDetails != null)
         ) {
           sparkInsert.run({
             id: payment.id,
             invoiceDetails: payment.details.invoiceDetails
               ? JSON.stringify(payment.details.invoiceDetails)
+              : null,
+            htlcDetails: payment.details.htlcDetails
+              ? JSON.stringify(payment.details.htlcDetails)
               : null,
           });
         }
@@ -343,6 +362,7 @@ class SqliteStorage {
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
             ,       s.invoice_details AS spark_invoice_details
+            ,       s.htlc_details AS spark_htlc_details
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
@@ -401,6 +421,7 @@ class SqliteStorage {
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
             ,       s.invoice_details AS spark_invoice_details
+            ,       s.htlc_details AS spark_htlc_details
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
@@ -603,6 +624,9 @@ class SqliteStorage {
         invoiceDetails: row.spark_invoice_details
           ? JSON.parse(row.spark_invoice_details)
           : null,
+        htlcDetails: row.spark_htlc_details
+          ? JSON.parse(row.spark_htlc_details)
+          : null,
       };
     } else if (row.token_metadata) {
       details = {
@@ -695,8 +719,12 @@ class SqliteStorage {
           DELETE FROM sync_outgoing
           WHERE record_type = ? AND data_id = ? AND revision = CAST(? AS INTEGER)
         `);
-        
-        deleteStmt.run(record.id.type, record.id.dataId, record.revision.toString());
+
+        deleteStmt.run(
+          record.id.type,
+          record.id.dataId,
+          record.revision.toString()
+        );
 
         // Update or insert the sync state
         const updateStateStmt = this.db.prepare(`
@@ -709,7 +737,7 @@ class SqliteStorage {
             data
           ) VALUES (?, ?, CAST(? AS INTEGER), ?, ?, ?)
         `);
-        
+
         updateStateStmt.run(
           record.id.type,
           record.id.dataId,
@@ -753,39 +781,39 @@ class SqliteStorage {
         ORDER BY o.revision ASC
         LIMIT ?
       `);
-      
+
       const rows = stmt.all(limit);
-      
-      const changes = rows.map(row => {
+
+      const changes = rows.map((row) => {
         const change = {
           id: {
             type: row.record_type,
-            dataId: row.data_id
+            dataId: row.data_id,
           },
           schemaVersion: row.schema_version,
           updatedFields: JSON.parse(row.updated_fields_json),
-          revision: BigInt(row.revision)
+          revision: BigInt(row.revision),
         };
-        
+
         let parent = null;
         if (row.existing_data) {
           parent = {
             id: {
               type: row.record_type,
-              dataId: row.data_id
+              dataId: row.data_id,
             },
             revision: BigInt(row.existing_revision),
             schemaVersion: row.existing_schema_version,
-            data: JSON.parse(row.existing_data)
+            data: JSON.parse(row.existing_data),
           };
         }
-        
+
         return {
           change,
-          parent
+          parent,
         };
       });
-      
+
       return Promise.resolve(changes);
     } catch (error) {
       return Promise.reject(
@@ -799,16 +827,15 @@ class SqliteStorage {
 
   syncGetLastRevision() {
     try {
-      const stmt = this.db.prepare(`SELECT CAST(COALESCE(MAX(revision), 0) AS TEXT) as revision FROM sync_state`);
+      const stmt = this.db.prepare(
+        `SELECT CAST(COALESCE(MAX(revision), 0) AS TEXT) as revision FROM sync_state`
+      );
       const row = stmt.get();
-      
+
       return Promise.resolve(row ? BigInt(row.revision) : BigInt(0));
     } catch (error) {
       return Promise.reject(
-        new StorageError(
-          `Failed to get last revision: ${error.message}`,
-          error
-        )
+        new StorageError(`Failed to get last revision: ${error.message}`, error)
       );
     }
   }
@@ -830,7 +857,7 @@ class SqliteStorage {
             revision
           ) VALUES (?, ?, ?, ?, ?, CAST(? AS INTEGER))
         `);
-        
+
         for (const record of records) {
           stmt.run(
             record.id.type,
@@ -842,7 +869,7 @@ class SqliteStorage {
           );
         }
       });
-      
+
       transaction();
       return Promise.resolve();
     } catch (error) {
@@ -884,24 +911,27 @@ class SqliteStorage {
           SELECT CAST(COALESCE(MAX(revision), 0) AS TEXT) as last_revision FROM sync_state
         `);
         const revisionRow = getLastRevisionStmt.get();
-        const lastRevision = revisionRow ? BigInt(revisionRow.last_revision) : BigInt(0);
-        
+        const lastRevision = revisionRow
+          ? BigInt(revisionRow.last_revision)
+          : BigInt(0);
+
         // Calculate the difference to add to all revision numbers
-        const diff = revision > lastRevision ? revision - lastRevision : BigInt(0);
-        
+        const diff =
+          revision > lastRevision ? revision - lastRevision : BigInt(0);
+
         if (diff === BigInt(0)) {
           return; // No rebasing needed
         }
-        
+
         // Update all pending outgoing records
         const updateRecordsStmt = this.db.prepare(`
           UPDATE sync_outgoing 
           SET revision = revision + CAST(? AS INTEGER)
         `);
-        
+
         updateRecordsStmt.run(diff.toString());
       });
-      
+
       transaction();
       return Promise.resolve();
     } catch (error) {
@@ -933,45 +963,45 @@ class SqliteStorage {
            ORDER BY i.revision ASC
            LIMIT ?
         `);
-        
+
         const rows = stmt.all(limit);
-        
+
         // Join with parent records from sync_state
-        const results = rows.map(row => {
+        const results = rows.map((row) => {
           // Create the record
           const newState = {
             id: {
               type: row.record_type,
-              dataId: row.data_id
+              dataId: row.data_id,
             },
             revision: BigInt(row.revision),
             schemaVersion: row.schema_version,
-            data: JSON.parse(row.data)
+            data: JSON.parse(row.data),
           };
-          
+
           // Create parent if exists
           let oldState = null;
           if (row.existing_data) {
             oldState = {
               id: {
                 type: row.record_type,
-                dataId: row.data_id
+                dataId: row.data_id,
               },
               revision: BigInt(row.existing_revision),
               schemaVersion: row.existing_schema_version,
-              data: JSON.parse(row.existing_data)
+              data: JSON.parse(row.existing_data),
             };
           }
-          
+
           return {
             newState,
-            oldState
+            oldState,
           };
         });
-        
+
         return results;
       });
-      
+
       return Promise.resolve(transaction());
     } catch (error) {
       return Promise.reject(
@@ -1005,39 +1035,39 @@ class SqliteStorage {
         ORDER BY o.revision DESC
         LIMIT 1
       `);
-      
+
       const row = stmt.get();
-      
+
       if (!row) {
         return Promise.resolve(null);
       }
-      
+
       const change = {
         id: {
           type: row.record_type,
-          dataId: row.data_id
+          dataId: row.data_id,
         },
         schemaVersion: row.schema_version,
         updatedFields: JSON.parse(row.updated_fields_json),
-        revision: BigInt(row.revision)
+        revision: BigInt(row.revision),
       };
-      
+
       let parent = null;
       if (row.existing_data) {
         parent = {
           id: {
             type: row.record_type,
-            dataId: row.data_id
+            dataId: row.data_id,
           },
           revision: BigInt(row.existing_revision),
           schemaVersion: row.existing_schema_version,
-          data: JSON.parse(row.existing_data)
+          data: JSON.parse(row.existing_data),
         };
       }
-      
+
       return Promise.resolve({
         change,
-        parent
+        parent,
       });
     } catch (error) {
       return Promise.reject(
@@ -1061,7 +1091,7 @@ class SqliteStorage {
           data
         ) VALUES (?, ?, CAST(? AS INTEGER), ?, ?, ?)
       `);
-      
+
       stmt.run(
         record.id.type,
         record.id.dataId,
@@ -1070,7 +1100,7 @@ class SqliteStorage {
         Math.floor(Date.now() / 1000),
         JSON.stringify(record.data)
       );
-      
+
       return Promise.resolve();
     } catch (error) {
       return Promise.reject(

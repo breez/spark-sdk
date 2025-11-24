@@ -261,8 +261,23 @@ class MigrationManager {
             PRIMARY KEY (record_type, data_id, revision)
           )`,
           `CREATE INDEX idx_sync_incoming_revision ON sync_incoming(revision)`,
-        ]
-      }
+        ],
+      },
+      {
+        name: "Add htlc details to payment_details_spark",
+        sql: [
+          `ALTER TABLE payment_details_spark RENAME TO tmp_payment_details_spark`,
+          `CREATE TABLE payment_details_spark (
+            payment_id TEXT NOT NULL PRIMARY KEY,
+            invoice_details TEXT,
+            htlc_details TEXT,
+            FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+          )`,
+          `INSERT INTO payment_details_spark (payment_id, invoice_details)
+            SELECT payment_id, invoice_details FROM tmp_payment_details_spark`,
+          `DROP TABLE tmp_payment_details_spark`,
+        ],
+      },
     ];
   }
 }

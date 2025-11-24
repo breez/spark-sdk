@@ -1,21 +1,15 @@
 use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::OperatorPool;
-use crate::operator::rpc::spark::initiate_preimage_swap_request::Reason;
-use crate::operator::rpc::spark::{
-    GetSigningCommitmentsRequest, InitiatePreimageSwapRequest, InitiatePreimageSwapResponse,
-    InvoiceAmount, InvoiceAmountProof, SecretShare, StartTransferRequest,
-    StartUserSignedTransferRequest, StorePreimageShareRequest,
-};
+use crate::operator::rpc::spark::{SecretShare, StorePreimageShareRequest};
 use crate::services::{ServiceError, Transfer, TransferId, TransferObserver, TransferService};
 use crate::signer::SecretToSplit;
 use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
     ServiceProvider,
 };
-use crate::utils::refund::{SignRefundsParams, SignedRefundTransactions};
-use crate::utils::time::web_time_to_prost_timestamp;
-use crate::utils::{leaf_key_tweak::prepare_leaf_key_tweaks_to_send, refund::sign_refunds};
+use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
+use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_preimage};
 use crate::{signer::Signer, tree::TreeNode};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
@@ -28,8 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use web_time::SystemTime;
 
-use super::LeafKeyTweak;
-use super::models::{LightningSendRequestStatus, map_signing_nonce_commitments};
+use super::models::LightningSendRequestStatus;
 
 const DEFAULT_RECEIVE_EXPIRY_SECS: u32 = 60 * 60 * 24 * 30; // 30 days
 const DEFAULT_SEND_EXPIRY_SECS: u64 = 60 * 60 * 24 * 16; // 16 days
@@ -193,19 +186,6 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
             payment_preimage: value.lightning_receive_payment_preimage,
         })
     }
-}
-
-struct SwapNodesForPreimageRequest<'a> {
-    transfer_id: &'a TransferId,
-    leaves: &'a [LeafKeyTweak],
-    receiver_pubkey: &'a PublicKey,
-    payment_hash: &'a sha256::Hash,
-    invoice: &'a str,
-    invoice_amount_sats: u64,
-    fee_sats: u64,
-    is_inbound_payment: bool,
-    transfer_request: Option<StartTransferRequest>,
-    expiry_time: &'a SystemTime,
 }
 
 pub struct PayLightningResult {
@@ -378,20 +358,24 @@ impl LightningService {
             )
             .await?;
 
-        let initiate_preimage_swap_res = self
-            .swap_nodes_for_preimage(SwapNodesForPreimageRequest {
+        let initiate_preimage_swap_res = swap_nodes_for_preimage(
+            &self.operator_pool,
+            &self.signer,
+            self.network,
+            SwapNodesForPreimageRequest {
                 transfer_id: &unwrapped_transfer_id,
                 leaves: &leaf_tweaks,
                 receiver_pubkey: &ssp_identity_public_key,
                 payment_hash,
-                invoice,
-                invoice_amount_sats: amount_sats,
+                invoice_str: Some(invoice),
+                amount_sats,
                 fee_sats: 0, // TODO: this must use the estimated fee.
                 is_inbound_payment: false,
                 transfer_request: Some(transfer_request),
                 expiry_time: &expiry_time,
-            })
-            .await;
+            },
+        )
+        .await;
         let transfer: Transfer = match (&transfer_id, initiate_preimage_swap_res) {
             (_, Ok(initiate_preimage_swap)) => initiate_preimage_swap
                 .transfer
@@ -532,128 +516,6 @@ impl LightningService {
             Some(request) => Ok(Some(request.try_into()?)),
             None => Ok(None),
         }
-    }
-
-    async fn swap_nodes_for_preimage(
-        &self,
-        req: SwapNodesForPreimageRequest<'_>,
-    ) -> Result<InitiatePreimageSwapResponse, ServiceError> {
-        let SwapNodesForPreimageRequest {
-            transfer_id,
-            leaves,
-            receiver_pubkey,
-            payment_hash,
-            invoice,
-            invoice_amount_sats,
-            fee_sats,
-            is_inbound_payment,
-            transfer_request,
-            expiry_time,
-        } = req;
-        // get signing commitments
-        let node_ids: Vec<String> = leaves
-            .iter()
-            .map(|l| l.node.id.clone().to_string())
-            .collect();
-        let signing_commitments = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .get_signing_commitments(GetSigningCommitmentsRequest { node_ids, count: 3 })
-            .await?
-            .signing_commitments
-            .iter()
-            .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let chunked_signing_commitments =
-            signing_commitments.chunks(leaves.len()).collect::<Vec<_>>();
-
-        if chunked_signing_commitments.len() != 3 {
-            return Err(ServiceError::SSPswapError(
-                "Not enough signing commitments returned".to_string(),
-            ));
-        }
-
-        let cpfp_signing_commitments = chunked_signing_commitments[0].to_vec();
-        let direct_signing_commitments = chunked_signing_commitments[1].to_vec();
-        let direct_from_cpfp_signing_commitments = chunked_signing_commitments[2].to_vec();
-
-        let SignedRefundTransactions {
-            cpfp_signed_tx,
-            direct_signed_tx,
-            direct_from_cpfp_signed_tx,
-        } = sign_refunds(SignRefundsParams {
-            signer: &self.signer,
-            leaves,
-            cpfp_signing_commitments,
-            direct_signing_commitments,
-            direct_from_cpfp_signing_commitments,
-            receiver_pubkey,
-            payment_hash: None,
-            network: self.network,
-        })
-        .await?;
-
-        let reason = if is_inbound_payment {
-            Reason::Receive
-        } else {
-            Reason::Send
-        };
-
-        // When a transfer request is provided, we do not send the direct signed txs
-        let (direct_signed_tx, direct_from_cpfp_signed_tx) = if transfer_request.is_some() {
-            (Vec::new(), Vec::new())
-        } else {
-            (direct_signed_tx, direct_from_cpfp_signed_tx)
-        };
-
-        let request_data = InitiatePreimageSwapRequest {
-            payment_hash: payment_hash.to_byte_array().to_vec(),
-            reason: reason as i32,
-            invoice_amount: Some(InvoiceAmount {
-                invoice_amount_proof: Some(InvoiceAmountProof {
-                    bolt11_invoice: invoice.to_string(),
-                }),
-                value_sats: invoice_amount_sats,
-            }),
-            transfer: Some(StartUserSignedTransferRequest {
-                transfer_id: transfer_id.to_string(),
-                owner_identity_public_key: self
-                    .signer
-                    .get_identity_public_key()?
-                    .serialize()
-                    .to_vec(),
-                receiver_identity_public_key: receiver_pubkey.serialize().to_vec(),
-                expiry_time: Some(
-                    web_time_to_prost_timestamp(expiry_time)
-                        .map_err(|_| ServiceError::Generic("Invalid expiry time".to_string()))?,
-                ),
-                leaves_to_send: cpfp_signed_tx
-                    .iter()
-                    .map(|l| l.try_into())
-                    .collect::<Result<Vec<_>, _>>()?,
-                direct_leaves_to_send: direct_signed_tx
-                    .iter()
-                    .map(|l| l.try_into())
-                    .collect::<Result<Vec<_>, _>>()?,
-                direct_from_cpfp_leaves_to_send: direct_from_cpfp_signed_tx
-                    .iter()
-                    .map(|l| l.try_into())
-                    .collect::<Result<Vec<_>, _>>()?,
-            }),
-            receiver_identity_public_key: receiver_pubkey.serialize().to_vec(),
-            fee_sats,
-            transfer_request,
-        };
-
-        let response = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .initiate_preimage_swap_v3(request_data)
-            .await?;
-        Ok(response)
     }
 }
 

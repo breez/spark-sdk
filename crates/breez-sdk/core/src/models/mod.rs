@@ -236,6 +236,8 @@ pub enum PaymentDetails {
     Spark {
         /// The invoice details if the payment fulfilled a spark invoice
         invoice_details: Option<SparkInvoicePaymentDetails>,
+        /// The HTLC transfer details if the payment fulfilled an HTLC transfer
+        htlc_details: Option<SparkHtlcDetails>,
     },
     Token {
         metadata: TokenMetadata,
@@ -280,6 +282,53 @@ pub struct SparkInvoicePaymentDetails {
     pub description: Option<String>,
     /// The raw spark invoice string
     pub invoice: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkHtlcDetails {
+    /// The payment hash of the HTLC
+    pub payment_hash: String,
+    /// The preimage of the HTLC. Empty until receiver has released it.
+    pub preimage: Option<String>,
+    /// The expiry time of the HTLC in seconds since the Unix epoch
+    pub expiry_time: u64,
+    /// The HTLC status
+    pub status: SparkHtlcStatus,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum SparkHtlcStatus {
+    /// The HTLC is waiting for the preimage to be shared by the receiver
+    WaitingForPreimage,
+    /// The HTLC preimage has been shared and the transfer can be or has been claimed by the receiver
+    PreimageShared,
+    /// The HTLC has been returned to the sender due to expiry
+    Returned,
+}
+
+impl fmt::Display for SparkHtlcStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SparkHtlcStatus::WaitingForPreimage => write!(f, "WaitingForPreimage"),
+            SparkHtlcStatus::PreimageShared => write!(f, "PreimageShared"),
+            SparkHtlcStatus::Returned => write!(f, "Returned"),
+        }
+    }
+}
+
+impl FromStr for SparkHtlcStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "WaitingForPreimage" => Ok(SparkHtlcStatus::WaitingForPreimage),
+            "PreimageShared" => Ok(SparkHtlcStatus::PreimageShared),
+            "Returned" => Ok(SparkHtlcStatus::Returned),
+            _ => Err("Invalid Spark HTLC status".to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -769,6 +818,20 @@ pub enum SendPaymentOptions {
         /// number of seconds. If unset, the function will return immediately after initiating the payment.
         completion_timeout_secs: Option<u32>,
     },
+    SparkAddress {
+        /// Can only be provided for Bitcoin payments. If set, a Spark HTLC transfer will be created.
+        /// The receiver will need to provide the preimage to claim it.
+        htlc_options: Option<SparkHtlcOptions>,
+    },
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkHtlcOptions {
+    /// The payment hash of the HTLC. The receiver will need to provide the associated preimage to claim it.
+    pub payment_hash: String,
+    /// The duration of the HTLC in seconds.
+    /// After this time, the HTLC will be returned.
+    pub expiry_duration_secs: u64,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -800,6 +863,9 @@ pub struct ListPaymentsRequest {
     pub status_filter: Option<Vec<PaymentStatus>>,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub asset_filter: Option<AssetFilter>,
+    /// Only include payments with specific Spark HTLC statuses
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
     /// Only include payments created after this timestamp (inclusive)
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub from_timestamp: Option<u64>,
@@ -1019,4 +1085,14 @@ pub struct UserSettings {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct UpdateUserSettingsRequest {
     pub spark_private_mode_enabled: Option<bool>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ClaimHtlcPaymentRequest {
+    pub preimage: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ClaimHtlcPaymentResponse {
+    pub payment: Payment,
 }

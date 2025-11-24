@@ -3,6 +3,7 @@ pub(super) mod frost;
 pub mod htlc_transactions;
 pub(crate) mod leaf_key_tweak;
 pub mod paging;
+pub(crate) mod preimage_swap;
 pub(crate) mod refund;
 pub(crate) mod signing_job;
 pub(crate) mod time;

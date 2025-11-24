@@ -84,6 +84,14 @@ impl BreezSdk {
         Ok(self.sdk.receive_payment(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "claimHtlcPayment")]
+    pub async fn claim_htlc_payment(
+        &self,
+        request: ClaimHtlcPaymentRequest,
+    ) -> WasmResult<ClaimHtlcPaymentResponse> {
+        Ok(self.sdk.claim_htlc_payment(request.into()).await?.into())
+    }
+
     #[wasm_bindgen(js_name = "prepareSendPayment")]
     pub async fn prepare_send_payment(
         &self,

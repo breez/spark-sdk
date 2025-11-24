@@ -232,6 +232,16 @@ impl SqliteStorage {
                 PRIMARY KEY(record_type, data_id, revision)
             );
             CREATE INDEX idx_sync_incoming_revision ON sync_incoming(revision);",
+            "ALTER TABLE payment_details_spark RENAME TO tmp_payment_details_spark;
+            CREATE TABLE payment_details_spark (
+              payment_id TEXT NOT NULL PRIMARY KEY,
+              invoice_details TEXT,
+              htlc_details TEXT,
+              FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+            );
+            INSERT INTO payment_details_spark (payment_id, invoice_details)
+             SELECT payment_id, invoice_details FROM tmp_payment_details_spark;
+            DROP TABLE tmp_payment_details_spark;",
         ]
     }
 }
@@ -320,6 +330,23 @@ impl Storage for SqliteStorage {
             }
         }
 
+        // Filter by Spark HTLC status
+        if let Some(ref htlc_status_filter) = request.spark_htlc_status_filter
+            && !htlc_status_filter.is_empty()
+        {
+            let placeholders = htlc_status_filter
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(", ");
+            where_clauses.push(format!(
+                "json_extract(s.htlc_details, '$.status') IN ({placeholders})"
+            ));
+            for htlc_status in htlc_status_filter {
+                params.push(Box::new(htlc_status.to_string()));
+            }
+        }
+
         // Build the WHERE clause
         let where_sql = if where_clauses.is_empty() {
             String::new()
@@ -356,6 +383,7 @@ impl Storage for SqliteStorage {
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
             ,       s.invoice_details AS spark_invoice_details
+            ,       s.htlc_details AS spark_htlc_details
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
@@ -408,7 +436,10 @@ impl Storage for SqliteStorage {
                     params![tx_id, payment.id],
                 )?;
             }
-            Some(PaymentDetails::Spark { invoice_details }) => {
+            Some(PaymentDetails::Spark {
+                invoice_details,
+                htlc_details,
+            }) => {
                 tx.execute(
                     "UPDATE payments SET spark = 1 WHERE id = ?",
                     params![payment.id],
@@ -416,6 +447,11 @@ impl Storage for SqliteStorage {
                 if let Some(invoice_details) = invoice_details {
                     tx.execute("INSERT OR REPLACE INTO payment_details_spark (payment_id, invoice_details) VALUES (?, ?)",
                         params![payment.id, serde_json::to_string(&invoice_details)?],
+                    )?;
+                }
+                if let Some(htlc_details) = htlc_details {
+                    tx.execute("INSERT OR REPLACE INTO payment_details_spark (payment_id, htlc_details) VALUES (?, ?)",
+                        params![payment.id, serde_json::to_string(&htlc_details)?],
                     )?;
                 }
             }
@@ -533,6 +569,7 @@ impl Storage for SqliteStorage {
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
             ,       s.invoice_details AS spark_invoice_details
+            ,       s.htlc_details AS spark_htlc_details
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
@@ -573,6 +610,7 @@ impl Storage for SqliteStorage {
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
             ,       s.invoice_details AS spark_invoice_details
+            ,       s.htlc_details AS spark_htlc_details
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
@@ -1053,6 +1091,7 @@ fn map_sqlite_error(value: rusqlite::Error) -> SyncStorageError {
     SyncStorageError::Implementation(value.to_string())
 }
 
+#[allow(clippy::too_many_lines)]
 fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
     let withdraw_tx_id: Option<String> = row.get(7)?;
     let deposit_tx_id: Option<String> = row.get(8)?;
@@ -1099,7 +1138,22 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                     })
                 })
                 .transpose()?;
-            Some(PaymentDetails::Spark { invoice_details })
+            let htlc_details_str: Option<String> = row.get(21)?;
+            let htlc_details = htlc_details_str
+                .map(|s| {
+                    serde_json::from_str(&s).map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            21,
+                            rusqlite::types::Type::Text,
+                            e.into(),
+                        )
+                    })
+                })
+                .transpose()?;
+            Some(PaymentDetails::Spark {
+                invoice_details,
+                htlc_details,
+            })
         }
         (_, _, _, _, Some(metadata)) => {
             let invoice_details_str: Option<String> = row.get(19)?;
@@ -1320,6 +1374,14 @@ mod tests {
         let storage = SqliteStorage::new(temp_dir.path()).unwrap();
 
         crate::persist::tests::test_timestamp_filtering(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_spark_htlc_status_filtering() {
+        let temp_dir = tempdir::TempDir::new("sqlite_storage_htlc_filter").unwrap();
+        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+
+        crate::persist::tests::test_spark_htlc_status_filtering(Box::new(storage)).await;
     }
 
     #[tokio::test]

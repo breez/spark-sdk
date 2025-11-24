@@ -11,6 +11,7 @@ dotenvy.workspace = true
 figment = { workspace = true, features = ["env", "yaml"] }
 hex.workspace = true
 qrcode-rs.workspace = true
+rand.workspace = true
 reqwest = { workspace = true, features = ["default-tls"] }
 rustyline = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }

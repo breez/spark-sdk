@@ -1,15 +1,18 @@
 mod issuer;
 
+use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest, Fee, GetInfoRequest,
-    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
-    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
-    OnchainConfirmationSpeed, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
-    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
-    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
+    AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
+    ClaimHtlcPaymentRequest, Fee, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
+    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
+    LnurlPayRequest, LnurlWithdrawRequest, OnchainConfirmationSpeed, PaymentStatus, PaymentType,
+    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
+    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
+    UpdateUserSettingsRequest,
 };
 use clap::Parser;
+use rand::RngCore;
 use rustyline::{
     Completer, Editor, Helper, Hinter, Validator, highlight::Highlighter, hint::HistoryHinter,
     history::DefaultHistory,
@@ -53,6 +56,10 @@ pub enum Command {
         /// Filter by payment details
         #[arg(short, long)]
         asset_filter: Option<AssetFilter>,
+
+        /// Filter by Spark HTLC status
+        #[arg(long)]
+        spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
 
         /// Only include payments created after this timestamp (inclusive)
         #[arg(long)]
@@ -147,6 +154,12 @@ pub enum Command {
         /// Optional completion timeout in seconds
         #[clap(short = 't', long = "timeout")]
         completion_timeout_secs: Option<u32>,
+    },
+
+    /// Claim an HTLC payment
+    ClaimHtlcPayment {
+        /// The preimage of the HTLC (hex string)
+        preimage: String,
     },
 
     ClaimDeposit {
@@ -260,6 +273,7 @@ pub(crate) async fn execute_command(
             offset,
             type_filter,
             status_filter,
+            spark_htlc_status_filter,
             asset_filter,
             from_timestamp,
             to_timestamp,
@@ -272,6 +286,7 @@ pub(crate) async fn execute_command(
                     type_filter,
                     status_filter,
                     asset_filter,
+                    spark_htlc_status_filter,
                     from_timestamp,
                     to_timestamp,
                     sort_ascending,
@@ -511,6 +526,14 @@ pub(crate) async fn execute_command(
             print_value(&res)?;
             Ok(true)
         }
+
+        Command::ClaimHtlcPayment { preimage } => {
+            let res = sdk
+                .claim_htlc_payment(ClaimHtlcPaymentRequest { preimage })
+                .await?;
+            print_value(&res.payment)?;
+            Ok(true)
+        }
         Command::CheckLightningAddressAvailable { username } => {
             let res = sdk
                 .check_lightning_address_available(CheckLightningAddressRequest { username })
@@ -626,7 +649,40 @@ fn read_payment_options(
                 completion_timeout_secs: Some(0),
             }))
         }
-        SendPaymentMethod::SparkAddress { .. } | SendPaymentMethod::SparkInvoice { .. } => Ok(None),
+        SendPaymentMethod::SparkAddress { .. } => {
+            let line = rl
+                .readline_with_initial("Do you want to create an HTLC transfer? (y/n)", ("n", ""))?
+                .to_lowercase();
+            if line != "y" {
+                return Ok(None);
+            }
+
+            let payment_hash = rl.readline("Please enter the HTLC payment hash (hex string) or leave empty to generate a new preimage and associated hash:")?;
+            let payment_hash = if payment_hash.is_empty() {
+                let mut preimage_bytes = [0u8; 32];
+                rand::thread_rng().fill_bytes(&mut preimage_bytes);
+                let preimage = hex::encode(preimage_bytes);
+                let payment_hash = sha256::Hash::hash(&preimage_bytes).to_string();
+
+                println!("Generated preimage: {preimage}");
+                println!("Associated payment hash: {payment_hash}");
+                payment_hash
+            } else {
+                payment_hash
+            };
+
+            let expiry_duration_secs = rl
+                .readline("Please enter the HTLC expiry duration in seconds:")?
+                .parse::<u64>()?;
+
+            Ok(Some(SendPaymentOptions::SparkAddress {
+                htlc_options: Some(SparkHtlcOptions {
+                    payment_hash,
+                    expiry_duration_secs,
+                }),
+            }))
+        }
+        SendPaymentMethod::SparkInvoice { .. } => Ok(None),
     }
 }
 

@@ -3,6 +3,7 @@ use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 use bitcoin::{
     Address, Transaction,
     address::NetworkUnchecked,
+    hashes::sha256::Hash,
     key::Secp256k1,
     secp256k1::{PublicKey, ecdsa::Signature},
 };
@@ -17,13 +18,14 @@ use spark::{
         OperatorPool,
         rpc::{
             ConnectionManager, DefaultConnectionManager,
-            spark::{QuerySparkInvoicesRequest, UpdateWalletSettingRequest},
+            spark::{PreimageRequestRole, QuerySparkInvoicesRequest, UpdateWalletSettingRequest},
         },
     },
     services::{
         CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpUtxo, DepositService, ExitSpeed,
-        Fee, FreezeIssuerTokenResponse, InvoiceDescription, LeafTxCpfpPsbts,
-        LightningReceivePayment, LightningSendPayment, LightningService,
+        Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LeafTxCpfpPsbts,
+        LightningReceivePayment, LightningSendPayment, LightningService, Preimage,
+        PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
         QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager, TokenService,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
         TransferTokenOutput, UnilateralExitService, Utxo,
@@ -47,8 +49,9 @@ use tracing::{debug, error, info, trace};
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    FulfillSparkInvoiceResult, ListTokenTransactionsRequest, QuerySparkInvoiceResult, TokenBalance,
-    WalletEvent, WalletLeaves, WalletSettings, WithdrawInnerParams,
+    FulfillSparkInvoiceResult, ListTokenTransactionsRequest, PreimageRequest,
+    QuerySparkInvoiceResult, TokenBalance, WalletEvent, WalletLeaves, WalletSettings,
+    WithdrawInnerParams,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
@@ -73,6 +76,7 @@ pub struct SparkWallet {
     ssp_client: Arc<ServiceProvider>,
     token_service: Arc<TokenService>,
     operator_pool: Arc<OperatorPool>,
+    htlc_service: Arc<HtlcService>,
 }
 
 impl SparkWallet {
@@ -203,6 +207,14 @@ impl SparkWallet {
             config.network,
             config.split_secret_threshold,
             config.tokens_config.clone(),
+            transfer_observer.clone(),
+        ));
+
+        let htlc_service = Arc::new(HtlcService::new(
+            operator_pool.clone(),
+            config.network,
+            Arc::clone(&signer),
+            Arc::clone(&transfer_service),
             transfer_observer,
         ));
 
@@ -218,6 +230,7 @@ impl SparkWallet {
                 Arc::clone(&tree_service),
                 Arc::clone(&service_provider),
                 Arc::clone(&transfer_service),
+                Arc::clone(&htlc_service),
             ));
             background_processor
                 .run_background_tasks(cancellation_token.clone())
@@ -239,6 +252,7 @@ impl SparkWallet {
             ssp_client: service_provider.clone(),
             token_service,
             operator_pool,
+            htlc_service,
         })
     }
 }
@@ -300,12 +314,14 @@ impl SparkWallet {
             Some(_) => WalletTransfer::from_transfer(
                 lightning_payment.transfer,
                 None,
+                None,
                 self.identity_public_key,
             ),
             None => {
                 create_transfer(
                     lightning_payment.transfer,
                     &self.ssp_client,
+                    &self.htlc_service,
                     self.identity_public_key,
                 )
                 .await?
@@ -445,6 +461,7 @@ impl SparkWallet {
         Ok(WalletTransfer::from_transfer(
             transfer,
             None,
+            None,
             self.identity_public_key,
         ))
     }
@@ -582,6 +599,7 @@ impl SparkWallet {
         Ok(WalletTransfer::from_transfer(
             transfer,
             None,
+            None,
             self.identity_public_key,
         ))
     }
@@ -592,9 +610,120 @@ impl SparkWallet {
             self.identity_public_key,
             &self.transfer_service,
             &self.tree_service,
+            &self.htlc_service,
             &self.ssp_client,
         )
         .await
+    }
+
+    pub async fn create_htlc(
+        &self,
+        amount_sat: u64,
+        receiver_address: &SparkAddress,
+        payment_hash: &Hash,
+        expiry_duration: Duration,
+        transfer_id: Option<TransferId>,
+    ) -> Result<WalletTransfer, SparkWalletError> {
+        // validate receiver address and get its pubkey
+        if self.config.network != receiver_address.network {
+            return Err(SparkWalletError::InvalidNetwork);
+        }
+        let receiver_pubkey = receiver_address.identity_public_key;
+
+        // get leaves to transfer
+        let target_amounts = TargetAmounts::new(amount_sat, None);
+        let leaves_reservation = self
+            .tree_service
+            .select_leaves(Some(&target_amounts))
+            .await?;
+
+        let expiry_time = SystemTime::now() + expiry_duration;
+        let transfer = with_reserved_leaves(
+            self.tree_service.as_ref(),
+            self.htlc_service.create_htlc(
+                leaves_reservation.leaves.clone(),
+                &receiver_pubkey,
+                payment_hash,
+                expiry_time,
+                transfer_id,
+            ),
+            &leaves_reservation,
+        )
+        .await?;
+
+        let htlc_preimage_request = PreimageRequest {
+            payment_hash: *payment_hash,
+            status: PreimageRequestStatus::WaitingForPreimage,
+            created_time: transfer
+                .created_time
+                .map(|t| UNIX_EPOCH + Duration::from_secs(t))
+                .unwrap_or(SystemTime::now()),
+            expiry_time,
+            preimage: None,
+        };
+
+        Ok(WalletTransfer::from_transfer(
+            transfer,
+            None,
+            Some(htlc_preimage_request),
+            self.identity_public_key,
+        ))
+    }
+
+    pub async fn claim_htlc(
+        &self,
+        preimage: &Preimage,
+    ) -> Result<WalletTransfer, SparkWalletError> {
+        let transfer = self.htlc_service.provide_preimage(preimage).await?;
+        let preimage_request = self
+            .htlc_service
+            .query_htlc(
+                QueryHtlcFilter {
+                    payment_hashes: vec![preimage.compute_hash().to_string()],
+                    identity_public_key: self.identity_public_key,
+                    status: None,
+                    transfer_ids: Vec::new(),
+                    match_role: PreimageRequestRole::Receiver,
+                },
+                None,
+            )
+            .await?
+            .items
+            .first()
+            .cloned()
+            .ok_or(SparkWalletError::Generic("HTLC not found".to_string()))?;
+        Ok(WalletTransfer::from_transfer(
+            transfer,
+            None,
+            Some(preimage_request.into()),
+            self.identity_public_key,
+        ))
+    }
+
+    pub async fn list_claimable_htlc_transfers(
+        &self,
+        paging: Option<PagingFilter>,
+    ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+        let htlcs = self
+            .htlc_service
+            .query_htlc(
+                QueryHtlcFilter {
+                    identity_public_key: self.identity_public_key,
+                    status: Some(PreimageRequestStatus::WaitingForPreimage),
+                    transfer_ids: Vec::new(),
+                    payment_hashes: Vec::new(),
+                    match_role: PreimageRequestRole::Receiver,
+                },
+                paging,
+            )
+            .await?
+            .items;
+        htlcs
+            .into_iter()
+            .map(|h| {
+                WalletTransfer::from_preimage_request_with_transfer(h, self.identity_public_key)
+            })
+            .collect()
     }
 
     pub fn get_info(&self) -> WalletInfo {
@@ -662,7 +791,7 @@ impl SparkWallet {
     ) -> Result<PagingResult<WalletTransfer>, SparkWalletError> {
         let our_pubkey = self.identity_public_key;
         let transfers = self.transfer_service.query_transfers(paging).await?;
-        create_transfers(transfers, &self.ssp_client, our_pubkey).await
+        create_transfers(transfers, &self.ssp_client, &self.htlc_service, our_pubkey).await
     }
 
     pub async fn list_pending_transfers(
@@ -674,7 +803,7 @@ impl SparkWallet {
             .transfer_service
             .query_pending_transfers(paging)
             .await?;
-        create_transfers(transfers, &self.ssp_client, our_pubkey).await
+        create_transfers(transfers, &self.ssp_client, &self.htlc_service, our_pubkey).await
     }
 
     /// Queries the SSP for user requests by their associated transfer IDs
@@ -772,7 +901,13 @@ impl SparkWallet {
         )
         .await?;
 
-        create_transfer(transfer, &self.ssp_client, self.identity_public_key).await
+        create_transfer(
+            transfer,
+            &self.ssp_client,
+            &self.htlc_service,
+            self.identity_public_key,
+        )
+        .await
     }
 
     async fn withdraw_inner(
@@ -1149,11 +1284,12 @@ async fn claim_pending_transfers(
     our_pubkey: PublicKey,
     transfer_service: &Arc<TransferService>,
     tree_service: &Arc<dyn TreeService>,
+    htlc_service: &Arc<HtlcService>,
     ssp_client: &Arc<ServiceProvider>,
 ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
     debug!("Claiming all pending transfers");
     let transfers = transfer_service
-        .query_pending_receiver_transfers(None)
+        .query_claimable_receiver_transfers(None)
         .await?;
 
     if transfers.is_empty() {
@@ -1176,26 +1312,73 @@ async fn claim_pending_transfers(
         );
     }
     debug!("Claimed all transfers, creating wallet transfers");
-    Ok(create_transfers(transfers, ssp_client, our_pubkey)
-        .await?
-        .items)
+    Ok(
+        create_transfers(transfers, ssp_client, htlc_service, our_pubkey)
+            .await?
+            .items,
+    )
 }
 
 async fn create_transfers(
     transfers: PagingResult<Transfer>,
     ssp_client: &Arc<ServiceProvider>,
+    htlc_service: &Arc<HtlcService>,
     our_public_key: PublicKey,
 ) -> Result<PagingResult<WalletTransfer>, SparkWalletError> {
-    let transfer_ids = transfers.items.iter().map(|t| t.id.to_string()).collect();
-    let ssp_tranfers = ssp_client.get_transfers(transfer_ids).await?;
+    let transfer_ids: Vec<String> = transfers.items.iter().map(|t| t.id.to_string()).collect();
+
+    let ssp_tranfers = ssp_client.get_transfers(transfer_ids.clone()).await?;
     let ssp_transfers_map: HashMap<String, SspTransfer> = ssp_tranfers
         .into_iter()
         .filter_map(|t| t.spark_id.clone().map(|spark_id| (spark_id, t.clone())))
         .collect();
+
+    // TODO: ask for the addition of a 3rd match role that is both receiver and sender to avoid two separate queries
+    let incoming_htlc_requests = htlc_service
+        .query_htlc(
+            QueryHtlcFilter {
+                transfer_ids: transfer_ids.clone(),
+                match_role: PreimageRequestRole::Receiver,
+                identity_public_key: our_public_key,
+                status: None,
+                payment_hashes: Vec::new(),
+            },
+            None,
+        )
+        .await?
+        .items;
+    let outgoing_htlc_requests = htlc_service
+        .query_htlc(
+            QueryHtlcFilter {
+                transfer_ids,
+                match_role: PreimageRequestRole::Sender,
+                identity_public_key: our_public_key,
+                status: None,
+                payment_hashes: Vec::new(),
+            },
+            None,
+        )
+        .await?
+        .items;
+    let htlc_requests = [incoming_htlc_requests, outgoing_htlc_requests].concat();
+
+    let htlc_requests_map: HashMap<String, PreimageRequestWithTransfer> = htlc_requests
+        .into_iter()
+        .filter_map(|t| {
+            t.transfer
+                .clone()
+                .map(|transfer| (transfer.id.to_string(), t))
+        })
+        .collect();
+
     Ok(transfers.map(|t| {
         WalletTransfer::from_transfer(
             t.clone(),
             ssp_transfers_map.get(&t.id.to_string()).cloned(),
+            htlc_requests_map
+                .get(&t.id.to_string())
+                .cloned()
+                .map(Into::into),
             our_public_key,
         )
     }))
@@ -1204,6 +1387,7 @@ async fn create_transfers(
 async fn create_transfer(
     transfer: Transfer,
     ssp_client: &Arc<ServiceProvider>,
+    htlc_service: &Arc<HtlcService>,
     our_public_key: PublicKey,
 ) -> Result<WalletTransfer, SparkWalletError> {
     let ssp_transfer = ssp_client
@@ -1212,9 +1396,46 @@ async fn create_transfer(
         .into_iter()
         .next();
 
+    // TODO: ask for the addition of a 3rd match role that is both receiver and sender to avoid two separate queries
+    let preimage_request = htlc_service
+        .query_htlc(
+            QueryHtlcFilter {
+                transfer_ids: vec![transfer.id.to_string()],
+                match_role: PreimageRequestRole::Receiver,
+                identity_public_key: our_public_key,
+                status: None,
+                payment_hashes: Vec::new(),
+            },
+            None,
+        )
+        .await?
+        .items
+        .first()
+        .cloned();
+    let preimage_request = if preimage_request.is_some() {
+        preimage_request
+    } else {
+        htlc_service
+            .query_htlc(
+                QueryHtlcFilter {
+                    transfer_ids: vec![transfer.id.to_string()],
+                    match_role: PreimageRequestRole::Sender,
+                    identity_public_key: our_public_key,
+                    status: None,
+                    payment_hashes: Vec::new(),
+                },
+                None,
+            )
+            .await?
+            .items
+            .first()
+            .cloned()
+    };
+
     Ok(WalletTransfer::from_transfer(
         transfer,
         ssp_transfer,
+        preimage_request.map(Into::into),
         our_public_key,
     ))
 }
@@ -1243,6 +1464,7 @@ struct BackgroundProcessor {
     tree_service: Arc<dyn TreeService>,
     ssp_client: Arc<ServiceProvider>,
     transfer_service: Arc<TransferService>,
+    htlc_service: Arc<HtlcService>,
 }
 
 impl BackgroundProcessor {
@@ -1255,6 +1477,7 @@ impl BackgroundProcessor {
         tree_service: Arc<dyn TreeService>,
         ssp_client: Arc<ServiceProvider>,
         transfer_service: Arc<TransferService>,
+        htlc_service: Arc<HtlcService>,
     ) -> Self {
         Self {
             operator_pool,
@@ -1264,6 +1487,7 @@ impl BackgroundProcessor {
             tree_service,
             ssp_client,
             transfer_service,
+            htlc_service,
         }
     }
 
@@ -1355,11 +1579,36 @@ impl BackgroundProcessor {
                 .next()
         };
 
+        // If there is an SSP transfer, we can avoid looking for the HTLC as it will not be present
+        let htlc = if transfer.transfer_type == spark::services::TransferType::PreimageSwap
+            && ssp_transfer.is_none()
+        {
+            self.htlc_service
+                .query_htlc(
+                    QueryHtlcFilter {
+                        transfer_ids: vec![transfer.id.to_string()],
+                        match_role: PreimageRequestRole::Receiver,
+                        identity_public_key: self.identity_public_key,
+                        payment_hashes: vec![],
+                        status: None,
+                    },
+                    None,
+                )
+                .await?
+                .items
+                .first()
+                .cloned()
+                .map(Into::into)
+        } else {
+            None
+        };
+
         self.event_manager
             .notify_listeners(WalletEvent::TransferClaimStarting(
                 WalletTransfer::from_transfer(
                     transfer.clone(),
                     ssp_transfer.clone(),
+                    htlc.clone(),
                     self.identity_public_key,
                 ),
             ));
@@ -1375,6 +1624,7 @@ impl BackgroundProcessor {
             .notify_listeners(WalletEvent::TransferClaimed(WalletTransfer::from_transfer(
                 claimed_transfer,
                 ssp_transfer,
+                htlc,
                 self.identity_public_key,
             )));
         Ok(())
@@ -1388,6 +1638,7 @@ impl BackgroundProcessor {
             self.identity_public_key,
             &self.transfer_service,
             &self.tree_service,
+            &self.htlc_service,
             &self.ssp_client,
         )
         .await

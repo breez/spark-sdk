@@ -429,6 +429,16 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    pub async fn query_htlc(&self, req: QueryHtlcRequest) -> Result<QueryHtlcResponse> {
+        debug!("Calling query_htlc with request: {:?}", req);
+        Ok(self
+            .spark_service_client()
+            .await?
+            .query_htlc(req)
+            .await?
+            .into_inner())
+    }
+
     pub async fn start_transaction(
         &self,
         req: StartTransactionRequest,

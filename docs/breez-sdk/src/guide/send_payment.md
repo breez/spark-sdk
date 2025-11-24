@@ -77,7 +77,8 @@ In the optional send payment options for Bitcoin addresses, you can set:
 
 ### Spark
 
-For Spark addresses and invoices no send payment options are needed.
+In the optional send payment options for Spark addresses, you can set:
+- **HTLC Options** - Enables Spark HTLC payments, which are an advanced feature that allows for conditional payments. See the [Spark HTLC Payments](htlcs.md) page for more details and example usage.
 
 {{#tabs send_payment:send-payment-spark}}
 

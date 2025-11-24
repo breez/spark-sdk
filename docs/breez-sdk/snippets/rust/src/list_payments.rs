@@ -46,6 +46,7 @@ async fn list_payments_filtered(sdk: &BreezSdk) -> Result<Vec<Payment>> {
             limit: Some(50),
             // Sort order (true = oldest first, false = newest first)
             sort_ascending: Some(false),
+            spark_htlc_status_filter: None,
         })
         .await?;
     let payments = response.payments;

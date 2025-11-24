@@ -413,6 +413,7 @@ pub struct Payment {
 pub enum PaymentDetails {
     Spark {
         invoice_details: Option<SparkInvoicePaymentDetails>,
+        htlc_details: Option<SparkHtlcDetails>,
     },
     Token {
         metadata: TokenMetadata,
@@ -440,6 +441,21 @@ pub enum PaymentDetails {
 pub struct SparkInvoicePaymentDetails {
     pub description: Option<String>,
     pub invoice: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkHtlcDetails)]
+pub struct SparkHtlcDetails {
+    pub payment_hash: String,
+    pub preimage: Option<String>,
+    pub expiry_time: u64,
+    pub status: SparkHtlcStatus,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkHtlcStatus)]
+pub enum SparkHtlcStatus {
+    WaitingForPreimage,
+    PreimageShared,
+    Returned,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentMethod)]
@@ -740,6 +756,15 @@ pub enum SendPaymentOptions {
         prefer_spark: bool,
         completion_timeout_secs: Option<u32>,
     },
+    SparkAddress {
+        htlc_options: Option<SparkHtlcOptions>,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkHtlcOptions)]
+pub struct SparkHtlcOptions {
+    pub payment_hash: String,
+    pub expiry_duration_secs: u64,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentRequest)]
@@ -759,6 +784,7 @@ pub struct ListPaymentsRequest {
     pub type_filter: Option<Vec<PaymentType>>,
     pub status_filter: Option<Vec<PaymentStatus>>,
     pub asset_filter: Option<AssetFilter>,
+    pub spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
     pub from_timestamp: Option<u64>,
     pub to_timestamp: Option<u64>,
     pub offset: Option<u32>,
@@ -992,4 +1018,14 @@ pub struct UserSettings {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateUserSettingsRequest)]
 pub struct UpdateUserSettingsRequest {
     pub spark_private_mode_enabled: Option<bool>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimHtlcPaymentRequest)]
+pub struct ClaimHtlcPaymentRequest {
+    pub preimage: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimHtlcPaymentResponse)]
+pub struct ClaimHtlcPaymentResponse {
+    pub payment: Payment,
 }

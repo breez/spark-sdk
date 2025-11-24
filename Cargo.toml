@@ -140,6 +140,6 @@ wasm-bindgen = "0.2.100"
 wasm-bindgen-futures = "0.4.50"
 wasm-bindgen-test = "0.3.50"
 web-sys = { version = "0.3.77", features = ["console", "DomException"] }
-web-time = "1.1.0"
+web-time = { version = "1.1.0", features = ["serde"] }
 x509-parser = "0.18.0"
 xshell = "0.2"

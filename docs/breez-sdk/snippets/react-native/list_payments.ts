@@ -22,7 +22,8 @@ const exampleListPayments = async (sdk: BreezSdk): Promise<Payment[]> => {
     toTimestamp: undefined,
     offset: undefined,
     limit: undefined,
-    sortAscending: undefined
+    sortAscending: undefined,
+    sparkHtlcStatusFilter: undefined
   })
   const payments = response.payments
   // ANCHOR_END: list-payments
@@ -49,7 +50,8 @@ const exampleListPaymentsFiltered = async (sdk: BreezSdk): Promise<Payment[]> =>
     offset: 0,
     limit: 50,
     // Sort order (true = oldest first, false = newest first)
-    sortAscending: false
+    sortAscending: false,
+    sparkHtlcStatusFilter: undefined
   })
   const payments = response.payments
   // ANCHOR_END: list-payments-filtered
