@@ -2284,6 +2284,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.16",
  "tokio",
+ "tonic",
  "tower-http",
  "tracing",
  "tracing-subscriber",

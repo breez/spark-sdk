@@ -4,7 +4,7 @@ use nostr::{EventBuilder, JsonUtil, Keys, TagStandard};
 use spark::operator::OperatorConfig;
 use spark::operator::rpc::spark::SubscribeToEventsRequest;
 use spark::operator::rpc::spark::subscribe_to_events_response::Event;
-use spark::operator::rpc::{ConnectionManager, SparkRpcClient};
+use spark::operator::rpc::{ConnectionManager, OperatorRpcError, SparkRpcClient};
 use spark::services::Transfer;
 use spark::session_manager::InMemorySessionManager;
 use spark::ssp::ServiceProvider;
@@ -89,6 +89,15 @@ pub fn subscribe_to_user_for_zaps<DB>(
             {
                 Ok(stream) => stream,
                 Err(e) => {
+                    if let OperatorRpcError::Connection(status) = &e
+                        && status.code() == tonic::Code::PermissionDenied
+                    {
+                        warn!("Permission denied for user {user_pk}, unsubscribing...");
+                        let mut subscribed = subscribed_keys.lock().await;
+                        subscribed.remove(&user_pk.to_string());
+                        drop(subscribed);
+                        return;
+                    }
                     error!("Failed to subscribe to events for user {user_pk}: {e}, retrying in 5s");
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                     continue;
@@ -129,6 +138,13 @@ pub fn subscribe_to_user_for_zaps<DB>(
                         break; // Break inner loop to reconnect
                     }
                     Err(e) => {
+                        if e.code() == tonic::Code::PermissionDenied {
+                            warn!("Permission denied for user {user_pk}, unsubscribing...");
+                            let mut subscribed = subscribed_keys.lock().await;
+                            subscribed.remove(&user_pk.to_string());
+                            drop(subscribed);
+                            return;
+                        }
                         error!("Error receiving event for user {user_pk}: {e}, reconnecting...");
                         break; // Break inner loop to reconnect
                     }
