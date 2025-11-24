@@ -25,31 +25,6 @@ Future<void> initSdk() async {
   print(sdk);
 }
 
-Future<void> initSdkAdvanced() async {
-  // ANCHOR: init-sdk-advanced
-  // Construct the seed using mnemonic words or entropy bytes
-  String mnemonic = "<mnemonic words>";
-  final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
-
-  // Create the default config
-  final config = defaultConfig(network: Network.mainnet)
-      .copyWith(apiKey: "<breez api key>");
-
-
-  // Build the SDK using the config, seed and default storage
-  final builder = SdkBuilder(config: config, seed: seed);
-  builder.withDefaultStorage(storageDir: "./.data");
-  // You can also pass your custom implementations:
-  // builder.withRestChainService(
-  //     url: "https://custom.chain.service",
-  //     credentials: Credentials(
-  //         username: "service-username", password: "service-password"));
-  // builder.withKeySet(keySetType: <your key set type>, useAddressIndex: <use address index>, accountNumber: <account number>);
-  final sdk = await builder.build();
-  // ANCHOR_END: init-sdk-advanced
-  print(sdk);
-}
-
 Future<void> fetchBalance(BreezSdk sdk) async {
   // ANCHOR: fetch-balance
   // ensureSynced: true will ensure the SDK is synced with the Spark network

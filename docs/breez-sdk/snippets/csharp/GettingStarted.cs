@@ -26,31 +26,6 @@ namespace BreezSdkSnippets
             // ANCHOR_END: init-sdk
         }
 
-        async Task InitSdkAdvanced()
-        {
-            // ANCHOR: init-sdk-advanced
-            // Construct the seed using mnemonic words or entropy bytes
-            var mnemonic = "<mnemonic words>";
-            var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
-            // Create the default config
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
-            {
-                apiKey = "<breez api key>"
-            };
-            // Build the SDK using the config, seed and default storage
-            var builder = new SdkBuilder(config: config, seed: seed);
-            await builder.WithDefaultStorage(storageDir: "./.data");
-            // You can also pass your custom implementations:
-            // await builder.WithStorage(<your storage implementation>)
-            // await builder.WithRealTimeSyncStorage(<your real-time sync storage implementation>)
-            // await builder.WithChainService(<your chain service implementation>)
-            // await builder.WithRestClient(<your rest client implementation>)
-            // await builder.WithKeySet(<your key set type>, <use address index>, <account number>)
-            // await builder.WithPaymentObserver(<your payment observer implementation>)
-            var sdk = await builder.Build();
-            // ANCHOR_END: init-sdk-advanced
-        }
-
         async Task FetchBalance(BreezSdk sdk)
         {
             // ANCHOR: fetch-balance

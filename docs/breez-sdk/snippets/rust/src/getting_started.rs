@@ -30,35 +30,6 @@ pub(crate) async fn init_sdk() -> Result<BreezSdk> {
     Ok(sdk)
 }
 
-pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
-    // ANCHOR: init-sdk-advanced
-    // Construct the seed using mnemonic words or entropy bytes
-    let mnemonic = "<mnemonic words>".to_string();
-    let seed = Seed::Mnemonic {
-        mnemonic,
-        passphrase: None,
-    };
-
-    // Create the default config
-    let mut config = default_config(Network::Mainnet);
-    config.api_key = Some("<breez api key>".to_string());
-
-    // Build the SDK using the config, seed and default storage
-    let builder = SdkBuilder::new(config, seed)
-        .with_default_storage("./.data".to_string());
-    // You can also pass your custom implementations:
-    // let builder = builder.with_storage(<your storage implementation>)
-    // let builder = builder.with_real_time_sync_storage(<your real-time sync storage implementation>)
-    // let builder = builder.with_chain_service(<your chain service implementation>)
-    // let builder = builder.with_rest_client(<your rest client implementation>)
-    // let builder = builder.with_key_set(<your key set type>, <use address index>, <account number>)
-    // let builder = builder.with_payment_observer(<your payment observer implementation>)
-    let sdk = builder.build().await?;
-
-    // ANCHOR_END: init-sdk-advanced
-    Ok(sdk)
-}
-
 pub(crate) async fn getting_started_node_info(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: fetch-balance
     let info = sdk.get_info(GetInfoRequest {

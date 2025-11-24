@@ -25,34 +25,6 @@ class GettingStarted {
         // ANCHOR_END: init-sdk
     }
 
-    suspend fun initSdkAdvanced() {
-        // ANCHOR: init-sdk-advanced
-        // Construct the seed using mnemonic words or entropy bytes
-        val mnemonic = "<mnemonic words>"
-        val seed = Seed.Mnemonic(mnemonic, null)
-
-        // Create the default config
-        val config = defaultConfig(Network.MAINNET)
-        config.apiKey = "<breez api key>"
-
-        try {
-            // Build the SDK using the config, seed and default storage
-            val builder = SdkBuilder(config, seed)
-            builder.withDefaultStorage("./.data")
-            // You can also pass your custom implementations:
-            // builder.withStorage(<your storage implementation>)
-            // builder.withRealTimeSyncStorage(<your real-time sync storage implementation>)
-            // builder.withChainService(<your chain service implementation>)
-            // builder.withRestClient(<your rest client implementation>)
-            // builder.withKeySet(<your key set type>, <use address index>, <account number>)
-            // builder.withPaymentObserver(<your payment observer implementation>)
-            val sdk = builder.build()
-        } catch (e: Exception) {
-            // handle error
-        }
-        // ANCHOR_END: init-sdk-advanced
-    }
-
     suspend fun fetchBalance(sdk: BreezSdk) {
         // ANCHOR: fetch-balance
         try {

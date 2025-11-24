@@ -21,32 +21,6 @@ func initSdk() async throws -> BreezSdk {
     return sdk
 }
 
-func initSdkAdvanced() async throws -> BreezSdk {
-    // ANCHOR: init-sdk-advanced
-    // Construct the seed using mnemonic words or entropy bytes
-    let mnemonic = "<mnemonic words>"
-    let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
-
-    // Create the default config
-    var config = defaultConfig(network: Network.mainnet)
-    config.apiKey = "<breez api key>"
-
-    // Build the SDK using the config, seed and default storage
-    let builder = SdkBuilder(config: config, seed: seed)
-    await builder.withDefaultStorage(storageDir: "./.data")
-    // You can also pass your custom implementations:
-    // await builder.withStorage(<your storage implementation>)
-    // await builder.withRealTimeSyncStorage(<your real-time sync storage implementation>)
-    // await builder.withChainService(<your chain service implementation>)
-    // await builder.withRestClient(<your rest client implementation>)
-    // await builder.withKeySet(<your key set type>, <use address index>, <account number>)
-    // await builder.withPaymentObserver(<your payment observer implementation>)
-    let sdk = try await builder.build()
-    // ANCHOR_END: init-sdk-advanced
-
-    return sdk
-}
-
 func gettingStartedNodeInfo(sdk: BreezSdk) async throws {
     // ANCHOR: fetch-balance
     // ensureSynced: true will ensure the SDK is synced with the Spark network

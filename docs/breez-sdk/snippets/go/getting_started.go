@@ -33,36 +33,6 @@ func InitSdk() (*breez_sdk_spark.BreezSdk, error) {
 	// ANCHOR_END: init-sdk
 }
 
-func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
-	// ANCHOR: init-sdk-advanced
-	// Construct the seed using mnemonic words or entropy bytes
-	mnemonic := "<mnemonic words>"
-	var seed breez_sdk_spark.Seed = breez_sdk_spark.SeedMnemonic{
-		Mnemonic:   mnemonic,
-		Passphrase: nil,
-	}
-
-	// Create the default config
-	apiKey := "<breez api key>"
-	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
-	config.ApiKey = &apiKey
-
-	// Build the SDK using the config, seed and default storage
-	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
-	builder.WithDefaultStorage("./.data")
-	// You can also pass your custom implementations:
-	// builder.WithStorage(<your storage implementation>)
-	// builder.WithRealTimeSyncStorage(<your real-time sync storage implementation>)
-	// builder.WithChainService(<your chain service implementation>)
-	// builder.WithRestClient(<your rest client implementation>)
-	// builder.WithKeySet(<your key set type>, <use address index>, <account number>)
-	// builder.WithPaymentObserver(<your payment observer implementation>)
-	sdk, err := builder.Build()
-
-	return sdk, err
-	// ANCHOR_END: init-sdk-advanced
-}
-
 func FetchBalance(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: fetch-balance
 	ensureSynced := false

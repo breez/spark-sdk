@@ -1,0 +1,71 @@
+import BreezSdkSpark
+
+func initSdkAdvanced() async throws -> BreezSdk {
+    // ANCHOR: init-sdk-advanced
+    // Construct the seed using mnemonic words or entropy bytes
+    let mnemonic = "<mnemonic words>"
+    let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
+
+    // Create the default config
+    var config = defaultConfig(network: Network.mainnet)
+    config.apiKey = "<breez api key>"
+
+    // Build the SDK using the config, seed and default storage
+    let builder = SdkBuilder(config: config, seed: seed)
+    await builder.withDefaultStorage(storageDir: "./.data")
+    // You can also pass your custom implementations:
+    // await builder.withStorage(<your storage implementation>)
+    // await builder.withRealTimeSyncStorage(<your real-time sync storage implementation>)
+    // await builder.withChainService(<your chain service implementation>)
+    // await builder.withRestClient(<your rest client implementation>)
+    // await builder.withKeySet(<your key set type>, <use address index>, <account number>)
+    // await builder.withPaymentObserver(<your payment observer implementation>)
+    let sdk = try await builder.build()
+    // ANCHOR_END: init-sdk-advanced
+
+    return sdk
+}
+
+func withRestChainService(builder: SdkBuilder) async {
+    // ANCHOR: with-rest-chain-service
+    let url = "<your REST chain service URL>"
+    let chainApiType = ChainApiType.mempoolSpace
+    let optionalCredentials = Credentials(
+        username: "<username>",
+        password: "<password>"
+    )
+    await builder.withRestChainService(
+        url: url,
+        apiType: chainApiType,
+        credentials: optionalCredentials
+    )
+    // ANCHOR_END: with-rest-chain-service
+}
+
+func withKeySet(builder: SdkBuilder) async {
+    // ANCHOR: with-key-set
+    let keySetType = KeySetType.default
+    let useAddressIndex = false
+    let optionalAccountNumber = UInt32(21)
+    await builder.withKeySet(
+        keySetType: keySetType,
+        useAddressIndex: useAddressIndex,
+        accountNumber: optionalAccountNumber
+    )
+    // ANCHOR_END: with-key-set
+}
+
+// ANCHOR: with-payment-observer
+class ExamplePaymentObserver: PaymentObserver {
+    func beforeSend(payments: [ProvisionalPayment]) async {
+        for payment in payments {
+            print("About to send payment: \(payment.paymentId) of amount \(payment.amount)")
+        }
+    }
+}
+
+func withPaymentObserver(builder: SdkBuilder) async {
+    let paymentObserver = ExamplePaymentObserver()
+    await builder.withPaymentObserver(paymentObserver: paymentObserver)
+}
+// ANCHOR_END: with-payment-observer

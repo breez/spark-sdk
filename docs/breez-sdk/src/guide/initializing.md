@@ -32,12 +32,14 @@ On some platforms (e.g., Android, iOS), you must use an application-specific wri
 
 For advanced use cases where you need more control, you can configure the SDK using the Builder pattern. With the SDK Builder you can define:
 
-- Custom storage management (bring your own implementation)
-- Which chain service to use (custom or the SDK’s default)
-- Which REST client to use for LNURL requests (custom or the SDK’s default)
-- Which keyset to use for the signer (custom or the SDK’s default)
+- [Storage](customizing.md#with-storage) and [Real-Time Storage](customizing.md#with-real-time-storage) to manage stored data
+- [Bitcoin Chain Service](customizing.md#with-chain-service) to provide network data
+- [LNURL Client](customizing.md#with-lnurl-client) to make REST requests
+- [Fiat Service](customizing.md#with-fiat-service) to provide Fiat currencies and exchange rates 
+- Change the [Key Set](customizing.md#with-key-set) to alter the derivation path used
+- [Payment Observer](customizing.md#with-payment-observer) to be notified before payments occur
 
-{{#tabs getting_started:init-sdk-advanced}}
+See [Customizing the SDK](customizing.md) for examples of this advanced initialization pattern.
 
 <h2 id="disconnecting">
     <a class="header" href="#disconnecting">Disconnecting</a>

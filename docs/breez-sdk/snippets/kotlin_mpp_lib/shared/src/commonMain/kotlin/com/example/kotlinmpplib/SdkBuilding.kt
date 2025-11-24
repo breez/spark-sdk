@@ -1,0 +1,76 @@
+package com.example.kotlinmpplib
+
+import breez_sdk_spark.*
+class SdkBuilding {
+    suspend fun initSdkAdvanced() {
+        // ANCHOR: init-sdk-advanced
+        // Construct the seed using mnemonic words or entropy bytes
+        val mnemonic = "<mnemonic words>"
+        val seed = Seed.Mnemonic(mnemonic, null)
+
+        // Create the default config
+        val config = defaultConfig(Network.MAINNET)
+        config.apiKey = "<breez api key>"
+
+        try {
+            // Build the SDK using the config, seed and default storage
+            val builder = SdkBuilder(config, seed)
+            builder.withDefaultStorage("./.data")
+            // You can also pass your custom implementations:
+            // builder.withStorage(<your storage implementation>)
+            // builder.withRealTimeSyncStorage(<your real-time sync storage implementation>)
+            // builder.withChainService(<your chain service implementation>)
+            // builder.withRestClient(<your rest client implementation>)
+            // builder.withKeySet(<your key set type>, <use address index>, <account number>)
+            // builder.withPaymentObserver(<your payment observer implementation>)
+            val sdk = builder.build()
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: init-sdk-advanced
+    }
+
+    suspend fun withRestChainService(builder: SdkBuilder) { 
+        // ANCHOR: with-rest-chain-service
+        val url = "<your REST chain service URL>"
+        val chainApiType = ChainApiType.MEMPOOL_SPACE
+        val optionalCredentials = Credentials(
+            username = "<username>",
+            password = "<password>"
+        )
+        builder.withRestChainService(
+            url = url,
+            apiType = chainApiType,
+            credentials = optionalCredentials
+        )
+        // ANCHOR_END: with-rest-chain-service
+    }
+
+    suspend fun withKeySet(builder: SdkBuilder) {
+        // ANCHOR: with-key-set
+        val keySetType = KeySetType.DEFAULT
+        val useAddressIndex = false
+        val optionalAccountNumber = 21u
+        builder.withKeySet(
+            keySetType = keySetType,
+            useAddressIndex = useAddressIndex,
+            accountNumber = optionalAccountNumber
+        )
+        // ANCHOR_END: with-key-set
+    }
+
+    // ANCHOR: with-payment-observer
+    class ExamplePaymentObserver : PaymentObserver {
+        override suspend fun beforeSend(payments: List<ProvisionalPayment>) {
+            for (payment in payments) {
+                // Log.v("PaymentObserver", "About to send payment: ${payment.paymentId} of amount ${payment.amount}")
+            }
+        }
+    }
+
+    suspend fun withPaymentObserver(builder: SdkBuilder) {
+        val paymentObserver = ExamplePaymentObserver()
+        builder.withPaymentObserver(paymentObserver)
+    }
+    // ANCHOR_END: with-payment-observer
+}

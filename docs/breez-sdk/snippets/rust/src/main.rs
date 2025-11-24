@@ -6,6 +6,7 @@ mod receive_payment;
 mod send_payment;
 mod tokens;
 mod messages;
+mod sdk_building;
 
 use anyhow::Result;
 

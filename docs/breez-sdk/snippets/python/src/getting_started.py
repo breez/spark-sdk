@@ -10,7 +10,6 @@ from breez_sdk_spark import (
     LogEntry,
     Logger,
     Network,
-    SdkBuilder,
     SdkEvent,
     Seed,
 )
@@ -34,33 +33,6 @@ async def init_sdk():
         logging.error(error)
         raise
     # ANCHOR_END: init-sdk
-
-
-async def init_sdk_advanced():
-    # ANCHOR: init-sdk-advanced
-    # Construct the seed using mnemonic words or entropy bytes
-    mnemonic = "<mnemonic words>"
-    seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
-    # Create the default config
-    config = default_config(network=Network.MAINNET)
-    config.api_key = "<breez api key>"
-    try:
-        # Build the SDK using the config, seed and default storage
-        builder = SdkBuilder(config=config, seed=seed)
-        await builder.with_default_storage(storage_dir="./.data")
-        # You can also pass your custom implementations:
-        # await builder.with_storage(<your storage implementation>)
-        # await builder.with_real_time_sync_storage(<your real-time sync storage implementation>)
-        # await builder.with_chain_service(<your chain service implementation>)
-        # await builder.with_rest_client(<your rest client implementation>)
-        # await builder.with_key_set(<your key set type>, <use address index>, <account number>)
-        # await builder.with_payment_observer(<your payment observer implementation>)
-        sdk = await builder.build()
-        return sdk
-    except Exception as error:
-        logging.error(error)
-        raise
-    # ANCHOR_END: init-sdk-advanced
 
 
 async def fetch_balance(sdk: BreezSdk):
