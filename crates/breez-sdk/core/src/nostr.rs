@@ -1,10 +1,13 @@
 use bitcoin::{
-    Network, XOnlyPublicKey,
+    Network,
     bip32::{DerivationPath, Xpriv},
-    key::Secp256k1,
-    secp256k1::SecretKey,
 };
-use nostr::{EventBuilder, JsonUtil, Keys};
+use nostr::{
+    EventBuilder, JsonUtil, Keys, SecretKey,
+    event::{TagKind, TagStandard},
+    filter::{Alphabet, SingleLetterTag},
+    secp256k1::{All, Secp256k1, XOnlyPublicKey},
+};
 
 use crate::{Payment, PaymentDetails};
 
@@ -15,7 +18,7 @@ pub enum NostrError {
 }
 
 pub struct NostrClient {
-    secp: Secp256k1<bitcoin::secp256k1::All>,
+    secp: Secp256k1<All>,
     nostr_key: SecretKey,
 }
 
@@ -35,10 +38,11 @@ impl NostrClient {
                 NostrError::KeyDerivationError(format!("Failed to derive nostr child key: {e:?}"))
             })?;
 
-        Ok(NostrClient {
-            secp,
-            nostr_key: nostr_key.private_key,
-        })
+        let nostr_key =
+            SecretKey::from_slice(&nostr_key.private_key.secret_bytes()).map_err(|e| {
+                NostrError::KeyDerivationError(format!("failed to serialize nostr key: {e:?}"))
+            })?;
+        Ok(NostrClient { secp, nostr_key })
     }
 
     pub fn nostr_pubkey(&self) -> String {
@@ -67,11 +71,31 @@ impl NostrClient {
         };
 
         // Convert bitcoin SecretKey to nostr SecretKey
-        let nostr_secret_key = nostr::SecretKey::from_slice(&self.nostr_key.secret_bytes())
-            .map_err(|e| {
-                NostrError::ZapReceiptCreationError(format!("Failed to convert secret key: {e}"))
-            })?;
-        let keys = Keys::new(nostr_secret_key);
+        let keys = Keys::new(self.nostr_key.clone());
+
+        let Some(p_tag) = zap_request_event.tags.iter().find(|t| {
+            t.kind()
+                == TagKind::SingleLetter(SingleLetterTag {
+                    character: Alphabet::P,
+                    uppercase: false,
+                })
+        }) else {
+            return Err(NostrError::ZapReceiptCreationError(
+                "Zap request event missing 'p' tag".to_string(),
+            ));
+        };
+
+        let Some(TagStandard::PublicKey { public_key, .. }) = p_tag.as_standardized() else {
+            return Err(NostrError::ZapReceiptCreationError(
+                "Zap request event 'p' tag is not a public key".to_string(),
+            ));
+        };
+
+        if self.nostr_pubkey() != public_key.to_string() {
+            return Err(NostrError::ZapReceiptCreationError(
+                "Nostr client key does not match zap request 'p' tag".to_string(),
+            ));
+        }
 
         // Build and sign the zap receipt event
         let zap_receipt = EventBuilder::zap_receipt(invoice, preimage.clone(), &zap_request_event)
