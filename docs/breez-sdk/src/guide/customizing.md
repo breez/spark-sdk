@@ -50,7 +50,7 @@ The SDK provides a default Bitcoin Chain Service implementation. If you want to 
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_fiat_service">API docs</a>
 </h2>
 
-The SDK by default provides a list of available Fiat currencies and current exchange rates. If you want to use own own, you can provide it by implementing the Fiat Service interface.
+The SDK by default provides a list of available Fiat currencies and current exchange rates. If you want to use your own, you can provide it by implementing the Fiat Service interface.
 
 <h2 id="with-lnurl-client">
     <a class="header" href="#with-lnurl-client">With LNURL Client</a>
