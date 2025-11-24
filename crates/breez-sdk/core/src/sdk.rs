@@ -1666,41 +1666,10 @@ impl BreezSdk {
         &self,
         request: RegisterLightningAddressRequest,
     ) -> Result<LightningAddressInfo, SdkError> {
-        let cache = ObjectCacheRepository::new(self.storage.clone());
-        let Some(client) = &self.lnurl_server_client else {
-            return Err(SdkError::Generic(
-                "LNURL server is not configured".to_string(),
-            ));
-        };
+        // Ensure spark private mode is initialized before registering
+        self.ensure_spark_private_mode_initialized().await?;
 
-        let username = sanitize_username(&request.username);
-
-        let description = match request.description {
-            Some(description) => description,
-            None => format!("Pay to {}@{}", username, client.domain()),
-        };
-
-        let nostr_pubkey = if self.get_user_settings().await?.spark_private_mode_enabled {
-            Some(self.nostr_client.nostr_pubkey())
-        } else {
-            None
-        };
-
-        let params = crate::lnurl::RegisterLightningAddressRequest {
-            username: username.clone(),
-            description: description.clone(),
-            nostr_pubkey,
-        };
-
-        let response = client.register_lightning_address(&params).await?;
-        let address_info = LightningAddressInfo {
-            lightning_address: response.lightning_address,
-            description,
-            lnurl: response.lnurl,
-            username,
-        };
-        cache.save_lightning_address(&address_info).await?;
-        Ok(address_info)
+        self.register_lightning_address_internal(request).await
     }
 
     pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
@@ -1852,6 +1821,27 @@ impl BreezSdk {
             self.spark_wallet
                 .update_wallet_settings(spark_private_mode_enabled)
                 .await?;
+
+            // Reregister the lightning address if spark private mode changed.
+            let lightning_address = match self.get_lightning_address().await {
+                Ok(lightning_address) => lightning_address,
+                Err(e) => {
+                    error!("Failed to get lightning address during user settings update: {e:?}");
+                    return Ok(());
+                }
+            };
+            let Some(lightning_address) = lightning_address else {
+                return Ok(());
+            };
+            if let Err(e) = self
+                .register_lightning_address_internal(RegisterLightningAddressRequest {
+                    username: lightning_address.username,
+                    description: Some(lightning_address.description),
+                })
+                .await
+            {
+                error!("Failed to reregister lightning address during user settings update: {e:?}");
+            }
         }
         Ok(())
     }
@@ -2330,6 +2320,49 @@ impl BreezSdk {
         };
 
         Ok(result)
+    }
+
+    async fn register_lightning_address_internal(
+        &self,
+        request: RegisterLightningAddressRequest,
+    ) -> Result<LightningAddressInfo, SdkError> {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let Some(client) = &self.lnurl_server_client else {
+            return Err(SdkError::Generic(
+                "LNURL server is not configured".to_string(),
+            ));
+        };
+
+        let username = sanitize_username(&request.username);
+
+        let description = match request.description {
+            Some(description) => description,
+            None => format!("Pay to {}@{}", username, client.domain()),
+        };
+
+        // Query settings directly from spark wallet to avoid recursion through get_user_settings()
+        let spark_user_settings = self.spark_wallet.query_wallet_settings().await?;
+        let nostr_pubkey = if spark_user_settings.private_enabled {
+            Some(self.nostr_client.nostr_pubkey())
+        } else {
+            None
+        };
+
+        let params = crate::lnurl::RegisterLightningAddressRequest {
+            username: username.clone(),
+            description: description.clone(),
+            nostr_pubkey,
+        };
+
+        let response = client.register_lightning_address(&params).await?;
+        let address_info = LightningAddressInfo {
+            lightning_address: response.lightning_address,
+            description,
+            lnurl: response.lnurl,
+            username,
+        };
+        cache.save_lightning_address(&address_info).await?;
+        Ok(address_info)
     }
 }
 
