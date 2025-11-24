@@ -166,18 +166,16 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         comment: &LnurlSenderComment,
     ) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "INSERT INTO sender_comments (payment_hash, user_pubkey, sender_comment, invoice_expiry, updated_at)
-             VALUES ($1, $2, $3, $4, $5)
+            "INSERT INTO sender_comments (payment_hash, user_pubkey, sender_comment, updated_at)
+             VALUES ($1, $2, $3, $4)
              ON CONFLICT(payment_hash) DO UPDATE
              SET user_pubkey = excluded.user_pubkey
              ,   sender_comment = excluded.sender_comment
-             ,   invoice_expiry = excluded.invoice_expiry
              ,   updated_at = excluded.updated_at",
         )
         .bind(&comment.payment_hash)
         .bind(&comment.user_pubkey)
         .bind(&comment.comment)
-        .bind(comment.invoice_expiry)
         .bind(comment.updated_at)
         .execute(&self.pool)
         .await?;

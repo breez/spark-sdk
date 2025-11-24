@@ -575,18 +575,18 @@ where
             lnurl_error("internal server error")
         })?;
 
-        let invoice_expiry: i64 = i64::try_from(expiry_timestamp.as_secs()).map_err(|e| {
-            error!(
-                "invoice has invalid expiry for i64: duration since epoch {}s, expiry time: {}s: {e}",
-                invoice.duration_since_epoch().as_secs(),
-                invoice.expiry_time().as_secs(),
-            );
-            lnurl_error("internal server error")
-        })?;
-
         let updated_at = now_millis();
         // save to zap event to db
         if let Some(zap_request) = params.nostr {
+            let invoice_expiry: i64 = i64::try_from(expiry_timestamp.as_secs()).map_err(|e| {
+                error!(
+                    "invoice has invalid expiry for i64: duration since epoch {}s, expiry time: {}s: {e}",
+                    invoice.duration_since_epoch().as_secs(),
+                    invoice.expiry_time().as_secs(),
+                );
+                lnurl_error("internal server error")
+            })?;
+
             let zap = Zap {
                 payment_hash: invoice.payment_hash().to_string(),
                 zap_request,
@@ -631,7 +631,6 @@ where
                         comment: comment.to_string(),
                         payment_hash: invoice.payment_hash().to_string(),
                         user_pubkey: user.pubkey.clone(),
-                        invoice_expiry,
                         updated_at,
                     })
                     .await
