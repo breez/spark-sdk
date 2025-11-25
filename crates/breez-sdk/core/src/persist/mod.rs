@@ -961,7 +961,35 @@ pub mod tests {
             }),
         };
 
-        // Test 7: Withdraw payment
+        // Test 7: Lightning payment with LNURL receive metadata
+        let lnurl_receive_payment_hash =
+            "receivehash1234567890abcdef1234567890abcdef1234567890abcdef1234".to_string();
+        let lnurl_receive_metadata = crate::LnurlReceiveMetadata {
+            sender_comment: Some("Test sender comment".to_string()),
+            nostr_zap_request: Some(r#"{"kind":9734,"content":"test zap"}"#.to_string()),
+            nostr_zap_receipt: Some(r#"{"kind":9735,"content":"test receipt"}"#.to_string()),
+        };
+        let lightning_lnurl_receive_payment = Payment {
+            id: "lightning_lnurl_receive_pmt".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 100_000,
+            fees: 1000,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Lightning,
+            details: Some(PaymentDetails::Lightning {
+                description: Some("LNURL receive test".to_string()),
+                preimage: Some("receivepreimage1234567890abcdef1234567890abcdef1234567890abcdef12".to_string()),
+                invoice: "lnbc1000n1pjqxyz9pp5receive123def456ghi789jkl012mno345pqr678stu901vwx234yz567890abcdefghijklmnopqrstuvwxyz".to_string(),
+                payment_hash: lnurl_receive_payment_hash.clone(),
+                destination_pubkey: "03receivepubkey123456789abcdef0123456789abcdef0123456789abcdef01234".to_string(),
+                lnurl_pay_info: None,
+                lnurl_withdraw_info: None,
+                lnurl_receive_metadata: Some(lnurl_receive_metadata.clone()),
+            }),
+        };
+
+        // Test 8: Withdraw payment
         let withdraw_payment = Payment {
             id: "withdraw_pmt345".to_string(),
             payment_type: PaymentType::Send,
@@ -976,7 +1004,7 @@ pub mod tests {
             }),
         };
 
-        // Test 8: Deposit payment
+        // Test 9: Deposit payment
         let deposit_payment = Payment {
             id: "deposit_pmt678".to_string(),
             payment_type: PaymentType::Receive,
@@ -991,7 +1019,7 @@ pub mod tests {
             }),
         };
 
-        // Test 9: Payment with no details
+        // Test 10: Payment with no details
         let no_details_payment = Payment {
             id: "no_details_pmt901".to_string(),
             payment_type: PaymentType::Send,
@@ -1010,6 +1038,7 @@ pub mod tests {
             lightning_lnurl_pay_payment.clone(),
             lightning_lnurl_withdraw_payment.clone(),
             lightning_minimal_payment.clone(),
+            lightning_lnurl_receive_payment.clone(),
             withdraw_payment.clone(),
             deposit_payment.clone(),
             no_details_payment.clone(),
@@ -1030,17 +1059,25 @@ pub mod tests {
             )
             .await
             .unwrap();
-
+        storage
+            .set_lnurl_metadata(vec![SetLnurlMetadataItem {
+                nostr_zap_receipt: lnurl_receive_metadata.nostr_zap_receipt.clone(),
+                nostr_zap_request: lnurl_receive_metadata.nostr_zap_request.clone(),
+                payment_hash: lnurl_receive_payment_hash.clone(),
+                sender_comment: lnurl_receive_metadata.sender_comment.clone(),
+            }])
+            .await
+            .unwrap();
         // List all payments
         let payments = storage
             .list_payments(ListPaymentsRequest {
                 offset: Some(0),
-                limit: Some(10),
+                limit: Some(11),
                 ..Default::default()
             })
             .await
             .unwrap();
-        assert_eq!(payments.len(), 9);
+        assert_eq!(payments.len(), 10);
 
         // Test each payment type individually
         for (i, expected_payment) in test_payments.iter().enumerate() {
@@ -1193,7 +1230,7 @@ pub mod tests {
             .filter(|p| p.payment_type == PaymentType::Receive)
             .count();
         assert_eq!(send_payments, 4); // spark, lightning_lnurl_pay, withdraw, no_details
-        assert_eq!(receive_payments, 5); // spark_htlc, token, lightning_lnurl_withdraw, lightning_minimal, deposit
+        assert_eq!(receive_payments, 6); // spark_htlc, token, lightning_lnurl_withdraw, lightning_minimal, lightning_lnurl_receive, deposit
 
         // Test filtering by status
         let completed_payments = payments
@@ -1208,7 +1245,7 @@ pub mod tests {
             .iter()
             .filter(|p| p.status == PaymentStatus::Failed)
             .count();
-        assert_eq!(completed_payments, 6); // spark, spark_htlc, lightning_lnurl_pay, lightning_lnurl_withdraw, withdraw, deposit
+        assert_eq!(completed_payments, 7); // spark, spark_htlc, lightning_lnurl_pay, lightning_lnurl_withdraw, lightning_lnurl_receive, withdraw, deposit
         assert_eq!(pending_payments, 2); // token, no_details
         assert_eq!(failed_payments, 1); // lightning_minimal
 
@@ -1217,7 +1254,7 @@ pub mod tests {
             .iter()
             .filter(|p| p.method == PaymentMethod::Lightning)
             .count();
-        assert_eq!(lightning_count, 3); // lightning_lnurl_pay, lightning_lnurl_withdraw and lightning_minimal
+        assert_eq!(lightning_count, 4); // lightning_lnurl_pay, lightning_lnurl_withdraw, lightning_minimal, lightning_lnurl_receive
 
         // Test 9: Lightning payment with lnurl receive metadata (zap request and sender comment)
         let lightning_zap_payment = Payment {
