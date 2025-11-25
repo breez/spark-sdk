@@ -38,18 +38,18 @@ use web_time::Instant;
 use x509_parser::parse_x509_certificate;
 
 use crate::{
-    BitcoinAddressDetails, BitcoinChainService, Bolt11InvoiceDetails, CheckLightningAddressRequest,
-    CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest, ClaimDepositResponse,
-    ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, DepositInfo, ExternalInputParser, Fee,
-    GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
-    InputType, LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse,
-    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest,
-    LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, Network, PaymentDetails,
-    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
-    SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem, SignMessageRequest,
-    SignMessageResponse, SparkHtlcOptions, UpdateUserSettingsRequest, UserSettings,
-    WaitForPaymentIdentifier,
+    AssetFilter, BitcoinAddressDetails, BitcoinChainService, Bolt11InvoiceDetails,
+    CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest,
+    ClaimDepositResponse, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, DepositInfo,
+    ExternalInputParser, Fee, GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest,
+    GetTokensMetadataResponse, InputType, LightningAddressInfo, ListFiatCurrenciesResponse,
+    ListFiatRatesResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
+    LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse,
+    Logger, Network, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
+    PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
+    RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem,
+    SignMessageRequest, SignMessageResponse, SparkHtlcOptions, UpdateUserSettingsRequest,
+    UserSettings, WaitForPaymentIdentifier,
     chain::RecommendedFees,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
@@ -350,6 +350,9 @@ impl BreezSdk {
                 .list_payments(ListPaymentsRequest {
                     offset: Some(offset),
                     limit: Some(limit),
+                    status_filter: Some(vec![PaymentStatus::Completed]),
+                    type_filter: Some(vec![PaymentType::Receive]),
+                    asset_filter: Some(AssetFilter::Bitcoin),
                     ..Default::default()
                 })
                 .await?;
