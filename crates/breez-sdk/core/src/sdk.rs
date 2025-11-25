@@ -337,15 +337,15 @@ impl BreezSdk {
         });
     }
 
-    async fn process_pending_zap_receipts(sdk: &BreezSdk) -> Result<(), SdkError> {
-        let Some(lnurl_server_client) = sdk.lnurl_server_client.clone() else {
+    async fn process_pending_zap_receipts(&self) -> Result<(), SdkError> {
+        let Some(lnurl_server_client) = self.lnurl_server_client.clone() else {
             return Ok(());
         };
 
         let mut offset = 0;
         let limit = 100;
         loop {
-            let payments = sdk
+            let payments = self
                 .storage
                 .list_payments(ListPaymentsRequest {
                     offset: Some(offset),
@@ -381,7 +381,8 @@ impl BreezSdk {
                 }
 
                 // Create the zap receipt using NostrClient
-                let zap_receipt = match sdk.nostr_client.create_zap_receipt(zap_request, &payment) {
+                let zap_receipt = match self.nostr_client.create_zap_receipt(zap_request, &payment)
+                {
                     Ok(receipt) => receipt,
                     Err(e) => {
                         error!(
@@ -407,7 +408,7 @@ impl BreezSdk {
                     continue;
                 }
 
-                if let Err(e) = sdk
+                if let Err(e) = self
                     .storage
                     .set_lnurl_metadata(vec![SetLnurlMetadataItem {
                         sender_comment: lnurl_receive_metadata.sender_comment.clone(),
