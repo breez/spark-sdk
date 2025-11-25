@@ -1788,8 +1788,8 @@ impl BreezSdk {
             .await
             .unwrap_or(payment);
 
-        // TODO: We get incomplete payments here from the ssp so better not to persist for now.
-        //self.storage.insert_payment(payment.clone()).await?;
+        // Insert the payment into storage to make it immediately available for listing
+        self.storage.insert_payment(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
     }
