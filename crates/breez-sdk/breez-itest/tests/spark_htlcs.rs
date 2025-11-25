@@ -228,7 +228,7 @@ async fn test_02_htlc_refund(
     info!("Waiting for HTLC to expire...");
 
     // HTLC fails and is returned a little bit after the expiry
-    tokio::time::sleep(Duration::from_secs(30)).await;
+    tokio::time::sleep(Duration::from_secs(60)).await;
 
     info!("Verifying Bob's failed payment...");
 
