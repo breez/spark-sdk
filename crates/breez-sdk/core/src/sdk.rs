@@ -1573,9 +1573,10 @@ impl BreezSdk {
                 self.storage
                     .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
                     .await?;
-                if let Err(e) = self.sync_trigger.send(SyncRequest::no_reply(
-                    SyncType::WalletState | SyncType::Deposits,
-                )) {
+                if let Err(e) = self
+                    .sync_trigger
+                    .send(SyncRequest::no_reply(SyncType::WalletState))
+                {
                     error!("Failed to execute sync after deposit claim: {e:?}");
                 }
                 Ok(ClaimDepositResponse {
