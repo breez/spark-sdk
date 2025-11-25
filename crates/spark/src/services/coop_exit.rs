@@ -163,11 +163,14 @@ impl CoopExitService {
         trace!("Leaf external IDs for cooperative exit: {leaf_external_ids:?}");
         trace!("Fee leaf external IDs for cooperative exit: {fee_leaf_external_ids:?}");
 
-        let transfer_id = transfer_id.unwrap_or_else(TransferId::generate);
+        let unwrapped_transfer_id = match &transfer_id {
+            Some(transfer_id) => transfer_id.clone(),
+            None => TransferId::generate(),
+        };
         if let Some(transfer_observer) = &self.transfer_observer {
             let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
             transfer_observer
-                .before_coop_exit(&transfer_id, withdrawal_address, amount_sats)
+                .before_coop_exit(&unwrapped_transfer_id, withdrawal_address, amount_sats)
                 .await?;
         }
 
@@ -187,7 +190,7 @@ impl CoopExitService {
                 withdraw_all,
                 fee_leaf_external_ids,
                 fee_quote_id,
-                user_outbound_transfer_external_id: Some(transfer_id.to_string()),
+                user_outbound_transfer_external_id: Some(unwrapped_transfer_id.to_string()),
             })
             .await?;
 
@@ -204,14 +207,24 @@ impl CoopExitService {
         let connector_txid = connector_tx.compute_txid();
         let coop_exit_input = connector_tx.input[0].previous_output.txid;
 
-        let coop_exit_refund_signatures = self
+        let res = self
             .get_connector_refund_signatures(
                 leaf_key_tweaks,
                 connector_txid,
                 coop_exit_input,
-                transfer_id,
+                unwrapped_transfer_id,
             )
-            .await?;
+            .await;
+        let coop_exit_refund_signatures = match (&transfer_id, res) {
+            (_, Ok(s)) => s,
+            (Some(transfer_id), Err(e)) => {
+                return self
+                    .transfer_service
+                    .recover_transfer_on_rpc_connection_error(transfer_id, e)
+                    .await;
+            }
+            (None, Err(e)) => return Err(e),
+        };
         trace!("Got connector refund signatures: {coop_exit_refund_signatures:?}",);
         let transfer = coop_exit_refund_signatures.transfer;
 
