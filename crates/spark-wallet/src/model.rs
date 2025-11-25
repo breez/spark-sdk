@@ -67,6 +67,7 @@ pub struct WalletTransfer {
     pub user_request: Option<SspUserRequest>,
     pub spark_invoice: Option<String>,
     pub htlc_preimage_request: Option<PreimageRequest>,
+    pub is_ssp_transfer: bool,
 }
 
 impl WalletTransfer {
@@ -75,12 +76,15 @@ impl WalletTransfer {
         ssp_transfer: Option<SspTransfer>,
         htlc_preimage_request: Option<PreimageRequest>,
         our_public_key: PublicKey,
+        ssp_public_key: PublicKey,
     ) -> Self {
         let direction = if value.sender_identity_public_key == our_public_key {
             TransferDirection::Outgoing
         } else {
             TransferDirection::Incoming
         };
+        let is_ssp_transfer = value.receiver_identity_public_key == ssp_public_key
+            || value.sender_identity_public_key == ssp_public_key;
         WalletTransfer {
             id: value.id,
             sender_id: value.sender_identity_public_key,
@@ -102,12 +106,14 @@ impl WalletTransfer {
             user_request: ssp_transfer.and_then(|t| t.user_request),
             spark_invoice: value.spark_invoice,
             htlc_preimage_request,
+            is_ssp_transfer,
         }
     }
 
     pub fn from_preimage_request_with_transfer(
         value: PreimageRequestWithTransfer,
         our_public_key: PublicKey,
+        ssp_public_key: PublicKey,
     ) -> Result<Self, SparkWalletError> {
         let transfer = Self::from_transfer(
             value.transfer.clone().ok_or(SparkWalletError::Generic(
@@ -116,6 +122,7 @@ impl WalletTransfer {
             None,
             Some(value.into()),
             our_public_key,
+            ssp_public_key,
         );
 
         Ok(transfer)
