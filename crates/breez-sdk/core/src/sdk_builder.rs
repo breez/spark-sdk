@@ -355,12 +355,11 @@ impl SdkBuilder {
         };
 
         let nostr_client = Arc::new(NostrClient::new(
-            &seed_bytes,
+            &key_set.identity_master_key,
             self.account_number.unwrap_or(match self.config.network {
                 Network::Mainnet => 0,
                 Network::Regtest => 1,
             }),
-            self.config.network.into(),
         )?);
 
         // Create the SDK instance

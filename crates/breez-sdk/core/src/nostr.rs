@@ -1,7 +1,4 @@
-use bitcoin::{
-    Network,
-    bip32::{DerivationPath, Xpriv},
-};
+use bitcoin::bip32::{DerivationPath, Xpriv};
 use nostr::{
     EventBuilder, JsonUtil, Keys, SecretKey,
     event::{TagKind, TagStandard},
@@ -23,14 +20,12 @@ pub struct NostrClient {
 }
 
 impl NostrClient {
-    pub fn new(seed: &[u8], account: u32, network: Network) -> Result<Self, NostrError> {
+    pub fn new(master_key: &Xpriv, account: u32) -> Result<Self, NostrError> {
+        // This derivation is kind-of NIP-06, but not really, since we derive from the identity key, not the seed.
         let derivation_path: DerivationPath =
             format!("m/44'/1237'/{account}'/0/0").parse().map_err(|e| {
                 NostrError::KeyDerivationError(format!("Failed to parse derivation path: {e:?}"))
             })?;
-        let master_key = Xpriv::new_master(network, seed).map_err(|e| {
-            NostrError::KeyDerivationError(format!("Failed to derive master key: {e:?}"))
-        })?;
         let secp = Secp256k1::new();
         let nostr_key = master_key
             .derive_priv(&secp, &derivation_path)
