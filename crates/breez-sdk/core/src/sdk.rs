@@ -5,6 +5,7 @@ use bitcoin::{
     hex::DisplayHex,
     secp256k1::{PublicKey, ecdsa::Signature},
 };
+use bitflags::bitflags;
 use breez_sdk_common::{
     fiat::FiatService,
     lnurl::{self, withdraw::execute_lnurl_withdraw},
@@ -24,7 +25,7 @@ use spark_wallet::{
     TransferTokenOutput, WalletEvent, WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use web_time::{Duration, SystemTime};
 
 use tokio::{
@@ -37,21 +38,23 @@ use web_time::Instant;
 use x509_parser::parse_x509_certificate;
 
 use crate::{
-    BitcoinAddressDetails, BitcoinChainService, Bolt11InvoiceDetails, CheckLightningAddressRequest,
-    CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest, ClaimDepositResponse,
-    ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, DepositInfo, ExternalInputParser, Fee,
-    GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
-    InputType, LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse,
-    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest,
-    LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, Network, PaymentDetails,
-    PaymentStatus, PrepareLnurlPayRequest, PrepareLnurlPayResponse, RecommendedFees,
-    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
-    SendOnchainFeeQuote, SendPaymentOptions, SignMessageRequest, SignMessageResponse,
-    SparkHtlcOptions, UpdateUserSettingsRequest, UserSettings, WaitForPaymentIdentifier,
+    AssetFilter, BitcoinAddressDetails, BitcoinChainService, Bolt11InvoiceDetails,
+    CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest,
+    ClaimDepositResponse, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, DepositInfo,
+    ExternalInputParser, Fee, GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest,
+    GetTokensMetadataResponse, InputType, LightningAddressInfo, ListFiatCurrenciesResponse,
+    ListFiatRatesResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
+    LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse,
+    Logger, Network, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
+    PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
+    RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem,
+    SignMessageRequest, SignMessageResponse, SparkHtlcOptions, UpdateUserSettingsRequest,
+    UserSettings, WaitForPaymentIdentifier,
+    chain::RecommendedFees,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
     issuer::TokenIssuer,
-    lnurl::LnurlServerClient,
+    lnurl::{ListMetadataRequest, LnurlServerClient, PublishZapReceiptRequest},
     logger,
     models::{
         Config, GetInfoRequest, GetInfoResponse, ListPaymentsRequest, ListPaymentsResponse,
@@ -59,6 +62,7 @@ use crate::{
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentMethod, SendPaymentRequest,
         SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
+    nostr::NostrClient,
     persist::{
         CachedAccountInfo, ObjectCacheRepository, PaymentMetadata, PaymentRequestMetadata,
         StaticDepositAddress, Storage, UpdateDepositPayload,
@@ -91,10 +95,20 @@ const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology";
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology:442";
 
-#[derive(Clone, Debug)]
-enum SyncType {
-    Full,
-    PaymentsOnly,
+const LNURL_METADATA_LIMIT: u32 = 100;
+
+bitflags! {
+    #[derive(Clone, Debug)]
+    struct SyncType: u32 {
+        const Wallet = 1 << 0;
+        const WalletState = 1 << 1;
+        const Deposits = 1 << 2;
+        const LnurlMetadata = 1 << 3;
+        const Full = Self::Wallet.0.0
+            | Self::WalletState.0.0
+            | Self::Deposits.0.0
+            | Self::LnurlMetadata.0.0;
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -105,6 +119,13 @@ struct SyncRequest {
 }
 
 impl SyncRequest {
+    fn new(reply: oneshot::Sender<Result<(), SdkError>>, sync_type: SyncType) -> Self {
+        Self {
+            sync_type,
+            reply: Arc::new(Mutex::new(Some(reply))),
+        }
+    }
+
     fn full(reply: Option<oneshot::Sender<Result<(), SdkError>>>) -> Self {
         Self {
             sync_type: SyncType::Full,
@@ -112,10 +133,10 @@ impl SyncRequest {
         }
     }
 
-    fn payments_only(reply: Option<oneshot::Sender<Result<(), SdkError>>>) -> Self {
+    fn no_reply(sync_type: SyncType) -> Self {
         Self {
-            sync_type: SyncType::PaymentsOnly,
-            reply: Arc::new(Mutex::new(reply)),
+            sync_type,
+            reply: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -144,9 +165,11 @@ pub struct BreezSdk {
     event_emitter: Arc<EventEmitter>,
     shutdown_sender: watch::Sender<()>,
     sync_trigger: tokio::sync::broadcast::Sender<SyncRequest>,
+    zap_receipt_trigger: tokio::sync::broadcast::Sender<()>,
     initial_synced_watcher: watch::Receiver<bool>,
     external_input_parsers: Vec<ExternalInputParser>,
     spark_private_mode_initialized: Arc<OnceCell<()>>,
+    nostr_client: Arc<NostrClient>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -206,6 +229,7 @@ pub(crate) struct BreezSdkParams {
     pub shutdown_sender: watch::Sender<()>,
     pub spark_wallet: Arc<SparkWallet>,
     pub event_emitter: Arc<EventEmitter>,
+    pub nostr_client: Arc<NostrClient>,
 }
 
 impl BreezSdk {
@@ -232,9 +256,11 @@ impl BreezSdk {
             event_emitter: params.event_emitter,
             shutdown_sender: params.shutdown_sender,
             sync_trigger: tokio::sync::broadcast::channel(10).0,
+            zap_receipt_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
             external_input_parsers,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
+            nostr_client: params.nostr_client,
         };
 
         sdk.start(initial_synced_sender);
@@ -247,10 +273,12 @@ impl BreezSdk {
     /// 1. `spawn_spark_private_mode_initialization`: initializes the spark private mode on startup
     /// 2. `periodic_sync`: syncs the wallet with the Spark network    
     /// 3. `try_recover_lightning_address`: recovers the lightning address on startup
+    /// 4. `spawn_zap_receipt_publisher`: publishes zap receipts for payments with zap requests
     fn start(&self, initial_synced_sender: watch::Sender<bool>) {
         self.spawn_spark_private_mode_initialization();
         self.periodic_sync(initial_synced_sender);
         self.try_recover_lightning_address();
+        self.spawn_zap_receipt_publisher();
     }
 
     fn spawn_spark_private_mode_initialization(&self) {
@@ -279,6 +307,135 @@ impl BreezSdk {
                 Err(e) => error!("Failed to recover lightning address on startup: {e:?}"),
             }
         });
+    }
+
+    /// Background task that publishes zap receipts for payments with zap requests.
+    /// Triggered on startup and after syncing lnurl metadata.
+    fn spawn_zap_receipt_publisher(&self) {
+        let sdk = self.clone();
+        let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
+        let mut trigger_receiver = sdk.zap_receipt_trigger.clone().subscribe();
+
+        tokio::spawn(async move {
+            if let Err(e) = Self::process_pending_zap_receipts(&sdk).await {
+                error!("Failed to process pending zap receipts on startup: {e:?}");
+            }
+
+            loop {
+                tokio::select! {
+                    _ = shutdown_receiver.changed() => {
+                        info!("Zap receipt publisher shutdown signal received");
+                        return;
+                    }
+                    _ = trigger_receiver.recv() => {
+                        if let Err(e) = Self::process_pending_zap_receipts(&sdk).await {
+                            error!("Failed to process pending zap receipts: {e:?}");
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    async fn process_pending_zap_receipts(&self) -> Result<(), SdkError> {
+        let Some(lnurl_server_client) = self.lnurl_server_client.clone() else {
+            return Ok(());
+        };
+
+        let mut offset = 0;
+        let limit = 100;
+        loop {
+            let payments = self
+                .storage
+                .list_payments(ListPaymentsRequest {
+                    offset: Some(offset),
+                    limit: Some(limit),
+                    status_filter: Some(vec![PaymentStatus::Completed]),
+                    type_filter: Some(vec![PaymentType::Receive]),
+                    asset_filter: Some(AssetFilter::Bitcoin),
+                    ..Default::default()
+                })
+                .await?;
+            if payments.is_empty() {
+                break;
+            }
+
+            let len = u32::try_from(payments.len())?;
+            for payment in payments {
+                let Some(PaymentDetails::Lightning {
+                    ref lnurl_receive_metadata,
+                    ref payment_hash,
+                    ..
+                }) = payment.details
+                else {
+                    continue;
+                };
+
+                let Some(lnurl_receive_metadata) = lnurl_receive_metadata else {
+                    continue;
+                };
+
+                let Some(zap_request) = &lnurl_receive_metadata.nostr_zap_request else {
+                    continue;
+                };
+
+                if lnurl_receive_metadata.nostr_zap_receipt.is_some() {
+                    continue;
+                }
+
+                // Create the zap receipt using NostrClient
+                let zap_receipt = match self.nostr_client.create_zap_receipt(zap_request, &payment)
+                {
+                    Ok(receipt) => receipt,
+                    Err(e) => {
+                        error!(
+                            "Failed to create zap receipt for payment {}: {e:?}",
+                            payment.id
+                        );
+                        continue;
+                    }
+                };
+
+                // Publish the zap receipt via the server
+                if let Err(e) = lnurl_server_client
+                    .publish_zap_receipt(&PublishZapReceiptRequest {
+                        payment_hash: payment_hash.clone(),
+                        zap_receipt: zap_receipt.clone(),
+                    })
+                    .await
+                {
+                    error!(
+                        "Failed to publish zap receipt for payment {}: {}",
+                        payment.id, e
+                    );
+                    continue;
+                }
+
+                if let Err(e) = self
+                    .storage
+                    .set_lnurl_metadata(vec![SetLnurlMetadataItem {
+                        sender_comment: lnurl_receive_metadata.sender_comment.clone(),
+                        nostr_zap_request: Some(zap_request.clone()),
+                        nostr_zap_receipt: Some(zap_receipt),
+                        payment_hash: payment_hash.clone(),
+                    }])
+                    .await
+                {
+                    error!(
+                        "Failed to store zap receipt for payment {}: {}",
+                        payment.id, e
+                    );
+                }
+            }
+
+            if len < limit {
+                break;
+            }
+
+            offset = offset.saturating_add(len);
+        }
+
+        Ok(())
     }
 
     fn periodic_sync(&self, initial_synced_sender: watch::Sender<bool>) {
@@ -315,28 +472,31 @@ impl BreezSdk {
                         }
                     }
                     sync_type_res = sync_trigger_receiver.recv() => {
-                      if let Ok(sync_request) = sync_type_res   {
-                          info!("Sync trigger changed: {:?}", &sync_request);
-                          let cloned_sdk = sdk.clone();
-                          let initial_synced_sender = initial_synced_sender.clone();
-                          if let Some(true) = run_with_shutdown(shutdown_receiver.clone(), "Sync trigger changed", async move {
-                          if let Err(e) = cloned_sdk.sync_wallet_internal(sync_request.sync_type.clone()).await {
-                              error!("Failed to sync wallet: {e:?}");
-                              let () = sync_request.reply(Some(e)).await;
-                              return false
-                          }
-                          if matches!(sync_request.sync_type, SyncType::Full) {
-                            let () = sync_request.reply(None).await;
-                            if let Err(e) = initial_synced_sender.send(true) {
-                              error!("Failed to send initial synced signal: {e:?}");
+                        let Ok(sync_request) = sync_type_res else {
+                            continue;
+                        };
+                        info!("Sync trigger changed: {:?}", &sync_request);
+                        let cloned_sdk = sdk.clone();
+                        let initial_synced_sender = initial_synced_sender.clone();
+                        if let Some(true) = Box::pin(run_with_shutdown(shutdown_receiver.clone(), "Sync trigger changed", async move {
+                            if let Err(e) = cloned_sdk.sync_wallet_internal(sync_request.sync_type.clone()).await {
+                                error!("Failed to sync wallet: {e:?}");
+                                let () = sync_request.reply(Some(e)).await;
+                                return false;
                             }
-                            return true
-                          }
-                          false
-                        }).await {
-                          last_sync_time = SystemTime::now();
+
+                            if sync_request.sync_type.contains(SyncType::Full) {
+                                let () = sync_request.reply(None).await;
+                                if let Err(e) = initial_synced_sender.send(true) {
+                                    error!("Failed to send initial synced signal: {e:?}");
+                                }
+                                return true;
+                            }
+
+                            false
+                        })).await {
+                            last_sync_time = SystemTime::now();
                         }
-                      }
                     }
                     // Ensure we sync at least the configured interval
                     () = tokio::time::sleep(Duration::from_secs(10)) => {
@@ -370,51 +530,209 @@ impl BreezSdk {
             }
             WalletEvent::TransferClaimed(transfer) => {
                 info!("Transfer claimed");
-                if let Ok(payment) = Payment::try_from(transfer) {
+                if let Ok(mut payment) = Payment::try_from(transfer) {
                     // Insert the payment into storage to make it immediately available for listing
                     if let Err(e) = self.storage.insert_payment(payment.clone()).await {
                         error!("Failed to insert succeeded payment: {e:?}");
                     }
+
+                    // Ensure potential lnurl metadata is synced before emitting the event.
+                    // Note this is already synced at TransferClaimStarting, but it might not have completed yet, so that could race.
+                    self.sync_single_lnurl_metadata(&mut payment).await;
+
                     self.event_emitter
                         .emit(&SdkEvent::PaymentSucceeded { payment })
                         .await;
                 }
-                if let Err(e) = self.sync_trigger.send(SyncRequest::payments_only(None)) {
+                if let Err(e) = self
+                    .sync_trigger
+                    .send(SyncRequest::no_reply(SyncType::WalletState))
+                {
                     error!("Failed to sync wallet: {e:?}");
                 }
             }
             WalletEvent::TransferClaimStarting(transfer) => {
                 info!("Transfer claim starting");
-                if let Ok(payment) = Payment::try_from(transfer) {
+                if let Ok(mut payment) = Payment::try_from(transfer) {
                     // Insert the payment into storage to make it immediately available for listing
                     if let Err(e) = self.storage.insert_payment(payment.clone()).await {
                         error!("Failed to insert pending payment: {e:?}");
                     }
+
+                    // Ensure potential lnurl metadata is synced before emitting the event
+                    self.sync_single_lnurl_metadata(&mut payment).await;
+
                     self.event_emitter
                         .emit(&SdkEvent::PaymentPending { payment })
                         .await;
                 }
-                if let Err(e) = self.sync_trigger.send(SyncRequest::payments_only(None)) {
+                if let Err(e) = self
+                    .sync_trigger
+                    .send(SyncRequest::no_reply(SyncType::WalletState))
+                {
                     error!("Failed to sync wallet: {e:?}");
                 }
             }
         }
     }
 
+    async fn sync_single_lnurl_metadata(&self, payment: &mut Payment) {
+        if payment.payment_type != PaymentType::Receive {
+            return;
+        }
+
+        let Some(PaymentDetails::Lightning {
+            invoice,
+            lnurl_receive_metadata,
+            ..
+        }) = &mut payment.details
+        else {
+            return;
+        };
+
+        if lnurl_receive_metadata.is_some() {
+            // Already have lnurl metadata
+            return;
+        }
+
+        let Ok(input) = parse_input(invoice, None).await else {
+            error!(
+                "Failed to parse invoice for lnurl metadata sync: {}",
+                invoice
+            );
+            return;
+        };
+
+        let InputType::Bolt11Invoice(details) = input else {
+            error!(
+                "Input is not a Bolt11 invoice for lnurl metadata sync: {}",
+                invoice
+            );
+            return;
+        };
+
+        // If there is a description hash, we assume this is a lnurl payment.
+        if details.description_hash.is_none() {
+            return;
+        }
+
+        // Let's check whether the lnurl receive metadata was already synced, then return early
+        if let Ok(db_payment) = self.storage.get_payment_by_id(payment.id.clone()).await
+            && let Some(PaymentDetails::Lightning {
+                lnurl_receive_metadata: db_lnurl_receive_metadata,
+                ..
+            }) = db_payment.details
+        {
+            *lnurl_receive_metadata = db_lnurl_receive_metadata;
+            return;
+        }
+
+        // Just sync all lnurl metadata here, no need to be picky.
+        let (tx, rx) = oneshot::channel();
+        if let Err(e) = self
+            .sync_trigger
+            .send(SyncRequest::new(tx, SyncType::LnurlMetadata))
+        {
+            error!("Failed to trigger lnurl metadata sync: {e}");
+            return;
+        }
+
+        if let Err(e) = rx.await {
+            error!("Failed to sync lnurl metadata for invoice {}: {e}", invoice);
+            return;
+        }
+
+        let db_payment = match self.storage.get_payment_by_id(payment.id.clone()).await {
+            Ok(p) => p,
+            Err(e) => {
+                debug!("Payment not found in storage for invoice {}: {e}", invoice);
+                return;
+            }
+        };
+
+        let Some(PaymentDetails::Lightning {
+            lnurl_receive_metadata: db_lnurl_receive_metadata,
+            ..
+        }) = db_payment.details
+        else {
+            debug!(
+                "No lnurl receive metadata in storage for invoice {}",
+                invoice
+            );
+            return;
+        };
+        *lnurl_receive_metadata = db_lnurl_receive_metadata;
+    }
+
     async fn sync_wallet_internal(&self, sync_type: SyncType) -> Result<(), SdkError> {
         let start_time = Instant::now();
-        if let SyncType::Full = sync_type {
-            // Sync with the Spark network
-            if let Err(e) = self.spark_wallet.sync().await {
-                error!("sync_wallet_internal: Failed to sync with Spark network: {e:?}");
+
+        let sync_wallet = async {
+            if sync_type.contains(SyncType::Wallet) {
+                debug!("sync_wallet_internal: Starting Wallet sync");
+                let wallet_start = Instant::now();
+                if let Err(e) = self.spark_wallet.sync().await {
+                    error!("sync_wallet_internal: Failed to sync with Spark network: {e:?}");
+                }
+                debug!(
+                    "sync_wallet_internal: Wallet sync completed in {:?}",
+                    wallet_start.elapsed()
+                );
+            } else {
+                trace!("sync_wallet_internal: Skipping Wallet sync");
             }
-        }
-        if let Err(e) = self.sync_wallet_state_to_storage().await {
-            error!("sync_wallet_internal: Failed to sync wallet state to storage: {e:?}");
-        }
-        if let Err(e) = self.check_and_claim_static_deposits().await {
-            error!("sync_wallet_internal: Failed to check and claim static deposits: {e:?}");
-        }
+
+            if sync_type.contains(SyncType::WalletState) {
+                debug!("sync_wallet_internal: Starting WalletState sync");
+                let wallet_state_start = Instant::now();
+                if let Err(e) = self.sync_wallet_state_to_storage().await {
+                    error!("sync_wallet_internal: Failed to sync wallet state to storage: {e:?}");
+                }
+                debug!(
+                    "sync_wallet_internal: WalletState sync completed in {:?}",
+                    wallet_state_start.elapsed()
+                );
+            } else {
+                trace!("sync_wallet_internal: Skipping WalletState sync");
+            }
+        };
+
+        let sync_lnurl = async {
+            if sync_type.contains(SyncType::LnurlMetadata) {
+                debug!("sync_wallet_internal: Starting LnurlMetadata sync");
+                let lnurl_start = Instant::now();
+                if let Err(e) = self.sync_lnurl_metadata().await {
+                    error!("sync_wallet_internal: Failed to sync lnurl metadata: {e:?}");
+                }
+                debug!(
+                    "sync_wallet_internal: LnurlMetadata sync completed in {:?}",
+                    lnurl_start.elapsed()
+                );
+            } else {
+                trace!("sync_wallet_internal: Skipping LnurlMetadata sync");
+            }
+        };
+
+        let sync_deposits = async {
+            if sync_type.contains(SyncType::Deposits) {
+                debug!("sync_wallet_internal: Starting Deposits sync");
+                let deposits_start = Instant::now();
+                if let Err(e) = self.check_and_claim_static_deposits().await {
+                    error!(
+                        "sync_wallet_internal: Failed to check and claim static deposits: {e:?}"
+                    );
+                }
+                debug!(
+                    "sync_wallet_internal: Deposits sync completed in {:?}",
+                    deposits_start.elapsed()
+                );
+            } else {
+                trace!("sync_wallet_internal: Skipping Deposits sync");
+            }
+        };
+
+        tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
+
         let elapsed = start_time.elapsed();
         info!("sync_wallet_internal: Wallet sync completed in {elapsed:?}");
         self.event_emitter.emit(&SdkEvent::Synced {}).await;
@@ -488,6 +806,54 @@ impl BreezSdk {
                 .emit(&SdkEvent::ClaimedDeposits { claimed_deposits })
                 .await;
         }
+        Ok(())
+    }
+
+    async fn sync_lnurl_metadata(&self) -> Result<(), SdkError> {
+        let Some(lnurl_server_client) = self.lnurl_server_client.clone() else {
+            return Ok(());
+        };
+
+        let cache = ObjectCacheRepository::new(Arc::clone(&self.storage));
+        let mut updated_after = cache.fetch_lnurl_metadata_updated_after().await?;
+
+        loop {
+            debug!("Syncing lnurl metadata from updated_after {updated_after}");
+            let metadata = lnurl_server_client
+                .list_metadata(&ListMetadataRequest {
+                    offset: None,
+                    limit: Some(LNURL_METADATA_LIMIT),
+                    updated_after: Some(updated_after),
+                })
+                .await?;
+
+            if metadata.metadata.is_empty() {
+                debug!("No more lnurl metadata on offset {updated_after}");
+                break;
+            }
+
+            let len = u32::try_from(metadata.metadata.len())?;
+            let last_updated_at = metadata.metadata.last().map(|m| m.updated_at);
+            self.storage
+                .set_lnurl_metadata(metadata.metadata.into_iter().map(From::from).collect())
+                .await?;
+
+            debug!(
+                "Synchronized {} lnurl metadata at updated_after {updated_after}",
+                len
+            );
+            updated_after = last_updated_at.unwrap_or(updated_after);
+            cache
+                .save_lnurl_metadata_updated_after(updated_after)
+                .await?;
+
+            let _ = self.zap_receipt_trigger.send(());
+            if len < LNURL_METADATA_LIMIT {
+                // No more invoices to fetch
+                break;
+            }
+        }
+
         Ok(())
     }
 
@@ -1207,7 +1573,10 @@ impl BreezSdk {
                 self.storage
                     .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
                     .await?;
-                if let Err(e) = self.sync_trigger.send(SyncRequest::payments_only(None)) {
+                if let Err(e) = self
+                    .sync_trigger
+                    .send(SyncRequest::no_reply(SyncType::WalletState))
+                {
                     error!("Failed to execute sync after deposit claim: {e:?}");
                 }
                 Ok(ClaimDepositResponse {
@@ -1302,33 +1671,10 @@ impl BreezSdk {
         &self,
         request: RegisterLightningAddressRequest,
     ) -> Result<LightningAddressInfo, SdkError> {
-        let cache = ObjectCacheRepository::new(self.storage.clone());
-        let Some(client) = &self.lnurl_server_client else {
-            return Err(SdkError::Generic(
-                "LNURL server is not configured".to_string(),
-            ));
-        };
+        // Ensure spark private mode is initialized before registering
+        self.ensure_spark_private_mode_initialized().await?;
 
-        let username = sanitize_username(&request.username);
-
-        let description = match request.description {
-            Some(description) => description,
-            None => format!("Pay to {}@{}", username, client.domain()),
-        };
-        let params = crate::lnurl::RegisterLightningAddressRequest {
-            username: username.clone(),
-            description: description.clone(),
-        };
-
-        let response = client.register_lightning_address(&params).await?;
-        let address_info = LightningAddressInfo {
-            lightning_address: response.lightning_address,
-            description,
-            lnurl: response.lnurl,
-            username,
-        };
-        cache.save_lightning_address(&address_info).await?;
-        Ok(address_info)
+        self.register_lightning_address_internal(request).await
     }
 
     pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
@@ -1480,6 +1826,27 @@ impl BreezSdk {
             self.spark_wallet
                 .update_wallet_settings(spark_private_mode_enabled)
                 .await?;
+
+            // Reregister the lightning address if spark private mode changed.
+            let lightning_address = match self.get_lightning_address().await {
+                Ok(lightning_address) => lightning_address,
+                Err(e) => {
+                    error!("Failed to get lightning address during user settings update: {e:?}");
+                    return Ok(());
+                }
+            };
+            let Some(lightning_address) = lightning_address else {
+                return Ok(());
+            };
+            if let Err(e) = self
+                .register_lightning_address_internal(RegisterLightningAddressRequest {
+                    username: lightning_address.username,
+                    description: Some(lightning_address.description),
+                })
+                .await
+            {
+                error!("Failed to reregister lightning address during user settings update: {e:?}");
+            }
         }
         Ok(())
     }
@@ -1558,7 +1925,10 @@ impl BreezSdk {
             if !suppress_payment_event {
                 emit_payment_status(&self.event_emitter, response.payment.clone()).await;
             }
-            if let Err(e) = self.sync_trigger.send(SyncRequest::payments_only(None)) {
+            if let Err(e) = self
+                .sync_trigger
+                .send(SyncRequest::no_reply(SyncType::WalletState))
+            {
                 error!("Failed to send sync trigger: {e:?}");
             }
         }
@@ -1905,30 +2275,30 @@ impl BreezSdk {
                     payment_id, i
                 );
                 select! {
-                  _ = shutdown.changed() => {
-                    info!("Shutdown signal received");
-                    return;
-                  },
+                    _ = shutdown.changed() => {
+                        info!("Shutdown signal received");
+                        return;
+                    },
                     p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
-                      if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone()) {
-                        info!("Polling payment status = {} {:?}", payment.status, p.status);
-                        if payment.status != PaymentStatus::Pending {
-                          info!("Polling payment completed status = {}", payment.status);
-                          emit_payment_status(&event_emitter, payment.clone()).await;
-                          if let Err(e) = sync_trigger.send(SyncRequest::payments_only(None)) {
-                            error!("Failed to send sync trigger: {e:?}");
-                          }
-                          return;
+                        if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone()) {
+                            info!("Polling payment status = {} {:?}", payment.status, p.status);
+                            if payment.status != PaymentStatus::Pending {
+                                info!("Polling payment completed status = {}", payment.status);
+                                emit_payment_status(&event_emitter, payment.clone()).await;
+                                if let Err(e) = sync_trigger.send(SyncRequest::no_reply(SyncType::WalletState)) {
+                                    error!("Failed to send sync trigger: {e:?}");
+                                }
+                                return;
+                            }
                         }
-                      }
 
-                    let sleep_time = if i < 5 {
-                        Duration::from_secs(1)
-                    } else {
-                        Duration::from_secs(i.into())
-                    };
-                    tokio::time::sleep(sleep_time).await;
-                  }
+                        let sleep_time = if i < 5 {
+                            Duration::from_secs(1)
+                        } else {
+                            Duration::from_secs(i.into())
+                        };
+                        tokio::time::sleep(sleep_time).await;
+                    }
                 }
             }
         });
@@ -1955,6 +2325,49 @@ impl BreezSdk {
         };
 
         Ok(result)
+    }
+
+    async fn register_lightning_address_internal(
+        &self,
+        request: RegisterLightningAddressRequest,
+    ) -> Result<LightningAddressInfo, SdkError> {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let Some(client) = &self.lnurl_server_client else {
+            return Err(SdkError::Generic(
+                "LNURL server is not configured".to_string(),
+            ));
+        };
+
+        let username = sanitize_username(&request.username);
+
+        let description = match request.description {
+            Some(description) => description,
+            None => format!("Pay to {}@{}", username, client.domain()),
+        };
+
+        // Query settings directly from spark wallet to avoid recursion through get_user_settings()
+        let spark_user_settings = self.spark_wallet.query_wallet_settings().await?;
+        let nostr_pubkey = if spark_user_settings.private_enabled {
+            Some(self.nostr_client.nostr_pubkey())
+        } else {
+            None
+        };
+
+        let params = crate::lnurl::RegisterLightningAddressRequest {
+            username: username.clone(),
+            description: description.clone(),
+            nostr_pubkey,
+        };
+
+        let response = client.register_lightning_address(&params).await?;
+        let address_info = LightningAddressInfo {
+            lightning_address: response.lightning_address,
+            description,
+            lnurl: response.lnurl,
+            username,
+        };
+        cache.save_lightning_address(&address_info).await?;
+        Ok(address_info)
     }
 }
 

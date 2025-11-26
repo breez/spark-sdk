@@ -23,6 +23,7 @@ use crate::{
     error::SdkError,
     lnurl::{LnurlServerClient, ReqwestLnurlServerClient},
     models::Config,
+    nostr::NostrClient,
     payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::Storage,
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
@@ -353,6 +354,14 @@ impl SdkBuilder {
             storage
         };
 
+        let nostr_client = Arc::new(NostrClient::new(
+            &key_set.identity_master_key,
+            self.account_number.unwrap_or(match self.config.network {
+                Network::Mainnet => 0,
+                Network::Regtest => 1,
+            }),
+        )?);
+
         // Create the SDK instance
         let sdk = BreezSdk::init_and_start(BreezSdkParams {
             config: self.config,
@@ -364,6 +373,7 @@ impl SdkBuilder {
             shutdown_sender,
             spark_wallet,
             event_emitter,
+            nostr_client,
         })?;
         debug!("Initialized and started breez sdk.");
 

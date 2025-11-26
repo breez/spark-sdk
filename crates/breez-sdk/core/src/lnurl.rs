@@ -1,13 +1,16 @@
 use bitcoin::hex::DisplayHex;
 use lnurl_models::{
-    CheckUsernameAvailableResponse, RecoverLnurlPayRequest, RecoverLnurlPayResponse,
-    RegisterLnurlPayRequest, RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
+    CheckUsernameAvailableResponse, ListMetadataResponse, RecoverLnurlPayRequest,
+    RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
+    UnregisterLnurlPayRequest,
 };
 use reqwest::{
     StatusCode,
     header::{AUTHORIZATION, HeaderMap, InvalidHeaderValue},
 };
+use std::fmt::Write as _;
 
+#[derive(Debug)]
 pub enum LnurlServerError {
     InvalidApiKey,
     Network {
@@ -18,15 +21,45 @@ pub enum LnurlServerError {
     SigningError(String),
 }
 
+impl std::fmt::Display for LnurlServerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LnurlServerError::InvalidApiKey => write!(f, "Invalid API key"),
+            LnurlServerError::Network {
+                statuscode,
+                message,
+            } => {
+                write!(f, "Network error (status {statuscode}): {message:?}")
+            }
+            LnurlServerError::RequestFailure(msg) => write!(f, "Request failure: {msg}"),
+            LnurlServerError::SigningError(msg) => write!(f, "Signing error: {msg}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RegisterLightningAddressRequest {
     pub username: String,
     pub description: String,
+    pub nostr_pubkey: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct UnregisterLightningAddressRequest {
     pub username: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ListMetadataRequest {
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+    pub updated_after: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PublishZapReceiptRequest {
+    pub payment_hash: String,
+    pub zap_receipt: String,
 }
 
 #[macros::async_trait]
@@ -44,6 +77,14 @@ pub trait LnurlServerClient: Send + Sync {
         &self,
         request: &UnregisterLightningAddressRequest,
     ) -> Result<(), LnurlServerError>;
+    async fn list_metadata(
+        &self,
+        request: &ListMetadataRequest,
+    ) -> Result<ListMetadataResponse, LnurlServerError>;
+    async fn publish_zap_receipt(
+        &self,
+        request: &PublishZapReceiptRequest,
+    ) -> Result<bool, LnurlServerError>;
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -212,6 +253,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
             username: request.username.clone(),
             description: request.description.clone(),
             signature,
+            nostr_pubkey: request.nostr_pubkey.clone(),
         };
 
         let url = format!("{}/lnurlpay/{}", self.base_url(), pubkey);
@@ -279,6 +321,123 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
             StatusCode::UNAUTHORIZED => return Err(LnurlServerError::InvalidApiKey),
             StatusCode::NOT_FOUND => return Ok(()),
             success if success.is_success() => return Ok(()),
+            other => {
+                return Err(LnurlServerError::Network {
+                    statuscode: other.as_u16(),
+                    message: response.text().await.ok(),
+                });
+            }
+        }
+    }
+
+    async fn list_metadata(
+        &self,
+        request: &ListMetadataRequest,
+    ) -> Result<ListMetadataResponse, LnurlServerError> {
+        let spark_address = self.wallet.get_spark_address().map_err(|e| {
+            LnurlServerError::SigningError(format!("Failed to get spark address: {e}"))
+        })?;
+        let pubkey = spark_address.identity_public_key;
+
+        let signature = self
+            .wallet
+            .sign_message(&pubkey.to_string())
+            .await
+            .map_err(|e| LnurlServerError::SigningError(e.to_string()))?
+            .serialize_der()
+            .to_lower_hex_string();
+
+        let mut url = format!(
+            "{}/lnurlpay/{}/metadata?signature={}",
+            self.base_url(),
+            pubkey,
+            signature
+        );
+        if let Some(offset) = request.offset {
+            let _ = write!(url, "&offset={offset}");
+        }
+        if let Some(limit) = request.limit {
+            let _ = write!(url, "&limit={limit}");
+        }
+        if let Some(updated_after) = request.updated_after {
+            let _ = write!(url, "&updated_after={updated_after}");
+        }
+
+        let result = self.client.get(url).send().await;
+        let response = match result {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(LnurlServerError::RequestFailure(e.to_string()));
+            }
+        };
+
+        match response.status() {
+            StatusCode::UNAUTHORIZED => return Err(LnurlServerError::InvalidApiKey),
+            success if success.is_success() => {
+                let body = response.json().await.map_err(|e| {
+                    LnurlServerError::RequestFailure(format!(
+                        "failed to deserialize response json: {e}"
+                    ))
+                })?;
+                return Ok(body);
+            }
+            other => {
+                return Err(LnurlServerError::Network {
+                    statuscode: other.as_u16(),
+                    message: response.text().await.ok(),
+                });
+            }
+        }
+    }
+
+    async fn publish_zap_receipt(
+        &self,
+        request: &PublishZapReceiptRequest,
+    ) -> Result<bool, LnurlServerError> {
+        let spark_address = self.wallet.get_spark_address().map_err(|e| {
+            LnurlServerError::SigningError(format!("Failed to get spark address: {e}"))
+        })?;
+        let pubkey = spark_address.identity_public_key;
+
+        let signature = self
+            .wallet
+            .sign_message(&request.zap_receipt)
+            .await
+            .map_err(|e| LnurlServerError::SigningError(e.to_string()))?
+            .serialize_der()
+            .to_lower_hex_string();
+
+        let url = format!(
+            "{}/lnurlpay/{}/metadata/{}/zap",
+            self.base_url(),
+            pubkey,
+            request.payment_hash
+        );
+
+        let payload = lnurl_models::PublishZapReceiptRequest {
+            signature,
+            zap_receipt: request.zap_receipt.clone(),
+        };
+
+        let result = self.client.post(url).json(&payload).send().await;
+        let response = match result {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(LnurlServerError::RequestFailure(e.to_string()));
+            }
+        };
+
+        match response.status() {
+            StatusCode::UNAUTHORIZED => return Err(LnurlServerError::InvalidApiKey),
+            success if success.is_success() => {
+                let body: lnurl_models::PublishZapReceiptResponse =
+                    response.json().await.map_err(|e| {
+                        LnurlServerError::RequestFailure(format!(
+                            "failed to deserialize response json: {e}"
+                        ))
+                    })?;
+                return Ok(body.published);
+            }
             other => {
                 return Err(LnurlServerError::Network {
                     statuscode: other.as_u16(),

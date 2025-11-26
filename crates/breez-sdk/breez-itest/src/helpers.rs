@@ -3,7 +3,7 @@ use bitcoin::hashes::{Hash as _, sha256};
 use breez_sdk_spark::*;
 use rand::RngCore;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::SdkInstance;
 use crate::faucet::RegtestFaucet;
@@ -129,6 +129,37 @@ pub async fn build_sdk_with_custom_config(
     })
 }
 
+pub async fn wait_for<F, Fut, T>(mut check_fn: F, timeout_secs: u64) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+
+    loop {
+        match check_fn().await {
+            Ok(value) => {
+                debug!(
+                    "Condition met after {:?}, returning result",
+                    start.elapsed()
+                );
+                return Ok(value);
+            }
+            Err(e) => {
+                if start.elapsed() >= timeout {
+                    return Err(anyhow::anyhow!(
+                        "Timeout after {} seconds waiting for condition: {}",
+                        timeout_secs,
+                        e
+                    ));
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+    }
+}
+
 /// Wait for SDK wallet balance to reach at least the specified amount
 ///
 /// This helper polls the wallet balance periodically until it reaches the minimum
@@ -148,58 +179,51 @@ pub async fn wait_for_balance(
     max_balance: Option<u64>,
     timeout_secs: u64,
 ) -> Result<u64> {
-    let start = std::time::Instant::now();
-    let poll_interval = std::time::Duration::from_secs(1);
+    wait_for(
+        || async {
+            let info = sdk
+                .get_info(GetInfoRequest {
+                    ensure_synced: Some(false),
+                })
+                .await?;
 
-    loop {
-        // Check current balance
-        let info = sdk
-            .get_info(GetInfoRequest {
-                ensure_synced: Some(false),
-            })
-            .await?;
+            if let Some(min_balance) = min_balance
+                && info.balance_sats >= min_balance
+            {
+                info!(
+                    "Balance requirement met: {} sats (required: {} sats)",
+                    info.balance_sats, min_balance
+                );
+                return Ok(info.balance_sats);
+            }
 
-        if let Some(min_balance) = min_balance
-            && info.balance_sats >= min_balance
-        {
+            if let Some(max_balance) = max_balance
+                && info.balance_sats >= max_balance
+            {
+                info!(
+                    "Balance requirement met: {} sats (required: {} sats)",
+                    info.balance_sats, max_balance
+                );
+                return Ok(info.balance_sats);
+            }
+
             info!(
-                "Balance requirement met: {} sats (required: {} sats)",
-                info.balance_sats, min_balance
-            );
-            return Ok(info.balance_sats);
-        }
-
-        if let Some(max_balance) = max_balance
-            && info.balance_sats >= max_balance
-        {
-            info!(
-                "Balance requirement met: {} sats (required: {} sats)",
-                info.balance_sats, max_balance
-            );
-            return Ok(info.balance_sats);
-        }
-
-        // Check timeout
-        if start.elapsed().as_secs() > timeout_secs {
-            anyhow::bail!(
-                "Timeout waiting for balance >= {} sats or <= {} sats after {} seconds. Current balance: {} sats",
+                "Waiting for balance... current: {} sats, target min: {} sats or max: {} sats",
+                info.balance_sats,
                 min_balance.unwrap_or_default(),
-                max_balance.unwrap_or_default(),
-                timeout_secs,
-                info.balance_sats
+                max_balance.unwrap_or_default()
             );
-        }
 
-        info!(
-            "Waiting for balance... current: {} sats, target min: {} sats or max: {} sats",
-            info.balance_sats,
-            min_balance.unwrap_or_default(),
-            max_balance.unwrap_or_default()
-        );
-
-        // Wait before next poll
-        tokio::time::sleep(poll_interval).await;
-    }
+            anyhow::bail!(
+                "Balance not yet reached. Current: {} sats, target min: {:?} sats, max: {:?} sats",
+                info.balance_sats,
+                min_balance,
+                max_balance
+            )
+        },
+        timeout_secs,
+    )
+    .await
 }
 
 /// Ensure SDK has at least the specified balance, funding if necessary

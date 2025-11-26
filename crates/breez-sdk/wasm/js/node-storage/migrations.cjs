@@ -278,6 +278,15 @@ class MigrationManager {
           `DROP TABLE tmp_payment_details_spark`,
         ],
       },
+      {
+        name: "Create lnurl_receive_metadata table",
+        sql: `CREATE TABLE lnurl_receive_metadata (
+                payment_hash TEXT NOT NULL PRIMARY KEY,
+                nostr_zap_request TEXT,
+                nostr_zap_receipt TEXT,
+                sender_comment TEXT
+            )`
+      }
     ];
   }
 }
