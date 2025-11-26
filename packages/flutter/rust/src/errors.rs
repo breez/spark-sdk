@@ -4,11 +4,11 @@ use flutter_rust_bridge::frb;
 
 #[frb(mirror(DepositClaimError))]
 pub enum _DepositClaimError {
-    DepositClaimFeeExceeded {
+    MaxDepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Option<Fee>,
-        actual_fee: u64,
+        max_fee: Option<u64>,
+        required_fee: u64,
     },
     MissingUtxo {
         tx: String,
@@ -27,11 +27,11 @@ pub enum _SdkError {
     NetworkError(String),
     StorageError(String),
     ChainServiceError(String),
-    DepositClaimFeeExceeded {
+    MaxDepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Option<Fee>,
-        actual_fee: u64,
+        max_fee: Option<u64>,
+        required_fee: u64,
     },
     MissingUtxo {
         tx: String,

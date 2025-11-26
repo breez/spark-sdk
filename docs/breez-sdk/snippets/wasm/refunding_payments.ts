@@ -3,7 +3,8 @@ import {
   type ListUnclaimedDepositsRequest,
   type ClaimDepositRequest,
   type RefundDepositRequest,
-  type Fee
+  type Fee,
+  type DepositInfo
 } from '@breeztech/breez-sdk-spark'
 
 const listUnclaimedDeposits = async (sdk: BreezSdk) => {
@@ -17,15 +18,13 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
 
     if (deposit.claimError != null) {
       switch (deposit.claimError.type) {
-        case 'depositClaimFeeExceeded': {
+        case 'maxDepositClaimFeeExceeded': {
           let maxFeeStr = 'none'
           if (deposit.claimError.maxFee != null) {
-            maxFeeStr = deposit.claimError.maxFee.type === 'fixed'
-              ? `${deposit.claimError.maxFee.amount} sats`
-              : `${deposit.claimError.maxFee.satPerVbyte} sat/vB`
+            maxFeeStr = `${deposit.claimError.maxFee} sats`
           }
           console.log(
-            `Max claim fee exceeded. Max: ${maxFeeStr}, Actual: ${deposit.claimError.actualFee} sats`
+            `Max claim fee exceeded. Max: ${maxFeeStr}, Required: ${deposit.claimError.requiredFee} sats`
           )
           break
         }
@@ -39,6 +38,26 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
     }
   }
   // ANCHOR_END: list-unclaimed-deposits
+}
+
+const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
+  // ANCHOR: handle-fee-exceeded
+  if (deposit.claimError?.type === 'maxDepositClaimFeeExceeded') {
+    const requiredFee = deposit.claimError.requiredFee
+
+    // Show UI to user with the required fee and get approval
+    const userApproved = true // Replace with actual user approval logic
+
+    if (userApproved) {
+      const claimRequest: ClaimDepositRequest = {
+        txid: deposit.txid,
+        vout: deposit.vout,
+        maxFee: { type: 'fixed', amount: requiredFee }
+      }
+      await sdk.claimDeposit(claimRequest)
+    }
+  }
+  // ANCHOR_END: handle-fee-exceeded
 }
 
 const claimDeposit = async (sdk: BreezSdk) => {

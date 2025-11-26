@@ -19,11 +19,11 @@ When receiving via Lightning, we can generate a BOLT11 invoice to be paid. Setti
 
 To receive via LNURL-Pay and/or a Lightning address, follow [these instructions](/guide/receive_lnurl_pay.md).
 
-> Note: Lightning payments work in Spark even if the receiver is offline. To understand how it works under the hood, read [this](https://docs.spark.money/spark/lightning).
+> Note: Lightning payments work in Spark even if the receiver is offline. To understand how it works under the hood, read [this](https://docs.spark.money/learn/lightning).
 
 ### Bitcoin
 
-For onchain payments you can use the static Bitcoin address to receive payments.
+For on-chain payments you can use the static Bitcoin address to receive payments.
 
 The SDK monitors the specified address for new UTXOs and automatically initiates the claim process when funds are detected. If the Config's maximum deposit claim fee is not set or below the current Spark fee to claim the Bitcoin deposit, the deposit will need to be claimed or refunded manually. See [Handling unclaimed deposits](/guide/unclaimed_deposits.md) for more details on this process.
 

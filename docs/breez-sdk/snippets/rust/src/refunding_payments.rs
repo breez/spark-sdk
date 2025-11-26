@@ -13,8 +13,8 @@ async fn list_unclaimed_deposits(sdk: &BreezSdk) -> Result<()> {
         
         if let Some(claim_error) = &deposit.claim_error {
             match claim_error {
-                DepositClaimError::DepositClaimFeeExceeded { max_fee, actual_fee, .. } => {
-                    info!("Max claim fee exceeded. Max: {:?}, Actual: {} sats", max_fee, actual_fee);
+                DepositClaimError::MaxDepositClaimFeeExceeded { max_fee, required_fee, .. } => {
+                    info!("Max claim fee exceeded. Max: {:?} sats, Required: {} sats", max_fee, required_fee);
                 }
                 DepositClaimError::MissingUtxo { .. } => {
                     info!("UTXO not found when claiming deposit");
@@ -29,13 +29,32 @@ async fn list_unclaimed_deposits(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+async fn handle_fee_exceeded(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()> {
+    // ANCHOR: handle-fee-exceeded
+    if let Some(DepositClaimError::MaxDepositClaimFeeExceeded { required_fee, .. }) = &deposit.claim_error {
+        // Show UI to user with the required fee and get approval
+        let user_approved = true; // Replace with actual user approval logic
+
+        if user_approved {
+            let request = ClaimDepositRequest {
+                txid: deposit.txid.clone(),
+                vout: deposit.vout,
+                max_fee: Some(Fee::Fixed { amount: *required_fee }),
+            };
+            sdk.claim_deposit(request).await?;
+        }
+    }
+    // ANCHOR_END: handle-fee-exceeded
+    Ok(())
+}
+
 async fn claim_deposit(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: claim-deposit
     let txid = "your_deposit_txid".to_string();
     let vout = 0;
     
     // Set a higher max fee to retry claiming
-    let max_fee = Some(Fee::Fixed { amount: 500 });
+    let max_fee = Some(Fee::Fixed { amount: 5_000 });
     
     let request = ClaimDepositRequest {
         txid,

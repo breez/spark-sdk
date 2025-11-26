@@ -10,9 +10,10 @@ Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
     print("Amount: ${deposit.amountSats} sats");
 
     final claimError = deposit.claimError;
-    if (claimError is DepositClaimError_DepositClaimFeeExceeded) {
+    if (claimError is DepositClaimError_MaxDepositClaimFeeExceeded) {
+      final maxFeeStr = claimError.maxFee != null ? '${claimError.maxFee} sats' : 'none';
       print(
-          "Max claim fee exceeded. Max: ${claimError.maxFee}, Actual: ${claimError.actualFee} sats");
+          "Max claim fee exceeded. Max: $maxFeeStr, Required: ${claimError.requiredFee} sats");
     } else if (claimError is DepositClaimError_MissingUtxo) {
       print("UTXO not found when claiming deposit");
     } else if (claimError is DepositClaimError_Generic) {
@@ -20,6 +21,27 @@ Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
     }
   }
   // ANCHOR_END: list-unclaimed-deposits
+}
+
+Future<void> handleFeeExceeded(BreezSdk sdk, DepositInfo deposit) async {
+  // ANCHOR: handle-fee-exceeded
+  final claimError = deposit.claimError;
+  if (claimError is DepositClaimError_MaxDepositClaimFeeExceeded) {
+    final requiredFee = claimError.requiredFee;
+
+    // Show UI to user with the required fee and get approval
+    bool userApproved = true; // Replace with actual user approval logic
+
+    if (userApproved) {
+      final claimRequest = ClaimDepositRequest(
+        txid: deposit.txid,
+        vout: deposit.vout,
+        maxFee: Fee.fixed(amount: requiredFee),
+      );
+      await sdk.claimDeposit(request: claimRequest);
+    }
+  }
+  // ANCHOR_END: handle-fee-exceeded
 }
 
 Future<void> claimDeposit(BreezSdk sdk) async {

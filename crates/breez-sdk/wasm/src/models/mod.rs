@@ -157,11 +157,11 @@ pub struct ListUnclaimedDepositsResponse {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::DepositClaimError)]
 pub enum DepositClaimError {
-    DepositClaimFeeExceeded {
+    MaxDepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Option<Fee>,
-        actual_fee: u64,
+        max_fee: Option<u64>,
+        required_fee: u64,
     },
     MissingUtxo {
         tx: String,

@@ -7,6 +7,7 @@ import {
   initLogging,
   type LogEntry,
   type SdkEvent,
+  SdkEvent_Tags,
   Seed
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
@@ -57,7 +58,29 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
   // ANCHOR: add-event-listener
   class JsEventListener {
     onEvent = async (event: SdkEvent) => {
-      console.log(`Received event: ${JSON.stringify(event)}`)
+      if (event.tag === SdkEvent_Tags.Synced) {
+        // Wallet has been synchronized with the network
+      } else if (event.tag === SdkEvent_Tags.DataSynced) {
+        // Data was pushed/pulled to/from real-time sync storage
+        const pulledNewRecords = event.inner.didPullNewRecords
+      } else if (event.tag === SdkEvent_Tags.UnclaimedDeposits) {
+        // SDK was unable to claim some deposits automatically
+        const unclaimedDeposits = event.inner.unclaimedDeposits
+      } else if (event.tag === SdkEvent_Tags.ClaimedDeposits) {
+        // Deposits were successfully claimed
+        const claimedDeposits = event.inner.claimedDeposits
+      } else if (event.tag === SdkEvent_Tags.PaymentSucceeded) {
+        // A payment completed successfully
+        const payment = event.inner.payment
+      } else if (event.tag === SdkEvent_Tags.PaymentPending) {
+        // A payment is pending (waiting for confirmation)
+        const pendingPayment = event.inner.payment
+      } else if (event.tag === SdkEvent_Tags.PaymentFailed) {
+        // A payment failed
+        const failedPayment = event.inner.payment
+      } else {
+        // Handle any future event types
+      }
     }
   }
 

@@ -17,10 +17,11 @@ namespace BreezSdkSnippets
 
                 if (deposit.claimError != null)
                 {
-                    if (deposit.claimError is DepositClaimError.DepositClaimFeeExceeded exceeded)
+                    if (deposit.claimError is DepositClaimError.MaxDepositClaimFeeExceeded exceeded)
                     {
-                        Console.WriteLine($"Claim failed: Fee exceeded. Max: {exceeded.maxFee}, " +
-                                        $"Actual: {exceeded.actualFee}");
+                        var maxFeeStr = exceeded.maxFee != null ? $"{exceeded.maxFee} sats" : "none";
+                        Console.WriteLine($"Claim failed: Fee exceeded. Max: {maxFeeStr}, " +
+                                        $"Required: {exceeded.requiredFee}");
                     }
                     else if (deposit.claimError is DepositClaimError.MissingUtxo)
                     {
@@ -33,6 +34,29 @@ namespace BreezSdkSnippets
                 }
             }
             // ANCHOR_END: list-unclaimed-deposits
+        }
+
+        async Task HandleFeeExceeded(BreezSdk sdk, DepositInfo deposit)
+        {
+            // ANCHOR: handle-fee-exceeded
+            if (deposit.claimError is DepositClaimError.MaxDepositClaimFeeExceeded exceeded)
+            {
+                var requiredFee = exceeded.requiredFee;
+
+                // Show UI to user with the required fee and get approval
+                var userApproved = true; // Replace with actual user approval logic
+
+                if (userApproved)
+                {
+                    var claimRequest = new ClaimDepositRequest(
+                        txid: deposit.txid,
+                        vout: deposit.vout,
+                        maxFee: new Fee.Fixed(amount: requiredFee)
+                    );
+                    await sdk.ClaimDeposit(request: claimRequest);
+                }
+            }
+            // ANCHOR_END: handle-fee-exceeded
         }
 
         async Task ClaimDeposit(BreezSdk sdk)

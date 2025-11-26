@@ -48,7 +48,32 @@ func logging() throws {
 // ANCHOR: add-event-listener
 class SdkEventListener: EventListener {
     func onEvent(event: SdkEvent) async {
-        print("Received event: ", event)
+        switch event {
+        case .synced:
+            // Wallet has been synchronized with the network
+            break
+        case .dataSynced(let dataSynced):
+            // Data was pushed/pulled to/from real-time sync storage
+            let _ = dataSynced
+        case .unclaimedDeposits(let unclaimedDeposits):
+            // SDK was unable to claim some deposits automatically
+            let _ = unclaimedDeposits
+        case .claimedDeposits(let claimedDeposits):
+            // Deposits were successfully claimed
+            let _ = claimedDeposits
+        case .paymentSucceeded(let paymentSucceeded):
+            // A payment completed successfully
+            let _ = paymentSucceeded
+        case .paymentPending(let paymentPending):
+            // A payment is pending (waiting for confirmation)
+            let _ = paymentPending
+        case .paymentFailed(let paymentFailed):
+            // A payment failed
+            let _ = paymentFailed
+        default:
+            // Handle any future event types
+            break
+        }
     }
 }
 
