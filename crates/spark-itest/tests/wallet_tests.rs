@@ -6,7 +6,13 @@ use rstest::*;
 use spark_wallet::{SparkWallet, WalletEvent};
 use tracing::{debug, info};
 
-use spark_itest::fixtures::setup::{TestFixtures, create_test_signer};
+use spark_itest::{
+    fixtures::{
+        bitcoind::BitcoindFixture,
+        setup::{TestFixtures, create_test_signer_alice, create_test_signer_bob},
+    },
+    helpers::wait_for_event,
+};
 
 // Setup test fixtures
 #[fixture]
@@ -16,46 +22,67 @@ async fn fixtures() -> TestFixtures {
         .expect("Failed to initialize test fixtures")
 }
 
-pub struct WalletFixture {
+pub struct WalletsFixture {
     #[allow(dead_code)]
     fixtures: TestFixtures,
-    wallet: SparkWallet,
+    alice_wallet: SparkWallet,
+    bob_wallet: SparkWallet,
 }
 
 // Create a wallet for testing
 #[fixture]
-async fn wallet(#[future] fixtures: TestFixtures) -> WalletFixture {
+async fn wallets(#[future] fixtures: TestFixtures) -> WalletsFixture {
     let fixtures = fixtures.await;
     let config = fixtures
         .create_wallet_config()
         .await
         .expect("failed to create wallet config");
-    let signer = create_test_signer();
+    let signer = create_test_signer_alice();
 
-    let wallet = SparkWallet::connect(config, Arc::new(signer))
+    let alice_wallet = SparkWallet::connect(config.clone(), Arc::new(signer))
         .await
-        .expect("Failed to connect wallet");
+        .expect("Failed to connect alice wallet");
 
-    let mut listener = wallet.subscribe_events();
+    let bob_wallet = SparkWallet::connect(config, Arc::new(create_test_signer_bob()))
+        .await
+        .expect("Failed to connect bob wallet");
+
+    let mut alice_listener = alice_wallet.subscribe_events();
+    let mut bob_listener = bob_wallet.subscribe_events();
     loop {
-        let event = listener
+        let event = alice_listener
             .recv()
             .await
-            .expect("Failed to receive wallet event");
-        info!("Wallet event: {:?}", event);
+            .expect("Failed to receive alicewallet event");
+        info!("Alice wallet event: {:?}", event);
         if event == WalletEvent::Synced {
             break;
         }
     }
-    WalletFixture { fixtures, wallet }
+    loop {
+        let event = bob_listener
+            .recv()
+            .await
+            .expect("Failed to receive bob wallet event");
+        info!("Bob wallet event: {:?}", event);
+        if event == WalletEvent::Synced {
+            break;
+        }
+    }
+
+    WalletsFixture {
+        fixtures,
+        alice_wallet,
+        bob_wallet,
+    }
 }
 // Test creating a deposit address
 #[rstest]
 #[tokio::test]
 #[test_log::test]
-async fn test_create_deposit_address(#[future] wallet: WalletFixture) -> Result<()> {
-    let fixture = wallet.await;
-    let wallet = fixture.wallet;
+async fn test_create_deposit_address(#[future] wallets: WalletsFixture) -> Result<()> {
+    let fixture = wallets.await;
+    let wallet = fixture.alice_wallet;
 
     let address = wallet.generate_deposit_address(false).await?;
     info!("Generated deposit address: {}", address);
@@ -68,15 +95,7 @@ async fn test_create_deposit_address(#[future] wallet: WalletFixture) -> Result<
     Ok(())
 }
 
-// Test claiming a deposit
-#[rstest]
-#[tokio::test]
-#[test_log::test]
-async fn test_claim_unconfirmed_deposit(#[future] wallet: WalletFixture) -> Result<()> {
-    let fixture = wallet.await;
-    let wallet = fixture.wallet;
-    let bitcoind = &fixture.fixtures.bitcoind;
-
+async fn deposit_wallet(wallet: &SparkWallet, bitcoind: &BitcoindFixture) -> Result<()> {
     // Generate a deposit address
     let deposit_address = wallet.generate_deposit_address(false).await?;
     info!("Generated deposit address: {}", deposit_address);
@@ -144,6 +163,19 @@ async fn test_claim_unconfirmed_deposit(#[future] wallet: WalletFixture) -> Resu
         deposit_amount.to_sat(),
         "Balance should be the deposit amount"
     );
+    Ok(())
+}
+
+// Test claiming a deposit
+#[rstest]
+#[tokio::test]
+#[test_log::test]
+async fn test_claim_unconfirmed_deposit(#[future] wallets: WalletsFixture) -> Result<()> {
+    let fixture = wallets.await;
+    let wallet = fixture.alice_wallet;
+    let bitcoind = &fixture.fixtures.bitcoind;
+
+    deposit_wallet(&wallet, bitcoind).await?;
 
     Ok(())
 }
@@ -152,9 +184,9 @@ async fn test_claim_unconfirmed_deposit(#[future] wallet: WalletFixture) -> Resu
 #[rstest]
 #[tokio::test]
 #[test_log::test]
-async fn test_claim_confirmed_deposit(#[future] wallet: WalletFixture) -> Result<()> {
-    let fixture = wallet.await;
-    let wallet = fixture.wallet;
+async fn test_claim_confirmed_deposit(#[future] wallets: WalletsFixture) -> Result<()> {
+    let fixture = wallets.await;
+    let wallet = fixture.alice_wallet;
     let bitcoind = &fixture.fixtures.bitcoind;
 
     // Generate a deposit address
@@ -210,5 +242,86 @@ async fn test_claim_confirmed_deposit(#[future] wallet: WalletFixture) -> Result
     // Check that balance increased immediately after claiming
     let balance = wallet.get_balance().await?;
     assert_eq!(balance, 100_000, "Balance should be the deposit amount");
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+#[test_log::test]
+async fn test_renew_timelocks(#[future] wallets: WalletsFixture) -> Result<()> {
+    let fixture = wallets.await;
+
+    let mut alice = fixture.alice_wallet;
+    let mut bob = fixture.bob_wallet;
+
+    deposit_wallet(&alice, &fixture.fixtures.bitcoind).await?;
+
+    // Get the total balance that will be sent back and forth
+    let total_balance = alice.get_balance().await?;
+    info!("Total balance to send back and forth: {total_balance} sats");
+
+    let send_sdk_payment = async |from_wallet: &mut SparkWallet,
+                                  to_wallet: &mut SparkWallet|
+           -> Result<()> {
+        info!("Sending via Spark started...");
+
+        // Get current balances
+        let sender_balance = from_wallet.get_balance().await?;
+        let receiver_balance_before = to_wallet.get_balance().await?;
+
+        // Verify we're sending the entire balance
+        assert_eq!(
+            sender_balance, total_balance,
+            "Sender should have the entire balance"
+        );
+        assert_eq!(
+            receiver_balance_before, 0,
+            "Receiver should have zero balance before transfer"
+        );
+
+        info!(
+            "Sender balance: {sender_balance}, Receiver balance before: {receiver_balance_before}"
+        );
+
+        // Get spark address of "to" SDK
+        let spark_address = to_wallet.get_spark_address()?;
+
+        // Subscribe to receiver's events BEFORE sending to avoid missing the event
+        let mut listener = to_wallet.subscribe_events();
+
+        info!("Sending {sender_balance} sats to {spark_address:?}...");
+
+        // Send entire balance
+        let _transfer = from_wallet
+            .transfer(sender_balance, &spark_address, None)
+            .await?;
+
+        // Wait for TransferClaimed event on the receiver
+        info!("Waiting for TransferClaimed event...");
+        wait_for_event(&mut listener, 60, "TransferClaimed", |event| match &event {
+            WalletEvent::TransferClaimed(_) => Ok(Some(event)),
+            _ => Ok(None),
+        })
+        .await?;
+
+        // Verify sender now has zero
+        let sender_balance_after = from_wallet.get_balance().await?;
+        assert_eq!(
+            sender_balance_after, 0,
+            "Sender should have zero balance after transfer"
+        );
+
+        info!("Sending via Spark completed - TransferClaimed received");
+        Ok(())
+    };
+
+    for n in 0..200 {
+        info!("Iteration {n}");
+        info!("Sending from Alice to Bob via Spark...");
+        send_sdk_payment(&mut alice, &mut bob).await?;
+        info!("Sending from Bob to Alice via Spark...");
+        send_sdk_payment(&mut bob, &mut alice).await?;
+    }
+
     Ok(())
 }
