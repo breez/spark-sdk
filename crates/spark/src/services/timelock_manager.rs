@@ -29,9 +29,9 @@ use crate::{
     },
 };
 
-enum RenewType {
-    Node,
-    Refund,
+enum RenewType<'a> {
+    Node { parent_node: &'a TreeNode },
+    Refund { parent_node: &'a TreeNode },
     ZeroTimelock,
 }
 
@@ -127,15 +127,14 @@ impl TimelockManager {
         let mut renew_futures = Vec::new();
         for node in &renewable_nodes {
             let parent_node = get_parent_node(node)?;
-            renew_futures.push(self.renew(RenewType::Node, node, parent_node));
+            renew_futures.push(self.renew(RenewType::Node { parent_node }, node));
         }
         for node in &renewable_refunds {
             let parent_node = get_parent_node(node)?;
-            renew_futures.push(self.renew(RenewType::Refund, node, parent_node));
+            renew_futures.push(self.renew(RenewType::Refund { parent_node }, node));
         }
         for node in &renewable_zero_timelock_nodes {
-            let parent_node = get_parent_node(node)?;
-            renew_futures.push(self.renew(RenewType::ZeroTimelock, node, parent_node));
+            renew_futures.push(self.renew(RenewType::ZeroTimelock, node));
         }
 
         let renewed_nodes = futures::future::try_join_all(renew_futures).await?;
@@ -144,15 +143,14 @@ impl TimelockManager {
         Ok(ready_nodes)
     }
 
-    async fn renew(
+    async fn renew<'a>(
         &self,
-        renew_type: RenewType,
+        renew_type: RenewType<'a>,
         node: &TreeNode,
-        parent_node: &TreeNode,
     ) -> Result<TreeNode, ServiceError> {
         match renew_type {
-            RenewType::Node => self.renew_node(node, parent_node).await,
-            RenewType::Refund => self.renew_refund(node, parent_node).await,
+            RenewType::Node { parent_node } => self.renew_node(node, parent_node).await,
+            RenewType::Refund { parent_node } => self.renew_refund(node, parent_node).await,
             RenewType::ZeroTimelock => self.renew_zero_timelock(node).await,
         }
     }

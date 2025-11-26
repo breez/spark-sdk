@@ -153,6 +153,7 @@ fn workspace_exclude_wasm() -> Vec<String> {
 fn test_cmd(package: Option<String>, doc: bool, rest: Vec<String>) -> Result<()> {
     let mut c = Command::new("cargo");
     c.arg("test");
+    c.arg("--no-fail-fast");
     if package.is_none() {
         c.arg("--workspace");
         c.args(["--exclude", "spark-itest"]);
@@ -646,6 +647,6 @@ fn itest_cmd() -> Result<()> {
     .run()?;
 
     // Run the integration tests
-    cmd!(sh, "cargo test -p spark-itest").run()?;
+    cmd!(sh, "cargo test -p spark-itest --no-fail-fast").run()?;
     Ok(())
 }
