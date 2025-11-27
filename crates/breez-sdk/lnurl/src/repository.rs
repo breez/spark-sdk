@@ -38,13 +38,10 @@ pub trait LnurlRepository {
         &self,
         payment_hash: &str,
     ) -> Result<Option<Zap>, LnurlRepositoryError>;
-    /// Get list of user pubkeys that have unexpired invoices
-    async fn get_users_with_unexpired_invoices(&self) -> Result<Vec<String>, LnurlRepositoryError>;
-    /// Check if a specific user has any unexpired invoices
-    async fn user_has_unexpired_invoices(
-        &self,
-        user_pubkey: &str,
-    ) -> Result<bool, LnurlRepositoryError>;
+    /// Get list of user pubkeys that have unexpired invoices that should be signed by the server
+    async fn get_zap_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError>;
+    /// Check if a specific user has any unexpired invoices that should be signed by the server
+    async fn is_zap_monitored_user(&self, user_pubkey: &str) -> Result<bool, LnurlRepositoryError>;
     async fn insert_lnurl_sender_comment(
         &self,
         comment: &LnurlSenderComment,

@@ -117,7 +117,7 @@ pub fn subscribe_to_user_for_zaps<DB>(
                         // Periodically check if user still has unexpired invoices
                         // Hold the lock while checking to prevent race condition with new subscriptions
                         let mut subscribed = subscribed_keys.lock().await;
-                        match db.user_has_unexpired_invoices(&user_pk.to_string()).await {
+                        match db.is_zap_monitored_user(&user_pk.to_string()).await {
                             Ok(has_unexpired) => {
                                 if !has_unexpired {
                                     debug!("User {user_pk} has no more unexpired invoices (timeout check), unsubscribing");
@@ -306,7 +306,7 @@ pub fn subscribe_to_user_for_zaps<DB>(
                 // Check if user still has unexpired invoices
                 // Hold the lock while checking to prevent race condition with new subscriptions
                 let mut subscribed = subscribed_keys.lock().await;
-                match db.user_has_unexpired_invoices(&user_pk.to_string()).await {
+                match db.is_zap_monitored_user(&user_pk.to_string()).await {
                     Ok(has_unexpired) => {
                         if !has_unexpired {
                             debug!("User {user_pk} has no more unexpired invoices, unsubscribing");

@@ -143,7 +143,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(maybe_zap)
     }
 
-    async fn get_users_with_unexpired_invoices(&self) -> Result<Vec<String>, LnurlRepositoryError> {
+    async fn get_zap_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError> {
         let now = now();
         let rows = sqlx::query(
             "SELECT DISTINCT user_pubkey
@@ -160,10 +160,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(keys)
     }
 
-    async fn user_has_unexpired_invoices(
-        &self,
-        user_pubkey: &str,
-    ) -> Result<bool, LnurlRepositoryError> {
+    async fn is_zap_monitored_user(&self, user_pubkey: &str) -> Result<bool, LnurlRepositoryError> {
         let now = now();
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*)

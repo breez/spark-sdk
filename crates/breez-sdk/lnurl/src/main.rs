@@ -227,7 +227,7 @@ where
     // Initialize zap subscriptions if nostr keys are provided
     if let Some(nostr_keys) = &nostr_keys {
         // start bg task to subscribe to users with unexpired invoices
-        for user in repository.get_users_with_unexpired_invoices().await? {
+        for user in repository.get_zap_monitored_users().await? {
             let user_pubkey = bitcoin::secp256k1::PublicKey::from_str(&user)
                 .map_err(|e| anyhow!("failed to parse user pubkey: {e:?}"))?;
 
