@@ -248,6 +248,9 @@ impl SqliteStorage {
                 nostr_zap_receipt TEXT,
                 sender_comment TEXT
             );",
+            // Delete all unclaimed deposits to clear old claim_error JSON format.
+            // Deposits will be recovered on next sync.
+            "DELETE FROM unclaimed_deposits;",
         ]
     }
 }
