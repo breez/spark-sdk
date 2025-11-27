@@ -41,13 +41,16 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(name)
         .fetch_optional(&self.pool)
         .await?
-        .map(|row| User {
-            domain: domain.to_string(),
-            pubkey: row.get(0),
-            name: row.get(1),
-            description: row.get(2),
-            nostr_pubkey: row.get(3),
-        });
+        .map(|row| {
+            Ok::<_, sqlx::Error>(User {
+                domain: domain.to_string(),
+                pubkey: row.try_get(0)?,
+                name: row.try_get(1)?,
+                description: row.try_get(2)?,
+                nostr_pubkey: row.try_get(3)?,
+            })
+        })
+        .transpose()?;
         Ok(maybe_user)
     }
 
@@ -65,13 +68,16 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(pubkey)
         .fetch_optional(&self.pool)
         .await?
-        .map(|row| User {
-            domain: domain.to_string(),
-            pubkey: row.get(0),
-            name: row.get(1),
-            description: row.get(2),
-            nostr_pubkey: row.get(3),
-        });
+        .map(|row| {
+            Ok::<_, sqlx::Error>(User {
+                domain: domain.to_string(),
+                pubkey: row.try_get(0)?,
+                name: row.try_get(1)?,
+                description: row.try_get(2)?,
+                nostr_pubkey: row.try_get(3)?,
+            })
+        })
+        .transpose()?;
         Ok(maybe_user)
     }
 
@@ -122,15 +128,18 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(payment_hash)
         .fetch_optional(&self.pool)
         .await?
-        .map(|row| Zap {
-            payment_hash: row.get(0),
-            zap_request: row.get(1),
-            zap_event: row.get(2),
-            user_pubkey: row.get(3),
-            invoice_expiry: row.get(4),
-            updated_at: row.get(5),
-            is_user_nostr_key: row.get(6),
-        });
+        .map(|row| {
+            Ok::<_, sqlx::Error>(Zap {
+                payment_hash: row.try_get(0)?,
+                zap_request: row.try_get(1)?,
+                zap_event: row.try_get(2)?,
+                user_pubkey: row.try_get(3)?,
+                invoice_expiry: row.try_get(4)?,
+                updated_at: row.try_get(5)?,
+                is_user_nostr_key: row.try_get(6)?,
+            })
+        })
+        .transpose()?;
         Ok(maybe_zap)
     }
 
@@ -144,7 +153,10 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(now)
         .fetch_all(&self.pool)
         .await?;
-        let keys = rows.into_iter().map(|row| row.get(0)).collect();
+        let keys = rows
+            .into_iter()
+            .map(|row| row.try_get(0))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(keys)
     }
 
@@ -211,14 +223,16 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .await?;
         let metadata = rows
             .into_iter()
-            .map(|row| ListMetadataMetadata {
-                payment_hash: row.get(0),
-                sender_comment: row.get(1),
-                nostr_zap_request: row.get(2),
-                nostr_zap_receipt: row.get(3),
-                updated_at: row.get(4),
+            .map(|row| {
+                Ok(ListMetadataMetadata {
+                    payment_hash: row.try_get(0)?,
+                    sender_comment: row.try_get(1)?,
+                    nostr_zap_request: row.try_get(2)?,
+                    nostr_zap_receipt: row.try_get(3)?,
+                    updated_at: row.try_get(4)?,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
         Ok(metadata)
     }
 }
