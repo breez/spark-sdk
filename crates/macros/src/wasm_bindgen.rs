@@ -52,13 +52,8 @@ fn extern_wasm_bindgen_from(
             #[serde(rename_all = "camelCase")]
         },
     };
-    output.extend(quote! {
-        impl wasm_bindgen::__rt::VectorIntoJsValue for #internal_name {
-            fn vector_into_jsvalue(vector: Box<[#internal_name]>) -> wasm_bindgen::JsValue {
-                wasm_bindgen::__rt::js_value_vector_into_jsvalue(vector)
-            }
-        }
-    });
+    // Note: VectorIntoJsValue was removed in wasm-bindgen 0.2.93+
+    // Vector conversions are now handled automatically by tsify
     (additional_definition, input, output)
 }
 

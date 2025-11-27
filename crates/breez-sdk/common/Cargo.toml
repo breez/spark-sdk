@@ -69,7 +69,7 @@ tonic-web-wasm-client.workspace = true
 
 # Wasm dev dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
-getrandom = { version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 wasm-bindgen-test.workspace = true
 
 [dev-dependencies]
