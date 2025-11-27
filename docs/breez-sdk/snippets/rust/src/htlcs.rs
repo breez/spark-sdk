@@ -1,6 +1,6 @@
 use anyhow::Result;
 use breez_sdk_spark::*;
-use log::info;
+use tracing::info;
 
 async fn send_htlc_payment(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: send-htlc-payment

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use breez_sdk_spark::*;
-use log::info;
+use tracing::info;
 
 async fn list_unclaimed_deposits(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: list-unclaimed-deposits

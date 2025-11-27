@@ -1,6 +1,6 @@
 use anyhow::Result;
 use breez_sdk_spark::*;
-use log::info;
+use tracing::info;
 
 pub(crate) fn configure_sdk() -> Result<()> {
     // ANCHOR: max-deposit-claim-fee

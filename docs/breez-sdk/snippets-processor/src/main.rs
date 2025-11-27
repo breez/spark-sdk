@@ -1,8 +1,7 @@
-use clap::{crate_version, Arg, ArgMatches, Command};
-use mdbook::book::Book;
-use mdbook::errors::{Error, Result};
-use mdbook::preprocess::{CmdPreprocessor, Preprocessor, PreprocessorContext};
-use mdbook::BookItem;
+use clap::{Arg, ArgMatches, Command, crate_version};
+use mdbook_core::book::Book;
+use mdbook_core::errors::{Error, Result};
+use mdbook_preprocessor::{Preprocessor, PreprocessorContext, book::BookItem};
 use std::fs;
 use std::io;
 
@@ -38,7 +37,7 @@ fn handle_supports(pre: &dyn Preprocessor, sub_args: &ArgMatches) -> Result<()> 
     let renderer = sub_args
         .get_one::<String>("renderer")
         .expect("Required argument");
-    let supported = pre.supports_renderer(renderer);
+    let supported = pre.supports_renderer(renderer)?;
     if supported {
         Ok(())
     } else {
@@ -50,7 +49,7 @@ fn handle_supports(pre: &dyn Preprocessor, sub_args: &ArgMatches) -> Result<()> 
 
 /// Preprocess `book` using `pre` and print it out.
 fn handle_preprocessing(pre: &dyn Preprocessor) -> Result<()> {
-    let (ctx, book) = CmdPreprocessor::parse_input(io::stdin())?;
+    let (ctx, book) = mdbook_preprocessor::parse_input(io::stdin())?;
     check_mdbook_version(&ctx.mdbook_version);
 
     let processed_book = pre.run(&ctx, book)?;
@@ -60,12 +59,12 @@ fn handle_preprocessing(pre: &dyn Preprocessor) -> Result<()> {
 
 /// Produce a warning on mdBook version mismatch.
 fn check_mdbook_version(version: &str) {
-    if version != mdbook::MDBOOK_VERSION {
+    if version != mdbook_core::MDBOOK_VERSION {
         eprintln!(
             "This mdbook-snippets was built against mdbook v{}, \
             but we are being called from mdbook v{version}. \
             If you have any issue, this might be a reason.",
-            mdbook::MDBOOK_VERSION,
+            mdbook_core::MDBOOK_VERSION,
         )
     }
 }
@@ -74,14 +73,52 @@ struct SnippetsProcessor;
 impl SnippetsProcessor {
     fn get_language_paths(file_base: &str) -> Vec<(&'static str, &'static str, String)> {
         vec![
-            ("Rust", "rust", format!("snippets/rust/src/{}.rs", file_base)),
-            ("Swift", "swift", format!("snippets/swift/BreezSdkSnippets/Sources/{}.swift", capitalize_first(file_base))),
-            ("Kotlin", "kotlin", format!("snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/{}.kt", capitalize_first(file_base))),
-            ("C#", "csharp", format!("snippets/csharp/{}.cs", capitalize_first(file_base))),
-            ("Javascript", "typescript", format!("snippets/wasm/{}.ts", file_base)),
-            ("React Native", "typescript", format!("snippets/react-native/{}.ts", file_base)),
-            ("Flutter", "dart", format!("snippets/flutter/lib/{}.dart", file_base)),
-            ("Python", "python", format!("snippets/python/src/{}.py", file_base)),
+            (
+                "Rust",
+                "rust",
+                format!("snippets/rust/src/{}.rs", file_base),
+            ),
+            (
+                "Swift",
+                "swift",
+                format!(
+                    "snippets/swift/BreezSdkSnippets/Sources/{}.swift",
+                    capitalize_first(file_base)
+                ),
+            ),
+            (
+                "Kotlin",
+                "kotlin",
+                format!(
+                    "snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/{}.kt",
+                    capitalize_first(file_base)
+                ),
+            ),
+            (
+                "C#",
+                "csharp",
+                format!("snippets/csharp/{}.cs", capitalize_first(file_base)),
+            ),
+            (
+                "Javascript",
+                "typescript",
+                format!("snippets/wasm/{}.ts", file_base),
+            ),
+            (
+                "React Native",
+                "typescript",
+                format!("snippets/react-native/{}.ts", file_base),
+            ),
+            (
+                "Flutter",
+                "dart",
+                format!("snippets/flutter/lib/{}.dart", file_base),
+            ),
+            (
+                "Python",
+                "python",
+                format!("snippets/python/src/{}.py", file_base),
+            ),
             ("Go", "go", format!("snippets/go/{}.go", file_base)),
         ]
     }
@@ -157,7 +194,7 @@ impl SnippetsProcessor {
         let mut result = String::from("<custom-tabs category=\"lang\">\n");
 
         for (lang_name, lang_code, relative_path) in &config {
-            let full_path = ctx.root.join(&relative_path);
+            let full_path = ctx.root.join(relative_path);
 
             // Try to read the file
             let content = match fs::read_to_string(&full_path) {
@@ -219,28 +256,24 @@ impl Preprocessor for SnippetsProcessor {
                 let mut block_lines: Vec<String> = vec![];
                 let mut min_indentation: usize = 0;
 
+                let regex = regex::Regex::new(r"\{\{#tabs\s+([^:]+):([\w-]+)\}\}").unwrap();
                 for line in chapter.content.lines() {
                     // Check for tab expansion syntax: {{#tabs file:snippet-name}}
-                    if let Some(captures) = regex::Regex::new(r"\{\{#tabs\s+([^:]+):([\w-]+)\}\}")
-                        .unwrap()
-                        .captures(line)
-                    {
-                        if let (Some(file_base), Some(snippet_name)) =
+                    if let Some(captures) = regex.captures(line)
+                        && let (Some(file_base), Some(snippet_name)) =
                             (captures.get(1), captures.get(2))
-                        {
-                            match Self::expand_tabs(ctx, file_base.as_str(), snippet_name.as_str())
-                            {
-                                Ok(expanded) => {
-                                    resulting_lines.push(expanded);
-                                }
-                                Err(e) => {
-                                    eprintln!("Error expanding tabs: {}", e);
-                                    // Keep the original line on error
-                                    resulting_lines.push(line.to_string());
-                                }
+                    {
+                        match Self::expand_tabs(ctx, file_base.as_str(), snippet_name.as_str()) {
+                            Ok(expanded) => {
+                                resulting_lines.push(expanded);
                             }
-                            continue;
+                            Err(e) => {
+                                eprintln!("Error expanding tabs: {}", e);
+                                // Keep the original line on error
+                                resulting_lines.push(line.to_string());
+                            }
                         }
+                        continue;
                     }
 
                     if line.starts_with("```") {

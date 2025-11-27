@@ -8,7 +8,7 @@ use std::{
     pin::Pin,
     task::{Context, Poll},
 };
-use tonic::{Status, body::BoxBody};
+use tonic::Status;
 use tower_service::Service;
 use tracing::{debug, trace};
 
@@ -35,10 +35,13 @@ where
     }
 }
 
-impl<T, ResBody> Service<Request<BoxBody>> for RetryChannel<T>
+impl<T, ResBody> Service<Request<tonic::body::Body>> for RetryChannel<T>
 where
-    T: Service<Request<BoxBody>, Response = Response<ResBody>, Error = tonic::transport::Error>
-        + Clone
+    T: Service<
+            Request<tonic::body::Body>,
+            Response = Response<ResBody>,
+            Error = tonic::transport::Error,
+        > + Clone
         + Send
         + 'static,
     T::Future: Send + 'static,
@@ -55,7 +58,7 @@ where
             .map_err(RetryChannelError::Transport)
     }
 
-    fn call(&mut self, req: Request<BoxBody>) -> Self::Future {
+    fn call(&mut self, req: Request<tonic::body::Body>) -> Self::Future {
         // Clone the inner service for both initial call and potential retry
         let mut inner_clone = self.inner.clone();
 
@@ -64,10 +67,10 @@ where
 
         Box::pin(async move {
             let data = body.collect().await?.to_bytes();
-            let full_body =
-                http_body_util::Full::new(data).map_err(|_| Status::internal("infallible error"));
-            let original_req = Request::from_parts(head.clone(), BoxBody::new(full_body.clone()));
-            let retry_req = Request::from_parts(head, BoxBody::new(full_body));
+            let full_body = http_body_util::Full::new(data);
+            let original_req =
+                Request::from_parts(head.clone(), tonic::body::Body::new(full_body.clone()));
+            let retry_req = Request::from_parts(head, tonic::body::Body::new(full_body));
 
             // Wait for the initial service to be ready and make the call
             poll_fn(|cx| inner_clone.poll_ready(cx)).await?;

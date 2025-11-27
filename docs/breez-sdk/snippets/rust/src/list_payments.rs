@@ -1,6 +1,7 @@
 use anyhow::Result;
 use breez_sdk_spark::*;
 
+#[allow(dead_code)]
 async fn get_payment(sdk: &BreezSdk) -> Result<Payment> {
     // ANCHOR: get-payment
     let payment_id = "<payment id>".to_string();
@@ -11,17 +12,17 @@ async fn get_payment(sdk: &BreezSdk) -> Result<Payment> {
     Ok(payment)
 }
 
+#[allow(dead_code)]
 async fn list_payments(sdk: &BreezSdk) -> Result<Vec<Payment>> {
     // ANCHOR: list-payments
-    let response = sdk
-        .list_payments(ListPaymentsRequest::default())
-        .await?;
+    let response = sdk.list_payments(ListPaymentsRequest::default()).await?;
     let payments = response.payments;
     // ANCHOR_END: list-payments
 
     Ok(payments)
 }
 
+#[allow(dead_code)]
 async fn list_payments_filtered(sdk: &BreezSdk) -> Result<Vec<Payment>> {
     // ANCHOR: list-payments-filtered
     // Filter by asset (Bitcoin or Token)

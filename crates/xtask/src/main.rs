@@ -482,7 +482,7 @@ fn build_cmd(release: bool, target: Option<String>, package: Option<String>) -> 
                     if wasm_pkgs.is_empty() {
                         Vec::new()
                     } else {
-                        wasm_pkgs.into_iter().map(|p| p.name).collect()
+                        wasm_pkgs.into_iter().map(|p| p.name.to_string()).collect()
                     }
                 } else {
                     match &package {

@@ -20,11 +20,12 @@ serde.workspace = true
 serde-wasm-bindgen.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tsify-next = {workspace = true, default-features = false, features = ["js"]}
+tsify-next = { workspace = true, default-features = false, features = ["js"] }
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 web-sys.workspace = true
 
 [dev-dependencies]
-wasm-bindgen-test.workspace = true
 breez-sdk-spark = { workspace = true, features = ["test-utils"] }
+wasm-bindgen-test.workspace = true
+

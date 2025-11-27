@@ -53,13 +53,13 @@ fn parse_command(input: &str) -> Result<Command> {
     let mut args = vec!["breez-cli".to_string()];
     match shlex::split(input) {
         Some(split_args) => args.extend(split_args),
-        None => return Err(anyhow!("Failed to parse input string: {}", input)),
+        None => return Err(anyhow!("Failed to parse input string: {input}")),
     }
 
     // Use clap to parse the command
     match Command::try_parse_from(args) {
         Ok(cmd) => Ok(cmd),
-        Err(e) => Err(anyhow!("Command parsing error: {}", e)),
+        Err(e) => Err(anyhow!("Command parsing error: {e}")),
     }
 }
 

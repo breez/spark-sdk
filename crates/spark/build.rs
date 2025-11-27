@@ -4,7 +4,7 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
     let is_wasm = target_family == "wasm" && target_os == "unknown";
 
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .build_server(false)
         .build_client(true)
         .build_transport(!is_wasm)

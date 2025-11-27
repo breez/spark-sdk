@@ -1,6 +1,6 @@
 use anyhow::Result;
 use breez_sdk_spark::*;
-use log::info;
+use tracing::info;
 
 pub(crate) async fn get_user_settings(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: get-user-settings

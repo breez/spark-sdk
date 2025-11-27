@@ -8,30 +8,25 @@ name = "breez_sdk_itest"
 path = "src/lib.rs"
 
 [dependencies]
-# Breez SDK under test (enable test-utils for direct helpers)
-breez-sdk-spark = { workspace = true, features = ["test-utils"] }
-
-# Async/test stack
-tokio = { workspace = true, features = ["full"] }
-async-trait.workspace = true
-rstest.workspace = true
-rstest_reuse.workspace = true
-reqwest = { workspace = true, features = ["default-tls"] }
-test-log = { workspace = true, features = ["trace"] }
 anyhow.workspace = true
-
-# Utils
+async-trait.workspace = true
 bitcoin = { workspace = true, features = ["serde"] }
-serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
+breez-sdk-spark = { workspace = true, features = ["test-utils"] }
+dotenvy.workspace = true
+futures.workspace = true
 hex.workspace = true
 macros.workspace = true
+nostr.workspace = true
+rand.workspace = true
+reqwest = { workspace = true, features = ["default-tls"] }
+rstest.workspace = true
+rstest_reuse.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 tempdir.workspace = true
+test-log = { workspace = true, features = ["trace"] }
 testcontainers.workspace = true
+tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-dotenvy.workspace = true
-rand.workspace = true
 uuid.workspace = true
-futures.workspace = true
-nostr.workspace = true
