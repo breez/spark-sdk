@@ -105,11 +105,11 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: recommended-fees
             var response = await sdk.RecommendedFees();
-            Console.WriteLine($"Fastest fee: {response.fastestFee}");
-            Console.WriteLine($"Half-hour fee: {response.halfHourFee}");
-            Console.WriteLine($"Hour fee: {response.hourFee}");
-            Console.WriteLine($"Economy fee: {response.economyFee}");
-            Console.WriteLine($"Minimum fee: {response.minimumFee}");
+            Console.WriteLine($"Fastest fee: {response.fastestFee} sats/vByte");
+            Console.WriteLine($"Half-hour fee: {response.halfHourFee} sats/vByte");
+            Console.WriteLine($"Hour fee: {response.hourFee} sats/vByte");
+            Console.WriteLine($"Economy fee: {response.economyFee} sats/vByte");
+            Console.WriteLine($"Minimum fee: {response.minimumFee} sats/vByte");
         }
         // ANCHOR_END: recommended-fees
     }

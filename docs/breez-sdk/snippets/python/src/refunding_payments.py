@@ -113,9 +113,9 @@ async def refund_deposit(sdk: BreezSdk):
 async def recommended_feeds(sdk: BreezSdk):
     # ANCHOR: recommended-fees
     response = await sdk.recommended_fees()
-    logging.info(f"Fastest fee: {response.fastest_fee} sats")
-    logging.info(f"Half-hour fee: {response.half_hour_fee} sats")
-    logging.info(f"Hour fee: {response.hour_fee} sats")
-    logging.info(f"Economy fee: {response.economy_fee} sats")
-    logging.info(f"Minimum fee: {response.minimum_fee} sats")
+    logging.info(f"Fastest fee: {response.fastest_fee} sats/vByte")
+    logging.info(f"Half-hour fee: {response.half_hour_fee} sats/vByte")
+    logging.info(f"Hour fee: {response.hour_fee} sats/vByte")
+    logging.info(f"Economy fee: {response.economy_fee} sats/vByte")
+    logging.info(f"Minimum fee: {response.minimum_fee} sats/vByte")
     # ANCHOR_END: recommended-fees

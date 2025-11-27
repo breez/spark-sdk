@@ -97,11 +97,11 @@ async fn refund_deposit(sdk: &BreezSdk) -> Result<()> {
 async fn recommended_fees(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: recommended-fees
     let response = sdk.recommended_fees().await?;
-    info!("Fastest fee: {} sats", response.fastest_fee);
-    info!("Half-hour fee: {} sats", response.half_hour_fee);
-    info!("Hour fee: {} sats", response.hour_fee);
-    info!("Economy fee: {} sats", response.economy_fee);
-    info!("Minimum fee: {} sats", response.minimum_fee);
+    info!("Fastest fee: {} sats/vByte", response.fastest_fee);
+    info!("Half-hour fee: {} sats/vByte", response.half_hour_fee);
+    info!("Hour fee: {} sats/vByte", response.hour_fee);
+    info!("Economy fee: {} sats/vByte", response.economy_fee);
+    info!("Minimum fee: {} sats/vByte", response.minimum_fee);
     // ANCHOR_END: recommended-fees
     Ok(())
 }

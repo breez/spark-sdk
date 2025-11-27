@@ -126,11 +126,11 @@ func RecommendedFees(sdk *breez_sdk_spark.BreezSdk) error {
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return err
 	}
-	log.Printf("Fastest fee: %v sats", response.FastestFee)
-	log.Printf("Half-hour fee: %v sats", response.HalfHourFee)
-	log.Printf("Hour fee: %v sats", response.HourFee)
-	log.Printf("Economy fee: %v sats", response.EconomyFee)
-	log.Printf("Minimum fee: %v sats", response.MinimumFee)
+	log.Printf("Fastest fee: %v sats/vByte", response.FastestFee)
+	log.Printf("Half-hour fee: %v sats/vByte", response.HalfHourFee)
+	log.Printf("Hour fee: %v sats/vByte", response.HourFee)
+	log.Printf("Economy fee: %v sats/vByte", response.EconomyFee)
+	log.Printf("Minimum fee: %v sats/vByte", response.MinimumFee)
 	// ANCHOR_END: recommended-fees
 	return nil
 }

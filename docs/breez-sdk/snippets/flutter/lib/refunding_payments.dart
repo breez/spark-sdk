@@ -89,10 +89,10 @@ Future<void> refundDeposit(BreezSdk sdk) async {
 Future<void> recommendedFees(BreezSdk sdk) async {
   // ANCHOR: recommended-fees
   final response = await sdk.recommendedFees();
-  print("Fastest fee: ${response.fastestFee} sats");
-  print("Half-hour fee: ${response.halfHourFee} sats");
-  print("Hour fee: ${response.hourFee} sats");
-  print("Economy fee: ${response.economyFee} sats");
-  print("Minimum fee: ${response.minimumFee} sats");
+  print("Fastest fee: ${response.fastestFee} sats/vByte");
+  print("Half-hour fee: ${response.halfHourFee} sats/vByte");
+  print("Hour fee: ${response.hourFee} sats/vByte");
+  print("Economy fee: ${response.economyFee} sats/vByte");
+  print("Minimum fee: ${response.minimumFee} sats/vByte");
   // ANCHOR_END: recommended-fees
 }

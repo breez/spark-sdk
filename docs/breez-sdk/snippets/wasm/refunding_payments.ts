@@ -110,10 +110,10 @@ const refundDeposit = async (sdk: BreezSdk) => {
 const recommendedFees = async (sdk: BreezSdk) => {
   // ANCHOR: recommended-fees
   const response = await sdk.recommendedFees()
-  console.log('Fastest fee:', response.fastestFee)
-  console.log('Half-hour fee:', response.halfHourFee)
-  console.log('Hour fee:', response.hourFee)
-  console.log('Economy fee:', response.economyFee)
-  console.log('Minimum fee:', response.minimumFee)
+  console.log('Fastest fee:', response.fastestFee, 'sats/vByte')
+  console.log('Half-hour fee:', response.halfHourFee, 'sats/vByte')
+  console.log('Hour fee:', response.hourFee, 'sats/vByte')
+  console.log('Economy fee:', response.economyFee, 'sats/vByte')
+  console.log('Minimum fee:', response.minimumFee, 'sats/vByte')
   // ANCHOR_END: recommended-fees
 }

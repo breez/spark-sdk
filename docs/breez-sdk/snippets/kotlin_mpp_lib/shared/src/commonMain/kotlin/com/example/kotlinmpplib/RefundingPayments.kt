@@ -115,10 +115,10 @@ class RefundingPayments {
 suspend fun recommendedFees(sdk: BreezSdk) {
     // ANCHOR: recommended-fees
     val response = sdk.recommendedFees()
-    println("Fastest fee: ${response.fastestFee} sats")
-    println("Half-hour fee: ${response.halfHourFee} sats")
-    println("Hour fee: ${response.hourFee} sats")
-    println("Economy fee: ${response.economyFee} sats")
-    println("Minimum fee: ${response.minimumFee} sats")
+    println("Fastest fee: ${response.fastestFee} sats/vByte")
+    println("Half-hour fee: ${response.halfHourFee} sats/vByte")
+    println("Hour fee: ${response.hourFee} sats/vByte")
+    println("Economy fee: ${response.economyFee} sats/vByte")
+    println("Minimum fee: ${response.minimumFee} sats/vByte")
     // ANCHOR_END: recommended-fees
 }
