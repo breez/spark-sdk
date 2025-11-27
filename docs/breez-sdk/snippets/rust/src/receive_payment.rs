@@ -1,6 +1,6 @@
 use anyhow::Result;
 use breez_sdk_spark::*;
-use log::info;
+use tracing::info;
 
 async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: receive-payment-lightning-bolt11

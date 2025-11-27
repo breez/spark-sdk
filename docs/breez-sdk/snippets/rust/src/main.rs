@@ -1,12 +1,12 @@
 mod getting_started;
 mod list_payments;
 mod lnurl_pay;
+mod messages;
 mod parsing_inputs;
 mod receive_payment;
+mod sdk_building;
 mod send_payment;
 mod tokens;
-mod messages;
-mod sdk_building;
 
 use anyhow::Result;
 

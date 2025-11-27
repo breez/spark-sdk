@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use breez_sdk_spark::*;
-use log::info;
+use tracing::info;
 
 pub(crate) async fn init_sdk() -> Result<BreezSdk> {
     // ANCHOR: init-sdk
@@ -32,11 +32,13 @@ pub(crate) async fn init_sdk() -> Result<BreezSdk> {
 
 pub(crate) async fn getting_started_node_info(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: fetch-balance
-    let info = sdk.get_info(GetInfoRequest {
-      // ensure_synced: true will ensure the SDK is synced with the Spark network
-      // before returning the balance
-      ensure_synced: Some(false),
-    }).await?;
+    let info = sdk
+        .get_info(GetInfoRequest {
+            // ensure_synced: true will ensure the SDK is synced with the Spark network
+            // before returning the balance
+            ensure_synced: Some(false),
+        })
+        .await?;
     let balance_sats = info.balance_sats;
     // ANCHOR_END: fetch-balance
     info!("Balance: {balance_sats} sats");

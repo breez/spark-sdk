@@ -35,19 +35,22 @@ async fn parse_input(sdk: &BreezSdk) -> Result<()> {
         InputType::SparkInvoice(invoice) => {
             println!("Input is Spark invoice:");
             if let Some(token_identifier) = &invoice.token_identifier {
-                println!("  Amount: {:?} base units of token with id {}", invoice.amount, token_identifier);
+                println!(
+                    "  Amount: {:?} base units of token with id {}",
+                    invoice.amount, token_identifier
+                );
             } else {
                 println!("  Amount: {:?} sats", invoice.amount);
             }
-            
+
             if let Some(description) = &invoice.description {
                 println!("  Description: {}", description);
             }
-            
+
             if let Some(expiry_time) = invoice.expiry_time {
                 println!("  Expiry time: {}", expiry_time);
             }
-            
+
             if let Some(sender_public_key) = &invoice.sender_public_key {
                 println!("  Sender public key: {}", sender_public_key);
             }

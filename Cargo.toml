@@ -22,6 +22,8 @@ members = [
   "crates/spark-wallet",
   "crates/xtask",
   "crates/internal",
+  "docs/breez-sdk/snippets/rust",
+  "docs/breez-sdk/snippets-processor",
 ]
 
 [workspace.package]
@@ -82,6 +84,8 @@ lightning = "0.1.7"
 lightning-invoice = "0.33.2"
 lnurl-models = { path = "crates/breez-sdk/lnurl-models" }
 macros = { path = "crates/macros" }
+mdbook-core = "0.5.1"
+mdbook-preprocessor = "0.5.1"
 nostr = { version = "0.44.1", default-features = false, features = ["std", "nip57"] }
 openssl = { version = "0.10.75", default-features = false, features = ["vendored"] }
 percent-encoding-rfc3986 = "0.1.3"

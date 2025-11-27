@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use anyhow::Result;
 use async_trait::async_trait;
 use breez_sdk_spark::*;
-use anyhow::Result;
-use log::info;
+use tracing::info;
 
 pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     // ANCHOR: init-sdk-advanced
@@ -19,8 +19,7 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     config.api_key = Some("<breez api key>".to_string());
 
     // Build the SDK using the config, seed and default storage
-    let builder = SdkBuilder::new(config, seed)
-        .with_default_storage("./.data".to_string());
+    let builder = SdkBuilder::new(config, seed).with_default_storage("./.data".to_string());
     // You can also pass your custom implementations:
     // let builder = builder.with_storage(<your storage implementation>)
     // let builder = builder.with_real_time_sync_storage(<your real-time sync storage implementation>)
@@ -42,11 +41,7 @@ pub(crate) fn with_rest_chain_service(builder: SdkBuilder) -> SdkBuilder {
         username: "<username>".to_string(),
         password: "<password>".to_string(),
     };
-    builder.with_rest_chain_service(
-        url,
-        chain_api_type,
-        Some(optional_credentials),
-    )
+    builder.with_rest_chain_service(url, chain_api_type, Some(optional_credentials))
     // ANCHOR_END: with-rest-chain-service
 }
 
@@ -55,7 +50,11 @@ pub(crate) fn with_key_set(builder: SdkBuilder) -> SdkBuilder {
     let key_set_type = KeySetType::Default;
     let use_address_index = false;
     let optional_account_number = 21;
-    builder.with_key_set(key_set_type, use_address_index, Some(optional_account_number))
+    builder.with_key_set(
+        key_set_type,
+        use_address_index,
+        Some(optional_account_number),
+    )
     // ANCHOR_END: with-key-set
 }
 
@@ -64,9 +63,15 @@ pub(crate) struct ExamplePaymentObserver {}
 
 #[async_trait]
 impl PaymentObserver for ExamplePaymentObserver {
-    async fn before_send(&self, payments: Vec<ProvisionalPayment>) -> Result<(), PaymentObserverError> {
+    async fn before_send(
+        &self,
+        payments: Vec<ProvisionalPayment>,
+    ) -> Result<(), PaymentObserverError> {
         for payment in payments {
-            info!("About to send payment: {:?} of amount {:?}", payment.payment_id, payment.amount);
+            info!(
+                "About to send payment: {:?} of amount {:?}",
+                payment.payment_id, payment.amount
+            );
         }
         Ok(())
     }

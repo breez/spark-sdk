@@ -1,6 +1,6 @@
 use anyhow::Result;
 use breez_sdk_spark::*;
-use log::info;
+use tracing::info;
 
 async fn prepare_send_payment_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-lightning-bolt11
@@ -104,7 +104,7 @@ async fn send_payment_lightning_bolt11(
     prepare_response: PrepareSendPaymentResponse,
 ) -> Result<()> {
     // ANCHOR: send-payment-lightning-bolt11
-    let options = Some(SendPaymentOptions::Bolt11Invoice { 
+    let options = Some(SendPaymentOptions::Bolt11Invoice {
         prefer_spark: false,
         completion_timeout_secs: Some(10),
     });
@@ -162,4 +162,3 @@ async fn send_payment_spark(
     // ANCHOR_END: send-payment-spark
     Ok(())
 }
-

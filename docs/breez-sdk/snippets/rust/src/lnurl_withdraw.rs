@@ -1,6 +1,6 @@
 use breez_sdk_spark::*;
 use anyhow::Result;
-use log::info;
+use tracing::info;
 
 async fn withdraw(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: lnurl-withdraw

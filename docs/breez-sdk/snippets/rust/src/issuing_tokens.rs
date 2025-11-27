@@ -3,7 +3,7 @@ use breez_sdk_spark::{
     TokenIssuer, BreezSdk, BurnIssuerTokenRequest, CreateIssuerTokenRequest, FreezeIssuerTokenRequest,
     MintIssuerTokenRequest, Payment, TokenMetadata, UnfreezeIssuerTokenRequest,
 };
-use log::info;
+use tracing::info;
 
 fn get_token_issuer(sdk: BreezSdk) -> TokenIssuer {
     // ANCHOR: get-token-issuer
