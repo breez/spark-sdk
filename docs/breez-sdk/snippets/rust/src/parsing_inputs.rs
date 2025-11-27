@@ -1,6 +1,7 @@
 use anyhow::Result;
 use breez_sdk_spark::*;
 
+#[allow(dead_code)]
 async fn parse_input(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: parse-inputs
     let input = "an input to be parsed...";
@@ -62,6 +63,7 @@ async fn parse_input(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) async fn set_external_input_parsers() -> Result<()> {
     // ANCHOR: set-external-input-parsers
     // Create the default config

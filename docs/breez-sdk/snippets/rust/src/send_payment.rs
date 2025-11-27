@@ -2,6 +2,7 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use tracing::info;
 
+#[allow(dead_code)]
 async fn prepare_send_payment_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-lightning-bolt11
     let payment_request = "<bolt11 invoice>".to_string();
@@ -31,6 +32,7 @@ async fn prepare_send_payment_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn prepare_send_payment_lightning_onchain(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-onchain
     let payment_request = "<bitcoin address>".to_string();
@@ -57,6 +59,7 @@ async fn prepare_send_payment_lightning_onchain(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn prepare_send_payment_spark_address(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-spark-address
     let payment_request = "<spark address>".to_string();
@@ -78,6 +81,7 @@ async fn prepare_send_payment_spark_address(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn prepare_send_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-spark-invoice
     let payment_request = "<spark invoice>".to_string();
@@ -99,6 +103,7 @@ async fn prepare_send_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn send_payment_lightning_bolt11(
     sdk: &BreezSdk,
     prepare_response: PrepareSendPaymentResponse,
@@ -122,6 +127,7 @@ async fn send_payment_lightning_bolt11(
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn send_payment_onchain(
     sdk: &BreezSdk,
     prepare_response: PrepareSendPaymentResponse,
@@ -144,6 +150,7 @@ async fn send_payment_onchain(
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn send_payment_spark(
     sdk: &BreezSdk,
     prepare_response: PrepareSendPaymentResponse,

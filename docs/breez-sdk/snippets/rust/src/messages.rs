@@ -2,6 +2,7 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use tracing::info;
 
+#[allow(dead_code)]
 async fn sign_message(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: sign-message
     let message = "<message to sign>".to_string();
@@ -20,6 +21,7 @@ async fn sign_message(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn check_message(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: check-message
     let check_message_request = CheckMessageRequest {

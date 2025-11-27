@@ -2,6 +2,7 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use tracing::info;
 
+#[allow(dead_code)]
 async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: receive-payment-lightning-bolt11
     let description = "<invoice description>".to_string();
@@ -25,6 +26,7 @@ async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn receive_onchain(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: receive-payment-onchain
     let response = sdk
@@ -41,6 +43,7 @@ async fn receive_onchain(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn receive_spark_address(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: receive-payment-spark-address
     let response = sdk
@@ -57,6 +60,7 @@ async fn receive_spark_address(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn receive_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: receive-payment-spark-invoice
     let optional_description = "<invoice description>".to_string();

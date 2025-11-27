@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use breez_sdk_spark::*;
 use tracing::info;
 
+#[allow(dead_code)]
 pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     // ANCHOR: init-sdk-advanced
     // Construct the seed using mnemonic words or entropy bytes
@@ -33,6 +34,7 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     Ok(sdk)
 }
 
+#[allow(dead_code)]
 pub(crate) fn with_rest_chain_service(builder: SdkBuilder) -> SdkBuilder {
     // ANCHOR: with-rest-chain-service
     let url = "<your REST chain service URL>".to_string();
@@ -45,6 +47,7 @@ pub(crate) fn with_rest_chain_service(builder: SdkBuilder) -> SdkBuilder {
     // ANCHOR_END: with-rest-chain-service
 }
 
+#[allow(dead_code)]
 pub(crate) fn with_key_set(builder: SdkBuilder) -> SdkBuilder {
     // ANCHOR: with-key-set
     let key_set_type = KeySetType::Default;
@@ -58,6 +61,7 @@ pub(crate) fn with_key_set(builder: SdkBuilder) -> SdkBuilder {
     // ANCHOR_END: with-key-set
 }
 
+#[allow(dead_code)]
 // ANCHOR: with-payment-observer
 pub(crate) struct ExamplePaymentObserver {}
 
@@ -82,3 +86,8 @@ pub(crate) fn with_payment_observer(builder: SdkBuilder) -> SdkBuilder {
     builder.with_payment_observer(Arc::new(observer))
 }
 // ANCHOR_END: with-payment-observer
+
+#[allow(dead_code)]
+fn avoid_never_used_warnings() {
+    let _ = with_payment_observer;
+}

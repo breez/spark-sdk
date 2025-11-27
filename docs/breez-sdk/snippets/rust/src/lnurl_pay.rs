@@ -2,6 +2,7 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use tracing::info;
 
+#[allow(dead_code)]
 async fn prepare_pay(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-lnurl-pay
     // Endpoint can also be of the form:
@@ -31,6 +32,7 @@ async fn prepare_pay(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn pay(sdk: &BreezSdk, prepare_response: PrepareLnurlPayResponse) -> Result<()> {
     // ANCHOR: lnurl-pay
     let optional_idempotency_key = Some("<idempotency key uuid>".to_string());

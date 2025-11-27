@@ -2,6 +2,7 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use tracing::info;
 
+#[allow(dead_code)]
 pub(crate) async fn fetch_token_balances(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: fetch-token-balances
     let info = sdk
@@ -25,6 +26,7 @@ pub(crate) async fn fetch_token_balances(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn fetch_token_metadata(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: fetch-token-metadata
     let response = sdk
@@ -49,6 +51,7 @@ async fn fetch_token_metadata(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn receive_token_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: receive-token-payment-spark-invoice
     let token_identifier = Some("<token identifier>".to_string());
@@ -77,6 +80,7 @@ async fn receive_token_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: send-token-payment
     let payment_request = "<spark address or invoice>".to_string();
