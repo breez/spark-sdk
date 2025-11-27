@@ -1,7 +1,8 @@
 use bitcoin::bip32::{DerivationPath, Xpriv};
 use nostr::{
-    EventBuilder, JsonUtil, Keys, SecretKey,
+    Keys, SecretKey,
     secp256k1::{All, Secp256k1, XOnlyPublicKey},
+    util::JsonUtil,
 };
 
 use crate::{Payment, PaymentDetails};
@@ -48,11 +49,6 @@ impl NostrClient {
         zap_request: &str,
         payment: &Payment,
     ) -> Result<String, NostrError> {
-        // Parse the zap request event
-        let zap_request_event = nostr::Event::from_json(zap_request).map_err(|e| {
-            NostrError::ZapReceiptCreationError(format!("Failed to parse zap request: {e}"))
-        })?;
-
         // Extract invoice and preimage from payment details
         let Some(PaymentDetails::Lightning {
             invoice, preimage, ..
@@ -66,17 +62,11 @@ impl NostrClient {
         // Convert bitcoin SecretKey to nostr SecretKey
         let keys = Keys::new(self.nostr_key.clone());
 
-        // Build and sign the zap receipt event
-        let zap_receipt = EventBuilder::zap_receipt(invoice, preimage.clone(), &zap_request_event)
-            .sign_with_keys(&keys)
+        lnurl_models::nostr::create_zap_receipt(zap_request, invoice, preimage.clone(), &keys)
+            .map_err(NostrError::ZapReceiptCreationError)?
+            .try_as_json()
             .map_err(|e| {
-                NostrError::ZapReceiptCreationError(format!("Failed to build zap receipt: {e}"))
-            })?;
-
-        zap_receipt.try_as_json().map_err(|e| {
-            NostrError::ZapReceiptCreationError(format!(
-                "Failed to convert zap receipt to JSON: {e}"
-            ))
-        })
+                NostrError::ZapReceiptCreationError(format!("Failed to serialize zap receipt: {e}"))
+            })
     }
 }

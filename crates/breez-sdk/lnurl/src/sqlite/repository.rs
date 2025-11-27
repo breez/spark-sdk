@@ -93,8 +93,9 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn upsert_zap(&self, zap: &Zap) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "REPLACE INTO zaps (payment_hash, zap_request, zap_event, user_pubkey, invoice_expiry, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6)",
+            "REPLACE INTO zaps (payment_hash, zap_request, zap_event
+            , user_pubkey, invoice_expiry, updated_at, is_user_nostr_key)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(&zap.payment_hash)
         .bind(&zap.zap_request)
@@ -102,6 +103,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(&zap.user_pubkey)
         .bind(zap.invoice_expiry)
         .bind(zap.updated_at)
+        .bind(zap.is_user_nostr_key)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -112,7 +114,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         payment_hash: &str,
     ) -> Result<Option<Zap>, LnurlRepositoryError> {
         let maybe_zap = sqlx::query(
-            "SELECT payment_hash, zap_request, zap_event, user_pubkey, invoice_expiry, updated_at
+            "SELECT payment_hash, zap_request, zap_event
+            , user_pubkey, invoice_expiry, updated_at, is_user_nostr_key
                 FROM zaps
                 WHERE payment_hash = $1",
         )
@@ -126,6 +129,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             user_pubkey: row.get(3),
             invoice_expiry: row.get(4),
             updated_at: row.get(5),
+            is_user_nostr_key: row.get(6),
         });
         Ok(maybe_zap)
     }
@@ -135,7 +139,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let rows = sqlx::query(
             "SELECT DISTINCT user_pubkey
              FROM zaps
-             WHERE invoice_expiry > $1 AND zap_event IS NULL",
+             WHERE invoice_expiry > $1 AND zap_event IS NULL AND is_user_nostr_key = 0",
         )
         .bind(now)
         .fetch_all(&self.pool)
@@ -152,7 +156,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*)
              FROM zaps
-             WHERE user_pubkey = $1 AND invoice_expiry > $2 AND zap_event IS NULL",
+             WHERE user_pubkey = $1 AND invoice_expiry > $2 AND zap_event IS NULL AND is_user_nostr_key = 0",
         )
         .bind(user_pubkey)
         .bind(now)

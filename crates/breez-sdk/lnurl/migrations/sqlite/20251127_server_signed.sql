@@ -1,0 +1,1 @@
+ALTER TABLE zaps ADD COLUMN is_user_nostr_key INTEGER NOT NULL DEFAULT 0;

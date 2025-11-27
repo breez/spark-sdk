@@ -24,6 +24,7 @@ pub struct Zap {
     pub user_pubkey: String,
     pub invoice_expiry: i64,
     pub updated_at: i64,
+    pub is_user_nostr_key: bool,
 }
 
 /// Helper function to create an RPC client and subscribe to a user for zaps.

@@ -2732,6 +2732,7 @@ checksum = "f5e54036fe321fd421e10d732f155734c4e4afd610dd556d9a82833ab3ee0bed"
 name = "lnurl-models"
 version = "0.1.0"
 dependencies = [
+ "nostr",
  "serde",
 ]
 

@@ -348,12 +348,68 @@ where
             )
         })?;
 
+        // Determine if we need to recreate the zap receipt with server nostr key
+        let zap_receipt = match (zap.is_user_nostr_key, &state.nostr_keys) {
+            (true, _) => zap_receipt,
+            (false, None) => {
+                warn!("server nostr keys not configured, but should publish zap receipt.");
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(
+                        json!({"error": "zap receipt should be server-published, but server does not support nostr (anymore)"}),
+                    ),
+                ));
+            }
+            (false, Some(signing_keys)) => {
+                // Recreate zap receipt signed by server nostr key
+                let preimage = zap_receipt.tags.iter().find_map(|t| {
+                    if let Some(TagStandard::Preimage(p)) = t.as_standardized() {
+                        Some(p.clone())
+                    } else {
+                        None
+                    }
+                });
+
+                let invoice = zap_receipt
+                    .tags
+                    .iter()
+                    .find_map(|t| {
+                        if let Some(TagStandard::Bolt11(b)) = t.as_standardized() {
+                            Some(b)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or_else(|| {
+                        warn!("zap receipt missing bolt11 tag");
+                        (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({"error": "zap receipt missing bolt11 tag"})),
+                        )
+                    })?;
+
+                lnurl_models::nostr::create_zap_receipt(
+                    &zap.zap_request,
+                    invoice,
+                    preimage,
+                    signing_keys,
+                )
+                .map_err(|e| {
+                    error!("failed to recreate zap receipt: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": "internal server error"})),
+                    )
+                })?
+            }
+        };
+
         // The nostr keys are not really needed here, but we use them to create the client
-        let nostr_keys = match &state.nostr_keys {
+        let publish_nostr_keys = match &state.nostr_keys {
             Some(keys) => keys.clone(),
             None => Keys::generate(),
         };
-        let nostr_client = nostr_sdk::Client::new(nostr_keys);
+        let nostr_client = nostr_sdk::Client::new(publish_nostr_keys);
 
         let relays = zap_request
             .tags
@@ -594,6 +650,7 @@ where
                 user_pubkey: user.pubkey.clone(),
                 invoice_expiry,
                 updated_at,
+                is_user_nostr_key,
             };
             if let Err(e) = state.db.upsert_zap(&zap).await {
                 error!("failed to save zap event: {}", e);
