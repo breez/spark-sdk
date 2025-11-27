@@ -187,6 +187,17 @@ class MigrationManager {
             db.createObjectStore("lnurl_receive_metadata", { keyPath: "paymentHash" });
           }
         }
+      },
+      {
+        // Delete all unclaimed deposits to clear old claim_error JSON format.
+        // Deposits will be recovered on next sync.
+        name: "Clear unclaimed deposits for claim_error format change",
+        upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("unclaimed_deposits")) {
+            const store = transaction.objectStore("unclaimed_deposits");
+            store.clear();
+          }
+        }
       }
     ];
   }
@@ -211,7 +222,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 5; // Current schema version
+    this.dbVersion = 6; // Current schema version
   }
 
   /**

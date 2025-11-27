@@ -11,8 +11,9 @@ func listUnclaimedDeposits(sdk: BreezSdk) async throws {
         
         if let claimError = deposit.claimError {
             switch claimError {
-            case .depositClaimFeeExceeded(let tx, let vout, let maxFee, let actualFee):
-                print("Max claim fee exceeded. Max: \(maxFee), Actual: \(actualFee) sats")
+            case .maxDepositClaimFeeExceeded(let tx, let vout, let maxFee, let requiredFee):
+                let maxFeeStr = maxFee != nil ? "\(maxFee!) sats" : "none"
+                print("Max claim fee exceeded. Max: \(maxFeeStr), Required: \(requiredFee) sats")
             case .missingUtxo(let tx, let vout):
                 print("UTXO not found when claiming deposit")
             case .generic(let message):
@@ -21,6 +22,24 @@ func listUnclaimedDeposits(sdk: BreezSdk) async throws {
         }
     }
     // ANCHOR_END: list-unclaimed-deposits
+}
+
+func handleFeeExceeded(sdk: BreezSdk, deposit: DepositInfo) async throws {
+    // ANCHOR: handle-fee-exceeded
+    if case .maxDepositClaimFeeExceeded(_, _, _, let requiredFee) = deposit.claimError {
+        // Show UI to user with the required fee and get approval
+        let userApproved = true // Replace with actual user approval logic
+
+        if userApproved {
+            let claimRequest = ClaimDepositRequest(
+                txid: deposit.txid,
+                vout: deposit.vout,
+                maxFee: Fee.fixed(amount: requiredFee)
+            )
+            try await sdk.claimDeposit(request: claimRequest)
+        }
+    }
+    // ANCHOR_END: handle-fee-exceeded
 }
 
 func claimDeposit(sdk: BreezSdk) async throws {
@@ -70,10 +89,10 @@ func refundDeposit(sdk: BreezSdk) async throws {
 func recommendedFees(sdk: BreezSdk) async throws {
     // ANCHOR: recommended-fees
     let response = try await sdk.recommendedFees()
-    print("Fastest fee: \(response.fastestFee) sats")
-    print("Half-hour fee: \(response.halfHourFee) sats")
-    print("Hour fee: \(response.hourFee) sats")
-    print("Economy fee: \(response.economyFee) sats")
-    print("Minimum fee: \(response.minimumFee) sats")
+    print("Fastest fee: \(response.fastestFee) sats/vByte")
+    print("Half-hour fee: \(response.halfHourFee) sats/vByte")
+    print("Hour fee: \(response.hourFee) sats/vByte")
+    print("Economy fee: \(response.economyFee) sats/vByte")
+    print("Minimum fee: \(response.minimumFee) sats/vByte")
     // ANCHOR_END: recommended-fees
 }

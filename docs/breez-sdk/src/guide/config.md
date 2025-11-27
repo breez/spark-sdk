@@ -7,7 +7,7 @@ The SDK supports various configuration options to customize its behavior. During
 
 ## Max deposit claim fee
 
-Receiving Bitcoin payments through onchain deposits may involve fees. This configuration option controls the automatic claiming of incoming funds, allowing it when the required fees are below specified thresholds (either an absolute fee amount or a feerate). You can also disable automatic claiming entirely. Deposits that are not automatically claimed require manual intervention.
+Receiving Bitcoin payments through on-chain deposits may involve fees. This configuration option controls the automatic claiming of incoming funds, allowing it when the required fees are below specified thresholds (either an absolute fee amount or a feerate). You can also disable automatic claiming entirely. Deposits that are not automatically claimed require manual intervention.
 
 By default, automatic claiming is enabled with a maximum feerate of 1 sat/vB.
 

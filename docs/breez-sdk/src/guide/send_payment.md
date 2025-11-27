@@ -102,8 +102,8 @@ Once a send payment is initiated, you can follow and react to the different paym
 
 | Event                | Description                                                                  | UX Suggestion                                    |
 | -------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------ |
-| **PaymentPending**   | The Spark transfer has been started. Awaiting onchain withdrawal completion. | Show payment as pending.                         |
-| **PaymentSucceeded** | The payment amount was successfully withdrawn onchain.                       | Update the balance and show payment as complete. |
+| **PaymentPending**   | The Spark transfer has been started. Awaiting on-chain withdrawal completion. | Show payment as pending.                         |
+| **PaymentSucceeded** | The payment amount was successfully withdrawn on-chain.                       | Update the balance and show payment as complete. |
 
 ### Spark
 

@@ -32,11 +32,13 @@ pub(crate) async fn init_sdk() -> Result<BreezSdk> {
 
 pub(crate) async fn getting_started_node_info(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: fetch-balance
-    let info = sdk.get_info(GetInfoRequest {
-      // ensure_synced: true will ensure the SDK is synced with the Spark network
-      // before returning the balance
-      ensure_synced: Some(false),
-    }).await?;
+    let info = sdk
+        .get_info(GetInfoRequest {
+            // ensure_synced: true will ensure the SDK is synced with the Spark network
+            // before returning the balance
+            ensure_synced: Some(false),
+        })
+        .await?;
     let balance_sats = info.balance_sats;
     // ANCHOR_END: fetch-balance
     info!("Balance: {balance_sats} sats");
@@ -59,7 +61,31 @@ pub(crate) struct SdkEventListener {}
 #[async_trait::async_trait]
 impl EventListener for SdkEventListener {
     async fn on_event(&self, e: SdkEvent) {
-        info!("Received event: {e:?}");
+        match e {
+            SdkEvent::Synced => {
+                // Wallet has been synchronized with the network
+            }
+            SdkEvent::DataSynced {
+                did_pull_new_records,
+            } => {
+                // Data was pushed/pulled to/from real-time sync storage
+            }
+            SdkEvent::UnclaimedDeposits { unclaimed_deposits } => {
+                // SDK was unable to claim some deposits automatically
+            }
+            SdkEvent::ClaimedDeposits { claimed_deposits } => {
+                // Deposits were successfully claimed
+            }
+            SdkEvent::PaymentSucceeded { payment } => {
+                // A payment completed successfully
+            }
+            SdkEvent::PaymentPending { payment } => {
+                // A payment is pending (waiting for confirmation)
+            }
+            SdkEvent::PaymentFailed { payment } => {
+                // A payment failed
+            }
+        }
     }
 }
 

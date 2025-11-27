@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use anyhow::Result;
 use async_trait::async_trait;
 use breez_sdk_spark::*;
-use anyhow::Result;
 use log::info;
 
 pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
@@ -55,7 +55,11 @@ pub(crate) fn with_key_set(builder: SdkBuilder) -> SdkBuilder {
     let key_set_type = KeySetType::Default;
     let use_address_index = false;
     let optional_account_number = 21;
-    builder.with_key_set(key_set_type, use_address_index, Some(optional_account_number))
+    builder.with_key_set(
+        key_set_type,
+        use_address_index,
+        Some(optional_account_number),
+    )
     // ANCHOR_END: with-key-set
 }
 
@@ -64,9 +68,15 @@ pub(crate) struct ExamplePaymentObserver {}
 
 #[async_trait]
 impl PaymentObserver for ExamplePaymentObserver {
-    async fn before_send(&self, payments: Vec<ProvisionalPayment>) -> Result<(), PaymentObserverError> {
+    async fn before_send(
+        &self,
+        payments: Vec<ProvisionalPayment>,
+    ) -> Result<(), PaymentObserverError> {
         for payment in payments {
-            info!("About to send payment: {:?} of amount {:?}", payment.payment_id, payment.amount);
+            info!(
+                "About to send payment: {:?} of amount {:?}",
+                payment.payment_id, payment.amount
+            );
         }
         Ok(())
     }
