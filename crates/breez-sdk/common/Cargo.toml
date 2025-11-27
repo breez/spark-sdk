@@ -45,6 +45,7 @@ strum = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 tokio.workspace = true
 tokio_with_wasm.workspace = true
+tonic-prost.workspace = true
 tracing.workspace = true
 web-time.workspace = true
 zbase32.workspace = true
@@ -56,9 +57,6 @@ prost.workspace = true
 tonic = { workspace = true, features = [
     "channel",
     "codegen",
-    "prost",
-    "tls",
-    "tls-roots",
     "tls-webpki-roots",
     "transport",
 ] }
@@ -66,7 +64,7 @@ tonic = { workspace = true, features = [
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 dns-parser.workspace = true
-tonic = { workspace = true, features = ["codegen", "prost"] }
+tonic = { workspace = true, features = ["codegen"] }
 tonic-web-wasm-client.workspace = true
 
 # Wasm dev dependencies
@@ -79,4 +77,4 @@ rand.workspace = true
 mockall = "0.12.1"
 
 [build-dependencies]
-tonic-build = { workspace = true }
+tonic-prost-build.workspace = true

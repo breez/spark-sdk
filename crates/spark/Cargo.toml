@@ -40,6 +40,7 @@ serde_with.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio_with_wasm.workspace = true
+tonic-prost.workspace = true
 tower-service.workspace = true
 tracing.workspace = true
 unicode-normalization.workspace = true
@@ -51,9 +52,6 @@ rustls.workspace = true
 tonic = { workspace = true, features = [
     "channel",
     "codegen",
-    "prost",
-    "tls",
-    "tls-roots",
     "tls-webpki-roots",
     "transport",
 ] }
@@ -63,7 +61,6 @@ uuid.workspace = true
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 tonic = { workspace = true, features = [
     "codegen",
-    "prost",
 ] }
 tonic-web-wasm-client.workspace = true
 uuid = { workspace = true, features = ["js"] }
@@ -75,4 +72,4 @@ wasm-bindgen-test.workspace = true
 [build-dependencies]
 built.workspace = true
 tonic.workspace = true
-tonic-build.workspace = true
+tonic-prost-build.workspace = true
