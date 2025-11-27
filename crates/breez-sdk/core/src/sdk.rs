@@ -397,19 +397,22 @@ impl BreezSdk {
                 };
 
                 // Publish the zap receipt via the server
-                if let Err(e) = lnurl_server_client
+                let zap_receipt = match lnurl_server_client
                     .publish_zap_receipt(&PublishZapReceiptRequest {
                         payment_hash: payment_hash.clone(),
                         zap_receipt: zap_receipt.clone(),
                     })
                     .await
                 {
-                    error!(
-                        "Failed to publish zap receipt for payment {}: {}",
-                        payment.id, e
-                    );
-                    continue;
-                }
+                    Ok(zap_receipt) => zap_receipt,
+                    Err(e) => {
+                        error!(
+                            "Failed to publish zap receipt for payment {}: {}",
+                            payment.id, e
+                        );
+                        continue;
+                    }
+                };
 
                 if let Err(e) = self
                     .storage

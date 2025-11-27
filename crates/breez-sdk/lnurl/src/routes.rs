@@ -331,12 +331,15 @@ where
 
         // Check if zap receipt already exists
         let mut published = false;
-        if zap.zap_event.is_some() {
+        if let Some(zap_receipt) = &zap.zap_event {
             debug!(
                 "Zap receipt already exists for payment hash {}",
                 payment_hash
             );
-            return Ok(Json(PublishZapReceiptResponse { published }));
+            return Ok(Json(PublishZapReceiptResponse {
+                published,
+                zap_receipt: zap_receipt.clone(),
+            }));
         }
 
         // Parse the zap request to get relay info
@@ -404,13 +407,6 @@ where
             }
         };
 
-        // The nostr keys are not really needed here, but we use them to create the client
-        let publish_nostr_keys = match &state.nostr_keys {
-            Some(keys) => keys.clone(),
-            None => Keys::generate(),
-        };
-        let nostr_client = nostr_sdk::Client::new(publish_nostr_keys);
-
         let relays = zap_request
             .tags
             .iter()
@@ -424,32 +420,39 @@ where
             .flatten()
             .collect::<Vec<_>>();
 
-        if relays.is_empty() {
-            debug!(
-                "No relays to publish zap receipt for payment hash {}",
-                payment_hash
-            );
-            return Ok(Json(PublishZapReceiptResponse { published }));
-        }
-
-        for r in &relays {
-            if let Err(e) = nostr_client.add_relay(r).await {
-                warn!("Failed to add relay {r}: {e}");
+        if !relays.is_empty() {
+            // The nostr keys are not really needed here, but we use them to create the client
+            let publish_nostr_keys = match &state.nostr_keys {
+                Some(keys) => keys.clone(),
+                None => Keys::generate(),
+            };
+            let nostr_client = nostr_sdk::Client::new(publish_nostr_keys);
+            for r in &relays {
+                if let Err(e) = nostr_client.add_relay(r).await {
+                    warn!("Failed to add relay {r}: {e}");
+                }
             }
+
+            nostr_client.connect().await;
+
+            if let Err(e) = nostr_client.send_event(&zap_receipt).await {
+                error!("Failed to publish zap receipt to relays: {e}");
+            } else {
+                debug!("Published zap receipt to {} relays", relays.len());
+                published = true;
+            }
+
+            nostr_client.disconnect().await;
         }
 
-        nostr_client.connect().await;
-
-        if let Err(e) = nostr_client.send_event(&zap_receipt).await {
-            error!("Failed to publish zap receipt to relays: {e}");
-        } else {
-            debug!("Published zap receipt to {} relays", relays.len());
-            published = true;
-        }
-
-        nostr_client.disconnect().await;
-
-        zap.zap_event = Some(payload.zap_receipt);
+        let zap_receipt_json = zap_receipt.try_as_json().map_err(|e| {
+            error!("failed to serialize zap receipt: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "internal server error"})),
+            )
+        })?;
+        zap.zap_event = Some(zap_receipt_json.clone());
         zap.updated_at = now_millis();
         state.db.upsert_zap(&zap).await.map_err(|e| {
             error!("failed to save zap receipt: {}", e);
@@ -459,7 +462,10 @@ where
             )
         })?;
 
-        Ok(Json(PublishZapReceiptResponse { published }))
+        Ok(Json(PublishZapReceiptResponse {
+            published,
+            zap_receipt: zap_receipt_json,
+        }))
     }
 
     pub async fn handle_lnurl_pay(

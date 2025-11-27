@@ -84,7 +84,7 @@ pub trait LnurlServerClient: Send + Sync {
     async fn publish_zap_receipt(
         &self,
         request: &PublishZapReceiptRequest,
-    ) -> Result<bool, LnurlServerError>;
+    ) -> Result<String, LnurlServerError>;
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -393,7 +393,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
     async fn publish_zap_receipt(
         &self,
         request: &PublishZapReceiptRequest,
-    ) -> Result<bool, LnurlServerError> {
+    ) -> Result<String, LnurlServerError> {
         let spark_address = self.wallet.get_spark_address().map_err(|e| {
             LnurlServerError::SigningError(format!("Failed to get spark address: {e}"))
         })?;
@@ -436,7 +436,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
                             "failed to deserialize response json: {e}"
                         ))
                     })?;
-                return Ok(body.published);
+                return Ok(body.zap_receipt);
             }
             other => {
                 return Err(LnurlServerError::Network {

@@ -73,6 +73,7 @@ pub struct PublishZapReceiptRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PublishZapReceiptResponse {
     pub published: bool,
+    pub zap_receipt: String,
 }
 
 pub fn sanitize_username(username: &str) -> String {
