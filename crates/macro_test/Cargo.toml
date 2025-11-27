@@ -5,4 +5,4 @@ edition = "2024"
 publish = false
 
 [dependencies]
-macros = { path = "../macros" }
+macros.workspace = true

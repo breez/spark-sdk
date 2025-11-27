@@ -25,6 +25,7 @@ name = "breez_sdk_spark"
 workspace = true
 
 [dependencies]
+anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 bip39.workspace = true
@@ -43,6 +44,7 @@ nostr.workspace = true
 openssl = { workspace = true, optional = true }
 qrcode-rs.workspace = true
 reqwest.workspace = true
+semver.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 shellwords.workspace = true
@@ -52,19 +54,17 @@ thiserror.workspace = true
 tokio_with_wasm.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-uuid.workspace = true
 uniffi = { workspace = true, optional = true }
+uuid.workspace = true
 web-time.workspace = true
-x509-parser = { version = "0.16.0" }
-semver = "1.0.27"
-anyhow.workspace = true
-zbase32 = "0.1.2"
+x509-parser.workspace = true
+zbase32.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]

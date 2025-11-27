@@ -28,7 +28,7 @@ base64.workspace = true
 bech32.workspace = true
 bitcoin.workspace = true
 cbc = { workspace = true, features = ["std"] }
-# flutter_rust_bridge = { workspace = true, optional = true}
+futures.workspace = true
 hex.workspace = true
 lightning.workspace = true
 macros.workspace = true
@@ -36,19 +36,18 @@ percent-encoding-rfc3986.workspace = true
 prost.workspace = true
 regex.workspace = true
 reqwest.workspace = true
+semver.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+spark.workspace = true
+spark-wallet.workspace = true
 strum = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 tokio.workspace = true
-tracing.workspace = true
-spark.workspace = true
-web-time.workspace = true
-spark-wallet.workspace = true
-semver = "1.0.27"
-zbase32 = "0.1.2"
-futures.workspace = true
 tokio_with_wasm.workspace = true
+tracing.workspace = true
+web-time.workspace = true
+zbase32.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
@@ -72,8 +71,8 @@ tonic-web-wasm-client.workspace = true
 
 # Wasm dev dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
-wasm-bindgen-test.workspace = true
 getrandom = { version = "0.2", features = ["js"] }
+wasm-bindgen-test.workspace = true
 
 [dev-dependencies]
 rand.workspace = true

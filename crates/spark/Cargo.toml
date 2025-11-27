@@ -42,7 +42,7 @@ tokio = { workspace = true, features = ["sync"] }
 tokio_with_wasm.workspace = true
 tower-service.workspace = true
 tracing.workspace = true
-unicode-normalization = "0.1.25"
+unicode-normalization.workspace = true
 web-time.workspace = true
 
 # Non-Wasm dependencies
