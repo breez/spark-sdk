@@ -19,6 +19,8 @@ To use Lightning addresses with the Breez SDK, you first need to supply a domain
 
 In case you choose to point your domain to a hosted LNURL server, you will need to add a CNAME record in your domain's DNS settings.
 
+> **Note:**: If you're using Cloudflare, make sure the CNAME record is set to 'DNS only' (not 'Proxied').
+
 **Option 1: Using your domain without any subdomain**
 
 This points yourdomain.com directly to the LNURL server. Some DNS providers do not support this method. If yours doesn't support CNAME or ALIAS records for the root domain, you will need to configure your domain at the registrar level to use an external DNS provider (like Google Cloud DNS).
