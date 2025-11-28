@@ -1,15 +1,15 @@
 use anyhow::Result;
 use breez_sdk_spark::{
-    TokenIssuer, BreezSdk, BurnIssuerTokenRequest, CreateIssuerTokenRequest, FreezeIssuerTokenRequest,
-    MintIssuerTokenRequest, Payment, TokenMetadata, UnfreezeIssuerTokenRequest,
+    default_config, BreezSdk, BurnIssuerTokenRequest, CreateIssuerTokenRequest,
+    FreezeIssuerTokenRequest, KeySetType, MintIssuerTokenRequest, Network, Payment, SdkBuilder,
+    Seed, TokenIssuer, TokenMetadata, UnfreezeIssuerTokenRequest,
 };
 use log::info;
 
-fn get_token_issuer(sdk: BreezSdk) -> TokenIssuer {
+fn get_token_issuer(sdk: BreezSdk) {
     // ANCHOR: get-token-issuer
     let token_issuer = sdk.get_token_issuer();
     // ANCHOR_END: get-token-issuer
-    token_issuer
 }
 
 async fn create_token(token_issuer: &TokenIssuer) -> Result<TokenMetadata> {
@@ -19,7 +19,7 @@ async fn create_token(token_issuer: &TokenIssuer) -> Result<TokenMetadata> {
         ticker: "MTK".to_string(),
         decimals: 6,
         is_freezable: false,
-        total_supply: 1_000_000,
+        max_supply: 1_000_000,
     };
     let token_metadata = token_issuer.create_issuer_token(request).await?;
     info!("Token identifier: {}", token_metadata.identifier);
@@ -31,14 +31,17 @@ async fn create_token_with_custom_account_number() -> Result<BreezSdk> {
     // ANCHOR: custom-account-number
     let account_number = 21;
 
-    let mnemonic = "<mnemonic words>";
-    let seed = Seed::Mnemonic(mnemonic, None);
+    let mnemonic = "<mnemonic words>".to_string();
+    let seed = Seed::Mnemonic {
+        mnemonic,
+        passphrase: None,
+    };
     let config = default_config(Network::Mainnet);
-    let builder = SdkBuilder::new(config, seed);
-    builder.with_default_storage("./.data");
+    let mut builder = SdkBuilder::new(config, seed);
+    builder = builder.with_default_storage("./.data".to_string());
 
     // Set the account number for the SDK
-    builder.with_key_set(KeySetType::Default, false, Some(account_number));
+    builder = builder.with_key_set(KeySetType::Default, false, Some(account_number));
 
     let sdk = builder.build().await?;
     // ANCHOR_END: custom-account-number
@@ -47,26 +50,18 @@ async fn create_token_with_custom_account_number() -> Result<BreezSdk> {
 
 async fn mint_token(token_issuer: &TokenIssuer) -> Result<Payment> {
     // ANCHOR: mint-token
-    let request = MintIssuerTokenRequest {
-        amount: 1_000,
-    };
+    let request = MintIssuerTokenRequest { amount: 1_000 };
 
-    let payment = token_issuer
-        .mint_issuer_token(request)
-        .await?;
+    let payment = token_issuer.mint_issuer_token(request).await?;
     // ANCHOR_END: mint-token
     Ok(payment)
 }
 
 async fn burn_token(token_issuer: &TokenIssuer) -> Result<Payment> {
     // ANCHOR: burn-token
-    let request = BurnIssuerTokenRequest {
-        amount: 1_000,
-    };
+    let request = BurnIssuerTokenRequest { amount: 1_000 };
 
-    let payment = token_issuer
-        .burn_issuer_token(request)
-        .await?;
+    let payment = token_issuer.burn_issuer_token(request).await?;
     // ANCHOR_END: burn-token
     Ok(payment)
 }

@@ -927,19 +927,13 @@ pub struct _UnfreezeIssuerTokenResponse {
     pub impacted_token_amount: u128,
 }
 
-#[frb(mirror(RecommendedFees))]
-pub struct _RecommendedFees {
+#[frb(mirror(RecommendedFeesResponse))]
+pub struct _RecommendedFeesResponse {
     pub fastest_fee: u64,
     pub half_hour_fee: u64,
     pub hour_fee: u64,
     pub economy_fee: u64,
     pub minimum_fee: u64,
-}
-
-#[frb(mirror(ChainApiType))]
-pub enum _ChainApiType {
-    Esplora,
-    MempoolSpace,
 }
 
 #[frb(mirror(ClaimHtlcPaymentRequest))]

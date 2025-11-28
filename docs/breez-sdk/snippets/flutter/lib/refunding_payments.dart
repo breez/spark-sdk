@@ -1,4 +1,5 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'helper.dart';
 
 Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
   // ANCHOR: list-unclaimed-deposits
@@ -11,9 +12,13 @@ Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
 
     final claimError = deposit.claimError;
     if (claimError is DepositClaimError_MaxDepositClaimFeeExceeded) {
-      final maxFeeStr = claimError.maxFee != null ? '${claimError.maxFee} sats' : 'none';
+      final maxFeeStr = claimError.maxFee != null
+          ? (claimError.maxFee is Fee_Fixed
+              ? '${(claimError.maxFee as Fee_Fixed).amount} sats'
+              : '${(claimError.maxFee as Fee_Rate).satPerVbyte} sats/vByte')
+          : 'none';
       print(
-          "Max claim fee exceeded. Max: $maxFeeStr, Required: ${claimError.requiredFee} sats");
+          "Max claim fee exceeded. Max: $maxFeeStr, Required: ${claimError.requiredFeeSats} sats or ${claimError.requiredFeeRateSatPerVbyte} sats/vByte");
     } else if (claimError is DepositClaimError_MissingUtxo) {
       print("UTXO not found when claiming deposit");
     } else if (claimError is DepositClaimError_Generic) {
@@ -27,7 +32,7 @@ Future<void> handleFeeExceeded(BreezSdk sdk, DepositInfo deposit) async {
   // ANCHOR: handle-fee-exceeded
   final claimError = deposit.claimError;
   if (claimError is DepositClaimError_MaxDepositClaimFeeExceeded) {
-    final requiredFee = claimError.requiredFee;
+    final requiredFee = claimError.requiredFeeSats;
 
     // Show UI to user with the required fee and get approval
     bool userApproved = true; // Replace with actual user approval logic
@@ -86,13 +91,28 @@ Future<void> refundDeposit(BreezSdk sdk) async {
   // ANCHOR_END: refund-deposit
 }
 
-Future<void> recommendedFees(BreezSdk sdk) async {
+Future<void> recommendedFeesExample() async {
   // ANCHOR: recommended-fees
-  final response = await sdk.recommendedFees();
+  final response = await recommendedFees(network: Network.mainnet);
   print("Fastest fee: ${response.fastestFee} sats/vByte");
   print("Half-hour fee: ${response.halfHourFee} sats/vByte");
   print("Hour fee: ${response.hourFee} sats/vByte");
   print("Economy fee: ${response.economyFee} sats/vByte");
   print("Minimum fee: ${response.minimumFee} sats/vByte");
   // ANCHOR_END: recommended-fees
+}
+
+Future<void> setMaxFeeToRecommendedFees() async {
+  // ANCHOR: set-max-fee-to-recommended-fees
+  // Get the current recommended fees
+  final fees = await recommendedFees(network: Network.mainnet);
+
+  // Create the default config
+  var config = defaultConfig(network: Network.mainnet)
+      .copyWith(apiKey: "<breez api key>");
+
+  // Set the maximum deposit claim fee to the fastest recommended fee
+  config = config.copyWith(
+      maxDepositClaimFee: Fee.rate(satPerVbyte: fees.fastestFee));
+  // ANCHOR_END: set-max-fee-to-recommended-fees
 }

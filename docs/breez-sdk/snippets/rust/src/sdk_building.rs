@@ -19,8 +19,7 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     config.api_key = Some("<breez api key>".to_string());
 
     // Build the SDK using the config, seed and default storage
-    let builder = SdkBuilder::new(config, seed)
-        .with_default_storage("./.data".to_string());
+    let builder = SdkBuilder::new(config, seed).with_default_storage("./.data".to_string());
     // You can also pass your custom implementations:
     // let builder = builder.with_storage(<your storage implementation>)
     // let builder = builder.with_real_time_sync_storage(<your real-time sync storage implementation>)
@@ -37,16 +36,11 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
 pub(crate) fn with_rest_chain_service(builder: SdkBuilder) -> SdkBuilder {
     // ANCHOR: with-rest-chain-service
     let url = "<your REST chain service URL>".to_string();
-    let chain_api_type = ChainApiType::MempoolSpace;
     let optional_credentials = Credentials {
         username: "<username>".to_string(),
         password: "<password>".to_string(),
     };
-    builder.with_rest_chain_service(
-        url,
-        chain_api_type,
-        Some(optional_credentials),
-    )
+    builder.with_rest_chain_service(url, Some(optional_credentials))
     // ANCHOR_END: with-rest-chain-service
 }
 

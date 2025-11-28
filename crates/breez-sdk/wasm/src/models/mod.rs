@@ -160,8 +160,9 @@ pub enum DepositClaimError {
     MaxDepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Option<u64>,
-        required_fee: u64,
+        max_fee: Option<Fee>,
+        required_fee_sats: u64,
+        required_fee_rate_sat_per_vbyte: u64,
     },
     MissingUtxo {
         tx: String,
@@ -1044,4 +1045,13 @@ pub struct LnurlReceiveMetadata {
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
     pub sender_comment: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecommendedFeesResponse)]
+pub struct RecommendedFeesResponse {
+    pub fastest_fee: u64,
+    pub half_hour_fee: u64,
+    pub hour_fee: u64,
+    pub economy_fee: u64,
+    pub minimum_fee: u64,
 }

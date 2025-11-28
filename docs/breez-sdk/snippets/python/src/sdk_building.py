@@ -7,7 +7,6 @@ from breez_sdk_spark import (
     SdkBuilder,
     Seed,
     PaymentObserver,
-    ChainApiType,
     Credentials,
     KeySetType,
 )
@@ -43,14 +42,12 @@ async def init_sdk_advanced():
 async def with_rest_chain_service(builder: SdkBuilder):
     # ANCHOR: with-rest-chain-service
     url = "<your REST chain service URL>"
-    chain_api_type = ChainApiType.MEMPOOL_SPACE
     optional_credentials = Credentials(
         username="<username>",
         password="<password>",
     )
     await builder.with_rest_chain_service(
         url=url,
-        api_type=chain_api_type,
         credentials=optional_credentials,
     )
     # ANCHOR_END: with-rest-chain-service

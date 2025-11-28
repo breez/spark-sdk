@@ -1,5 +1,7 @@
-use anyhow::anyhow;
-use breez_sdk_spark::{BreezSdk, CheckLightningAddressRequest, Config, Network, RegisterLightningAddressRequest, default_config};
+use breez_sdk_spark::{
+    default_config, BreezSdk, CheckLightningAddressRequest, Config, Network,
+    RegisterLightningAddressRequest,
+};
 
 pub fn configure_lightning_address() -> Config {
     // ANCHOR: config-lightning-address
@@ -10,36 +12,29 @@ pub fn configure_lightning_address() -> Config {
     config
 }
 
-pub async fn check_lightning_address_availability(sdk: &BreezSdk, username: String) -> anyhow::Result<bool> {
+pub async fn check_lightning_address_availability(sdk: &BreezSdk) -> anyhow::Result<bool> {
     // Define the username
-    let username = username;
-    
+    let username = "a username".to_string();
+
     // ANCHOR: check-lightning-address
-    let request = CheckLightningAddressRequest {
-        username,
-    };
-    
+    let request = CheckLightningAddressRequest { username };
+
     let is_available = sdk.check_lightning_address_available(request).await?;
     // ANCHOR_END: check-lightning-address
     Ok(is_available)
 }
 
-
-pub async fn register_lightning_address(
-    sdk: &BreezSdk,
-    username: String,
-    description: Option<String>,
-) -> anyhow::Result<(String, String)> {
+pub async fn register_lightning_address(sdk: &BreezSdk) -> anyhow::Result<(String, String)> {
     // Define the parameters
-    let username = username;
-    let description = description;
-    
+    let username = "a username".to_string();
+    let description = Some("Lightning address description".to_string());
+
     // ANCHOR: register-lightning-address
     let request = RegisterLightningAddressRequest {
         username,
         description,
     };
-    
+
     let address_info = sdk.register_lightning_address(request).await?;
     let lightning_address = address_info.lightning_address;
     let lnurl = address_info.lnurl;
@@ -57,7 +52,7 @@ pub async fn delete_lightning_address(sdk: &BreezSdk) -> anyhow::Result<()> {
 pub async fn get_lightning_address(sdk: &BreezSdk) -> anyhow::Result<()> {
     // ANCHOR: get-lightning-address
     let address_info_opt = sdk.get_lightning_address().await?;
-    
+
     if let Some(info) = address_info_opt {
         let lightning_address = &info.lightning_address;
         let username = &info.username;

@@ -61,7 +61,9 @@ async fn list_claimable_htlc_payments(sdk: &BreezSdk) -> Result<Vec<Payment>> {
 async fn claim_htlc_payment(sdk: &BreezSdk) -> Result<Payment> {
     // ANCHOR: claim-htlc-payment
     let preimage = "<preimage hex>".to_string();
-    let response = sdk.claim_htlc_payment(ClaimHtlcPaymentRequest { preimage }).await?;
+    let response = sdk
+        .claim_htlc_payment(ClaimHtlcPaymentRequest { preimage })
+        .await?;
     let payment = response.payment;
     // ANCHOR_END: claim-htlc-payment
     Ok(payment)

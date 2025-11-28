@@ -6,7 +6,16 @@ When receiving bitcoin through on-chain deposits, the SDK [automatically attempt
 
 The [maximum deposit claim fee](config.md#max-deposit-claim-fee) setting in the SDK configuration defines the maximum fee the SDK uses when automatically claiming an on-chain deposit. The SDK's default fee limit is set to 1 sats/vbyte, which is low and requires manual claiming when fees exceed this threshold. You can set a higher fee, either in sats/vbyte or in absolute sats, to automatically claim deposits.
 
-However, even when setting a high fee, the SDK might still fail to automatically claim deposits. In these cases, it's recommended to manually claim them by letting the end user accept the required fees. When [manual intervention](#manually-claiming-deposits) is required, the SDK emits an `UnclaimedDeposits` event containing information about the deposit. See [Listening to events](events.md) for how to subscribe to events.
+One possible approach is to set the maximum claim fee according to the current market conditions using the [recommended fees](#recommended-fees) API.
+
+{{#tabs refunding_payments:set-max-fee-to-recommended-fees}}
+
+<div class="warning">
+<h4>Developer note</h4>
+
+Even when setting a high fee, the SDK might still fail to automatically claim deposits. In these cases, it's recommended to manually claim them by letting the end user accept the required fees. When [manual intervention](#manually-claiming-deposits) is required, the SDK emits an `UnclaimedDeposits` event containing information about the deposit. See [Listening to events](events.md) for how to subscribe to events.
+
+</div>
 
 ## Manually claiming deposits
 
@@ -35,6 +44,7 @@ For advanced use cases, you may want to implement a custom claim logic instead o
 To disable automatic claims, unset the [maximum deposit claim fee](config.md#max-deposit-claim-fee). Then use the methods described above to manually claim deposits based on your business logic.
 
 Common scenarios for custom claiming logic include:
+
 - **Dynamic fee adjustment**: Adjust claiming fees based on market conditions or priority
 - **Conditional claiming**: Only claim deposits that meet certain criteria (amount thresholds, time windows, etc.)
 - **Integration with external systems**: Coordinate claims with other business processes

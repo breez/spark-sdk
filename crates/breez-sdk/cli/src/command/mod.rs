@@ -5,11 +5,11 @@ use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
     ClaimHtlcPaymentRequest, Fee, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, OnchainConfirmationSpeed, PaymentStatus, PaymentType,
-    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
-    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
-    UpdateUserSettingsRequest,
+    LnurlPayRequest, LnurlWithdrawRequest, Network, OnchainConfirmationSpeed, PaymentStatus,
+    PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
+    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest,
+    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
+    SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest, recommended_fees,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -252,6 +252,7 @@ pub(crate) async fn execute_command(
     command: Command,
     sdk: &BreezSdk,
     token_issuer: &TokenIssuer,
+    network: Network,
 ) -> Result<bool, anyhow::Error> {
     match command {
         Command::Exit => {
@@ -574,7 +575,7 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::RecommendedFees => {
-            let res = sdk.recommended_fees().await?;
+            let res = recommended_fees(network).await?;
             print_value(&res)?;
             Ok(true)
         }

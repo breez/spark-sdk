@@ -174,10 +174,6 @@ impl BreezSdk {
         self.inner.list_fiat_rates().await
     }
 
-    pub async fn recommended_fees(&self) -> Result<RecommendedFees, SdkError> {
-        self.inner.recommended_fees().await
-    }
-
     pub async fn get_tokens_metadata(
         &self,
         request: GetTokensMetadataRequest,
@@ -214,4 +210,8 @@ impl BreezSdk {
             token_issuer: Arc::new(token_issuer),
         }
     }
+}
+
+pub async fn recommended_fees(network: Network) -> Result<RecommendedFeesResponse, SdkError> {
+    breez_sdk_spark::recommended_fees(network).await
 }

@@ -6,6 +6,9 @@ from breez_sdk_spark import (
     RefundDepositRequest,
     Fee,
     DepositClaimError,
+    recommended_fees,
+    Network,
+    default_config,
 )
 
 
@@ -23,14 +26,16 @@ async def list_unclaimed_deposits(sdk: BreezSdk):
                 if isinstance(
                     deposit.claim_error, DepositClaimError.MAX_DEPOSIT_CLAIM_FEE_EXCEEDED
                 ):
-                    max_fee_str = (
-                        f"{deposit.claim_error.max_fee} sats"
-                        if deposit.claim_error.max_fee is not None
-                        else "none"
-                    )
+                    max_fee_str = "none"
+                    if deposit.claim_error.max_fee is not None:
+                        if isinstance(deposit.claim_error.max_fee, Fee.FIXED):
+                            max_fee_str = f"{deposit.claim_error.max_fee.amount} sats"
+                        elif isinstance(deposit.claim_error.max_fee, Fee.RATE):
+                            max_fee_str = f"{deposit.claim_error.max_fee.sat_per_vbyte} sats/vByte"
                     logging.info(
                         f"Claim failed: Fee exceeded. Max: {max_fee_str}, "
-                        f"Required: {deposit.claim_error.required_fee}"
+                        f"Required: {deposit.claim_error.required_fee_sats} sats "
+                        f"or {deposit.claim_error.required_fee_rate_sat_per_vbyte} sats/vByte"
                     )
                 elif isinstance(deposit.claim_error, DepositClaimError.MISSING_UTXO):
                     logging.info("Claim failed: UTXO not found")
@@ -48,7 +53,7 @@ async def handle_fee_exceeded(sdk: BreezSdk, deposit):
         if isinstance(
             deposit.claim_error, DepositClaimError.MAX_DEPOSIT_CLAIM_FEE_EXCEEDED
         ):
-            required_fee = deposit.claim_error.required_fee
+            required_fee = deposit.claim_error.required_fee_sats
 
             # Show UI to user with the required fee and get approval
             user_approved = True  # Replace with actual user approval logic
@@ -110,12 +115,26 @@ async def refund_deposit(sdk: BreezSdk):
         raise
     # ANCHOR_END: refund-deposit
 
-async def recommended_feeds(sdk: BreezSdk):
+async def recommended_feeds_example():
     # ANCHOR: recommended-fees
-    response = await sdk.recommended_fees()
+    response = await recommended_fees(network=Network.MAINNET)
     logging.info(f"Fastest fee: {response.fastest_fee} sats/vByte")
     logging.info(f"Half-hour fee: {response.half_hour_fee} sats/vByte")
     logging.info(f"Hour fee: {response.hour_fee} sats/vByte")
     logging.info(f"Economy fee: {response.economy_fee} sats/vByte")
     logging.info(f"Minimum fee: {response.minimum_fee} sats/vByte")
     # ANCHOR_END: recommended-fees
+
+
+async def set_max_fee_to_recommended_fees():
+    # ANCHOR: set-max-fee-to-recommended-fees
+    # Get the current recommended fees
+    fees = await recommended_fees(network=Network.MAINNET)
+
+    # Create the default config
+    config = default_config(network=Network.MAINNET)
+    config.api_key = "<breez api key>"
+
+    # Set the maximum deposit claim fee to the fastest recommended fee
+    config.max_deposit_claim_fee = Fee.RATE(sat_per_vbyte=fees.fastest_fee)
+    # ANCHOR_END: set-max-fee-to-recommended-fees

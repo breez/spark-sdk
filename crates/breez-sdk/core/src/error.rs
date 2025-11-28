@@ -1,4 +1,5 @@
 use crate::{
+    Fee,
     lnurl::{LnurlServerError, ReqwestLnurlServerClientError},
     nostr::NostrError,
     persist::{self},
@@ -38,13 +39,14 @@ pub enum SdkError {
     ChainServiceError(String),
 
     #[error(
-        "Max deposit claim fee exceeded for utxo: {tx}:{vout} with max fee: {max_fee:?} sats and required fee: {required_fee} sats"
+        "Max deposit claim fee exceeded for utxo: {tx}:{vout} with max fee: {max_fee:?} and required fee: {required_fee_sats} sats or {required_fee_rate_sat_per_vbyte} sats/vbyte"
     )]
     MaxDepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Option<u64>,
-        required_fee: u64,
+        max_fee: Option<Fee>,
+        required_fee_sats: u64,
+        required_fee_rate_sat_per_vbyte: u64,
     },
 
     #[error("Missing utxo: {tx}:{vout}")]
@@ -197,13 +199,14 @@ impl From<NostrError> for SdkError {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum DepositClaimError {
     #[error(
-        "Max deposit claim fee exceeded for utxo: {tx}:{vout} with max fee: {max_fee:?} sats and required fee: {required_fee} sats"
+        "Max deposit claim fee exceeded for utxo: {tx}:{vout} with max fee: {max_fee:?} and required fee: {required_fee_sats} sats or {required_fee_rate_sat_per_vbyte} sats/vbyte"
     )]
     MaxDepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Option<u64>,
-        required_fee: u64,
+        max_fee: Option<Fee>,
+        required_fee_sats: u64,
+        required_fee_rate_sat_per_vbyte: u64,
     },
 
     #[error("Missing utxo: {tx}:{vout}")]
@@ -220,12 +223,14 @@ impl From<SdkError> for DepositClaimError {
                 tx,
                 vout,
                 max_fee,
-                required_fee,
+                required_fee_sats,
+                required_fee_rate_sat_per_vbyte,
             } => DepositClaimError::MaxDepositClaimFeeExceeded {
                 tx,
                 vout,
                 max_fee,
-                required_fee,
+                required_fee_sats,
+                required_fee_rate_sat_per_vbyte,
             },
             SdkError::MissingUtxo { tx, vout } => DepositClaimError::MissingUtxo { tx, vout },
             SdkError::Generic(e) => DepositClaimError::Generic { message: e },

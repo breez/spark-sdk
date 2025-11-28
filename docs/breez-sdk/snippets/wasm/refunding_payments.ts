@@ -4,7 +4,9 @@ import {
   type ClaimDepositRequest,
   type RefundDepositRequest,
   type Fee,
-  type DepositInfo
+  type DepositInfo,
+  recommendedFees,
+  defaultConfig
 } from '@breeztech/breez-sdk-spark'
 
 const listUnclaimedDeposits = async (sdk: BreezSdk) => {
@@ -21,10 +23,14 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
         case 'maxDepositClaimFeeExceeded': {
           let maxFeeStr = 'none'
           if (deposit.claimError.maxFee != null) {
-            maxFeeStr = `${deposit.claimError.maxFee} sats`
+            if (deposit.claimError.maxFee.type === 'fixed') {
+              maxFeeStr = `${deposit.claimError.maxFee.amount} sats`
+            } else if (deposit.claimError.maxFee.type === 'rate') {
+              maxFeeStr = `${deposit.claimError.maxFee.satPerVbyte} sats/vByte`
+            }
           }
           console.log(
-            `Max claim fee exceeded. Max: ${maxFeeStr}, Required: ${deposit.claimError.requiredFee} sats`
+            `Max claim fee exceeded. Max: ${maxFeeStr}, Required: ${deposit.claimError.requiredFeeSats} sats or ${deposit.claimError.requiredFeeRateSatPerVbyte} sats/vByte`
           )
           break
         }
@@ -43,7 +49,7 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
 const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
   // ANCHOR: handle-fee-exceeded
   if (deposit.claimError?.type === 'maxDepositClaimFeeExceeded') {
-    const requiredFee = deposit.claimError.requiredFee
+    const requiredFee = deposit.claimError.requiredFeeSats
 
     // Show UI to user with the required fee and get approval
     const userApproved = true // Replace with actual user approval logic
@@ -107,13 +113,27 @@ const refundDeposit = async (sdk: BreezSdk) => {
   // ANCHOR_END: refund-deposit
 }
 
-const recommendedFees = async (sdk: BreezSdk) => {
+const recommendedFeesExample = async () => {
   // ANCHOR: recommended-fees
-  const response = await sdk.recommendedFees()
+  const response = await recommendedFees('mainnet')
   console.log('Fastest fee:', response.fastestFee, 'sats/vByte')
   console.log('Half-hour fee:', response.halfHourFee, 'sats/vByte')
   console.log('Hour fee:', response.hourFee, 'sats/vByte')
   console.log('Economy fee:', response.economyFee, 'sats/vByte')
   console.log('Minimum fee:', response.minimumFee, 'sats/vByte')
   // ANCHOR_END: recommended-fees
+}
+
+const setMaxFeeToRecommendedFees = async () => {
+  // ANCHOR: set-max-fee-to-recommended-fees
+  // Get the current recommended fees
+  const fees = await recommendedFees('mainnet')
+
+  // Create the default config
+  const config = defaultConfig('mainnet')
+  config.apiKey = '<breez api key>'
+
+  // Set the maximum deposit claim fee to the fastest recommended fee
+  config.maxDepositClaimFee = { type: 'rate', satPerVbyte: fees.fastestFee }
+  // ANCHOR_END: set-max-fee-to-recommended-fees
 }

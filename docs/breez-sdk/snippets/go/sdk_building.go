@@ -39,12 +39,11 @@ func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
 func WithRestChainService(builder *breez_sdk_spark.SdkBuilder) {
 	// ANCHOR: with-rest-chain-service
 	url := "<your REST chain service URL>"
-	chainApiType := breez_sdk_spark.ChainApiTypeMempoolSpace
 	optionalCredentials := &breez_sdk_spark.Credentials{
 		Username: "<username>",
 		Password: "<password>",
 	}
-	builder.WithRestChainService(url, chainApiType, optionalCredentials)
+	builder.WithRestChainService(url, optionalCredentials)
 	// ANCHOR_END: with-rest-chain-service
 }
 

@@ -33,14 +33,12 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: with-rest-chain-service
             var url = "<your REST chain service URL>";
-            var chainApiType = ChainApiType.MempoolSpace;
             var optionalCredentials = new Credentials(
                 username: "<username>",
                 password: "<password>"
             );
             await builder.WithRestChainService(
                 url: url,
-                apiType: chainApiType,
                 credentials: optionalCredentials
             );
             // ANCHOR_END: with-rest-chain-service

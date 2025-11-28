@@ -25,9 +25,14 @@ func ListUnclaimedDeposits(sdk *breez_sdk_spark.BreezSdk) error {
 			case breez_sdk_spark.DepositClaimErrorMaxDepositClaimFeeExceeded:
 				maxFeeStr := "none"
 				if claimErr.MaxFee != nil {
-					maxFeeStr = fmt.Sprintf("%v sats", *claimErr.MaxFee)
+					switch fee := (*claimErr.MaxFee).(type) {
+					case breez_sdk_spark.FeeFixed:
+						maxFeeStr = fmt.Sprintf("%v sats", fee.Amount)
+					case breez_sdk_spark.FeeRate:
+						maxFeeStr = fmt.Sprintf("%v sats/vByte", fee.SatPerVbyte)
+					}
 				}
-				log.Printf("Max claim fee exceeded. Max: %v, Required: %v sats", maxFeeStr, claimErr.RequiredFee)
+				log.Printf("Max claim fee exceeded. Max: %v, Required: %v sats or %v sats/vByte", maxFeeStr, claimErr.RequiredFeeSats, claimErr.RequiredFeeRateSatPerVbyte)
 			case breez_sdk_spark.DepositClaimErrorMissingUtxo:
 				log.Print("UTXO not found when claiming deposit")
 			case breez_sdk_spark.DepositClaimErrorGeneric:
@@ -43,7 +48,7 @@ func HandleFeeExceeded(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.De
 	// ANCHOR: handle-fee-exceeded
 	if claimErr := *deposit.ClaimError; claimErr != nil {
 		if exceeded, ok := claimErr.(breez_sdk_spark.DepositClaimErrorMaxDepositClaimFeeExceeded); ok {
-			requiredFee := exceeded.RequiredFee
+			requiredFee := exceeded.RequiredFeeSats
 
 			// Show UI to user with the required fee and get approval
 			userApproved := true // Replace with actual user approval logic
@@ -120,9 +125,9 @@ func RefundDeposit(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func RecommendedFees(sdk *breez_sdk_spark.BreezSdk) error {
+func RecommendedFeesExample() error {
 	// ANCHOR: recommended-fees
-	response, err := sdk.RecommendedFees()
+	response, err := breez_sdk_spark.RecommendedFees(breez_sdk_spark.NetworkMainnet)
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return err
 	}
@@ -132,5 +137,25 @@ func RecommendedFees(sdk *breez_sdk_spark.BreezSdk) error {
 	log.Printf("Economy fee: %v sats/vByte", response.EconomyFee)
 	log.Printf("Minimum fee: %v sats/vByte", response.MinimumFee)
 	// ANCHOR_END: recommended-fees
+	return nil
+}
+
+func SetMaxFeeToRecommendedFees() error {
+	// ANCHOR: set-max-fee-to-recommended-fees
+	// Get the current recommended fees
+	fees, err := breez_sdk_spark.RecommendedFees(breez_sdk_spark.NetworkMainnet)
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return err
+	}
+
+	// Create the default config
+	apiKey := "<breez api key>"
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	config.ApiKey = &apiKey
+
+	// Set the maximum deposit claim fee to the fastest recommended fee
+	maxFee := breez_sdk_spark.Fee(breez_sdk_spark.FeeRate{SatPerVbyte: fees.FastestFee})
+	config.MaxDepositClaimFee = &maxFee
+	// ANCHOR_END: set-max-fee-to-recommended-fees
 	return nil
 }

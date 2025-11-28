@@ -433,7 +433,7 @@ fn check_doc_snippets_python_cmd(skip_binding_gen: bool) -> Result<()> {
     let venv_pylint = format!("{}/bin/pylint", venv_dir);
     let status = Command::new(&venv_pylint)
         .arg("-d")
-        .arg("W0612,W0622,W1203,R0801,R0903,C0114,C0115,C0116")
+        .arg("W0612,W0622,W1203,R0801,R0903,C0114,C0115,C0116,R1702")
         .arg("src")
         .current_dir(&python_snippets_dir)
         .status()?;

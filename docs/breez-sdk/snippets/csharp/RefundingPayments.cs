@@ -19,9 +19,20 @@ namespace BreezSdkSnippets
                 {
                     if (deposit.claimError is DepositClaimError.MaxDepositClaimFeeExceeded exceeded)
                     {
-                        var maxFeeStr = exceeded.maxFee != null ? $"{exceeded.maxFee} sats" : "none";
+                        var maxFeeStr = "none";
+                        if (exceeded.maxFee != null)
+                        {
+                            if (exceeded.maxFee is Fee.Fixed fixedFee)
+                            {
+                                maxFeeStr = $"{fixedFee.amount} sats";
+                            }
+                            else if (exceeded.maxFee is Fee.Rate rateFee)
+                            {
+                                maxFeeStr = $"{rateFee.satPerVbyte} sats/vByte";
+                            }
+                        }
                         Console.WriteLine($"Claim failed: Fee exceeded. Max: {maxFeeStr}, " +
-                                        $"Required: {exceeded.requiredFee}");
+                                        $"Required: {exceeded.requiredFeeSats} sats or {exceeded.requiredFeeRateSatPerVbyte} sats/vByte");
                     }
                     else if (deposit.claimError is DepositClaimError.MissingUtxo)
                     {
@@ -41,7 +52,7 @@ namespace BreezSdkSnippets
             // ANCHOR: handle-fee-exceeded
             if (deposit.claimError is DepositClaimError.MaxDepositClaimFeeExceeded exceeded)
             {
-                var requiredFee = exceeded.requiredFee;
+                var requiredFee = exceeded.requiredFeeSats;
 
                 // Show UI to user with the required fee and get approval
                 var userApproved = true; // Replace with actual user approval logic
@@ -101,10 +112,10 @@ namespace BreezSdkSnippets
             // ANCHOR_END: refund-deposit
         }
 
-        async Task RecommendedFees(BreezSdk sdk)
+        async Task RecommendedFeesExample()
         {
             // ANCHOR: recommended-fees
-            var response = await sdk.RecommendedFees();
+            var response = await BreezSdkSparkMethods.RecommendedFees(network: Network.Mainnet);
             Console.WriteLine($"Fastest fee: {response.fastestFee} sats/vByte");
             Console.WriteLine($"Half-hour fee: {response.halfHourFee} sats/vByte");
             Console.WriteLine($"Hour fee: {response.hourFee} sats/vByte");
@@ -112,5 +123,22 @@ namespace BreezSdkSnippets
             Console.WriteLine($"Minimum fee: {response.minimumFee} sats/vByte");
         }
         // ANCHOR_END: recommended-fees
+
+        async Task SetMaxFeeToRecommendedFees()
+        {
+            // ANCHOR: set-max-fee-to-recommended-fees
+            // Get the current recommended fees
+            var fees = await BreezSdkSparkMethods.RecommendedFees(network: Network.Mainnet);
+
+            // Create the default config
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            {
+                apiKey = "<breez api key>"
+            };
+
+            // Set the maximum deposit claim fee to the fastest recommended fee
+            config = config with { maxDepositClaimFee = new Fee.Rate(satPerVbyte: fees.fastestFee) };
+            // ANCHOR_END: set-max-fee-to-recommended-fees
+        }
     }
 }

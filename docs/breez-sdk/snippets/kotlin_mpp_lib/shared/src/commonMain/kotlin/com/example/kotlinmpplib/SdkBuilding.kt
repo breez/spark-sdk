@@ -33,14 +33,12 @@ class SdkBuilding {
     suspend fun withRestChainService(builder: SdkBuilder) { 
         // ANCHOR: with-rest-chain-service
         val url = "<your REST chain service URL>"
-        val chainApiType = ChainApiType.MEMPOOL_SPACE
         val optionalCredentials = Credentials(
             username = "<username>",
             password = "<password>"
         )
         builder.withRestChainService(
             url = url,
-            apiType = chainApiType,
             credentials = optionalCredentials
         )
         // ANCHOR_END: with-rest-chain-service
