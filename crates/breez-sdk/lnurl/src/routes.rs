@@ -542,6 +542,11 @@ where
         };
 
         let pubkey = parse_pubkey(&user.pubkey)?;
+        // Nostr zap requests are required to be fulfilled with a lightning payment
+        let include_spark_address = params
+            .nostr
+            .as_ref()
+            .map_or(state.include_spark_address, |_| false);
         let res = state
             .wallet
             .create_lightning_invoice(
@@ -550,7 +555,7 @@ where
                     desc_hash.to_byte_array(),
                 )),
                 Some(pubkey),
-                state.include_spark_address,
+                include_spark_address,
             )
             .await
             .map_err(|e| {

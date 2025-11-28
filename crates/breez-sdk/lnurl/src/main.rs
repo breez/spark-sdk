@@ -83,7 +83,7 @@ struct Args {
     /// Whether to include the spark address in the invoices generated.
     /// If included this can reduce fees for wallets that support it at the
     /// cost of privacy.
-    #[arg(long, default_value = "false")]
+    #[arg(long, default_value = "true")]
     pub include_spark_address: bool,
 
     /// List of domains that are allowed to use the lnurl server. Comma separated.

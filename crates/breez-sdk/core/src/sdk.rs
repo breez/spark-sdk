@@ -1133,7 +1133,7 @@ impl BreezSdk {
                         amount_sats.unwrap_or_default(),
                         Some(InvoiceDescription::Memo(description.clone())),
                         None,
-                        self.config.prefer_spark_over_lightning,
+                        true,
                     )
                     .await?
                     .invoice,
