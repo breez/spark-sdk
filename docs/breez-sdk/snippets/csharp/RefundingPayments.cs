@@ -19,9 +19,20 @@ namespace BreezSdkSnippets
                 {
                     if (deposit.claimError is DepositClaimError.MaxDepositClaimFeeExceeded exceeded)
                     {
-                        var maxFeeStr = exceeded.maxFee != null ? $"{exceeded.maxFee} sats" : "none";
+                        var maxFeeStr = "none";
+                        if (exceeded.maxFee != null)
+                        {
+                            if (exceeded.maxFee is Fee.Fixed fixedFee)
+                            {
+                                maxFeeStr = $"{fixedFee.amount} sats";
+                            }
+                            else if (exceeded.maxFee is Fee.Rate rateFee)
+                            {
+                                maxFeeStr = $"{rateFee.satPerVbyte} sats/vByte";
+                            }
+                        }
                         Console.WriteLine($"Claim failed: Fee exceeded. Max: {maxFeeStr}, " +
-                                        $"Required: {exceeded.requiredFee}");
+                                        $"Required: {exceeded.requiredFeeSats} sats or {exceeded.requiredFeeRateSatPerVbyte} sats/vByte");
                     }
                     else if (deposit.claimError is DepositClaimError.MissingUtxo)
                     {
@@ -41,7 +52,7 @@ namespace BreezSdkSnippets
             // ANCHOR: handle-fee-exceeded
             if (deposit.claimError is DepositClaimError.MaxDepositClaimFeeExceeded exceeded)
             {
-                var requiredFee = exceeded.requiredFee;
+                var requiredFee = exceeded.requiredFeeSats;
 
                 // Show UI to user with the required fee and get approval
                 var userApproved = true; // Replace with actual user approval logic

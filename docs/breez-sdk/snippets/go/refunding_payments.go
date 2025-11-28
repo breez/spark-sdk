@@ -25,9 +25,14 @@ func ListUnclaimedDeposits(sdk *breez_sdk_spark.BreezSdk) error {
 			case breez_sdk_spark.DepositClaimErrorMaxDepositClaimFeeExceeded:
 				maxFeeStr := "none"
 				if claimErr.MaxFee != nil {
-					maxFeeStr = fmt.Sprintf("%v sats", *claimErr.MaxFee)
+					switch fee := (*claimErr.MaxFee).(type) {
+					case breez_sdk_spark.FeeFixed:
+						maxFeeStr = fmt.Sprintf("%v sats", fee.Amount)
+					case breez_sdk_spark.FeeRate:
+						maxFeeStr = fmt.Sprintf("%v sats/vByte", fee.SatPerVbyte)
+					}
 				}
-				log.Printf("Max claim fee exceeded. Max: %v, Required: %v sats", maxFeeStr, claimErr.RequiredFee)
+				log.Printf("Max claim fee exceeded. Max: %v, Required: %v sats or %v sats/vByte", maxFeeStr, claimErr.RequiredFeeSats, claimErr.RequiredFeeRateSatPerVbyte)
 			case breez_sdk_spark.DepositClaimErrorMissingUtxo:
 				log.Print("UTXO not found when claiming deposit")
 			case breez_sdk_spark.DepositClaimErrorGeneric:
@@ -43,7 +48,7 @@ func HandleFeeExceeded(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.De
 	// ANCHOR: handle-fee-exceeded
 	if claimErr := *deposit.ClaimError; claimErr != nil {
 		if exceeded, ok := claimErr.(breez_sdk_spark.DepositClaimErrorMaxDepositClaimFeeExceeded); ok {
-			requiredFee := exceeded.RequiredFee
+			requiredFee := exceeded.RequiredFeeSats
 
 			// Show UI to user with the required fee and get approval
 			userApproved := true // Replace with actual user approval logic
