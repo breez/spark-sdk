@@ -16,30 +16,17 @@ use crate::{
 
 impl PaymentMethod {
     fn from_transfer(transfer: &WalletTransfer) -> Self {
-        // HTLC transfers share PreimageSwap type with Lightning payments and both have an htlc_preimage_request.
-        // We can only tell them apart by checking the SSP user request.
-        if let Some(user_request) = &transfer.user_request {
-            match user_request {
-                SspUserRequest::LightningReceiveRequest(_)
-                | SspUserRequest::LightningSendRequest(_) => {
-                    return PaymentMethod::Lightning;
-                }
-                SspUserRequest::LeavesSwapRequest(_) => {
-                    return PaymentMethod::Spark;
-                }
-                SspUserRequest::CoopExitRequest(_) => {
-                    return PaymentMethod::Withdraw;
-                }
-                SspUserRequest::ClaimStaticDeposit(_) => {
-                    return PaymentMethod::Deposit;
+        match transfer.transfer_type {
+            TransferType::PreimageSwap => {
+                if transfer.is_ssp_transfer {
+                    PaymentMethod::Lightning
+                } else {
+                    PaymentMethod::Spark
                 }
             }
-        }
-
-        match transfer.transfer_type {
-            TransferType::PreimageSwap | TransferType::Transfer => PaymentMethod::Spark, // No user request means it's a Spark HTLC payment
             TransferType::CooperativeExit => PaymentMethod::Withdraw,
             TransferType::UtxoSwap => PaymentMethod::Deposit,
+            TransferType::Transfer => PaymentMethod::Spark,
             _ => PaymentMethod::Unknown,
         }
     }
@@ -47,79 +34,85 @@ impl PaymentMethod {
 
 impl PaymentDetails {
     fn from_transfer(transfer: &WalletTransfer) -> Result<Option<Self>, SdkError> {
-        if let Some(user_request) = &transfer.user_request {
-            let details = match user_request {
-                SspUserRequest::LightningReceiveRequest(request) => {
-                    let invoice_details = input::parse_invoice(&request.invoice.encoded_invoice)
-                        .ok_or(SdkError::Generic(
-                            "Invalid invoice in SspUserRequest::LightningReceiveRequest"
-                                .to_string(),
-                        ))?;
-                    PaymentDetails::Lightning {
-                        description: invoice_details.description,
-                        preimage: request.lightning_receive_payment_preimage.clone(),
-                        invoice: request.invoice.encoded_invoice.clone(),
-                        payment_hash: request.invoice.payment_hash.clone(),
-                        destination_pubkey: invoice_details.payee_pubkey,
-                        lnurl_pay_info: None,
-                        lnurl_withdraw_info: None,
-                        lnurl_receive_metadata: None,
-                    }
-                }
-                SspUserRequest::LightningSendRequest(request) => {
-                    let invoice_details =
-                        input::parse_invoice(&request.encoded_invoice).ok_or(SdkError::Generic(
-                            "Invalid invoice in SspUserRequest::LightningSendRequest".to_string(),
-                        ))?;
-                    PaymentDetails::Lightning {
-                        description: invoice_details.description,
-                        preimage: request.lightning_send_payment_preimage.clone(),
-                        invoice: request.encoded_invoice.clone(),
-                        payment_hash: invoice_details.payment_hash,
-                        destination_pubkey: invoice_details.payee_pubkey,
-                        lnurl_pay_info: None,
-                        lnurl_withdraw_info: None,
-                        lnurl_receive_metadata: None,
-                    }
-                }
-                SspUserRequest::CoopExitRequest(request) => PaymentDetails::Withdraw {
-                    tx_id: request.coop_exit_txid.clone(),
-                },
-                SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark {
-                    invoice_details: None,
-                    htlc_details: None,
-                },
-                SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
-                    tx_id: request.transaction_id.clone(),
-                },
-            };
-            return Ok(Some(details));
-        }
+        if !transfer.is_ssp_transfer {
+            // Check for Spark invoice payments
+            if let Some(spark_invoice) = &transfer.spark_invoice {
+                let Some(InputType::SparkInvoice(invoice_details)) =
+                    parse_spark_address(spark_invoice, &PaymentRequestSource::default())
+                else {
+                    return Err(SdkError::Generic("Invalid spark invoice".to_string()));
+                };
 
-        // Check for Spark invoice payments
-        if let Some(spark_invoice) = &transfer.spark_invoice {
-            let Some(InputType::SparkInvoice(invoice_details)) =
-                parse_spark_address(spark_invoice, &PaymentRequestSource::default())
-            else {
-                return Err(SdkError::Generic("Invalid spark invoice".to_string()));
-            };
+                return Ok(Some(PaymentDetails::Spark {
+                    invoice_details: Some(invoice_details.into()),
+                    htlc_details: None,
+                }));
+            }
+
+            // Check for Spark HTLC payments (when no user request is present)
+            if let Some(htlc_preimage_request) = &transfer.htlc_preimage_request {
+                return Ok(Some(PaymentDetails::Spark {
+                    invoice_details: None,
+                    htlc_details: Some(htlc_preimage_request.clone().try_into()?),
+                }));
+            }
 
             return Ok(Some(PaymentDetails::Spark {
-                invoice_details: Some(invoice_details.into()),
+                invoice_details: None,
                 htlc_details: None,
             }));
         }
 
-        // Check for Spark HTLC payments (when no user request is present)
-        if let Some(htlc_preimage_request) = &transfer.htlc_preimage_request {
-            return Ok(Some(PaymentDetails::Spark {
-                invoice_details: None,
-                htlc_details: Some(htlc_preimage_request.clone().try_into()?),
-            }));
-        }
+        let Some(user_request) = &transfer.user_request else {
+            return Ok(None);
+        };
 
-        // No details available
-        Ok(None)
+        let details = match user_request {
+            SspUserRequest::LightningReceiveRequest(request) => {
+                let invoice_details = input::parse_invoice(&request.invoice.encoded_invoice)
+                    .ok_or(SdkError::Generic(
+                        "Invalid invoice in SspUserRequest::LightningReceiveRequest".to_string(),
+                    ))?;
+                PaymentDetails::Lightning {
+                    description: invoice_details.description,
+                    preimage: request.lightning_receive_payment_preimage.clone(),
+                    invoice: request.invoice.encoded_invoice.clone(),
+                    payment_hash: request.invoice.payment_hash.clone(),
+                    destination_pubkey: invoice_details.payee_pubkey,
+                    lnurl_pay_info: None,
+                    lnurl_withdraw_info: None,
+                    lnurl_receive_metadata: None,
+                }
+            }
+            SspUserRequest::LightningSendRequest(request) => {
+                let invoice_details =
+                    input::parse_invoice(&request.encoded_invoice).ok_or(SdkError::Generic(
+                        "Invalid invoice in SspUserRequest::LightningSendRequest".to_string(),
+                    ))?;
+                PaymentDetails::Lightning {
+                    description: invoice_details.description,
+                    preimage: request.lightning_send_payment_preimage.clone(),
+                    invoice: request.encoded_invoice.clone(),
+                    payment_hash: invoice_details.payment_hash,
+                    destination_pubkey: invoice_details.payee_pubkey,
+                    lnurl_pay_info: None,
+                    lnurl_withdraw_info: None,
+                    lnurl_receive_metadata: None,
+                }
+            }
+            SspUserRequest::CoopExitRequest(request) => PaymentDetails::Withdraw {
+                tx_id: request.coop_exit_txid.clone(),
+            },
+            SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+            },
+            SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
+                tx_id: request.transaction_id.clone(),
+            },
+        };
+
+        Ok(Some(details))
     }
 }
 

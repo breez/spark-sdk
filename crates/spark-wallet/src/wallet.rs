@@ -316,6 +316,7 @@ impl SparkWallet {
                 None,
                 None,
                 self.identity_public_key,
+                self.config.service_provider_config.identity_public_key,
             ),
             None => {
                 create_transfer(
@@ -323,6 +324,7 @@ impl SparkWallet {
                     &self.ssp_client,
                     &self.htlc_service,
                     self.identity_public_key,
+                    self.config.service_provider_config.identity_public_key,
                 )
                 .await?
             }
@@ -463,6 +465,7 @@ impl SparkWallet {
             None,
             None,
             self.identity_public_key,
+            self.config.service_provider_config.identity_public_key,
         ))
     }
 
@@ -601,6 +604,7 @@ impl SparkWallet {
             None,
             None,
             self.identity_public_key,
+            self.config.service_provider_config.identity_public_key,
         ))
     }
 
@@ -667,6 +671,7 @@ impl SparkWallet {
             None,
             Some(htlc_preimage_request),
             self.identity_public_key,
+            self.config.service_provider_config.identity_public_key,
         ))
     }
 
@@ -697,6 +702,7 @@ impl SparkWallet {
             None,
             Some(preimage_request.into()),
             self.identity_public_key,
+            self.config.service_provider_config.identity_public_key,
         ))
     }
 
@@ -721,7 +727,11 @@ impl SparkWallet {
         htlcs
             .into_iter()
             .map(|h| {
-                WalletTransfer::from_preimage_request_with_transfer(h, self.identity_public_key)
+                WalletTransfer::from_preimage_request_with_transfer(
+                    h,
+                    self.identity_public_key,
+                    self.config.service_provider_config.identity_public_key,
+                )
             })
             .collect()
     }
@@ -791,7 +801,14 @@ impl SparkWallet {
     ) -> Result<PagingResult<WalletTransfer>, SparkWalletError> {
         let our_pubkey = self.identity_public_key;
         let transfers = self.transfer_service.query_transfers(paging).await?;
-        create_transfers(transfers, &self.ssp_client, &self.htlc_service, our_pubkey).await
+        create_transfers(
+            transfers,
+            &self.ssp_client,
+            &self.htlc_service,
+            our_pubkey,
+            self.ssp_client.identity_public_key(),
+        )
+        .await
     }
 
     pub async fn list_pending_transfers(
@@ -803,7 +820,14 @@ impl SparkWallet {
             .transfer_service
             .query_pending_transfers(paging)
             .await?;
-        create_transfers(transfers, &self.ssp_client, &self.htlc_service, our_pubkey).await
+        create_transfers(
+            transfers,
+            &self.ssp_client,
+            &self.htlc_service,
+            our_pubkey,
+            self.ssp_client.identity_public_key(),
+        )
+        .await
     }
 
     /// Queries the SSP for user requests by their associated transfer IDs
@@ -906,6 +930,7 @@ impl SparkWallet {
             &self.ssp_client,
             &self.htlc_service,
             self.identity_public_key,
+            self.config.service_provider_config.identity_public_key,
         )
         .await
     }
@@ -1312,11 +1337,15 @@ async fn claim_pending_transfers(
         );
     }
     debug!("Claimed all transfers, creating wallet transfers");
-    Ok(
-        create_transfers(transfers, ssp_client, htlc_service, our_pubkey)
-            .await?
-            .items,
+    Ok(create_transfers(
+        transfers,
+        ssp_client,
+        htlc_service,
+        our_pubkey,
+        ssp_client.identity_public_key(),
     )
+    .await?
+    .items)
 }
 
 async fn create_transfers(
@@ -1324,6 +1353,7 @@ async fn create_transfers(
     ssp_client: &Arc<ServiceProvider>,
     htlc_service: &Arc<HtlcService>,
     our_public_key: PublicKey,
+    ssp_public_key: PublicKey,
 ) -> Result<PagingResult<WalletTransfer>, SparkWalletError> {
     let mut incoming_preimage_swap_transfer_ids = Vec::new();
     let mut outgoing_preimage_swap_transfer_ids = Vec::new();
@@ -1394,6 +1424,7 @@ async fn create_transfers(
                 .cloned()
                 .map(Into::into),
             our_public_key,
+            ssp_public_key,
         )
     }))
 }
@@ -1403,6 +1434,7 @@ async fn create_transfer(
     ssp_client: &Arc<ServiceProvider>,
     htlc_service: &Arc<HtlcService>,
     our_public_key: PublicKey,
+    ssp_public_key: PublicKey,
 ) -> Result<WalletTransfer, SparkWalletError> {
     let ssp_transfer = ssp_client
         .get_transfers(vec![transfer.id.to_string()])
@@ -1440,6 +1472,7 @@ async fn create_transfer(
         ssp_transfer,
         preimage_request.map(Into::into),
         our_public_key,
+        ssp_public_key,
     ))
 }
 
@@ -1613,6 +1646,7 @@ impl BackgroundProcessor {
                     ssp_transfer.clone(),
                     htlc.clone(),
                     self.identity_public_key,
+                    self.ssp_client.identity_public_key(),
                 ),
             ));
 
@@ -1629,6 +1663,7 @@ impl BackgroundProcessor {
                 ssp_transfer,
                 htlc,
                 self.identity_public_key,
+                self.ssp_client.identity_public_key(),
             )));
         Ok(())
     }
