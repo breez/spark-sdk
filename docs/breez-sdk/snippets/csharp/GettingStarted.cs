@@ -59,12 +59,8 @@ namespace BreezSdkSnippets
                 switch (sdkEvent)
                 {
                     case SdkEvent.Synced syncedEvent:
-                        // Wallet has been synchronized with the network
-                        break;
-
-                    case SdkEvent.DataSynced dataSyncedEvent:
-                        // Data was pushed/pulled to/from real-time sync storage
-                        var pulledNewRecords = dataSyncedEvent.didPullNewRecords;
+                        // Data has been synchronized with the network. When this event is received,
+                        // it is recommended to refresh the payment list and wallet balance.
                         break;
 
                     case SdkEvent.UnclaimedDeposits unclaimedDepositsEvent:

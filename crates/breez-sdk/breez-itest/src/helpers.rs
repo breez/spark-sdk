@@ -311,8 +311,6 @@ pub enum EventResult {
     PaymentPending(Box<Payment>),
     /// Synced event occurred
     Synced,
-    /// Data synced event occurred
-    DataSynced(bool),
 }
 
 /// Generic event waiter with timeout
@@ -491,35 +489,6 @@ pub async fn wait_for_synced_event(
 ) -> Result<()> {
     wait_for_event(event_rx, timeout_secs, "Synced", |event| match event {
         SdkEvent::Synced => Ok(Some(EventResult::Synced)),
-        other => {
-            info!("Received SDK event: {:?}", other);
-            Ok(None)
-        }
-    })
-    .await
-    .map(|_| ())
-}
-
-pub async fn wait_for_data_synced_event(
-    event_rx: &mut mpsc::Receiver<SdkEvent>,
-    timeout_secs: u64,
-    must_pull_new_records: bool,
-) -> Result<()> {
-    wait_for_event(event_rx, timeout_secs, "DataSynced", |event| match event {
-        SdkEvent::DataSynced {
-            did_pull_new_records,
-        } => {
-            if must_pull_new_records {
-                if did_pull_new_records {
-                    Ok(Some(EventResult::DataSynced(did_pull_new_records)))
-                } else {
-                    info!("Received DataSynced but did not pull new records");
-                    Ok(None)
-                }
-            } else {
-                Ok(Some(EventResult::DataSynced(did_pull_new_records)))
-            }
-        }
         other => {
             info!("Received SDK event: {:?}", other);
             Ok(None)

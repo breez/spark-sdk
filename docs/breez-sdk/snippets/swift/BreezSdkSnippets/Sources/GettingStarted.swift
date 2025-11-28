@@ -50,11 +50,9 @@ class SdkEventListener: EventListener {
     func onEvent(event: SdkEvent) async {
         switch event {
         case .synced:
-            // Wallet has been synchronized with the network
+            // Data has been synchronized with the network. When this event is received,
+            // it is recommended to refresh the payment list and wallet balance.
             break
-        case .dataSynced(let dataSynced):
-            // Data was pushed/pulled to/from real-time sync storage
-            let _ = dataSynced
         case .unclaimedDeposits(let unclaimedDeposits):
             // SDK was unable to claim some deposits automatically
             let _ = unclaimedDeposits
