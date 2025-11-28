@@ -1236,7 +1236,10 @@ impl BreezSdk {
                     amount: request.prepare_response.amount_sats.into(),
                     token_identifier: None,
                 },
-                options: None,
+                options: Some(SendPaymentOptions::Bolt11Invoice {
+                    prefer_spark: false,
+                    completion_timeout_secs: None,
+                }),
                 idempotency_key: request.idempotency_key,
             },
             true,
