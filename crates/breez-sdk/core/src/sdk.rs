@@ -211,7 +211,7 @@ pub fn default_config(network: Network) -> Config {
         sync_interval_secs: 60, // every 1 minute
         max_deposit_claim_fee: Some(Fee::Rate { sat_per_vbyte: 1 }),
         lnurl_domain,
-        prefer_spark_over_lightning: false,
+        prefer_spark_over_lightning: true,
         external_input_parsers: None,
         use_default_external_input_parsers: true,
         real_time_sync_server_url: Some(BREEZ_SYNC_SERVICE_URL.to_string()),
@@ -1133,7 +1133,7 @@ impl BreezSdk {
                         amount_sats.unwrap_or_default(),
                         Some(InvoiceDescription::Memo(description.clone())),
                         None,
-                        true,
+                        self.config.prefer_spark_over_lightning,
                     )
                     .await?
                     .invoice,

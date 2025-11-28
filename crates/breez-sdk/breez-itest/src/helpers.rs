@@ -37,7 +37,6 @@ pub async fn build_sdk_with_dir(
     let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed
     config.lnurl_domain = None; // Avoid lnurl server in tests
-    config.prefer_spark_over_lightning = true; // prefer spark transfers when possible
     config.sync_interval_secs = 5; // Faster syncing for tests
     config.real_time_sync_server_url = None; // Disable real-time sync for tests
 
@@ -95,8 +94,7 @@ pub async fn build_sdk_with_custom_config(
         // In regtest we don't need an API key; drop it if present to avoid network calls
         config.api_key = None;
     }
-    // Speed up tests and prefer spark routing
-    config.prefer_spark_over_lightning = true;
+    // Speed up tests
     config.sync_interval_secs = 5;
     if apply_sensible_test_defaults {
         config.real_time_sync_server_url = None;

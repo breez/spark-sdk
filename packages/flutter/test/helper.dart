@@ -10,6 +10,7 @@ extension ConfigCopyWith on Config {
     bool? preferSparkOverLightning,
     List<ExternalInputParser>? externalInputParsers,
     bool? useDefaultExternalInputParsers,
+    bool? privateEnabledDefault,
   }) {
     return Config(
       apiKey: apiKey ?? this.apiKey,
@@ -17,9 +18,13 @@ extension ConfigCopyWith on Config {
       syncIntervalSecs: syncIntervalSecs ?? this.syncIntervalSecs,
       maxDepositClaimFee: maxDepositClaimFee ?? this.maxDepositClaimFee,
       lnurlDomain: lnurlDomain ?? this.lnurlDomain,
-      preferSparkOverLightning: preferSparkOverLightning ?? this.preferSparkOverLightning,
+      preferSparkOverLightning:
+          preferSparkOverLightning ?? this.preferSparkOverLightning,
       externalInputParsers: externalInputParsers ?? this.externalInputParsers,
-      useDefaultExternalInputParsers: useDefaultExternalInputParsers ?? this.useDefaultExternalInputParsers,
+      useDefaultExternalInputParsers:
+          useDefaultExternalInputParsers ?? this.useDefaultExternalInputParsers,
+      privateEnabledDefault:
+          privateEnabledDefault ?? this.privateEnabledDefault,
     );
   }
 }

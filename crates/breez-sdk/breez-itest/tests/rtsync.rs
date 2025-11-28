@@ -92,7 +92,6 @@ async fn create_sdk_with_rtsync(name: &str, seed: [u8; 32], sync_url: &str) -> R
 
     let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed
-    config.prefer_spark_over_lightning = true;
     config.sync_interval_secs = 1; // Faster sync for testing
     config.real_time_sync_server_url = Some(sync_url.to_string());
     config.lnurl_domain = None;
