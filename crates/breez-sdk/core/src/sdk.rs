@@ -52,7 +52,7 @@ use crate::{
     UserSettings, WaitForPaymentIdentifier,
     chain::RecommendedFees,
     error::SdkError,
-    events::{EventEmitter, EventListener, SdkEvent},
+    events::{EventEmitter, EventListener, InternalSyncedEvent, SdkEvent},
     issuer::TokenIssuer,
     lnurl::{ListMetadataRequest, LnurlServerClient, PublishZapReceiptRequest},
     logger,
@@ -667,52 +667,85 @@ impl BreezSdk {
         *lnurl_receive_metadata = db_lnurl_receive_metadata;
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn sync_wallet_internal(&self, sync_type: SyncType) -> Result<(), SdkError> {
         let start_time = Instant::now();
 
         let sync_wallet = async {
-            if sync_type.contains(SyncType::Wallet) {
+            let wallet_synced = if sync_type.contains(SyncType::Wallet) {
                 debug!("sync_wallet_internal: Starting Wallet sync");
                 let wallet_start = Instant::now();
-                if let Err(e) = self.spark_wallet.sync().await {
-                    error!("sync_wallet_internal: Failed to sync with Spark network: {e:?}");
+                match self.spark_wallet.sync().await {
+                    Ok(()) => {
+                        debug!(
+                            "sync_wallet_internal: Wallet sync completed in {:?}",
+                            wallet_start.elapsed()
+                        );
+                        true
+                    }
+                    Err(e) => {
+                        error!(
+                            "sync_wallet_internal: Spark wallet sync failed in {:?}: {e:?}",
+                            wallet_start.elapsed()
+                        );
+                        false
+                    }
                 }
-                debug!(
-                    "sync_wallet_internal: Wallet sync completed in {:?}",
-                    wallet_start.elapsed()
-                );
             } else {
                 trace!("sync_wallet_internal: Skipping Wallet sync");
-            }
+                false
+            };
 
-            if sync_type.contains(SyncType::WalletState) {
+            let wallet_state_synced = if sync_type.contains(SyncType::WalletState) {
                 debug!("sync_wallet_internal: Starting WalletState sync");
                 let wallet_state_start = Instant::now();
-                if let Err(e) = self.sync_wallet_state_to_storage().await {
-                    error!("sync_wallet_internal: Failed to sync wallet state to storage: {e:?}");
+                match self.sync_wallet_state_to_storage().await {
+                    Ok(()) => {
+                        debug!(
+                            "sync_wallet_internal: WalletState sync completed in {:?}",
+                            wallet_state_start.elapsed()
+                        );
+                        true
+                    }
+                    Err(e) => {
+                        error!(
+                            "sync_wallet_internal: Failed to sync wallet state to storage in {:?}: {e:?}",
+                            wallet_state_start.elapsed()
+                        );
+                        false
+                    }
                 }
-                debug!(
-                    "sync_wallet_internal: WalletState sync completed in {:?}",
-                    wallet_state_start.elapsed()
-                );
             } else {
                 trace!("sync_wallet_internal: Skipping WalletState sync");
-            }
+                false
+            };
+
+            (wallet_synced, wallet_state_synced)
         };
 
         let sync_lnurl = async {
             if sync_type.contains(SyncType::LnurlMetadata) {
                 debug!("sync_wallet_internal: Starting LnurlMetadata sync");
                 let lnurl_start = Instant::now();
-                if let Err(e) = self.sync_lnurl_metadata().await {
-                    error!("sync_wallet_internal: Failed to sync lnurl metadata: {e:?}");
+                match self.sync_lnurl_metadata().await {
+                    Ok(()) => {
+                        debug!(
+                            "sync_wallet_internal: LnurlMetadata sync completed in {:?}",
+                            lnurl_start.elapsed()
+                        );
+                        true
+                    }
+                    Err(e) => {
+                        error!(
+                            "sync_wallet_internal: Failed to sync lnurl metadata in {:?}: {e:?}",
+                            lnurl_start.elapsed()
+                        );
+                        false
+                    }
                 }
-                debug!(
-                    "sync_wallet_internal: LnurlMetadata sync completed in {:?}",
-                    lnurl_start.elapsed()
-                );
             } else {
                 trace!("sync_wallet_internal: Skipping LnurlMetadata sync");
+                false
             }
         };
 
@@ -720,25 +753,41 @@ impl BreezSdk {
             if sync_type.contains(SyncType::Deposits) {
                 debug!("sync_wallet_internal: Starting Deposits sync");
                 let deposits_start = Instant::now();
-                if let Err(e) = self.check_and_claim_static_deposits().await {
-                    error!(
-                        "sync_wallet_internal: Failed to check and claim static deposits: {e:?}"
-                    );
+                match self.check_and_claim_static_deposits().await {
+                    Ok(()) => {
+                        debug!(
+                            "sync_wallet_internal: Deposits sync completed in {:?}",
+                            deposits_start.elapsed()
+                        );
+                        true
+                    }
+                    Err(e) => {
+                        error!(
+                            "sync_wallet_internal: Failed to check and claim static deposits in {:?}: {e:?}",
+                            deposits_start.elapsed()
+                        );
+                        false
+                    }
                 }
-                debug!(
-                    "sync_wallet_internal: Deposits sync completed in {:?}",
-                    deposits_start.elapsed()
-                );
             } else {
                 trace!("sync_wallet_internal: Skipping Deposits sync");
+                false
             }
         };
 
-        tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
+        let ((wallet, wallet_state), lnurl_metadata, deposits) =
+            tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
 
         let elapsed = start_time.elapsed();
-        info!("sync_wallet_internal: Wallet sync completed in {elapsed:?}");
-        self.event_emitter.emit(&SdkEvent::Synced {}).await;
+        let event = InternalSyncedEvent {
+            wallet,
+            wallet_state,
+            lnurl_metadata,
+            deposits,
+            storage: false,
+        };
+        info!("sync_wallet_internal: Wallet sync completed in {elapsed:?}: {event:?}");
+        self.event_emitter.emit_synced(&event).await;
         Ok(())
     }
 

@@ -13,7 +13,7 @@ use tracing::{debug, error};
 
 use crate::{
     DepositInfo, EventEmitter, ListPaymentsRequest, Payment, PaymentDetails, PaymentMetadata,
-    SdkEvent, Storage, StorageError, UpdateDepositPayload,
+    Storage, StorageError, UpdateDepositPayload, events::InternalSyncedEvent,
 };
 use tokio_with_wasm::alias as tokio;
 
@@ -68,10 +68,16 @@ impl NewRecordHandler for SyncedStorage {
             "real-time sync completed for {:?} incoming, {:?} outgoing records",
             incoming_count, outgoing_count
         );
-        let did_pull_new_records = incoming_count.is_some();
+
+        // No need to emit an event if no new data was pulled.
+        if incoming_count.is_none() || incoming_count == Some(0) {
+            return Ok(());
+        }
+
         self.event_emitter
-            .emit(&SdkEvent::DataSynced {
-                did_pull_new_records,
+            .emit_synced(&InternalSyncedEvent {
+                storage: true,
+                ..Default::default()
             })
             .await;
         Ok(())
