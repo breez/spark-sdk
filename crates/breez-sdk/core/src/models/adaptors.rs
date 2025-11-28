@@ -118,6 +118,13 @@ impl PaymentDetails {
             }));
         }
 
+        if transfer.transfer_type == TransferType::Transfer {
+            return Ok(Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+            }));
+        }
+
         // No details available
         Ok(None)
     }

@@ -211,7 +211,7 @@ pub fn default_config(network: Network) -> Config {
         sync_interval_secs: 60, // every 1 minute
         max_deposit_claim_fee: Some(Fee::Rate { sat_per_vbyte: 1 }),
         lnurl_domain,
-        prefer_spark_over_lightning: false,
+        prefer_spark_over_lightning: true,
         external_input_parsers: None,
         use_default_external_input_parsers: true,
         real_time_sync_server_url: Some(BREEZ_SYNC_SERVICE_URL.to_string()),
@@ -1239,7 +1239,10 @@ impl BreezSdk {
                     amount: request.prepare_response.amount_sats.into(),
                     token_identifier: None,
                 },
-                options: None,
+                options: Some(SendPaymentOptions::Bolt11Invoice {
+                    prefer_spark: false,
+                    completion_timeout_secs: None,
+                }),
                 idempotency_key: request.idempotency_key,
             },
             true,
