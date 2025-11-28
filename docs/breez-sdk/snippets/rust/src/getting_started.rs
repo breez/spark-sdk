@@ -63,12 +63,8 @@ impl EventListener for SdkEventListener {
     async fn on_event(&self, e: SdkEvent) {
         match e {
             SdkEvent::Synced => {
-                // Wallet has been synchronized with the network
-            }
-            SdkEvent::DataSynced {
-                did_pull_new_records,
-            } => {
-                // Data was pushed/pulled to/from real-time sync storage
+                // Data has been synchronized with the network. When this event is received,
+                // it is recommended to refresh the payment list and wallet balance.
             }
             SdkEvent::UnclaimedDeposits { unclaimed_deposits } => {
                 // SDK was unable to claim some deposits automatically
