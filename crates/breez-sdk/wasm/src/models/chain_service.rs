@@ -18,21 +18,6 @@ pub struct Utxo {
     pub status: TxStatus,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::RecommendedFees)]
-pub struct RecommendedFees {
-    pub fastest_fee: u64,
-    pub half_hour_fee: u64,
-    pub hour_fee: u64,
-    pub economy_fee: u64,
-    pub minimum_fee: u64,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::ChainApiType)]
-pub enum ChainApiType {
-    Esplora,
-    MempoolSpace,
-}
-
 pub struct WasmBitcoinChainService {
     pub inner: BitcoinChainService,
 }
@@ -100,20 +85,6 @@ impl breez_sdk_spark::BitcoinChainService for WasmBitcoinChainService {
         future.await.map_err(js_error_to_chain_service_error)?;
         Ok(())
     }
-
-    async fn recommended_fees(
-        &self,
-    ) -> Result<breez_sdk_spark::RecommendedFees, breez_sdk_spark::ChainServiceError> {
-        let promise = self
-            .inner
-            .recommended_fees()
-            .map_err(js_error_to_chain_service_error)?;
-        let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_chain_service_error)?;
-        let recommended_fees: RecommendedFees = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| breez_sdk_spark::ChainServiceError::Generic(e.to_string()))?;
-        Ok(recommended_fees.into())
-    }
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -122,7 +93,6 @@ const EVENT_INTERFACE: &'static str = r#"export interface BitcoinChainService {
     getTransactionStatus(txid: string): Promise<TxStatus>;
     getTransactionHex(txid: string): Promise<string>;
     broadcastTransaction(tx: string): Promise<void>;
-    recommendedFees(): Promise<RecommendedFees>;
 }"#;
 
 #[wasm_bindgen]
@@ -153,7 +123,4 @@ extern "C" {
         this: &BitcoinChainService,
         tx: String,
     ) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(structural, method, js_name = "recommendedFees", catch)]
-    pub fn recommended_fees(this: &BitcoinChainService) -> Result<Promise, JsValue>;
 }

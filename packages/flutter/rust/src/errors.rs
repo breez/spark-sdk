@@ -1,4 +1,3 @@
-use breez_sdk_spark::Fee;
 pub use breez_sdk_spark::{DepositClaimError, SdkError, StorageError};
 use flutter_rust_bridge::frb;
 

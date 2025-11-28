@@ -1045,3 +1045,12 @@ pub struct LnurlReceiveMetadata {
     pub nostr_zap_receipt: Option<String>,
     pub sender_comment: Option<String>,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecommendedFeesResponse)]
+pub struct RecommendedFeesResponse {
+    pub fastest_fee: u64,
+    pub half_hour_fee: u64,
+    pub hour_fee: u64,
+    pub economy_fee: u64,
+    pub minimum_fee: u64,
+}

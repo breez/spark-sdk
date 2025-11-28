@@ -53,12 +53,11 @@ const exampleGettingStartedAdvanced = async () => {
 const exampleWithRestChainService = async (builder: SdkBuilder) => {
   // ANCHOR: with-rest-chain-service
   const url = '<your REST chain service URL>'
-  const chainApiType = 'mempoolSpace'
   const optionalCredentials: Credentials = {
     username: '<username>',
     password: '<password>'
   }
-  builder = builder.withRestChainService(url, chainApiType, optionalCredentials)
+  builder = builder.withRestChainService(url, optionalCredentials)
   // ANCHOR_END: with-rest-chain-service
 }
 

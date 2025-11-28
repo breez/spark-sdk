@@ -120,9 +120,9 @@ func RefundDeposit(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func RecommendedFees(sdk *breez_sdk_spark.BreezSdk) error {
+func RecommendedFeesExample() error {
 	// ANCHOR: recommended-fees
-	response, err := sdk.RecommendedFees()
+	response, err := breez_sdk_spark.RecommendedFees(breez_sdk_spark.NetworkMainnet)
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return err
 	}

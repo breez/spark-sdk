@@ -37,14 +37,12 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
 pub(crate) fn with_rest_chain_service(builder: SdkBuilder) -> SdkBuilder {
     // ANCHOR: with-rest-chain-service
     let url = "<your REST chain service URL>".to_string();
-    let chain_api_type = ChainApiType::MempoolSpace;
     let optional_credentials = Credentials {
         username: "<username>".to_string(),
         password: "<password>".to_string(),
     };
     builder.with_rest_chain_service(
         url,
-        chain_api_type,
         Some(optional_credentials),
     )
     // ANCHOR_END: with-rest-chain-service

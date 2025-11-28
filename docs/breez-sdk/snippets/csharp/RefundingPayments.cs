@@ -101,10 +101,10 @@ namespace BreezSdkSnippets
             // ANCHOR_END: refund-deposit
         }
 
-        async Task RecommendedFees(BreezSdk sdk)
+        async Task RecommendedFeesExample()
         {
             // ANCHOR: recommended-fees
-            var response = await sdk.RecommendedFees();
+            var response = await BreezSdkSparkMethods.RecommendedFees(network: Network.Mainnet);
             Console.WriteLine($"Fastest fee: {response.fastestFee} sats/vByte");
             Console.WriteLine($"Half-hour fee: {response.halfHourFee} sats/vByte");
             Console.WriteLine($"Hour fee: {response.hourFee} sats/vByte");

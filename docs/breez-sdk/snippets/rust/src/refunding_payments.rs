@@ -94,9 +94,9 @@ async fn refund_deposit(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn recommended_fees(sdk: &BreezSdk) -> Result<()> {
+async fn recommended_fees_example() -> Result<()> {
     // ANCHOR: recommended-fees
-    let response = sdk.recommended_fees().await?;
+    let response = recommended_fees(network: Network::Mainnet).await?;
     info!("Fastest fee: {} sats/vByte", response.fastest_fee);
     info!("Half-hour fee: {} sats/vByte", response.half_hour_fee);
     info!("Hour fee: {} sats/vByte", response.hour_fee);

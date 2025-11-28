@@ -18,7 +18,10 @@ use crate::{
     RestClientWrapper, Seed,
     chain::{
         BitcoinChainService,
-        rest_client::{BasicAuth, ChainApiType, RestClientChainService},
+        rest_client::{
+            BasicAuth, RestClientChainService, SPARK_MEMPOOL_SPACE_PASSWORD,
+            SPARK_MEMPOOL_SPACE_URL, SPARK_MEMPOOL_SPACE_USERNAME,
+        },
     },
     error::SdkError,
     lnurl::{LnurlServerClient, ReqwestLnurlServerClient},
@@ -136,7 +139,6 @@ impl SdkBuilder {
     pub fn with_rest_chain_service(
         mut self,
         url: String,
-        api_type: ChainApiType,
         credentials: Option<Credentials>,
     ) -> Self {
         self.chain_service = Some(Arc::new(RestClientChainService::new(
@@ -145,7 +147,6 @@ impl SdkBuilder {
             5,
             Box::new(CommonRequestRestClient::new().unwrap()),
             credentials.map(|c| BasicAuth::new(c.username, c.password)),
-            api_type,
         )));
         self
     }
@@ -213,10 +214,9 @@ impl SdkBuilder {
                     5,
                     Box::new(inner_client),
                     None,
-                    ChainApiType::Esplora,
                 )),
                 Network::Regtest => Arc::new(RestClientChainService::new(
-                    "https://regtest-mempool.us-west-2.sparkinfra.net/api".to_string(),
+                    SPARK_MEMPOOL_SPACE_URL.to_string(),
                     self.config.network,
                     5,
                     Box::new(inner_client),
@@ -226,11 +226,10 @@ impl SdkBuilder {
                     ) {
                         (Ok(username), Ok(password)) => Some(BasicAuth::new(username, password)),
                         _ => Some(BasicAuth::new(
-                            "spark-sdk".to_string(),
-                            "mCMk1JqlBNtetUNy".to_string(),
+                            SPARK_MEMPOOL_SPACE_USERNAME.to_string(),
+                            SPARK_MEMPOOL_SPACE_PASSWORD.to_string(),
                         )),
                     },
-                    ChainApiType::MempoolSpace,
                 )),
             }
         };

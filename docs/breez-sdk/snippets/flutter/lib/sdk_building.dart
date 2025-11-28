@@ -29,14 +29,12 @@ Future<void> initSdkAdvanced() async {
 Future<void> withRestChainService(SdkBuilder builder) async {
   // ANCHOR: with-rest-chain-service
   String url = "<your REST chain service URL>";
-  var chainApiType = ChainApiType.mempoolSpace;
   var optionalCredentials = Credentials(
     username: "<username>",
     password: "<password>",
   );
   builder.withRestChainService(
     url: url,
-    apiType: chainApiType,
     credentials: optionalCredentials,
   );
   // ANCHOR_END: with-rest-chain-service

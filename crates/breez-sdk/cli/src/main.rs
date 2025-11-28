@@ -143,7 +143,9 @@ async fn run_interactive_mode(
 
                 match parse_command(trimmed) {
                     Ok(command) => {
-                        match Box::pin(execute_command(rl, command, &sdk, &token_issuer)).await {
+                        match Box::pin(execute_command(rl, command, &sdk, &token_issuer, network))
+                            .await
+                        {
                             Ok(continue_loop) => {
                                 if !continue_loop {
                                     break;

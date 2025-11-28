@@ -3,7 +3,6 @@ import {
   Seed,
   defaultConfig,
   Network,
-  ChainApiType,
   KeySetType
 } from '@breeztech/breez-sdk-spark-react-native'
 import type { ProvisionalPayment, Credentials } from '@breeztech/breez-sdk-spark-react-native'
@@ -36,12 +35,11 @@ const exampleGettingStartedAdvanced = async () => {
 const exampleWithRestChainService = async (builder: SdkBuilder) => {
   // ANCHOR: with-rest-chain-service
   const url = '<your REST chain service URL>'
-  const chainApiType = ChainApiType.MempoolSpace
   const optionalCredentials: Credentials = {
     username: '<username>',
     password: '<password>'
   }
-  await builder.withRestChainService(url, chainApiType, optionalCredentials)
+  await builder.withRestChainService(url, optionalCredentials)
   // ANCHOR_END: with-rest-chain-service
 }
 

@@ -5,7 +5,7 @@ use crate::{
     logger::{Logger, WASM_LOGGER},
     models::{
         Config, Credentials, KeySetType, Seed,
-        chain_service::{BitcoinChainService, ChainApiType, WasmBitcoinChainService},
+        chain_service::{BitcoinChainService, WasmBitcoinChainService},
         fiat_service::{FiatService, WasmFiatService},
         payment_observer::{PaymentObserver, WasmPaymentObserver},
         rest_client::{RestClient, WasmRestClient},
@@ -90,14 +90,11 @@ impl SdkBuilder {
     pub fn with_rest_chain_service(
         mut self,
         url: String,
-        api_type: ChainApiType,
         credentials: Option<Credentials>,
     ) -> Self {
-        self.builder = self.builder.with_rest_chain_service(
-            url,
-            api_type.into(),
-            credentials.map(|c| c.into()),
-        );
+        self.builder = self
+            .builder
+            .with_rest_chain_service(url, credentials.map(|c| c.into()));
         self
     }
 

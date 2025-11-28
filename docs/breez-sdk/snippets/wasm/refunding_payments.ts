@@ -4,7 +4,8 @@ import {
   type ClaimDepositRequest,
   type RefundDepositRequest,
   type Fee,
-  type DepositInfo
+  type DepositInfo,
+  recommendedFees
 } from '@breeztech/breez-sdk-spark'
 
 const listUnclaimedDeposits = async (sdk: BreezSdk) => {
@@ -107,9 +108,9 @@ const refundDeposit = async (sdk: BreezSdk) => {
   // ANCHOR_END: refund-deposit
 }
 
-const recommendedFees = async (sdk: BreezSdk) => {
+const recommendedFeesExample = async () => {
   // ANCHOR: recommended-fees
-  const response = await sdk.recommendedFees()
+  const response = await recommendedFees('mainnet')
   console.log('Fastest fee:', response.fastestFee, 'sats/vByte')
   console.log('Half-hour fee:', response.halfHourFee, 'sats/vByte')
   console.log('Hour fee:', response.hourFee, 'sats/vByte')

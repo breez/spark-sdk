@@ -11,14 +11,14 @@ mod models;
 mod nostr;
 mod persist;
 mod realtime_sync;
+mod recommended_fees;
 mod sdk;
 mod sdk_builder;
 mod sync;
 mod utils;
 
 pub use chain::{
-    BitcoinChainService, ChainServiceError, RecommendedFees, TxStatus, Utxo,
-    rest_client::{ChainApiType, RestClientChainService},
+    BitcoinChainService, ChainServiceError, TxStatus, Utxo, rest_client::RestClientChainService,
 };
 pub use common::{fiat::*, models::*, rest::*, sync_storage};
 pub use error::{DepositClaimError, SdkError};
@@ -29,6 +29,7 @@ pub use persist::{
     PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, UpdateDepositPayload,
     path::default_storage_path,
 };
+pub use recommended_fees::{RecommendedFeesResponse, recommended_fees};
 pub use sdk::{BreezSdk, default_config, init_logging, parse_input};
 pub use sdk_builder::SdkBuilder;
 pub use spark_wallet::KeySet;

@@ -29,14 +29,12 @@ func initSdkAdvanced() async throws -> BreezSdk {
 func withRestChainService(builder: SdkBuilder) async {
     // ANCHOR: with-rest-chain-service
     let url = "<your REST chain service URL>"
-    let chainApiType = ChainApiType.mempoolSpace
     let optionalCredentials = Credentials(
         username: "<username>",
         password: "<password>"
     )
     await builder.withRestChainService(
         url: url,
-        apiType: chainApiType,
         credentials: optionalCredentials
     )
     // ANCHOR_END: with-rest-chain-service

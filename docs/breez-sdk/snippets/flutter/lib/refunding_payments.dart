@@ -11,7 +11,8 @@ Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
 
     final claimError = deposit.claimError;
     if (claimError is DepositClaimError_MaxDepositClaimFeeExceeded) {
-      final maxFeeStr = claimError.maxFee != null ? '${claimError.maxFee} sats' : 'none';
+      final maxFeeStr =
+          claimError.maxFee != null ? '${claimError.maxFee} sats' : 'none';
       print(
           "Max claim fee exceeded. Max: $maxFeeStr, Required: ${claimError.requiredFee} sats");
     } else if (claimError is DepositClaimError_MissingUtxo) {
@@ -86,9 +87,9 @@ Future<void> refundDeposit(BreezSdk sdk) async {
   // ANCHOR_END: refund-deposit
 }
 
-Future<void> recommendedFees(BreezSdk sdk) async {
+Future<void> recommendedFeesExample() async {
   // ANCHOR: recommended-fees
-  final response = await sdk.recommendedFees();
+  final response = await recommendedFees(network: Network.mainnet);
   print("Fastest fee: ${response.fastestFee} sats/vByte");
   print("Half-hour fee: ${response.halfHourFee} sats/vByte");
   print("Hour fee: ${response.hourFee} sats/vByte");

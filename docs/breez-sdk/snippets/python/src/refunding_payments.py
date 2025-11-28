@@ -6,6 +6,8 @@ from breez_sdk_spark import (
     RefundDepositRequest,
     Fee,
     DepositClaimError,
+    recommended_fees,
+    Network,
 )
 
 
@@ -110,9 +112,9 @@ async def refund_deposit(sdk: BreezSdk):
         raise
     # ANCHOR_END: refund-deposit
 
-async def recommended_feeds(sdk: BreezSdk):
+async def recommended_feeds_example():
     # ANCHOR: recommended-fees
-    response = await sdk.recommended_fees()
+    response = await recommended_fees(network=Network.MAINNET)
     logging.info(f"Fastest fee: {response.fastest_fee} sats/vByte")
     logging.info(f"Half-hour fee: {response.half_hour_fee} sats/vByte")
     logging.info(f"Hour fee: {response.hour_fee} sats/vByte")

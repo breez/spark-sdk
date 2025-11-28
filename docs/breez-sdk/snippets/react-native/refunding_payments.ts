@@ -5,7 +5,9 @@ import {
   type RefundDepositRequest,
   DepositClaimError,
   Fee,
-  type DepositInfo
+  Network,
+  type DepositInfo,
+  recommendedFees
 } from '@breeztech/breez-sdk-spark-react-native'
 
 const listUnclaimedDeposits = async (sdk: BreezSdk) => {
@@ -19,7 +21,10 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
 
     if (deposit.claimError != null) {
       if (deposit.claimError instanceof DepositClaimError.MaxDepositClaimFeeExceeded) {
-        const maxFeeStr = deposit.claimError.inner.maxFee != null ? `${deposit.claimError.inner.maxFee} sats` : 'none'
+        const maxFeeStr =
+          deposit.claimError.inner.maxFee != null
+            ? `${deposit.claimError.inner.maxFee} sats`
+            : 'none'
         console.log(
           `Max claim fee exceeded. Max: ${maxFeeStr}, Required: ${deposit.claimError.inner.requiredFee} sats`
         )
@@ -97,9 +102,9 @@ const refundDeposit = async (sdk: BreezSdk) => {
   // ANCHOR_END: refund-deposit
 }
 
-const recommendedFees = async (sdk: BreezSdk) => {
+const recommendedFeesExample = async () => {
   // ANCHOR: recommended-fees
-  const response = await sdk.recommendedFees()
+  const response = await recommendedFees(Network.Mainnet)
   console.log('Fastest fee:', response.fastestFee, 'sats/vByte')
   console.log('Half-hour fee:', response.halfHourFee, 'sats/vByte')
   console.log('Hour fee:', response.hourFee, 'sats/vByte')

@@ -4,11 +4,9 @@ use breez_sdk_common::rest::RestClient as CommonRestClient;
 use breez_sdk_common::{error::ServiceConnectivityError, rest::RestResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Duration;
-use tokio_with_wasm::alias as tokio;
 use tracing::info;
 
-use crate::chain::RecommendedFees;
+use crate::utils::rest::get_with_retry;
 use crate::{
     Network,
     chain::{ChainServiceError, Utxo},
@@ -16,14 +14,10 @@ use crate::{
 
 use super::BitcoinChainService;
 
-pub const RETRYABLE_ERROR_CODES: [u16; 3] = [
-    429, // TOO_MANY_REQUESTS
-    500, // INTERNAL_SERVER_ERROR
-    503, // SERVICE_UNAVAILABLE
-];
-
-/// Base backoff in milliseconds.
-const BASE_BACKOFF_MILLIS: Duration = Duration::from_millis(256);
+pub(crate) const SPARK_MEMPOOL_SPACE_URL: &str =
+    "https://regtest-mempool.us-west-2.sparkinfra.net/api";
+pub(crate) const SPARK_MEMPOOL_SPACE_USERNAME: &str = "spark-sdk";
+pub(crate) const SPARK_MEMPOOL_SPACE_PASSWORD: &str = "mCMk1JqlBNtetUNy";
 
 #[derive(Serialize, Deserialize, Clone)]
 struct TxInfo {
@@ -32,8 +26,8 @@ struct TxInfo {
 }
 
 pub struct BasicAuth {
-    username: String,
-    password: String,
+    pub username: String,
+    pub password: String,
 }
 
 impl BasicAuth {
@@ -48,36 +42,6 @@ pub struct RestClientChainService {
     client: Box<dyn breez_sdk_common::rest::RestClient>,
     max_retries: usize,
     basic_auth: Option<BasicAuth>,
-    api_type: ChainApiType,
-}
-
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum ChainApiType {
-    Esplora,
-    MempoolSpace,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MempoolSpaceRecommendedFeesResponse {
-    fastest_fee: f64,
-    half_hour_fee: f64,
-    hour_fee: f64,
-    economy_fee: f64,
-    minimum_fee: f64,
-}
-
-impl From<MempoolSpaceRecommendedFeesResponse> for RecommendedFees {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn from(response: MempoolSpaceRecommendedFeesResponse) -> Self {
-        Self {
-            fastest_fee: response.fastest_fee.ceil() as u64,
-            half_hour_fee: response.half_hour_fee.ceil() as u64,
-            hour_fee: response.hour_fee.ceil() as u64,
-            economy_fee: response.economy_fee.ceil() as u64,
-            minimum_fee: response.minimum_fee.ceil() as u64,
-        }
-    }
 }
 
 impl RestClientChainService {
@@ -87,7 +51,6 @@ impl RestClientChainService {
         max_retries: usize,
         rest_client: Box<dyn CommonRestClient>,
         basic_auth: Option<BasicAuth>,
-        api_type: ChainApiType,
     ) -> Self {
         Self {
             base_url,
@@ -95,7 +58,6 @@ impl RestClientChainService {
             client: rest_client,
             max_retries,
             basic_auth,
-            api_type,
         }
     }
 
@@ -105,7 +67,13 @@ impl RestClientChainService {
     ) -> Result<T, ChainServiceError> {
         let url = format!("{}{}", self.base_url, path);
         info!("Fetching response json from {}", url);
-        let (response, _) = self.get_with_retry(&url, self.client.as_ref()).await?;
+        let (response, _) = get_with_retry(
+            self.basic_auth.as_ref(),
+            self.max_retries,
+            &url,
+            self.client.as_ref(),
+        )
+        .await?;
 
         let response: T = serde_json::from_str(&response)
             .map_err(|e| ChainServiceError::Generic(e.to_string()))?;
@@ -116,47 +84,14 @@ impl RestClientChainService {
     async fn get_response_text(&self, path: &str) -> Result<String, ChainServiceError> {
         let url = format!("{}{}", self.base_url, path);
         info!("Fetching response text from {}", url);
-        let (response, _) = self.get_with_retry(&url, self.client.as_ref()).await?;
+        let (response, _) = get_with_retry(
+            self.basic_auth.as_ref(),
+            self.max_retries,
+            &url,
+            self.client.as_ref(),
+        )
+        .await?;
         Ok(response)
-    }
-
-    async fn get_with_retry(
-        &self,
-        url: &str,
-        client: &dyn CommonRestClient,
-    ) -> Result<(String, u16), ChainServiceError> {
-        let mut delay = BASE_BACKOFF_MILLIS;
-        let mut attempts = 0;
-
-        loop {
-            let mut headers: Option<HashMap<String, String>> = None;
-            if let Some(basic_auth) = &self.basic_auth {
-                let auth_string = format!("{}:{}", basic_auth.username, basic_auth.password);
-                let encoded_auth = general_purpose::STANDARD.encode(auth_string.as_bytes());
-
-                headers = Some(
-                    vec![("Authorization".to_string(), format!("Basic {encoded_auth}"))]
-                        .into_iter()
-                        .collect(),
-                );
-            }
-
-            let RestResponse { body, status } =
-                client.get_request(url.to_string(), headers).await?;
-            match status {
-                status if attempts < self.max_retries && is_status_retryable(status) => {
-                    tokio::time::sleep(delay).await;
-                    attempts = attempts.saturating_add(1);
-                    delay = delay.saturating_mul(2);
-                }
-                _ => {
-                    if !(200..300).contains(&status) {
-                        return Err(ServiceConnectivityError::Status { status, body }.into());
-                    }
-                    return Ok((body, status));
-                }
-            }
-        }
     }
 
     async fn post(&self, url: &str, body: Option<String>) -> Result<String, ChainServiceError> {
@@ -182,29 +117,6 @@ impl RestClientChainService {
         }
 
         Ok(body)
-    }
-
-    async fn recommended_fees_esplora(&self) -> Result<RecommendedFees, ChainServiceError> {
-        let fee_map = self
-            .get_response_json::<HashMap<u16, f64>>("/fee-estimates")
-            .await?;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let get_fees = |block: &u16| fee_map.get(block).map_or(0, |fee| fee.ceil() as u64);
-
-        Ok(RecommendedFees {
-            fastest_fee: get_fees(&1),
-            half_hour_fee: get_fees(&3),
-            hour_fee: get_fees(&6),
-            economy_fee: get_fees(&25),
-            minimum_fee: get_fees(&1008),
-        })
-    }
-
-    async fn recommended_fees_mempool_space(&self) -> Result<RecommendedFees, ChainServiceError> {
-        let response = self
-            .get_response_json::<MempoolSpaceRecommendedFeesResponse>("/v1/fees/recommended")
-            .await?;
-        Ok(response.into())
     }
 }
 
@@ -244,17 +156,6 @@ impl BitcoinChainService for RestClientChainService {
         self.post(&url, Some(tx)).await?;
         Ok(())
     }
-
-    async fn recommended_fees(&self) -> Result<RecommendedFees, ChainServiceError> {
-        match self.api_type {
-            ChainApiType::Esplora => self.recommended_fees_esplora().await,
-            ChainApiType::MempoolSpace => self.recommended_fees_mempool_space().await,
-        }
-    }
-}
-
-fn is_status_retryable(status: u16) -> bool {
-    RETRYABLE_ERROR_CODES.contains(&status)
 }
 
 #[cfg(test)]
@@ -341,7 +242,6 @@ mod tests {
             3,
             Box::new(mock),
             None,
-            ChainApiType::Esplora,
         );
 
         // Call the method under test
