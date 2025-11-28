@@ -21,10 +21,14 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
         case 'maxDepositClaimFeeExceeded': {
           let maxFeeStr = 'none'
           if (deposit.claimError.maxFee != null) {
-            maxFeeStr = `${deposit.claimError.maxFee} sats`
+            if (deposit.claimError.maxFee.type === 'fixed') {
+              maxFeeStr = `${deposit.claimError.maxFee.amount} sats`
+            } else if (deposit.claimError.maxFee.type === 'rate') {
+              maxFeeStr = `${deposit.claimError.maxFee.satPerVbyte} sats/vByte`
+            }
           }
           console.log(
-            `Max claim fee exceeded. Max: ${maxFeeStr}, Required: ${deposit.claimError.requiredFee} sats`
+            `Max claim fee exceeded. Max: ${maxFeeStr}, Required: ${deposit.claimError.requiredFeeSats} sats or ${deposit.claimError.requiredFeeRateSatPerVbyte} sats/vByte`
           )
           break
         }
@@ -43,7 +47,7 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
 const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
   // ANCHOR: handle-fee-exceeded
   if (deposit.claimError?.type === 'maxDepositClaimFeeExceeded') {
-    const requiredFee = deposit.claimError.requiredFee
+    const requiredFee = deposit.claimError.requiredFeeSats
 
     // Show UI to user with the required fee and get approval
     const userApproved = true // Replace with actual user approval logic

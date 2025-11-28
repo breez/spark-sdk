@@ -11,9 +11,22 @@ func listUnclaimedDeposits(sdk: BreezSdk) async throws {
         
         if let claimError = deposit.claimError {
             switch claimError {
-            case .maxDepositClaimFeeExceeded(let tx, let vout, let maxFee, let requiredFee):
-                let maxFeeStr = maxFee != nil ? "\(maxFee!) sats" : "none"
-                print("Max claim fee exceeded. Max: \(maxFeeStr), Required: \(requiredFee) sats")
+            case .maxDepositClaimFeeExceeded(
+                let tx, let vout, let maxFee, let requiredFeeSats, let requiredFeeRateSatPerVbyte):
+                let maxFeeStr: String
+                if let maxFee = maxFee {
+                    switch maxFee {
+                    case .fixed(let amount):
+                        maxFeeStr = "\(amount) sats"
+                    case .rate(let satPerVbyte):
+                        maxFeeStr = "\(satPerVbyte) sats/vByte"
+                    }
+                } else {
+                    maxFeeStr = "none"
+                }
+                print(
+                    "Max claim fee exceeded. Max: \(maxFeeStr), Required: \(requiredFeeSats) sats or \(requiredFeeRateSatPerVbyte) sats/vByte"
+                )
             case .missingUtxo(let tx, let vout):
                 print("UTXO not found when claiming deposit")
             case .generic(let message):
@@ -26,7 +39,7 @@ func listUnclaimedDeposits(sdk: BreezSdk) async throws {
 
 func handleFeeExceeded(sdk: BreezSdk, deposit: DepositInfo) async throws {
     // ANCHOR: handle-fee-exceeded
-    if case .maxDepositClaimFeeExceeded(_, _, _, let requiredFee) = deposit.claimError {
+    if case .maxDepositClaimFeeExceeded(_, _, _, let requiredFeeSats, _) = deposit.claimError {
         // Show UI to user with the required fee and get approval
         let userApproved = true // Replace with actual user approval logic
 
@@ -34,7 +47,7 @@ func handleFeeExceeded(sdk: BreezSdk, deposit: DepositInfo) async throws {
             let claimRequest = ClaimDepositRequest(
                 txid: deposit.txid,
                 vout: deposit.vout,
-                maxFee: Fee.fixed(amount: requiredFee)
+                maxFee: Fee.fixed(amount: requiredFeeSats)
             )
             try await sdk.claimDeposit(request: claimRequest)
         }

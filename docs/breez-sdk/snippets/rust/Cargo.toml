@@ -11,3 +11,5 @@ async-trait = "0.1.89"
 breez-sdk-spark = { path = "../../../../crates/breez-sdk/core" }
 log = "0.4"
 tokio = "1.42.0"
+hex = "0.4.3"
+sha256 = "1.6.0"
