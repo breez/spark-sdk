@@ -109,3 +109,17 @@ func recommendedFeesExample() async throws {
     print("Minimum fee: \(response.minimumFee) sats/vByte")
     // ANCHOR_END: recommended-fees
 }
+
+func setMaxFeeToRecommendedFees() async throws {
+    // ANCHOR: set-max-fee-to-recommended-fees
+    // Get the current recommended fees
+    let fees = try await recommendedFees(network: Network.mainnet)
+
+    // Create the default config
+    var config = defaultConfig(network: Network.mainnet)
+    config.apiKey = "<breez api key>"
+
+    // Set the maximum deposit claim fee to the fastest recommended fee
+    config.maxDepositClaimFee = Fee.rate(satPerVbyte: fees.fastestFee)
+    // ANCHOR_END: set-max-fee-to-recommended-fees
+}

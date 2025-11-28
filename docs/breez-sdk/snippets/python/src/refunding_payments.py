@@ -8,6 +8,7 @@ from breez_sdk_spark import (
     DepositClaimError,
     recommended_fees,
     Network,
+    default_config,
 )
 
 
@@ -123,3 +124,17 @@ async def recommended_feeds_example():
     logging.info(f"Economy fee: {response.economy_fee} sats/vByte")
     logging.info(f"Minimum fee: {response.minimum_fee} sats/vByte")
     # ANCHOR_END: recommended-fees
+
+
+async def set_max_fee_to_recommended_fees():
+    # ANCHOR: set-max-fee-to-recommended-fees
+    # Get the current recommended fees
+    fees = await recommended_fees(network=Network.MAINNET)
+
+    # Create the default config
+    config = default_config(network=Network.MAINNET)
+    config.api_key = "<breez api key>"
+
+    # Set the maximum deposit claim fee to the fastest recommended fee
+    config.max_deposit_claim_fee = Fee.RATE(sat_per_vbyte=fees.fastest_fee)
+    # ANCHOR_END: set-max-fee-to-recommended-fees

@@ -8,7 +8,8 @@ import {
   Network,
   type DepositInfo,
   recommendedFees,
-  Fee_Tags
+  Fee_Tags,
+  defaultConfig
 } from '@breeztech/breez-sdk-spark-react-native'
 
 const listUnclaimedDeposits = async (sdk: BreezSdk) => {
@@ -118,4 +119,18 @@ const recommendedFeesExample = async () => {
   console.log('Economy fee:', response.economyFee, 'sats/vByte')
   console.log('Minimum fee:', response.minimumFee, 'sats/vByte')
   // ANCHOR_END: recommended-fees
+}
+
+const setMaxFeeToRecommendedFees = async () => {
+  // ANCHOR: set-max-fee-to-recommended-fees
+  // Get the current recommended fees
+  const fees = await recommendedFees(Network.Mainnet)
+
+  // Create the default config
+  const config = defaultConfig(Network.Mainnet)
+  config.apiKey = '<breez api key>'
+
+  // Set the maximum deposit claim fee to the fastest recommended fee
+  config.maxDepositClaimFee = new Fee.Rate({ satPerVbyte: fees.fastestFee })
+  // ANCHOR_END: set-max-fee-to-recommended-fees
 }

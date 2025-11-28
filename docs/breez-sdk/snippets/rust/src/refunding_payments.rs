@@ -121,3 +121,20 @@ async fn recommended_fees_example() -> Result<()> {
     // ANCHOR_END: recommended-fees
     Ok(())
 }
+
+async fn set_max_fee_to_recommended_fees() -> Result<()> {
+    // ANCHOR: set-max-fee-to-recommended-fees
+    // Get the current recommended fees
+    let fees = recommended_fees(Network::Mainnet).await?;
+
+    // Create the default config
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some("<breez api key>".to_string());
+
+    // Set the maximum deposit claim fee to the fastest recommended fee
+    config.max_deposit_claim_fee = Some(Fee::Rate {
+        sat_per_vbyte: fees.fastest_fee,
+    });
+    // ANCHOR_END: set-max-fee-to-recommended-fees
+    Ok(())
+}

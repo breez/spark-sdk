@@ -1,4 +1,5 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'helper.dart';
 
 Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
   // ANCHOR: list-unclaimed-deposits
@@ -99,4 +100,19 @@ Future<void> recommendedFeesExample() async {
   print("Economy fee: ${response.economyFee} sats/vByte");
   print("Minimum fee: ${response.minimumFee} sats/vByte");
   // ANCHOR_END: recommended-fees
+}
+
+Future<void> setMaxFeeToRecommendedFees() async {
+  // ANCHOR: set-max-fee-to-recommended-fees
+  // Get the current recommended fees
+  final fees = await recommendedFees(network: Network.mainnet);
+
+  // Create the default config
+  var config = defaultConfig(network: Network.mainnet)
+      .copyWith(apiKey: "<breez api key>");
+
+  // Set the maximum deposit claim fee to the fastest recommended fee
+  config = config.copyWith(
+      maxDepositClaimFee: Fee.rate(satPerVbyte: fees.fastestFee));
+  // ANCHOR_END: set-max-fee-to-recommended-fees
 }

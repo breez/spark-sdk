@@ -127,3 +127,20 @@ suspend fun recommendedFeesExample() {
     println("Minimum fee: ${response.minimumFee} sats/vByte")
     // ANCHOR_END: recommended-fees
 }
+
+suspend fun setMaxFeeToRecommendedFees() {
+    // ANCHOR: set-max-fee-to-recommended-fees
+    // Get the current recommended fees
+    val fees = recommendedFees(Network.MAINNET)
+
+    // Create the default config
+    val config = defaultConfig(Network.MAINNET).copy(
+        apiKey = "<breez api key>"
+    )
+
+    // Set the maximum deposit claim fee to the fastest recommended fee
+    val updatedConfig = config.copy(
+        maxDepositClaimFee = Fee.Rate(fees.fastestFee)
+    )
+    // ANCHOR_END: set-max-fee-to-recommended-fees
+}

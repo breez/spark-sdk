@@ -123,5 +123,22 @@ namespace BreezSdkSnippets
             Console.WriteLine($"Minimum fee: {response.minimumFee} sats/vByte");
         }
         // ANCHOR_END: recommended-fees
+
+        async Task SetMaxFeeToRecommendedFees()
+        {
+            // ANCHOR: set-max-fee-to-recommended-fees
+            // Get the current recommended fees
+            var fees = await BreezSdkSparkMethods.RecommendedFees(network: Network.Mainnet);
+
+            // Create the default config
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            {
+                apiKey = "<breez api key>"
+            };
+
+            // Set the maximum deposit claim fee to the fastest recommended fee
+            config = config with { maxDepositClaimFee = new Fee.Rate(satPerVbyte: fees.fastestFee) };
+            // ANCHOR_END: set-max-fee-to-recommended-fees
+        }
     }
 }

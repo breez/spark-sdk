@@ -139,3 +139,23 @@ func RecommendedFeesExample() error {
 	// ANCHOR_END: recommended-fees
 	return nil
 }
+
+func SetMaxFeeToRecommendedFees() error {
+	// ANCHOR: set-max-fee-to-recommended-fees
+	// Get the current recommended fees
+	fees, err := breez_sdk_spark.RecommendedFees(breez_sdk_spark.NetworkMainnet)
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return err
+	}
+
+	// Create the default config
+	apiKey := "<breez api key>"
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	config.ApiKey = &apiKey
+
+	// Set the maximum deposit claim fee to the fastest recommended fee
+	maxFee := breez_sdk_spark.Fee(breez_sdk_spark.FeeRate{SatPerVbyte: fees.FastestFee})
+	config.MaxDepositClaimFee = &maxFee
+	// ANCHOR_END: set-max-fee-to-recommended-fees
+	return nil
+}
