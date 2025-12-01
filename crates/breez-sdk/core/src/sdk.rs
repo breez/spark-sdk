@@ -2200,8 +2200,7 @@ impl BreezSdk {
 
         let payment: Payment = response.try_into()?;
 
-        // TODO: We get incomplete payments here from the ssp so better not to persist for now.
-        //self.storage.insert_payment(payment.clone()).await?;
+        self.storage.insert_payment(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
     }
