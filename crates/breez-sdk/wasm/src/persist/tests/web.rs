@@ -101,6 +101,14 @@ async fn test_payment_request_metadata() {
 }
 
 #[wasm_bindgen_test]
+async fn test_payment_details_update_persistence() {
+    let storage = create_test_storage("payment_details_update").await;
+
+    breez_sdk_spark::storage_tests::test_payment_details_update_persistence(Box::new(storage))
+        .await;
+}
+
+#[wasm_bindgen_test]
 async fn test_spark_htlc_status_filtering() {
     let storage = create_test_storage("spark_htlc_status_filtering").await;
 
