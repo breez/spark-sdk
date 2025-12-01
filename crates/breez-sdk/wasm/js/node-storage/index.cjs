@@ -251,23 +251,46 @@ class SqliteStorage {
       }
 
       const paymentInsert = this.db.prepare(
-        `INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark) 
-         VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @depositTxId, @spark)`
+        `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark) 
+         VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @depositTxId, @spark)
+         ON CONFLICT(id) DO UPDATE SET
+           payment_type=excluded.payment_type,
+           status=excluded.status,
+           amount=excluded.amount,
+           fees=excluded.fees,
+           timestamp=excluded.timestamp,
+           method=excluded.method,
+           withdraw_tx_id=excluded.withdraw_tx_id,
+           deposit_tx_id=excluded.deposit_tx_id,
+           spark=excluded.spark`
       );
       const lightningInsert = this.db.prepare(
-        `INSERT OR REPLACE INTO payment_details_lightning 
+        `INSERT INTO payment_details_lightning 
           (payment_id, invoice, payment_hash, destination_pubkey, description, preimage) 
-          VALUES (@id, @invoice, @paymentHash, @destinationPubkey, @description, @preimage)`
+          VALUES (@id, @invoice, @paymentHash, @destinationPubkey, @description, @preimage)
+          ON CONFLICT(payment_id) DO UPDATE SET
+            invoice=excluded.invoice,
+            payment_hash=excluded.payment_hash,
+            destination_pubkey=excluded.destination_pubkey,
+            description=excluded.description,
+            preimage=excluded.preimage`
       );
       const tokenInsert = this.db.prepare(
-        `INSERT OR REPLACE INTO payment_details_token 
+        `INSERT INTO payment_details_token 
           (payment_id, metadata, tx_hash, invoice_details) 
-          VALUES (@id, @metadata, @txHash, @invoiceDetails)`
+          VALUES (@id, @metadata, @txHash, @invoiceDetails)
+          ON CONFLICT(payment_id) DO UPDATE SET
+            metadata=excluded.metadata,
+            tx_hash=excluded.tx_hash,
+            invoice_details=COALESCE(excluded.invoice_details, payment_details_token.invoice_details)`
       );
       const sparkInsert = this.db.prepare(
-        `INSERT OR REPLACE INTO payment_details_spark 
+        `INSERT INTO payment_details_spark 
           (payment_id, invoice_details, htlc_details) 
-          VALUES (@id, @invoiceDetails, @htlcDetails)`
+          VALUES (@id, @invoiceDetails, @htlcDetails)
+          ON CONFLICT(payment_id) DO UPDATE SET
+            invoice_details=COALESCE(excluded.invoice_details, payment_details_spark.invoice_details),
+            htlc_details=COALESCE(excluded.htlc_details, payment_details_spark.htlc_details)`
       );
       const transaction = this.db.transaction(() => {
         paymentInsert.run({
@@ -463,8 +486,12 @@ class SqliteStorage {
   setPaymentMetadata(paymentId, metadata) {
     try {
       const stmt = this.db.prepare(`
-                INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description) 
+                INSERT INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description) 
                 VALUES (?, ?, ?, ?)
+                ON CONFLICT(payment_id) DO UPDATE SET
+                  lnurl_pay_info=COALESCE(excluded.lnurl_pay_info, payment_metadata.lnurl_pay_info),
+                  lnurl_withdraw_info=COALESCE(excluded.lnurl_withdraw_info, payment_metadata.lnurl_withdraw_info),
+                  lnurl_description=COALESCE(excluded.lnurl_description, payment_metadata.lnurl_description)
             `);
 
       stmt.run(
