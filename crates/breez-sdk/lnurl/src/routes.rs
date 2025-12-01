@@ -24,13 +24,18 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, trace, warn};
 
-use crate::{repository::LnurlSenderComment, time::now_millis, zap::Zap};
+use crate::{
+    repository::LnurlSenderComment,
+    time::{now_millis, now_u64},
+    zap::Zap,
+};
 use crate::{
     repository::{LnurlRepository, LnurlRepositoryError},
     state::State,
     user::{USERNAME_VALIDATION_REGEX, User},
 };
 
+const ACCEPTABLE_TIME_DIFF_SECS: u64 = 60;
 const DEFAULT_METADATA_OFFSET: u32 = 0;
 const DEFAULT_METADATA_LIMIT: u32 = 100;
 
@@ -125,7 +130,14 @@ where
     ) -> Result<Json<RegisterLnurlPayResponse>, (StatusCode, Json<Value>)> {
         let username = sanitize_username(&payload.username);
         validate_username(&username)?;
-        let pubkey = validate(&pubkey, &payload.signature, &username, &state).await?;
+        let pubkey = validate(
+            &pubkey,
+            &payload.signature,
+            &username,
+            payload.timestamp,
+            &state,
+        )
+        .await?;
         if payload.description.chars().take(256).count() > 255 {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -185,7 +197,14 @@ where
         Json(payload): Json<UnregisterLnurlPayRequest>,
     ) -> Result<(), (StatusCode, Json<Value>)> {
         let username = sanitize_username(&payload.username);
-        let pubkey = validate(&pubkey, &payload.signature, &username, &state).await?;
+        let pubkey = validate(
+            &pubkey,
+            &payload.signature,
+            &username,
+            payload.timestamp,
+            &state,
+        )
+        .await?;
 
         state
             .db
@@ -208,7 +227,14 @@ where
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<RecoverLnurlPayRequest>,
     ) -> Result<Json<RecoverLnurlPayResponse>, (StatusCode, Json<Value>)> {
-        let pubkey = validate(&pubkey, &payload.signature, &pubkey, &state).await?;
+        let pubkey = validate(
+            &pubkey,
+            &payload.signature,
+            &pubkey,
+            payload.timestamp,
+            &state,
+        )
+        .await?;
 
         let user = state
             .db
@@ -245,7 +271,14 @@ where
         Query(params): Query<ListMetadataRequest>,
         Extension(state): Extension<State<DB>>,
     ) -> Result<Json<ListMetadataResponse>, (StatusCode, Json<Value>)> {
-        let pubkey = validate(&pubkey, &params.signature, &pubkey, &state).await?;
+        let pubkey = validate(
+            &pubkey,
+            &params.signature,
+            &pubkey,
+            params.timestamp,
+            &state,
+        )
+        .await?;
         let offset = params.offset.unwrap_or(DEFAULT_METADATA_OFFSET);
         let limit = params.limit.unwrap_or(DEFAULT_METADATA_LIMIT);
         let metadata = state
@@ -268,7 +301,14 @@ where
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<PublishZapReceiptRequest>,
     ) -> Result<Json<PublishZapReceiptResponse>, (StatusCode, Json<Value>)> {
-        let pubkey = validate(&pubkey, &payload.signature, &payload.zap_receipt, &state).await?;
+        let pubkey = validate(
+            &pubkey,
+            &payload.signature,
+            &payload.zap_receipt,
+            payload.timestamp,
+            &state,
+        )
+        .await?;
 
         // Parse and validate the zap receipt
         let zap_receipt = Event::from_json(&payload.zap_receipt).map_err(|e| {
@@ -822,7 +862,8 @@ fn validate_username(username: &str) -> Result<(), (StatusCode, Json<Value>)> {
 async fn validate<DB>(
     pubkey: &str,
     signature: &str,
-    username: &str,
+    message: &str,
+    timestamp: Option<u64>,
     state: &State<DB>,
 ) -> Result<PublicKey, (StatusCode, Json<Value>)> {
     let pubkey = parse_pubkey(pubkey)?;
@@ -841,9 +882,37 @@ async fn validate<DB>(
         )
     })?;
 
+    // This should be the preferred way to validate going forward. We accept both for backward
+    // compatibility, but log a warning if the timestamp is missing. Remove the old way after a
+    // deprecation period.
+    if let Some(timestamp) = timestamp {
+        if timestamp.abs_diff(now_u64()) > ACCEPTABLE_TIME_DIFF_SECS {
+            trace!("invalid timestamp, too far off: {}", timestamp);
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("invalid timestamp".into())),
+            ));
+        }
+
+        state
+            .wallet
+            .verify_message(&format!("{message}-{timestamp}"), &signature, &pubkey)
+            .await
+            .map_err(|e| {
+                trace!("invalid signature with timestamp, could not verify: {}", e);
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(Value::String("invalid signature".into())),
+                )
+            })?;
+
+        return Ok(pubkey);
+    }
+
+    warn!("Use of endpoint without timestamp is deprecated, pubkey: {pubkey}, message: {message}");
     state
         .wallet
-        .verify_message(username, &signature, &pubkey)
+        .verify_message(message, &signature, &pubkey)
         .await
         .map_err(|e| {
             trace!("invalid signature, could not verify: {}", e);
