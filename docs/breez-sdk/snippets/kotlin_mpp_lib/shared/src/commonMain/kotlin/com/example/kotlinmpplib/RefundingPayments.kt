@@ -16,8 +16,13 @@ class RefundingPayments {
                 deposit.claimError?.let { claimError ->
                     when (claimError) {
                         is DepositClaimError.MaxDepositClaimFeeExceeded -> {
-                            val maxFeeStr = claimError.maxFee?.let { "${it} sats" } ?: "none"
-                            // Log.v("Breez", "Max claim fee exceeded. Max: $maxFeeStr, Required: ${claimError.requiredFee} sats")
+                            val maxFee = claimError.maxFee
+                            val maxFeeStr = when (maxFee) {
+                                is Fee.Fixed -> "${maxFee.amount} sats"
+                                is Fee.Rate -> "${maxFee.satPerVbyte} sats/vByte"
+                                null -> "none"
+                            }
+                            // Log.v("Breez", "Max claim fee exceeded. Max: $maxFeeStr, Required: ${claimError.requiredFeeSats} sats or ${claimError.requiredFeeRateSatPerVbyte} sats/vByte")
                         }
                         is DepositClaimError.MissingUtxo -> {
                             // Log.v("Breez", "UTXO not found when claiming deposit")
@@ -39,7 +44,7 @@ class RefundingPayments {
         try {
             val claimError = deposit.claimError
             if (claimError is DepositClaimError.MaxDepositClaimFeeExceeded) {
-                val requiredFee = claimError.requiredFee
+                val requiredFee = claimError.requiredFeeSats
 
                 // Show UI to user with the required fee and get approval
                 val userApproved = true // Replace with actual user approval logic

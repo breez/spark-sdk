@@ -5,7 +5,8 @@ import {
   type RefundDepositRequest,
   DepositClaimError,
   Fee,
-  type DepositInfo
+  type DepositInfo,
+  Fee_Tags
 } from '@breeztech/breez-sdk-spark-react-native'
 
 const listUnclaimedDeposits = async (sdk: BreezSdk) => {
@@ -19,9 +20,18 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
 
     if (deposit.claimError != null) {
       if (deposit.claimError instanceof DepositClaimError.MaxDepositClaimFeeExceeded) {
-        const maxFeeStr = deposit.claimError.inner.maxFee != null ? `${deposit.claimError.inner.maxFee} sats` : 'none'
+        let maxFeeStr = 'none'
+        if (deposit.claimError.inner.maxFee != null) {
+          if (deposit.claimError.inner.maxFee.tag === Fee_Tags.Fixed) {
+            maxFeeStr = `${deposit.claimError.inner.maxFee.inner.amount} sats`
+          } else if (deposit.claimError.inner.maxFee.tag === Fee_Tags.Rate) {
+            maxFeeStr = `${deposit.claimError.inner.maxFee.inner.satPerVbyte} sats/vByte`
+          }
+        }
         console.log(
-          `Max claim fee exceeded. Max: ${maxFeeStr}, Required: ${deposit.claimError.inner.requiredFee} sats`
+          `Max claim fee exceeded. Max: ${maxFeeStr}, 
+          Required: ${deposit.claimError.inner.requiredFeeSats} sats 
+          or ${deposit.claimError.inner.requiredFeeRateSatPerVbyte} sats/vByte`
         )
       } else if (deposit.claimError instanceof DepositClaimError.MissingUtxo) {
         console.log('UTXO not found when claiming deposit')
@@ -36,7 +46,7 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
 const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
   // ANCHOR: handle-fee-exceeded
   if (deposit.claimError instanceof DepositClaimError.MaxDepositClaimFeeExceeded) {
-    const requiredFee = deposit.claimError.inner.requiredFee
+    const requiredFee = deposit.claimError.inner.requiredFeeSats
 
     // Show UI to user with the required fee and get approval
     const userApproved = true // Replace with actual user approval logic

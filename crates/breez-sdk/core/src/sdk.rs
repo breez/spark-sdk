@@ -97,6 +97,8 @@ const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology:442";
 
 const LNURL_METADATA_LIMIT: u32 = 100;
 
+const CLAIM_TX_SIZE_VBYTES: u64 = 99;
+
 bitflags! {
     #[derive(Clone, Debug)]
     struct SyncType: u32 {
@@ -873,44 +875,49 @@ impl BreezSdk {
             .spark_wallet
             .fetch_static_deposit_claim_quote(detailed_utxo.tx.clone(), Some(detailed_utxo.vout))
             .await?;
-        let spark_requested_fee = detailed_utxo.value.saturating_sub(quote.credit_amount_sats);
+
+        let spark_requested_fee_sats = detailed_utxo.value.saturating_sub(quote.credit_amount_sats);
+
+        let spark_requested_fee_rate = spark_requested_fee_sats.div_ceil(CLAIM_TX_SIZE_VBYTES);
+
         let Some(max_deposit_claim_fee) = max_claim_fee else {
             return Err(SdkError::MaxDepositClaimFeeExceeded {
                 tx: detailed_utxo.txid.to_string(),
                 vout: detailed_utxo.vout,
                 max_fee: None,
-                required_fee: spark_requested_fee,
+                required_fee_sats: spark_requested_fee_sats,
+                required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
             });
         };
         match max_deposit_claim_fee {
             Fee::Fixed { amount } => {
                 info!(
                     "User max fee: {} spark requested fee: {}",
-                    amount, spark_requested_fee
+                    amount, spark_requested_fee_sats
                 );
-                if spark_requested_fee > amount {
+                if spark_requested_fee_sats > amount {
                     return Err(SdkError::MaxDepositClaimFeeExceeded {
                         tx: detailed_utxo.txid.to_string(),
                         vout: detailed_utxo.vout,
-                        max_fee: Some(amount),
-                        required_fee: spark_requested_fee,
+                        max_fee: Some(max_deposit_claim_fee),
+                        required_fee_sats: spark_requested_fee_sats,
+                        required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
                     });
                 }
             }
             Fee::Rate { sat_per_vbyte } => {
-                // The claim tx size is 99 vbytes
-                const CLAIM_TX_SIZE: u64 = 99;
-                let user_max_fee = CLAIM_TX_SIZE.saturating_mul(sat_per_vbyte);
+                let user_max_fee = CLAIM_TX_SIZE_VBYTES.saturating_mul(sat_per_vbyte);
                 info!(
                     "User max fee: {} spark requested fee: {}",
-                    user_max_fee, spark_requested_fee
+                    user_max_fee, spark_requested_fee_sats
                 );
-                if spark_requested_fee > user_max_fee {
+                if spark_requested_fee_sats > user_max_fee {
                     return Err(SdkError::MaxDepositClaimFeeExceeded {
                         tx: detailed_utxo.txid.to_string(),
                         vout: detailed_utxo.vout,
-                        max_fee: Some(user_max_fee),
-                        required_fee: spark_requested_fee,
+                        max_fee: Some(max_deposit_claim_fee),
+                        required_fee_sats: spark_requested_fee_sats,
+                        required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
                     });
                 }
             }

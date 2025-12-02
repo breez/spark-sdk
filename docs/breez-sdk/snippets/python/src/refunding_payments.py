@@ -23,14 +23,16 @@ async def list_unclaimed_deposits(sdk: BreezSdk):
                 if isinstance(
                     deposit.claim_error, DepositClaimError.MAX_DEPOSIT_CLAIM_FEE_EXCEEDED
                 ):
-                    max_fee_str = (
-                        f"{deposit.claim_error.max_fee} sats"
-                        if deposit.claim_error.max_fee is not None
-                        else "none"
-                    )
+                    max_fee_str = "none"
+                    if deposit.claim_error.max_fee is not None:
+                        if isinstance(deposit.claim_error.max_fee, Fee.FIXED):
+                            max_fee_str = f"{deposit.claim_error.max_fee.amount} sats"
+                        elif isinstance(deposit.claim_error.max_fee, Fee.RATE):
+                            max_fee_str = f"{deposit.claim_error.max_fee.sat_per_vbyte} sats/vByte"
                     logging.info(
                         f"Claim failed: Fee exceeded. Max: {max_fee_str}, "
-                        f"Required: {deposit.claim_error.required_fee}"
+                        f"Required: {deposit.claim_error.required_fee_sats} sats "
+                        f"or {deposit.claim_error.required_fee_rate_sat_per_vbyte} sats/vByte"
                     )
                 elif isinstance(deposit.claim_error, DepositClaimError.MISSING_UTXO):
                     logging.info("Claim failed: UTXO not found")
@@ -48,7 +50,7 @@ async def handle_fee_exceeded(sdk: BreezSdk, deposit):
         if isinstance(
             deposit.claim_error, DepositClaimError.MAX_DEPOSIT_CLAIM_FEE_EXCEEDED
         ):
-            required_fee = deposit.claim_error.required_fee
+            required_fee = deposit.claim_error.required_fee_sats
 
             # Show UI to user with the required fee and get approval
             user_approved = True  # Replace with actual user approval logic
