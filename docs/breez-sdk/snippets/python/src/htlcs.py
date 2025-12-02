@@ -57,7 +57,8 @@ async def list_claimable_htlc_payments(sdk: BreezSdk):
         type_filter=[PaymentType.RECEIVE],
         status_filter=[PaymentStatus.PENDING],
         payment_details_filter=PaymentDetailsFilter.SPARK(
-            htlc_status=[SparkHtlcStatus.WAITING_FOR_PREIMAGE]
+            htlc_status=[SparkHtlcStatus.WAITING_FOR_PREIMAGE],
+            transfer_refund_needed=None
         ),
     )
 

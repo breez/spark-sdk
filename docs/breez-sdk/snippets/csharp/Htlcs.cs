@@ -56,6 +56,7 @@ namespace BreezSdkSnippets
                     htlcStatus: new List<SparkHtlcStatus> {
                         SparkHtlcStatus.WaitingForPreimage
                     },
+                    transferRefundNeeded: null
                 )
             );
 

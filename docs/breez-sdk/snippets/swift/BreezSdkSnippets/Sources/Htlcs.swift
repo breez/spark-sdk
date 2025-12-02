@@ -67,7 +67,8 @@ func listClaimableHtlcPayments(sdk: BreezSdk) async throws -> [Payment] {
         typeFilter: [PaymentType.receive],
         statusFilter: [PaymentStatus.pending],
         paymentDetailsFilter: PaymentDetailsFilter.spark(
-            htlcStatus: [SparkHtlcStatus.waitingForPreimage]
+            htlcStatus: [SparkHtlcStatus.waitingForPreimage],
+            transferRefundNeeded: nil
         )
     )
 

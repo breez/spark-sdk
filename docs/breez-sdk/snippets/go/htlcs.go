@@ -71,7 +71,7 @@ func ListClaimableHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spar
 	statusFilter := []breez_sdk_spark.PaymentStatus{
 		breez_sdk_spark.PaymentStatusPending,
 	}
-	paymentDetailsFilter := breez_sdk_spark.PaymentDetailsFilterSpark{
+	var paymentDetailsFilter breez_sdk_spark.PaymentDetailsFilter = breez_sdk_spark.PaymentDetailsFilterSpark{
 		HtlcStatus: &[]breez_sdk_spark.SparkHtlcStatus{
 			breez_sdk_spark.SparkHtlcStatusWaitingForPreimage,
 		},

@@ -1762,8 +1762,8 @@ impl BreezSdk {
         let pools_response = self
             .flashnet_client
             .list_pools(ListPoolsRequest {
-                asset_a_address: Some(asset_in_address.to_string()),
-                asset_b_address: Some(asset_out_address.to_string()),
+                asset_a_address: Some(asset_in_address.clone()),
+                asset_b_address: Some(asset_out_address.clone()),
                 sort: Some(PoolSortOrder::Volume24hDesc),
                 ..Default::default()
             })
@@ -1776,8 +1776,8 @@ impl BreezSdk {
         let response = self
             .flashnet_client
             .simulate_swap(SimulateSwapRequest {
-                asset_in_address: asset_in_address.to_string(),
-                asset_out_address: asset_out_address.to_string(),
+                asset_in_address: asset_in_address.clone(),
+                asset_out_address: asset_out_address.clone(),
                 pool_id,
                 amount_in: request.amount,
                 integrator_bps: None,
@@ -1822,8 +1822,8 @@ impl BreezSdk {
         let pools_response = self
             .flashnet_client
             .list_pools(ListPoolsRequest {
-                asset_a_address: Some(asset_in_address.to_string()),
-                asset_b_address: Some(asset_out_address.to_string()),
+                asset_a_address: Some(asset_in_address.clone()),
+                asset_b_address: Some(asset_out_address.clone()),
                 sort: Some(PoolSortOrder::Volume24hDesc),
                 ..Default::default()
             })
@@ -1848,8 +1848,8 @@ impl BreezSdk {
         let swap_response_res = self
             .flashnet_client
             .execute_swap(ExecuteSwapRequest {
-                asset_in_address: asset_in_address.to_string(),
-                asset_out_address: asset_out_address.to_string(),
+                asset_in_address: asset_in_address.clone(),
+                asset_out_address: asset_out_address.clone(),
                 pool_id,
                 amount_in: request.prepare_response.send_amount,
                 max_slippage_bps,

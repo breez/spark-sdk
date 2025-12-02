@@ -51,7 +51,7 @@ const exampleListPaymentsFiltered = async (sdk: BreezSdk): Promise<Payment[]> =>
     offset: 0,
     limit: 50,
     // Sort order (true = oldest first, false = newest first)
-    sortAscending: false,
+    sortAscending: false
   })
   const payments = response.payments
   // ANCHOR_END: list-payments-filtered

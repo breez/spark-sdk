@@ -420,12 +420,6 @@ class IndexedDBStorage {
 
         const payment = cursor.value;
 
-        // Apply filters
-        if (!this._matchesFilters(payment, request)) {
-          cursor.continue();
-          return;
-        }
-
         if (skipped < actualOffset) {
           skipped++;
           cursor.continue();
@@ -440,6 +434,12 @@ class IndexedDBStorage {
             payment,
             metadata
           );
+
+          // Apply filters
+          if (!this._matchesFilters(paymentWithMetadata, request)) {
+            cursor.continue();
+            return;
+          }
           
           // Fetch lnurl receive metadata if it's a lightning payment
           this._fetchLnurlReceiveMetadata(paymentWithMetadata, lnurlReceiveMetadataStore)
@@ -457,8 +457,11 @@ class IndexedDBStorage {
         };
         metadataRequest.onerror = () => {
           // Continue without metadata if it fails
-          payments.push(payment);
-          count++;
+          if (this._matchesFilters(payment, request)) {
+            payments.push(payment);
+            count++;
+          }
+
           cursor.continue();
         };
       };
@@ -1586,42 +1589,44 @@ class IndexedDBStorage {
       }
     }
 
-    // If this is a Lightning payment and we have metadata
-    if (metadata && details && details.type == "lightning") {
-      if (metadata.lnurlDescription && !details.description) {
-        details.description = metadata.lnurlDescription;
-      }
-      // If lnurlPayInfo exists, parse and add to details
-      if (metadata.lnurlPayInfo) {
-        try {
-          details.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
-        } catch (e) {
-          throw new StorageError(
-            `Failed to parse lnurlPayInfo JSON for payment ${payment.id}: ${e.message}`,
-            e
-          );
+    if (metadata && details) {
+      if (details.type == "lightning") {
+        if (metadata.lnurlDescription && !details.description) {
+          details.description = metadata.lnurlDescription;
         }
-      }
-      // If lnurlWithdrawInfo exists, parse and add to details
-      if (metadata.lnurlWithdrawInfo) {
-        try {
-          details.lnurlWithdrawInfo = JSON.parse(metadata.lnurlWithdrawInfo);
-        } catch (e) {
-          throw new StorageError(
-            `Failed to parse lnurlWithdrawInfo JSON for payment ${payment.id}: ${e.message}`,
-            e
-          );
+        // If lnurlPayInfo exists, parse and add to details
+        if (metadata.lnurlPayInfo) {
+          try {
+            details.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
+          } catch (e) {
+            throw new StorageError(
+              `Failed to parse lnurlPayInfo JSON for payment ${payment.id}: ${e.message}`,
+              e
+            );
+          }
         }
-      }
-      // If transferRefundInfo exists, parse and add to details
-      if (metadata.transferRefundInfo) {
-        try {
-          details.transferRefundInfo = JSON.parse(metadata.transferRefundInfo);
-        } catch (e) {
-          throw new StorageError(
-            `Failed to parse transferRefundInfo JSON for payment ${payment.id}: ${e.message}`,
-            e
-          );
+        // If lnurlWithdrawInfo exists, parse and add to details
+        if (metadata.lnurlWithdrawInfo) {
+          try {
+            details.lnurlWithdrawInfo = JSON.parse(metadata.lnurlWithdrawInfo);
+          } catch (e) {
+            throw new StorageError(
+              `Failed to parse lnurlWithdrawInfo JSON for payment ${payment.id}: ${e.message}`,
+              e
+            );
+          }
+        }
+      } else if (details.type == "spark" || details.type == "token") {
+        // If transferRefundInfo exists, parse and add to details
+        if (metadata.transferRefundInfo) {
+          try {
+            details.transferRefundInfo = JSON.parse(metadata.transferRefundInfo);
+          } catch (e) {
+            throw new StorageError(
+              `Failed to parse transferRefundInfo JSON for payment ${payment.id}: ${e.message}`,
+              e
+            );
+          }
         }
       }
     }
