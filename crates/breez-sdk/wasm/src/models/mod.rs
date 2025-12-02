@@ -414,11 +414,15 @@ pub enum PaymentDetails {
     Spark {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         htlc_details: Option<SparkHtlcDetails>,
+        transfer_info: Option<TransferInfo>,
+        transfer_refund_info: Option<TransferRefundInfo>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         invoice_details: Option<SparkInvoicePaymentDetails>,
+        transfer_info: Option<TransferInfo>,
+        transfer_refund_info: Option<TransferRefundInfo>,
     },
     Lightning {
         description: Option<String>,
@@ -780,12 +784,23 @@ pub struct SendPaymentResponse {
     pub payment: Payment,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentDetailsFilter)]
+pub enum PaymentDetailsFilter {
+    Spark {
+        htlc_status: Option<Vec<SparkHtlcStatus>>,
+        transfer_refund_needed: Option<bool>,
+    },
+    Token {
+        transfer_refund_needed: bool,
+    },
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ListPaymentsRequest)]
 pub struct ListPaymentsRequest {
     pub type_filter: Option<Vec<PaymentType>>,
     pub status_filter: Option<Vec<PaymentStatus>>,
     pub asset_filter: Option<AssetFilter>,
-    pub spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
+    pub payment_details_filter: Option<PaymentDetailsFilter>,
     pub from_timestamp: Option<u64>,
     pub to_timestamp: Option<u64>,
     pub offset: Option<u32>,
@@ -825,6 +840,7 @@ pub struct PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
+    pub transfer_refund_info: Option<TransferRefundInfo>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SetLnurlMetadataItem)]
@@ -1044,4 +1060,51 @@ pub struct LnurlReceiveMetadata {
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
     pub sender_comment: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TransferInfo)]
+pub struct TransferInfo {
+    pub payment_id: String,
+    #[serde(with = "serde_u128_as_string")]
+    pub fee: u128,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TransferRefundInfo)]
+pub struct TransferRefundInfo {
+    pub pool_id: String,
+    pub refund_payment_id: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TransferType)]
+pub enum TransferType {
+    FromBitcoin,
+    ToBitcoin,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareTransferTokenRequest)]
+pub struct PrepareTransferTokenRequest {
+    pub transfer_type: TransferType,
+    pub token_identifier: String,
+    pub amount: u128,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareTransferTokenResponse)]
+pub struct PrepareTransferTokenResponse {
+    pub transfer_type: TransferType,
+    pub token_identifier: String,
+    pub send_amount: u128,
+    pub estimated_receive_amount: u128,
+    pub fee: u128,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TransferTokenRequest)]
+pub struct TransferTokenRequest {
+    pub prepare_response: PrepareTransferTokenResponse,
+    pub max_slippage_bps: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TransferTokenResponse)]
+pub struct TransferTokenResponse {
+    pub sent_payment: Payment,
+    pub received_payment: Option<Payment>,
 }

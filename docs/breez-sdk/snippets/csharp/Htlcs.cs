@@ -52,9 +52,11 @@ namespace BreezSdkSnippets
             var request = new ListPaymentsRequest(
                 typeFilter: new List<PaymentType> { PaymentType.Receive },
                 statusFilter: new List<PaymentStatus> { PaymentStatus.Pending },
-                sparkHtlcStatusFilter: new List<SparkHtlcStatus> {
-                    SparkHtlcStatus.WaitingForPreimage
-                }
+                paymentDetailsFilter: new PaymentDetailsFilter.Spark(
+                    htlcStatus: new List<SparkHtlcStatus> {
+                        SparkHtlcStatus.WaitingForPreimage
+                    },
+                )
             );
 
             var response = await sdk.ListPayments(request: request);

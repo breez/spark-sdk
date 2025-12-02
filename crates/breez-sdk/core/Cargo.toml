@@ -13,9 +13,9 @@ uniffi = [
 openssl-vendored = ["openssl"]
 test-utils = []
 # TLS features
-default-tls = ["reqwest/default-tls", "breez-sdk-common/default-tls"]
-rustls-tls = ["reqwest/rustls-tls", "breez-sdk-common/rustls-tls"]
-native-tls = ["reqwest/native-tls", "breez-sdk-common/native-tls"]
+default-tls = ["reqwest/default-tls", "breez-sdk-common/default-tls", "flashnet/default-tls"]
+rustls-tls = ["reqwest/rustls-tls", "breez-sdk-common/rustls-tls", "flashnet/rustls-tls"]
+native-tls = ["reqwest/native-tls", "breez-sdk-common/native-tls", "flashnet/native-tls"]
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
@@ -36,6 +36,7 @@ clap = { workspace = true, features = ["derive"] }
 dotenvy.workspace = true
 ecies.workspace = true
 figment = { workspace = true, features = ["env", "yaml"] }
+flashnet.workspace = true
 hex.workspace = true
 lnurl-models.workspace = true
 macros.workspace = true

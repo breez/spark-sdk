@@ -644,6 +644,9 @@ class IndexedDBStorage {
           ? JSON.stringify(metadata.lnurlWithdrawInfo)
           : null,
         lnurlDescription: metadata.lnurlDescription,
+        transferRefundInfo: metadata.transferRefundInfo
+          ? JSON.stringify(metadata.transferRefundInfo)
+          : null,
       };
 
       const request = store.put(metadataToStore);
@@ -1456,11 +1459,9 @@ class IndexedDBStorage {
       }
     }
 
-    // Filter by Spark HTLC status
-    if (
-      request.sparkHtlcStatusFilter &&
-      request.sparkHtlcStatusFilter.length > 0
-    ) {
+    // Filter by payment details
+    if (request.paymentDetailsFilter) {
+      const paymentDetailsFilter = request.paymentDetailsFilter;
       let details = null;
 
       // Parse details if it's a string (stored in IndexedDB)
@@ -1475,13 +1476,43 @@ class IndexedDBStorage {
         details = payment.details;
       }
 
-      // Only Spark payments can have HTLC details
-      if (!details || details.type !== "spark" || !details.htlcDetails) {
+      if (!details) {
         return false;
       }
 
-      if (!request.sparkHtlcStatusFilter.includes(details.htlcDetails.status)) {
-        return false;
+      // Filter by Spark HTLC status
+      if (
+        paymentDetailsFilter.type === "spark" &&
+        paymentDetailsFilter.htlcStatus != null &&
+        paymentDetailsFilter.htlcStatus.length > 0
+      ) {
+        if (
+          details.type !== "spark" ||
+          !details.htlcDetails ||
+          !paymentDetailsFilter.htlcStatus.includes(details.htlcDetails.status)
+        ) {
+          return false;
+        }
+      }
+      // Filter by transfer refund info presence
+      if (
+        (paymentDetailsFilter.type === "spark" &&
+          paymentDetailsFilter.transferRefundNeeded != null) ||
+        paymentDetailsFilter.type === "token"
+      ) {
+        if (
+          details.type !== paymentDetailsFilter.type ||
+          !details.transferRefundInfo
+        ) {
+          return false;
+        }
+
+        if (
+          paymentDetailsFilter.transferRefundNeeded ===
+          !!details.transferRefundInfo.refundPaymentId
+        ) {
+          return false;
+        }
       }
     }
 
@@ -1578,6 +1609,17 @@ class IndexedDBStorage {
         } catch (e) {
           throw new StorageError(
             `Failed to parse lnurlWithdrawInfo JSON for payment ${payment.id}: ${e.message}`,
+            e
+          );
+        }
+      }
+      // If transferRefundInfo exists, parse and add to details
+      if (metadata.transferRefundInfo) {
+        try {
+          details.transferRefundInfo = JSON.parse(metadata.transferRefundInfo);
+        } catch (e) {
+          throw new StorageError(
+            `Failed to parse transferRefundInfo JSON for payment ${payment.id}: ${e.message}`,
             e
           );
         }

@@ -1,5 +1,5 @@
 use clap::Subcommand;
-use spark_wallet::{PagingFilter, SparkAddress, SparkWallet};
+use spark_wallet::{ListTransfersRequest, PagingFilter, SparkAddress, SparkWallet};
 
 use crate::config::Config;
 
@@ -58,7 +58,12 @@ pub async fn handle_command(
                 None
             };
 
-            let transfers = wallet.list_transfers(paging).await?;
+            let transfers = wallet
+                .list_transfers(ListTransfersRequest {
+                    paging,
+                    ..Default::default()
+                })
+                .await?;
             println!(
                 "Transfers: {}",
                 serde_json::to_string_pretty(&transfers.items)?

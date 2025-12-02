@@ -9,6 +9,7 @@ use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
     rest::ReqwestRestClient as CommonRequestRestClient,
 };
+use flashnet::{FlashnetClient, FlashnetConfig};
 use spark_wallet::{DefaultSigner, KeySet, Signer};
 use tokio::sync::watch;
 use tracing::{debug, info};
@@ -353,6 +354,10 @@ impl SdkBuilder {
         } else {
             storage
         };
+        let flashnet_client = Arc::new(FlashnetClient::connect(
+            FlashnetConfig::default_config(self.config.network.into()),
+            spark_wallet.clone(),
+        ));
 
         let nostr_client = Arc::new(NostrClient::new(
             &key_set.identity_master_key,
@@ -374,6 +379,7 @@ impl SdkBuilder {
             spark_wallet,
             event_emitter,
             nostr_client,
+            flashnet_client,
         })?;
         debug!("Initialized and started breez sdk.");
 

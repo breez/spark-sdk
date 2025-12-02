@@ -5,11 +5,12 @@ use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
     ClaimHtlcPaymentRequest, Fee, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, OnchainConfirmationSpeed, PaymentStatus, PaymentType,
-    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
-    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
-    UpdateUserSettingsRequest,
+    LnurlPayRequest, LnurlWithdrawRequest, OnchainConfirmationSpeed, PaymentDetailsFilter,
+    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
+    PrepareTransferTokenRequest, ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
+    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, TransferTokenRequest,
+    TransferType, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -222,6 +223,20 @@ pub enum Command {
         /// The token identifiers to get metadata for
         token_identifiers: Vec<String>,
     },
+    TokenTransfer {
+        /// The amount to transfer
+        amount: u128,
+
+        #[clap(short = 'f', long, action = clap::ArgAction::SetTrue)]
+        from_bitcoin: bool,
+
+        /// The token identifier of the token
+        token_identifier: String,
+
+        /// The maximum slippage in basis points (1/100 of a percent)
+        #[clap(short = 's', long)]
+        max_slippage_bps: Option<u32>,
+    },
     GetUserSettings,
     SetUserSettings {
         /// Whether spark private mode is enabled.
@@ -286,7 +301,12 @@ pub(crate) async fn execute_command(
                     type_filter,
                     status_filter,
                     asset_filter,
-                    spark_htlc_status_filter,
+                    payment_details_filter: spark_htlc_status_filter.map(|statuses| {
+                        PaymentDetailsFilter::Spark {
+                            htlc_status: Some(statuses),
+                            transfer_refund_needed: None,
+                        }
+                    }),
                     from_timestamp,
                     to_timestamp,
                     sort_ascending,
@@ -581,6 +601,38 @@ pub(crate) async fn execute_command(
         Command::GetTokensMetadata { token_identifiers } => {
             let res = sdk
                 .get_tokens_metadata(GetTokensMetadataRequest { token_identifiers })
+                .await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::TokenTransfer {
+            amount,
+            from_bitcoin,
+            token_identifier,
+            max_slippage_bps,
+        } => {
+            let transfer_type = if from_bitcoin {
+                TransferType::FromBitcoin
+            } else {
+                TransferType::ToBitcoin
+            };
+            let prepare_response = sdk
+                .prepare_transfer_token(PrepareTransferTokenRequest {
+                    amount,
+                    token_identifier,
+                    transfer_type,
+                })
+                .await?;
+            println!("Prepared transfer: {prepare_response:#?}\n Do you want to continue? (y/n)");
+            let line = rl.readline_with_initial("", ("y", ""))?.to_lowercase();
+            if line != "y" {
+                return Ok(true);
+            }
+            let res = sdk
+                .transfer_token(TransferTokenRequest {
+                    prepare_response,
+                    max_slippage_bps,
+                })
                 .await?;
             print_value(&res)?;
             Ok(true)

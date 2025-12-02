@@ -19,10 +19,15 @@ use breez_sdk_common::{
     },
     rest::RestClient,
 };
+use flashnet::{
+    BTC_ASSET_ADDRESS, ClawbackRequest, ClawbackResponse, ExecuteSwapRequest, FlashnetClient,
+    FlashnetError, ListPoolsRequest, ListUserSwapsRequest, PoolSortOrder, SimulateSwapRequest,
+    SwapSortOrder,
+};
 use lnurl_models::sanitize_username;
 use spark_wallet::{
-    ExitSpeed, InvoiceDescription, Preimage, SparkAddress, SparkWallet, TransferId,
-    TransferTokenOutput, WalletEvent, WalletTransfer,
+    ExitSpeed, InvoiceDescription, ListTokenTransactionsRequest, ListTransfersRequest, Preimage,
+    SparkAddress, SparkWallet, TransferId, TransferTokenOutput, WalletEvent, WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
 use tracing::{debug, error, info, trace, warn};
@@ -45,10 +50,12 @@ use crate::{
     GetTokensMetadataResponse, InputType, LightningAddressInfo, ListFiatCurrenciesResponse,
     ListFiatRatesResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
     LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse,
-    Logger, Network, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
+    Logger, Network, PaymentDetails, PaymentDetailsFilter, PaymentStatus, PaymentType,
+    PrepareLnurlPayRequest, PrepareLnurlPayResponse, PrepareTransferTokenRequest,
+    PrepareTransferTokenResponse, RefundDepositRequest, RefundDepositResponse,
     RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem,
-    SignMessageRequest, SignMessageResponse, SparkHtlcOptions, UpdateUserSettingsRequest,
+    SignMessageRequest, SignMessageResponse, SparkHtlcOptions, TransferInfo, TransferRefundInfo,
+    TransferTokenRequest, TransferTokenResponse, TransferType, UpdateUserSettingsRequest,
     UserSettings, WaitForPaymentIdentifier,
     chain::RecommendedFees,
     error::SdkError,
@@ -72,7 +79,10 @@ use crate::{
         deposit_chain_syncer::DepositChainSyncer,
         run_with_shutdown,
         send_payment_validation::validate_prepare_send_payment_request,
-        token::{get_tokens_metadata_cached_or_query, map_and_persist_token_transaction},
+        token::{
+            get_tokens_metadata_cached_or_query, map_and_persist_token_transaction,
+            token_transaction_to_payments,
+        },
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
@@ -95,7 +105,7 @@ const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology";
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology:442";
 
-const LNURL_METADATA_LIMIT: u32 = 100;
+const SYNC_PAGING_LIMIT: u32 = 100;
 
 bitflags! {
     #[derive(Clone, Debug)]
@@ -104,10 +114,12 @@ bitflags! {
         const WalletState = 1 << 1;
         const Deposits = 1 << 2;
         const LnurlMetadata = 1 << 3;
+        const TransferInfo = 1 << 4;
         const Full = Self::Wallet.0.0
             | Self::WalletState.0.0
             | Self::Deposits.0.0
-            | Self::LnurlMetadata.0.0;
+            | Self::LnurlMetadata.0.0
+            | Self::TransferInfo.0.0;
     }
 }
 
@@ -170,6 +182,7 @@ pub struct BreezSdk {
     external_input_parsers: Vec<ExternalInputParser>,
     spark_private_mode_initialized: Arc<OnceCell<()>>,
     nostr_client: Arc<NostrClient>,
+    flashnet_client: Arc<FlashnetClient>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -230,6 +243,7 @@ pub(crate) struct BreezSdkParams {
     pub spark_wallet: Arc<SparkWallet>,
     pub event_emitter: Arc<EventEmitter>,
     pub nostr_client: Arc<NostrClient>,
+    pub flashnet_client: Arc<FlashnetClient>,
 }
 
 impl BreezSdk {
@@ -261,6 +275,7 @@ impl BreezSdk {
             external_input_parsers,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
             nostr_client: params.nostr_client,
+            flashnet_client: params.flashnet_client,
         };
 
         sdk.start(initial_synced_sender);
@@ -487,9 +502,10 @@ impl BreezSdk {
                                 let () = sync_request.reply(Some(e)).await;
                                 return false;
                             }
-
+                            // Notify that the requested sync is complete
+                            let () = sync_request.reply(None).await;
+                            // If this was a full sync, notify the initial synced watcher
                             if sync_request.sync_type.contains(SyncType::Full) {
-                                let () = sync_request.reply(None).await;
                                 if let Err(e) = initial_synced_sender.send(true) {
                                     error!("Failed to send initial synced signal: {e:?}");
                                 }
@@ -734,7 +750,28 @@ impl BreezSdk {
             }
         };
 
-        tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
+        let sync_transfer_info = async {
+            if sync_type.contains(SyncType::TransferInfo) {
+                debug!("sync_wallet_internal: Starting TransferInfo sync");
+                let transfer_info_start = Instant::now();
+                if let Err(e) = self.sync_transfer_info().await {
+                    error!("sync_wallet_internal: Failed to sync transfer info: {e:?}");
+                }
+                if let Err(e) = self.check_and_refund_transfer_payments().await {
+                    error!(
+                        "sync_wallet_internal: Failed to check and refund transfer payments: {e:?}"
+                    );
+                }
+                debug!(
+                    "sync_wallet_internal: TransferInfo sync completed in {:?}",
+                    transfer_info_start.elapsed()
+                );
+            } else {
+                trace!("sync_wallet_internal: Skipping TransferInfo sync");
+            }
+        };
+
+        tokio::join!(sync_wallet, sync_lnurl, sync_deposits, sync_transfer_info);
 
         let elapsed = start_time.elapsed();
         info!("sync_wallet_internal: Wallet sync completed in {elapsed:?}");
@@ -825,7 +862,7 @@ impl BreezSdk {
             let metadata = lnurl_server_client
                 .list_metadata(&ListMetadataRequest {
                     offset: None,
-                    limit: Some(LNURL_METADATA_LIMIT),
+                    limit: Some(SYNC_PAGING_LIMIT),
                     updated_after: Some(updated_after),
                 })
                 .await?;
@@ -851,13 +888,202 @@ impl BreezSdk {
                 .await?;
 
             let _ = self.zap_receipt_trigger.send(());
-            if len < LNURL_METADATA_LIMIT {
+            if len < SYNC_PAGING_LIMIT {
                 // No more invoices to fetch
                 break;
             }
         }
 
         Ok(())
+    }
+
+    /// Synchronizes transfer info for payments from the Flashnet client to local storage,
+    /// which includes updating payments with outbound transfer IDs and fees paid. This syncs the
+    /// transfer info for all successful swaps starting from the last saved offset.
+    async fn sync_transfer_info(&self) -> Result<(), SdkError> {
+        let cache = ObjectCacheRepository::new(Arc::clone(&self.storage));
+        let mut offset = cache.fetch_transfer_info_offset().await?;
+
+        loop {
+            debug!("Syncing transfer info from offset {offset}");
+            let response = self
+                .flashnet_client
+                .list_user_swaps(ListUserSwapsRequest {
+                    sort: Some(SwapSortOrder::TimestampAsc),
+                    limit: Some(SYNC_PAGING_LIMIT),
+                    offset: Some(offset),
+                    ..Default::default()
+                })
+                .await?;
+            if response.swaps.is_empty() {
+                debug!("No more transfer info on offset {offset}");
+                break;
+            }
+            for swap in &response.swaps {
+                let payment = if let Ok(payment) = self
+                    .storage
+                    .get_payment_by_id(swap.inbound_transfer_id.clone())
+                    .await
+                {
+                    Ok(payment)
+                } else {
+                    // TODO: How can we lookup the token transaction payment id without the vout?
+                    self.storage
+                        .get_payment_by_id(format!("{}:0", swap.inbound_transfer_id))
+                        .await
+                };
+
+                if let Ok(mut payment) = payment
+                    && let Some(
+                        PaymentDetails::Spark { transfer_info, .. }
+                        | PaymentDetails::Token { transfer_info, .. },
+                    ) = &mut payment.details
+                {
+                    *transfer_info = Some(TransferInfo {
+                        payment_id: swap.outbound_transfer_id.clone(),
+                        fee: swap.fee_paid,
+                    });
+                    if let Err(e) = self.storage.insert_payment(payment).await {
+                        error!(
+                            "Failed to update payment with transfer info for swap {}: {e:?}",
+                            swap.id
+                        );
+                    }
+                } else {
+                    error!(
+                        "Failed to find payment for swap {} with inbound transfer id {}",
+                        swap.id, swap.inbound_transfer_id
+                    );
+                }
+            }
+
+            let len = u32::try_from(response.swaps.len())?;
+            offset = offset.saturating_add(len);
+            cache.save_transfer_info_offset(offset).await?;
+            if len < SYNC_PAGING_LIMIT {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Checks for payments that need transfer refunds and initiates the manual refund process.
+    /// This occures when a Spark transfer or token transaction is sent using the Flashnet client,
+    /// but the execution of the swap fails and no automatic refund is initiated.
+    async fn check_and_refund_transfer_payments(&self) -> Result<(), SdkError> {
+        debug!("Checking for failed transfers needing refunds");
+        let spark_payments = self
+            .storage
+            .list_payments(ListPaymentsRequest {
+                payment_details_filter: Some(PaymentDetailsFilter::Spark {
+                    htlc_status: None,
+                    transfer_refund_needed: Some(true),
+                }),
+                ..Default::default()
+            })
+            .await?;
+        let token_payments = self
+            .storage
+            .list_payments(ListPaymentsRequest {
+                payment_details_filter: Some(PaymentDetailsFilter::Token {
+                    transfer_refund_needed: true,
+                }),
+                ..Default::default()
+            })
+            .await?;
+        debug!(
+            "Found {} spark payments and {} token payments needing transfer refunds",
+            spark_payments.len(),
+            token_payments.len()
+        );
+        for payment in spark_payments.into_iter().chain(token_payments.into_iter()) {
+            if let Err(e) = self.refund_transfer_payment(&payment).await {
+                error!(
+                    "Failed to refund transfer for payment {}: {e:?}",
+                    payment.id
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Initiates a refund for a transfer payment that requires a manual refund.
+    async fn refund_transfer_payment(&self, payment: &Payment) -> Result<(), SdkError> {
+        let Some(
+            PaymentDetails::Spark {
+                transfer_refund_info:
+                    Some(TransferRefundInfo {
+                        pool_id,
+                        refund_payment_id: None,
+                    }),
+                ..
+            }
+            | PaymentDetails::Token {
+                transfer_refund_info:
+                    Some(TransferRefundInfo {
+                        pool_id,
+                        refund_payment_id: None,
+                    }),
+                ..
+            },
+        ) = &payment.details
+        else {
+            return Err(SdkError::Generic(
+                "No transfer refund info with missing refund".to_string(),
+            ));
+        };
+        debug!(
+            "Transfer refund needed for payment {}: pool_id {pool_id}",
+            payment.id
+        );
+        let Ok(pool_id) = PublicKey::from_str(pool_id) else {
+            return Err(SdkError::Generic(format!("Invalid pool_id: {pool_id}")));
+        };
+        match self
+            .flashnet_client
+            .clawback(ClawbackRequest {
+                pool_id,
+                transfer_id: payment.id.clone(),
+            })
+            .await
+        {
+            Ok(ClawbackResponse {
+                accepted: true,
+                spark_status_tracking_id,
+                ..
+            }) => {
+                debug!(
+                    "Clawback initiated for payment {}: tracking_id: {}",
+                    payment.id, spark_status_tracking_id
+                );
+                self.storage
+                    .set_payment_metadata(
+                        payment.id.clone(),
+                        PaymentMetadata {
+                            transfer_refund_info: Some(TransferRefundInfo {
+                                pool_id: pool_id.to_string(),
+                                refund_payment_id: Some(spark_status_tracking_id),
+                            }),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                Ok(())
+            }
+            Ok(ClawbackResponse {
+                accepted: false,
+                request_id,
+                error,
+                ..
+            }) => Err(SdkError::Generic(format!(
+                "Clawback not accepted: request_id: {request_id:?}, error: {error:?}"
+            ))),
+            Err(e) => Err(SdkError::Generic(format!(
+                "Failed to initiate clawback: {e}"
+            ))),
+        }
     }
 
     async fn claim_utxo(
@@ -1508,6 +1734,170 @@ impl BreezSdk {
     ) -> Result<SendPaymentResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
         Box::pin(self.send_payment_internal(request, false)).await
+    }
+
+    /// Prepares a transfer by validating the request and simulating the swap
+    /// to estimate the receive amount and fee.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The prepare transfer token request containing the amount, token identifier, and transfer type.
+    /// # Returns
+    ///
+    /// Result containing either:
+    /// * `PrepareTransferTokenResponse` - The response containing the estimated receive amount and fee.
+    /// * `SdkError` - If there was an error during the preparation process.
+    pub async fn prepare_transfer_token(
+        &self,
+        request: PrepareTransferTokenRequest,
+    ) -> Result<PrepareTransferTokenResponse, SdkError> {
+        self.ensure_spark_private_mode_initialized().await?;
+        let (asset_in_address, asset_out_address) = self
+            .validate_token_transfer(
+                request.amount,
+                &request.token_identifier,
+                &request.transfer_type,
+            )
+            .await?;
+        let pools_response = self
+            .flashnet_client
+            .list_pools(ListPoolsRequest {
+                asset_a_address: Some(asset_in_address.to_string()),
+                asset_b_address: Some(asset_out_address.to_string()),
+                sort: Some(PoolSortOrder::Volume24hDesc),
+                ..Default::default()
+            })
+            .await?;
+        // Get the pool for the transfer
+        let pool = pools_response.pools.first().ok_or(SdkError::Generic(
+            "No transfer pool found for the given token identifier".to_string(),
+        ))?;
+        let pool_id = pool.lp_public_key;
+        let response = self
+            .flashnet_client
+            .simulate_swap(SimulateSwapRequest {
+                asset_in_address: asset_in_address.to_string(),
+                asset_out_address: asset_out_address.to_string(),
+                pool_id,
+                amount_in: request.amount,
+                integrator_bps: None,
+            })
+            .await?;
+
+        Ok(PrepareTransferTokenResponse {
+            transfer_type: request.transfer_type,
+            token_identifier: request.token_identifier,
+            send_amount: request.amount,
+            estimated_receive_amount: response.amount_out,
+            fee: response.fee_paid_asset_in.unwrap_or_default(),
+        })
+    }
+
+    /// Executes a transfer based on the prepared transfer response. It validates the transfer,
+    /// retrieves the appropriate pool, and performs the swap while considering slippage.
+    /// It also updates the payment details with the transfer information.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The transfer token request containing the prepared response and optional max slippage.
+    ///
+    /// # Returns
+    ///
+    /// Result containing either:
+    /// * `TransferTokenResponse` - The response containing the sent and received payment details.
+    /// * `SdkError` - If there was an error during the transfer process.
+    pub async fn transfer_token(
+        &self,
+        request: TransferTokenRequest,
+    ) -> Result<TransferTokenResponse, SdkError> {
+        self.ensure_spark_private_mode_initialized().await?;
+        let (asset_in_address, asset_out_address) = self
+            .validate_token_transfer(
+                request.prepare_response.send_amount,
+                &request.prepare_response.token_identifier,
+                &request.prepare_response.transfer_type,
+            )
+            .await?;
+        // Get the pool for the transfer
+        let pools_response = self
+            .flashnet_client
+            .list_pools(ListPoolsRequest {
+                asset_a_address: Some(asset_in_address.to_string()),
+                asset_b_address: Some(asset_out_address.to_string()),
+                sort: Some(PoolSortOrder::Volume24hDesc),
+                ..Default::default()
+            })
+            .await?;
+        let pool = pools_response.pools.first().ok_or(SdkError::Generic(
+            "No transfer pool found for the given token identifier".to_string(),
+        ))?;
+        let pool_id = pool.lp_public_key;
+        // Calculate min amount out considering max slippage
+        let max_slippage_bps = request.max_slippage_bps.unwrap_or(50);
+        let min_amount_out = request
+            .prepare_response
+            .estimated_receive_amount
+            .saturating_sub(
+                request
+                    .prepare_response
+                    .estimated_receive_amount
+                    .saturating_mul(u128::from(max_slippage_bps))
+                    / 10_000,
+            );
+
+        let swap_response_res = self
+            .flashnet_client
+            .execute_swap(ExecuteSwapRequest {
+                asset_in_address: asset_in_address.to_string(),
+                asset_out_address: asset_out_address.to_string(),
+                pool_id,
+                amount_in: request.prepare_response.send_amount,
+                max_slippage_bps,
+                min_amount_out,
+                integrator_fee_rate_bps: None,
+                integrator_public_key: None,
+            })
+            .await;
+        let (sent_payment, received_payment) = match swap_response_res {
+            Ok(swap_response) => {
+                info!(
+                    "Token transfer executed: accepted {}",
+                    swap_response.accepted
+                );
+                self.update_payment_token_transfer_details(
+                    &pool_id,
+                    swap_response.transfer_id,
+                    swap_response.outbound_transfer_id,
+                    swap_response.refund_transfer_id,
+                    swap_response.fee_amount,
+                )
+                .await
+            }
+            Err(e) => {
+                error!("Token transfer failed: {e:?}");
+                if let FlashnetError::Execution {
+                    transaction_identifier: Some(transaction_identifier),
+                    ..
+                } = &e
+                {
+                    self.update_payment_token_transfer_details(
+                        &pool_id,
+                        transaction_identifier.clone(),
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                } else {
+                    Err(e.into())
+                }
+            }
+        }?;
+
+        Ok(TransferTokenResponse {
+            sent_payment,
+            received_payment,
+        })
     }
 
     /// Synchronizes the wallet with the Spark network
@@ -2371,6 +2761,181 @@ impl BreezSdk {
         };
         cache.save_lightning_address(&address_info).await?;
         Ok(address_info)
+    }
+
+    /// Validates that the token transfer can be executed based on the current balances.
+    /// Returns the asset in and asset out addresses for the transfer.
+    async fn validate_token_transfer(
+        &self,
+        amount: u128,
+        token_identifier: &str,
+        transfer_type: &TransferType,
+    ) -> Result<(String, String), SdkError> {
+        let get_info_response = self
+            .get_info(GetInfoRequest {
+                ensure_synced: Some(true),
+            })
+            .await?;
+        let (asset_in_address, asset_out_address) = match transfer_type {
+            TransferType::FromBitcoin => {
+                if u128::from(get_info_response.balance_sats) < amount {
+                    return Err(SdkError::InsufficientFunds);
+                }
+                (BTC_ASSET_ADDRESS, token_identifier)
+            }
+            TransferType::ToBitcoin => {
+                let token_balance = get_info_response
+                    .token_balances
+                    .get(token_identifier)
+                    .cloned()
+                    .map_or(0, |tb| tb.balance);
+                if token_balance < amount {
+                    return Err(SdkError::InsufficientFunds);
+                }
+                (token_identifier, BTC_ASSET_ADDRESS)
+            }
+        };
+        Ok((asset_in_address.to_string(), asset_out_address.to_string()))
+    }
+
+    /// Fetches a payment by its transfer identifier.
+    /// The identifier can be either a spark transfer id or a token transaction hash.
+    async fn fetch_payment_by_token_transfer_identifier(
+        &self,
+        identifier: &str,
+    ) -> Result<Payment, SdkError> {
+        debug!(
+            "Fetching token transfer payment for identifier: {}",
+            identifier
+        );
+        let payment = if let Ok(transfer_id) = TransferId::from_str(identifier) {
+            let transfers = self
+                .spark_wallet
+                .list_transfers(ListTransfersRequest {
+                    transfer_ids: vec![transfer_id],
+                    ..Default::default()
+                })
+                .await?;
+            let transfer = transfers
+                .items
+                .first()
+                .cloned()
+                .ok_or_else(|| SdkError::Generic("Transfer not found".to_string()))?;
+            transfer.try_into()
+        } else {
+            let token_transactions = self
+                .spark_wallet
+                .list_token_transactions(ListTokenTransactionsRequest {
+                    token_transaction_hashes: vec![identifier.to_string()],
+                    ..Default::default()
+                })
+                .await?;
+            let token_transaction = token_transactions
+                .items
+                .first()
+                .ok_or_else(|| SdkError::Generic("Token transaction not found".to_string()))?;
+            let object_repository = ObjectCacheRepository::new(self.storage.clone());
+            let payments = token_transaction_to_payments(
+                &self.spark_wallet,
+                &object_repository,
+                token_transaction,
+                false,
+            )
+            .await?;
+            payments.first().cloned().ok_or_else(|| {
+                SdkError::Generic("Payment not found for token transaction".to_string())
+            })
+        };
+        payment
+            .inspect(|p| debug!("Found payment: {p:?}"))
+            .inspect_err(|e| debug!("No payment found: {e}"))
+    }
+
+    /// Updates the payment with the token transfer details.
+    /// This is called after a token transfer is executed or fails.
+    ///
+    /// Arguments:
+    /// * `pool_id` - The pool id used for the transfer.
+    /// * `outbound_id` - The outbound spark transfer id or token transaction hash.
+    /// * `inbound_id` - The inbound spark transfer id or token transaction hash if the transfer was successful.
+    /// * `refund_id` - The inbound refund spark transfer id or token transaction hash if the transfer was refunded.
+    /// * `fee` - The fee paid for the transfer.
+    ///
+    /// Returns:
+    /// * The sent payment of the transfer.
+    /// * The received payment of the transfer if available.
+    async fn update_payment_token_transfer_details(
+        &self,
+        pool_id: &PublicKey,
+        outbound_id: String,
+        inbound_id: Option<String>,
+        refund_id: Option<String>,
+        fee: Option<u128>,
+    ) -> Result<(Payment, Option<Payment>), SdkError> {
+        debug!(
+            "Updating payment transfer details for pool_id: {pool_id}, outbound_id: {outbound_id}, inbound_id: {inbound_id:?}, refund_id: {refund_id:?}"
+        );
+        let mut sent_payment = self
+            .fetch_payment_by_token_transfer_identifier(&outbound_id)
+            .await?;
+        let received_payment = if let Some(inbound_id) = &inbound_id {
+            self.fetch_payment_by_token_transfer_identifier(inbound_id)
+                .await
+                .ok()
+        } else {
+            None
+        };
+
+        // Get the transfer info from the payment
+        let Some(
+            PaymentDetails::Token {
+                transfer_info: payment_transfer_info,
+                transfer_refund_info: payment_transfer_refund_info,
+                ..
+            }
+            | PaymentDetails::Spark {
+                transfer_info: payment_transfer_info,
+                transfer_refund_info: payment_transfer_refund_info,
+                ..
+            },
+        ) = &mut sent_payment.details
+        else {
+            return Err(SdkError::Generic(
+                "Expected Token or Spark payment details".to_string(),
+            ));
+        };
+        // Update the transfer info based on the provided details either setting
+        // the transfer info or the transfer refund info.
+        if let Some(inbound_id) = inbound_id
+            && let Some(fee) = fee
+        {
+            *payment_transfer_info = Some(TransferInfo {
+                payment_id: received_payment
+                    .as_ref()
+                    .map_or(inbound_id.clone(), |p| p.id.clone()),
+                fee,
+            });
+        } else {
+            let transfer_refund_info = TransferRefundInfo {
+                pool_id: pool_id.to_string(),
+                refund_payment_id: refund_id,
+            };
+            *payment_transfer_refund_info = Some(transfer_refund_info.clone());
+
+            self.storage
+                .set_payment_metadata(
+                    sent_payment.id.clone(),
+                    PaymentMetadata {
+                        transfer_refund_info: Some(transfer_refund_info),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+        }
+
+        self.storage.insert_payment(sent_payment.clone()).await?;
+
+        Ok((sent_payment, received_payment))
     }
 }
 

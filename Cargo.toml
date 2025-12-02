@@ -15,6 +15,7 @@ members = [
   "crates/breez-sdk/lnurl-models",
   "crates/breez-sdk/breez-itest",
   "crates/breez-sdk/wasm",
+  "crates/flashnet",
   "crates/macros",
   "crates/macro_test",
   "crates/spark",
@@ -64,6 +65,7 @@ dotenvy = "0.15.7"
 ecies = { version = "0.2.7", default-features = false, features = ["pure"] }
 enum_to_enum = "0.1.0"
 figment = "0.10.19"
+flashnet = { path = "crates/flashnet", default-features = false }
 # frost-core = "2.1.0"
 frost-core = { package = "frost-core-unofficial", version = "2.2.0" }
 # frost-secp256k1-tr = "2.1.0"

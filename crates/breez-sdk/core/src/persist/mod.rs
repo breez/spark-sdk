@@ -11,12 +11,13 @@ use thiserror::Error;
 
 use crate::{
     DepositClaimError, DepositInfo, LightningAddressInfo, ListPaymentsRequest, LnurlPayInfo,
-    LnurlWithdrawInfo, TokenBalance, TokenMetadata, models::Payment,
+    LnurlWithdrawInfo, TokenBalance, TokenMetadata, TransferRefundInfo, models::Payment,
 };
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
 const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
 const LNURL_METADATA_UPDATED_AFTER_KEY: &str = "lnurl_metadata_updated_after";
+const TRANSFER_INFO_OFFSET_KEY: &str = "transfer_info_offset";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
 const TX_CACHE_KEY: &str = "tx_cache";
 const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
@@ -82,6 +83,7 @@ pub struct PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
+    pub transfer_refund_info: Option<TransferRefundInfo>,
 }
 
 /// Trait for persistent storage
@@ -458,6 +460,26 @@ impl ObjectCacheRepository {
             None => Ok(0),
         }
     }
+
+    pub(crate) async fn save_transfer_info_offset(&self, offset: u32) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(TRANSFER_INFO_OFFSET_KEY.to_string(), offset.to_string())
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_transfer_info_offset(&self) -> Result<u32, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(TRANSFER_INFO_OFFSET_KEY.to_string())
+            .await?;
+        match value {
+            Some(value) => Ok(value.parse().map_err(|_| {
+                StorageError::Serialization("invalid transfer_info_offset".to_string())
+            })?),
+            None => Ok(0),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -826,6 +848,8 @@ pub mod tests {
                     invoice: "invoice_string".to_string(),
                 }),
                 htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -846,6 +870,8 @@ pub mod tests {
                     expiry_time: 15_000,
                     status: SparkHtlcStatus::PreimageShared,
                 }),
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -875,6 +901,8 @@ pub mod tests {
                     description: Some("description_2".to_string()),
                     invoice: "invoice_string_2".to_string(),
                 }),
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -890,6 +918,7 @@ pub mod tests {
             }),
             lnurl_withdraw_info: None,
             lnurl_description: None,
+            transfer_refund_info: None,
         };
 
         let lightning_lnurl_pay_payment = Payment {
@@ -919,6 +948,7 @@ pub mod tests {
                 withdraw_url: "http://example.com/withdraw".to_string(),
             }),
             lnurl_description: None,
+            transfer_refund_info: None,
         };
         let lightning_lnurl_withdraw_payment = Payment {
             id: "lightning_pmtabc".to_string(),
@@ -1104,25 +1134,35 @@ pub mod tests {
                     Some(PaymentDetails::Spark {
                         invoice_details: r_invoice,
                         htlc_details: r_htlc,
+                        transfer_info: r_transfer_info,
+                        transfer_refund_info: r_transfer_refund_info,
                     }),
                     Some(PaymentDetails::Spark {
                         invoice_details: e_invoice,
                         htlc_details: e_htlc,
+                        transfer_info: e_transfer_info,
+                        transfer_refund_info: e_transfer_refund_info,
                     }),
                 ) => {
                     assert_eq!(r_invoice, e_invoice);
                     assert_eq!(r_htlc, e_htlc);
+                    assert_eq!(r_transfer_info, e_transfer_info);
+                    assert_eq!(r_transfer_refund_info, e_transfer_refund_info);
                 }
                 (
                     Some(PaymentDetails::Token {
                         metadata: r_metadata,
                         tx_hash: r_tx_hash,
                         invoice_details: r_invoice,
+                        transfer_info: r_transfer_info,
+                        transfer_refund_info: r_transfer_refund_info,
                     }),
                     Some(PaymentDetails::Token {
                         metadata: e_metadata,
                         tx_hash: e_tx_hash,
                         invoice_details: e_invoice,
+                        transfer_info: e_transfer_info,
+                        transfer_refund_info: e_transfer_refund_info,
                     }),
                 ) => {
                     assert_eq!(r_metadata.identifier, e_metadata.identifier);
@@ -1134,6 +1174,8 @@ pub mod tests {
                     assert_eq!(r_metadata.is_freezable, e_metadata.is_freezable);
                     assert_eq!(r_tx_hash, e_tx_hash);
                     assert_eq!(r_invoice, e_invoice);
+                    assert_eq!(r_transfer_info, e_transfer_info);
+                    assert_eq!(r_transfer_refund_info, e_transfer_refund_info);
                 }
                 (
                     Some(PaymentDetails::Lightning {
@@ -1666,6 +1708,8 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -1680,6 +1724,8 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -1694,6 +1740,8 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -1750,6 +1798,8 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -1793,6 +1843,8 @@ pub mod tests {
                 },
                 tx_hash: "tx_hash_1".to_string(),
                 invoice_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -1896,6 +1948,8 @@ pub mod tests {
                     expiry_time: 2000,
                     status: SparkHtlcStatus::WaitingForPreimage,
                 }),
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -1915,6 +1969,8 @@ pub mod tests {
                     expiry_time: 3000,
                     status: SparkHtlcStatus::PreimageShared,
                 }),
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -1934,6 +1990,8 @@ pub mod tests {
                     expiry_time: 4000,
                     status: SparkHtlcStatus::Returned,
                 }),
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -1952,6 +2010,8 @@ pub mod tests {
                     invoice: "spark_invoice".to_string(),
                 }),
                 htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -1964,7 +2024,10 @@ pub mod tests {
         // Test filter for WaitingForPreimage
         let waiting_filter = storage
             .list_payments(ListPaymentsRequest {
-                spark_htlc_status_filter: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                    htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+                    transfer_refund_needed: None,
+                }),
                 ..Default::default()
             })
             .await
@@ -1975,7 +2038,10 @@ pub mod tests {
         // Test filter for PreimageShared
         let shared_filter = storage
             .list_payments(ListPaymentsRequest {
-                spark_htlc_status_filter: Some(vec![SparkHtlcStatus::PreimageShared]),
+                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                    htlc_status: Some(vec![SparkHtlcStatus::PreimageShared]),
+                    transfer_refund_needed: None,
+                }),
                 ..Default::default()
             })
             .await
@@ -1986,7 +2052,10 @@ pub mod tests {
         // Test filter for Returned
         let returned_filter = storage
             .list_payments(ListPaymentsRequest {
-                spark_htlc_status_filter: Some(vec![SparkHtlcStatus::Returned]),
+                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                    htlc_status: Some(vec![SparkHtlcStatus::Returned]),
+                    transfer_refund_needed: None,
+                }),
                 ..Default::default()
             })
             .await
@@ -1997,10 +2066,13 @@ pub mod tests {
         // Test filter for multiple statuses (WaitingForPreimage and PreimageShared)
         let multiple_filter = storage
             .list_payments(ListPaymentsRequest {
-                spark_htlc_status_filter: Some(vec![
-                    SparkHtlcStatus::WaitingForPreimage,
-                    SparkHtlcStatus::PreimageShared,
-                ]),
+                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                    htlc_status: Some(vec![
+                        SparkHtlcStatus::WaitingForPreimage,
+                        SparkHtlcStatus::PreimageShared,
+                    ]),
+                    transfer_refund_needed: None,
+                }),
                 ..Default::default()
             })
             .await
@@ -2012,17 +2084,180 @@ pub mod tests {
         // Test that non-HTLC payment is not included in any HTLC status filter
         let all_htlc_filter = storage
             .list_payments(ListPaymentsRequest {
-                spark_htlc_status_filter: Some(vec![
-                    SparkHtlcStatus::WaitingForPreimage,
-                    SparkHtlcStatus::PreimageShared,
-                    SparkHtlcStatus::Returned,
-                ]),
+                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                    htlc_status: Some(vec![
+                        SparkHtlcStatus::WaitingForPreimage,
+                        SparkHtlcStatus::PreimageShared,
+                        SparkHtlcStatus::Returned,
+                    ]),
+                    transfer_refund_needed: None,
+                }),
                 ..Default::default()
             })
             .await
             .unwrap();
         assert_eq!(all_htlc_filter.len(), 3);
         assert!(all_htlc_filter.iter().all(|p| p.id != "non_htlc"));
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub async fn test_transfer_refund_missing_filtering(storage: Box<dyn Storage>) {
+        // Create payments with and without transfer refund info
+        let payment_with_refund = Payment {
+            id: "with_refund".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 10_000,
+            fees: 0,
+            timestamp: 1000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
+            }),
+        };
+        let payment_with_refund_metadata = PaymentMetadata {
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_description: None,
+            transfer_refund_info: Some(crate::TransferRefundInfo {
+                pool_id: "pool1".to_string(),
+                refund_payment_id: Some("refund1".to_string()),
+            }),
+        };
+        let successful_transfer = Payment {
+            id: "successful_transfer".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 20_000,
+            fees: 0,
+            timestamp: 2000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+                transfer_info: Some(crate::TransferInfo {
+                    payment_id: "transfer1".to_string(),
+                    fee: 100,
+                }),
+                transfer_refund_info: None,
+            }),
+        };
+        let payment_without_refund = Payment {
+            id: "without_refund".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 10_000,
+            fees: 0,
+            timestamp: 3000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
+            }),
+        };
+        let payment_without_refund_metadata = PaymentMetadata {
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_description: None,
+            transfer_refund_info: Some(crate::TransferRefundInfo {
+                pool_id: "pool1".to_string(),
+                refund_payment_id: None,
+            }),
+        };
+
+        storage.insert_payment(payment_with_refund).await.unwrap();
+        storage.insert_payment(successful_transfer).await.unwrap();
+        storage
+            .insert_payment(payment_without_refund)
+            .await
+            .unwrap();
+        storage
+            .set_payment_metadata("with_refund".to_string(), payment_with_refund_metadata)
+            .await
+            .unwrap();
+        storage
+            .set_payment_metadata(
+                "without_refund".to_string(),
+                payment_without_refund_metadata,
+            )
+            .await
+            .unwrap();
+
+        let payments = storage
+            .list_payments(ListPaymentsRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(payments.len(), 3);
+
+        // Test filter for payments missing transfer refund info
+        let missing_refund_filter = storage
+            .list_payments(ListPaymentsRequest {
+                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                    htlc_status: None,
+                    transfer_refund_needed: Some(true),
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(missing_refund_filter.len(), 1);
+        assert_eq!(missing_refund_filter[0].id, "without_refund");
+
+        // Test filter for payments with transfer refund info present
+        let present_refund_filter = storage
+            .list_payments(ListPaymentsRequest {
+                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                    htlc_status: None,
+                    transfer_refund_needed: Some(false),
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(present_refund_filter.len(), 1);
+        assert_eq!(present_refund_filter[0].id, "with_refund");
+
+        // Test filter for token payments missing transfer refund info
+        let token_no_refund_filter = storage
+            .list_payments(ListPaymentsRequest {
+                payment_details_filter: Some(crate::PaymentDetailsFilter::Token {
+                    transfer_refund_needed: true,
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(token_no_refund_filter.len(), 0);
+
+        // Test filter for token payments with transfer refund info present
+        let token_with_refund_filter = storage
+            .list_payments(ListPaymentsRequest {
+                payment_details_filter: Some(crate::PaymentDetailsFilter::Token {
+                    transfer_refund_needed: false,
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(token_with_refund_filter.len(), 0);
+
+        // Test filter for all payments regardless of transfer refund info
+        let all_payments_filter = storage
+            .list_payments(ListPaymentsRequest {
+                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                    htlc_status: None,
+                    transfer_refund_needed: None,
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(all_payments_filter.len(), 3);
     }
 
     pub async fn test_timestamp_filtering(storage: Box<dyn Storage>) {
@@ -2038,6 +2273,8 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -2052,6 +2289,8 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -2066,6 +2305,8 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -2122,6 +2363,8 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -2220,6 +2463,8 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -2234,6 +2479,8 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -2248,6 +2495,8 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -2383,6 +2632,8 @@ pub mod tests {
                     expiry_time: 1_234_567_990,
                     status: SparkHtlcStatus::WaitingForPreimage,
                 }),
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
 
@@ -2416,6 +2667,8 @@ pub mod tests {
                 expiry_time: 1_234_567_990,
                 status: SparkHtlcStatus::PreimageShared,
             }),
+            transfer_info: None,
+            transfer_refund_info: None,
         });
         storage.insert_payment(payment.clone()).await.unwrap();
 

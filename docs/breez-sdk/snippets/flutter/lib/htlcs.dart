@@ -41,7 +41,9 @@ Future<List<Payment>> listClaimableHtlcPayments(BreezSdk sdk) async {
   final request = ListPaymentsRequest(
     typeFilter: [PaymentType.receive],
     statusFilter: [PaymentStatus.pending],
-    sparkHtlcStatusFilter: [SparkHtlcStatus.waitingForPreimage],
+    paymentDetailsFilter: PaymentDetailsFilter.spark(
+      htlcStatus: [SparkHtlcStatus.waitingForPreimage],
+    ),
   );
 
   final response = await sdk.listPayments(request: request);

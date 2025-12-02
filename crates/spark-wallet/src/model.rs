@@ -271,6 +271,12 @@ pub struct ListTokenTransactionsRequest {
     pub output_ids: Vec<String>,
 }
 
+#[derive(Default)]
+pub struct ListTransfersRequest {
+    pub paging: Option<PagingFilter>,
+    pub transfer_ids: Vec<TransferId>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum FulfillSparkInvoiceResult {
     Transfer(Box<WalletTransfer>),

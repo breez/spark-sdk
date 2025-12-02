@@ -49,7 +49,7 @@ use tracing::{debug, error, info, trace};
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    FulfillSparkInvoiceResult, ListTokenTransactionsRequest, PreimageRequest,
+    FulfillSparkInvoiceResult, ListTokenTransactionsRequest, ListTransfersRequest, PreimageRequest,
     QuerySparkInvoiceResult, TokenBalance, WalletEvent, WalletLeaves, WalletSettings,
     WithdrawInnerParams,
     event::EventManager,
@@ -787,10 +787,13 @@ impl SparkWallet {
 
     pub async fn list_transfers(
         &self,
-        paging: Option<PagingFilter>,
+        request: ListTransfersRequest,
     ) -> Result<PagingResult<WalletTransfer>, SparkWalletError> {
         let our_pubkey = self.identity_public_key;
-        let transfers = self.transfer_service.query_transfers(paging).await?;
+        let transfers = self
+            .transfer_service
+            .query_transfers(&request.transfer_ids, request.paging)
+            .await?;
         create_transfers(transfers, &self.ssp_client, &self.htlc_service, our_pubkey).await
     }
 

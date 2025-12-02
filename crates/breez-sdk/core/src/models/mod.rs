@@ -238,12 +238,20 @@ pub enum PaymentDetails {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         /// The HTLC transfer details if the payment fulfilled an HTLC transfer
         htlc_details: Option<SparkHtlcDetails>,
+        /// Transfer information if this was a successful transfer payment
+        transfer_info: Option<TransferInfo>,
+        /// Transfer refund information if this was a tranfer that was refunded
+        transfer_refund_info: Option<TransferRefundInfo>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         /// The invoice details if the payment fulfilled a spark invoice
         invoice_details: Option<SparkInvoicePaymentDetails>,
+        /// Transfer information if this was a successful transfer payment
+        transfer_info: Option<TransferInfo>,
+        /// Transfer refund information if this was a tranfer that was refunded
+        transfer_refund_info: Option<TransferRefundInfo>,
     },
     Lightning {
         /// Represents the invoice description
@@ -856,6 +864,21 @@ pub struct SendPaymentResponse {
     pub payment: Payment,
 }
 
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PaymentDetailsFilter {
+    Spark {
+        /// Filter specific Spark HTLC statuses
+        htlc_status: Option<Vec<SparkHtlcStatus>>,
+        /// Filter transfer payments with refund information
+        transfer_refund_needed: Option<bool>,
+    },
+    Token {
+        /// Filter transfer payments with refund information
+        transfer_refund_needed: bool,
+    },
+}
+
 /// Request to list payments with optional filters and pagination
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -866,9 +889,9 @@ pub struct ListPaymentsRequest {
     pub status_filter: Option<Vec<PaymentStatus>>,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub asset_filter: Option<AssetFilter>,
-    /// Only include payments with specific Spark HTLC statuses
+    /// Only include payments matching these payment details filters
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
+    pub payment_details_filter: Option<PaymentDetailsFilter>,
     /// Only include payments created after this timestamp (inclusive)
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub from_timestamp: Option<u64>,
@@ -1106,4 +1129,83 @@ pub struct LnurlReceiveMetadata {
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
     pub sender_comment: Option<String>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TransferInfo {
+    /// The receiving payment id associated with the transfer
+    pub payment_id: String,
+    /// The fee paid for the transfer
+    pub fee: u128,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TransferRefundInfo {
+    /// The pool id associated with the transfer
+    pub pool_id: String,
+    /// The refund payment id if a refund payment was made
+    pub refund_payment_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum TransferType {
+    /// Transfering from Bitcoin to a token
+    FromBitcoin,
+    /// Transfering from a token to Bitcoin
+    ToBitcoin,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PrepareTransferTokenRequest {
+    /// The type of transfer, either from or to Bitcoin.
+    pub transfer_type: TransferType,
+    /// The token identifier of the token.
+    /// From Bitcoin transfers to this token, to Bitcoin transfers from this token.
+    pub token_identifier: String,
+    /// Amount to transfer.
+    /// Denominated in satoshis if transfering from Bitcoin, otherwise in the token base units.
+    pub amount: u128,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PrepareTransferTokenResponse {
+    /// The type of transfer, either from or to Bitcoin.
+    pub transfer_type: TransferType,
+    /// The token identifier of the token.
+    /// From Bitcoin transfers to this token, to Bitcoin transfers from this token.
+    pub token_identifier: String,
+    /// Amount to transfer.
+    /// Denominated in satoshis if transfering from Bitcoin, otherwise in the token base units.
+    pub send_amount: u128,
+    /// The estimated amount to be received from the transfer.
+    /// Denominated in the token base units if transfering from Bitcoin, otherwise in satoshis.
+    pub estimated_receive_amount: u128,
+    /// The fee for the transfer.
+    /// Denominated in satoshis if transfering from Bitcoin, otherwise in the token base units.
+    pub fee: u128,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct TransferTokenRequest {
+    /// The prepared transfer token response
+    pub prepare_response: PrepareTransferTokenResponse,
+    /// The optional maximum slippage in basis points (1/100 of a percent) allowed for the
+    /// transfer compared to the estimated amount. Defaults to 50 bps (0.5%) if not set.
+    /// The transfer will fail if the actual amount received is less than
+    /// `estimated_amount * (1 - max_slippage_bps / 10_000)`.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub max_slippage_bps: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct TransferTokenResponse {
+    /// The sent payment for the transfer
+    pub sent_payment: Payment,
+    /// The received payment for a successful transfer
+    pub received_payment: Option<Payment>,
 }

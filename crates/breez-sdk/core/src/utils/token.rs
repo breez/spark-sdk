@@ -153,6 +153,8 @@ pub async fn token_transaction_to_payments(
                 metadata: metadata.clone(),
                 tx_hash: transaction.hash.clone(),
                 invoice_details: invoice.map(Into::into),
+                transfer_info: None,
+                transfer_refund_info: None,
             }),
         };
         payments.push(payment);

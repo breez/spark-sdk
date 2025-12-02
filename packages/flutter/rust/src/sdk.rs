@@ -203,15 +203,32 @@ impl BreezSdk {
         self.inner.get_user_settings().await
     }
 
-    pub async fn update_user_settings(&self, request: UpdateUserSettingsRequest) -> Result<(), SdkError> {
+    pub async fn update_user_settings(
+        &self,
+        request: UpdateUserSettingsRequest,
+    ) -> Result<(), SdkError> {
         self.inner.update_user_settings(request).await
     }
-    
+
     #[frb(sync)]
     pub fn get_token_issuer(&self) -> crate::issuer::TokenIssuer {
         let token_issuer = self.inner.get_token_issuer();
         crate::issuer::TokenIssuer {
             token_issuer: Arc::new(token_issuer),
         }
+    }
+
+    pub async fn prepare_transfer_token(
+        &self,
+        request: PrepareTransferTokenRequest,
+    ) -> Result<PrepareTransferTokenResponse, SdkError> {
+        self.inner.prepare_transfer_token(request).await
+    }
+
+    pub async fn transfer_token(
+        &self,
+        request: TransferTokenRequest,
+    ) -> Result<TransferTokenResponse, SdkError> {
+        self.inner.transfer_token(request).await
     }
 }

@@ -61,7 +61,10 @@ async fn send_htlc_alice_to_bob(
         .list_payments(ListPaymentsRequest {
             status_filter: Some(vec![PaymentStatus::Pending]),
             type_filter: Some(vec![PaymentType::Receive]),
-            spark_htlc_status_filter: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+            payment_details_filter: Some(PaymentDetailsFilter::Spark {
+                htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+                transfer_refund_needed: None,
+            }),
             ..Default::default()
         })
         .await?;
@@ -89,7 +92,10 @@ async fn send_htlc_alice_to_bob(
         .list_payments(ListPaymentsRequest {
             status_filter: Some(vec![PaymentStatus::Pending]),
             type_filter: Some(vec![PaymentType::Send]),
-            spark_htlc_status_filter: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+            payment_details_filter: Some(PaymentDetailsFilter::Spark {
+                htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+                transfer_refund_needed: None,
+            }),
             ..Default::default()
         })
         .await?;
@@ -239,7 +245,10 @@ async fn test_02_htlc_refund(
         .list_payments(ListPaymentsRequest {
             status_filter: Some(vec![PaymentStatus::Failed]),
             type_filter: Some(vec![PaymentType::Receive]),
-            spark_htlc_status_filter: Some(vec![SparkHtlcStatus::Returned]),
+            payment_details_filter: Some(PaymentDetailsFilter::Spark {
+                htlc_status: Some(vec![SparkHtlcStatus::Returned]),
+                transfer_refund_needed: None,
+            }),
             ..Default::default()
         })
         .await?;
@@ -268,7 +277,10 @@ async fn test_02_htlc_refund(
         .list_payments(ListPaymentsRequest {
             status_filter: Some(vec![PaymentStatus::Failed]),
             type_filter: Some(vec![PaymentType::Send]),
-            spark_htlc_status_filter: Some(vec![SparkHtlcStatus::Returned]),
+            payment_details_filter: Some(PaymentDetailsFilter::Spark {
+                htlc_status: Some(vec![SparkHtlcStatus::Returned]),
+                transfer_refund_needed: None,
+            }),
             ..Default::default()
         })
         .await?;

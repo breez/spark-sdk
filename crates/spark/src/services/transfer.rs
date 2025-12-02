@@ -1146,6 +1146,7 @@ impl TransferService {
 
     async fn query_transfers_inner(
         &self,
+        transfer_ids: &[TransferId],
         paging: PagingFilter,
     ) -> Result<PagingResult<Transfer>, ServiceError> {
         trace!(
@@ -1159,6 +1160,7 @@ impl TransferService {
             .client
             .query_all_transfers(TransferFilter {
                 order: order.into(),
+                transfer_ids: transfer_ids.iter().map(|id| id.to_string()).collect(),
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
                     self.signer.get_identity_public_key()?.serialize().to_vec(),
                 )),
@@ -1188,11 +1190,18 @@ impl TransferService {
     /// Queries transfers for the current identity
     pub async fn query_transfers(
         &self,
+        transfer_ids: &[TransferId],
         paging: Option<PagingFilter>,
     ) -> Result<PagingResult<Transfer>, ServiceError> {
         let transfers = match paging {
-            Some(paging) => self.query_transfers_inner(paging).await?,
-            None => pager(|f| self.query_transfers_inner(f), PagingFilter::default()).await?,
+            Some(paging) => self.query_transfers_inner(transfer_ids, paging).await?,
+            None => {
+                pager(
+                    |f| self.query_transfers_inner(transfer_ids, f),
+                    PagingFilter::default(),
+                )
+                .await?
+            }
         };
         Ok(transfers)
     }
