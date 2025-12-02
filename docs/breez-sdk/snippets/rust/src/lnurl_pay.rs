@@ -34,10 +34,12 @@ async fn prepare_pay(sdk: &BreezSdk) -> Result<()> {
 async fn pay(sdk: &BreezSdk, prepare_response: PrepareLnurlPayResponse) -> Result<()> {
     // ANCHOR: lnurl-pay
     let optional_idempotency_key = Some("<idempotency key uuid>".to_string());
-    let response = sdk.lnurl_pay(LnurlPayRequest {
-        prepare_response,
-        idempotency_key: optional_idempotency_key,
-    }).await?;
+    let response = sdk
+        .lnurl_pay(LnurlPayRequest {
+            prepare_response,
+            idempotency_key: optional_idempotency_key,
+        })
+        .await?;
     // ANCHOR_END: lnurl-pay
     info!("Response: {response:?}");
     Ok(())

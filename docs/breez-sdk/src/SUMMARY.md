@@ -17,7 +17,7 @@
   - [Receiving payments](guide/receive_payment.md)
   - [Sending payments](guide/send_payment.md)
   - [Listing payments](guide/list_payments.md)
-  - [Handling unclaimed deposits](guide/unclaimed_deposits.md)
+  - [Claiming on-chain deposits](guide/onchain_claims.md)
 - [Using LNURL and Lightning addresses](guide/lnurl.md)
   - [Sending payments using LNURL-Pay/Lightning address](guide/lnurl_pay.md)
   - [Receiving payments using LNURL-Pay/Lightning address](guide/receive_lnurl_pay.md)
@@ -31,6 +31,7 @@
   - [Issuing tokens](guide/issuing_tokens.md)
 - [Advanced features](guide/advanced.md)
   - [Spark HTLC Payments](guide/htlcs.md)
+- [Moving to production](guide/moving_to_production.md)
 
 ---
 

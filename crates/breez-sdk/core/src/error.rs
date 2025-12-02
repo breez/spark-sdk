@@ -1,6 +1,7 @@
 use crate::{
     Fee,
     lnurl::{LnurlServerError, ReqwestLnurlServerClientError},
+    nostr::NostrError,
     persist::{self},
 };
 use bitcoin::consensus::encode::FromHexError;
@@ -38,13 +39,14 @@ pub enum SdkError {
     ChainServiceError(String),
 
     #[error(
-        "Deposit claim fee exceeds for utxo: {tx}:{vout} with max fee: {max_fee:?} and actual fee: {actual_fee} sats"
+        "Max deposit claim fee exceeded for utxo: {tx}:{vout} with max fee: {max_fee:?} and required fee: {required_fee_sats} sats or {required_fee_rate_sat_per_vbyte} sats/vbyte"
     )]
-    DepositClaimFeeExceeded {
+    MaxDepositClaimFeeExceeded {
         tx: String,
         vout: u32,
         max_fee: Option<Fee>,
-        actual_fee: u64,
+        required_fee_sats: u64,
+        required_fee_rate_sat_per_vbyte: u64,
     },
 
     #[error("Missing utxo: {tx}:{vout}")]
@@ -180,17 +182,31 @@ impl From<TryInitError> for SdkError {
     }
 }
 
+impl From<NostrError> for SdkError {
+    fn from(value: NostrError) -> Self {
+        match value {
+            NostrError::KeyDerivationError(e) => {
+                SdkError::Generic(format!("Nostr key derivation error: {e}"))
+            }
+            NostrError::ZapReceiptCreationError(e) => {
+                SdkError::Generic(format!("Nostr zap receipt creation error: {e}"))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Error, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum DepositClaimError {
     #[error(
-        "Deposit claim fee exceeds for utxo: {tx}:{vout} with max fee: {max_fee:?} and actual fee: {actual_fee} sats"
+        "Max deposit claim fee exceeded for utxo: {tx}:{vout} with max fee: {max_fee:?} and required fee: {required_fee_sats} sats or {required_fee_rate_sat_per_vbyte} sats/vbyte"
     )]
-    DepositClaimFeeExceeded {
+    MaxDepositClaimFeeExceeded {
         tx: String,
         vout: u32,
         max_fee: Option<Fee>,
-        actual_fee: u64,
+        required_fee_sats: u64,
+        required_fee_rate_sat_per_vbyte: u64,
     },
 
     #[error("Missing utxo: {tx}:{vout}")]
@@ -203,16 +219,18 @@ pub enum DepositClaimError {
 impl From<SdkError> for DepositClaimError {
     fn from(value: SdkError) -> Self {
         match value {
-            SdkError::DepositClaimFeeExceeded {
+            SdkError::MaxDepositClaimFeeExceeded {
                 tx,
                 vout,
                 max_fee,
-                actual_fee,
-            } => DepositClaimError::DepositClaimFeeExceeded {
+                required_fee_sats,
+                required_fee_rate_sat_per_vbyte,
+            } => DepositClaimError::MaxDepositClaimFeeExceeded {
                 tx,
                 vout,
                 max_fee,
-                actual_fee,
+                required_fee_sats,
+                required_fee_rate_sat_per_vbyte,
             },
             SdkError::MissingUtxo { tx, vout } => DepositClaimError::MissingUtxo { tx, vout },
             SdkError::Generic(e) => DepositClaimError::Generic { message: e },

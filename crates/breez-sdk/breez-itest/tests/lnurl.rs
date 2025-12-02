@@ -1,12 +1,13 @@
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
+use nostr::util::JsonUtil;
 use rand::RngCore;
 use rstest::*;
 use tempdir::TempDir;
-use tracing::info;
+use tracing::{debug, info};
 
 // ---------------------
 // Fixtures
@@ -384,4 +385,302 @@ async fn test_05_lnurl_payment_flow(
 
     info!("=== Test test_05_lnurl_payment_flow PASSED ===");
     Ok(())
+}
+
+/// Test client-side zap receipt creation and publishing
+/// Bob has private mode enabled (prefer_spark_over_lightning = true)
+/// Alice sends a zap to Bob's lightning address
+/// Verify Bob creates and publishes a zap receipt
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_06_client_side_zap_receipt(
+    #[future] lnurl_fixture: LnurlFixture,
+    #[future] alice_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_06_client_side_zap_receipt ===");
+
+    // Setup Bob with private mode enabled
+    let lnurl = Arc::new(lnurl_fixture.await);
+    let lnurl_domain = lnurl.http_url().to_string();
+
+    let temp_dir = TempDir::new("breez-sdk-bob-zap")?;
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+
+    let mut config = default_config(Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = Some(lnurl_domain.clone());
+    config.sync_interval_secs = 1;
+    config.real_time_sync_server_url = None;
+    config.private_enabled_default = true;
+
+    let mut bob = build_sdk_with_custom_config(
+        temp_dir.path().to_string_lossy().to_string(),
+        seed,
+        config,
+        Some(temp_dir),
+        false,
+    )
+    .await?;
+    bob.lnurl_fixture = Some(Arc::clone(&lnurl));
+
+    let mut alice = alice_sdk.await?;
+
+    // Bob registers a Lightning address
+    let username = "bobzap";
+    let description = "Bob's zap test Lightning address";
+
+    let register_response = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: Some(description.to_string()),
+        })
+        .await?;
+
+    let bob_lightning_address = register_response.lightning_address.clone();
+    info!(
+        "Bob registered Lightning address: {}",
+        bob_lightning_address
+    );
+
+    // Fund Alice with sats for testing
+    receive_and_fund(&mut alice, 50_000, false).await?;
+    info!("Alice funded with sats");
+
+    // Wait for sync to complete
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Alice parses Bob's Lightning address
+    let details = match alice.sdk.parse(&bob_lightning_address).await? {
+        InputType::LightningAddress(address) => address,
+        _ => anyhow::bail!("Expected Lightning address"),
+    };
+
+    assert_eq!(details.pay_request.allows_nostr, Some(true));
+    assert_eq!(details.pay_request.comment_allowed, 255u16);
+    assert!(details.pay_request.nostr_pubkey.is_some());
+    let bob_nostr_pubkey = details.pay_request.nostr_pubkey.unwrap();
+
+    // Create a properly signed zap request (NIP-57 kind 9734 event) using the nostr crate
+    let payment_amount_sats = 1000_u64;
+
+    // Generate a temporary key for Alice (in production, this would be Alice's actual nostr key)
+    let alice_keys = nostr::Keys::generate();
+
+    // Parse Bob's nostr public key
+    let bob_pubkey = nostr::PublicKey::from_hex(&bob_nostr_pubkey)?;
+
+    // Build the zap request event
+    let zap_request_builder =
+        nostr::EventBuilder::new(nostr::Kind::ZapRequest, "Test zap from Alice to Bob")
+            .tag(nostr::Tag::public_key(bob_pubkey))
+            .tag(nostr::Tag::custom(
+                nostr::TagKind::Custom(std::borrow::Cow::Borrowed("amount")),
+                vec![(payment_amount_sats * 1000).to_string()],
+            ))
+            .tag(nostr::Tag::custom(
+                nostr::TagKind::Custom(std::borrow::Cow::Borrowed("relays")),
+                // Note there's nothing listening on this relay, but this makes the test pass.
+                vec!["ws://localhost:7777".to_string()],
+            ));
+
+    let zap_request_event = zap_request_builder.sign_with_keys(&alice_keys)?;
+
+    let zap_request_str = zap_request_event.as_json();
+
+    info!("Created properly signed zap request using nostr crate");
+
+    // For this test, we need to manually trigger the zap request flow
+    // since the SDK doesn't automatically include zap requests yet
+    //
+    // Step 1: Get an invoice from the LNURL server with the zap request
+    let encoded_zap = percent_encode(&zap_request_str);
+
+    let callback_url = format!(
+        "{}?amount={}&nostr={encoded_zap}&comment={}",
+        details.pay_request.callback,
+        payment_amount_sats * 1000, // amount in millisats
+        percent_encode("Test zap from Alice to Bob")
+    );
+
+    info!("Calling LNURL callback with zap request: {callback_url}");
+
+    let client = reqwest::Client::new();
+    let callback_response = client.get(&callback_url).send().await?;
+
+    if !callback_response.status().is_success() {
+        anyhow::bail!("Callback request failed: {}", callback_response.status());
+    }
+
+    let callback_json: serde_json::Value = callback_response.json().await?;
+    info!("Callback response: {}", callback_json);
+
+    // Extract the invoice from the callback response
+    let invoice = callback_json["pr"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No invoice in callback response: {callback_json}"))?
+        .to_string();
+
+    info!("Got invoice with zap request: {invoice}");
+
+    // Step 2: Alice pays the invoice using the standard send_payment flow
+    let prepare_response = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: invoice.clone(),
+            amount: None,
+            token_identifier: None,
+        })
+        .await?;
+
+    let _pay_response = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?;
+
+    info!("Alice initiated payment to Bob");
+
+    // Wait for payment to complete on both sides
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 30).await?;
+    info!("Payment completed on Alice's side");
+
+    let bob_payment_from_event =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+    info!("Payment completed on Bob's side");
+
+    // Verify bob_payment_from_event has all metadata
+    let Some(PaymentDetails::Lightning {
+        lnurl_receive_metadata: event_metadata,
+        ..
+    }) = &bob_payment_from_event.details
+    else {
+        anyhow::bail!("Expected Lightning payment in bob_payment_from_event");
+    };
+
+    let Some(event_lnurl_metadata) = event_metadata else {
+        anyhow::bail!("Expected LNURL receive metadata in bob_payment_from_event");
+    };
+
+    // Verify zap request was stored in the event
+    assert!(
+        event_lnurl_metadata.nostr_zap_request.is_some(),
+        "Zap request should be stored in bob_payment_from_event"
+    );
+    info!("Verified zap request is stored in bob_payment_from_event");
+
+    // Verify comment is present in the event
+    assert!(
+        event_lnurl_metadata.sender_comment.is_some(),
+        "Comment should be stored in bob_payment_from_event"
+    );
+    assert_eq!(
+        event_lnurl_metadata.sender_comment.as_deref(),
+        Some("Test zap from Alice to Bob"),
+        "Comment should match in bob_payment_from_event"
+    );
+    info!("Verified comment is stored in bob_payment_from_event");
+
+    // Wait for Bob's SDK to sync metadata and process zap receipts
+    // Poll until the zap receipt is present in the payment
+    let payment_id = bob_payment_from_event.id.clone();
+    let bob_sdk = bob.sdk.clone();
+
+    let payment_lnurl_metadata = wait_for(
+        || async {
+            debug!("Checking for zap receipt in Bob's payment {}", payment_id);
+            let payment = bob_sdk
+                .get_payment(GetPaymentRequest {
+                    payment_id: payment_id.clone(),
+                })
+                .await?
+                .payment;
+
+            let Some(PaymentDetails::Lightning {
+                lnurl_receive_metadata,
+                ..
+            }) = payment.details
+            else {
+                anyhow::bail!("Expected Lightning payment");
+            };
+
+            let Some(metadata) = lnurl_receive_metadata else {
+                anyhow::bail!("Expected LNURL receive metadata");
+            };
+
+            if metadata.nostr_zap_receipt.is_none() {
+                anyhow::bail!("Zap receipt not yet created");
+            }
+
+            Ok(metadata)
+        },
+        20,
+    )
+    .await?;
+
+    info!("Zap receipt detected in Bob's payment");
+
+    // NOTE: The zap receipt will not be present in the event because it is created
+    // asynchronously after the payment event is generated.
+
+    // Now verify bob_payment (fetched separately) also has all metadata
+    // Verify zap request was stored in bob_payment
+    assert!(
+        payment_lnurl_metadata.nostr_zap_request.is_some(),
+        "Zap request should be stored in bob_payment"
+    );
+    info!("Verified zap request is stored in bob_payment");
+
+    // Verify comment is present in bob_payment
+    assert!(
+        payment_lnurl_metadata.sender_comment.is_some(),
+        "Comment should be stored in bob_payment"
+    );
+    assert_eq!(
+        payment_lnurl_metadata.sender_comment.as_deref(),
+        Some("Test zap from Alice to Bob"),
+        "Comment should match in bob_payment"
+    );
+    info!("Verified comment is stored in bob_payment");
+
+    // Verify zap receipt was created and published in bob_payment
+    assert!(
+        payment_lnurl_metadata.nostr_zap_receipt.is_some(),
+        "Zap receipt should be created and stored in bob_payment"
+    );
+
+    let zap_receipt_json = payment_lnurl_metadata.nostr_zap_receipt.unwrap();
+    info!("Zap receipt created: {}", zap_receipt_json);
+
+    // Parse and validate the zap receipt
+    let zap_receipt: serde_json::Value = serde_json::from_str(&zap_receipt_json)?;
+    assert_eq!(
+        zap_receipt["kind"].as_i64(),
+        Some(9735),
+        "Zap receipt should be kind 9735"
+    );
+    info!("Verified zap receipt is valid NIP-57 event (kind 9735)");
+
+    info!("=== Test test_06_client_side_zap_receipt PASSED ===");
+    Ok(())
+}
+
+fn percent_encode(input: &str) -> Cow<'_, str> {
+    let mut result = String::new();
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                result.push(byte as char);
+            }
+            _ => {
+                result.push('%');
+                result.push_str(&format!("{:02X}", byte));
+            }
+        }
+    }
+    Cow::Owned(result)
 }

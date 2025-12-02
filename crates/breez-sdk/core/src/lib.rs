@@ -8,6 +8,7 @@ mod issuer;
 mod lnurl;
 mod logger;
 mod models;
+mod nostr;
 mod persist;
 mod realtime_sync;
 mod sdk;
@@ -25,7 +26,8 @@ pub use events::{EventEmitter, EventListener, SdkEvent};
 pub use issuer::*;
 pub use models::*;
 pub use persist::{
-    PaymentMetadata, Storage, StorageError, UpdateDepositPayload, path::default_storage_path,
+    PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, UpdateDepositPayload,
+    path::default_storage_path,
 };
 pub use sdk::{BreezSdk, default_config, init_logging, parse_input};
 pub use sdk_builder::SdkBuilder;

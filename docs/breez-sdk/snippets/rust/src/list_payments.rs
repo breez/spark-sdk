@@ -13,9 +13,7 @@ async fn get_payment(sdk: &BreezSdk) -> Result<Payment> {
 
 async fn list_payments(sdk: &BreezSdk) -> Result<Vec<Payment>> {
     // ANCHOR: list-payments
-    let response = sdk
-        .list_payments(ListPaymentsRequest::default())
-        .await?;
+    let response = sdk.list_payments(ListPaymentsRequest::default()).await?;
     let payments = response.payments;
     // ANCHOR_END: list-payments
 

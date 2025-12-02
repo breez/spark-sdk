@@ -86,6 +86,35 @@ class BreezSdkSpark {
   // Subscribe to the event stream
   void subscribeToEventStream() {
     _eventSubscription = _eventStream?.listen((sdkEvent) {
+      switch (sdkEvent) {
+        case SdkEvent_Synced():
+          // Wallet has been synchronized with the network
+          break;
+        case SdkEvent_DataSynced(:final didPullNewRecords):
+          // Data was pushed/pulled to/from real-time sync storage
+          final _ = didPullNewRecords;
+          break;
+        case SdkEvent_UnclaimedDeposits(:final unclaimedDeposits):
+          // SDK was unable to claim some deposits automatically
+          final _ = unclaimedDeposits;
+          break;
+        case SdkEvent_ClaimedDeposits(:final claimedDeposits):
+          // Deposits were successfully claimed
+          final _ = claimedDeposits;
+          break;
+        case SdkEvent_PaymentSucceeded(:final payment):
+          // A payment completed successfully
+          final _ = payment;
+          break;
+        case SdkEvent_PaymentPending(:final payment):
+          // A payment is pending (waiting for confirmation)
+          final _ = payment;
+          break;
+        case SdkEvent_PaymentFailed(:final payment):
+          // A payment failed
+          final _ = payment;
+          break;
+      }
       _eventStreamController.add(sdkEvent);
     }, onError: (e) {
       _eventStreamController.addError(e);

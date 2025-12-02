@@ -15,8 +15,14 @@ class RefundingPayments {
                 
                 deposit.claimError?.let { claimError ->
                     when (claimError) {
-                        is DepositClaimError.DepositClaimFeeExceeded -> {
-                            // Log.v("Breez", "Max claim fee exceeded. Max: ${claimError.maxFee}, Actual: ${claimError.actualFee} sats")
+                        is DepositClaimError.MaxDepositClaimFeeExceeded -> {
+                            val maxFee = claimError.maxFee
+                            val maxFeeStr = when (maxFee) {
+                                is Fee.Fixed -> "${maxFee.amount} sats"
+                                is Fee.Rate -> "${maxFee.satPerVbyte} sats/vByte"
+                                null -> "none"
+                            }
+                            // Log.v("Breez", "Max claim fee exceeded. Max: $maxFeeStr, Required: ${claimError.requiredFeeSats} sats or ${claimError.requiredFeeRateSatPerVbyte} sats/vByte")
                         }
                         is DepositClaimError.MissingUtxo -> {
                             // Log.v("Breez", "UTXO not found when claiming deposit")
@@ -31,6 +37,31 @@ class RefundingPayments {
             // handle error
         }
         // ANCHOR_END: list-unclaimed-deposits
+    }
+
+    suspend fun handleFeeExceeded(sdk: BreezSdk, deposit: DepositInfo) {
+        // ANCHOR: handle-fee-exceeded
+        try {
+            val claimError = deposit.claimError
+            if (claimError is DepositClaimError.MaxDepositClaimFeeExceeded) {
+                val requiredFee = claimError.requiredFeeSats
+
+                // Show UI to user with the required fee and get approval
+                val userApproved = true // Replace with actual user approval logic
+
+                if (userApproved) {
+                    val claimRequest = ClaimDepositRequest(
+                        txid = deposit.txid,
+                        vout = deposit.vout,
+                        maxFee = Fee.Fixed(requiredFee)
+                    )
+                    sdk.claimDeposit(claimRequest)
+                }
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: handle-fee-exceeded
     }
 
     suspend fun claimDeposit(sdk: BreezSdk) {
@@ -89,10 +120,10 @@ class RefundingPayments {
 suspend fun recommendedFees(sdk: BreezSdk) {
     // ANCHOR: recommended-fees
     val response = sdk.recommendedFees()
-    println("Fastest fee: ${response.fastestFee} sats")
-    println("Half-hour fee: ${response.halfHourFee} sats")
-    println("Hour fee: ${response.hourFee} sats")
-    println("Economy fee: ${response.economyFee} sats")
-    println("Minimum fee: ${response.minimumFee} sats")
+    println("Fastest fee: ${response.fastestFee} sats/vByte")
+    println("Half-hour fee: ${response.halfHourFee} sats/vByte")
+    println("Hour fee: ${response.hourFee} sats/vByte")
+    println("Economy fee: ${response.economyFee} sats/vByte")
+    println("Minimum fee: ${response.minimumFee} sats/vByte")
     // ANCHOR_END: recommended-fees
 }

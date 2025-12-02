@@ -17,10 +17,22 @@ namespace BreezSdkSnippets
 
                 if (deposit.claimError != null)
                 {
-                    if (deposit.claimError is DepositClaimError.DepositClaimFeeExceeded exceeded)
+                    if (deposit.claimError is DepositClaimError.MaxDepositClaimFeeExceeded exceeded)
                     {
-                        Console.WriteLine($"Claim failed: Fee exceeded. Max: {exceeded.maxFee}, " +
-                                        $"Actual: {exceeded.actualFee}");
+                        var maxFeeStr = "none";
+                        if (exceeded.maxFee != null)
+                        {
+                            if (exceeded.maxFee is Fee.Fixed fixedFee)
+                            {
+                                maxFeeStr = $"{fixedFee.amount} sats";
+                            }
+                            else if (exceeded.maxFee is Fee.Rate rateFee)
+                            {
+                                maxFeeStr = $"{rateFee.satPerVbyte} sats/vByte";
+                            }
+                        }
+                        Console.WriteLine($"Claim failed: Fee exceeded. Max: {maxFeeStr}, " +
+                                        $"Required: {exceeded.requiredFeeSats} sats or {exceeded.requiredFeeRateSatPerVbyte} sats/vByte");
                     }
                     else if (deposit.claimError is DepositClaimError.MissingUtxo)
                     {
@@ -33,6 +45,29 @@ namespace BreezSdkSnippets
                 }
             }
             // ANCHOR_END: list-unclaimed-deposits
+        }
+
+        async Task HandleFeeExceeded(BreezSdk sdk, DepositInfo deposit)
+        {
+            // ANCHOR: handle-fee-exceeded
+            if (deposit.claimError is DepositClaimError.MaxDepositClaimFeeExceeded exceeded)
+            {
+                var requiredFee = exceeded.requiredFeeSats;
+
+                // Show UI to user with the required fee and get approval
+                var userApproved = true; // Replace with actual user approval logic
+
+                if (userApproved)
+                {
+                    var claimRequest = new ClaimDepositRequest(
+                        txid: deposit.txid,
+                        vout: deposit.vout,
+                        maxFee: new Fee.Fixed(amount: requiredFee)
+                    );
+                    await sdk.ClaimDeposit(request: claimRequest);
+                }
+            }
+            // ANCHOR_END: handle-fee-exceeded
         }
 
         async Task ClaimDeposit(BreezSdk sdk)
@@ -81,11 +116,11 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: recommended-fees
             var response = await sdk.RecommendedFees();
-            Console.WriteLine($"Fastest fee: {response.fastestFee}");
-            Console.WriteLine($"Half-hour fee: {response.halfHourFee}");
-            Console.WriteLine($"Hour fee: {response.hourFee}");
-            Console.WriteLine($"Economy fee: {response.economyFee}");
-            Console.WriteLine($"Minimum fee: {response.minimumFee}");
+            Console.WriteLine($"Fastest fee: {response.fastestFee} sats/vByte");
+            Console.WriteLine($"Half-hour fee: {response.halfHourFee} sats/vByte");
+            Console.WriteLine($"Hour fee: {response.hourFee} sats/vByte");
+            Console.WriteLine($"Economy fee: {response.economyFee} sats/vByte");
+            Console.WriteLine($"Minimum fee: {response.minimumFee} sats/vByte");
         }
         // ANCHOR_END: recommended-fees
     }

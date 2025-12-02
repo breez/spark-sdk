@@ -56,7 +56,46 @@ namespace BreezSdkSnippets
         {
             public async Task OnEvent(SdkEvent sdkEvent)
             {
-                Console.WriteLine($"Received event {sdkEvent}");
+                switch (sdkEvent)
+                {
+                    case SdkEvent.Synced syncedEvent:
+                        // Wallet has been synchronized with the network
+                        break;
+
+                    case SdkEvent.DataSynced dataSyncedEvent:
+                        // Data was pushed/pulled to/from real-time sync storage
+                        var pulledNewRecords = dataSyncedEvent.didPullNewRecords;
+                        break;
+
+                    case SdkEvent.UnclaimedDeposits unclaimedDepositsEvent:
+                        // SDK was unable to claim some deposits automatically
+                        var unclaimedDeposits = unclaimedDepositsEvent.unclaimedDeposits;
+                        break;
+
+                    case SdkEvent.ClaimedDeposits claimedDepositsEvent:
+                        // Deposits were successfully claimed
+                        var claimedDeposits = claimedDepositsEvent.claimedDeposits;
+                        break;
+
+                    case SdkEvent.PaymentSucceeded paymentSucceededEvent:
+                        // A payment completed successfully
+                        var payment = paymentSucceededEvent.payment;
+                        break;
+
+                    case SdkEvent.PaymentPending paymentPendingEvent:
+                        // A payment is pending (waiting for confirmation)
+                        var pendingPayment = paymentPendingEvent.payment;
+                        break;
+
+                    case SdkEvent.PaymentFailed paymentFailedEvent:
+                        // A payment failed
+                        var failedPayment = paymentFailedEvent.payment;
+                        break;
+
+                    default:
+                        // Handle any future event types
+                        break;
+                }
             }
         }
 

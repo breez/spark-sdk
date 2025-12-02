@@ -1,6 +1,7 @@
 package example
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
@@ -21,8 +22,17 @@ func ListUnclaimedDeposits(sdk *breez_sdk_spark.BreezSdk) error {
 
 		if claimErr := *deposit.ClaimError; claimErr != nil {
 			switch claimErr := claimErr.(type) {
-			case breez_sdk_spark.DepositClaimErrorDepositClaimFeeExceeded:
-				log.Printf("Max claim fee exceeded. Max: %v, Actual: %v sats", claimErr.MaxFee, claimErr.ActualFee)
+			case breez_sdk_spark.DepositClaimErrorMaxDepositClaimFeeExceeded:
+				maxFeeStr := "none"
+				if claimErr.MaxFee != nil {
+					switch fee := (*claimErr.MaxFee).(type) {
+					case breez_sdk_spark.FeeFixed:
+						maxFeeStr = fmt.Sprintf("%v sats", fee.Amount)
+					case breez_sdk_spark.FeeRate:
+						maxFeeStr = fmt.Sprintf("%v sats/vByte", fee.SatPerVbyte)
+					}
+				}
+				log.Printf("Max claim fee exceeded. Max: %v, Required: %v sats or %v sats/vByte", maxFeeStr, claimErr.RequiredFeeSats, claimErr.RequiredFeeRateSatPerVbyte)
 			case breez_sdk_spark.DepositClaimErrorMissingUtxo:
 				log.Print("UTXO not found when claiming deposit")
 			case breez_sdk_spark.DepositClaimErrorGeneric:
@@ -34,14 +44,45 @@ func ListUnclaimedDeposits(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
+func HandleFeeExceeded(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.DepositInfo) error {
+	// ANCHOR: handle-fee-exceeded
+	if claimErr := *deposit.ClaimError; claimErr != nil {
+		if exceeded, ok := claimErr.(breez_sdk_spark.DepositClaimErrorMaxDepositClaimFeeExceeded); ok {
+			requiredFee := exceeded.RequiredFeeSats
+
+			// Show UI to user with the required fee and get approval
+			userApproved := true // Replace with actual user approval logic
+
+			if userApproved {
+				maxFee := breez_sdk_spark.Fee(breez_sdk_spark.FeeFixed{Amount: requiredFee})
+				claimRequest := breez_sdk_spark.ClaimDepositRequest{
+					Txid:   deposit.Txid,
+					Vout:   deposit.Vout,
+					MaxFee: &maxFee,
+				}
+				_, err := sdk.ClaimDeposit(claimRequest)
+				if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+					return err
+				}
+			}
+		}
+	}
+	// ANCHOR_END: handle-fee-exceeded
+	return nil
+}
+
 func ClaimDeposit(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: claim-deposit
 	txid := "<your_deposit_txid>"
 	vout := uint32(0)
 
+	// Set a higher max fee to retry claiming
+	maxFee := breez_sdk_spark.Fee(breez_sdk_spark.FeeFixed{Amount: 5000})
+
 	request := breez_sdk_spark.ClaimDepositRequest{
-		Txid: txid,
-		Vout: vout,
+		Txid:   txid,
+		Vout:   vout,
+		MaxFee: &maxFee,
 	}
 	response, err := sdk.ClaimDeposit(request)
 
@@ -90,11 +131,11 @@ func RecommendedFees(sdk *breez_sdk_spark.BreezSdk) error {
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 		return err
 	}
-	log.Printf("Fastest fee: %v sats", response.FastestFee)
-	log.Printf("Half-hour fee: %v sats", response.HalfHourFee)
-	log.Printf("Hour fee: %v sats", response.HourFee)
-	log.Printf("Economy fee: %v sats", response.EconomyFee)
-	log.Printf("Minimum fee: %v sats", response.MinimumFee)
+	log.Printf("Fastest fee: %v sats/vByte", response.FastestFee)
+	log.Printf("Half-hour fee: %v sats/vByte", response.HalfHourFee)
+	log.Printf("Hour fee: %v sats/vByte", response.HourFee)
+	log.Printf("Economy fee: %v sats/vByte", response.EconomyFee)
+	log.Printf("Minimum fee: %v sats/vByte", response.MinimumFee)
 	// ANCHOR_END: recommended-fees
 	return nil
 }

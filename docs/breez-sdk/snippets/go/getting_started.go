@@ -70,7 +70,36 @@ func SetLogger() {
 type SdkListener struct{}
 
 func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
-	log.Printf("Received event %#v", e)
+	switch event := e.(type) {
+	case breez_sdk_spark.SdkEventSynced:
+		// Wallet has been synchronized with the network
+	case breez_sdk_spark.SdkEventDataSynced:
+		// Data was pushed/pulled to/from real-time sync storage
+		pulledNewRecords := event.DidPullNewRecords
+		_ = pulledNewRecords
+	case breez_sdk_spark.SdkEventUnclaimedDeposits:
+		// SDK was unable to claim some deposits automatically
+		unclaimedDeposits := event.UnclaimedDeposits
+		_ = unclaimedDeposits
+	case breez_sdk_spark.SdkEventClaimedDeposits:
+		// Deposits were successfully claimed
+		claimedDeposits := event.ClaimedDeposits
+		_ = claimedDeposits
+	case breez_sdk_spark.SdkEventPaymentSucceeded:
+		// A payment completed successfully
+		payment := event.Payment
+		_ = payment
+	case breez_sdk_spark.SdkEventPaymentPending:
+		// A payment is pending (waiting for confirmation)
+		pendingPayment := event.Payment
+		_ = pendingPayment
+	case breez_sdk_spark.SdkEventPaymentFailed:
+		// A payment failed
+		failedPayment := event.Payment
+		_ = failedPayment
+	default:
+		// Handle any future event types
+	}
 }
 
 func AddEventListener(sdk *breez_sdk_spark.BreezSdk, listener SdkListener) string {

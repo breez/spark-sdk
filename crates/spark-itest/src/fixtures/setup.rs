@@ -88,8 +88,14 @@ impl TestFixtures {
 }
 
 // Helper function to create a test signer
-pub fn create_test_signer() -> DefaultSigner {
+pub fn create_test_signer_alice() -> DefaultSigner {
     // Use deterministic seed for testing
     let seed = [3u8; 32];
+    DefaultSigner::new(&seed, spark_wallet::Network::Regtest).unwrap()
+}
+
+pub fn create_test_signer_bob() -> DefaultSigner {
+    // Use deterministic seed for testing
+    let seed = [4u8; 32];
     DefaultSigner::new(&seed, spark_wallet::Network::Regtest).unwrap()
 }

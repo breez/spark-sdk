@@ -68,7 +68,30 @@ def set_logger(logger: SdkLogger):
 # ANCHOR: add-event-listener
 class SdkListener(EventListener):
     def on_event(self, event: SdkEvent):
-        logging.debug(f"Received event {event}")
+        if isinstance(event, SdkEvent.SYNCED):
+            # Wallet has been synchronized with the network
+            pass
+        elif isinstance(event, SdkEvent.DATA_SYNCED):
+            # Data was pushed/pulled to/from real-time sync storage
+            pulled_new_records = event.did_pull_new_records
+        elif isinstance(event, SdkEvent.UNCLAIMED_DEPOSITS):
+            # SDK was unable to claim some deposits automatically
+            unclaimed_deposits = event.unclaimed_deposits
+        elif isinstance(event, SdkEvent.CLAIMED_DEPOSITS):
+            # Deposits were successfully claimed
+            claimed_deposits = event.claimed_deposits
+        elif isinstance(event, SdkEvent.PAYMENT_SUCCEEDED):
+            # A payment completed successfully
+            payment = event.payment
+        elif isinstance(event, SdkEvent.PAYMENT_PENDING):
+            # A payment is pending (waiting for confirmation)
+            pending_payment = event.payment
+        elif isinstance(event, SdkEvent.PAYMENT_FAILED):
+            # A payment failed
+            failed_payment = event.payment
+        else:
+            # Handle any future event types
+            pass
 
 
 async def add_event_listener(sdk: BreezSdk, listener: SdkListener):

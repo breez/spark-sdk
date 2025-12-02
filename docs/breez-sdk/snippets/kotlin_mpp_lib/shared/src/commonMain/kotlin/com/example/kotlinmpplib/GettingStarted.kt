@@ -57,7 +57,38 @@ class GettingStarted {
     // ANCHOR: add-event-listener
     class SdkListener : EventListener {
         override suspend fun onEvent(e: SdkEvent) {
-            // Log.v("SDKListener", "Received event $e")
+            when (e) {
+                is SdkEvent.Synced -> {
+                    // Wallet has been synchronized with the network
+                }
+                is SdkEvent.DataSynced -> {
+                    // Data was pushed/pulled to/from real-time sync storage
+                    val pulledNewRecords = e.didPullNewRecords
+                }
+                is SdkEvent.UnclaimedDeposits -> {
+                    // SDK was unable to claim some deposits automatically
+                    val unclaimedDeposits = e.unclaimedDeposits
+                }
+                is SdkEvent.ClaimedDeposits -> {
+                    // Deposits were successfully claimed
+                    val claimedDeposits = e.claimedDeposits
+                }
+                is SdkEvent.PaymentSucceeded -> {
+                    // A payment completed successfully
+                    val payment = e.payment
+                }
+                is SdkEvent.PaymentPending -> {
+                    // A payment is pending (waiting for confirmation)
+                    val pendingPayment = e.payment
+                }
+                is SdkEvent.PaymentFailed -> {
+                    // A payment failed
+                    val failedPayment = e.payment
+                }
+                else -> {
+                    // Handle any future event types
+                }
+            }
         }
     }
 

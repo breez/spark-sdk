@@ -1,4 +1,5 @@
 use crate::repository::LnurlRepository;
+use crate::time::now_millis;
 use lightning_invoice::Bolt11Invoice;
 use nostr::{EventBuilder, JsonUtil, Keys, TagStandard};
 use spark::operator::OperatorConfig;
@@ -22,6 +23,8 @@ pub struct Zap {
     pub zap_event: Option<String>,
     pub user_pubkey: String,
     pub invoice_expiry: i64,
+    pub updated_at: i64,
+    pub is_user_nostr_key: bool,
 }
 
 /// Helper function to create an RPC client and subscribe to a user for zaps.
@@ -114,7 +117,7 @@ pub fn subscribe_to_user_for_zaps<DB>(
                         // Periodically check if user still has unexpired invoices
                         // Hold the lock while checking to prevent race condition with new subscriptions
                         let mut subscribed = subscribed_keys.lock().await;
-                        match db.user_has_unexpired_invoices(&user_pk.to_string()).await {
+                        match db.is_zap_monitored_user(&user_pk.to_string()).await {
                             Ok(has_unexpired) => {
                                 if !has_unexpired {
                                     debug!("User {user_pk} has no more unexpired invoices (timeout check), unsubscribing");
@@ -267,6 +270,7 @@ pub fn subscribe_to_user_for_zaps<DB>(
                 };
 
                 zap.zap_event = Some(zap_event.as_json());
+                zap.updated_at = now_millis();
                 db.upsert_zap(&zap).await.unwrap();
 
                 let nostr_client = nostr_sdk::Client::new(nostr_keys.clone());
@@ -302,7 +306,7 @@ pub fn subscribe_to_user_for_zaps<DB>(
                 // Check if user still has unexpired invoices
                 // Hold the lock while checking to prevent race condition with new subscriptions
                 let mut subscribed = subscribed_keys.lock().await;
-                match db.user_has_unexpired_invoices(&user_pk.to_string()).await {
+                match db.is_zap_monitored_user(&user_pk.to_string()).await {
                     Ok(has_unexpired) => {
                         if !has_unexpired {
                             debug!("User {user_pk} has no more unexpired invoices, unsubscribing");

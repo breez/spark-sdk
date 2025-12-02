@@ -28,7 +28,7 @@ use spark::{
         PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
         QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager, TokenService,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
-        TransferTokenOutput, UnilateralExitService, Utxo,
+        TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
@@ -1325,7 +1325,21 @@ async fn create_transfers(
     htlc_service: &Arc<HtlcService>,
     our_public_key: PublicKey,
 ) -> Result<PagingResult<WalletTransfer>, SparkWalletError> {
-    let transfer_ids: Vec<String> = transfers.items.iter().map(|t| t.id.to_string()).collect();
+    let mut incoming_preimage_swap_transfer_ids = Vec::new();
+    let mut outgoing_preimage_swap_transfer_ids = Vec::new();
+    let mut transfer_ids = Vec::new();
+
+    for transfer in &transfers.items {
+        let transfer_id = transfer.id.to_string();
+        if transfer.transfer_type == TransferType::PreimageSwap {
+            if transfer.receiver_identity_public_key == our_public_key {
+                incoming_preimage_swap_transfer_ids.push(transfer_id.clone());
+            } else {
+                outgoing_preimage_swap_transfer_ids.push(transfer_id.clone());
+            }
+        }
+        transfer_ids.push(transfer_id);
+    }
 
     let ssp_tranfers = ssp_client.get_transfers(transfer_ids.clone()).await?;
     let ssp_transfers_map: HashMap<String, SspTransfer> = ssp_tranfers
@@ -1337,7 +1351,7 @@ async fn create_transfers(
     let incoming_htlc_requests = htlc_service
         .query_htlc(
             QueryHtlcFilter {
-                transfer_ids: transfer_ids.clone(),
+                transfer_ids: incoming_preimage_swap_transfer_ids,
                 match_role: PreimageRequestRole::Receiver,
                 identity_public_key: our_public_key,
                 status: None,
@@ -1350,7 +1364,7 @@ async fn create_transfers(
     let outgoing_htlc_requests = htlc_service
         .query_htlc(
             QueryHtlcFilter {
-                transfer_ids,
+                transfer_ids: outgoing_preimage_swap_transfer_ids,
                 match_role: PreimageRequestRole::Sender,
                 identity_public_key: our_public_key,
                 status: None,
@@ -1396,30 +1410,17 @@ async fn create_transfer(
         .into_iter()
         .next();
 
-    // TODO: ask for the addition of a 3rd match role that is both receiver and sender to avoid two separate queries
-    let preimage_request = htlc_service
-        .query_htlc(
-            QueryHtlcFilter {
-                transfer_ids: vec![transfer.id.to_string()],
-                match_role: PreimageRequestRole::Receiver,
-                identity_public_key: our_public_key,
-                status: None,
-                payment_hashes: Vec::new(),
-            },
-            None,
-        )
-        .await?
-        .items
-        .first()
-        .cloned();
-    let preimage_request = if preimage_request.is_some() {
-        preimage_request
-    } else {
+    let preimage_request = if transfer.transfer_type == TransferType::PreimageSwap {
+        let match_role = if transfer.receiver_identity_public_key == our_public_key {
+            PreimageRequestRole::Receiver
+        } else {
+            PreimageRequestRole::Sender
+        };
         htlc_service
             .query_htlc(
                 QueryHtlcFilter {
                     transfer_ids: vec![transfer.id.to_string()],
-                    match_role: PreimageRequestRole::Sender,
+                    match_role,
                     identity_public_key: our_public_key,
                     status: None,
                     payment_hashes: Vec::new(),
@@ -1430,6 +1431,8 @@ async fn create_transfer(
             .items
             .first()
             .cloned()
+    } else {
+        None
     };
 
     Ok(WalletTransfer::from_transfer(

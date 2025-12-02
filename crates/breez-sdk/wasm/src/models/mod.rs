@@ -157,11 +157,12 @@ pub struct ListUnclaimedDepositsResponse {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::DepositClaimError)]
 pub enum DepositClaimError {
-    DepositClaimFeeExceeded {
+    MaxDepositClaimFeeExceeded {
         tx: String,
         vout: u32,
         max_fee: Option<Fee>,
-        actual_fee: u64,
+        required_fee_sats: u64,
+        required_fee_rate_sat_per_vbyte: u64,
     },
     MissingUtxo {
         tx: String,
@@ -428,6 +429,7 @@ pub enum PaymentDetails {
         destination_pubkey: String,
         lnurl_pay_info: Option<LnurlPayInfo>,
         lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
+        lnurl_receive_metadata: Option<LnurlReceiveMetadata>,
     },
     Withdraw {
         tx_id: String,
@@ -826,6 +828,14 @@ pub struct PaymentMetadata {
     pub lnurl_description: Option<String>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SetLnurlMetadataItem)]
+pub struct SetLnurlMetadataItem {
+    pub payment_hash: String,
+    pub sender_comment: Option<String>,
+    pub nostr_zap_request: Option<String>,
+    pub nostr_zap_receipt: Option<String>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateDepositPayload)]
 pub enum UpdateDepositPayload {
     ClaimError {
@@ -1028,4 +1038,11 @@ pub struct ClaimHtlcPaymentRequest {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimHtlcPaymentResponse)]
 pub struct ClaimHtlcPaymentResponse {
     pub payment: Payment,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlReceiveMetadata)]
+pub struct LnurlReceiveMetadata {
+    pub nostr_zap_request: Option<String>,
+    pub nostr_zap_receipt: Option<String>,
+    pub sender_comment: Option<String>,
 }

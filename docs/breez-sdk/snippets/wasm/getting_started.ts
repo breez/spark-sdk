@@ -65,7 +65,46 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
   // ANCHOR: add-event-listener
   class JsEventListener {
     onEvent = async (event: SdkEvent) => {
-      console.log(`Received event: ${JSON.stringify(event)}`)
+      switch (event.type) {
+        case 'synced': {
+          // Wallet has been synchronized with the network
+          break
+        }
+        case 'dataSynced': {
+          // Data was pushed/pulled to/from real-time sync storage
+          const pulledNewRecords = event.didPullNewRecords
+          break
+        }
+        case 'unclaimedDeposits': {
+          // SDK was unable to claim some deposits automatically
+          const unclaimedDeposits = event.unclaimedDeposits
+          break
+        }
+        case 'claimedDeposits': {
+          // Deposits were successfully claimed
+          const claimedDeposits = event.claimedDeposits
+          break
+        }
+        case 'paymentSucceeded': {
+          // A payment completed successfully
+          const payment = event.payment
+          break
+        }
+        case 'paymentPending': {
+          // A payment is pending (waiting for confirmation)
+          const pendingPayment = event.payment
+          break
+        }
+        case 'paymentFailed': {
+          // A payment failed
+          const failedPayment = event.payment
+          break
+        }
+        default: {
+          // Handle any future event types
+          break
+        }
+      }
     }
   }
 

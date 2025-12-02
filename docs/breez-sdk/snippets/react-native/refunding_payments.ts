@@ -4,7 +4,9 @@ import {
   type ClaimDepositRequest,
   type RefundDepositRequest,
   DepositClaimError,
-  Fee
+  Fee,
+  type DepositInfo,
+  Fee_Tags
 } from '@breeztech/breez-sdk-spark-react-native'
 
 const listUnclaimedDeposits = async (sdk: BreezSdk) => {
@@ -17,15 +19,19 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
     console.log(`Amount: ${deposit.amountSats} sats`)
 
     if (deposit.claimError != null) {
-      if (deposit.claimError instanceof DepositClaimError.DepositClaimFeeExceeded) {
+      if (deposit.claimError instanceof DepositClaimError.MaxDepositClaimFeeExceeded) {
         let maxFeeStr = 'none'
-        if (deposit.claimError.inner.maxFee instanceof Fee.Fixed) {
-          maxFeeStr = `${deposit.claimError.inner.maxFee.inner.amount} sats`
-        } else if (deposit.claimError.inner.maxFee instanceof Fee.Rate) {
-          maxFeeStr = `${deposit.claimError.inner.maxFee.inner.satPerVbyte} sat/vB`
+        if (deposit.claimError.inner.maxFee != null) {
+          if (deposit.claimError.inner.maxFee.tag === Fee_Tags.Fixed) {
+            maxFeeStr = `${deposit.claimError.inner.maxFee.inner.amount} sats`
+          } else if (deposit.claimError.inner.maxFee.tag === Fee_Tags.Rate) {
+            maxFeeStr = `${deposit.claimError.inner.maxFee.inner.satPerVbyte} sats/vByte`
+          }
         }
         console.log(
-          `Max claim fee exceeded. Max: ${maxFeeStr}, Actual: ${deposit.claimError.inner.actualFee} sats`
+          `Max claim fee exceeded. Max: ${maxFeeStr}, 
+          Required: ${deposit.claimError.inner.requiredFeeSats} sats 
+          or ${deposit.claimError.inner.requiredFeeRateSatPerVbyte} sats/vByte`
         )
       } else if (deposit.claimError instanceof DepositClaimError.MissingUtxo) {
         console.log('UTXO not found when claiming deposit')
@@ -35,6 +41,26 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
     }
   }
   // ANCHOR_END: list-unclaimed-deposits
+}
+
+const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
+  // ANCHOR: handle-fee-exceeded
+  if (deposit.claimError instanceof DepositClaimError.MaxDepositClaimFeeExceeded) {
+    const requiredFee = deposit.claimError.inner.requiredFeeSats
+
+    // Show UI to user with the required fee and get approval
+    const userApproved = true // Replace with actual user approval logic
+
+    if (userApproved) {
+      const claimRequest: ClaimDepositRequest = {
+        txid: deposit.txid,
+        vout: deposit.vout,
+        maxFee: new Fee.Fixed({ amount: requiredFee })
+      }
+      await sdk.claimDeposit(claimRequest)
+    }
+  }
+  // ANCHOR_END: handle-fee-exceeded
 }
 
 const claimDeposit = async (sdk: BreezSdk) => {
@@ -84,10 +110,10 @@ const refundDeposit = async (sdk: BreezSdk) => {
 const recommendedFees = async (sdk: BreezSdk) => {
   // ANCHOR: recommended-fees
   const response = await sdk.recommendedFees()
-  console.log('Fastest fee:', response.fastestFee)
-  console.log('Half-hour fee:', response.halfHourFee)
-  console.log('Hour fee:', response.hourFee)
-  console.log('Economy fee:', response.economyFee)
-  console.log('Minimum fee:', response.minimumFee)
+  console.log('Fastest fee:', response.fastestFee, 'sats/vByte')
+  console.log('Half-hour fee:', response.halfHourFee, 'sats/vByte')
+  console.log('Hour fee:', response.hourFee, 'sats/vByte')
+  console.log('Economy fee:', response.economyFee, 'sats/vByte')
+  console.log('Minimum fee:', response.minimumFee, 'sats/vByte')
   // ANCHOR_END: recommended-fees
 }

@@ -5,6 +5,7 @@ version.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+nostr.workspace = true
 serde.workspace = true
 
 [lints]
