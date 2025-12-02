@@ -125,7 +125,7 @@ pub struct DepositInfo {
 pub struct ClaimDepositRequest {
     pub txid: String,
     pub vout: u32,
-    pub max_fee: Option<Fee>,
+    pub max_fee: Option<MaxFee>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositResponse)]
@@ -160,7 +160,7 @@ pub enum DepositClaimError {
     MaxDepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Option<Fee>,
+        max_fee: Option<MaxFee>,
         required_fee_sats: u64,
         required_fee_rate_sat_per_vbyte: u64,
     },
@@ -551,13 +551,20 @@ pub struct Config {
     pub api_key: Option<String>,
     pub network: Network,
     pub sync_interval_secs: u32,
-    pub max_deposit_claim_fee: Option<Fee>,
+    pub max_deposit_claim_fee: Option<MaxFee>,
     pub lnurl_domain: Option<String>,
     pub prefer_spark_over_lightning: bool,
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
     pub use_default_external_input_parsers: bool,
     pub real_time_sync_server_url: Option<String>,
     pub private_enabled_default: bool,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::MaxFee)]
+pub enum MaxFee {
+    Fixed { amount: u64 },
+    Rate { sat_per_vbyte: u64 },
+    NetworkRecommended { leeway_sat_per_vbyte: u64 },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Fee)]

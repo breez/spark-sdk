@@ -24,7 +24,7 @@ pub struct _Config {
     pub api_key: Option<String>,
     pub network: Network,
     pub sync_interval_secs: u32,
-    pub max_deposit_claim_fee: Option<Fee>,
+    pub max_deposit_claim_fee: Option<MaxFee>,
     pub lnurl_domain: Option<String>,
     pub prefer_spark_over_lightning: bool,
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
@@ -72,7 +72,7 @@ pub struct _CheckMessageResponse {
 pub struct _ClaimDepositRequest {
     pub txid: String,
     pub vout: u32,
-    pub max_fee: Option<Fee>,
+    pub max_fee: Option<MaxFee>,
 }
 
 #[frb(mirror(ClaimDepositResponse))]
@@ -94,6 +94,13 @@ pub struct _DepositInfo {
     pub refund_tx: Option<String>,
     pub refund_tx_id: Option<String>,
     pub claim_error: Option<DepositClaimError>,
+}
+
+#[frb(mirror(MaxFee))]
+pub enum _MaxFee {
+    Fixed { amount: u64 },
+    Rate { sat_per_vbyte: u64 },
+    NetworkRecommended { leeway_sat_per_vbyte: u64 },
 }
 
 #[frb(mirror(Fee))]
