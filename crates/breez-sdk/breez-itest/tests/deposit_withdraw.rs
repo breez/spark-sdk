@@ -99,6 +99,17 @@ async fn test_onchain_withdraw_to_static_address(
     assert!(matches!(send_resp.payment.method, PaymentMethod::Withdraw));
     assert!(matches!(send_resp.payment.payment_type, PaymentType::Send));
 
+    let stored_payment = alice
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: send_resp.payment.id.clone(),
+        })
+        .await?;
+    assert!(matches!(
+        stored_payment.payment.status,
+        PaymentStatus::Pending
+    ));
+
     // Trigger Bob sync and wait for receive + claim
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let recv_payment =
