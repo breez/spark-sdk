@@ -133,7 +133,6 @@ impl SdkBuilder {
     /// Sets the REST chain service to be used by the SDK.
     /// Arguments:
     /// - `url`: The base URL of the REST API.
-    /// - `api_type`: The API type to be used.
     /// - `credentials`: Optional credentials for basic authentication.
     #[must_use]
     pub fn with_rest_chain_service(

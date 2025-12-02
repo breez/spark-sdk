@@ -81,7 +81,6 @@ impl SdkBuilder {
     /// Sets the REST chain service to be used by the SDK.
     /// Arguments:
     /// - `url`: The base URL of the REST API.
-    /// - `api_type`: The API type to be used.
     /// - `credentials`: Optional credentials for basic authentication.
     pub async fn with_rest_chain_service(&self, url: String, credentials: Option<Credentials>) {
         let mut builder = self.inner.lock().await;
