@@ -5,7 +5,7 @@ use reqwest::{
     RequestBuilder,
     header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
-use tracing::debug;
+use tracing::{debug, trace};
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
@@ -50,7 +50,7 @@ impl FlashnetClient {
             public_key: identity_public_key.clone(),
         };
         let challenge_response = self.auth_challenge(challenge_request).await?;
-        debug!(
+        trace!(
             "Received challenge from flashnet, challenge: {}, challenge_string: {}, request_id: {}",
             challenge_response.challenge,
             challenge_response.challenge_string,
@@ -66,10 +66,7 @@ impl FlashnetClient {
             signature: hex::encode(signature.serialize_compact()),
         };
         let verify_response = self.auth_verify(verify_request).await?;
-        debug!(
-            "Received verify from flashnet, access_token: {}",
-            verify_response.access_token
-        );
+        trace!("Received verify from flashnet",);
 
         let token: Token<Header, Claims, _> =
             Token::parse_unverified(&verify_response.access_token).map_err(|e| {
@@ -81,7 +78,11 @@ impl FlashnetClient {
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| {
                     FlashnetError::Generic("Failed to get current time".to_string())
                 })?;
-                expires.saturating_sub(now).as_millis()
+                let buffer = Duration::from_secs(30);
+                expires
+                    .saturating_sub(now)
+                    .saturating_sub(buffer)
+                    .as_millis()
             }
             None => HOUR_MS.into(),
         };
@@ -195,8 +196,8 @@ impl FlashnetClient {
         let response = builder.send().await?;
         let status_code = response.status();
         let text = response.text().await?;
-        debug!("Response: {text:?}");
-        if status_code.is_client_error() {
+        trace!("Response: {text:?}");
+        if !status_code.is_success() {
             return Err(FlashnetError::Network {
                 reason: text,
                 code: Some(status_code.as_u16()),
