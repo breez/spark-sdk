@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bitcoin::hashes::{Hash, sha256};
+use spark::bech32m_encode_token_id;
 use spark_wallet::{PublicKey, SparkAddress, SparkWallet, TransferId, TransferTokenOutput};
 use tracing::debug;
 
@@ -399,10 +400,15 @@ impl FlashnetClient {
                 .to_string()
         } else {
             // Send a token transfer
+            let asset_address_hex = hex::decode(asset_address).map_err(|e| {
+                FlashnetError::Generic(format!("Failed to decode asset address from hex: {e}"))
+            })?;
+            let token_id = bech32m_encode_token_id(&asset_address_hex, self.config.network)
+                .map_err(|e| FlashnetError::Generic(format!("Failed to encode token id: {e}")))?;
             self.spark_wallet
                 .transfer_tokens(
                     vec![TransferTokenOutput {
-                        token_id: asset_address.to_string(),
+                        token_id,
                         amount,
                         receiver_address,
                         spark_invoice: None,
