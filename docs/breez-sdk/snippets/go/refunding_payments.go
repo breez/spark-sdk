@@ -77,8 +77,12 @@ func RefundDeposit(sdk *breez_sdk_spark.BreezSdk) error {
 	vout := uint32(0)
 	destinationAddress := "bc1qexample..." // Your Bitcoin address
 
-	// Set the fee for the refund transaction using a rate
-	fee := breez_sdk_spark.Fee(breez_sdk_spark.FeeRate{SatPerVbyte: 5})
+	// Set the fee for the refund transaction using the half-hour feerate
+	recommendedFees, err := sdk.RecommendedFees()
+	if err != nil {
+		return err
+	}
+	fee := breez_sdk_spark.Fee(breez_sdk_spark.FeeRate{SatPerVbyte: recommendedFees.HalfHourFee})
 	// or using a fixed amount
 	//fee := breez_sdk_spark.Fee(breez_sdk_spark.FeeFixed{Amount: 500})
 
@@ -114,6 +118,35 @@ func SetMaxFeeToRecommendedFees() error {
 	config.MaxDepositClaimFee = &networkRecommendedInterface
 	// ANCHOR_END: set-max-fee-to-recommended-fees
 	log.Printf("Config: %v", config)
+	return nil
+}
+
+func CustomClaimLogic(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.DepositInfo) error {
+	// ANCHOR: custom-claim-logic
+	if claimErr := *deposit.ClaimError; claimErr != nil {
+		if exceeded, ok := claimErr.(breez_sdk_spark.DepositClaimErrorMaxDepositClaimFeeExceeded); ok {
+			requiredFeeRate := exceeded.RequiredFeeRateSatPerVbyte
+
+			recommendedFees, err := sdk.RecommendedFees()
+			if err != nil {
+				return err
+			}
+
+			if requiredFeeRate <= recommendedFees.FastestFee {
+				maxFee := breez_sdk_spark.MaxFee(breez_sdk_spark.MaxFeeRate{SatPerVbyte: requiredFeeRate})
+				claimRequest := breez_sdk_spark.ClaimDepositRequest{
+					Txid:   deposit.Txid,
+					Vout:   deposit.Vout,
+					MaxFee: &maxFee,
+				}
+				_, err := sdk.ClaimDeposit(claimRequest)
+				if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+					return err
+				}
+			}
+		}
+	}
+	// ANCHOR_END: custom-claim-logic
 	return nil
 }
 

@@ -44,7 +44,9 @@ Common scenarios for custom claiming logic include:
 - **Conditional claiming**: Only claim deposits that meet certain criteria (amount thresholds, time windows, etc.)
 - **Integration with external systems**: Coordinate claims with other business processes
 
-The [recommended fees](#recommended-fees) API is useful for determining appropriate fee levels for claiming deposits.
+The [recommended fees](#recommended-fees) API is useful for determining appropriate fee levels for claiming deposits. For example, you can implement a custom claim logic to only claim deposits if the required fee rate is less than the fastest recommended fee (or any other).
+
+{{#tabs refunding_payments:custom-claim-logic}}
 
 ## Recommended fees
 
