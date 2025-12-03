@@ -3,7 +3,7 @@ import {
   type ListUnclaimedDepositsRequest,
   type ClaimDepositRequest,
   type RefundDepositRequest,
-  DepositClaimError,
+  DepositClaimError_Tags,
   Fee,
   type DepositInfo,
   Fee_Tags,
@@ -22,7 +22,7 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
     console.log(`Amount: ${deposit.amountSats} sats`)
 
     if (deposit.claimError != null) {
-      if (deposit.claimError instanceof DepositClaimError.MaxDepositClaimFeeExceeded) {
+      if (deposit.claimError?.tag === DepositClaimError_Tags.MaxDepositClaimFeeExceeded) {
         let maxFeeStr = 'none'
         if (deposit.claimError.inner.maxFee != null) {
           if (deposit.claimError.inner.maxFee.tag === Fee_Tags.Fixed) {
@@ -36,9 +36,9 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
           Required: ${deposit.claimError.inner.requiredFeeSats} sats 
           or ${deposit.claimError.inner.requiredFeeRateSatPerVbyte} sats/vByte`
         )
-      } else if (deposit.claimError instanceof DepositClaimError.MissingUtxo) {
+      } else if (deposit.claimError?.tag === DepositClaimError_Tags.MissingUtxo) {
         console.log('UTXO not found when claiming deposit')
-      } else if (deposit.claimError instanceof DepositClaimError.Generic) {
+      } else if (deposit.claimError?.tag === DepositClaimError_Tags.Generic) {
         console.log(`Claim failed: ${deposit.claimError.inner.message}`)
       }
     }
@@ -48,7 +48,7 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
 
 const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
   // ANCHOR: handle-fee-exceeded
-  if (deposit.claimError instanceof DepositClaimError.MaxDepositClaimFeeExceeded) {
+  if (deposit.claimError?.tag === DepositClaimError_Tags.MaxDepositClaimFeeExceeded) {
     const requiredFee = deposit.claimError.inner.requiredFeeSats
 
     // Show UI to user with the required fee and get approval
@@ -107,7 +107,7 @@ const setMaxFeeToRecommendedFees = () => {
 
 const customClaimLogic = async (sdk: BreezSdk, deposit: DepositInfo) => {
   // ANCHOR: custom-claim-logic
-  if (deposit.claimError instanceof DepositClaimError.MaxDepositClaimFeeExceeded) {
+  if (deposit.claimError?.tag === DepositClaimError_Tags.MaxDepositClaimFeeExceeded) {
     const requiredFeeRate = deposit.claimError.inner.requiredFeeRateSatPerVbyte
 
     const recommendedFees = await sdk.recommendedFees()
