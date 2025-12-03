@@ -6,6 +6,9 @@ from breez_sdk_spark import (
     RefundDepositRequest,
     Fee,
     DepositClaimError,
+    default_config,
+    Network,
+    MaxFee,
 )
 
 
@@ -67,26 +70,6 @@ async def handle_fee_exceeded(sdk: BreezSdk, deposit):
         raise
     # ANCHOR_END: handle-fee-exceeded
 
-
-async def claim_deposit(sdk: BreezSdk):
-    # ANCHOR: claim-deposit
-    try:
-        txid = "your_deposit_txid"
-        vout = 0
-
-        # Set a higher max fee to retry claiming
-        max_fee = Fee.FIXED(amount=5_000)
-
-        request = ClaimDepositRequest(txid=txid, vout=vout, max_fee=max_fee)
-
-        response = await sdk.claim_deposit(request=request)
-        logging.info(f"Deposit claimed successfully. Payment: {response.payment}")
-    except Exception as error:
-        logging.error(error)
-        raise
-    # ANCHOR_END: claim-deposit
-
-
 async def refund_deposit(sdk: BreezSdk):
     # ANCHOR: refund-deposit
     try:
@@ -111,6 +94,19 @@ async def refund_deposit(sdk: BreezSdk):
         logging.error(error)
         raise
     # ANCHOR_END: refund-deposit
+
+async def set_max_fee_to_recommended_fees():
+    # ANCHOR: set-max-fee-to-recommended-fees
+    # Create the default config
+    config = default_config(network=Network.MAINNET)
+    config.api_key = "<breez api key>"
+
+    # Set the maximum fee to the fastest network recommended fee at the time of claim
+    # with a leeway of 1 sats/vbyte
+    config.max_deposit_claim_fee = MaxFee.NETWORK_RECOMMENDED(leeway_sat_per_vbyte=1)
+    # ANCHOR_END: set-max-fee-to-recommended-fees
+    logging.info(f"Config: {config}")
+
 
 async def recommended_feeds(sdk: BreezSdk):
     # ANCHOR: recommended-fees

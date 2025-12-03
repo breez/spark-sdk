@@ -1,4 +1,5 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'helper.dart';
 
 Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
   // ANCHOR: list-unclaimed-deposits
@@ -40,29 +41,12 @@ Future<void> handleFeeExceeded(BreezSdk sdk, DepositInfo deposit) async {
       final claimRequest = ClaimDepositRequest(
         txid: deposit.txid,
         vout: deposit.vout,
-        maxFee: Fee.fixed(amount: requiredFee),
+        maxFee: MaxFee.fixed(amount: requiredFee),
       );
       await sdk.claimDeposit(request: claimRequest);
     }
   }
   // ANCHOR_END: handle-fee-exceeded
-}
-
-Future<void> claimDeposit(BreezSdk sdk) async {
-  // ANCHOR: claim-deposit
-  String txid = "your_deposit_txid";
-  int vout = 0;
-
-  Fee maxFee = Fee.fixed(amount: BigInt.from(5000));
-  final request = ClaimDepositRequest(
-    txid: txid,
-    vout: vout,
-    maxFee: maxFee,
-  );
-
-  final response = await sdk.claimDeposit(request: request);
-  print("Deposit claimed successfully. Payment: ${response.payment}");
-  // ANCHOR_END: claim-deposit
 }
 
 Future<void> refundDeposit(BreezSdk sdk) async {
@@ -88,6 +72,21 @@ Future<void> refundDeposit(BreezSdk sdk) async {
   print("Transaction ID: ${response.txId}");
   print("Transaction hex: ${response.txHex}");
   // ANCHOR_END: refund-deposit
+}
+
+Future<void> setMaxFeeToRecommendedFees() async {
+  // ANCHOR: set-max-fee-to-recommended-fees
+  // Create the default config
+  var config = defaultConfig(network: Network.mainnet);
+  config = config.copyWith(apiKey: "<breez api key>");
+
+  // Set the maximum fee to the fastest network recommended fee at the time of claim
+  // with a leeway of 1 sats/vbyte
+  config = config.copyWith(
+      maxDepositClaimFee:
+          MaxFee.networkRecommended(leewaySatPerVbyte: BigInt.from(1)));
+  // ANCHOR_END: set-max-fee-to-recommended-fees
+  print("Config: $config");
 }
 
 Future<void> recommendedFees(BreezSdk sdk) async {
