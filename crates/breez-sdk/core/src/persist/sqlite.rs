@@ -549,12 +549,8 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         connection.execute(
-            "INSERT INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(payment_id) DO UPDATE SET
-                lnurl_pay_info=COALESCE(excluded.lnurl_pay_info, payment_metadata.lnurl_pay_info),
-                lnurl_withdraw_info=COALESCE(excluded.lnurl_withdraw_info, payment_metadata.lnurl_withdraw_info),
-                lnurl_description=COALESCE(excluded.lnurl_description, payment_metadata.lnurl_description)",
+            "INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description)
+             VALUES (?, ?, ?, ?)",
             params![payment_id, metadata.lnurl_pay_info, metadata.lnurl_withdraw_info, metadata.lnurl_description],
         )?;
 
