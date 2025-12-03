@@ -459,14 +459,12 @@ pub enum MaxFee {
 }
 
 impl MaxFee {
-    pub async fn to_sats(
-        &self,
-        vbytes: u64,
-        client: &dyn BitcoinChainService,
-    ) -> Result<u64, SdkError> {
+    pub(crate) async fn to_fee(&self, client: &dyn BitcoinChainService) -> Result<Fee, SdkError> {
         match self {
-            MaxFee::Fixed { amount } => Ok(*amount),
-            MaxFee::Rate { sat_per_vbyte } => Ok(sat_per_vbyte.saturating_mul(vbytes)),
+            MaxFee::Fixed { amount } => Ok(Fee::Fixed { amount: *amount }),
+            MaxFee::Rate { sat_per_vbyte } => Ok(Fee::Rate {
+                sat_per_vbyte: *sat_per_vbyte,
+            }),
             MaxFee::NetworkRecommended {
                 leeway_sat_per_vbyte,
             } => {
@@ -474,7 +472,9 @@ impl MaxFee {
                 let max_fee_rate = recommended_fees
                     .fastest_fee
                     .saturating_add(*leeway_sat_per_vbyte);
-                Ok(max_fee_rate.saturating_mul(vbytes))
+                Ok(Fee::Rate {
+                    sat_per_vbyte: max_fee_rate,
+                })
             }
         }
     }
@@ -487,6 +487,15 @@ pub enum Fee {
     Fixed { amount: u64 },
     // Relative fee rate in satoshis per vbyte
     Rate { sat_per_vbyte: u64 },
+}
+
+impl Fee {
+    pub fn to_sats(&self, vbytes: u64) -> u64 {
+        match self {
+            Fee::Fixed { amount } => *amount,
+            Fee::Rate { sat_per_vbyte } => sat_per_vbyte.saturating_mul(vbytes),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

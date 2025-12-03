@@ -889,9 +889,10 @@ impl BreezSdk {
                 required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
             });
         };
-        let max_fee_sats = max_deposit_claim_fee
-            .to_sats(CLAIM_TX_SIZE_VBYTES, self.chain_service.as_ref())
+        let max_fee = max_deposit_claim_fee
+            .to_fee(self.chain_service.as_ref())
             .await?;
+        let max_fee_sats = max_fee.to_sats(CLAIM_TX_SIZE_VBYTES);
         info!(
             "User max fee: {} spark requested fee: {}",
             max_fee_sats, spark_requested_fee_sats
@@ -900,7 +901,7 @@ impl BreezSdk {
             return Err(SdkError::MaxDepositClaimFeeExceeded {
                 tx: detailed_utxo.txid.to_string(),
                 vout: detailed_utxo.vout,
-                max_fee: Some(max_deposit_claim_fee),
+                max_fee: Some(max_fee),
                 required_fee_sats: spark_requested_fee_sats,
                 required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
             });

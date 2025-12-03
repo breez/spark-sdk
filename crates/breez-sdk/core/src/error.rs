@@ -1,5 +1,5 @@
 use crate::{
-    MaxFee,
+    Fee,
     lnurl::{LnurlServerError, ReqwestLnurlServerClientError},
     nostr::NostrError,
     persist::{self},
@@ -44,7 +44,7 @@ pub enum SdkError {
     MaxDepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Option<MaxFee>,
+        max_fee: Option<Fee>,
         required_fee_sats: u64,
         required_fee_rate_sat_per_vbyte: u64,
     },
@@ -204,7 +204,7 @@ pub enum DepositClaimError {
     MaxDepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Option<MaxFee>,
+        max_fee: Option<Fee>,
         required_fee_sats: u64,
         required_fee_rate_sat_per_vbyte: u64,
     },
