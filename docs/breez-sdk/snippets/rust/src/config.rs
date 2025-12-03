@@ -12,10 +12,16 @@ pub(crate) fn configure_sdk() -> Result<()> {
     config.max_deposit_claim_fee = None;
 
     // Set a maximum feerate of 10 sat/vB
-    config.max_deposit_claim_fee = Some(Fee::Rate { sat_per_vbyte: 10 });
+    config.max_deposit_claim_fee = Some(MaxFee::Rate { sat_per_vbyte: 10 });
 
     // Set a maximum fee of 1000 sat
-    config.max_deposit_claim_fee = Some(Fee::Fixed { amount: 1000 });
+    config.max_deposit_claim_fee = Some(MaxFee::Fixed { amount: 1000 });
+
+    // Set the maximum fee to the fastest network recommended fee at the time of claim
+    // with a leeway of 1 sats/vbyte
+    config.max_deposit_claim_fee = Some(MaxFee::NetworkRecommended {
+        leeway_sat_per_vbyte: 1,
+    });
     // ANCHOR_END: max-deposit-claim-fee
     info!("Config: {:?}", config);
     Ok(())

@@ -5,11 +5,11 @@ use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
     ClaimHtlcPaymentRequest, Fee, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, OnchainConfirmationSpeed, PaymentStatus, PaymentType,
-    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
-    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
-    UpdateUserSettingsRequest,
+    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentStatus,
+    PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
+    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest,
+    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
+    SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -176,6 +176,10 @@ pub enum Command {
         /// The max fee per vbyte to claim the deposit
         #[arg(long)]
         sat_per_vbyte: Option<u64>,
+
+        /// If provided, the max fee per vbyte will be set to the fastest recommended fee at time of claim, plus the leeway.
+        #[arg(long)]
+        recommended_fee_leeway: Option<u64>,
     },
     Parse {
         input: String,
@@ -312,16 +316,28 @@ pub(crate) async fn execute_command(
             vout,
             fee_sat,
             sat_per_vbyte,
+            recommended_fee_leeway,
         } => {
-            let max_fee = match (fee_sat, sat_per_vbyte) {
-                (Some(_), Some(_)) => {
+            let max_fee = if let Some(recommended_fee_leeway) = recommended_fee_leeway {
+                if fee_sat.is_some() || sat_per_vbyte.is_some() {
                     return Err(anyhow::anyhow!(
-                        "Cannot specify both fee_sat and sat_per_vbyte"
+                        "Cannot specify fee_sat or sat_per_vbyte when using recommended fee"
                     ));
                 }
-                (Some(fee_sat), None) => Some(Fee::Fixed { amount: fee_sat }),
-                (None, Some(sat_per_vbyte)) => Some(Fee::Rate { sat_per_vbyte }),
-                (None, None) => None,
+                Some(MaxFee::NetworkRecommended {
+                    leeway_sat_per_vbyte: recommended_fee_leeway,
+                })
+            } else {
+                match (fee_sat, sat_per_vbyte) {
+                    (Some(_), Some(_)) => {
+                        return Err(anyhow::anyhow!(
+                            "Cannot specify both fee_sat and sat_per_vbyte"
+                        ));
+                    }
+                    (Some(fee_sat), None) => Some(MaxFee::Fixed { amount: fee_sat }),
+                    (None, Some(sat_per_vbyte)) => Some(MaxFee::Rate { sat_per_vbyte }),
+                    (None, None) => None,
+                }
             };
             let value = sdk
                 .claim_deposit(ClaimDepositRequest {

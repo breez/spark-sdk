@@ -194,7 +194,7 @@ async fn test_deposit_fee_manual_claim(
         .claim_deposit(ClaimDepositRequest {
             txid: txid_found.clone(),
             vout,
-            max_fee: Some(Fee::Fixed { amount: 100_000 }),
+            max_fee: Some(MaxFee::Fixed { amount: 100_000 }),
         })
         .await?;
     assert!(matches!(

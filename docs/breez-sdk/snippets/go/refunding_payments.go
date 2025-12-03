@@ -54,7 +54,7 @@ func HandleFeeExceeded(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.De
 			userApproved := true // Replace with actual user approval logic
 
 			if userApproved {
-				maxFee := breez_sdk_spark.Fee(breez_sdk_spark.FeeFixed{Amount: requiredFee})
+				maxFee := breez_sdk_spark.MaxFee(breez_sdk_spark.MaxFeeFixed{Amount: requiredFee})
 				claimRequest := breez_sdk_spark.ClaimDepositRequest{
 					Txid:   deposit.Txid,
 					Vout:   deposit.Vout,
@@ -69,30 +69,6 @@ func HandleFeeExceeded(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.De
 	}
 	// ANCHOR_END: handle-fee-exceeded
 	return nil
-}
-
-func ClaimDeposit(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, error) {
-	// ANCHOR: claim-deposit
-	txid := "<your_deposit_txid>"
-	vout := uint32(0)
-
-	// Set a higher max fee to retry claiming
-	maxFee := breez_sdk_spark.Fee(breez_sdk_spark.FeeFixed{Amount: 5000})
-
-	request := breez_sdk_spark.ClaimDepositRequest{
-		Txid:   txid,
-		Vout:   vout,
-		MaxFee: &maxFee,
-	}
-	response, err := sdk.ClaimDeposit(request)
-
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
-		return nil, err
-	}
-
-	payment := response.Payment
-	// ANCHOR_END: claim-deposit
-	return &payment, nil
 }
 
 func RefundDeposit(sdk *breez_sdk_spark.BreezSdk) error {
@@ -122,6 +98,22 @@ func RefundDeposit(sdk *breez_sdk_spark.BreezSdk) error {
 	log.Printf("Transaction ID: %v", response.TxId)
 	log.Printf("Transaction hex: %v", response.TxHex)
 	// ANCHOR_END: refund-deposit
+	return nil
+}
+
+func SetMaxFeeToRecommendedFees() error {
+	// ANCHOR: set-max-fee-to-recommended-fees
+	// Create the default config
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	apiKey := "<breez api key>"
+	config.ApiKey = &apiKey
+
+	// Set the maximum fee to the fastest network recommended fee at the time of claim
+	// with a leeway of 1 sats/vbyte
+	networkRecommendedInterface := breez_sdk_spark.MaxFee(breez_sdk_spark.MaxFeeNetworkRecommended{LeewaySatPerVbyte: 1})
+	config.MaxDepositClaimFee = &networkRecommendedInterface
+	// ANCHOR_END: set-max-fee-to-recommended-fees
+	log.Printf("Config: %v", config)
 	return nil
 }
 

@@ -41,11 +41,11 @@ use crate::{
     AssetFilter, BitcoinAddressDetails, BitcoinChainService, Bolt11InvoiceDetails,
     CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest,
     ClaimDepositResponse, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, DepositInfo,
-    ExternalInputParser, Fee, GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest,
+    ExternalInputParser, GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest,
     GetTokensMetadataResponse, InputType, LightningAddressInfo, ListFiatCurrenciesResponse,
     ListFiatRatesResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
     LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse,
-    Logger, Network, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
+    Logger, MaxFee, Network, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
     PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
     RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem,
     SignMessageRequest, SignMessageResponse, SparkHtlcOptions, UpdateUserSettingsRequest,
@@ -211,7 +211,7 @@ pub fn default_config(network: Network) -> Config {
         api_key: None,
         network,
         sync_interval_secs: 60, // every 1 minute
-        max_deposit_claim_fee: Some(Fee::Rate { sat_per_vbyte: 1 }),
+        max_deposit_claim_fee: Some(MaxFee::Rate { sat_per_vbyte: 1 }),
         lnurl_domain,
         prefer_spark_over_lightning: false,
         external_input_parsers: None,
@@ -865,7 +865,7 @@ impl BreezSdk {
     async fn claim_utxo(
         &self,
         detailed_utxo: &DetailedUtxo,
-        max_claim_fee: Option<Fee>,
+        max_claim_fee: Option<MaxFee>,
     ) -> Result<WalletTransfer, SdkError> {
         info!(
             "Fetching static deposit claim quote for deposit tx {}:{} and amount: {}",
@@ -889,39 +889,24 @@ impl BreezSdk {
                 required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
             });
         };
-        match max_deposit_claim_fee {
-            Fee::Fixed { amount } => {
-                info!(
-                    "User max fee: {} spark requested fee: {}",
-                    amount, spark_requested_fee_sats
-                );
-                if spark_requested_fee_sats > amount {
-                    return Err(SdkError::MaxDepositClaimFeeExceeded {
-                        tx: detailed_utxo.txid.to_string(),
-                        vout: detailed_utxo.vout,
-                        max_fee: Some(max_deposit_claim_fee),
-                        required_fee_sats: spark_requested_fee_sats,
-                        required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
-                    });
-                }
-            }
-            Fee::Rate { sat_per_vbyte } => {
-                let user_max_fee = CLAIM_TX_SIZE_VBYTES.saturating_mul(sat_per_vbyte);
-                info!(
-                    "User max fee: {} spark requested fee: {}",
-                    user_max_fee, spark_requested_fee_sats
-                );
-                if spark_requested_fee_sats > user_max_fee {
-                    return Err(SdkError::MaxDepositClaimFeeExceeded {
-                        tx: detailed_utxo.txid.to_string(),
-                        vout: detailed_utxo.vout,
-                        max_fee: Some(max_deposit_claim_fee),
-                        required_fee_sats: spark_requested_fee_sats,
-                        required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
-                    });
-                }
-            }
+        let max_fee = max_deposit_claim_fee
+            .to_fee(self.chain_service.as_ref())
+            .await?;
+        let max_fee_sats = max_fee.to_sats(CLAIM_TX_SIZE_VBYTES);
+        info!(
+            "User max fee: {} spark requested fee: {}",
+            max_fee_sats, spark_requested_fee_sats
+        );
+        if spark_requested_fee_sats > max_fee_sats {
+            return Err(SdkError::MaxDepositClaimFeeExceeded {
+                tx: detailed_utxo.txid.to_string(),
+                vout: detailed_utxo.vout,
+                max_fee: Some(max_fee),
+                required_fee_sats: spark_requested_fee_sats,
+                required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
+            });
         }
+
         info!(
             "Claiming static deposit for utxo {}:{}",
             detailed_utxo.txid, detailed_utxo.vout

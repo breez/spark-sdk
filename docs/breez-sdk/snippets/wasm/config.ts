@@ -1,4 +1,4 @@
-import { defaultConfig, Fee } from '@breeztech/breez-sdk-spark'
+import { defaultConfig } from '@breeztech/breez-sdk-spark'
 
 const exampleConfigureSdk = async () => {
   // ANCHOR: max-deposit-claim-fee
@@ -14,6 +14,10 @@ const exampleConfigureSdk = async () => {
 
   // Set a maximum fee of 1000 sat
   config.maxDepositClaimFee = { type: 'fixed', amount: 1000 }
+
+  // Set the maximum fee to the fastest network recommended fee at the time of claim
+  // with a leeway of 1 sats/vbyte
+  config.maxDepositClaimFee = { type: 'networkRecommended', leewaySatPerVbyte: 1 }
   // ANCHOR_END: max-deposit-claim-fee
   console.log('Config:', config)
 }

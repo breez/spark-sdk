@@ -50,7 +50,7 @@ async fn handle_fee_exceeded(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()
             let request = ClaimDepositRequest {
                 txid: deposit.txid.clone(),
                 vout: deposit.vout,
-                max_fee: Some(Fee::Fixed {
+                max_fee: Some(MaxFee::Fixed {
                     amount: *required_fee_sats,
                 }),
             };
@@ -58,29 +58,6 @@ async fn handle_fee_exceeded(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()
         }
     }
     // ANCHOR_END: handle-fee-exceeded
-    Ok(())
-}
-
-async fn claim_deposit(sdk: &BreezSdk) -> Result<()> {
-    // ANCHOR: claim-deposit
-    let txid = "your_deposit_txid".to_string();
-    let vout = 0;
-
-    // Set a higher max fee to retry claiming
-    let max_fee = Some(Fee::Fixed { amount: 5_000 });
-
-    let request = ClaimDepositRequest {
-        txid,
-        vout,
-        max_fee,
-    };
-
-    let response = sdk.claim_deposit(request).await?;
-    info!(
-        "Deposit claimed successfully. Payment: {:?}",
-        response.payment
-    );
-    // ANCHOR_END: claim-deposit
     Ok(())
 }
 
@@ -107,6 +84,22 @@ async fn refund_deposit(sdk: &BreezSdk) -> Result<()> {
     info!("Transaction ID: {}", response.tx_id);
     info!("Transaction hex: {}", response.tx_hex);
     // ANCHOR_END: refund-deposit
+    Ok(())
+}
+
+async fn set_max_fee_to_recommended_fees() -> Result<()> {
+    // ANCHOR: set-max-fee-to-recommended-fees
+    // Create the default config
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some("<breez api key>".to_string());
+
+    // Set the maximum fee to the fastest network recommended fee at the time of claim
+    // with a leeway of 1 sats/vbyte
+    config.max_deposit_claim_fee = Some(MaxFee::NetworkRecommended {
+        leeway_sat_per_vbyte: 1,
+    });
+    // ANCHOR_END: set-max-fee-to-recommended-fees
+    info!("Config: {:?}", config);
     Ok(())
 }
 

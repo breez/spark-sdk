@@ -9,9 +9,9 @@ use serde_json::Value;
 use std::{collections::HashMap, fmt::Display, str::FromStr};
 
 use crate::{
-    BitcoinAddressDetails, BitcoinNetwork, Bolt11InvoiceDetails, ExternalInputParser, FiatCurrency,
-    LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate, SdkError, SparkInvoiceDetails,
-    SuccessAction, SuccessActionProcessed, error::DepositClaimError,
+    BitcoinAddressDetails, BitcoinChainService, BitcoinNetwork, Bolt11InvoiceDetails,
+    ExternalInputParser, FiatCurrency, LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate,
+    SdkError, SparkInvoiceDetails, SuccessAction, SuccessActionProcessed, error::DepositClaimError,
 };
 
 /// A list of external input parsers that are used by default.
@@ -398,7 +398,7 @@ pub struct Config {
 
     // The maximum fee that can be paid for a static deposit claim
     // If not set then any fee is allowed
-    pub max_deposit_claim_fee: Option<Fee>,
+    pub max_deposit_claim_fee: Option<MaxFee>,
 
     /// The domain used for receiving through lnurl-pay and lightning address.
     pub lnurl_domain: Option<String>,
@@ -449,6 +449,39 @@ impl Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum MaxFee {
+    // Fixed fee amount in sats
+    Fixed { amount: u64 },
+    // Relative fee rate in satoshis per vbyte
+    Rate { sat_per_vbyte: u64 },
+    // Fastest network recommended fee at the time of claim, with a leeway in satoshis per vbyte
+    NetworkRecommended { leeway_sat_per_vbyte: u64 },
+}
+
+impl MaxFee {
+    pub(crate) async fn to_fee(&self, client: &dyn BitcoinChainService) -> Result<Fee, SdkError> {
+        match self {
+            MaxFee::Fixed { amount } => Ok(Fee::Fixed { amount: *amount }),
+            MaxFee::Rate { sat_per_vbyte } => Ok(Fee::Rate {
+                sat_per_vbyte: *sat_per_vbyte,
+            }),
+            MaxFee::NetworkRecommended {
+                leeway_sat_per_vbyte,
+            } => {
+                let recommended_fees = client.recommended_fees().await?;
+                let max_fee_rate = recommended_fees
+                    .fastest_fee
+                    .saturating_add(*leeway_sat_per_vbyte);
+                Ok(Fee::Rate {
+                    sat_per_vbyte: max_fee_rate,
+                })
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Fee {
     // Fixed fee amount in sats
     Fixed { amount: u64 },
@@ -481,7 +514,7 @@ pub struct ClaimDepositRequest {
     pub txid: String,
     pub vout: u32,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub max_fee: Option<Fee>,
+    pub max_fee: Option<MaxFee>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -516,11 +549,14 @@ pub struct ListUnclaimedDepositsResponse {
     pub deposits: Vec<DepositInfo>,
 }
 
-impl std::fmt::Display for Fee {
+impl std::fmt::Display for MaxFee {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Fee::Fixed { amount } => write!(f, "Fixed: {amount}"),
-            Fee::Rate { sat_per_vbyte } => write!(f, "Rate: {sat_per_vbyte}"),
+            MaxFee::Fixed { amount } => write!(f, "Fixed: {amount}"),
+            MaxFee::Rate { sat_per_vbyte } => write!(f, "Rate: {sat_per_vbyte}"),
+            MaxFee::NetworkRecommended {
+                leeway_sat_per_vbyte,
+            } => write!(f, "NetworkRecommended: {leeway_sat_per_vbyte}"),
         }
     }
 }
