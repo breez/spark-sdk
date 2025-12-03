@@ -1,4 +1,4 @@
-import { type BreezSdk, type PrepareSendPaymentResponse } from '@breeztech/breez-sdk-spark'
+import type { BreezSdk, PrepareSendPaymentResponse, PrepareTransferTokenResponse } from '@breeztech/breez-sdk-spark'
 
 const exampleFetchTokenBalances = async (sdk: BreezSdk) => {
   // ANCHOR: fetch-token-balances
@@ -96,4 +96,59 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const payment = sendResponse.payment
   console.log(`Payment: ${JSON.stringify(payment)}`)
   // ANCHOR_END: send-token-payment
+}
+
+const examplePrepareTransferTokenToBitcoin = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-transfer-token-to-bitcoin
+  const tokenIdentifier = '<token identifier>'
+  // Amount in token base units
+  const amount = BigInt(10_000_000)
+
+  const prepareResponse = await sdk.prepareTransferToken({
+    transferType: 'toBitcoin',
+    tokenIdentifier,
+    amount
+  })
+
+  const estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount
+  const fee = prepareResponse.fee
+  console.log(`Estimated receive amount: ${estimatedReceiveAmount} sats`)
+  console.log(`Fee: ${fee} token base units`)
+  // ANCHOR_END: prepare-transfer-token-to-bitcoin
+}
+
+const examplePrepareTransferTokenFromBitcoin = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-transfer-token-from-bitcoin
+  const tokenIdentifier = '<token identifier>'
+  // Amount in satoshis
+  const amount = BigInt(10_000)
+
+  const prepareResponse = await sdk.prepareTransferToken({
+    transferType: 'fromBitcoin',
+    tokenIdentifier,
+    amount
+  })
+
+  const estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount
+  const fee = prepareResponse.fee
+  console.log(`Estimated receive amount: ${estimatedReceiveAmount} token base units`)
+  console.log(`Fee: ${fee} sats`)
+  // ANCHOR_END: prepare-transfer-token-from-bitcoin
+}
+
+const exampleTransferToken = async (sdk: BreezSdk, prepareResponse: PrepareTransferTokenResponse) => {
+  // ANCHOR: transfer-token
+  // Set the maximum slippage to 1% in basis points
+  const optionalMaxSlippageBps = 100
+
+  const response = await sdk.transferToken({
+    prepareResponse,
+    maxSlippageBps: optionalMaxSlippageBps
+  })
+
+  const sentPayment = response.sentPayment
+  const receivedPayment = response.receivedPayment
+  console.log(`Sent Payment: ${JSON.stringify(sentPayment)}`)
+  console.log(`Received Payment: ${JSON.stringify(receivedPayment)}`)
+  // ANCHOR_END: transfer-token
 }

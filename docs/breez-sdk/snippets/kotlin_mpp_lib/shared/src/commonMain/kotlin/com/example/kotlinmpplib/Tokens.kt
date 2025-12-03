@@ -132,4 +132,88 @@ class Tokens {
         }
         // ANCHOR_END: send-token-payment
     }
+
+    suspend fun prepareTransferTokenToBitcoin(sdk: BreezSdk) {
+        // ANCHOR: prepare-transfer-token-to-bitcoin
+        try {
+            val tokenIdentifier = "<token identifier>"
+            // Amount in token base units
+            // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
+            // package)
+            val amount = BigInteger.fromLong(10_000_000L)
+            // Android (BigInteger from java.math)
+            // val amount = BigInteger.valueOf(10_000_000L)
+
+            val prepareResponse =
+                sdk.prepareTransferToken(
+                    PrepareTransferTokenRequest(
+                        transferType = TransferType.TO_BITCOIN,
+                        tokenIdentifier = tokenIdentifier,
+                        amount = amount,
+                    )
+                )
+
+            val estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount
+            val fee = prepareResponse.fee
+            println("Estimated receive amount: $estimatedReceiveAmount sats")
+            println("Fees: $fee token base units")
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: prepare-transfer-token-to-bitcoin
+    }
+
+    suspend fun prepareTransferTokenFromBitcoin(sdk: BreezSdk) {
+        // ANCHOR: prepare-transfer-token-from-bitcoin
+        try {
+            val tokenIdentifier = "<token identifier>"
+            // Amount in satoshis
+            // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
+            // package)
+            val amount = BigInteger.fromLong(10_000L)
+            // Android (BigInteger from java.math)
+            // val amount = BigInteger.valueOf(10_000L)
+
+            val prepareResponse =
+                sdk.prepareTransferToken(
+                    PrepareTransferTokenRequest(
+                        transferType = TransferType.FROM_BITCOIN,
+                        tokenIdentifier = tokenIdentifier,
+                        amount = amount,
+                    )
+                )
+
+            val estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount
+            val fee = prepareResponse.fee
+            println("Estimated receive amount: $estimatedReceiveAmount token base units")
+            println("Fees: $fee sats")
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: prepare-transfer-token-from-bitcoin
+    }
+
+    suspend fun transferToken(sdk: BreezSdk, prepareResponse: PrepareTransferTokenResponse) {
+        // ANCHOR: transfer-token
+        try {
+            // Set the maximum slippage to 1% in basis points
+            val optionalMaxSlippageBps = 100U
+
+            val response =
+                sdk.transferToken(
+                    TransferTokenRequest(
+                        prepareResponse = prepareResponse,
+                        maxSlippageBps = optionalMaxSlippageBps
+                    )
+                )
+
+            val sentPayment = response.sentPayment
+            val receivedPayment = response.receivedPayment
+            println("Sent payment: $sentPayment")
+            println("Received payment: $receivedPayment")
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: transfer-token
+    }
 }

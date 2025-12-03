@@ -106,3 +106,63 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
     print("Payment: \(payment)")
     // ANCHOR_END: send-token-payment
 }
+
+func prepareTransferTokenToBitcoin(sdk: BreezSdk) async throws {
+    // ANCHOR: prepare-transfer-token-to-bitcoin
+    let tokenIdentifier = "<token identifier>"
+    // Amount in token base units
+    let amount = BInt(10_000_000)
+
+    let prepareResponse = try await sdk.prepareTransferToken(
+        request: PrepareTransferTokenRequest(
+            transferType: TransferType.toBitcoin,
+            tokenIdentifier: tokenIdentifier,
+            amount: amount
+        ))
+
+    let estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount
+    let fee = prepareResponse.fee
+    print("Estimated receive amount: \(estimatedReceiveAmount) sats")
+    print("Fee: \(fee) token base units")
+    // ANCHOR_END: prepare-transfer-token-to-bitcoin
+}
+
+func prepareTransferTokenFromBitcoin(sdk: BreezSdk) async throws {
+    // ANCHOR: prepare-transfer-token-from-bitcoin
+    let tokenIdentifier = "<token identifier>"
+    // Amount in satoshis
+    let amount = BInt(10_000)
+
+    let prepareResponse = try await sdk.prepareTransferToken(
+        request: PrepareTransferTokenRequest(
+            transferType: TransferType.fromBitcoin,
+            tokenIdentifier: tokenIdentifier,
+            amount: amount
+        ))
+
+    let estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount
+    let fee = prepareResponse.fee
+    print("Estimated receive amount: \(estimatedReceiveAmount) token base units")
+    print("Fee: \(fee) sats")
+    // ANCHOR_END: prepare-transfer-token-from-bitcoin
+}
+
+func transferToken(sdk: BreezSdk, prepareResponse: PrepareTransferTokenResponse) async throws {
+    // ANCHOR: transfer-token
+    // Set the maximum slippage to 1% in basis points
+    let optionalMaxSlippageBps = UInt32(100)
+
+    let response = try await sdk.transferToken(
+        request: TransferTokenRequest(
+            prepareResponse: prepareResponse,
+            maxSlippageBps: optionalMaxSlippageBps
+        ))
+    
+    let sentPayment = response.sentPayment
+    let receivedPayment = response.receivedPayment
+    print("Sent payment: \(sentPayment)")
+    if let receivedPayment = receivedPayment {
+        print("Received payment: \(receivedPayment)")
+    }
+    // ANCHOR_END: transfer-token
+}

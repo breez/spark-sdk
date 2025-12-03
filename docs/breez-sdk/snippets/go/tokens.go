@@ -132,3 +132,76 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR_END: send-token-payment
 	return nil
 }
+
+func PrepareTransferTokenToBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: prepare-transfer-token-to-bitcoin
+	tokenIdentifier := "<token identifier>"
+	// Amount in token base units
+	amount := new(big.Int).SetInt64(10_000_000)
+
+	prepareResponse, err := sdk.PrepareTransferToken(
+		breez_sdk_spark.PrepareTransferTokenRequest{
+			TransferType:    breez_sdk_spark.TransferTypeToBitcoin,
+			TokenIdentifier: tokenIdentifier,
+			Amount:          amount,
+		})
+
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return err
+	}
+
+	estimatedReceiveAmount := prepareResponse.EstimatedReceiveAmount
+	fee := prepareResponse.Fee
+	log.Printf("Estimated Receive Amount: %v sats", estimatedReceiveAmount)
+	log.Printf("Fee: %v token base units", fee)
+	// ANCHOR_END: prepare-transfer-token-to-bitcoin
+	return nil
+}
+
+func PrepareTransferTokenFromBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: prepare-transfer-token-from-bitcoin
+	tokenIdentifier := "<token identifier>"
+	// Amount in satoshis
+	amount := new(big.Int).SetInt64(10_000)
+
+	prepareResponse, err := sdk.PrepareTransferToken(
+		breez_sdk_spark.PrepareTransferTokenRequest{
+			TransferType:    breez_sdk_spark.TransferTypeFromBitcoin,
+			TokenIdentifier: tokenIdentifier,
+			Amount:          amount,
+		})
+
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return err
+	}
+
+	estimatedReceiveAmount := prepareResponse.EstimatedReceiveAmount
+	fee := prepareResponse.Fee
+	log.Printf("Estimated Receive Amount: %v token base units", estimatedReceiveAmount)
+	log.Printf("Fee: %v sats", fee)
+	// ANCHOR_END: prepare-transfer-token-from-bitcoin
+	return nil
+}
+
+func TransferToken(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.PrepareTransferTokenResponse) error {
+	// ANCHOR: transfer-token
+	// Set the maximum slippage to 1% in basis points
+	optionalMaxSlippageBps := uint32(100)
+
+	response, err := sdk.TransferToken(
+		breez_sdk_spark.TransferTokenRequest{
+			PrepareResponse: prepareResponse,
+			MaxSlippageBps:  &optionalMaxSlippageBps,
+		})
+
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return err
+	}
+
+	sentPayment := response.SentPayment
+	receivedPayment := response.ReceivedPayment
+	log.Printf("Sent Payment: %#v", sentPayment)
+	log.Printf("Received Payment: %#v", receivedPayment)
+	// ANCHOR_END: transfer-token
+	return nil
+}

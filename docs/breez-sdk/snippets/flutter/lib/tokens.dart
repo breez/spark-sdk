@@ -107,3 +107,60 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
   // ANCHOR_END: send-token-payment
 }
 
+Future<void> prepareTransferTokenToBitcoin(BreezSdk sdk) async {
+  // ANCHOR: prepare-transfer-token-to-bitcoin
+  final tokenIdentifier = '<token identifier>';
+  // Amount in token base units
+  final amount = BigInt.from(10000000);
+
+  final prepareResponse = await sdk.prepareTransferToken(
+    request: PrepareTransferTokenRequest(
+      transferType: TransferType.toBitcoin,
+      tokenIdentifier: tokenIdentifier,
+      amount: amount,
+    ),
+  );
+  final estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount;
+  final fee = prepareResponse.fee;
+  print('Estimated receive amount: $estimatedReceiveAmount sats');
+  print('Fee: $fee token base units');
+  // ANCHOR_END: prepare-transfer-token-to-bitcoin
+}
+
+Future<void> prepareTransferTokenFromBitcoin(BreezSdk sdk) async {
+  // ANCHOR: prepare-transfer-token-from-bitcoin
+  final tokenIdentifier = '<token identifier>';
+  // Amount in satoshis
+  final amount = BigInt.from(10000);
+
+  final prepareResponse = await sdk.prepareTransferToken(
+    request: PrepareTransferTokenRequest(
+      transferType: TransferType.fromBitcoin,
+      tokenIdentifier: tokenIdentifier,
+      amount: amount,
+    ),
+  );
+  final estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount;
+  final fee = prepareResponse.fee;
+  print('Estimated receive amount: $estimatedReceiveAmount token base units');
+  print('Fee: $fee sats');
+  // ANCHOR_END: prepare-transfer-token-from-bitcoin
+}
+
+Future<void> transferToken(BreezSdk sdk, PrepareTransferTokenResponse prepareResponse) async {
+  // ANCHOR: transfer-token
+  // Set the maximum slippage to 1% in basis points
+  final optionalMaxSlippageBps = 100;
+
+  final response = await sdk.transferToken(
+    request: TransferTokenRequest(
+      prepareResponse: prepareResponse,
+      maxSlippageBps: optionalMaxSlippageBps,
+    ),
+  );
+  final sentPayment = response.sentPayment;
+  final receivedPayment = response.receivedPayment;
+  print('Sent payment: $sentPayment');
+  print('Received payment: $receivedPayment');
+  // ANCHOR_END: transfer-token
+}
