@@ -3,7 +3,7 @@ import {
   type ListUnclaimedDepositsRequest,
   type ClaimDepositRequest,
   type RefundDepositRequest,
-  DepositClaimError,
+  DepositClaimError_Tags,
   Fee,
   type DepositInfo,
   Fee_Tags,
@@ -22,7 +22,7 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
     console.log(`Amount: ${deposit.amountSats} sats`)
 
     if (deposit.claimError != null) {
-      if (deposit.claimError instanceof DepositClaimError.MaxDepositClaimFeeExceeded) {
+      if (deposit.claimError?.tag === DepositClaimError_Tags.MaxDepositClaimFeeExceeded) {
         let maxFeeStr = 'none'
         if (deposit.claimError.inner.maxFee != null) {
           if (deposit.claimError.inner.maxFee.tag === Fee_Tags.Fixed) {
@@ -36,9 +36,9 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
           Required: ${deposit.claimError.inner.requiredFeeSats} sats 
           or ${deposit.claimError.inner.requiredFeeRateSatPerVbyte} sats/vByte`
         )
-      } else if (deposit.claimError instanceof DepositClaimError.MissingUtxo) {
+      } else if (deposit.claimError?.tag === DepositClaimError_Tags.MissingUtxo) {
         console.log('UTXO not found when claiming deposit')
-      } else if (deposit.claimError instanceof DepositClaimError.Generic) {
+      } else if (deposit.claimError?.tag === DepositClaimError_Tags.Generic) {
         console.log(`Claim failed: ${deposit.claimError.inner.message}`)
       }
     }
@@ -48,7 +48,7 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
 
 const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
   // ANCHOR: handle-fee-exceeded
-  if (deposit.claimError instanceof DepositClaimError.MaxDepositClaimFeeExceeded) {
+  if (deposit.claimError?.tag === DepositClaimError_Tags.MaxDepositClaimFeeExceeded) {
     const requiredFee = deposit.claimError.inner.requiredFeeSats
 
     // Show UI to user with the required fee and get approval
@@ -72,8 +72,9 @@ const refundDeposit = async (sdk: BreezSdk) => {
   const vout = 0
   const destinationAddress = 'bc1qexample...' // Your Bitcoin address
 
-  // Set the fee for the refund transaction using a rate
-  const fee = new Fee.Rate({ satPerVbyte: BigInt(5) })
+  // Set the fee for the refund transaction using the half-hour feerate
+  const recommendedFees = await sdk.recommendedFees()
+  const fee = new Fee.Rate({ satPerVbyte: recommendedFees.halfHourFee })
   // or using a fixed amount
   // const fee = new Fee.Fixed({ amount: BigInt(500) })
 
@@ -102,6 +103,25 @@ const setMaxFeeToRecommendedFees = () => {
   config.maxDepositClaimFee = new MaxFee.NetworkRecommended({ leewaySatPerVbyte: BigInt(1) })
   // ANCHOR_END: set-max-fee-to-recommended-fees
   console.log('Config:', config)
+}
+
+const customClaimLogic = async (sdk: BreezSdk, deposit: DepositInfo) => {
+  // ANCHOR: custom-claim-logic
+  if (deposit.claimError?.tag === DepositClaimError_Tags.MaxDepositClaimFeeExceeded) {
+    const requiredFeeRate = deposit.claimError.inner.requiredFeeRateSatPerVbyte
+
+    const recommendedFees = await sdk.recommendedFees()
+
+    if (requiredFeeRate <= recommendedFees.fastestFee) {
+      const claimRequest: ClaimDepositRequest = {
+        txid: deposit.txid,
+        vout: deposit.vout,
+        maxFee: new MaxFee.Rate({ satPerVbyte: requiredFeeRate })
+      }
+      await sdk.claimDeposit(claimRequest)
+    }
+  }
+  // ANCHOR_END: custom-claim-logic
 }
 
 const recommendedFees = async (sdk: BreezSdk) => {

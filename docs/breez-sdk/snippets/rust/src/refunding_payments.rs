@@ -67,8 +67,9 @@ async fn refund_deposit(sdk: &BreezSdk) -> Result<()> {
     let vout = 0;
     let destination_address = "bc1qexample...".to_string(); // Your Bitcoin address
 
-    // Set the fee for the refund transaction using a rate
-    let fee = Fee::Rate { sat_per_vbyte: 5 };
+    // Set the fee for the refund transaction using the half-hour feerate
+    let recommended_fees = sdk.recommended_fees().await?;
+    let fee = Fee::Rate { sat_per_vbyte: recommended_fees.half_hour_fee };
     // or using a fixed amount
     //let fee = Fee::Fixed { amount: 500 };
 
@@ -100,6 +101,29 @@ async fn set_max_fee_to_recommended_fees() -> Result<()> {
     });
     // ANCHOR_END: set-max-fee-to-recommended-fees
     info!("Config: {:?}", config);
+    Ok(())
+}
+
+async fn custom_claim_logic(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()> {
+    // ANCHOR: custom-claim-logic
+    if let Some(DepositClaimError::MaxDepositClaimFeeExceeded {
+        required_fee_rate_sat_per_vbyte, ..
+    }) = &deposit.claim_error
+    {
+        let recommended_fees = sdk.recommended_fees().await?;
+
+        if *required_fee_rate_sat_per_vbyte <= recommended_fees.fastest_fee {
+            let request = ClaimDepositRequest {
+                txid: deposit.txid.clone(),
+                vout: deposit.vout,
+                max_fee: Some(MaxFee::Rate {
+                    sat_per_vbyte: *required_fee_rate_sat_per_vbyte,
+                }),
+            };
+            sdk.claim_deposit(request).await?;
+        }
+    }
+    // ANCHOR_END: custom-claim-logic
     Ok(())
 }
 

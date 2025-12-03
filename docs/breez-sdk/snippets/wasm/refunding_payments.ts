@@ -73,8 +73,9 @@ const refundDeposit = async (sdk: BreezSdk) => {
   const vout = 0
   const destinationAddress = 'bc1qexample...' // Your Bitcoin address
 
-  // Set the fee for the refund transaction using a rate
-  const fee: Fee = { type: 'rate', satPerVbyte: 5 }
+  // Set the fee for the refund transaction using the half-hour feerate
+  const recommendedFees = await sdk.recommendedFees()
+  const fee: Fee = { type: 'rate', satPerVbyte: recommendedFees.halfHourFee }
   // or using a fixed amount
   // const fee: Fee = { type: 'fixed', amount: 500 }
 
@@ -103,6 +104,25 @@ const setMaxFeeToRecommendedFees = () => {
   config.maxDepositClaimFee = { type: 'networkRecommended', leewaySatPerVbyte: 1 }
   // ANCHOR_END: set-max-fee-to-recommended-fees
   console.log('Config:', config)
+}
+
+const customClaimLogic = async (sdk: BreezSdk, deposit: DepositInfo) => {
+  // ANCHOR: custom-claim-logic
+  if (deposit.claimError?.type === 'maxDepositClaimFeeExceeded') {
+    const requiredFeeRate = deposit.claimError.requiredFeeRateSatPerVbyte
+
+    const recommendedFees = await sdk.recommendedFees()
+
+    if (requiredFeeRate <= recommendedFees.fastestFee) {
+      const claimRequest: ClaimDepositRequest = {
+        txid: deposit.txid,
+        vout: deposit.vout,
+        maxFee: { type: 'rate', satPerVbyte: requiredFeeRate }
+      }
+      await sdk.claimDeposit(claimRequest)
+    }
+  }
+  // ANCHOR_END: custom-claim-logic
 }
 
 const recommendedFees = async (sdk: BreezSdk) => {

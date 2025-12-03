@@ -1,6 +1,6 @@
 import {
   OnchainConfirmationSpeed,
-  SendPaymentMethod,
+  SendPaymentMethod_Tags,
   SendPaymentOptions,
   type BreezSdk,
   type PrepareSendPaymentResponse
@@ -19,7 +19,7 @@ const examplePrepareSendPaymentLightningBolt11 = async (sdk: BreezSdk) => {
   })
 
   // If the fees are acceptable, continue to create the Send Payment
-  if (prepareResponse.paymentMethod instanceof SendPaymentMethod.Bolt11Invoice) {
+  if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.Bolt11Invoice) {
     // Fees to pay via Lightning
     const lightningFeeSats = prepareResponse.paymentMethod.inner.lightningFeeSats
     // Or fees to pay (if available) via a Spark transfer
@@ -43,7 +43,7 @@ const examplePrepareSendPaymentOnchain = async (sdk: BreezSdk) => {
   })
 
   // If the fees are acceptable, continue to create the Send Payment
-  if (prepareResponse.paymentMethod instanceof SendPaymentMethod.BitcoinAddress) {
+  if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.BitcoinAddress) {
     const feeQuote = prepareResponse.paymentMethod.inner.feeQuote
     const slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
     const mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
@@ -68,7 +68,7 @@ const examplePrepareSendPaymentSparkAddress = async (sdk: BreezSdk) => {
   })
 
   // If the fees are acceptable, continue to create the Send Payment
-  if (prepareResponse.paymentMethod instanceof SendPaymentMethod.SparkAddress) {
+  if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.SparkAddress) {
     const feeSats = prepareResponse.paymentMethod.inner.fee
     console.debug(`Fees: ${feeSats} sats`)
   }
@@ -88,7 +88,7 @@ const examplePrepareSendPaymentSparkInvoice = async (sdk: BreezSdk) => {
   })
 
   // If the fees are acceptable, continue to create the Send Payment
-  if (prepareResponse.paymentMethod instanceof SendPaymentMethod.SparkInvoice) {
+  if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.SparkInvoice) {
     const feeSats = prepareResponse.paymentMethod.inner.fee
     console.debug(`Fees: ${feeSats} sats`)
   }

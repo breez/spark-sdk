@@ -61,8 +61,9 @@ func refundDeposit(sdk: BreezSdk) async throws {
     let vout: UInt32 = 0
     let destinationAddress = "bc1qexample..."  // Your Bitcoin address
 
-    // Set the fee for the refund transaction using a rate
-    let fee = Fee.rate(satPerVbyte: 5)  // 5 sats per vbyte
+    // Set the fee for the refund transaction using the half-hour feerate
+    let recommendedFees = try await sdk.recommendedFees()
+    let fee = Fee.rate(satPerVbyte: recommendedFees.halfHourFee)
     // or using a fixed amount
     //let fee = Fee.fixed(amount: 500) // 500 sats
 
@@ -91,6 +92,23 @@ func setMaxFeeToRecommendedFees() async throws {
     config.maxDepositClaimFee = MaxFee.networkRecommended(leewaySatPerVbyte: 1)
     // ANCHOR_END: set-max-fee-to-recommended-fees
     print("Config: \(config)")
+}
+
+func customClaimLogic(sdk: BreezSdk, deposit: DepositInfo) async throws {
+    // ANCHOR: custom-claim-logic
+    if case .maxDepositClaimFeeExceeded(_, _, _, _, let requiredFeeRateSatPerVbyte) = deposit.claimError {
+        let recommendedFees = try await sdk.recommendedFees()
+
+        if requiredFeeRateSatPerVbyte <= recommendedFees.fastestFee {
+            let claimRequest = ClaimDepositRequest(
+                txid: deposit.txid,
+                vout: deposit.vout,
+                maxFee: MaxFee.rate(satPerVbyte: requiredFeeRateSatPerVbyte)
+            )
+            try await sdk.claimDeposit(request: claimRequest)
+        }
+    }
+    // ANCHOR_END: custom-claim-logic
 }
 
 func recommendedFees(sdk: BreezSdk) async throws {

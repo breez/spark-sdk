@@ -77,8 +77,9 @@ namespace BreezSdkSnippets
             var vout = 0U;
             var destinationAddress = "bc1qexample...";  // Your Bitcoin address
 
-            // Set the fee for the refund transaction using a rate
-            var fee = new Fee.Rate(satPerVbyte: 5);
+            // Set the fee for the refund transaction using the half-hour feerate
+            var recommendedFees = await sdk.RecommendedFees();
+            var fee = new Fee.Rate(satPerVbyte: recommendedFees.halfHourFee);
             // or using a fixed amount
             //var fee = new Fee.Fixed(amount: 500);
 
@@ -110,6 +111,28 @@ namespace BreezSdkSnippets
             config = config with { maxDepositClaimFee = new MaxFee.NetworkRecommended(leewaySatPerVbyte: 1) };
             // ANCHOR_END: set-max-fee-to-recommended-fees
             Console.WriteLine($"Config: {config}");
+        }
+
+        async Task CustomClaimLogic(BreezSdk sdk, DepositInfo deposit)
+        {
+            // ANCHOR: custom-claim-logic
+            if (deposit.claimError is DepositClaimError.MaxDepositClaimFeeExceeded exceeded)
+            {
+                var requiredFeeRate = exceeded.requiredFeeRateSatPerVbyte;
+
+                var recommendedFees = await sdk.RecommendedFees();
+
+                if (requiredFeeRate <= recommendedFees.fastestFee)
+                {
+                    var claimRequest = new ClaimDepositRequest(
+                        txid: deposit.txid,
+                        vout: deposit.vout,
+                        maxFee: new MaxFee.Rate(satPerVbyte: requiredFeeRate)
+                    );
+                    await sdk.ClaimDeposit(request: claimRequest);
+                }
+            }
+            // ANCHOR_END: custom-claim-logic
         }
 
         async Task RecommendedFees(BreezSdk sdk)

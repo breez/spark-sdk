@@ -77,8 +77,9 @@ async def refund_deposit(sdk: BreezSdk):
         vout = 0
         destination_address = "bc1qexample..."  # Your Bitcoin address
 
-        # Set the fee for the refund transaction using a rate
-        fee = Fee.RATE(sat_per_vbyte=5)
+        # Set the fee for the refund transaction using the half-hour feerate
+        recommended_fees = await sdk.recommended_fees()
+        fee = Fee.RATE(sat_per_vbyte=recommended_fees.half_hour_fee)
         # or using a fixed amount
         #fee = Fee.FIXED(amount=500)
 
@@ -106,6 +107,29 @@ async def set_max_fee_to_recommended_fees():
     config.max_deposit_claim_fee = MaxFee.NETWORK_RECOMMENDED(leeway_sat_per_vbyte=1)
     # ANCHOR_END: set-max-fee-to-recommended-fees
     logging.info(f"Config: {config}")
+
+
+async def custom_claim_logic(sdk: BreezSdk, deposit):
+    # ANCHOR: custom-claim-logic
+    try:
+        if isinstance(
+            deposit.claim_error, DepositClaimError.MAX_DEPOSIT_CLAIM_FEE_EXCEEDED
+        ):
+            required_fee_rate = deposit.claim_error.required_fee_rate_sat_per_vbyte
+
+            recommended_fees = await sdk.recommended_fees()
+
+            if required_fee_rate <= recommended_fees.fastest_fee:
+                claim_request = ClaimDepositRequest(
+                    txid=deposit.txid,
+                    vout=deposit.vout,
+                    max_fee=MaxFee.RATE(sat_per_vbyte=required_fee_rate),
+                )
+                await sdk.claim_deposit(request=claim_request)
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: custom-claim-logic
 
 
 async def recommended_feeds(sdk: BreezSdk):
