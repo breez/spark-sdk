@@ -65,5 +65,58 @@ namespace BreezSdkSnippets
             await sdk.DeleteLightningAddress();
             // ANCHOR_END: delete-lightning-address
         }
+
+        async Task AccessSenderComment(BreezSdk sdk)
+        {
+            var paymentId = "<payment id>";
+            var response = await sdk.GetPayment(new GetPaymentRequest(paymentId: paymentId));
+            var payment = response.payment;
+
+            // ANCHOR: access-sender-comment
+            // Check if this is a lightning payment with LNURL receive metadata
+            if (payment.details is PaymentDetails.Lightning lightningDetails)
+            {
+                var metadata = lightningDetails.lnurlReceiveMetadata;
+
+                // Access the sender comment if present
+                if (metadata?.senderComment != null)
+                {
+                    Console.WriteLine($"Sender comment: {metadata.senderComment}");
+                }
+            }
+            // ANCHOR_END: access-sender-comment
+        }
+
+        async Task AccessNostrZap(BreezSdk sdk)
+        {
+            var paymentId = "<payment id>";
+            var response = await sdk.GetPayment(new GetPaymentRequest(paymentId: paymentId));
+            var payment = response.payment;
+
+            // ANCHOR: access-nostr-zap
+            // Check if this is a lightning payment with LNURL receive metadata
+            if (payment.details is PaymentDetails.Lightning lightningDetails)
+            {
+                var metadata = lightningDetails.lnurlReceiveMetadata;
+
+                if (metadata != null)
+                {
+                    // Access the Nostr zap request if present
+                    if (metadata.nostrZapRequest != null)
+                    {
+                        // The nostrZapRequest is a JSON string containing the Nostr event (kind 9734)
+                        Console.WriteLine($"Nostr zap request: {metadata.nostrZapRequest}");
+                    }
+
+                    // Access the Nostr zap receipt if present
+                    if (metadata.nostrZapReceipt != null)
+                    {
+                        // The nostrZapReceipt is a JSON string containing the Nostr event (kind 9735)
+                        Console.WriteLine($"Nostr zap receipt: {metadata.nostrZapReceipt}");
+                    }
+                }
+            }
+            // ANCHOR_END: access-nostr-zap
+        }
     }
 }
