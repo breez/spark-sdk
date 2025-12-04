@@ -1,6 +1,6 @@
 use breez_sdk_spark::{
     default_config, BreezSdk, CheckLightningAddressRequest, Config, Network,
-    RegisterLightningAddressRequest,
+    RegisterLightningAddressRequest, GetPaymentRequest, PaymentDetails,
 };
 
 pub fn configure_lightning_address() -> Config {
@@ -60,5 +60,54 @@ pub async fn get_lightning_address(sdk: &BreezSdk) -> anyhow::Result<()> {
         let lnurl = &info.lnurl;
     }
     // ANCHOR_END: get-lightning-address
+    Ok(())
+}
+
+pub async fn access_sender_comment(sdk: &BreezSdk) -> anyhow::Result<()> {
+    let payment_id = "<payment id>".to_string();
+    let response = sdk.get_payment(GetPaymentRequest { payment_id }).await?;
+    let payment = response.payment;
+
+    // ANCHOR: access-sender-comment
+    // Check if this is a lightning payment with LNURL receive metadata
+    if let Some(PaymentDetails::Lightning {
+        lnurl_receive_metadata: Some(metadata),
+        ..
+    }) = payment.details
+    {
+        // Access the sender comment if present
+        if let Some(comment) = metadata.sender_comment {
+            println!("Sender comment: {}", comment);
+        }
+    }
+    // ANCHOR_END: access-sender-comment
+    Ok(())
+}
+
+pub async fn access_nostr_zap(sdk: &BreezSdk) -> anyhow::Result<()> {
+    let payment_id = "<payment id>".to_string();
+    let response = sdk.get_payment(GetPaymentRequest { payment_id }).await?;
+    let payment = response.payment;
+
+    // ANCHOR: access-nostr-zap
+    // Check if this is a lightning payment with LNURL receive metadata
+    if let Some(PaymentDetails::Lightning {
+        lnurl_receive_metadata: Some(metadata),
+        ..
+    }) = payment.details
+    {
+        // Access the Nostr zap request if present
+        if let Some(zap_request) = metadata.nostr_zap_request {
+            // The zap_request is a JSON string containing the Nostr event (kind 9734)
+            println!("Nostr zap request: {}", zap_request);
+        }
+
+        // Access the Nostr zap receipt if present
+        if let Some(zap_receipt) = metadata.nostr_zap_receipt {
+            // The zap_receipt is a JSON string containing the Nostr event (kind 9735)
+            println!("Nostr zap receipt: {}", zap_receipt);
+        }
+    }
+    // ANCHOR_END: access-nostr-zap
     Ok(())
 }

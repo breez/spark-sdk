@@ -58,4 +58,49 @@ class LightningAddress {
         sdk.deleteLightningAddress()
         // ANCHOR_END: delete-lightning-address
     }
+
+    suspend fun accessSenderComment(sdk: BreezSdk) {
+        val paymentId = "<payment id>"
+        val response = sdk.getPayment(GetPaymentRequest(paymentId = paymentId))
+        val payment = response.payment
+        
+        // ANCHOR: access-sender-comment
+        // Check if this is a lightning payment with LNURL receive metadata
+        if (payment.details is PaymentDetails.Lightning) {
+            val details = payment.details as PaymentDetails.Lightning
+            val metadata = details.lnurlReceiveMetadata
+            
+            // Access the sender comment if present
+            metadata?.senderComment?.let { comment ->
+                println("Sender comment: $comment")
+            }
+        }
+        // ANCHOR_END: access-sender-comment
+    }
+
+    suspend fun accessNostrZap(sdk: BreezSdk) {
+        val paymentId = "<payment id>"
+        val response = sdk.getPayment(GetPaymentRequest(paymentId = paymentId))
+        val payment = response.payment
+        
+        // ANCHOR: access-nostr-zap
+        // Check if this is a lightning payment with LNURL receive metadata
+        if (payment.details is PaymentDetails.Lightning) {
+            val details = payment.details as PaymentDetails.Lightning
+            val metadata = details.lnurlReceiveMetadata
+            
+            // Access the Nostr zap request if present
+            metadata?.nostrZapRequest?.let { zapRequest ->
+                // The zapRequest is a JSON string containing the Nostr event (kind 9734)
+                println("Nostr zap request: $zapRequest")
+            }
+            
+            // Access the Nostr zap receipt if present
+            metadata?.nostrZapReceipt?.let { zapReceipt ->
+                // The zapReceipt is a JSON string containing the Nostr event (kind 9735)
+                println("Nostr zap receipt: $zapReceipt")
+            }
+        }
+        // ANCHOR_END: access-nostr-zap
+    }
 }

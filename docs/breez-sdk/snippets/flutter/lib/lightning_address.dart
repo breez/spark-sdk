@@ -62,3 +62,55 @@ Future<void> deleteLightningAddress(BreezSdk sdk) async {
   await sdk.deleteLightningAddress();
   // ANCHOR_END: delete-lightning-address
 }
+
+Future<void> accessSenderComment(BreezSdk sdk) async {
+  final paymentId = '<payment id>';
+  final response = await sdk.getPayment(
+    request: GetPaymentRequest(paymentId: paymentId),
+  );
+  final payment = response.payment;
+
+  // ANCHOR: access-sender-comment
+  // Check if this is a lightning payment with LNURL receive metadata
+  if (payment.details case PaymentDetails_Lightning lightningDetails) {
+    final metadata = lightningDetails.lnurlReceiveMetadata;
+
+    // Access the sender comment if present
+    final comment = metadata?.senderComment;
+    if (comment != null) {
+      print('Sender comment: $comment');
+    }
+  }
+  // ANCHOR_END: access-sender-comment
+}
+
+Future<void> accessNostrZap(BreezSdk sdk) async {
+  final paymentId = '<payment id>';
+  final response = await sdk.getPayment(
+    request: GetPaymentRequest(paymentId: paymentId),
+  );
+  final payment = response.payment;
+
+  // ANCHOR: access-nostr-zap
+  // Check if this is a lightning payment with LNURL receive metadata
+  if (payment.details case PaymentDetails_Lightning lightningDetails) {
+    final metadata = lightningDetails.lnurlReceiveMetadata;
+
+    if (metadata != null) {
+      // Access the Nostr zap request if present
+      final zapRequest = metadata.nostrZapRequest;
+      if (zapRequest != null) {
+        // The zapRequest is a JSON string containing the Nostr event (kind 9734)
+        print('Nostr zap request: $zapRequest');
+      }
+
+      // Access the Nostr zap receipt if present
+      final zapReceipt = metadata.nostrZapReceipt;
+      if (zapReceipt != null) {
+        // The zapReceipt is a JSON string containing the Nostr event (kind 9735)
+        print('Nostr zap receipt: $zapReceipt');
+      }
+    }
+  }
+  // ANCHOR_END: access-nostr-zap
+}

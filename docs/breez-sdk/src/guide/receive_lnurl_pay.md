@@ -84,3 +84,26 @@ You can retrieve information about the currently registered Lightning address.
 When a user no longer wants to use the Lightning address, you can delete it.
 
 {{#tabs lightning_address:delete-lightning-address}}
+
+<h2 id="lnurl-metadata">
+    <a class="header" href="#lnurl-metadata">Accessing LNURL payment metadata</a>
+</h2>
+
+When receiving payments via LNURL-Pay or Lightning addresses, additional metadata may be included with the payment. This metadata is available on the received payment.
+
+<h3 id="sender-comment">
+    <a class="header" href="#sender-comment">Sender comment</a>
+</h3>
+
+If the sender includes a comment with their payment (as defined in [LUD-12](https://github.com/lnurl/luds/blob/luds/12.md)), it will be available on the received payment. This is the message that the sender wrote when making the payment.
+
+{{#tabs lightning_address:access-sender-comment}}
+
+<h3 id="nostr-zap">
+    <a class="header" href="#nostr-zap">Nostr Zap request</a>
+</h3>
+
+If the payment was sent as a Nostr Zap (as defined in [NIP-57](https://github.com/nostr-protocol/nips/blob/master/57.md)), the received payment will include the zap request event. It carries the signed Nostr event (kind 9734) used to create the zap, and will also include the zap receipt event (kind 9735) once that has been created and published.
+
+{{#tabs lightning_address:access-nostr-zap}}
+
