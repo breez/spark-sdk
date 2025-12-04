@@ -227,8 +227,8 @@ pub enum Command {
         /// The token identifiers to get metadata for
         token_identifiers: Vec<String>,
     },
-    TokenTransfer {
-        /// The amount to transfer
+    ConvertToken {
+        /// The amount to convert
         amount: u128,
 
         #[clap(short = 'f', long, action = clap::ArgAction::SetTrue)]
@@ -621,7 +621,7 @@ pub(crate) async fn execute_command(
             print_value(&res)?;
             Ok(true)
         }
-        Command::TokenTransfer {
+        Command::ConvertToken {
             amount,
             from_bitcoin,
             token_identifier,
