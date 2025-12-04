@@ -913,8 +913,8 @@ impl BreezSdk {
         );
         let transfer = self.spark_wallet.claim_static_deposit(quote).await?;
         info!(
-            "Claimed static deposit transfer: {}",
-            serde_json::to_string_pretty(&transfer)?
+            "Claimed static deposit transfer for utxo {}:{}, value {}",
+            detailed_utxo.txid, detailed_utxo.vout, transfer.total_value_sat,
         );
         Ok(transfer)
     }
