@@ -87,6 +87,8 @@ struct Args {
     pub include_spark_address: bool,
 
     /// List of domains that are allowed to use the lnurl server. Comma separated.
+    /// These are in addition to any domains stored in the database. The configured
+    /// domains here will be added to the database on startup.
     #[arg(long, default_value = "localhost:8080")]
     pub domains: String,
 
@@ -194,12 +196,20 @@ where
         .await?,
     );
 
-    let domains = args
+    let config_domains: Vec<String> = args
         .domains
         .split(',')
         .map(|d| d.trim().to_lowercase())
         .filter(|d| !d.is_empty())
         .collect();
+
+    for domain in &config_domains {
+        repository.add_domain(domain).await?;
+        debug!("ensured domain '{}' exists in database", domain);
+    }
+
+    let domains: HashSet<String> = repository.list_domains().await?.into_iter().collect();
+    info!("loaded {} allowed domains from database", domains.len());
 
     let ca_cert = args
         .ca_cert
