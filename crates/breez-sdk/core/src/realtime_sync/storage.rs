@@ -69,14 +69,14 @@ impl NewRecordHandler for SyncedStorage {
             incoming_count, outgoing_count
         );
 
-        // No need to emit an event if no new data was pulled.
-        if incoming_count.is_none() || incoming_count == Some(0) {
+        // No need to emit an event if no pull was done.
+        if incoming_count.is_none() {
             return Ok(());
         }
 
         self.event_emitter
             .emit_synced(&InternalSyncedEvent {
-                storage: true,
+                storage_incoming: incoming_count,
                 ..Default::default()
             })
             .await;

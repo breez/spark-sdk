@@ -784,7 +784,7 @@ impl BreezSdk {
             wallet_state,
             lnurl_metadata,
             deposits,
-            storage: false,
+            storage_incoming: None,
         };
         info!("sync_wallet_internal: Wallet sync completed in {elapsed:?}: {event:?}");
         self.event_emitter.emit_synced(&event).await;

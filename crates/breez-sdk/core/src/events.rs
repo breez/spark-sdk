@@ -65,12 +65,24 @@ pub struct InternalSyncedEvent {
     pub wallet_state: bool,
     pub deposits: bool,
     pub lnurl_metadata: bool,
-    pub storage: bool,
+    pub storage_incoming: Option<u32>,
 }
 
 impl InternalSyncedEvent {
     pub fn any(&self) -> bool {
-        self.wallet || self.wallet_state || self.deposits || self.lnurl_metadata || self.storage
+        self.wallet
+            || self.wallet_state
+            || self.deposits
+            || self.lnurl_metadata
+            || self.storage_incoming.is_some()
+    }
+
+    pub fn any_non_zero(&self) -> bool {
+        self.wallet
+            || self.wallet_state
+            || self.deposits
+            || self.lnurl_metadata
+            || self.storage_incoming.is_some_and(|v| v > 0)
     }
 
     pub fn merge(&self, other: &InternalSyncedEvent) -> Self {
@@ -79,7 +91,12 @@ impl InternalSyncedEvent {
             wallet_state: self.wallet_state || other.wallet_state,
             deposits: self.deposits || other.deposits,
             lnurl_metadata: self.lnurl_metadata || other.lnurl_metadata,
-            storage: self.storage || other.storage,
+            storage_incoming: self
+                .storage_incoming
+                .zip(other.storage_incoming)
+                .map(|(a, b)| a.saturating_add(b))
+                .or(self.storage_incoming)
+                .or(other.storage_incoming),
         }
     }
 }
@@ -159,7 +176,7 @@ impl EventEmitter {
 
         let mut mtx = self.synced_event_buffer.lock().await;
 
-        if let Some(buffered) = &*mtx {
+        let if_first_event = if let Some(buffered) = &*mtx {
             let merged = buffered.merge(synced);
 
             // The first synced event emitted should at least have the wallet synced.
@@ -170,9 +187,18 @@ impl EventEmitter {
                 *mtx = Some(merged);
                 return;
             }
-        }
+
+            true
+        } else {
+            false
+        };
 
         drop(mtx);
+
+        // Only emit zero real-time syncs on the first event.
+        if !if_first_event && !synced.any_non_zero() {
+            return;
+        }
 
         // Emit the merged event
         self.emit(&SdkEvent::Synced).await;
@@ -285,7 +311,7 @@ mod tests {
                 wallet_state: true,
                 deposits: true,
                 lnurl_metadata: true,
-                storage: true,
+                storage_incoming: Some(1),
             })
             .await;
 
@@ -298,7 +324,7 @@ mod tests {
                 wallet_state: false,
                 deposits: false,
                 lnurl_metadata: false,
-                storage: false,
+                storage_incoming: Some(1),
             })
             .await;
 
@@ -323,7 +349,7 @@ mod tests {
                 wallet_state: true,
                 deposits: false,
                 lnurl_metadata: false,
-                storage: false,
+                storage_incoming: None,
             })
             .await;
 
@@ -335,7 +361,7 @@ mod tests {
                 wallet_state: false,
                 deposits: true,
                 lnurl_metadata: false,
-                storage: false,
+                storage_incoming: None,
             })
             .await;
 
@@ -347,7 +373,7 @@ mod tests {
                 wallet_state: false,
                 deposits: false,
                 lnurl_metadata: true,
-                storage: false,
+                storage_incoming: None,
             })
             .await;
 
@@ -359,7 +385,7 @@ mod tests {
                 wallet_state: false,
                 deposits: false,
                 lnurl_metadata: false,
-                storage: true,
+                storage_incoming: None,
             })
             .await;
 
@@ -372,7 +398,7 @@ mod tests {
                 wallet_state: false,
                 deposits: false,
                 lnurl_metadata: false,
-                storage: false,
+                storage_incoming: None,
             })
             .await;
 
@@ -397,7 +423,7 @@ mod tests {
                 wallet_state: true,
                 deposits: true,
                 lnurl_metadata: true,
-                storage: true,
+                storage_incoming: None,
             })
             .await;
 
@@ -422,7 +448,7 @@ mod tests {
                 wallet_state: false,
                 deposits: false,
                 lnurl_metadata: false,
-                storage: false,
+                storage_incoming: None,
             })
             .await;
 
@@ -462,7 +488,7 @@ mod tests {
                 wallet_state: false,
                 deposits: false,
                 lnurl_metadata: false,
-                storage: false,
+                storage_incoming: None,
             })
             .await;
 
@@ -475,7 +501,7 @@ mod tests {
                 wallet_state: true,
                 deposits: false,
                 lnurl_metadata: false,
-                storage: false,
+                storage_incoming: None,
             })
             .await;
 
@@ -488,7 +514,7 @@ mod tests {
                 wallet_state: false,
                 deposits: true,
                 lnurl_metadata: false,
-                storage: false,
+                storage_incoming: None,
             })
             .await;
 
@@ -500,7 +526,7 @@ mod tests {
                 wallet_state: false,
                 deposits: false,
                 lnurl_metadata: true,
-                storage: false,
+                storage_incoming: None,
             })
             .await;
 
@@ -512,7 +538,7 @@ mod tests {
                 wallet_state: false,
                 deposits: false,
                 lnurl_metadata: false,
-                storage: true,
+                storage_incoming: Some(1),
             })
             .await;
 
@@ -524,7 +550,7 @@ mod tests {
                 wallet_state: false,
                 deposits: false,
                 lnurl_metadata: false,
-                storage: false,
+                storage_incoming: None,
             })
             .await;
 
@@ -564,7 +590,7 @@ mod tests {
                 wallet_state: false,
                 deposits: false,
                 lnurl_metadata: false,
-                storage: false,
+                storage_incoming: None,
             })
             .await;
 
@@ -577,7 +603,7 @@ mod tests {
                 wallet_state: false,
                 deposits: false,
                 lnurl_metadata: false,
-                storage: false,
+                storage_incoming: None,
             })
             .await;
 
@@ -590,7 +616,73 @@ mod tests {
                 wallet_state: true,
                 deposits: false,
                 lnurl_metadata: false,
-                storage: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert_eq!(count.load(Ordering::Relaxed), 2); // Now count should be 2
+    }
+
+    #[async_test_all]
+    async fn test_storage_incoming_zero_does_not_emit_after_first_sync() {
+        use std::sync::atomic::AtomicUsize;
+
+        struct CountingListener {
+            count: Arc<AtomicUsize>,
+        }
+
+        #[macros::async_trait]
+        impl EventListener for CountingListener {
+            async fn on_event(&self, event: SdkEvent) {
+                if matches!(event, SdkEvent::Synced) {
+                    self.count.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        let emitter = EventEmitter::new();
+        let count = Arc::new(AtomicUsize::new(0));
+
+        let listener = Box::new(CountingListener {
+            count: count.clone(),
+        });
+
+        emitter.add_listener(listener).await;
+
+        // First sync with wallet - should emit
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: true,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+
+        // storage_incoming with Some(0) after first sync - should NOT emit (zero value)
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: Some(0),
+            })
+            .await;
+
+        assert_eq!(count.load(Ordering::Relaxed), 1); // Count should remain 1
+
+        // storage_incoming with Some(1) - should emit
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: Some(1),
             })
             .await;
 
