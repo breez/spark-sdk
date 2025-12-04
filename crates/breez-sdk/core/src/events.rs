@@ -111,6 +111,7 @@ pub trait EventListener: Send + Sync {
 
 /// Event publisher that manages event listeners
 pub struct EventEmitter {
+    has_real_time_sync: bool,
     listener_index: AtomicU64,
     listeners: RwLock<BTreeMap<String, Box<dyn EventListener>>>,
     synced_event_buffer: Mutex<Option<InternalSyncedEvent>>,
@@ -118,8 +119,9 @@ pub struct EventEmitter {
 
 impl EventEmitter {
     /// Create a new event emitter
-    pub fn new() -> Self {
+    pub fn new(has_real_time_sync: bool) -> Self {
         Self {
+            has_real_time_sync,
             listener_index: AtomicU64::new(0),
             listeners: RwLock::new(BTreeMap::new()),
             synced_event_buffer: Mutex::new(Some(InternalSyncedEvent::default())),
@@ -181,7 +183,7 @@ impl EventEmitter {
 
             // The first synced event emitted should at least have the wallet synced.
             // Subsequent events might have only partial syncs.
-            if merged.wallet {
+            if merged.wallet && (!self.has_real_time_sync || merged.storage_incoming.is_some()) {
                 *mtx = None;
             } else {
                 *mtx = Some(merged);
@@ -207,7 +209,7 @@ impl EventEmitter {
 
 impl Default for EventEmitter {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
@@ -235,7 +237,7 @@ mod tests {
 
     #[async_test_all]
     async fn test_event_emission() {
-        let emitter = EventEmitter::new();
+        let emitter = EventEmitter::new(false);
         let received = Arc::new(AtomicBool::new(false));
 
         // Create the listener with a shared reference to the atomic boolean
@@ -255,7 +257,7 @@ mod tests {
 
     #[async_test_all]
     async fn test_remove_listener() {
-        let emitter = EventEmitter::new();
+        let emitter = EventEmitter::new(false);
 
         // Create shared atomic booleans to track event reception
         let received1 = Arc::new(AtomicBool::new(false));
@@ -295,7 +297,7 @@ mod tests {
 
     #[async_test_all]
     async fn test_synced_event_only_emitted_with_wallet_sync() {
-        let emitter = EventEmitter::new();
+        let emitter = EventEmitter::new(false);
         let received = Arc::new(AtomicBool::new(false));
 
         let listener = Box::new(TestListener {
@@ -311,7 +313,7 @@ mod tests {
                 wallet_state: true,
                 deposits: true,
                 lnurl_metadata: true,
-                storage_incoming: Some(1),
+                storage_incoming: None,
             })
             .await;
 
@@ -332,8 +334,85 @@ mod tests {
     }
 
     #[async_test_all]
+    async fn test_has_real_time_sync_synced_event_only_emitted_with_wallet_and_storage_sync() {
+        let emitter = EventEmitter::new(true);
+        let received = Arc::new(AtomicBool::new(false));
+
+        let listener = Box::new(TestListener {
+            received: received.clone(),
+        });
+
+        emitter.add_listener(listener).await;
+
+        // Emit synced event with storage
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: Some(0),
+            })
+            .await;
+
+        assert!(!received.load(Ordering::Relaxed));
+
+        // Emit synced event with wallet sync - should emit Synced
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: true,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert!(received.load(Ordering::Relaxed));
+    }
+
+    #[async_test_all]
+    async fn test_has_real_time_sync_synced_event_only_emitted_with_wallet_and_storage_sync_reverse()
+     {
+        let emitter = EventEmitter::new(true);
+        let received = Arc::new(AtomicBool::new(false));
+
+        let listener = Box::new(TestListener {
+            received: received.clone(),
+        });
+
+        emitter.add_listener(listener).await;
+
+        // Emit synced event with wallet sync
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: true,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert!(!received.load(Ordering::Relaxed));
+
+        // Emit synced event with storage - should emit Synced
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: Some(0),
+            })
+            .await;
+
+        assert!(received.load(Ordering::Relaxed));
+    }
+
+    #[async_test_all]
     async fn test_synced_event_buffers_until_wallet_sync() {
-        let emitter = EventEmitter::new();
+        let emitter = EventEmitter::new(false);
         let received = Arc::new(AtomicBool::new(false));
 
         let listener = Box::new(TestListener {
@@ -407,7 +486,7 @@ mod tests {
 
     #[async_test_all]
     async fn test_synced_event_all_true() {
-        let emitter = EventEmitter::new();
+        let emitter = EventEmitter::new(false);
         let received = Arc::new(AtomicBool::new(false));
 
         let listener = Box::new(TestListener {
@@ -423,7 +502,7 @@ mod tests {
                 wallet_state: true,
                 deposits: true,
                 lnurl_metadata: true,
-                storage_incoming: None,
+                storage_incoming: Some(1),
             })
             .await;
 
@@ -432,7 +511,7 @@ mod tests {
 
     #[async_test_all]
     async fn test_synced_event_empty_does_not_emit() {
-        let emitter = EventEmitter::new();
+        let emitter = EventEmitter::new(false);
         let received = Arc::new(AtomicBool::new(false));
 
         let listener = Box::new(TestListener {
@@ -472,7 +551,7 @@ mod tests {
             }
         }
 
-        let emitter = EventEmitter::new();
+        let emitter = EventEmitter::new(true);
         let count = Arc::new(AtomicUsize::new(0));
 
         let listener = Box::new(CountingListener {
@@ -488,7 +567,7 @@ mod tests {
                 wallet_state: false,
                 deposits: false,
                 lnurl_metadata: false,
-                storage_incoming: None,
+                storage_incoming: Some(0),
             })
             .await;
 
@@ -544,6 +623,19 @@ mod tests {
 
         assert_eq!(count.load(Ordering::Relaxed), 5);
 
+        // storage_incoming with Some(0) - should NOT emit after first sync
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: Some(0),
+            })
+            .await;
+
+        assert_eq!(count.load(Ordering::Relaxed), 5);
+
         emitter
             .emit_synced(&InternalSyncedEvent {
                 wallet: true,
@@ -574,7 +666,7 @@ mod tests {
             }
         }
 
-        let emitter = EventEmitter::new();
+        let emitter = EventEmitter::new(false);
         let count = Arc::new(AtomicUsize::new(0));
 
         let listener = Box::new(CountingListener {
@@ -617,72 +709,6 @@ mod tests {
                 deposits: false,
                 lnurl_metadata: false,
                 storage_incoming: None,
-            })
-            .await;
-
-        assert_eq!(count.load(Ordering::Relaxed), 2); // Now count should be 2
-    }
-
-    #[async_test_all]
-    async fn test_storage_incoming_zero_does_not_emit_after_first_sync() {
-        use std::sync::atomic::AtomicUsize;
-
-        struct CountingListener {
-            count: Arc<AtomicUsize>,
-        }
-
-        #[macros::async_trait]
-        impl EventListener for CountingListener {
-            async fn on_event(&self, event: SdkEvent) {
-                if matches!(event, SdkEvent::Synced) {
-                    self.count.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-        }
-
-        let emitter = EventEmitter::new();
-        let count = Arc::new(AtomicUsize::new(0));
-
-        let listener = Box::new(CountingListener {
-            count: count.clone(),
-        });
-
-        emitter.add_listener(listener).await;
-
-        // First sync with wallet - should emit
-        emitter
-            .emit_synced(&InternalSyncedEvent {
-                wallet: true,
-                wallet_state: false,
-                deposits: false,
-                lnurl_metadata: false,
-                storage_incoming: None,
-            })
-            .await;
-
-        assert_eq!(count.load(Ordering::Relaxed), 1);
-
-        // storage_incoming with Some(0) after first sync - should NOT emit (zero value)
-        emitter
-            .emit_synced(&InternalSyncedEvent {
-                wallet: false,
-                wallet_state: false,
-                deposits: false,
-                lnurl_metadata: false,
-                storage_incoming: Some(0),
-            })
-            .await;
-
-        assert_eq!(count.load(Ordering::Relaxed), 1); // Count should remain 1
-
-        // storage_incoming with Some(1) - should emit
-        emitter
-            .emit_synced(&InternalSyncedEvent {
-                wallet: false,
-                wallet_state: false,
-                deposits: false,
-                lnurl_metadata: false,
-                storage_incoming: Some(1),
             })
             .await;
 
