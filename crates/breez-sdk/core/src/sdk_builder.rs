@@ -321,7 +321,9 @@ impl SdkBuilder {
         };
         let shutdown_sender = watch::channel::<()>(()).0;
 
-        let event_emitter = Arc::new(EventEmitter::new());
+        let event_emitter = Arc::new(EventEmitter::new(
+            self.config.real_time_sync_server_url.is_some(),
+        ));
         let storage = if let Some(server_url) = &self.config.real_time_sync_server_url {
             let Some(sync_storage) = sync_storage else {
                 return Err(SdkError::Generic(

@@ -5,7 +5,7 @@ use std::{
 };
 
 use serde::Serialize;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::{DepositInfo, Payment};
@@ -17,11 +17,6 @@ use crate::{DepositInfo, Payment};
 pub enum SdkEvent {
     /// Emitted when the wallet has been synchronized with the network
     Synced,
-    /// Emitted when data was pushed and/or pulled to/from real-time sync storage.
-    DataSynced {
-        /// Value indicating whether new data was pulled through real-time sync.
-        did_pull_new_records: bool,
-    },
     /// Emitted when the SDK was unable to claim deposits
     UnclaimedDeposits {
         unclaimed_deposits: Vec<DepositInfo>,
@@ -44,18 +39,6 @@ impl fmt::Display for SdkEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SdkEvent::Synced => write!(f, "Synced"),
-            SdkEvent::DataSynced {
-                did_pull_new_records,
-            } => {
-                write!(
-                    f,
-                    "DataSynced: {} new records",
-                    match did_pull_new_records {
-                        true => "with",
-                        false => "no",
-                    }
-                )
-            }
             SdkEvent::UnclaimedDeposits { unclaimed_deposits } => {
                 write!(f, "UnclaimedDeposits: {unclaimed_deposits:?}")
             }
@@ -75,6 +58,49 @@ impl fmt::Display for SdkEvent {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Default)]
+pub struct InternalSyncedEvent {
+    pub wallet: bool,
+    pub wallet_state: bool,
+    pub deposits: bool,
+    pub lnurl_metadata: bool,
+    pub storage_incoming: Option<u32>,
+}
+
+impl InternalSyncedEvent {
+    pub fn any(&self) -> bool {
+        self.wallet
+            || self.wallet_state
+            || self.deposits
+            || self.lnurl_metadata
+            || self.storage_incoming.is_some()
+    }
+
+    pub fn any_non_zero(&self) -> bool {
+        self.wallet
+            || self.wallet_state
+            || self.deposits
+            || self.lnurl_metadata
+            || self.storage_incoming.is_some_and(|v| v > 0)
+    }
+
+    pub fn merge(&self, other: &InternalSyncedEvent) -> Self {
+        Self {
+            wallet: self.wallet || other.wallet,
+            wallet_state: self.wallet_state || other.wallet_state,
+            deposits: self.deposits || other.deposits,
+            lnurl_metadata: self.lnurl_metadata || other.lnurl_metadata,
+            storage_incoming: self
+                .storage_incoming
+                .zip(other.storage_incoming)
+                .map(|(a, b)| a.saturating_add(b))
+                .or(self.storage_incoming)
+                .or(other.storage_incoming),
+        }
+    }
+}
+
 /// Trait for event listeners
 #[cfg_attr(feature = "uniffi", uniffi::export(callback_interface))]
 #[macros::async_trait]
@@ -85,16 +111,20 @@ pub trait EventListener: Send + Sync {
 
 /// Event publisher that manages event listeners
 pub struct EventEmitter {
+    has_real_time_sync: bool,
     listener_index: AtomicU64,
     listeners: RwLock<BTreeMap<String, Box<dyn EventListener>>>,
+    synced_event_buffer: Mutex<Option<InternalSyncedEvent>>,
 }
 
 impl EventEmitter {
     /// Create a new event emitter
-    pub fn new() -> Self {
+    pub fn new(has_real_time_sync: bool) -> Self {
         Self {
+            has_real_time_sync,
             listener_index: AtomicU64::new(0),
             listeners: RwLock::new(BTreeMap::new()),
+            synced_event_buffer: Mutex::new(Some(InternalSyncedEvent::default())),
         }
     }
 
@@ -139,11 +169,47 @@ impl EventEmitter {
             listener.on_event(event.clone()).await;
         }
     }
+
+    pub async fn emit_synced(&self, synced: &InternalSyncedEvent) {
+        if !synced.any() {
+            // Nothing to emit
+            return;
+        }
+
+        let mut mtx = self.synced_event_buffer.lock().await;
+
+        let is_first_event = if let Some(buffered) = &*mtx {
+            let merged = buffered.merge(synced);
+
+            // The first synced event emitted should at least have the wallet synced.
+            // Subsequent events might have only partial syncs.
+            if merged.wallet && (!self.has_real_time_sync || merged.storage_incoming.is_some()) {
+                *mtx = None;
+            } else {
+                *mtx = Some(merged);
+                return;
+            }
+
+            true
+        } else {
+            false
+        };
+
+        drop(mtx);
+
+        // Only emit zero real-time syncs on the first event.
+        if !is_first_event && !synced.any_non_zero() {
+            return;
+        }
+
+        // Emit the merged event
+        self.emit(&SdkEvent::Synced).await;
+    }
 }
 
 impl Default for EventEmitter {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
@@ -171,7 +237,7 @@ mod tests {
 
     #[async_test_all]
     async fn test_event_emission() {
-        let emitter = EventEmitter::new();
+        let emitter = EventEmitter::new(false);
         let received = Arc::new(AtomicBool::new(false));
 
         // Create the listener with a shared reference to the atomic boolean
@@ -191,7 +257,7 @@ mod tests {
 
     #[async_test_all]
     async fn test_remove_listener() {
-        let emitter = EventEmitter::new();
+        let emitter = EventEmitter::new(false);
 
         // Create shared atomic booleans to track event reception
         let received1 = Arc::new(AtomicBool::new(false));
@@ -227,5 +293,425 @@ mod tests {
 
         // Try to remove a non-existent listener
         assert!(!emitter.remove_listener("non-existent-id").await);
+    }
+
+    #[async_test_all]
+    async fn test_synced_event_only_emitted_with_wallet_sync() {
+        let emitter = EventEmitter::new(false);
+        let received = Arc::new(AtomicBool::new(false));
+
+        let listener = Box::new(TestListener {
+            received: received.clone(),
+        });
+
+        emitter.add_listener(listener).await;
+
+        // Emit synced event without wallet sync - should NOT emit Synced
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: true,
+                deposits: true,
+                lnurl_metadata: true,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert!(!received.load(Ordering::Relaxed));
+
+        // Emit synced event with wallet sync - should emit Synced
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: true,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: Some(1),
+            })
+            .await;
+
+        assert!(received.load(Ordering::Relaxed));
+    }
+
+    #[async_test_all]
+    async fn test_has_real_time_sync_synced_event_only_emitted_with_wallet_and_storage_sync() {
+        let emitter = EventEmitter::new(true);
+        let received = Arc::new(AtomicBool::new(false));
+
+        let listener = Box::new(TestListener {
+            received: received.clone(),
+        });
+
+        emitter.add_listener(listener).await;
+
+        // Emit synced event with storage
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: Some(0),
+            })
+            .await;
+
+        assert!(!received.load(Ordering::Relaxed));
+
+        // Emit synced event with wallet sync - should emit Synced
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: true,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert!(received.load(Ordering::Relaxed));
+    }
+
+    #[async_test_all]
+    async fn test_has_real_time_sync_synced_event_only_emitted_with_wallet_and_storage_sync_reverse()
+     {
+        let emitter = EventEmitter::new(true);
+        let received = Arc::new(AtomicBool::new(false));
+
+        let listener = Box::new(TestListener {
+            received: received.clone(),
+        });
+
+        emitter.add_listener(listener).await;
+
+        // Emit synced event with wallet sync
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: true,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert!(!received.load(Ordering::Relaxed));
+
+        // Emit synced event with storage - should emit Synced
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: Some(0),
+            })
+            .await;
+
+        assert!(received.load(Ordering::Relaxed));
+    }
+
+    #[async_test_all]
+    async fn test_synced_event_buffers_until_wallet_sync() {
+        let emitter = EventEmitter::new(false);
+        let received = Arc::new(AtomicBool::new(false));
+
+        let listener = Box::new(TestListener {
+            received: received.clone(),
+        });
+
+        emitter.add_listener(listener).await;
+
+        // Emit multiple partial syncs without wallet sync
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: true,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert!(!received.load(Ordering::Relaxed));
+
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: true,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert!(!received.load(Ordering::Relaxed));
+
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: true,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert!(!received.load(Ordering::Relaxed));
+
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert!(!received.load(Ordering::Relaxed));
+
+        // Finally emit wallet sync - should emit Synced
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: true,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert!(received.load(Ordering::Relaxed));
+    }
+
+    #[async_test_all]
+    async fn test_synced_event_all_true() {
+        let emitter = EventEmitter::new(false);
+        let received = Arc::new(AtomicBool::new(false));
+
+        let listener = Box::new(TestListener {
+            received: received.clone(),
+        });
+
+        emitter.add_listener(listener).await;
+
+        // Emit synced event with wallet and other components - should emit Synced
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: true,
+                wallet_state: true,
+                deposits: true,
+                lnurl_metadata: true,
+                storage_incoming: Some(1),
+            })
+            .await;
+
+        assert!(received.load(Ordering::Relaxed));
+    }
+
+    #[async_test_all]
+    async fn test_synced_event_empty_does_not_emit() {
+        let emitter = EventEmitter::new(false);
+        let received = Arc::new(AtomicBool::new(false));
+
+        let listener = Box::new(TestListener {
+            received: received.clone(),
+        });
+
+        emitter.add_listener(listener).await;
+
+        // Emit empty synced event - should NOT emit Synced
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert!(!received.load(Ordering::Relaxed));
+    }
+
+    #[async_test_all]
+    async fn test_subsequent_syncs_after_wallet_emit_immediately() {
+        use std::sync::atomic::AtomicUsize;
+
+        struct CountingListener {
+            count: Arc<AtomicUsize>,
+        }
+
+        #[macros::async_trait]
+        impl EventListener for CountingListener {
+            async fn on_event(&self, event: SdkEvent) {
+                if matches!(event, SdkEvent::Synced) {
+                    self.count.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        let emitter = EventEmitter::new(true);
+        let count = Arc::new(AtomicUsize::new(0));
+
+        let listener = Box::new(CountingListener {
+            count: count.clone(),
+        });
+
+        emitter.add_listener(listener).await;
+
+        // First sync with wallet - should emit
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: true,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: Some(0),
+            })
+            .await;
+
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+
+        // Subsequent partial sync without wallet - should emit (buffer cleared after first wallet sync)
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: true,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert_eq!(count.load(Ordering::Relaxed), 2);
+
+        // Another partial sync - should emit
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: true,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert_eq!(count.load(Ordering::Relaxed), 3);
+
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: true,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert_eq!(count.load(Ordering::Relaxed), 4);
+
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: Some(1),
+            })
+            .await;
+
+        assert_eq!(count.load(Ordering::Relaxed), 5);
+
+        // storage_incoming with Some(0) - should NOT emit after first sync
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: Some(0),
+            })
+            .await;
+
+        assert_eq!(count.load(Ordering::Relaxed), 5);
+
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: true,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert_eq!(count.load(Ordering::Relaxed), 6);
+    }
+
+    #[async_test_all]
+    async fn test_empty_event_does_not_emit_after_wallet_sync() {
+        use std::sync::atomic::AtomicUsize;
+
+        struct CountingListener {
+            count: Arc<AtomicUsize>,
+        }
+
+        #[macros::async_trait]
+        impl EventListener for CountingListener {
+            async fn on_event(&self, event: SdkEvent) {
+                if matches!(event, SdkEvent::Synced) {
+                    self.count.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        let emitter = EventEmitter::new(false);
+        let count = Arc::new(AtomicUsize::new(0));
+
+        let listener = Box::new(CountingListener {
+            count: count.clone(),
+        });
+
+        emitter.add_listener(listener).await;
+
+        // First sync with wallet - should emit
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: true,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+
+        // Empty sync after wallet sync - should NOT emit (all fields false)
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert_eq!(count.load(Ordering::Relaxed), 1); // Count should remain 1
+
+        // Another non-empty sync - should emit
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: false,
+                wallet_state: true,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert_eq!(count.load(Ordering::Relaxed), 2); // Now count should be 2
     }
 }
