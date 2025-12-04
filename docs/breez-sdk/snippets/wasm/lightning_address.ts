@@ -55,3 +55,46 @@ const exampleDeleteLightningAddress = async (sdk: BreezSdk) => {
   await sdk.deleteLightningAddress()
   // ANCHOR_END: delete-lightning-address
 }
+
+const exampleAccessSenderComment = async (sdk: BreezSdk) => {
+  const paymentId = '<payment id>'
+  const response = await sdk.getPayment({ paymentId })
+  const payment = response.payment
+
+  // ANCHOR: access-sender-comment
+  // Check if this is a lightning payment with LNURL receive metadata
+  if (payment.details?.type === 'lightning') {
+    const metadata = payment.details.lnurlReceiveMetadata
+
+    // Access the sender comment if present
+    if (metadata?.senderComment != null) {
+      console.log('Sender comment:', metadata.senderComment)
+    }
+  }
+  // ANCHOR_END: access-sender-comment
+}
+
+const exampleAccessNostrZap = async (sdk: BreezSdk) => {
+  const paymentId = '<payment id>'
+  const response = await sdk.getPayment({ paymentId })
+  const payment = response.payment
+
+  // ANCHOR: access-nostr-zap
+  // Check if this is a lightning payment with LNURL receive metadata
+  if (payment.details?.type === 'lightning') {
+    const metadata = payment.details.lnurlReceiveMetadata
+
+    // Access the Nostr zap request if present
+    if (metadata?.nostrZapRequest != null) {
+      // The nostrZapRequest is a JSON string containing the Nostr event (kind 9734)
+      console.log('Nostr zap request:', metadata.nostrZapRequest)
+    }
+
+    // Access the Nostr zap receipt if present
+    if (metadata?.nostrZapReceipt != null) {
+      // The nostrZapReceipt is a JSON string containing the Nostr event (kind 9735)
+      console.log('Nostr zap receipt:', metadata.nostrZapReceipt)
+    }
+  }
+  // ANCHOR_END: access-nostr-zap
+}

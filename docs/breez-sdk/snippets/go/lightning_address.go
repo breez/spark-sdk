@@ -82,3 +82,60 @@ func DeleteLightningAddress(sdk *breez_sdk_spark.BreezSdk) error {
 
 	return nil
 }
+
+func AccessSenderComment(sdk *breez_sdk_spark.BreezSdk) error {
+	paymentID := "<payment id>"
+	response, err := sdk.GetPayment(breez_sdk_spark.GetPaymentRequest{
+		PaymentId: paymentID,
+	})
+	if err != nil {
+		return err
+	}
+	payment := response.Payment
+
+	// ANCHOR: access-sender-comment
+	// Check if this is a lightning payment with LNURL receive metadata
+	if lightningDetails, ok := (*payment.Details).(breez_sdk_spark.PaymentDetailsLightning); ok {
+		metadata := lightningDetails.LnurlReceiveMetadata
+
+		// Access the sender comment if present
+		if metadata != nil && metadata.SenderComment != nil {
+			println("Sender comment:", *metadata.SenderComment)
+		}
+	}
+	// ANCHOR_END: access-sender-comment
+	return nil
+}
+
+func AccessNostrZap(sdk *breez_sdk_spark.BreezSdk) error {
+	paymentID := "<payment id>"
+	response, err := sdk.GetPayment(breez_sdk_spark.GetPaymentRequest{
+		PaymentId: paymentID,
+	})
+	if err != nil {
+		return err
+	}
+	payment := response.Payment
+
+	// ANCHOR: access-nostr-zap
+	// Check if this is a lightning payment with LNURL receive metadata
+	if lightningDetails, ok := (*payment.Details).(breez_sdk_spark.PaymentDetailsLightning); ok {
+		metadata := lightningDetails.LnurlReceiveMetadata
+
+		if metadata != nil {
+			// Access the Nostr zap request if present
+			if metadata.NostrZapRequest != nil {
+				// The NostrZapRequest is a JSON string containing the Nostr event (kind 9734)
+				println("Nostr zap request:", *metadata.NostrZapRequest)
+			}
+
+			// Access the Nostr zap receipt if present
+			if metadata.NostrZapReceipt != nil {
+				// The NostrZapReceipt is a JSON string containing the Nostr event (kind 9735)
+				println("Nostr zap receipt:", *metadata.NostrZapReceipt)
+			}
+		}
+	}
+	// ANCHOR_END: access-nostr-zap
+	return nil
+}

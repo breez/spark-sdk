@@ -1,7 +1,9 @@
 from breez_sdk_spark import (
     BreezSdk,
     CheckLightningAddressRequest,
+    GetPaymentRequest,
     Network,
+    PaymentDetails,
     RegisterLightningAddressRequest,
     default_config
 )
@@ -57,3 +59,42 @@ async def delete_lightning_address(sdk: BreezSdk):
     # ANCHOR: delete-lightning-address
     await sdk.delete_lightning_address()
     # ANCHOR_END: delete-lightning-address
+
+
+async def access_sender_comment(sdk: BreezSdk):
+    payment_id = "<payment id>"
+    response = await sdk.get_payment(GetPaymentRequest(payment_id=payment_id))
+    payment = response.payment
+
+    # ANCHOR: access-sender-comment
+    # Check if this is a lightning payment with LNURL receive metadata
+    if isinstance(payment.details, PaymentDetails.LIGHTNING):
+        metadata = payment.details.lnurl_receive_metadata
+
+        # Access the sender comment if present
+        if metadata is not None and metadata.sender_comment is not None:
+            print(f"Sender comment: {metadata.sender_comment}")
+    # ANCHOR_END: access-sender-comment
+
+
+async def access_nostr_zap(sdk: BreezSdk):
+    payment_id = "<payment id>"
+    response = await sdk.get_payment(GetPaymentRequest(payment_id=payment_id))
+    payment = response.payment
+
+    # ANCHOR: access-nostr-zap
+    # Check if this is a lightning payment with LNURL receive metadata
+    if isinstance(payment.details, PaymentDetails.LIGHTNING):
+        metadata = payment.details.lnurl_receive_metadata
+
+        if metadata is not None:
+            # Access the Nostr zap request if present
+            if metadata.nostr_zap_request is not None:
+                # The nostr_zap_request is a JSON string containing the Nostr event (kind 9734)
+                print(f"Nostr zap request: {metadata.nostr_zap_request}")
+
+            # Access the Nostr zap receipt if present
+            if metadata.nostr_zap_receipt is not None:
+                # The nostr_zap_receipt is a JSON string containing the Nostr event (kind 9735)
+                print(f"Nostr zap receipt: {metadata.nostr_zap_receipt}")
+    # ANCHOR_END: access-nostr-zap
