@@ -647,8 +647,8 @@ class IndexedDBStorage {
           ? JSON.stringify(metadata.lnurlWithdrawInfo)
           : null,
         lnurlDescription: metadata.lnurlDescription,
-        transferRefundInfo: metadata.transferRefundInfo
-          ? JSON.stringify(metadata.transferRefundInfo)
+        conversionRefundInfo: metadata.conversionRefundInfo
+          ? JSON.stringify(metadata.conversionRefundInfo)
           : null,
       };
 
@@ -1497,22 +1497,22 @@ class IndexedDBStorage {
           return false;
         }
       }
-      // Filter by transfer refund info presence
+      // Filter by conversion refund info presence
       if (
         (paymentDetailsFilter.type === "spark" &&
-          paymentDetailsFilter.transferRefundNeeded != null) ||
+          paymentDetailsFilter.conversionRefundNeeded != null) ||
         paymentDetailsFilter.type === "token"
       ) {
         if (
           details.type !== paymentDetailsFilter.type ||
-          !details.transferRefundInfo
+          !details.conversionRefundInfo
         ) {
           return false;
         }
 
         if (
-          paymentDetailsFilter.transferRefundNeeded ===
-          !!details.transferRefundInfo.refundPaymentId
+          paymentDetailsFilter.conversionRefundNeeded ===
+          !!details.conversionRefundInfo.refundPaymentId
         ) {
           return false;
         }
@@ -1617,13 +1617,13 @@ class IndexedDBStorage {
           }
         }
       } else if (details.type == "spark" || details.type == "token") {
-        // If transferRefundInfo exists, parse and add to details
-        if (metadata.transferRefundInfo) {
+        // If conversionRefundInfo exists, parse and add to details
+        if (metadata.conversionRefundInfo) {
           try {
-            details.transferRefundInfo = JSON.parse(metadata.transferRefundInfo);
+            details.conversionRefundInfo = JSON.parse(metadata.conversionRefundInfo);
           } catch (e) {
             throw new StorageError(
-              `Failed to parse transferRefundInfo JSON for payment ${payment.id}: ${e.message}`,
+              `Failed to parse conversionRefundInfo JSON for payment ${payment.id}: ${e.message}`,
               e
             );
           }

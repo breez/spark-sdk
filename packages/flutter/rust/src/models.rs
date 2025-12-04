@@ -162,10 +162,10 @@ pub enum _InputType {
 pub enum _PaymentDetailsFilter {
     Spark {
         htlc_status: Option<Vec<SparkHtlcStatus>>,
-        transfer_refund_needed: Option<bool>,
+        conversion_refund_needed: Option<bool>,
     },
     Token {
-        transfer_refund_needed: bool,
+        conversion_refund_needed: bool,
     },
 }
 
@@ -485,15 +485,15 @@ pub enum _PaymentDetails {
     Spark {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         htlc_details: Option<SparkHtlcDetails>,
-        transfer_info: Option<TransferInfo>,
-        transfer_refund_info: Option<TransferRefundInfo>,
+        conversion_info: Option<ConversionInfo>,
+        conversion_refund_info: Option<ConversionRefundInfo>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         invoice_details: Option<SparkInvoicePaymentDetails>,
-        transfer_info: Option<TransferInfo>,
-        transfer_refund_info: Option<TransferRefundInfo>,
+        conversion_info: Option<ConversionInfo>,
+        conversion_refund_info: Option<ConversionRefundInfo>,
     },
     Lightning {
         description: Option<String>,
@@ -539,7 +539,7 @@ pub struct _PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
-    pub transfer_refund_info: Option<TransferRefundInfo>,
+    pub conversion_refund_info: Option<ConversionRefundInfo>,
 }
 
 #[frb(mirror(PaymentMethod))]
@@ -968,48 +968,48 @@ pub struct _ClaimHtlcPaymentResponse {
     pub payment: Payment,
 }
 
-#[frb(mirror(TransferInfo))]
-pub struct _TransferInfo {
+#[frb(mirror(ConversionInfo))]
+pub struct _ConversionInfo {
     pub payment_id: String,
     pub fee: u128,
 }
 
-#[frb(mirror(TransferRefundInfo))]
-pub struct _TransferRefundInfo {
+#[frb(mirror(ConversionRefundInfo))]
+pub struct _ConversionRefundInfo {
     pub pool_id: String,
     pub refund_payment_id: Option<String>,
 }
 
-#[frb(mirror(TransferType))]
-pub enum _TransferType {
+#[frb(mirror(ConvertType))]
+pub enum _ConvertType {
     FromBitcoin,
     ToBitcoin,
 }
 
-#[frb(mirror(PrepareTransferTokenRequest))]
-pub struct _PrepareTransferTokenRequest {
-    pub transfer_type: TransferType,
+#[frb(mirror(PrepareConvertTokenRequest))]
+pub struct _PrepareConvertTokenRequest {
+    pub convert_type: ConvertType,
     pub token_identifier: String,
     pub amount: u128,
 }
 
-#[frb(mirror(PrepareTransferTokenResponse))]
-pub struct _PrepareTransferTokenResponse {
-    pub transfer_type: TransferType,
+#[frb(mirror(PrepareConvertTokenResponse))]
+pub struct _PrepareConvertTokenResponse {
+    pub convert_type: ConvertType,
     pub token_identifier: String,
     pub send_amount: u128,
     pub estimated_receive_amount: u128,
     pub fee: u128,
 }
 
-#[frb(mirror(TransferTokenRequest))]
-pub struct _TransferTokenRequest {
-    pub prepare_response: PrepareTransferTokenResponse,
+#[frb(mirror(ConvertTokenRequest))]
+pub struct _ConvertTokenRequest {
+    pub prepare_response: PrepareConvertTokenResponse,
     pub max_slippage_bps: Option<u32>,
 }
 
-#[frb(mirror(TransferTokenResponse))]
-pub struct _TransferTokenResponse {
+#[frb(mirror(ConvertTokenResponse))]
+pub struct _ConvertTokenResponse {
     pub sent_payment: Payment,
     pub received_payment: Option<Payment>,
 }

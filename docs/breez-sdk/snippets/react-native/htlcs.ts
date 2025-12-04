@@ -59,7 +59,7 @@ const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[
     statusFilter: [PaymentStatus.Pending],
     paymentDetailsFilter: new PaymentDetailsFilter.Spark({
       htlcStatus: [SparkHtlcStatus.WaitingForPreimage],
-      transferRefundNeeded: undefined
+      conversionRefundNeeded: undefined
     }),
     assetFilter: undefined,
     fromTimestamp: undefined,

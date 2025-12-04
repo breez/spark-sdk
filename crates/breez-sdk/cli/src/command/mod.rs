@@ -3,14 +3,14 @@ mod issuer;
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, Fee, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
-    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, OnchainConfirmationSpeed, PaymentDetailsFilter,
-    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
-    PrepareTransferTokenRequest, ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    ClaimHtlcPaymentRequest, ConvertTokenRequest, ConvertType, Fee, GetInfoRequest,
+    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
+    OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
+    PrepareConvertTokenRequest, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
     RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, TransferTokenRequest,
-    TransferType, UpdateUserSettingsRequest,
+    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -304,7 +304,7 @@ pub(crate) async fn execute_command(
                     payment_details_filter: spark_htlc_status_filter.map(|statuses| {
                         PaymentDetailsFilter::Spark {
                             htlc_status: Some(statuses),
-                            transfer_refund_needed: None,
+                            conversion_refund_needed: None,
                         }
                     }),
                     from_timestamp,
@@ -611,16 +611,16 @@ pub(crate) async fn execute_command(
             token_identifier,
             max_slippage_bps,
         } => {
-            let transfer_type = if from_bitcoin {
-                TransferType::FromBitcoin
+            let convert_type = if from_bitcoin {
+                ConvertType::FromBitcoin
             } else {
-                TransferType::ToBitcoin
+                ConvertType::ToBitcoin
             };
             let prepare_response = sdk
-                .prepare_transfer_token(PrepareTransferTokenRequest {
+                .prepare_convert_token(PrepareConvertTokenRequest {
                     amount,
                     token_identifier,
-                    transfer_type,
+                    convert_type,
                 })
                 .await?;
             println!("Prepared transfer: {prepare_response:#?}\n Do you want to continue? (y/n)");
@@ -629,7 +629,7 @@ pub(crate) async fn execute_command(
                 return Ok(true);
             }
             let res = sdk
-                .transfer_token(TransferTokenRequest {
+                .convert_token(ConvertTokenRequest {
                     prepare_response,
                     max_slippage_bps,
                 })

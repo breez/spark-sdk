@@ -133,8 +133,8 @@ class Tokens {
         // ANCHOR_END: send-token-payment
     }
 
-    suspend fun prepareTransferTokenToBitcoin(sdk: BreezSdk) {
-        // ANCHOR: prepare-transfer-token-to-bitcoin
+    suspend fun prepareConvertTokenToBitcoin(sdk: BreezSdk) {
+        // ANCHOR: prepare-convert-token-to-bitcoin
         try {
             val tokenIdentifier = "<token identifier>"
             // Amount in token base units
@@ -145,9 +145,9 @@ class Tokens {
             // val amount = BigInteger.valueOf(10_000_000L)
 
             val prepareResponse =
-                sdk.prepareTransferToken(
-                    PrepareTransferTokenRequest(
-                        transferType = TransferType.TO_BITCOIN,
+                sdk.prepareConvertToken(
+                    PrepareConvertTokenRequest(
+                        convertType = ConvertType.TO_BITCOIN,
                         tokenIdentifier = tokenIdentifier,
                         amount = amount,
                     )
@@ -160,11 +160,11 @@ class Tokens {
         } catch (e: Exception) {
             // handle error
         }
-        // ANCHOR_END: prepare-transfer-token-to-bitcoin
+        // ANCHOR_END: prepare-convert-token-to-bitcoin
     }
 
-    suspend fun prepareTransferTokenFromBitcoin(sdk: BreezSdk) {
-        // ANCHOR: prepare-transfer-token-from-bitcoin
+    suspend fun prepareConvertTokenFromBitcoin(sdk: BreezSdk) {
+        // ANCHOR: prepare-convert-token-from-bitcoin
         try {
             val tokenIdentifier = "<token identifier>"
             // Amount in satoshis
@@ -175,9 +175,9 @@ class Tokens {
             // val amount = BigInteger.valueOf(10_000L)
 
             val prepareResponse =
-                sdk.prepareTransferToken(
-                    PrepareTransferTokenRequest(
-                        transferType = TransferType.FROM_BITCOIN,
+                sdk.prepareConvertToken(
+                    PrepareConvertTokenRequest(
+                        convertType = ConvertType.FROM_BITCOIN,
                         tokenIdentifier = tokenIdentifier,
                         amount = amount,
                     )
@@ -190,18 +190,18 @@ class Tokens {
         } catch (e: Exception) {
             // handle error
         }
-        // ANCHOR_END: prepare-transfer-token-from-bitcoin
+        // ANCHOR_END: prepare-convert-token-from-bitcoin
     }
 
-    suspend fun transferToken(sdk: BreezSdk, prepareResponse: PrepareTransferTokenResponse) {
-        // ANCHOR: transfer-token
+    suspend fun convertToken(sdk: BreezSdk, prepareResponse: PrepareConvertTokenResponse) {
+        // ANCHOR: convert-token
         try {
             // Set the maximum slippage to 1% in basis points
             val optionalMaxSlippageBps = 100U
 
             val response =
-                sdk.transferToken(
-                    TransferTokenRequest(
+                sdk.convertToken(
+                    ConvertTokenRequest(
                         prepareResponse = prepareResponse,
                         maxSlippageBps = optionalMaxSlippageBps
                     )
@@ -214,6 +214,6 @@ class Tokens {
         } catch (e: Exception) {
             // handle error
         }
-        // ANCHOR_END: transfer-token
+        // ANCHOR_END: convert-token
     }
 }

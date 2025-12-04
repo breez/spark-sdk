@@ -63,7 +63,7 @@ async fn send_htlc_alice_to_bob(
             type_filter: Some(vec![PaymentType::Receive]),
             payment_details_filter: Some(PaymentDetailsFilter::Spark {
                 htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
-                transfer_refund_needed: None,
+                conversion_refund_needed: None,
             }),
             ..Default::default()
         })
@@ -94,7 +94,7 @@ async fn send_htlc_alice_to_bob(
             type_filter: Some(vec![PaymentType::Send]),
             payment_details_filter: Some(PaymentDetailsFilter::Spark {
                 htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
-                transfer_refund_needed: None,
+                conversion_refund_needed: None,
             }),
             ..Default::default()
         })
@@ -247,7 +247,7 @@ async fn test_02_htlc_refund(
             type_filter: Some(vec![PaymentType::Receive]),
             payment_details_filter: Some(PaymentDetailsFilter::Spark {
                 htlc_status: Some(vec![SparkHtlcStatus::Returned]),
-                transfer_refund_needed: None,
+                conversion_refund_needed: None,
             }),
             ..Default::default()
         })
@@ -279,7 +279,7 @@ async fn test_02_htlc_refund(
             type_filter: Some(vec![PaymentType::Send]),
             payment_details_filter: Some(PaymentDetailsFilter::Spark {
                 htlc_status: Some(vec![SparkHtlcStatus::Returned]),
-                transfer_refund_needed: None,
+                conversion_refund_needed: None,
             }),
             ..Default::default()
         })

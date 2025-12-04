@@ -128,15 +128,15 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn prepare_transfer_token_to_bitcoin(sdk: &BreezSdk) -> Result<()> {
-    // ANCHOR: prepare-transfer-token-to-bitcoin
+async fn prepare_convert_token_to_bitcoin(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: prepare-convert-token-to-bitcoin
     let token_identifier = "<token identifier>".to_string();
     // Amount in token base units
     let amount = 10_000_000;
 
     let prepare_response = sdk
-        .prepare_transfer_token(PrepareTransferTokenRequest {
-            transfer_type: TransferType::ToBitcoin,
+        .prepare_convert_token(PrepareConvertTokenRequest {
+            convert_type: ConvertType::ToBitcoin,
             token_identifier,
             amount,
         })
@@ -146,19 +146,19 @@ async fn prepare_transfer_token_to_bitcoin(sdk: &BreezSdk) -> Result<()> {
     let fee = prepare_response.fee;
     info!("Estimated receive amount: {estimated_receive_amount} sats");
     info!("Fees: {fee} token base units");
-    // ANCHOR_END: prepare-transfer-token-to-bitcoin
+    // ANCHOR_END: prepare-convert-token-to-bitcoin
     Ok(())
 }
 
-async fn prepare_transfer_token_from_bitcoin(sdk: &BreezSdk) -> Result<()> {
-    // ANCHOR: prepare-transfer-token-from-bitcoin
+async fn prepare_convert_token_from_bitcoin(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: prepare-convert-token-from-bitcoin
     let token_identifier = "<token identifier>".to_string();
     // Amount in satoshis
     let amount = 10_000;
 
     let prepare_response = sdk
-        .prepare_transfer_token(PrepareTransferTokenRequest {
-            transfer_type: TransferType::FromBitcoin,
+        .prepare_convert_token(PrepareConvertTokenRequest {
+            convert_type: ConvertType::FromBitcoin,
             token_identifier,
             amount,
         })
@@ -168,20 +168,20 @@ async fn prepare_transfer_token_from_bitcoin(sdk: &BreezSdk) -> Result<()> {
     let fee = prepare_response.fee;
     info!("Estimated receive amount: {estimated_receive_amount} token base units");
     info!("Fees: {fee} sats");
-    // ANCHOR_END: prepare-transfer-token-from-bitcoin
+    // ANCHOR_END: prepare-convert-token-from-bitcoin
     Ok(())
 }
 
-async fn transfer_token(
+async fn convert_token(
     sdk: &BreezSdk,
-    prepare_response: PrepareTransferTokenResponse,
+    prepare_response: PrepareConvertTokenResponse,
 ) -> Result<()> {
-    // ANCHOR: transfer-token
+    // ANCHOR: convert-token
     // Set the maximum slippage to 1% in basis points
     let optional_max_slippage_bps = 100;
 
     let response = sdk
-        .transfer_token(TransferTokenRequest {
+        .convert_token(ConvertTokenRequest {
             prepare_response,
             max_slippage_bps: Some(optional_max_slippage_bps),
         })
@@ -191,6 +191,6 @@ async fn transfer_token(
     let received_payment = response.received_payment;
     info!("Sent payment: {sent_payment:?}");
     info!("Received payment: {received_payment:?}");
-    // ANCHOR_END: transfer-token
+    // ANCHOR_END: convert-token
     Ok(())
 }

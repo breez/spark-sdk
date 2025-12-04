@@ -296,9 +296,9 @@ class MigrationManager {
       {
         name: "Add transfer info to payment_metadata and payment_details tables",
         sql: [
-          `ALTER TABLE payment_metadata ADD COLUMN transfer_refund_info TEXT`,
-          `ALTER TABLE payment_details_spark ADD COLUMN transfer_info TEXT`,
-          `ALTER TABLE payment_details_token ADD COLUMN transfer_info TEXT`,
+          `ALTER TABLE payment_metadata ADD COLUMN conversion_refund_info TEXT`,
+          `ALTER TABLE payment_details_spark ADD COLUMN conversion_info TEXT`,
+          `ALTER TABLE payment_details_token ADD COLUMN conversion_info TEXT`,
         ],
       },
     ];

@@ -133,15 +133,15 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func PrepareTransferTokenToBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
-	// ANCHOR: prepare-transfer-token-to-bitcoin
+func PrepareConvertTokenToBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: prepare-convert-token-to-bitcoin
 	tokenIdentifier := "<token identifier>"
 	// Amount in token base units
 	amount := new(big.Int).SetInt64(10_000_000)
 
-	prepareResponse, err := sdk.PrepareTransferToken(
-		breez_sdk_spark.PrepareTransferTokenRequest{
-			TransferType:    breez_sdk_spark.TransferTypeToBitcoin,
+	prepareResponse, err := sdk.PrepareConvertToken(
+		breez_sdk_spark.PrepareConvertTokenRequest{
+			ConvertType:     breez_sdk_spark.ConvertTypeToBitcoin,
 			TokenIdentifier: tokenIdentifier,
 			Amount:          amount,
 		})
@@ -154,19 +154,19 @@ func PrepareTransferTokenToBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
 	fee := prepareResponse.Fee
 	log.Printf("Estimated Receive Amount: %v sats", estimatedReceiveAmount)
 	log.Printf("Fee: %v token base units", fee)
-	// ANCHOR_END: prepare-transfer-token-to-bitcoin
+	// ANCHOR_END: prepare-convert-token-to-bitcoin
 	return nil
 }
 
-func PrepareTransferTokenFromBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
-	// ANCHOR: prepare-transfer-token-from-bitcoin
+func PrepareConvertTokenFromBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: prepare-convert-token-from-bitcoin
 	tokenIdentifier := "<token identifier>"
 	// Amount in satoshis
 	amount := new(big.Int).SetInt64(10_000)
 
-	prepareResponse, err := sdk.PrepareTransferToken(
-		breez_sdk_spark.PrepareTransferTokenRequest{
-			TransferType:    breez_sdk_spark.TransferTypeFromBitcoin,
+	prepareResponse, err := sdk.PrepareConvertToken(
+		breez_sdk_spark.PrepareConvertTokenRequest{
+			ConvertType:     breez_sdk_spark.ConvertTypeFromBitcoin,
 			TokenIdentifier: tokenIdentifier,
 			Amount:          amount,
 		})
@@ -179,17 +179,17 @@ func PrepareTransferTokenFromBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
 	fee := prepareResponse.Fee
 	log.Printf("Estimated Receive Amount: %v token base units", estimatedReceiveAmount)
 	log.Printf("Fee: %v sats", fee)
-	// ANCHOR_END: prepare-transfer-token-from-bitcoin
+	// ANCHOR_END: prepare-convert-token-from-bitcoin
 	return nil
 }
 
-func TransferToken(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.PrepareTransferTokenResponse) error {
-	// ANCHOR: transfer-token
+func ConvertToken(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.PrepareConvertTokenResponse) error {
+	// ANCHOR: convert-token
 	// Set the maximum slippage to 1% in basis points
 	optionalMaxSlippageBps := uint32(100)
 
-	response, err := sdk.TransferToken(
-		breez_sdk_spark.TransferTokenRequest{
+	response, err := sdk.ConvertToken(
+		breez_sdk_spark.ConvertTokenRequest{
 			PrepareResponse: prepareResponse,
 			MaxSlippageBps:  &optionalMaxSlippageBps,
 		})
@@ -202,6 +202,6 @@ func TransferToken(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spar
 	receivedPayment := response.ReceivedPayment
 	log.Printf("Sent Payment: %#v", sentPayment)
 	log.Printf("Received Payment: %#v", receivedPayment)
-	// ANCHOR_END: transfer-token
+	// ANCHOR_END: convert-token
 	return nil
 }

@@ -119,7 +119,7 @@ impl SyncedStorage {
             let Some(details) = payment.details else {
                 continue;
             };
-            let (description, lnurl_pay_info, lnurl_withdraw_info, transfer_refund_info) =
+            let (description, lnurl_pay_info, lnurl_withdraw_info, conversion_refund_info) =
                 match details {
                     PaymentDetails::Lightning {
                         description,
@@ -128,19 +128,19 @@ impl SyncedStorage {
                         ..
                     } => (description, lnurl_pay_info, lnurl_withdraw_info, None),
                     PaymentDetails::Spark {
-                        transfer_refund_info,
+                        conversion_refund_info,
                         ..
                     }
                     | PaymentDetails::Token {
-                        transfer_refund_info,
+                        conversion_refund_info,
                         ..
-                    } => (None, None, None, transfer_refund_info),
+                    } => (None, None, None, conversion_refund_info),
                     _ => continue,
                 };
 
             if lnurl_pay_info.is_none()
                 && lnurl_withdraw_info.is_none()
-                && transfer_refund_info.is_none()
+                && conversion_refund_info.is_none()
             {
                 continue;
             }
@@ -149,7 +149,7 @@ impl SyncedStorage {
                 lnurl_description: description,
                 lnurl_pay_info,
                 lnurl_withdraw_info,
-                transfer_refund_info,
+                conversion_refund_info,
             };
             let record_id = RecordId::new(RecordType::PaymentMetadata.to_string(), &payment.id);
             let record_change_request = RecordChangeRequest {

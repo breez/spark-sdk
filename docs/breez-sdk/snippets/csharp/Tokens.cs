@@ -117,16 +117,16 @@ namespace BreezSdkSnippets
             // ANCHOR_END: send-token-payment
         }
 
-        async Task PrepareTransferTokenToBitcoin(BreezSdk sdk)
+        async Task PrepareConvertTokenToBitcoin(BreezSdk sdk)
         {
-            // ANCHOR: prepare-transfer-token-to-bitcoin
+            // ANCHOR: prepare-convert-token-to-bitcoin
             var tokenIdentifier = "<token identifier>";
             // Amount in token base units
             var amount = new BigInteger(10000000);
 
-            var prepareResponse = await sdk.PrepareTransferToken(
-                request: new PrepareTransferTokenRequest(
-                    transferType: TransferType.ToBitcoin,
+            var prepareResponse = await sdk.PrepareConvertToken(
+                request: new PrepareConvertTokenRequest(
+                    convertType: ConvertType.ToBitcoin,
                     tokenIdentifier: tokenIdentifier,
                     amount: amount
                 )
@@ -136,19 +136,19 @@ namespace BreezSdkSnippets
             var fee = prepareResponse.fee;
             Console.WriteLine($"Estimated receive amount: {estimatedReceiveAmount} sats");
             Console.WriteLine($"Fees: {fee} token base units");
-            // ANCHOR_END: prepare-transfer-token-to-bitcoin
+            // ANCHOR_END: prepare-convert-token-to-bitcoin
         }
 
-        async Task PrepareTransferTokenFromBitcoin(BreezSdk sdk)
+        async Task PrepareConvertTokenFromBitcoin(BreezSdk sdk)
         {
-            // ANCHOR: prepare-transfer-token-from-bitcoin
+            // ANCHOR: prepare-convert-token-from-bitcoin
             var tokenIdentifier = "<token identifier>";
             // Amount in satoshis
             var amount = new BigInteger(10000);
 
-            var prepareResponse = await sdk.PrepareTransferToken(
-                request: new PrepareTransferTokenRequest(
-                    transferType: TransferType.FromBitcoin,
+            var prepareResponse = await sdk.PrepareConvertToken(
+                request: new PrepareConvertTokenRequest(
+                    convertType: ConvertType.FromBitcoin,
                     tokenIdentifier: tokenIdentifier,
                     amount: amount
                 )
@@ -158,17 +158,17 @@ namespace BreezSdkSnippets
             var fee = prepareResponse.fee;
             Console.WriteLine($"Estimated receive amount: {estimatedReceiveAmount} token base units");
             Console.WriteLine($"Fees: {fee} sats");
-            // ANCHOR_END: prepare-transfer-token-from-bitcoin
+            // ANCHOR_END: prepare-convert-token-from-bitcoin
         }
 
-        async Task TransferToken(BreezSdk sdk, PrepareTransferTokenResponse prepareResponse)
+        async Task ConvertToken(BreezSdk sdk, PrepareConvertTokenResponse prepareResponse)
         {
-            // ANCHOR: transfer-token
+            // ANCHOR: convert-token
             // Set the maximum slippage to 1% in basis points
             var optionalMaxSlippageBps = 100U;
 
-            var response = await sdk.TransferToken(
-                request: new TransferTokenRequest(
+            var response = await sdk.ConvertToken(
+                request: new ConvertTokenRequest(
                     prepareResponse: prepareResponse,
                     maxSlippageBps: optionalMaxSlippageBps
                 )
@@ -178,7 +178,7 @@ namespace BreezSdkSnippets
             var receivedPayment = response.receivedPayment;
             Console.WriteLine($"Sent payment: {sentPayment}");
             Console.WriteLine($"Received payment: {receivedPayment}");
-            // ANCHOR_END: transfer-token
+            // ANCHOR_END: convert-token
         }
 
 

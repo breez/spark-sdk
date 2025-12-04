@@ -1,4 +1,4 @@
-import type { BreezSdk, PrepareSendPaymentResponse, PrepareTransferTokenResponse } from '@breeztech/breez-sdk-spark'
+import type { BreezSdk, PrepareSendPaymentResponse, PrepareConvertTokenResponse } from '@breeztech/breez-sdk-spark'
 
 const exampleFetchTokenBalances = async (sdk: BreezSdk) => {
   // ANCHOR: fetch-token-balances
@@ -98,14 +98,14 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   // ANCHOR_END: send-token-payment
 }
 
-const examplePrepareTransferTokenToBitcoin = async (sdk: BreezSdk) => {
-  // ANCHOR: prepare-transfer-token-to-bitcoin
+const examplePrepareConvertTokenToBitcoin = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-convert-token-to-bitcoin
   const tokenIdentifier = '<token identifier>'
   // Amount in token base units
   const amount = BigInt(10_000_000)
 
-  const prepareResponse = await sdk.prepareTransferToken({
-    transferType: 'toBitcoin',
+  const prepareResponse = await sdk.prepareConvertToken({
+    convertType: 'toBitcoin',
     tokenIdentifier,
     amount
   })
@@ -114,17 +114,17 @@ const examplePrepareTransferTokenToBitcoin = async (sdk: BreezSdk) => {
   const fee = prepareResponse.fee
   console.log(`Estimated receive amount: ${estimatedReceiveAmount} sats`)
   console.log(`Fee: ${fee} token base units`)
-  // ANCHOR_END: prepare-transfer-token-to-bitcoin
+  // ANCHOR_END: prepare-convert-token-to-bitcoin
 }
 
-const examplePrepareTransferTokenFromBitcoin = async (sdk: BreezSdk) => {
-  // ANCHOR: prepare-transfer-token-from-bitcoin
+const examplePrepareConvertTokenFromBitcoin = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-convert-token-from-bitcoin
   const tokenIdentifier = '<token identifier>'
   // Amount in satoshis
   const amount = BigInt(10_000)
 
-  const prepareResponse = await sdk.prepareTransferToken({
-    transferType: 'fromBitcoin',
+  const prepareResponse = await sdk.prepareConvertToken({
+    convertType: 'fromBitcoin',
     tokenIdentifier,
     amount
   })
@@ -133,15 +133,15 @@ const examplePrepareTransferTokenFromBitcoin = async (sdk: BreezSdk) => {
   const fee = prepareResponse.fee
   console.log(`Estimated receive amount: ${estimatedReceiveAmount} token base units`)
   console.log(`Fee: ${fee} sats`)
-  // ANCHOR_END: prepare-transfer-token-from-bitcoin
+  // ANCHOR_END: prepare-convert-token-from-bitcoin
 }
 
-const exampleTransferToken = async (sdk: BreezSdk, prepareResponse: PrepareTransferTokenResponse) => {
-  // ANCHOR: transfer-token
+const exampleConvertToken = async (sdk: BreezSdk, prepareResponse: PrepareConvertTokenResponse) => {
+  // ANCHOR: convert-token
   // Set the maximum slippage to 1% in basis points
   const optionalMaxSlippageBps = 100
 
-  const response = await sdk.transferToken({
+  const response = await sdk.convertToken({
     prepareResponse,
     maxSlippageBps: optionalMaxSlippageBps
   })
@@ -150,5 +150,5 @@ const exampleTransferToken = async (sdk: BreezSdk, prepareResponse: PrepareTrans
   const receivedPayment = response.receivedPayment
   console.log(`Sent Payment: ${JSON.stringify(sentPayment)}`)
   console.log(`Received Payment: ${JSON.stringify(receivedPayment)}`)
-  // ANCHOR_END: transfer-token
+  // ANCHOR_END: convert-token
 }

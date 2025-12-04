@@ -218,17 +218,17 @@ impl BreezSdk {
         }
     }
 
-    pub async fn prepare_transfer_token(
+    pub async fn prepare_convert_token(
         &self,
-        request: PrepareTransferTokenRequest,
-    ) -> Result<PrepareTransferTokenResponse, SdkError> {
-        self.inner.prepare_transfer_token(request).await
+        request: PrepareConvertTokenRequest,
+    ) -> Result<PrepareConvertTokenResponse, SdkError> {
+        self.inner.prepare_convert_token(request).await
     }
 
-    pub async fn transfer_token(
+    pub async fn convert_token(
         &self,
-        request: TransferTokenRequest,
-    ) -> Result<TransferTokenResponse, SdkError> {
-        self.inner.transfer_token(request).await
+        request: ConvertTokenRequest,
+    ) -> Result<ConvertTokenResponse, SdkError> {
+        self.inner.convert_token(request).await
     }
 }

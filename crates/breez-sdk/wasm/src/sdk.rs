@@ -269,23 +269,19 @@ impl BreezSdk {
         }
     }
 
-    #[wasm_bindgen(js_name = "prepareTransferToken")]
-    pub async fn prepare_transfer_token(
+    #[wasm_bindgen(js_name = "prepareConvertToken")]
+    pub async fn prepare_convert_token(
         &self,
-        request: PrepareTransferTokenRequest,
-    ) -> WasmResult<PrepareTransferTokenResponse> {
-        Ok(self
-            .sdk
-            .prepare_transfer_token(request.into())
-            .await?
-            .into())
+        request: PrepareConvertTokenRequest,
+    ) -> WasmResult<PrepareConvertTokenResponse> {
+        Ok(self.sdk.prepare_convert_token(request.into()).await?.into())
     }
 
-    #[wasm_bindgen(js_name = "transferToken")]
-    pub async fn transfer_token(
+    #[wasm_bindgen(js_name = "convertToken")]
+    pub async fn convert_token(
         &self,
-        request: TransferTokenRequest,
-    ) -> WasmResult<TransferTokenResponse> {
-        Ok(self.sdk.transfer_token(request.into()).await?.into())
+        request: ConvertTokenRequest,
+    ) -> WasmResult<ConvertTokenResponse> {
+        Ok(self.sdk.convert_token(request.into()).await?.into())
     }
 }

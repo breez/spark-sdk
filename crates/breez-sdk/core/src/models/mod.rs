@@ -238,20 +238,20 @@ pub enum PaymentDetails {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         /// The HTLC transfer details if the payment fulfilled an HTLC transfer
         htlc_details: Option<SparkHtlcDetails>,
-        /// Transfer information if this was a successful transfer payment
-        transfer_info: Option<TransferInfo>,
-        /// Transfer refund information if this was a tranfer that was refunded
-        transfer_refund_info: Option<TransferRefundInfo>,
+        /// Conversion information if this was a successful conversion
+        conversion_info: Option<ConversionInfo>,
+        /// Conversion refund information if this was a conversion that was refunded
+        conversion_refund_info: Option<ConversionRefundInfo>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         /// The invoice details if the payment fulfilled a spark invoice
         invoice_details: Option<SparkInvoicePaymentDetails>,
-        /// Transfer information if this was a successful transfer payment
-        transfer_info: Option<TransferInfo>,
-        /// Transfer refund information if this was a tranfer that was refunded
-        transfer_refund_info: Option<TransferRefundInfo>,
+        /// Conversion information if this was a successful conversion
+        conversion_info: Option<ConversionInfo>,
+        /// Conversion refund information if this was a conversion that was refunded
+        conversion_refund_info: Option<ConversionRefundInfo>,
     },
     Lightning {
         /// Represents the invoice description
@@ -870,12 +870,12 @@ pub enum PaymentDetailsFilter {
     Spark {
         /// Filter specific Spark HTLC statuses
         htlc_status: Option<Vec<SparkHtlcStatus>>,
-        /// Filter transfer payments with refund information
-        transfer_refund_needed: Option<bool>,
+        /// Filter conversion payments with refund information
+        conversion_refund_needed: Option<bool>,
     },
     Token {
-        /// Filter transfer payments with refund information
-        transfer_refund_needed: bool,
+        /// Filter conversion payments with refund information
+        conversion_refund_needed: bool,
     },
 }
 
@@ -1133,17 +1133,17 @@ pub struct LnurlReceiveMetadata {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TransferInfo {
-    /// The receiving payment id associated with the transfer
+pub struct ConversionInfo {
+    /// The receiving payment id associated with the conversion
     pub payment_id: String,
-    /// The fee paid for the transfer
+    /// The fee paid for the conversion
     pub fee: u128,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TransferRefundInfo {
-    /// The pool id associated with the transfer
+pub struct ConversionRefundInfo {
+    /// The pool id associated with the conversion
     pub pool_id: String,
     /// The refund payment id if a refund payment was made
     pub refund_payment_id: Option<String>,
@@ -1151,51 +1151,51 @@ pub struct TransferRefundInfo {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum TransferType {
-    /// Transfering from Bitcoin to a token
+pub enum ConvertType {
+    /// Converting from Bitcoin to a token
     FromBitcoin,
-    /// Transfering from a token to Bitcoin
+    /// Converting from a token to Bitcoin
     ToBitcoin,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct PrepareTransferTokenRequest {
-    /// The type of transfer, either from or to Bitcoin.
-    pub transfer_type: TransferType,
+pub struct PrepareConvertTokenRequest {
+    /// The type of conversion, either from or to Bitcoin.
+    pub convert_type: ConvertType,
     /// The token identifier of the token.
-    /// From Bitcoin transfers to this token, to Bitcoin transfers from this token.
+    /// Converting to Bitcoin from this token, or from Bitcoin to this token.
     pub token_identifier: String,
     /// Amount to transfer.
-    /// Denominated in satoshis if transfering from Bitcoin, otherwise in the token base units.
+    /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
     pub amount: u128,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct PrepareTransferTokenResponse {
-    /// The type of transfer, either from or to Bitcoin.
-    pub transfer_type: TransferType,
+pub struct PrepareConvertTokenResponse {
+    /// The type of conversion, either from or to Bitcoin.
+    pub convert_type: ConvertType,
     /// The token identifier of the token.
-    /// From Bitcoin transfers to this token, to Bitcoin transfers from this token.
+    /// Converting to Bitcoin from this token, or from Bitcoin to this token.
     pub token_identifier: String,
-    /// Amount to transfer.
-    /// Denominated in satoshis if transfering from Bitcoin, otherwise in the token base units.
+    /// Amount to convert.
+    /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
     pub send_amount: u128,
-    /// The estimated amount to be received from the transfer.
-    /// Denominated in the token base units if transfering from Bitcoin, otherwise in satoshis.
+    /// The estimated amount to be received from the conversion.
+    /// Denominated in the token base units if converting from Bitcoin, otherwise in satoshis.
     pub estimated_receive_amount: u128,
-    /// The fee for the transfer.
-    /// Denominated in satoshis if transfering from Bitcoin, otherwise in the token base units.
+    /// The fee for the conversion.
+    /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
     pub fee: u128,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct TransferTokenRequest {
-    /// The prepared transfer token response
-    pub prepare_response: PrepareTransferTokenResponse,
+pub struct ConvertTokenRequest {
+    /// The prepared convert token response
+    pub prepare_response: PrepareConvertTokenResponse,
     /// The optional maximum slippage in basis points (1/100 of a percent) allowed for the
-    /// transfer compared to the estimated amount. Defaults to 50 bps (0.5%) if not set.
-    /// The transfer will fail if the actual amount received is less than
+    /// conversion compared to the estimated amount. Defaults to 50 bps (0.5%) if not set.
+    /// The conversion will fail if the actual amount received is less than
     /// `estimated_amount * (1 - max_slippage_bps / 10_000)`.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub max_slippage_bps: Option<u32>,
@@ -1203,9 +1203,9 @@ pub struct TransferTokenRequest {
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct TransferTokenResponse {
-    /// The sent payment for the transfer
+pub struct ConvertTokenResponse {
+    /// The sent payment for the conversion
     pub sent_payment: Payment,
-    /// The received payment for a successful transfer
+    /// The received payment for a successful conversion
     pub received_payment: Option<Payment>,
 }

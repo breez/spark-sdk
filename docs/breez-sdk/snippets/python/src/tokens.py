@@ -4,15 +4,15 @@ from breez_sdk_spark import (
     BreezSdk,
     GetInfoRequest,
     PrepareSendPaymentRequest,
-    PrepareTransferTokenRequest,
-    PrepareTransferTokenResponse,
+    PrepareConvertTokenRequest,
+    PrepareConvertTokenResponse,
     ReceivePaymentMethod,
     ReceivePaymentRequest,
     SendPaymentRequest,
     SendPaymentMethod,
-    TransferTokenRequest,
+    ConvertTokenRequest,
     GetTokensMetadataRequest,
-    TransferType,
+    ConvertType,
 )
 
 
@@ -130,16 +130,16 @@ async def send_token_payment(sdk: BreezSdk):
     # ANCHOR_END: send-token-payment
 
 
-async def prepare_transfer_token_to_bitcoin(sdk: BreezSdk):
-    # ANCHOR: prepare-transfer-token-to-bitcoin
+async def prepare_convert_token_to_bitcoin(sdk: BreezSdk):
+    # ANCHOR: prepare-convert-token-to-bitcoin
     try:
         token_identifier = "<token identifier>"
         # Amount in token base units
         amount = 10_000_000
 
-        prepare_response = await sdk.prepare_transfer_token(
-            request=PrepareTransferTokenRequest(
-                transfer_type=TransferType.TO_BITCOIN,
+        prepare_response = await sdk.prepare_convert_token(
+            request=PrepareConvertTokenRequest(
+                convert_type=ConvertType.TO_BITCOIN,
                 token_identifier=token_identifier,
                 amount=amount,
             )
@@ -152,19 +152,19 @@ async def prepare_transfer_token_to_bitcoin(sdk: BreezSdk):
     except Exception as error:
         logging.error(error)
         raise
-    # ANCHOR_END: prepare-transfer-token-to-bitcoin
+    # ANCHOR_END: prepare-convert-token-to-bitcoin
 
 
-async def prepare_transfer_token_from_bitcoin(sdk: BreezSdk):
-    # ANCHOR: prepare-transfer-token-from-bitcoin
+async def prepare_convert_token_from_bitcoin(sdk: BreezSdk):
+    # ANCHOR: prepare-convert-token-from-bitcoin
     try:
         token_identifier = "<token identifier>"
         # Amount in satoshis
         amount = 10_000
 
-        prepare_response = await sdk.prepare_transfer_token(
-            request=PrepareTransferTokenRequest(
-                transfer_type=TransferType.FROM_BITCOIN,
+        prepare_response = await sdk.prepare_convert_token(
+            request=PrepareConvertTokenRequest(
+                convert_type=ConvertType.FROM_BITCOIN,
                 token_identifier=token_identifier,
                 amount=amount,
             )
@@ -177,17 +177,17 @@ async def prepare_transfer_token_from_bitcoin(sdk: BreezSdk):
     except Exception as error:
         logging.error(error)
         raise
-    # ANCHOR_END: prepare-transfer-token-from-bitcoin
+    # ANCHOR_END: prepare-convert-token-from-bitcoin
 
 
-async def transfer_token(sdk: BreezSdk, prepare_response: PrepareTransferTokenResponse):
-    # ANCHOR: transfer-token
+async def convert_token(sdk: BreezSdk, prepare_response: PrepareConvertTokenResponse):
+    # ANCHOR: convert-token
     try:
         # Set the maximum slippage to 1% in basis points
         optional_max_slippage_bps = 100
 
-        response = await sdk.transfer_token(
-            request=TransferTokenRequest(
+        response = await sdk.convert_token(
+            request=ConvertTokenRequest(
                 prepare_response=prepare_response,
                 max_slippage_bps=optional_max_slippage_bps,
             )
@@ -200,4 +200,4 @@ async def transfer_token(sdk: BreezSdk, prepare_response: PrepareTransferTokenRe
     except Exception as error:
         logging.error(error)
         raise
-    # ANCHOR_END: transfer-token
+    # ANCHOR_END: convert-token

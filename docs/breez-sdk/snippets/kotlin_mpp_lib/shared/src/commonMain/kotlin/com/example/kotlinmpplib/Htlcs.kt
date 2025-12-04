@@ -60,7 +60,7 @@ class Htlcs {
                 statusFilter = listOf(PaymentStatus.PENDING),
                 paymentDetailsFilter = PaymentDetailsFilter.Spark(
                     htlcStatus = listOf(SparkHtlcStatus.WAITING_FOR_PREIMAGE),
-                    transferRefundNeeded = null
+                    conversionRefundNeeded = null
                 )
             )
 
