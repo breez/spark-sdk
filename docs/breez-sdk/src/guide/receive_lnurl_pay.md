@@ -107,3 +107,4 @@ If the payment was sent as a Nostr Zap (as defined in [NIP-57](https://github.co
 
 {{#tabs lightning_address:access-nostr-zap}}
 
+> **Note:** When used in [private mode](./config.md#private-mode-enabled-by-default), the nostr zap receipt will be published by the SDK when online. When used in public mode, the zap receipt will be published by the LNURL server on your behalf.
