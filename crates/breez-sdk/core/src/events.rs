@@ -178,7 +178,7 @@ impl EventEmitter {
 
         let mut mtx = self.synced_event_buffer.lock().await;
 
-        let if_first_event = if let Some(buffered) = &*mtx {
+        let is_first_event = if let Some(buffered) = &*mtx {
             let merged = buffered.merge(synced);
 
             // The first synced event emitted should at least have the wallet synced.
@@ -198,7 +198,7 @@ impl EventEmitter {
         drop(mtx);
 
         // Only emit zero real-time syncs on the first event.
-        if !if_first_event && !synced.any_non_zero() {
+        if !is_first_event && !synced.any_non_zero() {
             return;
         }
 
