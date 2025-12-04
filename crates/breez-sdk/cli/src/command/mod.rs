@@ -642,7 +642,7 @@ pub(crate) async fn execute_command(
                     amount,
                 })
                 .await?;
-            println!("Prepared transfer: {prepare_response:#?}\n Do you want to continue? (y/n)");
+            println!("Prepared conversion: {prepare_response:#?}\n Do you want to continue? (y/n)");
             let line = rl.readline_with_initial("", ("y", ""))?.to_lowercase();
             if line != "y" {
                 return Ok(true);

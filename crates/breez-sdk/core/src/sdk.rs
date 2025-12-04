@@ -2809,7 +2809,7 @@ impl BreezSdk {
         Ok((asset_in_address.to_string(), asset_out_address.to_string()))
     }
 
-    /// Fetches a payment by its covert token identifier.
+    /// Fetches a payment by its convert token identifier.
     /// The identifier can be either a spark transfer id or a token transaction hash.
     async fn fetch_payment_by_convert_token_identifier(
         &self,
