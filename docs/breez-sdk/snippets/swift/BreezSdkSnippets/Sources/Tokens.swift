@@ -115,8 +115,9 @@ func prepareConvertTokenToBitcoin(sdk: BreezSdk) async throws {
 
     let prepareResponse = try await sdk.prepareConvertToken(
         request: PrepareConvertTokenRequest(
-            convertType: ConvertType.toBitcoin,
-            tokenIdentifier: tokenIdentifier,
+            convertType: ConvertType.toBitcoin(
+                fromTokenIdentifier: tokenIdentifier
+            ),
             amount: amount
         ))
 
@@ -135,8 +136,9 @@ func prepareConvertTokenFromBitcoin(sdk: BreezSdk) async throws {
 
     let prepareResponse = try await sdk.prepareConvertToken(
         request: PrepareConvertTokenRequest(
-            convertType: ConvertType.fromBitcoin,
-            tokenIdentifier: tokenIdentifier,
+            convertType: ConvertType.fromBitcoin(
+                toTokenIdentifier: tokenIdentifier
+            ),
             amount: amount
         ))
 

@@ -2230,7 +2230,8 @@ pub mod tests {
         let token_no_refund_filter = storage
             .list_payments(ListPaymentsRequest {
                 payment_details_filter: Some(crate::PaymentDetailsFilter::Token {
-                    conversion_refund_needed: true,
+                    conversion_refund_needed: Some(true),
+                    tx_hash: None,
                 }),
                 ..Default::default()
             })
@@ -2242,7 +2243,8 @@ pub mod tests {
         let token_with_refund_filter = storage
             .list_payments(ListPaymentsRequest {
                 payment_details_filter: Some(crate::PaymentDetailsFilter::Token {
-                    conversion_refund_needed: false,
+                    conversion_refund_needed: Some(false),
+                    tx_hash: None,
                 }),
                 ..Default::default()
             })

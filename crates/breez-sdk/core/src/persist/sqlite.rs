@@ -370,7 +370,8 @@ impl Storage for SqliteStorage {
                 ..
             }
             | PaymentDetailsFilter::Token {
-                conversion_refund_needed,
+                conversion_refund_needed: Some(conversion_refund_needed),
+                ..
             } = payment_details_filter
             {
                 let type_check = match payment_details_filter {
@@ -383,6 +384,15 @@ impl Storage for SqliteStorage {
                     "IS NOT NULL"
                 };
                 where_clauses.push(format!("{type_check} AND pm.conversion_refund_info IS NOT NULL AND json_extract(pm.conversion_refund_info, '$.refund_payment_id') {null_check}" ));
+            }
+            // Filter by token transaction hash
+            if let PaymentDetailsFilter::Token {
+                tx_hash: Some(tx_hash),
+                ..
+            } = payment_details_filter
+            {
+                where_clauses.push("t.tx_hash = ?".to_string());
+                params.push(Box::new(tx_hash.clone()));
             }
         }
 

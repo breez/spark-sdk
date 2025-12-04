@@ -173,9 +173,8 @@ class SqliteStorage {
         }
         // Filter by conversion refund info presence
         if (
-          (paymentDetailsFilter.type === "spark" &&
-            paymentDetailsFilter.conversionRefundNeeded !== undefined) ||
-          (paymentDetailsFilter.type === "token")
+          (paymentDetailsFilter.type === "spark" || paymentDetailsFilter.type === "token") &&
+            paymentDetailsFilter.conversionRefundNeeded !== undefined
         ) {
           let typeCheck = paymentDetailsFilter.type === "spark" ? "p.spark = 1" : "p.spark IS NULL";
           let nullCheck =
@@ -185,6 +184,14 @@ class SqliteStorage {
           whereClauses.push(
             `${typeCheck} AND pm.conversion_refund_info IS NOT NULL AND json_extract(pm.conversion_refund_info, '$.refundPaymentId') ${nullCheck}`
           );
+        }
+        // Filter by token transaction hash
+        if (
+          paymentDetailsFilter.type === "token" &&
+          paymentDetailsFilter.txHash !== undefined
+        ) {
+          whereClauses.push("t.tx_hash = ?");
+          params.push(paymentDetailsFilter.txHash);
         }
       }
 

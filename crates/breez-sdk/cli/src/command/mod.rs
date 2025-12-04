@@ -62,6 +62,10 @@ pub enum Command {
         #[arg(long)]
         spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
 
+        /// Filter by token transaction hash
+        #[arg(long)]
+        tx_hash: Option<String>,
+
         /// Only include payments created after this timestamp (inclusive)
         #[arg(long)]
         from_timestamp: Option<u64>,
@@ -289,11 +293,28 @@ pub(crate) async fn execute_command(
             type_filter,
             status_filter,
             spark_htlc_status_filter,
+            tx_hash,
             asset_filter,
             from_timestamp,
             to_timestamp,
             sort_ascending,
         } => {
+            let payment_details_filter = match (spark_htlc_status_filter, tx_hash) {
+                (Some(statuses), None) => Some(PaymentDetailsFilter::Spark {
+                    htlc_status: Some(statuses),
+                    conversion_refund_needed: None,
+                }),
+                (None, Some(tx_hash)) => Some(PaymentDetailsFilter::Token {
+                    conversion_refund_needed: None,
+                    tx_hash: Some(tx_hash),
+                }),
+                (None, None) => None,
+                (Some(_), Some(_)) => {
+                    return Err(anyhow::anyhow!(
+                        "Cannot specify both spark_htlc_status_filter and tx_hash"
+                    ));
+                }
+            };
             let value = sdk
                 .list_payments(ListPaymentsRequest {
                     limit,
@@ -301,12 +322,7 @@ pub(crate) async fn execute_command(
                     type_filter,
                     status_filter,
                     asset_filter,
-                    payment_details_filter: spark_htlc_status_filter.map(|statuses| {
-                        PaymentDetailsFilter::Spark {
-                            htlc_status: Some(statuses),
-                            conversion_refund_needed: None,
-                        }
-                    }),
+                    payment_details_filter,
                     from_timestamp,
                     to_timestamp,
                     sort_ascending,
@@ -612,15 +628,18 @@ pub(crate) async fn execute_command(
             max_slippage_bps,
         } => {
             let convert_type = if from_bitcoin {
-                ConvertType::FromBitcoin
+                ConvertType::FromBitcoin {
+                    to_token_identifier: token_identifier,
+                }
             } else {
-                ConvertType::ToBitcoin
+                ConvertType::ToBitcoin {
+                    from_token_identifier: token_identifier,
+                }
             };
             let prepare_response = sdk
                 .prepare_convert_token(PrepareConvertTokenRequest {
-                    amount,
-                    token_identifier,
                     convert_type,
+                    amount,
                 })
                 .await?;
             println!("Prepared transfer: {prepare_response:#?}\n Do you want to continue? (y/n)");

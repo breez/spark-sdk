@@ -920,6 +920,7 @@ impl BreezSdk {
                 break;
             }
             for swap in &response.swaps {
+                // Get the payment by inbound transfer id
                 let payment = if let Ok(payment) = self
                     .storage
                     .get_payment_by_id(swap.inbound_transfer_id.clone())
@@ -927,10 +928,19 @@ impl BreezSdk {
                 {
                     Ok(payment)
                 } else {
-                    // TODO: How can we lookup the token transaction payment id without the vout?
+                    // Fallback to searching by tx_hash for token payments
                     self.storage
-                        .get_payment_by_id(format!("{}:0", swap.inbound_transfer_id))
-                        .await
+                        .list_payments(ListPaymentsRequest {
+                            payment_details_filter: Some(PaymentDetailsFilter::Token {
+                                conversion_refund_needed: None,
+                                tx_hash: Some(swap.inbound_transfer_id.clone()),
+                            }),
+                            ..Default::default()
+                        })
+                        .await?
+                        .first()
+                        .cloned()
+                        .ok_or(SdkError::Generic("Payment not found".to_string()))
                 };
 
                 if let Ok(mut payment) = payment
@@ -991,7 +1001,8 @@ impl BreezSdk {
             .storage
             .list_payments(ListPaymentsRequest {
                 payment_details_filter: Some(PaymentDetailsFilter::Token {
-                    conversion_refund_needed: true,
+                    conversion_refund_needed: Some(true),
+                    tx_hash: None,
                 }),
                 ..Default::default()
             })
@@ -1757,11 +1768,7 @@ impl BreezSdk {
     ) -> Result<PrepareConvertTokenResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
         let (asset_in_address, asset_out_address) = self
-            .validate_convert_token_params(
-                request.amount,
-                &request.token_identifier,
-                &request.convert_type,
-            )
+            .validate_convert_token_params(request.amount, &request.convert_type)
             .await?;
         let pools_response = self
             .flashnet_client
@@ -1789,7 +1796,6 @@ impl BreezSdk {
 
         Ok(PrepareConvertTokenResponse {
             convert_type: request.convert_type,
-            token_identifier: request.token_identifier,
             send_amount: request.amount,
             estimated_receive_amount: response.amount_out,
             fee: response.fee_paid_asset_in.unwrap_or_default(),
@@ -1817,7 +1823,6 @@ impl BreezSdk {
         let (asset_in_address, asset_out_address) = self
             .validate_convert_token_params(
                 request.prepare_response.send_amount,
-                &request.prepare_response.token_identifier,
                 &request.prepare_response.convert_type,
             )
             .await?;
@@ -1863,7 +1868,10 @@ impl BreezSdk {
             .await;
         let (sent_payment, received_payment) = match response_res {
             Ok(response) => {
-                info!("Token conversion executed: accepted {}", response.accepted);
+                info!(
+                    "Token conversion executed: accepted {}, error {:?}",
+                    response.accepted, response.error
+                );
                 self.update_payment_conversion_info(
                     &pool_id,
                     response.transfer_id,
@@ -2768,7 +2776,6 @@ impl BreezSdk {
     async fn validate_convert_token_params(
         &self,
         amount: u128,
-        token_identifier: &str,
         convert_type: &ConvertType,
     ) -> Result<(String, String), SdkError> {
         let get_info_response = self
@@ -2777,22 +2784,26 @@ impl BreezSdk {
             })
             .await?;
         let (asset_in_address, asset_out_address) = match convert_type {
-            ConvertType::FromBitcoin => {
+            ConvertType::FromBitcoin {
+                to_token_identifier,
+            } => {
                 if u128::from(get_info_response.balance_sats) < amount {
                     return Err(SdkError::InsufficientFunds);
                 }
-                (BTC_ASSET_ADDRESS, token_identifier)
+                (BTC_ASSET_ADDRESS, to_token_identifier.as_str())
             }
-            ConvertType::ToBitcoin => {
+            ConvertType::ToBitcoin {
+                from_token_identifier,
+            } => {
                 let token_balance = get_info_response
                     .token_balances
-                    .get(token_identifier)
+                    .get(from_token_identifier)
                     .cloned()
                     .map_or(0, |tb| tb.balance);
                 if token_balance < amount {
                     return Err(SdkError::InsufficientFunds);
                 }
-                (token_identifier, BTC_ASSET_ADDRESS)
+                (from_token_identifier.as_str(), BTC_ASSET_ADDRESS)
             }
         };
         Ok((asset_in_address.to_string(), asset_out_address.to_string()))
@@ -2803,6 +2814,7 @@ impl BreezSdk {
     async fn fetch_payment_by_convert_token_identifier(
         &self,
         identifier: &str,
+        tx_inputs_are_ours: bool,
     ) -> Result<Payment, SdkError> {
         debug!("Fetching conversion payment for identifier: {}", identifier);
         let payment = if let Ok(transfer_id) = TransferId::from_str(identifier) {
@@ -2836,7 +2848,7 @@ impl BreezSdk {
                 &self.spark_wallet,
                 &object_repository,
                 token_transaction,
-                false,
+                tx_inputs_are_ours,
             )
             .await?;
             payments.first().cloned().ok_or_else(|| {
@@ -2872,10 +2884,10 @@ impl BreezSdk {
             "Updating payment conversion info for pool_id: {pool_id}, outbound_id: {outbound_id}, inbound_id: {inbound_id:?}, refund_id: {refund_id:?}"
         );
         let mut sent_payment = self
-            .fetch_payment_by_convert_token_identifier(&outbound_id)
+            .fetch_payment_by_convert_token_identifier(&outbound_id, true)
             .await?;
         let received_payment = if let Some(inbound_id) = &inbound_id {
-            self.fetch_payment_by_convert_token_identifier(inbound_id)
+            self.fetch_payment_by_convert_token_identifier(inbound_id, false)
                 .await
                 .ok()
         } else {

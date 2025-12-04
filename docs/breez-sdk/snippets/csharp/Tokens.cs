@@ -126,8 +126,9 @@ namespace BreezSdkSnippets
 
             var prepareResponse = await sdk.PrepareConvertToken(
                 request: new PrepareConvertTokenRequest(
-                    convertType: ConvertType.ToBitcoin,
-                    tokenIdentifier: tokenIdentifier,
+                    convertType: new ConvertType.ToBitcoin(
+                        fromTokenIdentifier: tokenIdentifier
+                    ),
                     amount: amount
                 )
             );
@@ -148,8 +149,9 @@ namespace BreezSdkSnippets
 
             var prepareResponse = await sdk.PrepareConvertToken(
                 request: new PrepareConvertTokenRequest(
-                    convertType: ConvertType.FromBitcoin,
-                    tokenIdentifier: tokenIdentifier,
+                    convertType: new ConvertType.FromBitcoin(
+                        toTokenIdentifier: tokenIdentifier
+                    ),
                     amount: amount
                 )
             );

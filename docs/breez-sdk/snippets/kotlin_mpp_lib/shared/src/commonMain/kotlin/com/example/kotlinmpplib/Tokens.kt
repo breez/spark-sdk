@@ -147,8 +147,9 @@ class Tokens {
             val prepareResponse =
                 sdk.prepareConvertToken(
                     PrepareConvertTokenRequest(
-                        convertType = ConvertType.TO_BITCOIN,
-                        tokenIdentifier = tokenIdentifier,
+                        convertType = ConvertType.ToBitcoin(
+                            fromTokenIdentifier = tokenIdentifier
+                        ),
                         amount = amount,
                     )
                 )
@@ -177,8 +178,9 @@ class Tokens {
             val prepareResponse =
                 sdk.prepareConvertToken(
                     PrepareConvertTokenRequest(
-                        convertType = ConvertType.FROM_BITCOIN,
-                        tokenIdentifier = tokenIdentifier,
+                        convertType = ConvertType.FromBitcoin(
+                            toTokenIdentifier = tokenIdentifier
+                        ),
                         amount = amount,
                     )
                 )

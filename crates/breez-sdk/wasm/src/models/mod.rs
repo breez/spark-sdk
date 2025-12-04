@@ -791,7 +791,8 @@ pub enum PaymentDetailsFilter {
         conversion_refund_needed: Option<bool>,
     },
     Token {
-        conversion_refund_needed: bool,
+        conversion_refund_needed: Option<bool>,
+        tx_hash: Option<String>,
     },
 }
 
@@ -1077,21 +1078,19 @@ pub struct ConversionRefundInfo {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConvertType)]
 pub enum ConvertType {
-    FromBitcoin,
-    ToBitcoin,
+    FromBitcoin { to_token_identifier: String },
+    ToBitcoin { from_token_identifier: String },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareConvertTokenRequest)]
 pub struct PrepareConvertTokenRequest {
     pub convert_type: ConvertType,
-    pub token_identifier: String,
     pub amount: u128,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareConvertTokenResponse)]
 pub struct PrepareConvertTokenResponse {
     pub convert_type: ConvertType,
-    pub token_identifier: String,
     pub send_amount: u128,
     pub estimated_receive_amount: u128,
     pub fee: u128,

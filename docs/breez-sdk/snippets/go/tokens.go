@@ -141,9 +141,10 @@ func PrepareConvertTokenToBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
 
 	prepareResponse, err := sdk.PrepareConvertToken(
 		breez_sdk_spark.PrepareConvertTokenRequest{
-			ConvertType:     breez_sdk_spark.ConvertTypeToBitcoin,
-			TokenIdentifier: tokenIdentifier,
-			Amount:          amount,
+			ConvertType: breez_sdk_spark.ConvertTypeToBitcoin{
+				FromTokenIdentifier: tokenIdentifier,
+			},
+			Amount: amount,
 		})
 
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
@@ -166,9 +167,10 @@ func PrepareConvertTokenFromBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
 
 	prepareResponse, err := sdk.PrepareConvertToken(
 		breez_sdk_spark.PrepareConvertTokenRequest{
-			ConvertType:     breez_sdk_spark.ConvertTypeFromBitcoin,
-			TokenIdentifier: tokenIdentifier,
-			Amount:          amount,
+			ConvertType: breez_sdk_spark.ConvertTypeFromBitcoin{
+				ToTokenIdentifier: tokenIdentifier,
+			},
+			Amount: amount,
 		})
 
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {

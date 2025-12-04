@@ -136,8 +136,9 @@ async fn prepare_convert_token_to_bitcoin(sdk: &BreezSdk) -> Result<()> {
 
     let prepare_response = sdk
         .prepare_convert_token(PrepareConvertTokenRequest {
-            convert_type: ConvertType::ToBitcoin,
-            token_identifier,
+            convert_type: ConvertType::ToBitcoin {
+                from_token_identifier: token_identifier,
+            },
             amount,
         })
         .await?;
@@ -158,8 +159,9 @@ async fn prepare_convert_token_from_bitcoin(sdk: &BreezSdk) -> Result<()> {
 
     let prepare_response = sdk
         .prepare_convert_token(PrepareConvertTokenRequest {
-            convert_type: ConvertType::FromBitcoin,
-            token_identifier,
+            convert_type: ConvertType::FromBitcoin {
+                to_token_identifier: token_identifier,
+            },
             amount,
         })
         .await?;

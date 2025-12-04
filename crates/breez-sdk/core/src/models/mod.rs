@@ -875,7 +875,9 @@ pub enum PaymentDetailsFilter {
     },
     Token {
         /// Filter conversion payments with refund information
-        conversion_refund_needed: bool,
+        conversion_refund_needed: Option<bool>,
+        /// Filter by transaction hash
+        tx_hash: Option<String>,
     },
 }
 
@@ -1153,18 +1155,15 @@ pub struct ConversionRefundInfo {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ConvertType {
     /// Converting from Bitcoin to a token
-    FromBitcoin,
+    FromBitcoin { to_token_identifier: String },
     /// Converting from a token to Bitcoin
-    ToBitcoin,
+    ToBitcoin { from_token_identifier: String },
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareConvertTokenRequest {
     /// The type of conversion, either from or to Bitcoin.
     pub convert_type: ConvertType,
-    /// The token identifier of the token.
-    /// Converting to Bitcoin from this token, or from Bitcoin to this token.
-    pub token_identifier: String,
     /// Amount to transfer.
     /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
     pub amount: u128,
@@ -1175,14 +1174,11 @@ pub struct PrepareConvertTokenRequest {
 pub struct PrepareConvertTokenResponse {
     /// The type of conversion, either from or to Bitcoin.
     pub convert_type: ConvertType,
-    /// The token identifier of the token.
-    /// Converting to Bitcoin from this token, or from Bitcoin to this token.
-    pub token_identifier: String,
     /// Amount to convert.
     /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
     pub send_amount: u128,
     /// The estimated amount to be received from the conversion.
-    /// Denominated in the token base units if converting from Bitcoin, otherwise in satoshis.
+    /// Denominated in satoshis if converting to Bitcoin, otherwise in the token base units.
     pub estimated_receive_amount: u128,
     /// The fee for the conversion.
     /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.

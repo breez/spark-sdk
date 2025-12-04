@@ -1499,9 +1499,8 @@ class IndexedDBStorage {
       }
       // Filter by conversion refund info presence
       if (
-        (paymentDetailsFilter.type === "spark" &&
-          paymentDetailsFilter.conversionRefundNeeded != null) ||
-        paymentDetailsFilter.type === "token"
+        (paymentDetailsFilter.type === "spark" || paymentDetailsFilter.type === "token") &&
+          paymentDetailsFilter.conversionRefundNeeded != null
       ) {
         if (
           details.type !== paymentDetailsFilter.type ||
@@ -1513,6 +1512,18 @@ class IndexedDBStorage {
         if (
           paymentDetailsFilter.conversionRefundNeeded ===
           !!details.conversionRefundInfo.refundPaymentId
+        ) {
+          return false;
+        }
+      }
+      // Filter by token transaction hash
+      if (
+        paymentDetailsFilter.type === "token" &&
+        paymentDetailsFilter.txHash != null
+      ) {
+        if (
+          details.type !== "token" ||
+          details.txHash !== paymentDetailsFilter.txHash
         ) {
           return false;
         }

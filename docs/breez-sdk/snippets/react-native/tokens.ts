@@ -111,8 +111,9 @@ const prepareConvertTokenToBitcoin = async (sdk: BreezSdk) => {
   const amount = BigInt(10_000_000)
 
   const prepareResponse = await sdk.prepareConvertToken({
-    convertType: ConvertType.ToBitcoin,
-    tokenIdentifier,
+    convertType: new ConvertType.ToBitcoin({
+      fromTokenIdentifier: tokenIdentifier
+    }),
     amount
   })
 
@@ -130,8 +131,9 @@ const prepareConvertTokenFromBitcoin = async (sdk: BreezSdk) => {
   const amount = BigInt(10_000)
 
   const prepareResponse = await sdk.prepareConvertToken({
-    convertType: ConvertType.FromBitcoin,
-    tokenIdentifier,
+    convertType: new ConvertType.FromBitcoin({
+      toTokenIdentifier: tokenIdentifier
+    }),
     amount
   })
 

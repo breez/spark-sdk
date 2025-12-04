@@ -165,7 +165,8 @@ pub enum _PaymentDetailsFilter {
         conversion_refund_needed: Option<bool>,
     },
     Token {
-        conversion_refund_needed: bool,
+        conversion_refund_needed: Option<bool>,
+        tx_hash: Option<String>,
     },
 }
 
@@ -982,21 +983,23 @@ pub struct _ConversionRefundInfo {
 
 #[frb(mirror(ConvertType))]
 pub enum _ConvertType {
-    FromBitcoin,
-    ToBitcoin,
+    FromBitcoin {
+        to_token_identifier: String,
+    },
+    ToBitcoin {
+        from_token_identifier: String,
+    },
 }
 
 #[frb(mirror(PrepareConvertTokenRequest))]
 pub struct _PrepareConvertTokenRequest {
     pub convert_type: ConvertType,
-    pub token_identifier: String,
     pub amount: u128,
 }
 
 #[frb(mirror(PrepareConvertTokenResponse))]
 pub struct _PrepareConvertTokenResponse {
     pub convert_type: ConvertType,
-    pub token_identifier: String,
     pub send_amount: u128,
     pub estimated_receive_amount: u128,
     pub fee: u128,

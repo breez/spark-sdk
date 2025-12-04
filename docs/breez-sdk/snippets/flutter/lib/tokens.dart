@@ -115,8 +115,7 @@ Future<void> prepareConvertTokenToBitcoin(BreezSdk sdk) async {
 
   final prepareResponse = await sdk.prepareConvertToken(
     request: PrepareConvertTokenRequest(
-      convertType: ConvertType.toBitcoin,
-      tokenIdentifier: tokenIdentifier,
+      convertType: ConvertType.toBitcoin(fromTokenIdentifier: tokenIdentifier),
       amount: amount,
     ),
   );
@@ -135,8 +134,7 @@ Future<void> prepareConvertTokenFromBitcoin(BreezSdk sdk) async {
 
   final prepareResponse = await sdk.prepareConvertToken(
     request: PrepareConvertTokenRequest(
-      convertType: ConvertType.fromBitcoin,
-      tokenIdentifier: tokenIdentifier,
+      convertType: ConvertType.fromBitcoin(toTokenIdentifier: tokenIdentifier),
       amount: amount,
     ),
   );
