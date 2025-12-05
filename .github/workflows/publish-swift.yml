@@ -55,7 +55,7 @@ jobs:
       - name: Build Swift bindings
         working-directory: crates/breez-sdk/bindings
         run: |
-          cargo run --features=uniffi/cli --bin uniffi-bindgen generate --library ../../../aarch64-apple-ios/libbreez_sdk_spark_bindings.a --no-format --language swift -o ffi/swift
+          cargo run --features=uniffi/cli --bin uniffi-bindgen generate --library ../../../aarch64-apple-ios/libbreez_sdk_spark_bindings.dylib --no-format --language swift -o ffi/swift
           # WA pre 0.29.0: Fix redeclaration of protocol UniffiForeignFutureTask https://github.com/mozilla/uniffi-rs/pull/2341
           find ffi/swift -name "*.swift" -exec sed -i 's/protocol UniffiForeignFutureTask/fileprivate protocol UniffiForeignFutureTask/g' {} \;
 
@@ -117,9 +117,9 @@ jobs:
           cp swift/breez_sdk_*FFI.h build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/Headers
           cp swift/breez_sdk_*FFI.h build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/Headers
           cp swift/breez_sdk_*FFI.h build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Headers
-          cp aarch64-apple-ios/libbreez_sdk_spark_bindings.a build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
-          cp ios-universal-sim/libbreez_sdk_spark_bindings.a build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
-          cp darwin-universal/libbreez_sdk_spark_bindings.a build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+          cp aarch64-apple-ios/libbreez_sdk_spark_bindings.dylib build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+          cp ios-universal-sim/libbreez_sdk_spark_bindings.dylib build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+          cp darwin-universal/libbreez_sdk_spark_bindings.dylib build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
 
       - name: Set plist versions
         working-directory: build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework

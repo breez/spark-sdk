@@ -9,7 +9,7 @@ path = "uniffi-bindgen.rs"
 
 [lib]
 name = "breez_sdk_spark_bindings"
-crate-type = ["staticlib", "cdylib", "lib"]
+crate-type = ["cdylib", "staticlib", "lib"]
 
 [dependencies]
 breez-sdk-spark = { workspace = true, features = ["uniffi"] }
