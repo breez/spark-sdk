@@ -182,7 +182,7 @@ class SqliteStorage {
               ? "IS NULL"
               : "IS NOT NULL";
           whereClauses.push(
-            `${typeCheck} AND pm.conversion_refund_info IS NOT NULL AND json_extract(pm.conversion_refund_info, '$.refundPaymentId') ${nullCheck}`
+            `${typeCheck} AND pm.conversion_refund_info IS NOT NULL AND json_extract(pm.conversion_refund_info, '$.refundIdentifier') ${nullCheck}`
           );
         }
         // Filter by token transaction hash

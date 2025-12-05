@@ -750,28 +750,26 @@ impl BreezSdk {
             }
         };
 
-        let sync_conversion_info = async {
-            if sync_type.contains(SyncType::ConversionInfo) {
-                debug!("sync_wallet_internal: Starting ConversionInfo sync");
-                let conversion_info_start = Instant::now();
-                if let Err(e) = self.sync_conversion_info().await {
-                    error!("sync_wallet_internal: Failed to sync conversion info: {e:?}");
-                }
-                if let Err(e) = self.check_and_refund_conversion_payments().await {
-                    error!(
-                        "sync_wallet_internal: Failed to check and refund conversion payments: {e:?}"
-                    );
-                }
-                debug!(
-                    "sync_wallet_internal: ConversionInfo sync completed in {:?}",
-                    conversion_info_start.elapsed()
-                );
-            } else {
-                trace!("sync_wallet_internal: Skipping ConversionInfo sync");
-            }
-        };
+        tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
 
-        tokio::join!(sync_wallet, sync_lnurl, sync_deposits, sync_conversion_info);
+        if sync_type.contains(SyncType::ConversionInfo) {
+            debug!("sync_wallet_internal: Starting ConversionInfo sync");
+            let conversion_info_start = Instant::now();
+            if let Err(e) = self.sync_conversion_info().await {
+                error!("sync_wallet_internal: Failed to sync conversion info: {e:?}");
+            }
+            if let Err(e) = self.check_and_refund_conversion_payments().await {
+                error!(
+                    "sync_wallet_internal: Failed to check and refund conversion payments: {e:?}"
+                );
+            }
+            debug!(
+                "sync_wallet_internal: ConversionInfo sync completed in {:?}",
+                conversion_info_start.elapsed()
+            );
+        } else {
+            trace!("sync_wallet_internal: Skipping ConversionInfo sync");
+        }
 
         let elapsed = start_time.elapsed();
         info!("sync_wallet_internal: Wallet sync completed in {elapsed:?}");
@@ -919,9 +917,10 @@ impl BreezSdk {
                 debug!("No more conversion info on offset {offset}");
                 break;
             }
-            for swap in &response.swaps {
+            let mut len = u32::try_from(response.swaps.len())?;
+            for (i, swap) in response.swaps.iter().enumerate() {
                 // Get the payment by inbound transfer id
-                let payment = if let Ok(payment) = self
+                let payment_res = if let Ok(payment) = self
                     .storage
                     .get_payment_by_id(swap.inbound_transfer_id.clone())
                     .await
@@ -943,15 +942,24 @@ impl BreezSdk {
                         .ok_or(SdkError::Generic("Payment not found".to_string()))
                 };
 
-                if let Ok(mut payment) = payment
-                    && let Some(
-                        PaymentDetails::Spark {
-                            conversion_info, ..
-                        }
-                        | PaymentDetails::Token {
-                            conversion_info, ..
-                        },
-                    ) = &mut payment.details
+                let Ok(mut payment) = payment_res else {
+                    // Stop the sync if the payment is not found
+                    error!(
+                        "Failed to find payment for swap {} with inbound transfer id {}, skipping remaining swaps",
+                        swap.id, swap.inbound_transfer_id
+                    );
+                    len = u32::try_from(i).unwrap_or(0);
+                    break;
+                };
+
+                if let Some(
+                    PaymentDetails::Spark {
+                        conversion_info, ..
+                    }
+                    | PaymentDetails::Token {
+                        conversion_info, ..
+                    },
+                ) = &mut payment.details
                 {
                     *conversion_info = Some(ConversionInfo {
                         payment_id: swap.outbound_transfer_id.clone(),
@@ -963,15 +971,9 @@ impl BreezSdk {
                             swap.id
                         );
                     }
-                } else {
-                    error!(
-                        "Failed to find payment for swap {} with inbound transfer id {}",
-                        swap.id, swap.inbound_transfer_id
-                    );
                 }
             }
 
-            let len = u32::try_from(response.swaps.len())?;
             offset = offset.saturating_add(len);
             cache.save_conversion_info_offset(offset).await?;
             if len < SYNC_PAGING_LIMIT {
@@ -1026,24 +1028,26 @@ impl BreezSdk {
 
     /// Initiates a refund for a conversion payment that requires a manual refund.
     async fn refund_conversion_payment(&self, payment: &Payment) -> Result<(), SdkError> {
-        let Some(
-            PaymentDetails::Spark {
-                conversion_refund_info:
-                    Some(ConversionRefundInfo {
-                        pool_id,
-                        refund_payment_id: None,
-                    }),
+        let (clawback_transfer_id, conversion_refund_info) = match &payment.details {
+            Some(PaymentDetails::Spark {
+                conversion_refund_info,
                 ..
+            }) => (payment.id.clone(), conversion_refund_info),
+            Some(PaymentDetails::Token {
+                tx_hash,
+                conversion_refund_info,
+                ..
+            }) => (tx_hash.clone(), conversion_refund_info),
+            _ => {
+                return Err(SdkError::Generic(
+                    "Payment is not a Spark or Token conversion".to_string(),
+                ));
             }
-            | PaymentDetails::Token {
-                conversion_refund_info:
-                    Some(ConversionRefundInfo {
-                        pool_id,
-                        refund_payment_id: None,
-                    }),
-                ..
-            },
-        ) = &payment.details
+        };
+        let Some(ConversionRefundInfo {
+            pool_id,
+            refund_identifier: None,
+        }) = conversion_refund_info
         else {
             return Err(SdkError::Generic(
                 "No conversion refund info with missing refund".to_string(),
@@ -1060,7 +1064,7 @@ impl BreezSdk {
             .flashnet_client
             .clawback(ClawbackRequest {
                 pool_id,
-                transfer_id: payment.id.clone(),
+                transfer_id: clawback_transfer_id,
             })
             .await
         {
@@ -1073,13 +1077,16 @@ impl BreezSdk {
                     "Clawback initiated for payment {}: tracking_id: {}",
                     payment.id, spark_status_tracking_id
                 );
+                // Store the refund identifier as is in payment metadata as the
+                // refund payment might not yet be sent and in the case of token
+                // transactions we don't know the vout yet to make it a payment id
                 self.storage
                     .set_payment_metadata(
                         payment.id.clone(),
                         PaymentMetadata {
                             conversion_refund_info: Some(ConversionRefundInfo {
                                 pool_id: pool_id.to_string(),
-                                refund_payment_id: Some(spark_status_tracking_id),
+                                refund_identifier: Some(spark_status_tracking_id),
                             }),
                             ..Default::default()
                         },
@@ -2864,9 +2871,9 @@ impl BreezSdk {
     ///
     /// Arguments:
     /// * `pool_id` - The pool id used for the conversion.
-    /// * `outbound_id` - The outbound spark transfer id or token transaction hash.
-    /// * `inbound_id` - The inbound spark transfer id or token transaction hash if the conversion was successful.
-    /// * `refund_id` - The inbound refund spark transfer id or token transaction hash if the conversion was refunded.
+    /// * `outbound_identifier` - The outbound spark transfer id or token transaction hash.
+    /// * `inbound_identifier` - The inbound spark transfer id or token transaction hash if the conversion was successful.
+    /// * `refund_identifier` - The inbound refund spark transfer id or token transaction hash if the conversion was refunded.
     /// * `fee` - The fee paid for the conversion.
     ///
     /// Returns:
@@ -2875,19 +2882,19 @@ impl BreezSdk {
     async fn update_payment_conversion_info(
         &self,
         pool_id: &PublicKey,
-        outbound_id: String,
-        inbound_id: Option<String>,
-        refund_id: Option<String>,
+        outbound_identifier: String,
+        inbound_identifier: Option<String>,
+        refund_identifier: Option<String>,
         fee: Option<u128>,
     ) -> Result<(Payment, Option<Payment>), SdkError> {
         debug!(
-            "Updating payment conversion info for pool_id: {pool_id}, outbound_id: {outbound_id}, inbound_id: {inbound_id:?}, refund_id: {refund_id:?}"
+            "Updating payment conversion info for pool_id: {pool_id}, outbound_identifier: {outbound_identifier}, inbound_identifier: {inbound_identifier:?}, refund_identifier: {refund_identifier:?}"
         );
         let mut sent_payment = self
-            .fetch_payment_by_convert_token_identifier(&outbound_id, true)
+            .fetch_payment_by_convert_token_identifier(&outbound_identifier, true)
             .await?;
-        let received_payment = if let Some(inbound_id) = &inbound_id {
-            self.fetch_payment_by_convert_token_identifier(inbound_id, false)
+        let received_payment = if let Some(inbound_identifier) = &inbound_identifier {
+            self.fetch_payment_by_convert_token_identifier(inbound_identifier, false)
                 .await
                 .ok()
         } else {
@@ -2914,19 +2921,19 @@ impl BreezSdk {
         };
         // Update the conversion info based on the provided details either setting
         // the conversion info or the conversion refund info.
-        if let Some(inbound_id) = inbound_id
+        if let Some(inbound_identifier) = inbound_identifier
             && let Some(fee) = fee
         {
             *payment_conversion_info = Some(ConversionInfo {
                 payment_id: received_payment
                     .as_ref()
-                    .map_or(inbound_id.clone(), |p| p.id.clone()),
+                    .map_or(inbound_identifier.clone(), |p| p.id.clone()),
                 fee,
             });
         } else {
             let conversion_refund_info = ConversionRefundInfo {
                 pool_id: pool_id.to_string(),
-                refund_payment_id: refund_id,
+                refund_identifier,
             };
             *payment_conversion_refund_info = Some(conversion_refund_info.clone());
 

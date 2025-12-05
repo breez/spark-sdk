@@ -383,7 +383,7 @@ impl Storage for SqliteStorage {
                 } else {
                     "IS NOT NULL"
                 };
-                where_clauses.push(format!("{type_check} AND pm.conversion_refund_info IS NOT NULL AND json_extract(pm.conversion_refund_info, '$.refund_payment_id') {null_check}" ));
+                where_clauses.push(format!("{type_check} AND pm.conversion_refund_info IS NOT NULL AND json_extract(pm.conversion_refund_info, '$.refund_identifier') {null_check}" ));
             }
             // Filter by token transaction hash
             if let PaymentDetailsFilter::Token {

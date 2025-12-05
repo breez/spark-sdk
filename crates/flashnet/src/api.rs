@@ -37,14 +37,6 @@ pub struct FlashnetClient {
 }
 
 impl FlashnetClient {
-    pub fn connect(config: FlashnetConfig, spark_wallet: Arc<SparkWallet>) -> Self {
-        Self {
-            config,
-            cache_store: Arc::new(CacheStore::default()),
-            spark_wallet,
-        }
-    }
-
     pub fn new(
         config: FlashnetConfig,
         spark_wallet: Arc<SparkWallet>,

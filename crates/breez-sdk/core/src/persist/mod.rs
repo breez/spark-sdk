@@ -1065,6 +1065,84 @@ pub mod tests {
             details: None,
         };
 
+        // Test 11: Successful conversion payment
+        let successful_sent_conversion_payment = Payment {
+            id: "conversion_pmt123".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 10_000,
+            fees: 0,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+                conversion_info: Some(crate::ConversionInfo {
+                    payment_id: "conversion_pmt123".to_string(),
+                    fee: 21,
+                }),
+                conversion_refund_info: None,
+            }),
+        };
+
+        // Test 12: Failed conversion payment with refund info
+        let failed_with_refund_conversion_payment_metadata = PaymentMetadata {
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_description: None,
+            conversion_refund_info: Some(crate::ConversionRefundInfo {
+                pool_id: "pool_xyz".to_string(),
+                refund_identifier: Some("refund_pmt456".to_string()),
+            }),
+        };
+        let failed_with_refund_conversion_payment = Payment {
+            id: "conversion_pmt789".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 10_000,
+            fees: 0,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+                conversion_info: None,
+                conversion_refund_info: Some(crate::ConversionRefundInfo {
+                    pool_id: "pool_xyz".to_string(),
+                    refund_identifier: Some("refund_pmt456".to_string()),
+                }),
+            }),
+        };
+
+        // Test 13: Failed conversion payment with no refund info
+        let failed_no_refund_conversion_payment_metadata = PaymentMetadata {
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_description: None,
+            conversion_refund_info: Some(crate::ConversionRefundInfo {
+                pool_id: "pool_xyz".to_string(),
+                refund_identifier: None,
+            }),
+        };
+        let failed_no_refund_conversion_payment = Payment {
+            id: "conversion_pmt000".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 20_000,
+            fees: 0,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+                conversion_info: None,
+                conversion_refund_info: Some(crate::ConversionRefundInfo {
+                    pool_id: "pool_xyz".to_string(),
+                    refund_identifier: None,
+                }),
+            }),
+        };
+
         let test_payments = vec![
             spark_payment.clone(),
             spark_htlc_payment.clone(),
@@ -1076,6 +1154,9 @@ pub mod tests {
             withdraw_payment.clone(),
             deposit_payment.clone(),
             no_details_payment.clone(),
+            successful_sent_conversion_payment.clone(),
+            failed_with_refund_conversion_payment.clone(),
+            failed_no_refund_conversion_payment.clone(),
         ];
 
         // Insert all payments
@@ -1102,16 +1183,30 @@ pub mod tests {
             }])
             .await
             .unwrap();
+        storage
+            .set_payment_metadata(
+                failed_with_refund_conversion_payment.id.clone(),
+                failed_with_refund_conversion_payment_metadata,
+            )
+            .await
+            .unwrap();
+        storage
+            .set_payment_metadata(
+                failed_no_refund_conversion_payment.id.clone(),
+                failed_no_refund_conversion_payment_metadata,
+            )
+            .await
+            .unwrap();
         // List all payments
         let payments = storage
             .list_payments(ListPaymentsRequest {
                 offset: Some(0),
-                limit: Some(11),
+                limit: Some(14),
                 ..Default::default()
             })
             .await
             .unwrap();
-        assert_eq!(payments.len(), 10);
+        assert_eq!(payments.len(), 13);
 
         // Test each payment type individually
         for (i, expected_payment) in test_payments.iter().enumerate() {
@@ -1275,7 +1370,7 @@ pub mod tests {
             .iter()
             .filter(|p| p.payment_type == PaymentType::Receive)
             .count();
-        assert_eq!(send_payments, 4); // spark, lightning_lnurl_pay, withdraw, no_details
+        assert_eq!(send_payments, 7); // spark, lightning_lnurl_pay, withdraw, no_details, conversion x3
         assert_eq!(receive_payments, 6); // spark_htlc, token, lightning_lnurl_withdraw, lightning_minimal, lightning_lnurl_receive, deposit
 
         // Test filtering by status
@@ -1291,7 +1386,7 @@ pub mod tests {
             .iter()
             .filter(|p| p.status == PaymentStatus::Failed)
             .count();
-        assert_eq!(completed_payments, 7); // spark, spark_htlc, lightning_lnurl_pay, lightning_lnurl_withdraw, lightning_lnurl_receive, withdraw, deposit
+        assert_eq!(completed_payments, 10); // spark, spark_htlc, lightning_lnurl_pay, lightning_lnurl_withdraw, lightning_lnurl_receive, withdraw, deposit, conversion x3
         assert_eq!(pending_payments, 2); // token, no_details
         assert_eq!(failed_payments, 1); // lightning_minimal
 
@@ -2128,7 +2223,7 @@ pub mod tests {
             lnurl_description: None,
             conversion_refund_info: Some(crate::ConversionRefundInfo {
                 pool_id: "pool1".to_string(),
-                refund_payment_id: Some("refund1".to_string()),
+                refund_identifier: Some("refund1".to_string()),
             }),
         };
         let successful_conversion = Payment {
@@ -2170,7 +2265,7 @@ pub mod tests {
             lnurl_description: None,
             conversion_refund_info: Some(crate::ConversionRefundInfo {
                 pool_id: "pool1".to_string(),
-                refund_payment_id: None,
+                refund_identifier: None,
             }),
         };
 

@@ -1139,6 +1139,7 @@ pub struct ConversionInfo {
     /// The receiving payment id associated with the conversion
     pub payment_id: String,
     /// The fee paid for the conversion
+    /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
     pub fee: u128,
 }
 
@@ -1148,7 +1149,7 @@ pub struct ConversionRefundInfo {
     /// The pool id associated with the conversion
     pub pool_id: String,
     /// The refund payment id if a refund payment was made
-    pub refund_payment_id: Option<String>,
+    pub refund_identifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

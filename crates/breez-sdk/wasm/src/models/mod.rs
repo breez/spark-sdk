@@ -1073,7 +1073,7 @@ pub struct ConversionInfo {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionRefundInfo)]
 pub struct ConversionRefundInfo {
     pub pool_id: String,
-    pub refund_payment_id: Option<String>,
+    pub refund_identifier: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConvertType)]

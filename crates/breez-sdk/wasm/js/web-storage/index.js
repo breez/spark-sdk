@@ -1511,7 +1511,7 @@ class IndexedDBStorage {
 
         if (
           paymentDetailsFilter.conversionRefundNeeded ===
-          !!details.conversionRefundInfo.refundPaymentId
+          !!details.conversionRefundInfo.refundIdentifier
         ) {
           return false;
         }

@@ -978,7 +978,7 @@ pub struct _ConversionInfo {
 #[frb(mirror(ConversionRefundInfo))]
 pub struct _ConversionRefundInfo {
     pub pool_id: String,
-    pub refund_payment_id: Option<String>,
+    pub refund_identifier: Option<String>,
 }
 
 #[frb(mirror(ConvertType))]
