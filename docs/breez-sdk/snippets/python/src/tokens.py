@@ -142,7 +142,6 @@ async def prepare_convert_token_to_bitcoin(sdk: BreezSdk):
                 convert_type=ConvertType.TO_BITCOIN(
                     from_token_identifier=token_identifier
                 ),
-                token_identifier=token_identifier,
                 amount=amount,
             )
         )
@@ -169,7 +168,6 @@ async def prepare_convert_token_from_bitcoin(sdk: BreezSdk):
                 convert_type=ConvertType.FROM_BITCOIN(
                     to_token_identifier=token_identifier
                 ),
-                token_identifier=token_identifier,
                 amount=amount,
             )
         )
