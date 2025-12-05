@@ -14,6 +14,7 @@ members = [
   "crates/breez-sdk/core", 
   "crates/breez-sdk/lnurl-models",
   "crates/breez-sdk/breez-itest",
+  "crates/breez-sdk/breez-bench",
   "crates/breez-sdk/wasm",
   "crates/macros",
   "crates/macro_test",
@@ -91,6 +92,7 @@ prost-types = "0.13.4"
 qrcode-rs = { version = "0.1", default-features = false }
 quote = "1.0.40"
 rand = "0.8"
+rand_chacha = "0.3"
 rayon = "1.10"
 rcgen = "0.14.5"
 regex = "1.11.2"

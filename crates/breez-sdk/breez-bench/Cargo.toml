@@ -1,0 +1,39 @@
+[package]
+name = "breez-sdk-bench"
+edition = "2024"
+version.workspace = true
+
+[[bin]]
+name = "breez-sdk-bench"
+path = "src/main.rs"
+
+[dependencies]
+# Reuse all test infrastructure from breez-itest
+breez-sdk-itest = { path = "../breez-itest" }
+
+# SDK under test
+breez-sdk-spark = { workspace = true, features = ["test-utils"] }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+async-trait.workspace = true
+
+# CLI
+clap = { workspace = true, features = ["derive"] }
+
+# Random with seeding
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+
+# Tracing for swap detection
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+# Mnemonic handling (for mainnet)
+bip39 = { workspace = true, features = ["rand"] }
+
+# Utils
+anyhow.workspace = true
+tempdir.workspace = true
+dirs.workspace = true
+
