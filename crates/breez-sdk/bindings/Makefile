@@ -109,6 +109,9 @@ package-xcframework: build-ios-universal build-darwin-universal package-xcframew
 	cp $(TARGET_DIR)aarch64-apple-ios/release/$(BIN_NAME).dylib langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
 	cp $(TARGET_DIR)ios-universal-sim/release/$(BIN_NAME).dylib langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
 	cp $(TARGET_DIR)darwin-universal/release/$(BIN_NAME).dylib langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+	install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+	install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+	install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
 
 ## Kotlin Multiplatform
 KMP_BASE := langs/kotlin-multiplatform/breez-sdk-spark-kmp/src
