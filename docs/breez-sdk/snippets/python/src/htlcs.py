@@ -1,6 +1,7 @@
 # pylint: disable=duplicate-code
 import hashlib
 import logging
+from typing import cast
 from breez_sdk_spark import (
     BreezSdk,
     ClaimHtlcPaymentRequest,
@@ -56,10 +57,10 @@ async def list_claimable_htlc_payments(sdk: BreezSdk):
     request = ListPaymentsRequest(
         type_filter=[PaymentType.RECEIVE],
         status_filter=[PaymentStatus.PENDING],
-        payment_details_filter=[PaymentDetailsFilter.SPARK(
+        payment_details_filter=[cast(PaymentDetailsFilter, PaymentDetailsFilter.SPARK(
             htlc_status=[SparkHtlcStatus.WAITING_FOR_PREIMAGE],
             conversion_refund_needed=None
-        )],
+        ))],
     )
 
     response = await sdk.list_payments(request=request)
