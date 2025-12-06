@@ -29,7 +29,7 @@ The LNURL domain to be used for receiving LNURL and Lightning address payments. 
 
 ## Prefer Spark over Lightning
 
-An on-off switch that determines whether to prefer settlement using Spark when sending and receiving payments via Lightning invoices. Direct settlement using Spark offers lower fees but reduces privacy.
+An on-off switch that determines whether to prefer settlement using Spark when sending and receiving payments via Lightning invoices. 
 
 ## External input parsing
 
