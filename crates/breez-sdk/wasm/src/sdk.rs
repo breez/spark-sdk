@@ -268,4 +268,20 @@ impl BreezSdk {
             token_issuer: Rc::new(token_issuer),
         }
     }
+
+    #[wasm_bindgen(js_name = "prepareConvertToken")]
+    pub async fn prepare_convert_token(
+        &self,
+        request: PrepareConvertTokenRequest,
+    ) -> WasmResult<PrepareConvertTokenResponse> {
+        Ok(self.sdk.prepare_convert_token(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "convertToken")]
+    pub async fn convert_token(
+        &self,
+        request: ConvertTokenRequest,
+    ) -> WasmResult<ConvertTokenResponse> {
+        Ok(self.sdk.convert_token(request.into()).await?.into())
+    }
 }

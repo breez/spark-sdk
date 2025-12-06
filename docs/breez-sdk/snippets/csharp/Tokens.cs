@@ -116,5 +116,73 @@ namespace BreezSdkSnippets
             Console.WriteLine($"Payment: {payment}");
             // ANCHOR_END: send-token-payment
         }
+
+        async Task PrepareConvertTokenToBitcoin(BreezSdk sdk)
+        {
+            // ANCHOR: prepare-convert-token-to-bitcoin
+            var tokenIdentifier = "<token identifier>";
+            // Amount in token base units
+            var amount = new BigInteger(10000000);
+
+            var prepareResponse = await sdk.PrepareConvertToken(
+                request: new PrepareConvertTokenRequest(
+                    convertType: new ConvertType.ToBitcoin(
+                        fromTokenIdentifier: tokenIdentifier
+                    ),
+                    amount: amount
+                )
+            );
+
+            var estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount;
+            var fee = prepareResponse.fee;
+            Console.WriteLine($"Estimated receive amount: {estimatedReceiveAmount} sats");
+            Console.WriteLine($"Fees: {fee} token base units");
+            // ANCHOR_END: prepare-convert-token-to-bitcoin
+        }
+
+        async Task PrepareConvertTokenFromBitcoin(BreezSdk sdk)
+        {
+            // ANCHOR: prepare-convert-token-from-bitcoin
+            var tokenIdentifier = "<token identifier>";
+            // Amount in satoshis
+            var amount = new BigInteger(10000);
+
+            var prepareResponse = await sdk.PrepareConvertToken(
+                request: new PrepareConvertTokenRequest(
+                    convertType: new ConvertType.FromBitcoin(
+                        toTokenIdentifier: tokenIdentifier
+                    ),
+                    amount: amount
+                )
+            );
+
+            var estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount;
+            var fee = prepareResponse.fee;
+            Console.WriteLine($"Estimated receive amount: {estimatedReceiveAmount} token base units");
+            Console.WriteLine($"Fees: {fee} sats");
+            // ANCHOR_END: prepare-convert-token-from-bitcoin
+        }
+
+        async Task ConvertToken(BreezSdk sdk, PrepareConvertTokenResponse prepareResponse)
+        {
+            // ANCHOR: convert-token
+            // Set the maximum slippage to 1% in basis points
+            var optionalMaxSlippageBps = 100U;
+
+            var response = await sdk.ConvertToken(
+                request: new ConvertTokenRequest(
+                    prepareResponse: prepareResponse,
+                    maxSlippageBps: optionalMaxSlippageBps
+                )
+            );
+
+            var sentPayment = response.sentPayment;
+            var receivedPayment = response.receivedPayment;
+            Console.WriteLine($"Sent payment: {sentPayment}");
+            Console.WriteLine($"Received payment: {receivedPayment}");
+            // ANCHOR_END: convert-token
+        }
+
+
     }
 }

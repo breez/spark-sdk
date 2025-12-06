@@ -3,13 +3,14 @@ mod issuer;
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, Fee, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
-    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, OnchainConfirmationSpeed, PaymentStatus, PaymentType,
-    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
-    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
-    UpdateUserSettingsRequest,
+    ClaimHtlcPaymentRequest, ConvertTokenRequest, ConvertType, Fee, GetInfoRequest,
+    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
+    OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
+    PrepareConvertTokenRequest, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
+    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -60,6 +61,10 @@ pub enum Command {
         /// Filter by Spark HTLC status
         #[arg(long)]
         spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
+
+        /// Filter by token transaction hash
+        #[arg(long)]
+        tx_hash: Option<String>,
 
         /// Only include payments created after this timestamp (inclusive)
         #[arg(long)]
@@ -222,6 +227,20 @@ pub enum Command {
         /// The token identifiers to get metadata for
         token_identifiers: Vec<String>,
     },
+    ConvertToken {
+        /// The amount to convert
+        amount: u128,
+
+        #[clap(short = 'f', long, action = clap::ArgAction::SetTrue)]
+        from_bitcoin: bool,
+
+        /// The token identifier of the token
+        token_identifier: String,
+
+        /// The maximum slippage in basis points (1/100 of a percent)
+        #[clap(short = 's', long)]
+        max_slippage_bps: Option<u32>,
+    },
     GetUserSettings,
     SetUserSettings {
         /// Whether spark private mode is enabled.
@@ -274,11 +293,30 @@ pub(crate) async fn execute_command(
             type_filter,
             status_filter,
             spark_htlc_status_filter,
+            tx_hash,
             asset_filter,
             from_timestamp,
             to_timestamp,
             sort_ascending,
         } => {
+            let mut payment_details_filter = Vec::new();
+            if let Some(statuses) = spark_htlc_status_filter {
+                payment_details_filter.push(PaymentDetailsFilter::Spark {
+                    htlc_status: Some(statuses),
+                    conversion_refund_needed: None,
+                });
+            }
+            if let Some(tx_hash) = tx_hash {
+                payment_details_filter.push(PaymentDetailsFilter::Token {
+                    conversion_refund_needed: None,
+                    tx_hash: Some(tx_hash),
+                });
+            }
+            let payment_details_filter = if payment_details_filter.is_empty() {
+                None
+            } else {
+                Some(payment_details_filter)
+            };
             let value = sdk
                 .list_payments(ListPaymentsRequest {
                     limit,
@@ -286,7 +324,7 @@ pub(crate) async fn execute_command(
                     type_filter,
                     status_filter,
                     asset_filter,
-                    spark_htlc_status_filter,
+                    payment_details_filter,
                     from_timestamp,
                     to_timestamp,
                     sort_ascending,
@@ -581,6 +619,41 @@ pub(crate) async fn execute_command(
         Command::GetTokensMetadata { token_identifiers } => {
             let res = sdk
                 .get_tokens_metadata(GetTokensMetadataRequest { token_identifiers })
+                .await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::ConvertToken {
+            amount,
+            from_bitcoin,
+            token_identifier,
+            max_slippage_bps,
+        } => {
+            let convert_type = if from_bitcoin {
+                ConvertType::FromBitcoin {
+                    to_token_identifier: token_identifier,
+                }
+            } else {
+                ConvertType::ToBitcoin {
+                    from_token_identifier: token_identifier,
+                }
+            };
+            let prepare_response = sdk
+                .prepare_convert_token(PrepareConvertTokenRequest {
+                    convert_type,
+                    amount,
+                })
+                .await?;
+            println!("Prepared conversion: {prepare_response:#?}\n Do you want to continue? (y/n)");
+            let line = rl.readline_with_initial("", ("y", ""))?.to_lowercase();
+            if line != "y" {
+                return Ok(true);
+            }
+            let res = sdk
+                .convert_token(ConvertTokenRequest {
+                    prepare_response,
+                    max_slippage_bps,
+                })
                 .await?;
             print_value(&res)?;
             Ok(true)

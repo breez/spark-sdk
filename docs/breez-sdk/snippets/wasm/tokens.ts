@@ -1,4 +1,4 @@
-import { type BreezSdk, type PrepareSendPaymentResponse } from '@breeztech/breez-sdk-spark'
+import type { BreezSdk, PrepareSendPaymentResponse, PrepareConvertTokenResponse } from '@breeztech/breez-sdk-spark'
 
 const exampleFetchTokenBalances = async (sdk: BreezSdk) => {
   // ANCHOR: fetch-token-balances
@@ -96,4 +96,63 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const payment = sendResponse.payment
   console.log(`Payment: ${JSON.stringify(payment)}`)
   // ANCHOR_END: send-token-payment
+}
+
+const examplePrepareConvertTokenToBitcoin = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-convert-token-to-bitcoin
+  const tokenIdentifier = '<token identifier>'
+  // Amount in token base units
+  const amount = BigInt(10_000_000)
+
+  const prepareResponse = await sdk.prepareConvertToken({
+    convertType: {
+      type: 'toBitcoin',
+      fromTokenIdentifier: tokenIdentifier
+    },
+    amount
+  })
+
+  const estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount
+  const fee = prepareResponse.fee
+  console.log(`Estimated receive amount: ${estimatedReceiveAmount} sats`)
+  console.log(`Fee: ${fee} token base units`)
+  // ANCHOR_END: prepare-convert-token-to-bitcoin
+}
+
+const examplePrepareConvertTokenFromBitcoin = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-convert-token-from-bitcoin
+  const tokenIdentifier = '<token identifier>'
+  // Amount in satoshis
+  const amount = BigInt(10_000)
+
+  const prepareResponse = await sdk.prepareConvertToken({
+    convertType: {
+      type: 'fromBitcoin',
+      toTokenIdentifier: tokenIdentifier
+    },
+    amount
+  })
+
+  const estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount
+  const fee = prepareResponse.fee
+  console.log(`Estimated receive amount: ${estimatedReceiveAmount} token base units`)
+  console.log(`Fee: ${fee} sats`)
+  // ANCHOR_END: prepare-convert-token-from-bitcoin
+}
+
+const exampleConvertToken = async (sdk: BreezSdk, prepareResponse: PrepareConvertTokenResponse) => {
+  // ANCHOR: convert-token
+  // Set the maximum slippage to 1% in basis points
+  const optionalMaxSlippageBps = 100
+
+  const response = await sdk.convertToken({
+    prepareResponse,
+    maxSlippageBps: optionalMaxSlippageBps
+  })
+
+  const sentPayment = response.sentPayment
+  const receivedPayment = response.receivedPayment
+  console.log(`Sent Payment: ${JSON.stringify(sentPayment)}`)
+  console.log(`Received Payment: ${JSON.stringify(receivedPayment)}`)
+  // ANCHOR_END: convert-token
 }
