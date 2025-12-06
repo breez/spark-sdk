@@ -1463,8 +1463,7 @@ class IndexedDBStorage {
     }
 
     // Filter by payment details
-    if (request.paymentDetailsFilter) {
-      const paymentDetailsFilter = request.paymentDetailsFilter;
+    if (request.paymentDetailsFilter && request.paymentDetailsFilter.length > 0) {
       let details = null;
 
       // Parse details if it's a string (stored in IndexedDB)
@@ -1483,50 +1482,61 @@ class IndexedDBStorage {
         return false;
       }
 
-      // Filter by Spark HTLC status
-      if (
-        paymentDetailsFilter.type === "spark" &&
-        paymentDetailsFilter.htlcStatus != null &&
-        paymentDetailsFilter.htlcStatus.length > 0
-      ) {
+      // Filter by payment details. If any filter matches, we include the payment
+      let paymentDetailsFilterMatches = false;
+      for (const paymentDetailsFilter of request.paymentDetailsFilter) {
+        // Filter by Spark HTLC status
         if (
-          details.type !== "spark" ||
-          !details.htlcDetails ||
-          !paymentDetailsFilter.htlcStatus.includes(details.htlcDetails.status)
+          paymentDetailsFilter.type === "spark" &&
+          paymentDetailsFilter.htlcStatus != null &&
+          paymentDetailsFilter.htlcStatus.length > 0
         ) {
-          return false;
+          if (
+            details.type !== "spark" ||
+            !details.htlcDetails ||
+            !paymentDetailsFilter.htlcStatus.includes(details.htlcDetails.status)
+          ) {
+            continue;
+          }
         }
-      }
-      // Filter by conversion refund info presence
-      if (
-        (paymentDetailsFilter.type === "spark" || paymentDetailsFilter.type === "token") &&
-          paymentDetailsFilter.conversionRefundNeeded != null
-      ) {
+        // Filter by conversion refund info presence
         if (
-          details.type !== paymentDetailsFilter.type ||
-          !details.conversionRefundInfo
+          (paymentDetailsFilter.type === "spark" || paymentDetailsFilter.type === "token") &&
+            paymentDetailsFilter.conversionRefundNeeded != null
         ) {
-          return false;
+          if (
+            details.type !== paymentDetailsFilter.type ||
+            !details.conversionRefundInfo
+          ) {
+            continue;
+          }
+
+          if (
+            paymentDetailsFilter.conversionRefundNeeded ===
+            !!details.conversionRefundInfo.refundIdentifier
+          ) {
+            continue;
+          }
+        }
+        // Filter by token transaction hash
+        if (
+          paymentDetailsFilter.type === "token" &&
+          paymentDetailsFilter.txHash != null
+        ) {
+          if (
+            details.type !== "token" ||
+            details.txHash !== paymentDetailsFilter.txHash
+          ) {
+            continue;
+          }
         }
 
-        if (
-          paymentDetailsFilter.conversionRefundNeeded ===
-          !!details.conversionRefundInfo.refundIdentifier
-        ) {
-          return false;
-        }
+        paymentDetailsFilterMatches = true;
+        break;
       }
-      // Filter by token transaction hash
-      if (
-        paymentDetailsFilter.type === "token" &&
-        paymentDetailsFilter.txHash != null
-      ) {
-        if (
-          details.type !== "token" ||
-          details.txHash !== paymentDetailsFilter.txHash
-        ) {
-          return false;
-        }
+      
+      if (!paymentDetailsFilterMatches) {
+        return false;
       }
     }
 

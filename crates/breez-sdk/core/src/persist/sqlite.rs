@@ -344,55 +344,69 @@ impl Storage for SqliteStorage {
             }
         }
 
+        // Filter by payment details. If any filter matches, we include the payment
         if let Some(ref payment_details_filter) = request.payment_details_filter {
-            // Filter by Spark HTLC status
-            if let PaymentDetailsFilter::Spark {
-                htlc_status: Some(htlc_statuses),
-                ..
-            } = payment_details_filter
-                && !htlc_statuses.is_empty()
-            {
-                let placeholders = htlc_statuses
-                    .iter()
-                    .map(|_| "?")
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                where_clauses.push(format!(
-                    "json_extract(s.htlc_details, '$.status') IN ({placeholders})"
-                ));
-                for htlc_status in htlc_statuses {
-                    params.push(Box::new(htlc_status.to_string()));
+            let mut all_payment_details_clauses = Vec::new();
+            for payment_details_filter in payment_details_filter {
+                let mut payment_details_clauses = Vec::new();
+                // Filter by Spark HTLC status
+                if let PaymentDetailsFilter::Spark {
+                    htlc_status: Some(htlc_statuses),
+                    ..
+                } = payment_details_filter
+                    && !htlc_statuses.is_empty()
+                {
+                    let placeholders = htlc_statuses
+                        .iter()
+                        .map(|_| "?")
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    payment_details_clauses.push(format!(
+                        "json_extract(s.htlc_details, '$.status') IN ({placeholders})"
+                    ));
+                    for htlc_status in htlc_statuses {
+                        params.push(Box::new(htlc_status.to_string()));
+                    }
+                }
+                // Filter by conversion refund info presence
+                if let PaymentDetailsFilter::Spark {
+                    conversion_refund_needed: Some(conversion_refund_needed),
+                    ..
+                }
+                | PaymentDetailsFilter::Token {
+                    conversion_refund_needed: Some(conversion_refund_needed),
+                    ..
+                } = payment_details_filter
+                {
+                    let type_check = match payment_details_filter {
+                        PaymentDetailsFilter::Spark { .. } => "p.spark = 1",
+                        PaymentDetailsFilter::Token { .. } => "p.spark IS NULL",
+                    };
+                    let null_check = if *conversion_refund_needed {
+                        "IS NULL"
+                    } else {
+                        "IS NOT NULL"
+                    };
+                    payment_details_clauses.push(format!("{type_check} AND pm.conversion_refund_info IS NOT NULL AND json_extract(pm.conversion_refund_info, '$.refund_identifier') {null_check}" ));
+                }
+                // Filter by token transaction hash
+                if let PaymentDetailsFilter::Token {
+                    tx_hash: Some(tx_hash),
+                    ..
+                } = payment_details_filter
+                {
+                    payment_details_clauses.push("t.tx_hash = ?".to_string());
+                    params.push(Box::new(tx_hash.clone()));
+                }
+
+                if !payment_details_clauses.is_empty() {
+                    all_payment_details_clauses
+                        .push(format!("({})", payment_details_clauses.join(" AND ")));
                 }
             }
-            // Filter by conversion refund info presence
-            if let PaymentDetailsFilter::Spark {
-                conversion_refund_needed: Some(conversion_refund_needed),
-                ..
-            }
-            | PaymentDetailsFilter::Token {
-                conversion_refund_needed: Some(conversion_refund_needed),
-                ..
-            } = payment_details_filter
-            {
-                let type_check = match payment_details_filter {
-                    PaymentDetailsFilter::Spark { .. } => "p.spark = 1",
-                    PaymentDetailsFilter::Token { .. } => "p.spark IS NULL",
-                };
-                let null_check = if *conversion_refund_needed {
-                    "IS NULL"
-                } else {
-                    "IS NOT NULL"
-                };
-                where_clauses.push(format!("{type_check} AND pm.conversion_refund_info IS NOT NULL AND json_extract(pm.conversion_refund_info, '$.refund_identifier') {null_check}" ));
-            }
-            // Filter by token transaction hash
-            if let PaymentDetailsFilter::Token {
-                tx_hash: Some(tx_hash),
-                ..
-            } = payment_details_filter
-            {
-                where_clauses.push("t.tx_hash = ?".to_string());
-                params.push(Box::new(tx_hash.clone()));
+
+            if !all_payment_details_clauses.is_empty() {
+                where_clauses.push(format!("({})", all_payment_details_clauses.join(" OR ")));
             }
         }
 

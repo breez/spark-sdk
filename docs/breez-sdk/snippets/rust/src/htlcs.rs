@@ -48,10 +48,10 @@ async fn list_claimable_htlc_payments(sdk: &BreezSdk) -> Result<Vec<Payment>> {
     let request = ListPaymentsRequest {
         type_filter: Some(vec![PaymentType::Receive]),
         status_filter: Some(vec![PaymentStatus::Pending]),
-        payment_details_filter: Some(PaymentDetailsFilter::Spark {
+        payment_details_filter: Some(vec![PaymentDetailsFilter::Spark {
             htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
             conversion_refund_needed: None,
-        }),
+        }]),
         ..Default::default()
     };
 

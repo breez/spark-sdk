@@ -930,10 +930,10 @@ impl BreezSdk {
                     // Fallback to searching by tx_hash for token payments
                     self.storage
                         .list_payments(ListPaymentsRequest {
-                            payment_details_filter: Some(PaymentDetailsFilter::Token {
+                            payment_details_filter: Some(vec![PaymentDetailsFilter::Token {
                                 conversion_refund_needed: None,
                                 tx_hash: Some(swap.inbound_transfer_id.clone()),
-                            }),
+                            }]),
                             ..Default::default()
                         })
                         .await?
@@ -989,32 +989,27 @@ impl BreezSdk {
     /// but the execution fails and no automatic refund is initiated.
     async fn check_and_refund_conversion_payments(&self) -> Result<(), SdkError> {
         debug!("Checking for failed conversions needing refunds");
-        let spark_payments = self
+        let payments = self
             .storage
             .list_payments(ListPaymentsRequest {
-                payment_details_filter: Some(PaymentDetailsFilter::Spark {
-                    htlc_status: None,
-                    conversion_refund_needed: Some(true),
-                }),
-                ..Default::default()
-            })
-            .await?;
-        let token_payments = self
-            .storage
-            .list_payments(ListPaymentsRequest {
-                payment_details_filter: Some(PaymentDetailsFilter::Token {
-                    conversion_refund_needed: Some(true),
-                    tx_hash: None,
-                }),
+                payment_details_filter: Some(vec![
+                    PaymentDetailsFilter::Spark {
+                        htlc_status: None,
+                        conversion_refund_needed: Some(true),
+                    },
+                    PaymentDetailsFilter::Token {
+                        conversion_refund_needed: Some(true),
+                        tx_hash: None,
+                    },
+                ]),
                 ..Default::default()
             })
             .await?;
         debug!(
-            "Found {} spark payments and {} token payments needing conversion refunds",
-            spark_payments.len(),
-            token_payments.len()
+            "Found {} payments needing conversion refunds",
+            payments.len()
         );
-        for payment in spark_payments.into_iter().chain(token_payments.into_iter()) {
+        for payment in payments {
             if let Err(e) = self.refund_conversion_payment(&payment).await {
                 error!(
                     "Failed to refund conversion for payment {}: {e:?}",

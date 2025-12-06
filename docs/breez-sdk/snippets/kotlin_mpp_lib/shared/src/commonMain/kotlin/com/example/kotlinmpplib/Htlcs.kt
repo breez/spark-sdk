@@ -58,9 +58,11 @@ class Htlcs {
             val request = ListPaymentsRequest(
                 typeFilter = listOf(PaymentType.RECEIVE),
                 statusFilter = listOf(PaymentStatus.PENDING),
-                paymentDetailsFilter = PaymentDetailsFilter.Spark(
-                    htlcStatus = listOf(SparkHtlcStatus.WAITING_FOR_PREIMAGE),
-                    conversionRefundNeeded = null
+                paymentDetailsFilter = listOf(
+                    PaymentDetailsFilter.Spark(
+                        htlcStatus = listOf(SparkHtlcStatus.WAITING_FOR_PREIMAGE),
+                        conversionRefundNeeded = null
+                    )
                 )
             )
 

@@ -175,7 +175,7 @@ pub struct _ListPaymentsRequest {
     pub type_filter: Option<Vec<PaymentType>>,
     pub status_filter: Option<Vec<PaymentStatus>>,
     pub asset_filter: Option<AssetFilter>,
-    pub payment_details_filter: Option<PaymentDetailsFilter>,
+    pub payment_details_filter: Option<Vec<PaymentDetailsFilter>>,
     pub from_timestamp: Option<u64>,
     pub to_timestamp: Option<u64>,
     pub offset: Option<u32>,

@@ -2123,10 +2123,10 @@ pub mod tests {
         // Test filter for WaitingForPreimage
         let waiting_filter = storage
             .list_payments(ListPaymentsRequest {
-                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Spark {
                     htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
                     conversion_refund_needed: None,
-                }),
+                }]),
                 ..Default::default()
             })
             .await
@@ -2137,10 +2137,10 @@ pub mod tests {
         // Test filter for PreimageShared
         let shared_filter = storage
             .list_payments(ListPaymentsRequest {
-                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Spark {
                     htlc_status: Some(vec![SparkHtlcStatus::PreimageShared]),
                     conversion_refund_needed: None,
-                }),
+                }]),
                 ..Default::default()
             })
             .await
@@ -2151,10 +2151,10 @@ pub mod tests {
         // Test filter for Returned
         let returned_filter = storage
             .list_payments(ListPaymentsRequest {
-                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Spark {
                     htlc_status: Some(vec![SparkHtlcStatus::Returned]),
                     conversion_refund_needed: None,
-                }),
+                }]),
                 ..Default::default()
             })
             .await
@@ -2165,13 +2165,13 @@ pub mod tests {
         // Test filter for multiple statuses (WaitingForPreimage and PreimageShared)
         let multiple_filter = storage
             .list_payments(ListPaymentsRequest {
-                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Spark {
                     htlc_status: Some(vec![
                         SparkHtlcStatus::WaitingForPreimage,
                         SparkHtlcStatus::PreimageShared,
                     ]),
                     conversion_refund_needed: None,
-                }),
+                }]),
                 ..Default::default()
             })
             .await
@@ -2183,14 +2183,14 @@ pub mod tests {
         // Test that non-HTLC payment is not included in any HTLC status filter
         let all_htlc_filter = storage
             .list_payments(ListPaymentsRequest {
-                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Spark {
                     htlc_status: Some(vec![
                         SparkHtlcStatus::WaitingForPreimage,
                         SparkHtlcStatus::PreimageShared,
                         SparkHtlcStatus::Returned,
                     ]),
                     conversion_refund_needed: None,
-                }),
+                }]),
                 ..Default::default()
             })
             .await
@@ -2206,13 +2206,22 @@ pub mod tests {
             id: "with_refund".to_string(),
             payment_type: PaymentType::Send,
             status: PaymentStatus::Completed,
-            amount: 10_000,
+            amount: 10_000_000,
             fees: 0,
             timestamp: 1000,
-            method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark {
+            method: PaymentMethod::Token,
+            details: Some(PaymentDetails::Token {
+                metadata: crate::TokenMetadata {
+                    identifier: "token1".to_string(),
+                    issuer_public_key: "pubkey1".to_string(),
+                    name: "Test Token".to_string(),
+                    ticker: "TTK".to_string(),
+                    decimals: 8,
+                    max_supply: 1_000_000_000,
+                    is_freezable: false,
+                },
+                tx_hash: "txhash1".to_string(),
                 invoice_details: None,
-                htlc_details: None,
                 conversion_info: None,
                 conversion_refund_info: None,
             }),
@@ -2296,10 +2305,10 @@ pub mod tests {
         // Test filter for payments missing transfer refund info
         let missing_refund_filter = storage
             .list_payments(ListPaymentsRequest {
-                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Spark {
                     htlc_status: None,
                     conversion_refund_needed: Some(true),
-                }),
+                }]),
                 ..Default::default()
             })
             .await
@@ -2310,10 +2319,10 @@ pub mod tests {
         // Test filter for payments with transfer refund info present
         let present_refund_filter = storage
             .list_payments(ListPaymentsRequest {
-                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
-                    htlc_status: None,
+                payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Token {
                     conversion_refund_needed: Some(false),
-                }),
+                    tx_hash: None,
+                }]),
                 ..Default::default()
             })
             .await
@@ -2321,39 +2330,58 @@ pub mod tests {
         assert_eq!(present_refund_filter.len(), 1);
         assert_eq!(present_refund_filter[0].id, "with_refund");
 
+        // Test multiple payment detail filters
+        let multiple_filters = storage
+            .list_payments(ListPaymentsRequest {
+                payment_details_filter: Some(vec![
+                    crate::PaymentDetailsFilter::Spark {
+                        htlc_status: None,
+                        conversion_refund_needed: Some(true),
+                    },
+                    crate::PaymentDetailsFilter::Token {
+                        conversion_refund_needed: Some(false),
+                        tx_hash: None,
+                    },
+                ]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(multiple_filters.len(), 2);
+
         // Test filter for token payments missing transfer refund info
         let token_no_refund_filter = storage
             .list_payments(ListPaymentsRequest {
-                payment_details_filter: Some(crate::PaymentDetailsFilter::Token {
+                payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Token {
                     conversion_refund_needed: Some(true),
                     tx_hash: None,
-                }),
+                }]),
                 ..Default::default()
             })
             .await
             .unwrap();
         assert_eq!(token_no_refund_filter.len(), 0);
 
-        // Test filter for token payments with transfer refund info present
-        let token_with_refund_filter = storage
+        // Test filter for spark payments with transfer refund info present
+        let spark_with_refund_filter = storage
             .list_payments(ListPaymentsRequest {
-                payment_details_filter: Some(crate::PaymentDetailsFilter::Token {
+                payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Spark {
+                    htlc_status: None,
                     conversion_refund_needed: Some(false),
-                    tx_hash: None,
-                }),
+                }]),
                 ..Default::default()
             })
             .await
             .unwrap();
-        assert_eq!(token_with_refund_filter.len(), 0);
+        assert_eq!(spark_with_refund_filter.len(), 0);
 
         // Test filter for all payments regardless of transfer refund info
         let all_payments_filter = storage
             .list_payments(ListPaymentsRequest {
-                payment_details_filter: Some(crate::PaymentDetailsFilter::Spark {
+                payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Spark {
                     htlc_status: None,
                     conversion_refund_needed: None,
-                }),
+                }]),
                 ..Default::default()
             })
             .await

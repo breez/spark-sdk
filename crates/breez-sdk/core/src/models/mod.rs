@@ -893,7 +893,7 @@ pub struct ListPaymentsRequest {
     pub asset_filter: Option<AssetFilter>,
     /// Only include payments matching these payment details filters
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub payment_details_filter: Option<PaymentDetailsFilter>,
+    pub payment_details_filter: Option<Vec<PaymentDetailsFilter>>,
     /// Only include payments created after this timestamp (inclusive)
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub from_timestamp: Option<u64>,

@@ -154,44 +154,55 @@ class SqliteStorage {
         params.push(request.toTimestamp);
       }
 
-      // Filter by payment details
-      if (request.paymentDetailsFilter) {
-        const paymentDetailsFilter = request.paymentDetailsFilter;
-        // Filter by Spark HTLC status
-        if (
-          paymentDetailsFilter.type === "spark" &&
-          paymentDetailsFilter.htlcStatus !== undefined &&
-          paymentDetailsFilter.htlcStatus.length > 0
-        ) {
-          const placeholders = paymentDetailsFilter.htlcStatus
-            .map(() => "?")
-            .join(", ");
-          whereClauses.push(
-            `json_extract(s.htlc_details, '$.status') IN (${placeholders})`
-          );
-          params.push(...paymentDetailsFilter.htlcStatus);
+      // Filter by payment details. If any filter matches, we include the payment
+      if (request.paymentDetailsFilter && request.paymentDetailsFilter.length > 0) {
+        const allPaymentDetailsClauses = [];
+        for (const paymentDetailsFilter of request.paymentDetailsFilter) {
+          const paymentDetailsClauses = [];
+          // Filter by Spark HTLC status
+          if (
+            paymentDetailsFilter.type === "spark" &&
+            paymentDetailsFilter.htlcStatus !== undefined &&
+            paymentDetailsFilter.htlcStatus.length > 0
+          ) {
+            const placeholders = paymentDetailsFilter.htlcStatus
+              .map(() => "?")
+              .join(", ");
+            paymentDetailsClauses.push(
+              `json_extract(s.htlc_details, '$.status') IN (${placeholders})`
+            );
+            params.push(...paymentDetailsFilter.htlcStatus);
+          }
+          // Filter by conversion refund info presence
+          if (
+            (paymentDetailsFilter.type === "spark" || paymentDetailsFilter.type === "token") &&
+              paymentDetailsFilter.conversionRefundNeeded !== undefined
+          ) {
+            const typeCheck = paymentDetailsFilter.type === "spark" ? "p.spark = 1" : "p.spark IS NULL";
+            const nullCheck =
+              paymentDetailsFilter.conversionRefundNeeded === true
+                ? "IS NULL"
+                : "IS NOT NULL";
+            paymentDetailsClauses.push(
+              `${typeCheck} AND pm.conversion_refund_info IS NOT NULL AND json_extract(pm.conversion_refund_info, '$.refundIdentifier') ${nullCheck}`
+            );
+          }
+          // Filter by token transaction hash
+          if (
+            paymentDetailsFilter.type === "token" &&
+            paymentDetailsFilter.txHash !== undefined
+          ) {
+            paymentDetailsClauses.push("t.tx_hash = ?");
+            params.push(paymentDetailsFilter.txHash);
+          }
+
+          if (paymentDetailsClauses.length > 0) {
+            allPaymentDetailsClauses.push(`(${paymentDetailsClauses.join(" AND ")})`);
+          }
         }
-        // Filter by conversion refund info presence
-        if (
-          (paymentDetailsFilter.type === "spark" || paymentDetailsFilter.type === "token") &&
-            paymentDetailsFilter.conversionRefundNeeded !== undefined
-        ) {
-          let typeCheck = paymentDetailsFilter.type === "spark" ? "p.spark = 1" : "p.spark IS NULL";
-          let nullCheck =
-            paymentDetailsFilter.conversionRefundNeeded === true
-              ? "IS NULL"
-              : "IS NOT NULL";
-          whereClauses.push(
-            `${typeCheck} AND pm.conversion_refund_info IS NOT NULL AND json_extract(pm.conversion_refund_info, '$.refundIdentifier') ${nullCheck}`
-          );
-        }
-        // Filter by token transaction hash
-        if (
-          paymentDetailsFilter.type === "token" &&
-          paymentDetailsFilter.txHash !== undefined
-        ) {
-          whereClauses.push("t.tx_hash = ?");
-          params.push(paymentDetailsFilter.txHash);
+
+        if (allPaymentDetailsClauses.length > 0) {
+          whereClauses.push(`(${allPaymentDetailsClauses.join(" OR ")})`);
         }
       }
 

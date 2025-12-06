@@ -299,21 +299,23 @@ pub(crate) async fn execute_command(
             to_timestamp,
             sort_ascending,
         } => {
-            let payment_details_filter = match (spark_htlc_status_filter, tx_hash) {
-                (Some(statuses), None) => Some(PaymentDetailsFilter::Spark {
+            let mut payment_details_filter = Vec::new();
+            if let Some(statuses) = spark_htlc_status_filter {
+                payment_details_filter.push(PaymentDetailsFilter::Spark {
                     htlc_status: Some(statuses),
                     conversion_refund_needed: None,
-                }),
-                (None, Some(tx_hash)) => Some(PaymentDetailsFilter::Token {
+                });
+            }
+            if let Some(tx_hash) = tx_hash {
+                payment_details_filter.push(PaymentDetailsFilter::Token {
                     conversion_refund_needed: None,
                     tx_hash: Some(tx_hash),
-                }),
-                (None, None) => None,
-                (Some(_), Some(_)) => {
-                    return Err(anyhow::anyhow!(
-                        "Cannot specify both spark_htlc_status_filter and tx_hash"
-                    ));
-                }
+                });
+            }
+            let payment_details_filter = if payment_details_filter.is_empty() {
+                None
+            } else {
+                Some(payment_details_filter)
             };
             let value = sdk
                 .list_payments(ListPaymentsRequest {
