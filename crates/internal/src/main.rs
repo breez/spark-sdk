@@ -105,6 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         spark_wallet::WalletEvent::Synced => println!("Synced"),
                         spark_wallet::WalletEvent::TransferClaimed(transfer) => println!("Transfer claimed: {}", transfer.id),
                         spark_wallet::WalletEvent::TransferClaimStarting(transfer) => println!("Transfer claim starting: {}", transfer.id),
+                        spark_wallet::WalletEvent::Optimization(event) => println!("Optimization event: {:?}", event),
                     }
                 }
                 else => eprintln!("Event stream closed."),

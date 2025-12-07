@@ -5,8 +5,8 @@ use tracing::{error, trace, warn};
 use uuid::Uuid;
 
 use crate::tree::{
-    Leaves, LeavesReservation, LeavesReservationId, TargetAmounts, TreeNode, TreeNodeId,
-    TreeNodeStatus, TreeServiceError, TreeStore, select_helper,
+    Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, TargetAmounts, TreeNode,
+    TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore, select_helper,
 };
 
 #[derive(Default)]
@@ -14,11 +14,18 @@ pub struct InMemoryTreeStore {
     leaves: Mutex<LeavesState>,
 }
 
+/// Entry in the reservation map, containing leaves and the purpose of the reservation.
+#[derive(Clone)]
+struct ReservationEntry {
+    leaves: Vec<TreeNode>,
+    purpose: ReservationPurpose,
+}
+
 #[derive(Default)]
 struct LeavesState {
     leaves: HashMap<TreeNodeId, TreeNode>,
     missing_operators_leaves: HashMap<TreeNodeId, TreeNode>,
-    leaves_reservations: HashMap<LeavesReservationId, Vec<TreeNode>>,
+    leaves_reservations: HashMap<LeavesReservationId, ReservationEntry>,
 }
 
 #[macros::async_trait]
@@ -34,6 +41,21 @@ impl TreeStore for InMemoryTreeStore {
 
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
         let leaves = self.leaves.lock().await;
+
+        // Separate reserved leaves by purpose
+        let mut reserved_for_payment = Vec::new();
+        let mut reserved_for_optimization = Vec::new();
+        for entry in leaves.leaves_reservations.values() {
+            match entry.purpose {
+                ReservationPurpose::Payment => {
+                    reserved_for_payment.extend(entry.leaves.iter().cloned());
+                }
+                ReservationPurpose::Optimization => {
+                    reserved_for_optimization.extend(entry.leaves.iter().cloned());
+                }
+            }
+        }
+
         Ok(Leaves {
             available: leaves
                 .leaves
@@ -53,12 +75,8 @@ impl TreeStore for InMemoryTreeStore {
                 .filter(|leaf| leaf.status == TreeNodeStatus::Available)
                 .cloned()
                 .collect(),
-            reserved: leaves
-                .leaves_reservations
-                .values()
-                .flatten()
-                .cloned()
-                .collect(),
+            reserved_for_payment,
+            reserved_for_optimization,
         })
     }
 
@@ -74,9 +92,10 @@ impl TreeStore for InMemoryTreeStore {
             .map(|l| (l.id.clone(), l.clone()))
             .collect();
 
-        for (key, reserved_leaves) in leaves_state.leaves_reservations.clone().iter() {
+        for (key, entry) in leaves_state.leaves_reservations.clone().iter() {
             // remove leaves not existing in the main pool
-            let mut filtered_leaves: Vec<TreeNode> = reserved_leaves
+            let mut filtered_leaves: Vec<TreeNode> = entry
+                .leaves
                 .iter()
                 .filter(|l| {
                     leaves_state.leaves.contains_key(&l.id)
@@ -97,9 +116,13 @@ impl TreeStore for InMemoryTreeStore {
             if filtered_leaves.is_empty() {
                 leaves_state.leaves_reservations.remove(key);
             } else {
-                leaves_state
-                    .leaves_reservations
-                    .insert(key.clone(), filtered_leaves);
+                leaves_state.leaves_reservations.insert(
+                    key.clone(),
+                    ReservationEntry {
+                        leaves: filtered_leaves,
+                        purpose: entry.purpose,
+                    },
+                );
             }
         }
         trace!("Updated {:?} leaves in the local state", leaves.len());
@@ -110,8 +133,9 @@ impl TreeStore for InMemoryTreeStore {
         &self,
         target_amounts: Option<&TargetAmounts>,
         exact_only: bool,
+        purpose: ReservationPurpose,
     ) -> Result<LeavesReservation, TreeServiceError> {
-        trace!("Reserving leaves for amounts: {target_amounts:?}");
+        trace!("Reserving leaves for amounts: {target_amounts:?}, purpose: {purpose:?}");
         let reservation = {
             // Filter available leaves from the state
             let leaves: Vec<TreeNode> = self.get_leaves().await?.available.into_iter().collect();
@@ -144,7 +168,7 @@ impl TreeStore for InMemoryTreeStore {
                 }
             };
 
-            let reservation_id = self.reserve_leaves_internal(&selected).await?;
+            let reservation_id = self.reserve_leaves_internal(&selected, purpose).await?;
             LeavesReservation::new(selected, reservation_id)
         };
 
@@ -154,8 +178,8 @@ impl TreeStore for InMemoryTreeStore {
     // move leaves back from the reserved pool to the main pool
     async fn cancel_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError> {
         let mut leaves_state = self.leaves.lock().await;
-        if let Some(leaves) = leaves_state.leaves_reservations.remove(id) {
-            for leaf in leaves {
+        if let Some(entry) = leaves_state.leaves_reservations.remove(id) {
+            for leaf in entry.leaves {
                 leaves_state.leaves.insert(leaf.id.clone(), leaf.clone());
             }
         }
@@ -188,6 +212,7 @@ impl InMemoryTreeStore {
     async fn reserve_leaves_internal(
         &self,
         leaves: &[TreeNode],
+        purpose: ReservationPurpose,
     ) -> Result<LeavesReservationId, TreeServiceError> {
         let mut leaves_state = self.leaves.lock().await;
         if leaves.is_empty() {
@@ -199,9 +224,13 @@ impl InMemoryTreeStore {
             }
         }
         let id = Uuid::now_v7().to_string();
-        leaves_state
-            .leaves_reservations
-            .insert(id.clone(), leaves.to_vec());
+        leaves_state.leaves_reservations.insert(
+            id.clone(),
+            ReservationEntry {
+                leaves: leaves.to_vec(),
+                purpose,
+            },
+        );
         for leaf in leaves {
             leaves_state.leaves.remove(&leaf.id);
         }
@@ -212,13 +241,17 @@ impl InMemoryTreeStore {
     #[cfg(test)]
     async fn get_reservation(&self, id: &LeavesReservationId) -> Option<Vec<TreeNode>> {
         let leaves_state = self.leaves.lock().await;
-        leaves_state.leaves_reservations.get(id).cloned()
+        leaves_state
+            .leaves_reservations
+            .get(id)
+            .map(|entry| entry.leaves.clone())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tree::ReservationPurpose;
     use bitcoin::{Transaction, absolute::LockTime, secp256k1::PublicKey, transaction::Version};
     use frost_secp256k1_tr::Identifier;
     use macros::async_test_all;
@@ -341,7 +374,11 @@ mod tests {
 
         // Reserve some leaves
         let reservation = state
-            .reserve_leaves(Some(&TargetAmounts::new(600, None)), false)
+            .reserve_leaves(
+                Some(&TargetAmounts::new(600, None)),
+                false,
+                ReservationPurpose::Payment,
+            )
             .await
             .unwrap();
 
@@ -371,9 +408,10 @@ mod tests {
 
         // Check main pool
         let all_leaves = state.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.reserved_balance(), 400);
+        assert_eq!(all_leaves.payment_reserved_balance(), 400);
         assert_eq!(all_leaves.available_balance(), 400);
         assert_eq!(all_leaves.missing_operators_balance(), 1000);
+        // balance() excludes payment-reserved leaves
         assert_eq!(all_leaves.balance(), 400 + 1000);
         assert_eq!(all_leaves.available.len(), 1); // Only node4 should be in main pool
         assert!(
@@ -395,7 +433,11 @@ mod tests {
 
         // Reserve leaves
         let reservation = state
-            .reserve_leaves(Some(&TargetAmounts::new(300, None)), false)
+            .reserve_leaves(
+                Some(&TargetAmounts::new(300, None)),
+                false,
+                ReservationPurpose::Payment,
+            )
             .await
             .unwrap();
 
@@ -419,7 +461,11 @@ mod tests {
         state.add_leaves(&leaves).await.unwrap();
 
         let reservation = state
-            .reserve_leaves(Some(&TargetAmounts::new(100, None)), true)
+            .reserve_leaves(
+                Some(&TargetAmounts::new(100, None)),
+                true,
+                ReservationPurpose::Payment,
+            )
             .await
             .unwrap();
 
@@ -443,7 +489,11 @@ mod tests {
         state.add_leaves(&leaves).await.unwrap();
 
         let reservation = state
-            .reserve_leaves(Some(&TargetAmounts::new(100, None)), true)
+            .reserve_leaves(
+                Some(&TargetAmounts::new(100, None)),
+                true,
+                ReservationPurpose::Payment,
+            )
             .await
             .unwrap();
 
@@ -483,7 +533,11 @@ mod tests {
         state.add_leaves(&leaves).await.unwrap();
 
         let reservation = state
-            .reserve_leaves(Some(&TargetAmounts::new(100, None)), true)
+            .reserve_leaves(
+                Some(&TargetAmounts::new(100, None)),
+                true,
+                ReservationPurpose::Payment,
+            )
             .await
             .unwrap();
 
@@ -527,11 +581,19 @@ mod tests {
 
         // Create multiple reservations
         let reservation1 = state
-            .reserve_leaves(Some(&TargetAmounts::new(100, None)), true)
+            .reserve_leaves(
+                Some(&TargetAmounts::new(100, None)),
+                true,
+                ReservationPurpose::Payment,
+            )
             .await
             .unwrap();
         let reservation2 = state
-            .reserve_leaves(Some(&TargetAmounts::new(200, None)), true)
+            .reserve_leaves(
+                Some(&TargetAmounts::new(200, None)),
+                true,
+                ReservationPurpose::Payment,
+            )
             .await
             .unwrap();
 
@@ -570,12 +632,20 @@ mod tests {
         state.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
 
         let r1 = state
-            .reserve_leaves(Some(&TargetAmounts::new(100, None)), true)
+            .reserve_leaves(
+                Some(&TargetAmounts::new(100, None)),
+                true,
+                ReservationPurpose::Payment,
+            )
             .await
             .unwrap();
         state.cancel_reservation(&r1.id).await.unwrap();
         let r2 = state
-            .reserve_leaves(Some(&TargetAmounts::new(100, None)), true)
+            .reserve_leaves(
+                Some(&TargetAmounts::new(100, None)),
+                true,
+                ReservationPurpose::Payment,
+            )
             .await
             .unwrap();
 
@@ -589,11 +659,19 @@ mod tests {
         state.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
 
         state
-            .reserve_leaves(Some(&TargetAmounts::new(100, None)), true)
+            .reserve_leaves(
+                Some(&TargetAmounts::new(100, None)),
+                true,
+                ReservationPurpose::Payment,
+            )
             .await
             .unwrap();
         let result = state
-            .reserve_leaves(Some(&TargetAmounts::new(100, None)), true)
+            .reserve_leaves(
+                Some(&TargetAmounts::new(100, None)),
+                true,
+                ReservationPurpose::Payment,
+            )
             .await
             .unwrap_err();
         assert!(matches!(result, TreeServiceError::InsufficientFunds));
@@ -602,8 +680,67 @@ mod tests {
     #[async_test_all]
     async fn test_reserve_leaves_empty() {
         let state = InMemoryTreeStore::new();
-        let err = state.reserve_leaves(None, false).await.unwrap_err();
+        let err = state
+            .reserve_leaves(None, false, ReservationPurpose::Payment)
+            .await
+            .unwrap_err();
 
         assert!(matches!(err, TreeServiceError::NonReservableLeaves));
+    }
+
+    #[async_test_all]
+    async fn test_optimization_reservation_included_in_balance() {
+        let state = InMemoryTreeStore::new();
+        let leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+            create_test_tree_node("node3", 300),
+        ];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Reserve some leaves for optimization
+        let _reservation = state
+            .reserve_leaves(
+                Some(&TargetAmounts::new(300, None)),
+                true,
+                ReservationPurpose::Optimization,
+            )
+            .await
+            .unwrap();
+
+        // Check that optimization-reserved leaves are included in balance
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.optimization_reserved_balance(), 300);
+        assert_eq!(all_leaves.available_balance(), 300); // node1 + node2 remaining
+        // balance() should include optimization-reserved leaves
+        assert_eq!(all_leaves.balance(), 300 + 300); // available + optimization-reserved
+    }
+
+    #[async_test_all]
+    async fn test_payment_reservation_excluded_from_balance() {
+        let state = InMemoryTreeStore::new();
+        let leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+            create_test_tree_node("node3", 300),
+        ];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Reserve some leaves for payment
+        let _reservation = state
+            .reserve_leaves(
+                Some(&TargetAmounts::new(300, None)),
+                true,
+                ReservationPurpose::Payment,
+            )
+            .await
+            .unwrap();
+
+        // Check that payment-reserved leaves are excluded from balance
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.payment_reserved_balance(), 300);
+        assert_eq!(all_leaves.available_balance(), 300); // node1 + node2 remaining
+        // balance() should NOT include payment-reserved leaves
+        assert_eq!(all_leaves.balance(), 300); // only available
     }
 }

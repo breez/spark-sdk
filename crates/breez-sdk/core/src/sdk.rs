@@ -578,6 +578,9 @@ impl BreezSdk {
                     error!("Failed to sync wallet: {e:?}");
                 }
             }
+            WalletEvent::Optimization(event) => {
+                info!("Optimization event: {:?}", event);
+            }
         }
     }
 

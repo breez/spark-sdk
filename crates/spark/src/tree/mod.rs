@@ -20,7 +20,10 @@ pub struct Leaves {
     pub available: Vec<TreeNode>,
     pub not_available: Vec<TreeNode>,
     pub available_missing_from_operators: Vec<TreeNode>,
-    pub reserved: Vec<TreeNode>,
+    /// Leaves reserved for payment operations - excluded from balance.
+    pub reserved_for_payment: Vec<TreeNode>,
+    /// Leaves reserved for optimization - included in balance.
+    pub reserved_for_optimization: Vec<TreeNode>,
 }
 
 impl Leaves {
@@ -33,11 +36,24 @@ impl Leaves {
             .map(|leaf| leaf.value)
             .sum()
     }
-    pub fn reserved_balance(&self) -> u64 {
-        self.reserved.iter().map(|leaf| leaf.value).sum()
+    pub fn payment_reserved_balance(&self) -> u64 {
+        self.reserved_for_payment
+            .iter()
+            .map(|leaf| leaf.value)
+            .sum()
     }
+    pub fn optimization_reserved_balance(&self) -> u64 {
+        self.reserved_for_optimization
+            .iter()
+            .map(|leaf| leaf.value)
+            .sum()
+    }
+    /// Total balance including optimization-reserved leaves but excluding
+    /// payment-reserved leaves (since those are being spent).
     pub fn balance(&self) -> u64 {
-        self.available_balance() + self.missing_operators_balance()
+        self.available_balance()
+            + self.missing_operators_balance()
+            + self.optimization_reserved_balance()
     }
 }
 
@@ -191,7 +207,20 @@ pub struct SigningKeyshare {
     pub public_key: PublicKey,
 }
 
-type LeavesReservationId = String;
+pub type LeavesReservationId = String;
+
+/// The purpose of a leaf reservation, which determines how the reserved
+/// leaves are treated in balance calculations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReservationPurpose {
+    /// Leaves being used for a payment - excluded from balance since they
+    /// are about to be spent.
+    #[default]
+    Payment,
+    /// Leaves being reorganized by the optimizer - included in balance since
+    /// the total value remains the same, just the denominations change.
+    Optimization,
+}
 
 #[derive(Debug)]
 pub struct LeavesReservation {
@@ -385,6 +414,8 @@ pub trait TreeStore: Send + Sync {
     ///   behavior is implementation-specific
     /// * `exact_only` - If `true`, only exact matches are allowed. If `false`,
     ///   approximate matches may be acceptable
+    /// * `purpose` - The purpose of the reservation, which determines how
+    ///   reserved leaves affect balance calculations
     ///
     /// # Returns
     ///
@@ -402,11 +433,11 @@ pub trait TreeStore: Send + Sync {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError};
+    /// use spark::tree::{TreeStore, TargetAmounts, ReservationPurpose, TreeServiceError};
     ///
     /// # async fn example(store: &dyn TreeStore) -> Result<(), TreeServiceError> {
     /// let target = TargetAmounts::new(50_000, Some(1_000));
-    /// let reservation = store.reserve_leaves(Some(&target), false).await?;
+    /// let reservation = store.reserve_leaves(Some(&target), false, ReservationPurpose::Payment).await?;
     /// println!("Reserved {} leaves with ID: {}", reservation.leaves.len(), reservation.id);
     /// # Ok(())
     /// # }
@@ -415,6 +446,7 @@ pub trait TreeStore: Send + Sync {
         &self,
         target_amounts: Option<&TargetAmounts>,
         exact_only: bool,
+        purpose: ReservationPurpose,
     ) -> Result<LeavesReservation, TreeServiceError>;
 
     /// Cancels a leaf reservation and returns the leaves to the available pool.
@@ -587,26 +619,23 @@ pub trait TreeService: Send + Sync {
     /// ```
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError>;
 
-    /// Inserts new leaves into the tree and optionally optimizes the tree structure.
+    /// Inserts new leaves into the tree.
     ///
-    /// This method adds the provided leaves to the tree state and can perform optimization
-    /// to improve the tree structure for better performance.
+    /// This method adds the provided leaves to the tree state.
     ///
     /// # Parameters
     ///
     /// * `leaves` - A vector of `TreeNode` objects to insert into the tree
-    /// * `optimize` - Whether to perform tree optimization after insertion
     ///
     /// # Returns
     ///
-    /// * `Result<Vec<TreeNode>, TreeServiceError>` - The updated tree nodes after insertion
-    ///   and optional optimization, or an error if the operation fails.
+    /// * `Result<Vec<TreeNode>, TreeServiceError>` - The updated tree nodes after insertion,
+    ///   or an error if the operation fails.
     ///
     /// # Errors
     ///
     /// Returns a `TreeServiceError` if:
     /// * The leaves contain invalid data
-    /// * Tree optimization fails    
     ///
     /// # Examples
     ///
@@ -614,21 +643,14 @@ pub trait TreeService: Send + Sync {
     /// use spark::tree::{TreeService, TreeNode, TreeServiceError};
     ///
     /// # async fn example(tree_service: Box<dyn TreeService>, new_leaves: Vec<TreeNode>) -> Result<(), TreeServiceError> {
-    /// // Insert leaves without optimization
-    /// let result = tree_service.insert_leaves(new_leaves.clone(), false).await?;
+    /// // Insert leaves
+    /// let result = tree_service.insert_leaves(new_leaves).await?;
     /// println!("Inserted {} leaves", result.len());
-    ///
-    /// // Insert leaves with optimization for better performance
-    /// let optimized_result = tree_service.insert_leaves(new_leaves, true).await?;
-    /// println!("Inserted and optimized {} leaves", optimized_result.len());
     /// # Ok(())
     /// # }
     /// ```
-    async fn insert_leaves(
-        &self,
-        leaves: Vec<TreeNode>,
-        optimize: bool,
-    ) -> Result<Vec<TreeNode>, TreeServiceError>;
+    async fn insert_leaves(&self, leaves: Vec<TreeNode>)
+    -> Result<Vec<TreeNode>, TreeServiceError>;
 
     /// Selects and reserves leaves from the tree that match the specified target amounts.
     ///
@@ -641,6 +663,9 @@ pub trait TreeService: Send + Sync {
     ///
     /// * `target_amounts` - Optional target amounts specifying the desired amount and fee.
     ///   If `None`, all available leaves are selected.
+    /// * `purpose` - The purpose of the reservation, which determines how reserved
+    ///   leaves affect balance calculations. Use `Payment` for spending operations
+    ///   and `Optimization` for leaf reorganization.
     ///
     /// # Returns
     ///
@@ -658,12 +683,12 @@ pub trait TreeService: Send + Sync {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeService, TargetAmounts, TreeServiceError};
+    /// use spark::tree::{TreeService, TargetAmounts, ReservationPurpose, TreeServiceError};
     ///
     /// # async fn example(tree_service: Box<dyn TreeService>) -> Result<(), TreeServiceError> {
     /// // Select leaves for a specific amount with fee
     /// let target = TargetAmounts::new(100_000, Some(1_000)); // 100k sats + 1k fee
-    /// let reservation = tree_service.select_leaves(Some(&target)).await?;
+    /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment).await?;
     /// println!("Reserved {} leaves with ID: {}", reservation.leaves.len(), reservation.id);
     ///   
     /// # Ok(())
@@ -672,6 +697,7 @@ pub trait TreeService: Send + Sync {
     async fn select_leaves(
         &self,
         target_amounts: Option<&TargetAmounts>,
+        purpose: ReservationPurpose,
     ) -> Result<LeavesReservation, TreeServiceError>;
 
     /// Cancels a leaf reservation and returns the reserved leaves to the available pool.
@@ -694,12 +720,12 @@ pub trait TreeService: Send + Sync {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeService, TargetAmounts, TreeServiceError};
+    /// use spark::tree::{TreeService, TargetAmounts, ReservationPurpose, TreeServiceError};
     ///
     /// # async fn example(tree_service: Box<dyn TreeService>) -> Result<(), TreeServiceError> {
     /// // Create a reservation
     /// let target = TargetAmounts::new(50_000, None);
-    /// let reservation = tree_service.select_leaves(Some(&target)).await?;
+    /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment).await?;
     ///
     /// // Later, if the transaction fails, cancel the reservation
     /// tree_service.cancel_reservation(reservation.id).await;
@@ -730,12 +756,12 @@ pub trait TreeService: Send + Sync {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeService, TargetAmounts, TreeServiceError};
+    /// use spark::tree::{TreeService, TargetAmounts, ReservationPurpose, TreeServiceError};
     ///
     /// # async fn example(tree_service: Box<dyn TreeService>) -> Result<(), TreeServiceError> {
     /// // Create a reservation
     /// let target = TargetAmounts::new(75_000, Some(2_000));
-    /// let reservation = tree_service.select_leaves(Some(&target)).await?;
+    /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment).await?;
     ///
     /// // After successfully using the leaves in a transaction, finalize the reservation
     /// tree_service.finalize_reservation(reservation.id).await;
