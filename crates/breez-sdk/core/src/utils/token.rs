@@ -154,7 +154,6 @@ pub async fn token_transaction_to_payments(
                 tx_hash: transaction.hash.clone(),
                 invoice_details: invoice.map(Into::into),
                 conversion_info: None,
-                conversion_refund_info: None,
             }),
         };
         payments.push(payment);

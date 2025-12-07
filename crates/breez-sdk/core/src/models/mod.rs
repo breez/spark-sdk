@@ -238,20 +238,16 @@ pub enum PaymentDetails {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         /// The HTLC transfer details if the payment fulfilled an HTLC transfer
         htlc_details: Option<SparkHtlcDetails>,
-        /// Conversion information if this was a successful conversion
+        /// The information for a successful or refundable conversion
         conversion_info: Option<ConversionInfo>,
-        /// Conversion refund information if this was a conversion that was refunded
-        conversion_refund_info: Option<ConversionRefundInfo>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         /// The invoice details if the payment fulfilled a spark invoice
         invoice_details: Option<SparkInvoicePaymentDetails>,
-        /// Conversion information if this was a successful conversion
+        /// The information for a successful or refundable conversion
         conversion_info: Option<ConversionInfo>,
-        /// Conversion refund information if this was a conversion that was refunded
-        conversion_refund_info: Option<ConversionRefundInfo>,
     },
     Lightning {
         /// Represents the invoice description
@@ -1133,9 +1129,16 @@ pub struct LnurlReceiveMetadata {
     pub sender_comment: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ConversionInfo {
+    Success(SuccessConversionInfo),
+    Refund(RefundConversionInfo),
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ConversionInfo {
+pub struct SuccessConversionInfo {
     /// The receiving payment id associated with the conversion
     pub payment_id: String,
     /// The fee paid for the conversion
@@ -1145,7 +1148,7 @@ pub struct ConversionInfo {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ConversionRefundInfo {
+pub struct RefundConversionInfo {
     /// The pool id associated with the conversion
     pub pool_id: String,
     /// The refund payment id if a refund payment was made

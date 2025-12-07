@@ -46,17 +46,17 @@ use crate::{
     AssetFilter, BitcoinAddressDetails, BitcoinChainService, Bolt11InvoiceDetails,
     CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest,
     ClaimDepositResponse, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, ConversionInfo,
-    ConversionRefundInfo, ConvertTokenRequest, ConvertTokenResponse, ConvertType, DepositInfo,
-    ExternalInputParser, Fee, GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest,
-    GetTokensMetadataResponse, InputType, LightningAddressInfo, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
-    LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse,
-    Logger, Network, PaymentDetails, PaymentDetailsFilter, PaymentStatus, PaymentType,
-    PrepareConvertTokenRequest, PrepareConvertTokenResponse, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
+    ConvertTokenRequest, ConvertTokenResponse, ConvertType, DepositInfo, ExternalInputParser, Fee,
+    GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
+    InputType, LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse,
+    ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest,
+    LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, Network, PaymentDetails,
+    PaymentDetailsFilter, PaymentStatus, PaymentType, PrepareConvertTokenRequest,
+    PrepareConvertTokenResponse, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    RefundConversionInfo, RefundDepositRequest, RefundDepositResponse,
     RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem,
-    SignMessageRequest, SignMessageResponse, SparkHtlcOptions, UpdateUserSettingsRequest,
-    UserSettings, WaitForPaymentIdentifier,
+    SignMessageRequest, SignMessageResponse, SparkHtlcOptions, SuccessConversionInfo,
+    UpdateUserSettingsRequest, UserSettings, WaitForPaymentIdentifier,
     chain::RecommendedFees,
     error::SdkError,
     events::{EventEmitter, EventListener, SdkEvent},
@@ -961,10 +961,10 @@ impl BreezSdk {
                     },
                 ) = &mut payment.details
                 {
-                    *conversion_info = Some(ConversionInfo {
+                    *conversion_info = Some(ConversionInfo::Success(SuccessConversionInfo {
                         payment_id: swap.outbound_transfer_id.clone(),
                         fee: swap.fee_paid,
-                    });
+                    }));
                     if let Err(e) = self.storage.insert_payment(payment).await {
                         error!(
                             "Failed to update payment with conversion info for swap {}: {e:?}",
@@ -1023,26 +1023,25 @@ impl BreezSdk {
 
     /// Initiates a refund for a conversion payment that requires a manual refund.
     async fn refund_conversion_payment(&self, payment: &Payment) -> Result<(), SdkError> {
-        let (clawback_transfer_id, conversion_refund_info) = match &payment.details {
+        let (clawback_transfer_id, conversion_info) = match &payment.details {
             Some(PaymentDetails::Spark {
-                conversion_refund_info,
-                ..
-            }) => (payment.id.clone(), conversion_refund_info),
+                conversion_info, ..
+            }) => (payment.id.clone(), conversion_info),
             Some(PaymentDetails::Token {
                 tx_hash,
-                conversion_refund_info,
+                conversion_info,
                 ..
-            }) => (tx_hash.clone(), conversion_refund_info),
+            }) => (tx_hash.clone(), conversion_info),
             _ => {
                 return Err(SdkError::Generic(
                     "Payment is not a Spark or Token conversion".to_string(),
                 ));
             }
         };
-        let Some(ConversionRefundInfo {
+        let Some(ConversionInfo::Refund(RefundConversionInfo {
             pool_id,
             refund_identifier: None,
-        }) = conversion_refund_info
+        })) = conversion_info
         else {
             return Err(SdkError::Generic(
                 "No conversion refund info with missing refund".to_string(),
@@ -1079,7 +1078,7 @@ impl BreezSdk {
                     .set_payment_metadata(
                         payment.id.clone(),
                         PaymentMetadata {
-                            conversion_refund_info: Some(ConversionRefundInfo {
+                            conversion_refund_info: Some(RefundConversionInfo {
                                 pool_id: pool_id.to_string(),
                                 refund_identifier: Some(spark_status_tracking_id),
                             }),
@@ -2900,12 +2899,10 @@ impl BreezSdk {
         let Some(
             PaymentDetails::Token {
                 conversion_info: payment_conversion_info,
-                conversion_refund_info: payment_conversion_refund_info,
                 ..
             }
             | PaymentDetails::Spark {
                 conversion_info: payment_conversion_info,
-                conversion_refund_info: payment_conversion_refund_info,
                 ..
             },
         ) = &mut sent_payment.details
@@ -2919,18 +2916,18 @@ impl BreezSdk {
         if let Some(inbound_identifier) = inbound_identifier
             && let Some(fee) = fee
         {
-            *payment_conversion_info = Some(ConversionInfo {
+            *payment_conversion_info = Some(ConversionInfo::Success(SuccessConversionInfo {
                 payment_id: received_payment
                     .as_ref()
                     .map_or(inbound_identifier.clone(), |p| p.id.clone()),
                 fee,
-            });
+            }));
         } else {
-            let conversion_refund_info = ConversionRefundInfo {
+            let conversion_refund_info = RefundConversionInfo {
                 pool_id: pool_id.to_string(),
                 refund_identifier,
             };
-            *payment_conversion_refund_info = Some(conversion_refund_info.clone());
+            *payment_conversion_info = Some(ConversionInfo::Refund(conversion_refund_info.clone()));
 
             self.storage
                 .set_payment_metadata(

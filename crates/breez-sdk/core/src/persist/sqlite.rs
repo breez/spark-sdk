@@ -8,8 +8,9 @@ use rusqlite::{
 use rusqlite_migration::{M, Migrations, SchemaVersion};
 
 use crate::{
-    AssetFilter, ConversionRefundInfo, DepositInfo, ListPaymentsRequest, LnurlPayInfo,
+    AssetFilter, ConversionInfo, DepositInfo, ListPaymentsRequest, LnurlPayInfo,
     LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter, PaymentMethod,
+    RefundConversionInfo, SuccessConversionInfo,
     error::DepositClaimError,
     persist::{PaymentMetadata, SetLnurlMetadataItem, UpdateDepositPayload},
     sync_storage::{
@@ -524,7 +525,13 @@ impl Storage for SqliteStorage {
                     "UPDATE payments SET spark = 1 WHERE id = ?",
                     params![payment.id],
                 )?;
-                if invoice_details.is_some() || htlc_details.is_some() || conversion_info.is_some()
+                let success_conversion_info = match conversion_info {
+                    Some(ConversionInfo::Success(info)) => Some(info),
+                    _ => None,
+                };
+                if invoice_details.is_some()
+                    || htlc_details.is_some()
+                    || success_conversion_info.is_some()
                 {
                     // Upsert both details together and avoid overwriting existing data with NULLs
                     tx.execute(
@@ -538,7 +545,7 @@ impl Storage for SqliteStorage {
                             payment.id,
                             invoice_details.as_ref().map(serde_json::to_string).transpose()?,
                             htlc_details.as_ref().map(serde_json::to_string).transpose()?,
-                            conversion_info.as_ref().map(serde_json::to_string).transpose()?,
+                            success_conversion_info.as_ref().map(serde_json::to_string).transpose()?,
                         ],
                     )?;
                 }
@@ -550,6 +557,10 @@ impl Storage for SqliteStorage {
                 conversion_info,
                 ..
             }) => {
+                let success_conversion_info = match conversion_info {
+                    Some(ConversionInfo::Success(info)) => Some(info),
+                    _ => None,
+                };
                 tx.execute(
                     "INSERT INTO payment_details_token (payment_id, metadata, tx_hash, invoice_details, conversion_info)
                      VALUES (?, ?, ?, ?, ?)
@@ -563,7 +574,7 @@ impl Storage for SqliteStorage {
                         serde_json::to_string(&metadata)?,
                         tx_hash,
                         invoice_details.as_ref().map(serde_json::to_string).transpose()?,
-                        conversion_info.as_ref().map(serde_json::to_string).transpose()?,
+                        success_conversion_info.as_ref().map(serde_json::to_string).transpose()?,
                     ],
                 )?;
             }
@@ -1296,16 +1307,21 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             let htlc_details = htlc_details_str
                 .map(|s| serde_json_from_str(&s, 23))
                 .transpose()?;
-            let conversion_info_str: Option<String> = row.get(24)?;
-            let conversion_info = conversion_info_str
-                .map(|s| serde_json_from_str(&s, 24))
-                .transpose()?;
-            let conversion_refund_info: Option<ConversionRefundInfo> = row.get(17)?;
+            let success_conversion_info_str: Option<String> = row.get(24)?;
+            let success_conversion_info: Option<SuccessConversionInfo> =
+                success_conversion_info_str
+                    .map(|s: String| serde_json_from_str(&s, 24))
+                    .transpose()?;
+            let refund_conversion_info: Option<RefundConversionInfo> = row.get(17)?;
+            let conversion_info = match (success_conversion_info, refund_conversion_info) {
+                (Some(success), _) => Some(ConversionInfo::Success(success)),
+                (_, Some(refund)) => Some(ConversionInfo::Refund(refund)),
+                _ => None,
+            };
             Some(PaymentDetails::Spark {
                 invoice_details,
                 htlc_details,
                 conversion_info,
-                conversion_refund_info,
             })
         }
         (_, _, _, _, Some(metadata)) => {
@@ -1313,17 +1329,22 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             let invoice_details = invoice_details_str
                 .map(|s| serde_json_from_str(&s, 20))
                 .transpose()?;
-            let conversion_info_str: Option<String> = row.get(21)?;
-            let conversion_info = conversion_info_str
-                .map(|s| serde_json_from_str(&s, 21))
-                .transpose()?;
-            let conversion_refund_info: Option<ConversionRefundInfo> = row.get(17)?;
+            let success_conversion_info_str: Option<String> = row.get(21)?;
+            let success_conversion_info: Option<SuccessConversionInfo> =
+                success_conversion_info_str
+                    .map(|s: String| serde_json_from_str(&s, 21))
+                    .transpose()?;
+            let refund_conversion_info: Option<RefundConversionInfo> = row.get(17)?;
+            let conversion_info = match (success_conversion_info, refund_conversion_info) {
+                (Some(success), _) => Some(ConversionInfo::Success(success)),
+                (_, Some(refund)) => Some(ConversionInfo::Refund(refund)),
+                _ => None,
+            };
             Some(PaymentDetails::Token {
                 metadata: serde_json_from_str(&metadata, 18)?,
                 tx_hash: row.get(19)?,
                 invoice_details,
                 conversion_info,
-                conversion_refund_info,
             })
         }
         _ => None,
@@ -1416,13 +1437,13 @@ impl FromSql for LnurlWithdrawInfo {
     }
 }
 
-impl ToSql for ConversionRefundInfo {
+impl ToSql for RefundConversionInfo {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         to_sql_json(self)
     }
 }
 
-impl FromSql for ConversionRefundInfo {
+impl FromSql for RefundConversionInfo {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         from_sql_json(value)
     }

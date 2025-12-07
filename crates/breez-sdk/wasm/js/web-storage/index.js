@@ -1506,14 +1506,15 @@ class IndexedDBStorage {
         ) {
           if (
             details.type !== paymentDetailsFilter.type ||
-            !details.conversionRefundInfo
+            !details.conversionInfo ||
+            details.conversionInfo.type !== "refund"
           ) {
             continue;
           }
 
           if (
             paymentDetailsFilter.conversionRefundNeeded ===
-            !!details.conversionRefundInfo.refundIdentifier
+            !!details.conversionInfo.refundIdentifier
           ) {
             continue;
           }
@@ -1639,9 +1640,9 @@ class IndexedDBStorage {
         }
       } else if (details.type == "spark" || details.type == "token") {
         // If conversionRefundInfo exists, parse and add to details
-        if (metadata.conversionRefundInfo) {
+        if (!details.conversionInfo && metadata.conversionRefundInfo) {
           try {
-            details.conversionRefundInfo = JSON.parse(metadata.conversionRefundInfo);
+            details.conversionInfo = { type: "refund", ...JSON.parse(metadata.conversionRefundInfo) };
           } catch (e) {
             throw new StorageError(
               `Failed to parse conversionRefundInfo JSON for payment ${payment.id}: ${e.message}`,

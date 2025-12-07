@@ -12,8 +12,8 @@ use serde_json::Value;
 use tracing::{debug, error};
 
 use crate::{
-    DepositInfo, EventEmitter, ListPaymentsRequest, Payment, PaymentDetails, PaymentMetadata,
-    SdkEvent, Storage, StorageError, UpdateDepositPayload,
+    ConversionInfo, DepositInfo, EventEmitter, ListPaymentsRequest, Payment, PaymentDetails,
+    PaymentMetadata, SdkEvent, Storage, StorageError, UpdateDepositPayload,
 };
 use tokio_with_wasm::alias as tokio;
 
@@ -128,13 +128,13 @@ impl SyncedStorage {
                         ..
                     } => (description, lnurl_pay_info, lnurl_withdraw_info, None),
                     PaymentDetails::Spark {
-                        conversion_refund_info,
+                        conversion_info: Some(ConversionInfo::Refund(refund_info)),
                         ..
                     }
                     | PaymentDetails::Token {
-                        conversion_refund_info,
+                        conversion_info: Some(ConversionInfo::Refund(refund_info)),
                         ..
-                    } => (None, None, None, conversion_refund_info),
+                    } => (None, None, None, Some(refund_info)),
                     _ => continue,
                 };
 

@@ -351,11 +351,15 @@ class SqliteStorage {
           spark: payment.details?.type === "spark" ? 1 : null,
         });
 
+        const conversionInfo = payment.details?.conversionInfo &&
+          payment.details.conversionInfo.type === "success"
+            ? JSON.stringify(payment.details.conversionInfo)
+            : null;
         if (
           payment.details?.type === "spark" &&
           (payment.details.invoiceDetails != null ||
             payment.details.htlcDetails != null ||
-            payment.details.conversionInfo != null)
+            conversionInfo != null)
         ) {
           sparkInsert.run({
             id: payment.id,
@@ -365,9 +369,7 @@ class SqliteStorage {
             htlcDetails: payment.details.htlcDetails
               ? JSON.stringify(payment.details.htlcDetails)
               : null,
-            conversionInfo: payment.details.conversionInfo
-              ? JSON.stringify(payment.details.conversionInfo)
-              : null,
+            conversionInfo,
           });
         }
 
@@ -390,9 +392,7 @@ class SqliteStorage {
             invoiceDetails: payment.details.invoiceDetails
               ? JSON.stringify(payment.details.invoiceDetails)
               : null,
-            conversionInfo: payment.details.conversionInfo
-              ? JSON.stringify(payment.details.conversionInfo)
-              : null,
+            conversionInfo,
           });
         }
       });
@@ -759,11 +759,10 @@ class SqliteStorage {
           ? JSON.parse(row.spark_htlc_details)
           : null,
         conversionInfo: row.spark_conversion_info
-          ? JSON.parse(row.spark_conversion_info)
-          : null,
-        conversionRefundInfo: row.conversion_refund_info
-          ? JSON.parse(row.conversion_refund_info)
-          : null,
+          ? { type: "success", ...JSON.parse(row.spark_conversion_info) }
+          : row.conversion_refund_info
+            ? { type: "refund", ...JSON.parse(row.conversion_refund_info) }
+            : null,
       };
     } else if (row.token_metadata) {
       details = {
@@ -774,11 +773,10 @@ class SqliteStorage {
           ? JSON.parse(row.token_invoice_details)
           : null,
         conversionInfo: row.token_conversion_info
-          ? JSON.parse(row.token_conversion_info)
-          : null,
-        conversionRefundInfo: row.conversion_refund_info
-          ? JSON.parse(row.conversion_refund_info)
-          : null,
+          ? { type: "success", ...JSON.parse(row.token_conversion_info) }
+          : row.conversion_refund_info
+            ? { type: "refund", ...JSON.parse(row.conversion_refund_info) }
+            : null,
       };
     }
 

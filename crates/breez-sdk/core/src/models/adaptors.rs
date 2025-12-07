@@ -89,7 +89,6 @@ impl PaymentDetails {
                     invoice_details: None,
                     htlc_details: None,
                     conversion_info: None,
-                    conversion_refund_info: None,
                 },
                 SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
                     tx_id: request.transaction_id.clone(),
@@ -110,7 +109,6 @@ impl PaymentDetails {
                 invoice_details: Some(invoice_details.into()),
                 htlc_details: None,
                 conversion_info: None,
-                conversion_refund_info: None,
             }));
         }
 
@@ -120,7 +118,6 @@ impl PaymentDetails {
                 invoice_details: None,
                 htlc_details: Some(htlc_preimage_request.clone().try_into()?),
                 conversion_info: None,
-                conversion_refund_info: None,
             }));
         }
 
@@ -129,7 +126,6 @@ impl PaymentDetails {
                 invoice_details: None,
                 htlc_details: None,
                 conversion_info: None,
-                conversion_refund_info: None,
             }));
         }
 
