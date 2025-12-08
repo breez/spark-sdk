@@ -902,6 +902,7 @@ impl BreezSdk {
     async fn sync_conversion_info(&self) -> Result<(), SdkError> {
         let cache = ObjectCacheRepository::new(Arc::clone(&self.storage));
         let mut offset = cache.fetch_conversion_info_offset().await?;
+        let mut update_offset = true;
 
         loop {
             debug!("Syncing conversion info from offset {offset}");
@@ -918,7 +919,6 @@ impl BreezSdk {
                 debug!("No more conversion info on offset {offset}");
                 break;
             }
-            let mut len = u32::try_from(response.swaps.len())?;
             for (i, swap) in response.swaps.iter().enumerate() {
                 // Get the payment by inbound transfer id
                 let payment_res = if let Ok(payment) = self
@@ -944,13 +944,19 @@ impl BreezSdk {
                 };
 
                 let Ok(mut payment) = payment_res else {
-                    // Stop the sync if the payment is not found
                     error!(
-                        "Failed to find payment for swap {} with inbound transfer id {}, skipping remaining swaps",
+                        "Failed to find payment for swap {} with inbound transfer id {}",
                         swap.id, swap.inbound_transfer_id
                     );
-                    len = u32::try_from(i).unwrap_or(0);
-                    break;
+                    if update_offset {
+                        // Store the offset and stop caching further offsets. The next sync
+                        // should start from this offset again.
+                        let index = u32::try_from(i)?;
+                        let last_found_offset = offset.saturating_add(index);
+                        cache.save_conversion_info_offset(last_found_offset).await?;
+                        update_offset = false;
+                    }
+                    continue;
                 };
 
                 if let Some(
@@ -975,8 +981,11 @@ impl BreezSdk {
                 }
             }
 
+            let len = u32::try_from(response.swaps.len())?;
             offset = offset.saturating_add(len);
-            cache.save_conversion_info_offset(offset).await?;
+            if update_offset {
+                cache.save_conversion_info_offset(offset).await?;
+            }
             if len < SYNC_PAGING_LIMIT {
                 break;
             }
@@ -1894,46 +1903,60 @@ impl BreezSdk {
                 integrator_public_key: None,
             })
             .await;
-        let (sent_payment, received_payment) = match response_res {
+        match response_res {
             Ok(response) => {
                 info!(
                     "Token conversion executed: accepted {}, error {:?}",
                     response.accepted, response.error
                 );
-                self.update_payment_conversion_info(
-                    &pool_id,
-                    response.transfer_id,
-                    response.outbound_transfer_id,
-                    response.refund_transfer_id,
-                    response.fee_amount,
-                )
-                .await
+                let (sent_payment, received_payment) = self
+                    .update_payment_conversion_info(
+                        &pool_id,
+                        response.transfer_id,
+                        response.outbound_transfer_id,
+                        response.refund_transfer_id,
+                        response.fee_amount,
+                    )
+                    .await?;
+                if response.accepted {
+                    Ok(ConvertTokenResponse {
+                        sent_payment,
+                        received_payment,
+                    })
+                } else {
+                    let error_message = response
+                        .error
+                        .unwrap_or("Conversion not accepted".to_string());
+                    Err(SdkError::Generic(format!(
+                        "Convert token failed, refund in progress: {error_message}",
+                    )))
+                }
             }
             Err(e) => {
-                error!("Token conversion failed: {e:?}");
+                error!("Convert token failed: {e:?}");
                 if let FlashnetError::Execution {
                     transaction_identifier: Some(transaction_identifier),
-                    ..
+                    source,
                 } = &e
                 {
-                    self.update_payment_conversion_info(
-                        &pool_id,
-                        transaction_identifier.clone(),
-                        None,
-                        None,
-                        None,
-                    )
-                    .await
+                    let _ = self
+                        .update_payment_conversion_info(
+                            &pool_id,
+                            transaction_identifier.clone(),
+                            None,
+                            None,
+                            None,
+                        )
+                        .await;
+                    Err(SdkError::Generic(format!(
+                        "Convert token failed, refund pending: {}",
+                        *source.clone()
+                    )))
                 } else {
                     Err(e.into())
                 }
             }
-        }?;
-
-        Ok(ConvertTokenResponse {
-            sent_payment,
-            received_payment,
-        })
+        }
     }
 
     /// Synchronizes the wallet with the Spark network
