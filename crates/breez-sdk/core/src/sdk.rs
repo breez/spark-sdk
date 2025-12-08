@@ -797,7 +797,11 @@ impl BreezSdk {
     async fn sync_wallet_state_to_storage(&self) -> Result<(), SdkError> {
         update_balances(self.spark_wallet.clone(), self.storage.clone()).await?;
 
-        let sync_service = SparkSyncService::new(self.spark_wallet.clone(), self.storage.clone());
+        let sync_service = SparkSyncService::new(
+            self.spark_wallet.clone(),
+            self.storage.clone(),
+            self.event_emitter.clone(),
+        );
         sync_service.sync_payments().await?;
 
         Ok(())
@@ -1332,7 +1336,9 @@ impl BreezSdk {
             )
             .await?;
 
-        emit_payment_status(&self.event_emitter, payment.clone()).await;
+        self.event_emitter
+            .emit(&SdkEvent::from_payment(payment.clone()))
+            .await;
         Ok(LnurlPayResponse {
             payment,
             success_action: success_action.map(From::from),
@@ -1967,7 +1973,9 @@ impl BreezSdk {
         };
         if let Ok(response) = &res {
             if !suppress_payment_event {
-                emit_payment_status(&self.event_emitter, response.payment.clone()).await;
+                self.event_emitter
+                    .emit(&SdkEvent::from_payment(response.payment.clone()))
+                    .await;
             }
             if let Err(e) = self
                 .sync_trigger
@@ -2327,7 +2335,7 @@ impl BreezSdk {
                             info!("Polling payment status = {} {:?}", payment.status, p.status);
                             if payment.status != PaymentStatus::Pending {
                                 info!("Polling payment completed status = {}", payment.status);
-                                emit_payment_status(&event_emitter, payment.clone()).await;
+                                event_emitter.emit(&SdkEvent::from_payment(payment.clone())).await;
                                 if let Err(e) = sync_trigger.send(SyncRequest::no_reply(SyncType::WalletState)) {
                                     error!("Failed to send sync trigger: {e:?}");
                                 }
@@ -2561,26 +2569,6 @@ fn process_success_action(
     };
 
     Ok(Some(SuccessActionProcessed::Aes { result }))
-}
-
-async fn emit_payment_status(event_emitter: &EventEmitter, payment: Payment) {
-    match payment.status {
-        PaymentStatus::Completed => {
-            event_emitter
-                .emit(&SdkEvent::PaymentSucceeded { payment })
-                .await;
-        }
-        PaymentStatus::Failed => {
-            event_emitter
-                .emit(&SdkEvent::PaymentFailed { payment })
-                .await;
-        }
-        PaymentStatus::Pending => {
-            event_emitter
-                .emit(&SdkEvent::PaymentPending { payment })
-                .await;
-        }
-    }
 }
 
 fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {

@@ -4,7 +4,8 @@ use spark_wallet::{ListTokenTransactionsRequest, Order, PagingFilter, SparkWalle
 use tracing::{error, info};
 
 use crate::{
-    LnurlWithdrawInfo, Payment, PaymentDetails, PaymentMetadata, PaymentStatus, SdkError, Storage,
+    EventEmitter, LnurlWithdrawInfo, Payment, PaymentDetails, PaymentMetadata, PaymentStatus,
+    SdkError, SdkEvent, Storage,
     persist::{CachedSyncInfo, ObjectCacheRepository},
     utils::token::token_transaction_to_payments,
 };
@@ -14,13 +15,19 @@ const PAYMENT_SYNC_BATCH_SIZE: u64 = 50;
 pub(crate) struct SparkSyncService {
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
+    event_emitter: Arc<EventEmitter>,
 }
 
 impl SparkSyncService {
-    pub fn new(spark_wallet: Arc<SparkWallet>, storage: Arc<dyn Storage>) -> Self {
+    pub fn new(
+        spark_wallet: Arc<SparkWallet>,
+        storage: Arc<dyn Storage>,
+        event_emitter: Arc<EventEmitter>,
+    ) -> Self {
         Self {
             spark_wallet,
             storage,
+            event_emitter,
         }
     }
 
@@ -311,6 +318,9 @@ impl SparkSyncService {
             if let Err(e) = self.storage.insert_payment(payment.clone()).await {
                 error!("Failed to insert token payment: {e:?}");
             }
+            self.event_emitter
+                .emit(&SdkEvent::from_payment(payment.clone()))
+                .await;
         }
 
         // We have synced all token transactions or found the last synced payment id.
