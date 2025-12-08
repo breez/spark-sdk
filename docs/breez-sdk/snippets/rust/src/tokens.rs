@@ -128,6 +128,28 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+async fn fetch_convert_limits(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: fetch-convert-limits
+    let token_identifier = "<token identifier>".to_string();
+
+    let response = sdk
+        .fetch_convert_token_limits(FetchConvertTokenLimitsRequest {
+            convert_type: ConvertType::ToBitcoin {
+                from_token_identifier: token_identifier,
+            },
+        })
+        .await?;
+
+    if let Some(min_from_amount) = response.min_from_amount {
+        info!("Min amount to send: {min_from_amount} token base units");
+    }
+    if let Some(min_to_amount) = response.min_to_amount {
+        info!("Min amount to receive: {min_to_amount} sats");
+    }
+    // ANCHOR_END: fetch-convert-limits
+    Ok(())
+}
+
 async fn prepare_convert_token_to_bitcoin(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-convert-token-to-bitcoin
     let token_identifier = "<token identifier>".to_string();

@@ -2,6 +2,7 @@
 import logging
 from breez_sdk_spark import (
     BreezSdk,
+    FetchConvertTokenLimitsRequest,
     GetInfoRequest,
     PrepareSendPaymentRequest,
     PrepareConvertTokenRequest,
@@ -128,6 +129,27 @@ async def send_token_payment(sdk: BreezSdk):
         logging.error(error)
         raise
     # ANCHOR_END: send-token-payment
+
+
+async def fetch_convert_limits(sdk: BreezSdk):
+    # ANCHOR: fetch-convert-limits
+    try:
+        token_identifier = "<token identifier>"
+        response = await sdk.fetch_convert_token_limits(
+            request=FetchConvertTokenLimitsRequest(
+                convert_type=ConvertType.TO_BITCOIN(
+                    from_token_identifier=token_identifier
+                ),
+            )
+        )
+        if response.min_from_amount is not None:
+            print(f"Min amount to send: {response.min_from_amount} token base units")
+        if response.min_to_amount is not None:
+            print(f"Min amount to receive: {response.min_to_amount} sats")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: fetch-convert-limits
 
 
 async def prepare_convert_token_to_bitcoin(sdk: BreezSdk):

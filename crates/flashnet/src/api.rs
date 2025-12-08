@@ -8,7 +8,8 @@ use tracing::debug;
 use crate::utils::generate_nonce;
 use crate::{
     ClawbackIntent, ClawbackRequest, ClawbackResponse, ExecuteSwapIntent, ExecuteSwapResponse,
-    ListUserSwapsRequest, ListUserSwapsResponse, SignedClawbackRequest, SignedExecuteSwapResponse,
+    GetMinAmountsRequest, GetMinAmountsResponse, ListUserSwapsRequest, ListUserSwapsResponse,
+    SignedClawbackRequest, SignedExecuteSwapResponse,
 };
 use crate::{
     ExecuteSwapRequest, FeatureName, FeatureStatus, FlashnetError, MinAmount, PingResponse,
@@ -59,6 +60,34 @@ impl FlashnetClient {
         self.ensure_ping_ok().await?;
 
         self.sign_clawback(request).await
+    }
+
+    pub async fn get_min_amounts(
+        &self,
+        request: GetMinAmountsRequest,
+    ) -> Result<GetMinAmountsResponse, FlashnetError> {
+        let request = request.decode_token_identifiers(self.config.network)?;
+        debug!("Get limits request: {request:?}");
+        let min_amounts = self.config_min_amounts().await?;
+        let min_amounts_map = min_amounts
+            .into_iter()
+            .filter(|ma| ma.enabled)
+            .map(|ma| (ma.asset_identifier, ma.min_amount))
+            .collect::<HashMap<_, _>>();
+        if let Some(min_in) = min_amounts_map.get(&request.asset_in_address) {
+            return Ok(GetMinAmountsResponse {
+                asset_in_min: Some(*min_in),
+                asset_out_min: None,
+            });
+        } else if let Some(min_out) = min_amounts_map.get(&request.asset_out_address) {
+            let relaxed_min_out = min_out.saturating_div(2); // 50% relaxation for slippage
+            return Ok(GetMinAmountsResponse {
+                asset_in_min: None,
+                asset_out_min: Some(relaxed_min_out),
+            });
+        }
+
+        Ok(GetMinAmountsResponse::default())
     }
 
     pub async fn get_pool(&self, pool_id: &str) -> Result<ListPoolsResponse, FlashnetError> {
@@ -174,7 +203,26 @@ impl FlashnetClient {
     }
 
     pub(crate) async fn config_min_amounts(&self) -> Result<Vec<MinAmount>, FlashnetError> {
-        self.get_request("v1/config/min-amounts", None::<()>).await
+        let min_amounts_cache = self
+            .cache_store
+            .get::<Vec<MinAmount>>(MIN_AMOUNTS_CACHE_KEY)
+            .await?;
+        let min_amounts = if let Some(min_amounts) = min_amounts_cache {
+            min_amounts
+        } else {
+            let min_amounts = self
+                .get_request("v1/config/min-amounts", None::<()>)
+                .await?;
+            self.cache_store
+                .set(
+                    MIN_AMOUNTS_CACHE_KEY,
+                    &min_amounts,
+                    MIN_AMOUNTS_TTL_MS.into(),
+                )
+                .await?;
+            min_amounts
+        };
+        Ok(min_amounts)
     }
 
     pub(crate) async fn ping(&self) -> Result<PingResponse, FlashnetError> {
@@ -228,29 +276,13 @@ impl FlashnetClient {
         amount_in: u128,
         min_amount_out: Option<u128>,
     ) -> Result<(), FlashnetError> {
-        let min_amounts_cache = self
-            .cache_store
-            .get::<Vec<MinAmount>>(MIN_AMOUNTS_CACHE_KEY)
+        let min_amounts = self
+            .get_min_amounts(GetMinAmountsRequest {
+                asset_in_address: asset_in_address.to_string(),
+                asset_out_address: asset_out_address.to_string(),
+            })
             .await?;
-        let min_amounts = if let Some(min_amounts) = min_amounts_cache {
-            min_amounts
-        } else {
-            let min_amounts = self.config_min_amounts().await?;
-            self.cache_store
-                .set(
-                    MIN_AMOUNTS_CACHE_KEY,
-                    &min_amounts,
-                    MIN_AMOUNTS_TTL_MS.into(),
-                )
-                .await?;
-            min_amounts
-        };
-        let min_amounts_map = min_amounts
-            .into_iter()
-            .filter(|ma| ma.enabled)
-            .map(|ma| (ma.asset_identifier, ma.min_amount))
-            .collect::<HashMap<_, _>>();
-        if let Some(&min_in) = min_amounts_map.get(asset_in_address) {
+        if let Some(min_in) = min_amounts.asset_in_min {
             if amount_in < min_in {
                 return Err(FlashnetError::Generic(format!(
                     "Amount in {amount_in} is less than minimum required {min_in} for asset {asset_in_address}",
@@ -259,12 +291,11 @@ impl FlashnetClient {
             return Ok(());
         }
         if let Some(min_amount_out) = min_amount_out
-            && let Some(&min_out) = min_amounts_map.get(asset_out_address)
+            && let Some(min_out) = min_amounts.asset_out_min
         {
-            let relaxed_min_out = min_out.saturating_div(2); // 50% relaxation for slippage
-            if min_amount_out < relaxed_min_out {
+            if min_amount_out < min_out {
                 return Err(FlashnetError::Generic(format!(
-                    "Minimum amount out {min_amount_out} is less than required {relaxed_min_out} (50% relaxed) for asset {asset_out_address}",
+                    "Minimum amount out {min_amount_out} is less than required {min_out} (50% relaxed) for asset {asset_out_address}",
                 )));
             }
             return Ok(());

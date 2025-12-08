@@ -1086,6 +1086,17 @@ pub enum ConvertType {
     ToBitcoin { from_token_identifier: String },
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchConvertTokenLimitsRequest)]
+pub struct FetchConvertTokenLimitsRequest {
+    pub convert_type: ConvertType,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchConvertTokenLimitsResponse)]
+pub struct FetchConvertTokenLimitsResponse {
+    pub min_from_amount: Option<u128>,
+    pub min_to_amount: Option<u128>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareConvertTokenRequest)]
 pub struct PrepareConvertTokenRequest {
     pub convert_type: ConvertType,

@@ -3,11 +3,11 @@ mod issuer;
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, ConvertTokenRequest, ConvertType, Fee, GetInfoRequest,
-    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
-    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
-    OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
-    PrepareConvertTokenRequest, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
+    ClaimHtlcPaymentRequest, ConvertTokenRequest, ConvertType, Fee, FetchConvertTokenLimitsRequest,
+    GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest, InputType,
+    LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest,
+    LnurlWithdrawRequest, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus,
+    PaymentType, PrepareConvertTokenRequest, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
     ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
     RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
     SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
@@ -227,10 +227,19 @@ pub enum Command {
         /// The token identifiers to get metadata for
         token_identifiers: Vec<String>,
     },
+    FetchConvertLimits {
+        /// Whether we are converting from or to Bitcoin
+        #[clap(short = 'f', long, action = clap::ArgAction::SetTrue)]
+        from_bitcoin: bool,
+
+        /// The token identifier of the token
+        token_identifier: String,
+    },
     ConvertToken {
         /// The amount to convert
         amount: u128,
 
+        /// Whether we are converting from or to Bitcoin
         #[clap(short = 'f', long, action = clap::ArgAction::SetTrue)]
         from_bitcoin: bool,
 
@@ -619,6 +628,25 @@ pub(crate) async fn execute_command(
         Command::GetTokensMetadata { token_identifiers } => {
             let res = sdk
                 .get_tokens_metadata(GetTokensMetadataRequest { token_identifiers })
+                .await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::FetchConvertLimits {
+            from_bitcoin,
+            token_identifier,
+        } => {
+            let convert_type = if from_bitcoin {
+                ConvertType::FromBitcoin {
+                    to_token_identifier: token_identifier,
+                }
+            } else {
+                ConvertType::ToBitcoin {
+                    from_token_identifier: token_identifier,
+                }
+            };
+            let res = sdk
+                .fetch_convert_token_limits(FetchConvertTokenLimitsRequest { convert_type })
                 .await?;
             print_value(&res)?;
             Ok(true)

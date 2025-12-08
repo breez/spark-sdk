@@ -104,6 +104,25 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   // ANCHOR_END: send-token-payment
 }
 
+const fetchConvertLimits = async (sdk: BreezSdk) => {
+  // ANCHOR: fetch-convert-limits
+  const tokenIdentifier = '<token identifier>'
+
+  const response = await sdk.fetchConvertTokenLimits({
+    convertType: new ConvertType.ToBitcoin({
+      fromTokenIdentifier: tokenIdentifier
+    })
+  })
+
+  if (response.minFromAmount !== null) {
+    console.log(`Min amount to send: ${response.minFromAmount} token base units`)
+  }
+  if (response.minToAmount !== null) {
+    console.log(`Min amount to receive: ${response.minToAmount} sats`)
+  }
+  // ANCHOR_END: fetch-convert-limits
+}
+
 const prepareConvertTokenToBitcoin = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-convert-token-to-bitcoin
   const tokenIdentifier = '<token identifier>'

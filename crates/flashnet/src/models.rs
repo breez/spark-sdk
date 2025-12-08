@@ -230,6 +230,27 @@ pub(crate) struct FeatureStatus {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct GetMinAmountsRequest {
+    pub asset_in_address: String,
+    pub asset_out_address: String,
+}
+
+impl GetMinAmountsRequest {
+    pub(crate) fn decode_token_identifiers(&self, network: Network) -> Result<Self, FlashnetError> {
+        Ok(Self {
+            asset_in_address: decode_token_identifier(&self.asset_in_address, network)?,
+            asset_out_address: decode_token_identifier(&self.asset_out_address, network)?,
+        })
+    }
+}
+
+#[derive(Default)]
+pub struct GetMinAmountsResponse {
+    pub asset_in_min: Option<u128>,
+    pub asset_out_min: Option<u128>,
+}
+
 #[serde_as]
 #[derive(Serialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]

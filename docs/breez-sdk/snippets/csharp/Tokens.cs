@@ -117,6 +117,30 @@ namespace BreezSdkSnippets
             // ANCHOR_END: send-token-payment
         }
 
+        async Task FetchConvertLimits(BreezSdk sdk)
+        {
+            // ANCHOR: fetch-convert-limits
+            var tokenIdentifier = "<token identifier>";
+
+            var response = await sdk.FetchConvertTokenLimits(
+                request: new FetchConvertTokenLimitsRequest(
+                    convertType: new ConvertType.ToBitcoin(
+                        fromTokenIdentifier: tokenIdentifier
+                    )
+                )
+            );
+
+            if (response.minFromAmount != null)
+            {
+                Console.WriteLine($"Min amount to send: {response.minFromAmount} token base units");
+            }
+            if (response.minToAmount != null)
+            {
+                Console.WriteLine($"Min amount to receive: {response.minToAmount} sats");
+            }
+            // ANCHOR_END: fetch-convert-limits
+        }
+
         async Task PrepareConvertTokenToBitcoin(BreezSdk sdk)
         {
             // ANCHOR: prepare-convert-token-to-bitcoin

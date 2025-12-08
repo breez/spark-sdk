@@ -995,6 +995,17 @@ pub enum _ConvertType {
     },
 }
 
+#[frb(mirror(FetchConvertTokenLimitsRequest))]
+pub struct _FetchConvertTokenLimitsRequest {
+    pub convert_type: ConvertType,
+}
+
+#[frb(mirror(FetchConvertTokenLimitsResponse))]
+pub struct _FetchConvertTokenLimitsResponse {
+    pub min_from_amount: Option<u128>,
+    pub min_to_amount: Option<u128>,
+}
+
 #[frb(mirror(PrepareConvertTokenRequest))]
 pub struct _PrepareConvertTokenRequest {
     pub convert_type: ConvertType,

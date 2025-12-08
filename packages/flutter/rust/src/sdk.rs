@@ -218,6 +218,13 @@ impl BreezSdk {
         }
     }
 
+    pub async fn fetch_convert_token_limits(
+        &self,
+        request: FetchConvertTokenLimitsRequest,
+    ) -> Result<FetchConvertTokenLimitsResponse, SdkError> {
+        self.inner.fetch_convert_token_limits(request).await
+    }
+
     pub async fn prepare_convert_token(
         &self,
         request: PrepareConvertTokenRequest,

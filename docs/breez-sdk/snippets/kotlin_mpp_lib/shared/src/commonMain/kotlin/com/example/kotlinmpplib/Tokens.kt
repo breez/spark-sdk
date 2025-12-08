@@ -133,6 +133,30 @@ class Tokens {
         // ANCHOR_END: send-token-payment
     }
 
+    suspend fun fetchConvertLimits(sdk: BreezSdk) {
+        // ANCHOR: fetch-convert-limits
+        try {
+            val tokenIdentifier = "<token identifier>"
+            
+            val response = sdk.fetchConvertTokenLimits(
+                FetchConvertTokenLimitsRequest(
+                    convertType = ConvertType.ToBitcoin(
+                        fromTokenIdentifier = tokenIdentifier
+                    ),
+                )
+            )
+            if (response.minFromAmount != null) {
+                println("Min amount to send: ${response.minFromAmount} token base units")
+            }
+            if (response.minToAmount != null) {
+                println("Min amount to receive: ${response.minToAmount} sats")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: fetch-convert-limits
+    }
+
     suspend fun prepareConvertTokenToBitcoin(sdk: BreezSdk) {
         // ANCHOR: prepare-convert-token-to-bitcoin
         try {

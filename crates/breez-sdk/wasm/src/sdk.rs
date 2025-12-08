@@ -269,6 +269,18 @@ impl BreezSdk {
         }
     }
 
+    #[wasm_bindgen(js_name = "fetchConvertTokenLimits")]
+    pub async fn fetch_convert_token_limits(
+        &self,
+        request: FetchConvertTokenLimitsRequest,
+    ) -> WasmResult<FetchConvertTokenLimitsResponse> {
+        Ok(self
+            .sdk
+            .fetch_convert_token_limits(request.into())
+            .await?
+            .into())
+    }
+
     #[wasm_bindgen(js_name = "prepareConvertToken")]
     pub async fn prepare_convert_token(
         &self,

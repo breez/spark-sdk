@@ -133,6 +133,31 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
+func FetchConvertLimits(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: fetch-convert-limits
+	tokenIdentifier := "<token identifier>"
+
+	response, err := sdk.FetchConvertTokenLimits(
+		breez_sdk_spark.FetchConvertTokenLimitsRequest{
+			ConvertType: breez_sdk_spark.ConvertTypeToBitcoin{
+				FromTokenIdentifier: tokenIdentifier,
+			},
+		})
+
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return err
+	}
+
+	if response.MinFromAmount != nil {
+		log.Printf("Min amount to send: %v token base units", *response.MinFromAmount)
+	}
+	if response.MinToAmount != nil {
+		log.Printf("Min amount to receive: %v sats", *response.MinToAmount)
+	}
+	// ANCHOR_END: fetch-convert-limits
+	return nil
+}
+
 func PrepareConvertTokenToBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: prepare-convert-token-to-bitcoin
 	tokenIdentifier := "<token identifier>"

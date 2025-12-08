@@ -107,6 +107,24 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
   // ANCHOR_END: send-token-payment
 }
 
+Future<void> fetchConvertLimits(BreezSdk sdk) async {
+  // ANCHOR: fetch-convert-limits
+  final tokenIdentifier = '<token identifier>';
+
+  final response = await sdk.fetchConvertTokenLimits(
+    request: FetchConvertTokenLimitsRequest(
+      convertType: ConvertType.toBitcoin(fromTokenIdentifier: tokenIdentifier),
+    ),
+  );
+  if (response.minFromAmount != null) {
+    print('Min amount to send: ${response.minFromAmount} token base units');
+  }
+  if (response.minToAmount != null) {
+    print('Min amount to receive: ${response.minToAmount} sats');
+  }
+  // ANCHOR_END: fetch-convert-limits
+}
+
 Future<void> prepareConvertTokenToBitcoin(BreezSdk sdk) async {
   // ANCHOR: prepare-convert-token-to-bitcoin
   final tokenIdentifier = '<token identifier>';

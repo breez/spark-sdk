@@ -100,7 +100,7 @@ impl FlashnetClient {
     async fn get_access_token(&self) -> Result<String, FlashnetError> {
         let access_token =
             if let Some(access_token) = self.cache_store.get(ACCESS_TOKEN_CACHE_KEY).await? {
-                debug!("Using cached access token: {access_token}");
+                trace!("Using cached access token");
                 access_token
             } else {
                 debug!("No access token in cache, authenticating");

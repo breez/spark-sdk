@@ -28,7 +28,7 @@
 - [End-user fees](guide/end-user_fees.md)
 - [Handling tokens](guide/tokens.md)
   - [Token payments](guide/token_payments.md)
-  - [Transfer tokens](guide/convert_tokens.md)
+  - [Converting tokens](guide/converting_tokens.md)
   - [Issuing tokens](guide/issuing_tokens.md)
 - [Advanced features](guide/advanced.md)
   - [Spark HTLC Payments](guide/htlcs.md)

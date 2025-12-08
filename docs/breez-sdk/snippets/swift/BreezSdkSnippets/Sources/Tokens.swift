@@ -107,6 +107,26 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
     // ANCHOR_END: send-token-payment
 }
 
+func fetchConvertLimits(sdk: BreezSdk) async throws {
+    // ANCHOR: fetch-convert-limits
+    let tokenIdentifier = "<token identifier>"
+
+    let response = try await sdk.fetchConvertTokenLimits(
+        request: FetchConvertTokenLimitsRequest(
+            convertType: ConvertType.toBitcoin(
+                fromTokenIdentifier: tokenIdentifier
+            )
+        ))
+
+    if let minFromAmount = response.minFromAmount {
+        print("Min amount to send: \(minFromAmount) token base units")
+    }
+    if let minToAmount = response.minToAmount {
+        print("Min amount to receive: \(minToAmount) sats")
+    }
+    // ANCHOR_END: fetch-convert-limits
+}
+
 func prepareConvertTokenToBitcoin(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-convert-token-to-bitcoin
     let tokenIdentifier = "<token identifier>"

@@ -1165,6 +1165,23 @@ pub enum ConvertType {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FetchConvertTokenLimitsRequest {
+    /// The type of conversion, either from or to Bitcoin.
+    pub convert_type: ConvertType,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FetchConvertTokenLimitsResponse {
+    /// The minimum amount to be converted.
+    /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
+    pub min_from_amount: Option<u128>,
+    /// The minimum amount to be received from the conversion.
+    /// Denominated in satoshis if converting to Bitcoin, otherwise in the token base units.
+    pub min_to_amount: Option<u128>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareConvertTokenRequest {
     /// The type of conversion, either from or to Bitcoin.
     pub convert_type: ConvertType,

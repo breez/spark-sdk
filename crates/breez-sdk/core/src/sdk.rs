@@ -21,8 +21,8 @@ use breez_sdk_common::{
 };
 use flashnet::{
     BTC_ASSET_ADDRESS, ClawbackRequest, ClawbackResponse, ExecuteSwapRequest, FlashnetClient,
-    FlashnetError, ListPoolsRequest, ListUserSwapsRequest, PoolSortOrder, SimulateSwapRequest,
-    SwapSortOrder,
+    FlashnetError, GetMinAmountsRequest, ListPoolsRequest, ListUserSwapsRequest, PoolSortOrder,
+    SimulateSwapRequest, SwapSortOrder,
 };
 use lnurl_models::sanitize_username;
 use spark_wallet::{
@@ -47,8 +47,9 @@ use crate::{
     CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest,
     ClaimDepositResponse, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, ConversionInfo,
     ConvertTokenRequest, ConvertTokenResponse, ConvertType, DepositInfo, ExternalInputParser, Fee,
-    GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
-    InputType, LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse,
+    FetchConvertTokenLimitsRequest, FetchConvertTokenLimitsResponse, GetPaymentRequest,
+    GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse, InputType,
+    LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse,
     ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlPayInfo, LnurlPayRequest,
     LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, Network, PaymentDetails,
     PaymentDetailsFilter, PaymentStatus, PaymentType, PrepareConvertTokenRequest,
@@ -1750,6 +1751,32 @@ impl BreezSdk {
     ) -> Result<SendPaymentResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
         Box::pin(self.send_payment_internal(request, false)).await
+    }
+
+    pub async fn fetch_convert_token_limits(
+        &self,
+        request: FetchConvertTokenLimitsRequest,
+    ) -> Result<FetchConvertTokenLimitsResponse, SdkError> {
+        self.ensure_spark_private_mode_initialized().await?;
+        let (asset_in_address, asset_out_address) = match request.convert_type {
+            ConvertType::FromBitcoin {
+                to_token_identifier,
+            } => (BTC_ASSET_ADDRESS.to_string(), to_token_identifier),
+            ConvertType::ToBitcoin {
+                from_token_identifier,
+            } => (from_token_identifier, BTC_ASSET_ADDRESS.to_string()),
+        };
+        let min_amounts = self
+            .flashnet_client
+            .get_min_amounts(GetMinAmountsRequest {
+                asset_in_address,
+                asset_out_address,
+            })
+            .await?;
+        Ok(FetchConvertTokenLimitsResponse {
+            min_from_amount: min_amounts.asset_in_min,
+            min_to_amount: min_amounts.asset_out_min,
+        })
     }
 
     /// Prepares a conversion by validating the request and estimating the receive amount and fee.
