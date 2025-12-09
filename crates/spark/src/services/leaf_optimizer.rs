@@ -7,7 +7,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     services::{ServiceError, Swap},
-    tree::{LeavesReservationId, ReservationPurpose, TreeNode, TreeService},
+    tree::{LeavesReservation, ReservationPurpose, TargetAmounts, TreeService},
 };
 
 /// Default maximum number of leaves per swap round
@@ -88,12 +88,18 @@ pub trait OptimizationEventHandler: Send + Sync {
     fn on_optimization_event(&self, event: OptimizationEvent);
 }
 
-/// Represents a single swap operation in the optimization process.
+/// Represents a single swap operation plan for the optimization process.
 #[derive(Clone, Debug)]
-pub struct OptimizationSwap {
+struct SwapPlan {
     /// The leaf values to give up in this swap.
     pub leaves_to_give: Vec<u64>,
     /// The leaf values to receive in this swap.
+    pub leaves_to_receive: Vec<u64>,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedSwap {
+    pub reserved_leaves_to_give: LeavesReservation,
     pub leaves_to_receive: Vec<u64>,
 }
 
@@ -140,7 +146,7 @@ impl LeafOptimizer {
 
     /// Checks if optimization is currently running and may have leaves in use.
     /// Used to determine if optimization should be cancelled when payments fail.
-    pub fn has_reserved_leaves(&self) -> bool {
+    pub fn is_running(&self) -> bool {
         self.progress.lock().unwrap().is_running
     }
 
@@ -209,31 +215,52 @@ impl LeafOptimizer {
         // Reset cancellation flag
         let _ = self.cancel_tx.send(false);
 
-        // Reserve ALL available leaves for the duration of optimization.
-        // Use Optimization purpose so these leaves are still counted in the balance.
-        let reservation = self
-            .tree_service
-            .select_leaves(None, ReservationPurpose::Optimization)
-            .await?;
+        let leaves = self.tree_service.list_leaves().await?.available;
 
-        if reservation.leaves.is_empty() {
+        if leaves.is_empty() {
             debug!("No leaves available for optimization");
             self.emit_event(OptimizationEvent::Skipped);
             return Ok(());
         }
 
-        // Calculate the swaps needed based on the reserved leaves
-        let leaf_values: Vec<u64> = reservation.leaves.iter().map(|l| l.value).collect();
-        let swaps = self.calculate_optimization_swaps(&leaf_values);
+        let swaps = self
+            .calculate_optimization_swaps(&leaves.iter().map(|l| l.value).collect::<Vec<u64>>());
 
         if swaps.is_empty() {
             debug!("No swaps needed for optimization");
-            let _ = self.tree_service.cancel_reservation(reservation.id).await;
             self.emit_event(OptimizationEvent::Skipped);
             return Ok(());
         }
 
-        let total_rounds = swaps.len() as u32;
+        let mut prepared_swaps = Vec::new();
+        for swap in swaps {
+            let swap_reservation = match self
+                .tree_service
+                .select_leaves(
+                    Some(&TargetAmounts::new_exact_denominations(
+                        swap.leaves_to_give.clone(),
+                    )),
+                    ReservationPurpose::Optimization,
+                )
+                .await
+            {
+                Ok(reservation) => reservation,
+                Err(e) => {
+                    self.emit_event(OptimizationEvent::Failed {
+                        error: e.to_string(),
+                    });
+                    return Err(e.into());
+                }
+            };
+            prepared_swaps.push(PreparedSwap {
+                reserved_leaves_to_give: swap_reservation,
+                leaves_to_receive: swap.leaves_to_receive,
+            });
+        }
+
+        let total_rounds = prepared_swaps.len() as u32;
+
+        info!("Starting leaf optimization with {} rounds", total_rounds);
 
         // Mark as running
         {
@@ -249,9 +276,7 @@ impl LeafOptimizer {
         info!("Starting leaf optimization with {} rounds", total_rounds);
 
         // Execute each swap round using the reserved leaves
-        let result = self
-            .execute_optimization_rounds(swaps, reservation.leaves, reservation.id)
-            .await;
+        let result = self.execute_optimization_rounds(prepared_swaps).await;
 
         // Mark as stopped and notify any waiters (e.g., cancel method)
         {
@@ -324,27 +349,33 @@ impl LeafOptimizer {
     /// - On cancellation/failure with partial progress: refreshes leaves from server to sync state
     async fn execute_optimization_rounds(
         &self,
-        swaps: Vec<OptimizationSwap>,
-        mut available_leaves: Vec<TreeNode>,
-        reservation_id: LeavesReservationId,
+        swaps: Vec<PreparedSwap>,
     ) -> Result<bool, ServiceError> {
         let total_rounds = swaps.len() as u32;
-        let mut completed_rounds = 0u32;
 
-        for (index, swap) in swaps.into_iter().enumerate() {
+        let mut swaps_left_to_execute = swaps;
+
+        for (index, swap) in swaps_left_to_execute.clone().into_iter().enumerate() {
             let round = (index + 1) as u32;
 
             // Check for cancellation before each round
             if *self.cancel_rx.borrow() {
                 debug!("Optimization cancelled before round {}", round);
-                self.cleanup_after_interruption(reservation_id, completed_rounds)
+                self.cancel_remaining_swap_reservations(swaps_left_to_execute)
                     .await;
                 return Ok(false);
             }
 
             trace!(
                 "Executing optimization round {}/{}: give {:?}, receive {:?}",
-                round, total_rounds, swap.leaves_to_give, swap.leaves_to_receive
+                round,
+                total_rounds,
+                swap.reserved_leaves_to_give
+                    .leaves
+                    .iter()
+                    .map(|l| l.value)
+                    .collect::<Vec<u64>>(),
+                swap.leaves_to_receive
             );
 
             // Update progress with current round
@@ -358,49 +389,27 @@ impl LeafOptimizer {
             }
 
             // Find leaves matching our swap from the reserved leaves
-            let leaves_for_swap =
-                self.select_leaves_for_swap(&available_leaves, &swap.leaves_to_give)?;
-
-            if leaves_for_swap.is_empty() {
-                warn!(
-                    "Could not find matching leaves for optimization round {}",
-                    round
-                );
-                continue;
-            }
+            let leaves_for_swap = swap.reserved_leaves_to_give.leaves.clone();
 
             // Execute the swap
-            let target_amounts = if swap.leaves_to_receive.is_empty() {
-                None
-            } else {
-                Some(swap.leaves_to_receive.clone())
-            };
-
             match self
                 .swap_service
-                .swap_leaves(&leaves_for_swap, target_amounts)
+                .swap_leaves(&leaves_for_swap, Some(swap.leaves_to_receive))
                 .await
             {
                 Ok(new_leaves) => {
-                    // Remove the swapped leaves from our working set so we don't
-                    // try to use them in subsequent rounds. Note: we don't add the
-                    // new leaves to the working set because swap rounds are independent -
-                    // each round's output is NOT input for subsequent rounds.
-                    let swapped_ids: Vec<_> = leaves_for_swap.iter().map(|l| &l.id).collect();
-                    available_leaves.retain(|l| !swapped_ids.contains(&&l.id));
-
-                    // Insert the new leaves immediately - they're available for payments
-                    // even while optimization continues
-                    if let Err(e) = self.tree_service.insert_leaves(new_leaves).await {
-                        error!("Failed to insert optimized leaves: {:?}", e);
-                        self.cleanup_after_interruption(reservation_id, completed_rounds)
-                            .await;
-                        return Err(ServiceError::Generic(format!(
-                            "Failed to insert optimized leaves: {e:?}"
-                        )));
+                    if let Err(e) = self
+                        .tree_service
+                        .finalize_reservation(swap.reserved_leaves_to_give.id, Some(&new_leaves))
+                        .await
+                    {
+                        error!(
+                            "Failed to finalize optimization reservation, proceeding with optimization. {:?}",
+                            e
+                        );
                     }
 
-                    completed_rounds = round;
+                    swaps_left_to_execute.remove(0);
 
                     self.emit_event(OptimizationEvent::RoundCompleted {
                         current_round: round,
@@ -411,82 +420,34 @@ impl LeafOptimizer {
                 }
                 Err(e) => {
                     error!("Swap failed in optimization round {}: {:?}", round, e);
-                    self.cleanup_after_interruption(reservation_id, completed_rounds)
+                    self.cancel_remaining_swap_reservations(swaps_left_to_execute)
                         .await;
                     return Err(e);
                 }
             }
         }
 
-        // All rounds completed successfully - finalize the reservation
-        // This removes the original leaves from the local store
-        // (they've already been consumed server-side by the swaps)
-        if let Err(e) = self.tree_service.finalize_reservation(reservation_id).await {
-            warn!("Failed to finalize optimization reservation: {:?}", e);
-        }
-
         Ok(true)
     }
 
-    /// Cleans up local state after optimization is interrupted (cancelled or failed).
-    ///
-    /// If no rounds completed, we can simply cancel the reservation to return leaves
-    /// to the available pool. If some rounds completed, the local state is inconsistent
-    /// (some reserved leaves no longer exist), so we refresh from the server.
-    async fn cleanup_after_interruption(
-        &self,
-        reservation_id: LeavesReservationId,
-        completed_rounds: u32,
-    ) {
-        if completed_rounds == 0 {
-            // No swaps happened - safe to just cancel the reservation
-            debug!("No rounds completed, cancelling reservation");
-            let _ = self.tree_service.cancel_reservation(reservation_id).await;
-        } else {
-            // Some swaps happened - local state is inconsistent
-            // The reservation contains stale leaf IDs that were already swapped.
-            // Refresh from server to get the ground truth.
-            debug!(
-                "Optimization interrupted after {} rounds, refreshing leaves from server",
-                completed_rounds
-            );
+    async fn cancel_remaining_swap_reservations(&self, remaining_swaps: Vec<PreparedSwap>) {
+        debug!(
+            "Cancelling {} remaining swap reservations",
+            remaining_swaps.len()
+        );
 
-            // First cancel the reservation to clear the stale reserved state
-            let _ = self.tree_service.cancel_reservation(reservation_id).await;
-
-            // Then refresh from server to sync with actual state
-            if let Err(e) = self.tree_service.refresh_leaves().await {
-                warn!(
-                    "Failed to refresh leaves after optimization interruption: {:?}",
-                    e
-                );
+        for swap in remaining_swaps {
+            if let Err(e) = self
+                .tree_service
+                .cancel_reservation(swap.reserved_leaves_to_give.id)
+                .await
+            {
+                warn!("Failed to cancel reservation for swap: {:?}", e);
             }
         }
     }
 
-    /// Selects leaves from available leaves that match the target values.
-    fn select_leaves_for_swap(
-        &self,
-        available_leaves: &[TreeNode],
-        target_values: &[u64],
-    ) -> Result<Vec<TreeNode>, ServiceError> {
-        let mut selected = Vec::new();
-        let mut remaining_values: Vec<u64> = target_values.to_vec();
-        let mut available: Vec<&TreeNode> = available_leaves.iter().collect();
-
-        for target in &mut remaining_values {
-            if let Some(pos) = available.iter().position(|l| l.value == *target) {
-                selected.push(available.remove(pos).clone());
-            } else {
-                // Could not find exact match - this might happen if leaves changed
-                warn!("Could not find leaf with value {} for optimization", target);
-            }
-        }
-
-        Ok(selected)
-    }
-
-    fn calculate_optimization_swaps(&self, input_leave_amounts: &[u64]) -> Vec<OptimizationSwap> {
+    fn calculate_optimization_swaps(&self, input_leave_amounts: &[u64]) -> Vec<SwapPlan> {
         if self.config.multiplicity == 0 {
             self.maximize_unilateral_exit(input_leave_amounts)
         } else {
@@ -498,7 +459,7 @@ impl LeafOptimizer {
     ///
     /// Generates swaps that will result in the unilateral exit maximizing set of leaves.
     /// Multiple iterations may be required to reach the optimal set.
-    fn maximize_unilateral_exit(&self, input_leave_amounts: &[u64]) -> Vec<OptimizationSwap> {
+    fn maximize_unilateral_exit(&self, input_leave_amounts: &[u64]) -> Vec<SwapPlan> {
         let max_leaves_per_swap = self.config.max_leaves_per_swap as usize;
         let mut swaps = Vec::new();
         let mut batch: Vec<u64> = Vec::new();
@@ -515,7 +476,7 @@ impl LeafOptimizer {
 
             if batch.len() >= max_leaves_per_swap || target.len() >= max_leaves_per_swap {
                 if target != batch {
-                    swaps.push(OptimizationSwap {
+                    swaps.push(SwapPlan {
                         leaves_to_give: batch.clone(),
                         leaves_to_receive: target,
                     });
@@ -530,7 +491,7 @@ impl LeafOptimizer {
             let target = Self::greedy_leaves(batch_sum);
 
             if target != batch {
-                swaps.push(OptimizationSwap {
+                swaps.push(SwapPlan {
                     leaves_to_give: batch,
                     leaves_to_receive: target,
                 });
@@ -544,7 +505,7 @@ impl LeafOptimizer {
     ///
     /// Generates swaps that will minimize the probability of needing to swap during a transfer.
     /// Multiple iterations may be required to reach the optimal set.
-    fn minimize_transfer_swap(&self, input_leave_amounts: &[u64]) -> Vec<OptimizationSwap> {
+    fn minimize_transfer_swap(&self, input_leave_amounts: &[u64]) -> Vec<SwapPlan> {
         let max_leaves = self.config.max_leaves_per_swap as usize;
 
         let balance: u64 = input_leave_amounts.iter().sum();
@@ -590,7 +551,7 @@ impl LeafOptimizer {
                     // Split give batch into chunks
                     for chunk in to_give_batch.chunks(max_leaves) {
                         let chunk_sum: u64 = chunk.iter().sum();
-                        swaps.push(OptimizationSwap {
+                        swaps.push(SwapPlan {
                             leaves_to_give: chunk.to_vec(),
                             leaves_to_receive: Self::greedy_leaves(chunk_sum),
                         });
@@ -605,7 +566,7 @@ impl LeafOptimizer {
                         alternate_batch.extend(Self::greedy_leaves(remainder));
 
                         if alternate_batch.len() <= max_leaves {
-                            swaps.push(OptimizationSwap {
+                            swaps.push(SwapPlan {
                                 leaves_to_give: to_give_batch.clone(),
                                 leaves_to_receive: alternate_batch,
                             });
@@ -613,7 +574,7 @@ impl LeafOptimizer {
                         }
                     }
                 } else {
-                    swaps.push(OptimizationSwap {
+                    swaps.push(SwapPlan {
                         leaves_to_give: to_give_batch.clone(),
                         leaves_to_receive: to_receive_batch.clone(),
                     });

@@ -234,6 +234,15 @@ async fn main() -> Result<()> {
         .payment_request;
     info!("Sender address: {}", sender_address);
 
+    // Wait for initial sync before starting benchmark
+    info!("Waiting for sender initial sync...");
+    wait_for_synced_event(&mut sender.events, 120).await?;
+    info!("Sender synced");
+
+    info!("Waiting for receiver initial sync...");
+    wait_for_synced_event(&mut receiver.events, 120).await?;
+    info!("Receiver synced");
+
     // Handle funding based on network
     match network {
         Network::Regtest => {
@@ -324,15 +333,6 @@ async fn main() -> Result<()> {
             }
         }
     };
-
-    // Wait for initial sync before starting benchmark
-    info!("Waiting for sender initial sync...");
-    wait_for_synced_event(&mut sender.events, 120).await?;
-    info!("Sender synced");
-
-    info!("Waiting for receiver initial sync...");
-    wait_for_synced_event(&mut receiver.events, 120).await?;
-    info!("Receiver synced");
 
     // Run the benchmark
     info!("Starting benchmark...");

@@ -4,7 +4,7 @@ mod service;
 mod store;
 
 pub use error::TreeServiceError;
-pub use select_helper::{select_leaves_by_amounts, with_reserved_leaves};
+pub use select_helper::{select_leaves_by_target_amounts, with_reserved_leaves};
 use serde::{Deserialize, Serialize};
 pub use service::SynchronousTreeService;
 pub use store::InMemoryTreeStore;
@@ -222,7 +222,7 @@ pub enum ReservationPurpose {
     Optimization,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LeavesReservation {
     pub id: LeavesReservationId,
     pub leaves: Vec<TreeNode>,
@@ -239,29 +239,36 @@ impl LeavesReservation {
 }
 
 #[derive(Clone, Debug)]
-pub struct TargetAmounts {
-    pub amount_sats: u64,
-    pub fee_sats: Option<u64>,
+pub enum TargetAmounts {
+    AmountAndFee {
+        amount_sats: u64,
+        fee_sats: Option<u64>,
+    },
+    ExactDenominations {
+        denominations: Vec<u64>,
+    },
 }
 
 impl TargetAmounts {
-    pub fn new(amount_sats: u64, fee_sats: Option<u64>) -> Self {
-        Self {
+    pub fn new_amount_and_fee(amount_sats: u64, fee_sats: Option<u64>) -> Self {
+        Self::AmountAndFee {
             amount_sats,
             fee_sats,
         }
     }
 
-    pub fn total_sats(&self) -> u64 {
-        self.amount_sats + self.fee_sats.unwrap_or(0)
+    pub fn new_exact_denominations(denominations: Vec<u64>) -> Self {
+        Self::ExactDenominations { denominations }
     }
 
-    pub fn to_vec(&self) -> Vec<u64> {
-        let mut amounts = vec![self.amount_sats];
-        if let Some(fee) = self.fee_sats {
-            amounts.push(fee);
+    pub fn total_sats(&self) -> u64 {
+        match self {
+            Self::AmountAndFee {
+                amount_sats,
+                fee_sats,
+            } => amount_sats + fee_sats.unwrap_or(0),
+            Self::ExactDenominations { denominations } => denominations.iter().sum(),
         }
-        amounts
     }
 }
 
@@ -487,7 +494,7 @@ pub trait TreeStore: Send + Sync {
     /// ```
     async fn cancel_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError>;
 
-    /// Finalizes a leaf reservation, marking the leaves as consumed.
+    /// Finalizes a leaf reservation, marking the leaves as consumed and optionally adding new leaves to the main pool.
     ///
     /// This method permanently removes the reserved leaves from the store,
     /// indicating they have been successfully used in a transaction. Unlike
@@ -496,6 +503,7 @@ pub trait TreeStore: Send + Sync {
     /// # Parameters
     ///
     /// * `id` - The unique reservation ID to finalize
+    /// * `new_leaves` - Optional new leaves to add to the main pool.
     ///
     /// # Returns
     ///
@@ -516,14 +524,18 @@ pub trait TreeStore: Send + Sync {
     ///
     /// # async fn example(store: &dyn TreeStore) -> Result<(), TreeServiceError> {
     /// let target = TargetAmounts::new(100_000, Some(2_000));
-    /// let reservation = store.reserve_leaves(Some(&target), false).await?;
+    /// let reservation = store.reserve_leaves(Some(&target), false, ReservationPurpose::Payment).await?;
     ///
     /// // After successfully using the leaves in a transaction
-    /// store.finalize_reservation(&reservation.id).await?;
+    /// store.finalize_reservation(&reservation.id, None).await?;
     /// # Ok(())
     /// # }
     /// ```
-    async fn finalize_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError>;
+    async fn finalize_reservation(
+        &self,
+        id: &LeavesReservationId,
+        new_leaves: Option<&[TreeNode]>,
+    ) -> Result<(), TreeServiceError>;
 }
 
 #[macros::async_trait]
@@ -735,7 +747,7 @@ pub trait TreeService: Send + Sync {
     /// ```
     async fn cancel_reservation(&self, id: LeavesReservationId) -> Result<(), TreeServiceError>;
 
-    /// Finalizes a leaf reservation, marking the reserved leaves as consumed.
+    /// Finalizes a leaf reservation, marking the reserved leaves as consumed and optionally adding new leaves to the main pool.
     ///
     /// This method permanently removes the reserved leaves from the available pool,
     /// indicating that they have been successfully used in a transaction. Unlike
@@ -745,6 +757,7 @@ pub trait TreeService: Send + Sync {
     /// # Parameters
     ///
     /// * `id` - The unique reservation ID returned from [`select_leaves`]
+    /// * `new_leaves` - Optional new leaves to add to the main pool.
     ///
     /// # Errors
     ///
@@ -764,10 +777,14 @@ pub trait TreeService: Send + Sync {
     /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment).await?;
     ///
     /// // After successfully using the leaves in a transaction, finalize the reservation
-    /// tree_service.finalize_reservation(reservation.id).await;
+    /// tree_service.finalize_reservation(reservation.id, None).await;
     /// println!("Reservation finalized, leaves marked as spent");
     /// # Ok(())
     /// # }
     /// ```
-    async fn finalize_reservation(&self, id: LeavesReservationId) -> Result<(), TreeServiceError>;
+    async fn finalize_reservation(
+        &self,
+        id: LeavesReservationId,
+        new_leaves: Option<&[TreeNode]>,
+    ) -> Result<(), TreeServiceError>;
 }

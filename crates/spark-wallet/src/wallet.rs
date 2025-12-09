@@ -40,7 +40,7 @@ use spark::{
     },
     tree::{
         InMemoryTreeStore, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
-        TreeService, TreeStore, select_leaves_by_amounts, with_reserved_leaves,
+        TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult},
 };
@@ -308,7 +308,7 @@ impl SparkWallet {
             });
         }
 
-        let target_amounts = TargetAmounts::new(total_amount_sat, None);
+        let target_amounts = TargetAmounts::new_amount_and_fee(total_amount_sat, None);
         let leaves_reservation = self.select_leaves_with_retry(Some(&target_amounts)).await?;
         // start the lightning swap with the operator
         let lightning_payment = with_reserved_leaves(
@@ -390,7 +390,8 @@ impl SparkWallet {
             .map_err(|_| SparkWalletError::InvalidNetwork)?;
 
         // Selects leaves totaling `amount_sat` if provided, otherwise retrieves all available leaves.
-        let target_amounts = amount_sats.map(|amount| TargetAmounts::new(amount, None));
+        let target_amounts =
+            amount_sats.map(|amount| TargetAmounts::new_amount_and_fee(amount, None));
         let reservation = self
             .select_leaves_with_retry(target_amounts.as_ref())
             .await?;
@@ -594,7 +595,7 @@ impl SparkWallet {
         let receiver_pubkey = receiver_address.identity_public_key;
 
         // get leaves to transfer
-        let target_amounts = TargetAmounts::new(amount_sat, None);
+        let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
         let leaves_reservation = self.select_leaves_with_retry(Some(&target_amounts)).await?;
 
         let transfer = with_reserved_leaves(
@@ -656,7 +657,7 @@ impl SparkWallet {
         let receiver_pubkey = receiver_address.identity_public_key;
 
         // get leaves to transfer
-        let target_amounts = TargetAmounts::new(amount_sat, None);
+        let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
         let leaves_reservation = self.select_leaves_with_retry(Some(&target_amounts)).await?;
 
         let expiry_time = SystemTime::now() + expiry_duration;
@@ -892,7 +893,21 @@ impl SparkWallet {
     }
 
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
-        self.tree_service.refresh_leaves().await?;
+        // TODO: consider potential race issue
+        if !self.leaf_optimizer.is_running() {
+            self.tree_service.refresh_leaves().await?;
+        }
+
+        // Trigger auto-optimization if enabled (non-blocking)
+        if self.config.optimization_options.auto_enabled
+            && self.leaf_optimizer.should_optimize().await?
+        {
+            let optimizer = Arc::clone(&self.leaf_optimizer);
+            if let Err(e) = optimizer.start().await {
+                debug!("Auto-optimization after sync failed: {:?}", e);
+            }
+        }
+
         self.token_output_service.refresh_tokens_outputs().await?;
         Ok(())
     }
@@ -921,8 +936,8 @@ impl SparkWallet {
         trace!("Calculated fee for exit speed {exit_speed:?}: {fee_sats} sats",);
 
         // Select leaves for the withdrawal
-        let target_amounts =
-            amount_sats.map(|amount_sats| TargetAmounts::new(amount_sats, Some(fee_sats)));
+        let target_amounts = amount_sats
+            .map(|amount_sats| TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats)));
         let leaves_reservation = self
             .select_leaves_with_retry(target_amounts.as_ref())
             .await?;
@@ -970,7 +985,7 @@ impl SparkWallet {
             (leaves_reservation.leaves.clone(), None, None)
         } else {
             let target_leaves =
-                select_leaves_by_amounts(&leaves_reservation.leaves, target_amounts)?;
+                select_leaves_by_target_amounts(&leaves_reservation.leaves, target_amounts)?;
             (
                 target_leaves.amount_leaves,
                 target_leaves.fee_leaves,
@@ -1366,7 +1381,7 @@ impl SparkWallet {
             Ok(reservation) => Ok(reservation),
             Err(TreeServiceError::InsufficientFunds) => {
                 // Check if optimization has reserved leaves
-                if self.leaf_optimizer.has_reserved_leaves() {
+                if self.leaf_optimizer.is_running() {
                     debug!(
                         "Insufficient funds with optimization in progress, cancelling optimization and retrying"
                     );
@@ -1657,7 +1672,10 @@ impl BackgroundProcessor {
             .await;
         });
 
-        if let Err(e) = self.tree_service.refresh_leaves().await {
+        // TODO: consider potential race issue
+        if !self.leaf_optimizer.is_running()
+            && let Err(e) = self.tree_service.refresh_leaves().await
+        {
             error!("Error refreshing leaves on startup: {:?}", e);
         }
 
@@ -1808,14 +1826,6 @@ impl BackgroundProcessor {
             }
         };
         self.event_manager.notify_listeners(WalletEvent::Synced);
-
-        // Trigger auto-optimization if enabled (non-blocking)
-        if self.auto_optimize_enabled && self.leaf_optimizer.should_optimize().await? {
-            let optimizer = Arc::clone(&self.leaf_optimizer);
-            if let Err(e) = optimizer.start().await {
-                debug!("Auto-optimization after sync failed: {:?}", e);
-            }
-        }
 
         Ok(())
     }

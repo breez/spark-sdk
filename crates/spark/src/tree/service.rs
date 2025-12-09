@@ -47,8 +47,12 @@ impl TreeService for SynchronousTreeService {
         self.state.cancel_reservation(&id).await
     }
 
-    async fn finalize_reservation(&self, id: LeavesReservationId) -> Result<(), TreeServiceError> {
-        self.state.finalize_reservation(&id).await
+    async fn finalize_reservation(
+        &self,
+        id: LeavesReservationId,
+        new_leaves: Option<&[TreeNode]>,
+    ) -> Result<(), TreeServiceError> {
+        self.state.finalize_reservation(&id, new_leaves).await
     }
 
     async fn insert_leaves(
@@ -101,7 +105,8 @@ impl TreeService for SynchronousTreeService {
         //   can be selected from the reserved leaves
         let total_amount_sats = target_amounts.map(|ta| ta.total_sats()).unwrap_or(0);
         if (total_amount_sats == 0 || reservation.sum() == total_amount_sats)
-            && select_helper::select_leaves_by_amounts(&reservation.leaves, target_amounts).is_ok()
+            && select_helper::select_leaves_by_target_amounts(&reservation.leaves, target_amounts)
+                .is_ok()
         {
             trace!("Selected leaves match requirements, no swap needed");
             return Ok(reservation);
@@ -386,7 +391,19 @@ impl SynchronousTreeService {
             return Err(TreeServiceError::Generic("no leaves to swap".to_string()));
         }
 
-        let target_amounts = target_amounts.map(|ta| ta.to_vec());
+        let target_amounts = target_amounts.map(|ta| match ta {
+            TargetAmounts::AmountAndFee {
+                amount_sats,
+                fee_sats,
+            } => {
+                let mut amounts = vec![*amount_sats];
+                if let Some(fee_sats) = fee_sats {
+                    amounts.push(*fee_sats);
+                }
+                amounts
+            }
+            TargetAmounts::ExactDenominations { denominations } => denominations.clone(),
+        });
         let claimed_nodes = self
             .swap_service
             .swap_leaves(leaves, target_amounts)

@@ -141,7 +141,7 @@ impl TreeStore for InMemoryTreeStore {
             let leaves: Vec<TreeNode> = self.get_leaves().await?.available.into_iter().collect();
             // Select leaves that match the target amounts
             let target_leaves_res =
-                select_helper::select_leaves_by_amounts(&leaves, target_amounts);
+                select_helper::select_leaves_by_target_amounts(&leaves, target_amounts);
             let selected = match target_leaves_res {
                 Ok(target_leaves) => {
                     // Successfully selected target leaves
@@ -189,10 +189,20 @@ impl TreeStore for InMemoryTreeStore {
 
     // remove the leaves from the reserved pool, they are now considered used and
     // not available anymore.
-    async fn finalize_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError> {
+    // If resulting_leaves are provided, they are added to the main pool.
+    async fn finalize_reservation(
+        &self,
+        id: &LeavesReservationId,
+        new_leaves: Option<&[TreeNode]>,
+    ) -> Result<(), TreeServiceError> {
         let mut leaves_state = self.leaves.lock().await;
         if leaves_state.leaves_reservations.remove(id).is_none() {
             warn!("Tried to finalize a non existing reservation");
+        }
+        if let Some(resulting_leaves) = new_leaves {
+            leaves_state
+                .leaves
+                .extend(resulting_leaves.iter().map(|l| (l.id.clone(), l.clone())))
         }
         trace!("Finalized leaves reservation: {}", id);
         Ok(())
@@ -375,7 +385,7 @@ mod tests {
         // Reserve some leaves
         let reservation = state
             .reserve_leaves(
-                Some(&TargetAmounts::new(600, None)),
+                Some(&TargetAmounts::new_amount_and_fee(600, None)),
                 false,
                 ReservationPurpose::Payment,
             )
@@ -434,7 +444,7 @@ mod tests {
         // Reserve leaves
         let reservation = state
             .reserve_leaves(
-                Some(&TargetAmounts::new(300, None)),
+                Some(&TargetAmounts::new_amount_and_fee(300, None)),
                 false,
                 ReservationPurpose::Payment,
             )
@@ -462,7 +472,7 @@ mod tests {
 
         let reservation = state
             .reserve_leaves(
-                Some(&TargetAmounts::new(100, None)),
+                Some(&TargetAmounts::new_amount_and_fee(100, None)),
                 true,
                 ReservationPurpose::Payment,
             )
@@ -490,7 +500,7 @@ mod tests {
 
         let reservation = state
             .reserve_leaves(
-                Some(&TargetAmounts::new(100, None)),
+                Some(&TargetAmounts::new_amount_and_fee(100, None)),
                 true,
                 ReservationPurpose::Payment,
             )
@@ -534,7 +544,7 @@ mod tests {
 
         let reservation = state
             .reserve_leaves(
-                Some(&TargetAmounts::new(100, None)),
+                Some(&TargetAmounts::new_amount_and_fee(100, None)),
                 true,
                 ReservationPurpose::Payment,
             )
@@ -542,7 +552,10 @@ mod tests {
             .unwrap();
 
         // Finalize the reservation
-        state.finalize_reservation(&reservation.id).await.unwrap();
+        state
+            .finalize_reservation(&reservation.id, None)
+            .await
+            .unwrap();
 
         // Check that reservation was removed
         assert!(state.get_reservation(&reservation.id).await.is_none());
@@ -559,7 +572,7 @@ mod tests {
         let fake_id = "fake-reservation-id".to_string();
 
         // Should not panic or cause issues
-        state.finalize_reservation(&fake_id).await.unwrap();
+        state.finalize_reservation(&fake_id, None).await.unwrap();
 
         let leaves_state = state.leaves.lock().await;
         assert!(leaves_state.leaves_reservations.is_empty());
@@ -582,7 +595,7 @@ mod tests {
         // Create multiple reservations
         let reservation1 = state
             .reserve_leaves(
-                Some(&TargetAmounts::new(100, None)),
+                Some(&TargetAmounts::new_amount_and_fee(100, None)),
                 true,
                 ReservationPurpose::Payment,
             )
@@ -590,7 +603,7 @@ mod tests {
             .unwrap();
         let reservation2 = state
             .reserve_leaves(
-                Some(&TargetAmounts::new(200, None)),
+                Some(&TargetAmounts::new_amount_and_fee(200, None)),
                 true,
                 ReservationPurpose::Payment,
             )
@@ -620,7 +633,10 @@ mod tests {
         assert_eq!(state.get_leaves().await.unwrap().available.len(), 2);
 
         // Finalize the other
-        state.finalize_reservation(&reservation2.id).await.unwrap();
+        state
+            .finalize_reservation(&reservation2.id, None)
+            .await
+            .unwrap();
         assert!(state.get_reservation(&reservation2.id).await.is_none());
         assert_eq!(state.get_leaves().await.unwrap().available.len(), 2); // node1 returned, node3 was always there
     }
@@ -633,7 +649,7 @@ mod tests {
 
         let r1 = state
             .reserve_leaves(
-                Some(&TargetAmounts::new(100, None)),
+                Some(&TargetAmounts::new_amount_and_fee(100, None)),
                 true,
                 ReservationPurpose::Payment,
             )
@@ -642,7 +658,7 @@ mod tests {
         state.cancel_reservation(&r1.id).await.unwrap();
         let r2 = state
             .reserve_leaves(
-                Some(&TargetAmounts::new(100, None)),
+                Some(&TargetAmounts::new_amount_and_fee(100, None)),
                 true,
                 ReservationPurpose::Payment,
             )
@@ -660,7 +676,7 @@ mod tests {
 
         state
             .reserve_leaves(
-                Some(&TargetAmounts::new(100, None)),
+                Some(&TargetAmounts::new_amount_and_fee(100, None)),
                 true,
                 ReservationPurpose::Payment,
             )
@@ -668,7 +684,7 @@ mod tests {
             .unwrap();
         let result = state
             .reserve_leaves(
-                Some(&TargetAmounts::new(100, None)),
+                Some(&TargetAmounts::new_amount_and_fee(100, None)),
                 true,
                 ReservationPurpose::Payment,
             )
@@ -701,7 +717,7 @@ mod tests {
         // Reserve some leaves for optimization
         let _reservation = state
             .reserve_leaves(
-                Some(&TargetAmounts::new(300, None)),
+                Some(&TargetAmounts::new_amount_and_fee(300, None)),
                 true,
                 ReservationPurpose::Optimization,
             )
@@ -729,7 +745,7 @@ mod tests {
         // Reserve some leaves for payment
         let _reservation = state
             .reserve_leaves(
-                Some(&TargetAmounts::new(300, None)),
+                Some(&TargetAmounts::new_amount_and_fee(300, None)),
                 true,
                 ReservationPurpose::Payment,
             )
