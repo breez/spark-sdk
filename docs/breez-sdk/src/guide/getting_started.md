@@ -15,7 +15,7 @@ Before you begin, make sure to read the [repository README](https://github.com/b
 
 ## API Key
 
-The _Nodeless_ Breez API key must be set for the SDK to work. You can request one for free by filling our form <a target="_blank" href="{{api_key_form_uri}}">here</a>.
+The _Nodeless_ Breez API key must be set for the SDK to work. You can request one by filling our form <a target="_blank" href="{{api_key_form_uri}}">here</a>.
 
 ## UX Guidelines
 
