@@ -232,4 +232,29 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             .collect::<Result<Vec<_>, sqlx::Error>>()?;
         Ok(metadata)
     }
+
+    async fn list_domains(&self) -> Result<Vec<String>, LnurlRepositoryError> {
+        let rows = sqlx::query("SELECT domain FROM allowed_domains")
+            .fetch_all(&self.pool)
+            .await?;
+
+        let domains = rows
+            .into_iter()
+            .map(|row| row.try_get(0))
+            .collect::<Result<Vec<String>, sqlx::Error>>()?;
+
+        Ok(domains)
+    }
+
+    async fn add_domain(&self, domain: &str) -> Result<(), LnurlRepositoryError> {
+        sqlx::query(
+            "INSERT INTO allowed_domains (domain)
+             VALUES ($1)
+             ON CONFLICT(domain) DO NOTHING",
+        )
+        .bind(domain)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }

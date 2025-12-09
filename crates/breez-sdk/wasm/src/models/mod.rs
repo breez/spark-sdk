@@ -60,9 +60,6 @@ mod serde_option_u128_as_string {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SdkEvent)]
 pub enum SdkEvent {
     Synced,
-    DataSynced {
-        did_pull_new_records: bool,
-    },
     UnclaimedDeposits {
         unclaimed_deposits: Vec<DepositInfo>,
     },
@@ -125,7 +122,7 @@ pub struct DepositInfo {
 pub struct ClaimDepositRequest {
     pub txid: String,
     pub vout: u32,
-    pub max_fee: Option<Fee>,
+    pub max_fee: Option<MaxFee>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimDepositResponse)]
@@ -551,13 +548,20 @@ pub struct Config {
     pub api_key: Option<String>,
     pub network: Network,
     pub sync_interval_secs: u32,
-    pub max_deposit_claim_fee: Option<Fee>,
+    pub max_deposit_claim_fee: Option<MaxFee>,
     pub lnurl_domain: Option<String>,
     pub prefer_spark_over_lightning: bool,
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
     pub use_default_external_input_parsers: bool,
     pub real_time_sync_server_url: Option<String>,
     pub private_enabled_default: bool,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::MaxFee)]
+pub enum MaxFee {
+    Fixed { amount: u64 },
+    Rate { sat_per_vbyte: u64 },
+    NetworkRecommended { leeway_sat_per_vbyte: u64 },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Fee)]

@@ -6,8 +6,7 @@ import {
   SparkHtlcStatus,
   PaymentType,
   PaymentStatus,
-  ClaimHtlcPaymentRequest,
-  SendPaymentMethod
+  SendPaymentMethod_Tags
 } from '@breeztech/breez-sdk-spark-react-native'
 
 const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
@@ -23,7 +22,7 @@ const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
   const prepareResponse = await sdk.prepareSendPayment(prepareRequest)
 
   // If the fees are acceptable, continue to create the HTLC Payment
-  if (prepareResponse.paymentMethod instanceof SendPaymentMethod.SparkAddress) {
+  if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.SparkAddress) {
     const fee = prepareResponse.paymentMethod.inner.fee
     console.debug(`Fees: ${fee} sats`)
   }

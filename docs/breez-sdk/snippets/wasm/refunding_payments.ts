@@ -4,7 +4,10 @@ import {
   type ClaimDepositRequest,
   type RefundDepositRequest,
   type Fee,
-  type DepositInfo
+  type DepositInfo,
+  defaultConfig,
+  Network,
+  type MaxFee
 } from '@breeztech/breez-sdk-spark'
 
 const listUnclaimedDeposits = async (sdk: BreezSdk) => {
@@ -64,36 +67,15 @@ const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
   // ANCHOR_END: handle-fee-exceeded
 }
 
-const claimDeposit = async (sdk: BreezSdk) => {
-  // ANCHOR: claim-deposit
-  const txid = 'your_deposit_txid'
-  const vout = 0
-
-  // Set a higher max fee to retry claiming
-  const maxFee: Fee = {
-    type: 'fixed',
-    amount: 5_000
-  }
-
-  const request: ClaimDepositRequest = {
-    txid,
-    vout,
-    maxFee
-  }
-
-  const response = await sdk.claimDeposit(request)
-  console.log('Deposit claimed successfully. Payment:', response.payment)
-  // ANCHOR_END: claim-deposit
-}
-
 const refundDeposit = async (sdk: BreezSdk) => {
   // ANCHOR: refund-deposit
   const txid = 'your_deposit_txid'
   const vout = 0
   const destinationAddress = 'bc1qexample...' // Your Bitcoin address
 
-  // Set the fee for the refund transaction using a rate
-  const fee: Fee = { type: 'rate', satPerVbyte: 5 }
+  // Set the fee for the refund transaction using the half-hour feerate
+  const recommendedFees = await sdk.recommendedFees()
+  const fee: Fee = { type: 'rate', satPerVbyte: recommendedFees.halfHourFee }
   // or using a fixed amount
   // const fee: Fee = { type: 'fixed', amount: 500 }
 
@@ -109,6 +91,38 @@ const refundDeposit = async (sdk: BreezSdk) => {
   console.log('Transaction ID:', response.txId)
   console.log('Transaction hex:', response.txHex)
   // ANCHOR_END: refund-deposit
+}
+
+const setMaxFeeToRecommendedFees = () => {
+  // ANCHOR: set-max-fee-to-recommended-fees
+  // Create the default config
+  const config = defaultConfig('mainnet')
+  config.apiKey = '<breez api key>'
+
+  // Set the maximum fee to the fastest network recommended fee at the time of claim
+  // with a leeway of 1 sats/vbyte
+  config.maxDepositClaimFee = { type: 'networkRecommended', leewaySatPerVbyte: 1 }
+  // ANCHOR_END: set-max-fee-to-recommended-fees
+  console.log('Config:', config)
+}
+
+const customClaimLogic = async (sdk: BreezSdk, deposit: DepositInfo) => {
+  // ANCHOR: custom-claim-logic
+  if (deposit.claimError?.type === 'maxDepositClaimFeeExceeded') {
+    const requiredFeeRate = deposit.claimError.requiredFeeRateSatPerVbyte
+
+    const recommendedFees = await sdk.recommendedFees()
+
+    if (requiredFeeRate <= recommendedFees.fastestFee) {
+      const claimRequest: ClaimDepositRequest = {
+        txid: deposit.txid,
+        vout: deposit.vout,
+        maxFee: { type: 'rate', satPerVbyte: requiredFeeRate }
+      }
+      await sdk.claimDeposit(claimRequest)
+    }
+  }
+  // ANCHOR_END: custom-claim-logic
 }
 
 const recommendedFees = async (sdk: BreezSdk) => {

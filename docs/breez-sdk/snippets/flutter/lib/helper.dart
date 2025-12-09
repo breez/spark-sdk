@@ -5,7 +5,7 @@ extension ConfigCopyWith on Config {
     String? apiKey,
     Network? network,
     int? syncIntervalSecs,
-    Fee? maxDepositClaimFee,
+    MaxFee? maxDepositClaimFee,
     String? lnurlDomain,
     bool? preferSparkOverLightning,
     List<ExternalInputParser>? externalInputParsers,

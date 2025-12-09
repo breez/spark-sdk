@@ -1,4 +1,5 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'helper.dart';
 
 Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
   // ANCHOR: list-unclaimed-deposits
@@ -40,29 +41,12 @@ Future<void> handleFeeExceeded(BreezSdk sdk, DepositInfo deposit) async {
       final claimRequest = ClaimDepositRequest(
         txid: deposit.txid,
         vout: deposit.vout,
-        maxFee: Fee.fixed(amount: requiredFee),
+        maxFee: MaxFee.fixed(amount: requiredFee),
       );
       await sdk.claimDeposit(request: claimRequest);
     }
   }
   // ANCHOR_END: handle-fee-exceeded
-}
-
-Future<void> claimDeposit(BreezSdk sdk) async {
-  // ANCHOR: claim-deposit
-  String txid = "your_deposit_txid";
-  int vout = 0;
-
-  Fee maxFee = Fee.fixed(amount: BigInt.from(5000));
-  final request = ClaimDepositRequest(
-    txid: txid,
-    vout: vout,
-    maxFee: maxFee,
-  );
-
-  final response = await sdk.claimDeposit(request: request);
-  print("Deposit claimed successfully. Payment: ${response.payment}");
-  // ANCHOR_END: claim-deposit
 }
 
 Future<void> refundDeposit(BreezSdk sdk) async {
@@ -71,8 +55,9 @@ Future<void> refundDeposit(BreezSdk sdk) async {
   int vout = 0;
   String destinationAddress = "bc1qexample..."; // Your Bitcoin address
 
-  // Set the fee for the refund transaction using a rate
-  Fee fee = Fee.rate(satPerVbyte: BigInt.from(5));
+  // Set the fee for the refund transaction using the half-hour feerate
+  final recommendedFees = await sdk.recommendedFees();
+  Fee fee = Fee.rate(satPerVbyte: recommendedFees.halfHourFee);
   // or using a fixed amount
   //Fee fee = Fee.fixed(amount: BigInt.from(500));
 
@@ -88,6 +73,41 @@ Future<void> refundDeposit(BreezSdk sdk) async {
   print("Transaction ID: ${response.txId}");
   print("Transaction hex: ${response.txHex}");
   // ANCHOR_END: refund-deposit
+}
+
+Future<void> setMaxFeeToRecommendedFees() async {
+  // ANCHOR: set-max-fee-to-recommended-fees
+  // Create the default config
+  var config = defaultConfig(network: Network.mainnet);
+  config = config.copyWith(apiKey: "<breez api key>");
+
+  // Set the maximum fee to the fastest network recommended fee at the time of claim
+  // with a leeway of 1 sats/vbyte
+  config = config.copyWith(
+      maxDepositClaimFee:
+          MaxFee.networkRecommended(leewaySatPerVbyte: BigInt.from(1)));
+  // ANCHOR_END: set-max-fee-to-recommended-fees
+  print("Config: $config");
+}
+
+Future<void> customClaimLogic(BreezSdk sdk, DepositInfo deposit) async {
+  // ANCHOR: custom-claim-logic
+  final claimError = deposit.claimError;
+  if (claimError is DepositClaimError_MaxDepositClaimFeeExceeded) {
+    final requiredFeeRate = claimError.requiredFeeRateSatPerVbyte;
+
+    final recommendedFees = await sdk.recommendedFees();
+
+    if (requiredFeeRate <= recommendedFees.fastestFee) {
+      final claimRequest = ClaimDepositRequest(
+        txid: deposit.txid,
+        vout: deposit.vout,
+        maxFee: MaxFee.rate(satPerVbyte: requiredFeeRate),
+      );
+      await sdk.claimDeposit(request: claimRequest);
+    }
+  }
+  // ANCHOR_END: custom-claim-logic
 }
 
 Future<void> recommendedFees(BreezSdk sdk) async {

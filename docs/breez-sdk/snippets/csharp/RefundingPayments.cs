@@ -62,28 +62,12 @@ namespace BreezSdkSnippets
                     var claimRequest = new ClaimDepositRequest(
                         txid: deposit.txid,
                         vout: deposit.vout,
-                        maxFee: new Fee.Fixed(amount: requiredFee)
+                        maxFee: new MaxFee.Fixed(amount: requiredFee)
                     );
                     await sdk.ClaimDeposit(request: claimRequest);
                 }
             }
             // ANCHOR_END: handle-fee-exceeded
-        }
-
-        async Task ClaimDeposit(BreezSdk sdk)
-        {
-            // ANCHOR: claim-deposit
-            var txid = "your_deposit_txid";
-            var vout = 0U;
-
-            // Set a higher max fee to retry claiming
-            var maxFee = new Fee.Fixed(amount: 5_000);
-
-            var request = new ClaimDepositRequest(txid: txid, vout: vout, maxFee: maxFee);
-
-            var response = await sdk.ClaimDeposit(request: request);
-            Console.WriteLine($"Deposit claimed successfully. Payment: {response.payment}");
-            // ANCHOR_END: claim-deposit
         }
 
         async Task RefundDeposit(BreezSdk sdk)
@@ -93,8 +77,9 @@ namespace BreezSdkSnippets
             var vout = 0U;
             var destinationAddress = "bc1qexample...";  // Your Bitcoin address
 
-            // Set the fee for the refund transaction using a rate
-            var fee = new Fee.Rate(satPerVbyte: 5);
+            // Set the fee for the refund transaction using the half-hour feerate
+            var recommendedFees = await sdk.RecommendedFees();
+            var fee = new Fee.Rate(satPerVbyte: recommendedFees.halfHourFee);
             // or using a fixed amount
             //var fee = new Fee.Fixed(amount: 500);
 
@@ -110,6 +95,44 @@ namespace BreezSdkSnippets
             Console.WriteLine($"Transaction ID: {response.txId}");
             Console.WriteLine($"Transaction hex: {response.txHex}");
             // ANCHOR_END: refund-deposit
+        }
+
+        void SetMaxFeeToRecommendedFees()
+        {
+            // ANCHOR: set-max-fee-to-recommended-fees
+            // Create the default config
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            {
+                apiKey = "<breez api key>"
+            };
+
+            // Set the maximum fee to the fastest network recommended fee at the time of claim
+            // with a leeway of 1 sats/vbyte
+            config = config with { maxDepositClaimFee = new MaxFee.NetworkRecommended(leewaySatPerVbyte: 1) };
+            // ANCHOR_END: set-max-fee-to-recommended-fees
+            Console.WriteLine($"Config: {config}");
+        }
+
+        async Task CustomClaimLogic(BreezSdk sdk, DepositInfo deposit)
+        {
+            // ANCHOR: custom-claim-logic
+            if (deposit.claimError is DepositClaimError.MaxDepositClaimFeeExceeded exceeded)
+            {
+                var requiredFeeRate = exceeded.requiredFeeRateSatPerVbyte;
+
+                var recommendedFees = await sdk.RecommendedFees();
+
+                if (requiredFeeRate <= recommendedFees.fastestFee)
+                {
+                    var claimRequest = new ClaimDepositRequest(
+                        txid: deposit.txid,
+                        vout: deposit.vout,
+                        maxFee: new MaxFee.Rate(satPerVbyte: requiredFeeRate)
+                    );
+                    await sdk.ClaimDeposit(request: claimRequest);
+                }
+            }
+            // ANCHOR_END: custom-claim-logic
         }
 
         async Task RecommendedFees(BreezSdk sdk)

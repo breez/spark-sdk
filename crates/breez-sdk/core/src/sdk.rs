@@ -41,18 +41,18 @@ use crate::{
     AssetFilter, BitcoinAddressDetails, BitcoinChainService, Bolt11InvoiceDetails,
     CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest,
     ClaimDepositResponse, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, DepositInfo,
-    ExternalInputParser, Fee, GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest,
+    ExternalInputParser, GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest,
     GetTokensMetadataResponse, InputType, LightningAddressInfo, ListFiatCurrenciesResponse,
     ListFiatRatesResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
     LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse,
-    Logger, Network, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
+    Logger, MaxFee, Network, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
     PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
     RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem,
     SignMessageRequest, SignMessageResponse, SparkHtlcOptions, UpdateUserSettingsRequest,
     UserSettings, WaitForPaymentIdentifier,
     chain::RecommendedFees,
     error::SdkError,
-    events::{EventEmitter, EventListener, SdkEvent},
+    events::{EventEmitter, EventListener, InternalSyncedEvent, SdkEvent},
     issuer::TokenIssuer,
     lnurl::{ListMetadataRequest, LnurlServerClient, PublishZapReceiptRequest},
     logger,
@@ -211,7 +211,7 @@ pub fn default_config(network: Network) -> Config {
         api_key: None,
         network,
         sync_interval_secs: 60, // every 1 minute
-        max_deposit_claim_fee: Some(Fee::Rate { sat_per_vbyte: 1 }),
+        max_deposit_claim_fee: Some(MaxFee::Rate { sat_per_vbyte: 1 }),
         lnurl_domain,
         prefer_spark_over_lightning: false,
         external_input_parsers: None,
@@ -669,52 +669,85 @@ impl BreezSdk {
         *lnurl_receive_metadata = db_lnurl_receive_metadata;
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn sync_wallet_internal(&self, sync_type: SyncType) -> Result<(), SdkError> {
         let start_time = Instant::now();
 
         let sync_wallet = async {
-            if sync_type.contains(SyncType::Wallet) {
+            let wallet_synced = if sync_type.contains(SyncType::Wallet) {
                 debug!("sync_wallet_internal: Starting Wallet sync");
                 let wallet_start = Instant::now();
-                if let Err(e) = self.spark_wallet.sync().await {
-                    error!("sync_wallet_internal: Failed to sync with Spark network: {e:?}");
+                match self.spark_wallet.sync().await {
+                    Ok(()) => {
+                        debug!(
+                            "sync_wallet_internal: Wallet sync completed in {:?}",
+                            wallet_start.elapsed()
+                        );
+                        true
+                    }
+                    Err(e) => {
+                        error!(
+                            "sync_wallet_internal: Spark wallet sync failed in {:?}: {e:?}",
+                            wallet_start.elapsed()
+                        );
+                        false
+                    }
                 }
-                debug!(
-                    "sync_wallet_internal: Wallet sync completed in {:?}",
-                    wallet_start.elapsed()
-                );
             } else {
                 trace!("sync_wallet_internal: Skipping Wallet sync");
-            }
+                false
+            };
 
-            if sync_type.contains(SyncType::WalletState) {
+            let wallet_state_synced = if sync_type.contains(SyncType::WalletState) {
                 debug!("sync_wallet_internal: Starting WalletState sync");
                 let wallet_state_start = Instant::now();
-                if let Err(e) = self.sync_wallet_state_to_storage().await {
-                    error!("sync_wallet_internal: Failed to sync wallet state to storage: {e:?}");
+                match self.sync_wallet_state_to_storage().await {
+                    Ok(()) => {
+                        debug!(
+                            "sync_wallet_internal: WalletState sync completed in {:?}",
+                            wallet_state_start.elapsed()
+                        );
+                        true
+                    }
+                    Err(e) => {
+                        error!(
+                            "sync_wallet_internal: Failed to sync wallet state to storage in {:?}: {e:?}",
+                            wallet_state_start.elapsed()
+                        );
+                        false
+                    }
                 }
-                debug!(
-                    "sync_wallet_internal: WalletState sync completed in {:?}",
-                    wallet_state_start.elapsed()
-                );
             } else {
                 trace!("sync_wallet_internal: Skipping WalletState sync");
-            }
+                false
+            };
+
+            (wallet_synced, wallet_state_synced)
         };
 
         let sync_lnurl = async {
             if sync_type.contains(SyncType::LnurlMetadata) {
                 debug!("sync_wallet_internal: Starting LnurlMetadata sync");
                 let lnurl_start = Instant::now();
-                if let Err(e) = self.sync_lnurl_metadata().await {
-                    error!("sync_wallet_internal: Failed to sync lnurl metadata: {e:?}");
+                match self.sync_lnurl_metadata().await {
+                    Ok(()) => {
+                        debug!(
+                            "sync_wallet_internal: LnurlMetadata sync completed in {:?}",
+                            lnurl_start.elapsed()
+                        );
+                        true
+                    }
+                    Err(e) => {
+                        error!(
+                            "sync_wallet_internal: Failed to sync lnurl metadata in {:?}: {e:?}",
+                            lnurl_start.elapsed()
+                        );
+                        false
+                    }
                 }
-                debug!(
-                    "sync_wallet_internal: LnurlMetadata sync completed in {:?}",
-                    lnurl_start.elapsed()
-                );
             } else {
                 trace!("sync_wallet_internal: Skipping LnurlMetadata sync");
+                false
             }
         };
 
@@ -722,25 +755,41 @@ impl BreezSdk {
             if sync_type.contains(SyncType::Deposits) {
                 debug!("sync_wallet_internal: Starting Deposits sync");
                 let deposits_start = Instant::now();
-                if let Err(e) = self.check_and_claim_static_deposits().await {
-                    error!(
-                        "sync_wallet_internal: Failed to check and claim static deposits: {e:?}"
-                    );
+                match self.check_and_claim_static_deposits().await {
+                    Ok(()) => {
+                        debug!(
+                            "sync_wallet_internal: Deposits sync completed in {:?}",
+                            deposits_start.elapsed()
+                        );
+                        true
+                    }
+                    Err(e) => {
+                        error!(
+                            "sync_wallet_internal: Failed to check and claim static deposits in {:?}: {e:?}",
+                            deposits_start.elapsed()
+                        );
+                        false
+                    }
                 }
-                debug!(
-                    "sync_wallet_internal: Deposits sync completed in {:?}",
-                    deposits_start.elapsed()
-                );
             } else {
                 trace!("sync_wallet_internal: Skipping Deposits sync");
+                false
             }
         };
 
-        tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
+        let ((wallet, wallet_state), lnurl_metadata, deposits) =
+            tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
 
         let elapsed = start_time.elapsed();
-        info!("sync_wallet_internal: Wallet sync completed in {elapsed:?}");
-        self.event_emitter.emit(&SdkEvent::Synced {}).await;
+        let event = InternalSyncedEvent {
+            wallet,
+            wallet_state,
+            lnurl_metadata,
+            deposits,
+            storage_incoming: None,
+        };
+        info!("sync_wallet_internal: Wallet sync completed in {elapsed:?}: {event:?}");
+        self.event_emitter.emit_synced(&event).await;
         Ok(())
     }
 
@@ -865,7 +914,7 @@ impl BreezSdk {
     async fn claim_utxo(
         &self,
         detailed_utxo: &DetailedUtxo,
-        max_claim_fee: Option<Fee>,
+        max_claim_fee: Option<MaxFee>,
     ) -> Result<WalletTransfer, SdkError> {
         info!(
             "Fetching static deposit claim quote for deposit tx {}:{} and amount: {}",
@@ -889,47 +938,32 @@ impl BreezSdk {
                 required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
             });
         };
-        match max_deposit_claim_fee {
-            Fee::Fixed { amount } => {
-                info!(
-                    "User max fee: {} spark requested fee: {}",
-                    amount, spark_requested_fee_sats
-                );
-                if spark_requested_fee_sats > amount {
-                    return Err(SdkError::MaxDepositClaimFeeExceeded {
-                        tx: detailed_utxo.txid.to_string(),
-                        vout: detailed_utxo.vout,
-                        max_fee: Some(max_deposit_claim_fee),
-                        required_fee_sats: spark_requested_fee_sats,
-                        required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
-                    });
-                }
-            }
-            Fee::Rate { sat_per_vbyte } => {
-                let user_max_fee = CLAIM_TX_SIZE_VBYTES.saturating_mul(sat_per_vbyte);
-                info!(
-                    "User max fee: {} spark requested fee: {}",
-                    user_max_fee, spark_requested_fee_sats
-                );
-                if spark_requested_fee_sats > user_max_fee {
-                    return Err(SdkError::MaxDepositClaimFeeExceeded {
-                        tx: detailed_utxo.txid.to_string(),
-                        vout: detailed_utxo.vout,
-                        max_fee: Some(max_deposit_claim_fee),
-                        required_fee_sats: spark_requested_fee_sats,
-                        required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
-                    });
-                }
-            }
+        let max_fee = max_deposit_claim_fee
+            .to_fee(self.chain_service.as_ref())
+            .await?;
+        let max_fee_sats = max_fee.to_sats(CLAIM_TX_SIZE_VBYTES);
+        info!(
+            "User max fee: {} spark requested fee: {}",
+            max_fee_sats, spark_requested_fee_sats
+        );
+        if spark_requested_fee_sats > max_fee_sats {
+            return Err(SdkError::MaxDepositClaimFeeExceeded {
+                tx: detailed_utxo.txid.to_string(),
+                vout: detailed_utxo.vout,
+                max_fee: Some(max_fee),
+                required_fee_sats: spark_requested_fee_sats,
+                required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
+            });
         }
+
         info!(
             "Claiming static deposit for utxo {}:{}",
             detailed_utxo.txid, detailed_utxo.vout
         );
         let transfer = self.spark_wallet.claim_static_deposit(quote).await?;
         info!(
-            "Claimed static deposit transfer: {}",
-            serde_json::to_string_pretty(&transfer)?
+            "Claimed static deposit transfer for utxo {}:{}, value {}",
+            detailed_utxo.txid, detailed_utxo.vout, transfer.total_value_sat,
         );
         Ok(transfer)
     }

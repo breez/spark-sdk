@@ -9,6 +9,7 @@ use reqwest::{
     header::{AUTHORIZATION, HeaderMap, InvalidHeaderValue},
 };
 use std::fmt::Write as _;
+use web_time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug)]
 pub enum LnurlServerError {
@@ -145,6 +146,19 @@ impl ReqwestLnurlServerClient {
             format!("https://{}", self.domain)
         }
     }
+
+    async fn sign_message(&self, message: &str) -> Result<(String, u64), LnurlServerError> {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| LnurlServerError::SigningError("invalid systemtime".to_string()))?
+            .as_secs();
+        let signature = self
+            .wallet
+            .sign_message(&format!("{message}-{timestamp}"))
+            .await
+            .map_err(|e| LnurlServerError::SigningError(e.to_string()))?;
+        Ok((signature.serialize_der().to_lower_hex_string(), timestamp))
+    }
 }
 
 #[macros::async_trait]
@@ -192,15 +206,12 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
         let pubkey = spark_address.identity_public_key;
 
         // Sign the pubkey itself for recovery
-        let signature = self
-            .wallet
-            .sign_message(&pubkey.to_string())
-            .await
-            .map_err(|e| LnurlServerError::SigningError(e.to_string()))?
-            .serialize_der()
-            .to_lower_hex_string();
+        let (signature, timestamp) = self.sign_message(&pubkey.to_string()).await?;
 
-        let request = RecoverLnurlPayRequest { signature };
+        let request = RecoverLnurlPayRequest {
+            signature,
+            timestamp: Some(timestamp),
+        };
         let url = format!("{}/lnurlpay/{}/recover", self.base_url(), pubkey);
         let result = self.client.post(url).json(&request).send().await;
         let response = match result {
@@ -241,18 +252,13 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
         let pubkey = spark_address.identity_public_key;
 
         // Sign the username
-        let signature = self
-            .wallet
-            .sign_message(&request.username)
-            .await
-            .map_err(|e| LnurlServerError::SigningError(e.to_string()))?
-            .serialize_der()
-            .to_lower_hex_string();
+        let (signature, timestamp) = self.sign_message(&request.username).await?;
 
         let request = RegisterLnurlPayRequest {
             username: request.username.clone(),
             description: request.description.clone(),
             signature,
+            timestamp: Some(timestamp),
             nostr_pubkey: request.nostr_pubkey.clone(),
         };
 
@@ -295,17 +301,12 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
         let pubkey = spark_address.identity_public_key;
 
         // Sign the username
-        let signature = self
-            .wallet
-            .sign_message(&request.username)
-            .await
-            .map_err(|e| LnurlServerError::SigningError(e.to_string()))?
-            .serialize_der()
-            .to_lower_hex_string();
+        let (signature, timestamp) = self.sign_message(&request.username).await?;
 
         let request = UnregisterLnurlPayRequest {
             username: request.username.clone(),
             signature,
+            timestamp: Some(timestamp),
         };
 
         let url = format!("{}/lnurlpay/{}", self.base_url(), pubkey);
@@ -339,19 +340,11 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
         })?;
         let pubkey = spark_address.identity_public_key;
 
-        let signature = self
-            .wallet
-            .sign_message(&pubkey.to_string())
-            .await
-            .map_err(|e| LnurlServerError::SigningError(e.to_string()))?
-            .serialize_der()
-            .to_lower_hex_string();
+        let (signature, timestamp) = self.sign_message(&pubkey.to_string()).await?;
 
         let mut url = format!(
-            "{}/lnurlpay/{}/metadata?signature={}",
+            "{}/lnurlpay/{pubkey}/metadata?signature={signature}&timestamp={timestamp}",
             self.base_url(),
-            pubkey,
-            signature
         );
         if let Some(offset) = request.offset {
             let _ = write!(url, "&offset={offset}");
@@ -399,13 +392,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
         })?;
         let pubkey = spark_address.identity_public_key;
 
-        let signature = self
-            .wallet
-            .sign_message(&request.zap_receipt)
-            .await
-            .map_err(|e| LnurlServerError::SigningError(e.to_string()))?
-            .serialize_der()
-            .to_lower_hex_string();
+        let (signature, timestamp) = self.sign_message(&request.zap_receipt).await?;
 
         let url = format!(
             "{}/lnurlpay/{}/metadata/{}/zap",
@@ -416,6 +403,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
 
         let payload = lnurl_models::PublishZapReceiptRequest {
             signature,
+            timestamp: Some(timestamp),
             zap_receipt: request.zap_receipt.clone(),
         };
 

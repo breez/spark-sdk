@@ -4,11 +4,11 @@ func listUnclaimedDeposits(sdk: BreezSdk) async throws {
     // ANCHOR: list-unclaimed-deposits
     let request = ListUnclaimedDepositsRequest()
     let response = try await sdk.listUnclaimedDeposits(request: request)
-    
+
     for deposit in response.deposits {
         print("Unclaimed deposit: \(deposit.txid):\(deposit.vout)")
         print("Amount: \(deposit.amountSats) sats")
-        
+
         if let claimError = deposit.claimError {
             switch claimError {
             case .maxDepositClaimFeeExceeded(
@@ -41,13 +41,13 @@ func handleFeeExceeded(sdk: BreezSdk, deposit: DepositInfo) async throws {
     // ANCHOR: handle-fee-exceeded
     if case .maxDepositClaimFeeExceeded(_, _, _, let requiredFeeSats, _) = deposit.claimError {
         // Show UI to user with the required fee and get approval
-        let userApproved = true // Replace with actual user approval logic
+        let userApproved = true  // Replace with actual user approval logic
 
         if userApproved {
             let claimRequest = ClaimDepositRequest(
                 txid: deposit.txid,
                 vout: deposit.vout,
-                maxFee: Fee.fixed(amount: requiredFeeSats)
+                maxFee: MaxFee.fixed(amount: requiredFeeSats)
             )
             try await sdk.claimDeposit(request: claimRequest)
         }
@@ -55,48 +55,60 @@ func handleFeeExceeded(sdk: BreezSdk, deposit: DepositInfo) async throws {
     // ANCHOR_END: handle-fee-exceeded
 }
 
-func claimDeposit(sdk: BreezSdk) async throws {
-    // ANCHOR: claim-deposit
-    let txid = "your_deposit_txid"
-    let vout: UInt32 = 0
-    
-    // Set a higher max fee to retry claiming
-    let maxFee = Fee.fixed(amount: 5000) // 5000 sats
-    
-    let request = ClaimDepositRequest(
-        txid: txid,
-        vout: vout,
-        maxFee: maxFee
-    )
-    
-    let response = try await sdk.claimDeposit(request: request)
-    print("Deposit claimed successfully. Payment: \(response.payment)")
-    // ANCHOR_END: claim-deposit
-}
-
 func refundDeposit(sdk: BreezSdk) async throws {
     // ANCHOR: refund-deposit
     let txid = "your_deposit_txid"
     let vout: UInt32 = 0
-    let destinationAddress = "bc1qexample..." // Your Bitcoin address
+    let destinationAddress = "bc1qexample..."  // Your Bitcoin address
 
-    // Set the fee for the refund transaction using a rate
-    let fee = Fee.rate(satPerVbyte: 5) // 5 sats per vbyte
+    // Set the fee for the refund transaction using the half-hour feerate
+    let recommendedFees = try await sdk.recommendedFees()
+    let fee = Fee.rate(satPerVbyte: recommendedFees.halfHourFee)
     // or using a fixed amount
     //let fee = Fee.fixed(amount: 500) // 500 sats
-    
+
     let request = RefundDepositRequest(
         txid: txid,
         vout: vout,
         destinationAddress: destinationAddress,
         fee: fee
     )
-    
+
     let response = try await sdk.refundDeposit(request: request)
     print("Refund transaction created:")
     print("Transaction ID: \(response.txId)")
     print("Transaction hex: \(response.txHex)")
     // ANCHOR_END: refund-deposit
+}
+
+func setMaxFeeToRecommendedFees() async throws {
+    // ANCHOR: set-max-fee-to-recommended-fees
+    // Create the default config
+    var config = defaultConfig(network: Network.mainnet)
+    config.apiKey = "<breez api key>"
+
+    // Set the maximum fee to the fastest network recommended fee at the time of claim
+    // with a leeway of 1 sats/vbyte
+    config.maxDepositClaimFee = MaxFee.networkRecommended(leewaySatPerVbyte: 1)
+    // ANCHOR_END: set-max-fee-to-recommended-fees
+    print("Config: \(config)")
+}
+
+func customClaimLogic(sdk: BreezSdk, deposit: DepositInfo) async throws {
+    // ANCHOR: custom-claim-logic
+    if case .maxDepositClaimFeeExceeded(_, _, _, _, let requiredFeeRateSatPerVbyte) = deposit.claimError {
+        let recommendedFees = try await sdk.recommendedFees()
+
+        if requiredFeeRateSatPerVbyte <= recommendedFees.fastestFee {
+            let claimRequest = ClaimDepositRequest(
+                txid: deposit.txid,
+                vout: deposit.vout,
+                maxFee: MaxFee.rate(satPerVbyte: requiredFeeRateSatPerVbyte)
+            )
+            try await sdk.claimDeposit(request: claimRequest)
+        }
+    }
+    // ANCHOR_END: custom-claim-logic
 }
 
 func recommendedFees(sdk: BreezSdk) async throws {

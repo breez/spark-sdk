@@ -10,10 +10,14 @@ func configureSdk() async throws {
     config.maxDepositClaimFee = nil
 
     // Set a maximum feerate of 10 sat/vB
-    config.maxDepositClaimFee = Fee.rate(satPerVbyte: 10)
+    config.maxDepositClaimFee = MaxFee.rate(satPerVbyte: 10)
 
     // Set a maximum fee of 1000 sat
-    config.maxDepositClaimFee = Fee.fixed(amount: 1000)
+    config.maxDepositClaimFee = MaxFee.fixed(amount: 1000)
+
+    // Set the maximum fee to the fastest network recommended fee at the time of claim
+    // with a leeway of 1 sats/vbyte
+    config.maxDepositClaimFee = MaxFee.networkRecommended(leewaySatPerVbyte: 1)
     // ANCHOR_END: max-deposit-claim-fee
     print("Config: \(config)")
 }

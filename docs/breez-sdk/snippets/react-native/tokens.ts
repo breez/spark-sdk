@@ -1,6 +1,6 @@
 import {
   ReceivePaymentMethod,
-  SendPaymentMethod,
+  SendPaymentMethod_Tags,
   type BreezSdk
 } from '@breeztech/breez-sdk-spark-react-native'
 
@@ -82,11 +82,11 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   })
 
   // If the fees are acceptable, continue to send the token payment
-  if (prepareResponse.paymentMethod instanceof SendPaymentMethod.SparkAddress) {
+  if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.SparkAddress) {
     console.log(`Token ID: ${prepareResponse.paymentMethod.inner.tokenIdentifier}`)
     console.log(`Fees: ${prepareResponse.paymentMethod.inner.fee} token base units`)
   }
-  if (prepareResponse.paymentMethod instanceof SendPaymentMethod.SparkInvoice) {
+  if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.SparkInvoice) {
     console.log(`Token ID: ${prepareResponse.paymentMethod.inner.tokenIdentifier}`)
     console.log(`Fees: ${prepareResponse.paymentMethod.inner.fee} token base units`)
   }

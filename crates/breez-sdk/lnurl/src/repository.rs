@@ -52,4 +52,10 @@ pub trait LnurlRepository {
         offset: u32,
         limit: u32,
     ) -> Result<Vec<ListMetadataMetadata>, LnurlRepositoryError>;
+
+    /// Get all allowed domains from the database
+    async fn list_domains(&self) -> Result<Vec<String>, LnurlRepositoryError>;
+
+    /// Insert a domain if it doesn't already exist
+    async fn add_domain(&self, domain: &str) -> Result<(), LnurlRepositoryError>;
 }

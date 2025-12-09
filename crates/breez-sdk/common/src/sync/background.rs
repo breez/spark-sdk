@@ -447,10 +447,8 @@ impl SyncProcessor {
 
         let count = self.pull_sync_once_local().await?;
 
-        Ok(match count {
-            0 => None,
-            other => Some(other),
-        })
+        // NOTE: Might return Some(0) if pull was successful without pulling records.
+        Ok(Some(count))
     }
 
     async fn pull_sync_once_local(&self) -> anyhow::Result<u32> {

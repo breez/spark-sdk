@@ -53,7 +53,7 @@ class RefundingPayments {
                     val claimRequest = ClaimDepositRequest(
                         txid = deposit.txid,
                         vout = deposit.vout,
-                        maxFee = Fee.Fixed(requiredFee)
+                        maxFee = MaxFee.Fixed(requiredFee)
                     )
                     sdk.claimDeposit(claimRequest)
                 }
@@ -64,29 +64,6 @@ class RefundingPayments {
         // ANCHOR_END: handle-fee-exceeded
     }
 
-    suspend fun claimDeposit(sdk: BreezSdk) {
-        // ANCHOR: claim-deposit
-        try {
-            val txid = "your_deposit_txid"
-            val vout = 0u
-            
-            // Set a higher max fee to retry claiming
-            val maxFee = Fee.Fixed(5000u)
-            
-            val request = ClaimDepositRequest(
-                txid = txid,
-                vout = vout,
-                maxFee = maxFee
-            )
-            
-            val response = sdk.claimDeposit(request)
-            // Log.v("Breez", "Deposit claimed successfully. Payment: ${response.payment}")
-        } catch (e: Exception) {
-            // handle error
-        }
-        // ANCHOR_END: claim-deposit
-    }
-
     suspend fun refundDeposit(sdk: BreezSdk) {
         // ANCHOR: refund-deposit
         try {
@@ -94,8 +71,9 @@ class RefundingPayments {
             val vout = 0u
             val destinationAddress = "bc1qexample..." // Your Bitcoin address
             
-            // Set the fee for the refund transaction using a rate
-            val fee = Fee.Rate(5u)
+            // Set the fee for the refund transaction using the half-hour feerate
+            val recommendedFees = sdk.recommendedFees()
+            val fee = Fee.Rate(recommendedFees.halfHourFee)
             // or using a fixed amount
             //val fee = Fee.Fixed(500u)
             
@@ -114,6 +92,43 @@ class RefundingPayments {
             // handle error
         }
         // ANCHOR_END: refund-deposit
+    }
+
+    suspend fun setMaxFeeToRecommendedFees() {
+        // ANCHOR: set-max-fee-to-recommended-fees
+        // Create the default config
+        val config = defaultConfig(Network.MAINNET)
+        config.apiKey = "<breez api key>"
+
+        // Set the maximum fee to the fastest network recommended fee at the time of claim
+        // with a leeway of 1 sats/vbyte
+        config.maxDepositClaimFee = MaxFee.NetworkRecommended(leewaySatPerVbyte = 1u)
+        // ANCHOR_END: set-max-fee-to-recommended-fees
+        println("Config: $config")
+    }
+
+    suspend fun customClaimLogic(sdk: BreezSdk, deposit: DepositInfo) {
+        // ANCHOR: custom-claim-logic
+        try {
+            val claimError = deposit.claimError
+            if (claimError is DepositClaimError.MaxDepositClaimFeeExceeded) {
+                val requiredFeeRate = claimError.requiredFeeRateSatPerVbyte
+
+                val recommendedFees = sdk.recommendedFees()
+
+                if (requiredFeeRate <= recommendedFees.fastestFee) {
+                    val claimRequest = ClaimDepositRequest(
+                        txid = deposit.txid,
+                        vout = deposit.vout,
+                        maxFee = MaxFee.Rate(requiredFeeRate)
+                    )
+                    sdk.claimDeposit(claimRequest)
+                }
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: custom-claim-logic
     }
 }
 

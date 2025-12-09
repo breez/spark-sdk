@@ -50,7 +50,7 @@ async fn handle_fee_exceeded(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()
             let request = ClaimDepositRequest {
                 txid: deposit.txid.clone(),
                 vout: deposit.vout,
-                max_fee: Some(Fee::Fixed {
+                max_fee: Some(MaxFee::Fixed {
                     amount: *required_fee_sats,
                 }),
             };
@@ -61,37 +61,15 @@ async fn handle_fee_exceeded(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()
     Ok(())
 }
 
-async fn claim_deposit(sdk: &BreezSdk) -> Result<()> {
-    // ANCHOR: claim-deposit
-    let txid = "your_deposit_txid".to_string();
-    let vout = 0;
-
-    // Set a higher max fee to retry claiming
-    let max_fee = Some(Fee::Fixed { amount: 5_000 });
-
-    let request = ClaimDepositRequest {
-        txid,
-        vout,
-        max_fee,
-    };
-
-    let response = sdk.claim_deposit(request).await?;
-    info!(
-        "Deposit claimed successfully. Payment: {:?}",
-        response.payment
-    );
-    // ANCHOR_END: claim-deposit
-    Ok(())
-}
-
 async fn refund_deposit(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: refund-deposit
     let txid = "your_deposit_txid".to_string();
     let vout = 0;
     let destination_address = "bc1qexample...".to_string(); // Your Bitcoin address
 
-    // Set the fee for the refund transaction using a rate
-    let fee = Fee::Rate { sat_per_vbyte: 5 };
+    // Set the fee for the refund transaction using the half-hour feerate
+    let recommended_fees = sdk.recommended_fees().await?;
+    let fee = Fee::Rate { sat_per_vbyte: recommended_fees.half_hour_fee };
     // or using a fixed amount
     //let fee = Fee::Fixed { amount: 500 };
 
@@ -107,6 +85,45 @@ async fn refund_deposit(sdk: &BreezSdk) -> Result<()> {
     info!("Transaction ID: {}", response.tx_id);
     info!("Transaction hex: {}", response.tx_hex);
     // ANCHOR_END: refund-deposit
+    Ok(())
+}
+
+async fn set_max_fee_to_recommended_fees() -> Result<()> {
+    // ANCHOR: set-max-fee-to-recommended-fees
+    // Create the default config
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some("<breez api key>".to_string());
+
+    // Set the maximum fee to the fastest network recommended fee at the time of claim
+    // with a leeway of 1 sats/vbyte
+    config.max_deposit_claim_fee = Some(MaxFee::NetworkRecommended {
+        leeway_sat_per_vbyte: 1,
+    });
+    // ANCHOR_END: set-max-fee-to-recommended-fees
+    info!("Config: {:?}", config);
+    Ok(())
+}
+
+async fn custom_claim_logic(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()> {
+    // ANCHOR: custom-claim-logic
+    if let Some(DepositClaimError::MaxDepositClaimFeeExceeded {
+        required_fee_rate_sat_per_vbyte, ..
+    }) = &deposit.claim_error
+    {
+        let recommended_fees = sdk.recommended_fees().await?;
+
+        if *required_fee_rate_sat_per_vbyte <= recommended_fees.fastest_fee {
+            let request = ClaimDepositRequest {
+                txid: deposit.txid.clone(),
+                vout: deposit.vout,
+                max_fee: Some(MaxFee::Rate {
+                    sat_per_vbyte: *required_fee_rate_sat_per_vbyte,
+                }),
+            };
+            sdk.claim_deposit(request).await?;
+        }
+    }
+    // ANCHOR_END: custom-claim-logic
     Ok(())
 }
 
