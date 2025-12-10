@@ -20,6 +20,7 @@ pub struct SparkWalletConfig {
     pub split_secret_threshold: u32,
     pub tokens_config: TokensConfig,
     pub optimization_options: OptimizationOptions,
+    pub auto_optimize_enabled: bool,
 }
 
 impl SparkWalletConfig {
@@ -52,6 +53,7 @@ impl SparkWalletConfig {
                 split_secret_threshold: 2,
                 tokens_config: Self::default_tokens_config(),
                 optimization_options: OptimizationOptions::default(),
+                auto_optimize_enabled: true,
             },
             _ => Self {
                 network,
@@ -66,6 +68,7 @@ impl SparkWalletConfig {
                 split_secret_threshold: 2,
                 tokens_config: Self::default_tokens_config(),
                 optimization_options: OptimizationOptions::default(),
+                auto_optimize_enabled: true,
             },
         }
     }

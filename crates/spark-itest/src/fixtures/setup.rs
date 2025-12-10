@@ -83,10 +83,8 @@ impl TestFixtures {
                 user_agent: Some("spark-wallet-itest/0.1.0".to_string()),
             },
             tokens_config: SparkWalletConfig::default_tokens_config(),
-            optimization_options: OptimizationOptions {
-                auto_enabled: false,
-                ..Default::default()
-            },
+            optimization_options: OptimizationOptions::default(),
+            auto_optimize_enabled: false,
         })
     }
 }

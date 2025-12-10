@@ -16,8 +16,6 @@ pub const DEFAULT_MAX_LEAVES_PER_SWAP: u32 = 64;
 /// Configuration options for leaf optimization.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct OptimizationOptions {
-    /// Whether optimization should run automatically after sync/receive operations.
-    pub auto_enabled: bool,
     /// Controls the optimization aggressiveness. Minimum value is 0, maximum value is 5.
     /// Higher values create more leaves for flexibility but may slow down operations.
     pub multiplicity: u8,
@@ -28,7 +26,6 @@ pub struct OptimizationOptions {
 impl Default for OptimizationOptions {
     fn default() -> Self {
         Self {
-            auto_enabled: true,
             multiplicity: 2,
             max_leaves_per_swap: DEFAULT_MAX_LEAVES_PER_SWAP,
         }
@@ -690,7 +687,6 @@ mod tests {
     #[test]
     fn test_optimization_options_validation() {
         let valid = OptimizationOptions {
-            auto_enabled: true,
             multiplicity: 2,
             max_leaves_per_swap: 64,
         };

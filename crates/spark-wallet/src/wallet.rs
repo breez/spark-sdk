@@ -247,7 +247,7 @@ impl SparkWallet {
                 Arc::clone(&transfer_service),
                 Arc::clone(&htlc_service),
                 Arc::clone(&leaf_optimizer),
-                config.optimization_options.auto_enabled,
+                config.auto_optimize_enabled,
             ));
             background_processor
                 .run_background_tasks(cancellation_token.clone())
@@ -612,9 +612,7 @@ impl SparkWallet {
         .await?;
 
         // Trigger auto-optimization if enabled (non-blocking)
-        if self.config.optimization_options.auto_enabled
-            && self.leaf_optimizer.should_optimize().await?
-        {
+        if self.config.auto_optimize_enabled && self.leaf_optimizer.should_optimize().await? {
             let optimizer = Arc::clone(&self.leaf_optimizer);
             if let Err(e) = optimizer.start().await {
                 debug!("Auto-optimization after transfer failed: {:?}", e);
@@ -899,9 +897,7 @@ impl SparkWallet {
         }
 
         // Trigger auto-optimization if enabled (non-blocking)
-        if self.config.optimization_options.auto_enabled
-            && self.leaf_optimizer.should_optimize().await?
-        {
+        if self.config.auto_optimize_enabled && self.leaf_optimizer.should_optimize().await? {
             let optimizer = Arc::clone(&self.leaf_optimizer);
             if let Err(e) = optimizer.start().await {
                 debug!("Auto-optimization after sync failed: {:?}", e);
