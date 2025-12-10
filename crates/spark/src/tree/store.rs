@@ -50,7 +50,7 @@ impl TreeStore for InMemoryTreeStore {
                 ReservationPurpose::Payment => {
                     reserved_for_payment.extend(entry.leaves.iter().cloned());
                 }
-                ReservationPurpose::Optimization => {
+                ReservationPurpose::Swap => {
                     reserved_for_optimization.extend(entry.leaves.iter().cloned());
                 }
             }
@@ -719,7 +719,7 @@ mod tests {
             .reserve_leaves(
                 Some(&TargetAmounts::new_amount_and_fee(300, None)),
                 true,
-                ReservationPurpose::Optimization,
+                ReservationPurpose::Swap,
             )
             .await
             .unwrap();

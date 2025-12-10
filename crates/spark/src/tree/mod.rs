@@ -217,9 +217,9 @@ pub enum ReservationPurpose {
     /// are about to be spent.
     #[default]
     Payment,
-    /// Leaves being reorganized by the optimizer - included in balance since
-    /// the total value remains the same, just the denominations change.
-    Optimization,
+    /// Leaves will be swapped. Included in balance since we will receive
+    /// the same amount back.
+    Swap,
 }
 
 #[derive(Debug, Clone)]

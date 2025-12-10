@@ -271,7 +271,7 @@ impl LeafOptimizer {
                     Some(&TargetAmounts::new_exact_denominations(
                         swap.leaves_to_give.clone(),
                     )),
-                    ReservationPurpose::Optimization,
+                    ReservationPurpose::Swap,
                 )
                 .await
             {
