@@ -44,14 +44,14 @@ impl TreeStore for InMemoryTreeStore {
 
         // Separate reserved leaves by purpose
         let mut reserved_for_payment = Vec::new();
-        let mut reserved_for_optimization = Vec::new();
+        let mut reserved_for_swap = Vec::new();
         for entry in leaves.leaves_reservations.values() {
             match entry.purpose {
                 ReservationPurpose::Payment => {
                     reserved_for_payment.extend(entry.leaves.iter().cloned());
                 }
                 ReservationPurpose::Swap => {
-                    reserved_for_optimization.extend(entry.leaves.iter().cloned());
+                    reserved_for_swap.extend(entry.leaves.iter().cloned());
                 }
             }
         }
@@ -76,7 +76,7 @@ impl TreeStore for InMemoryTreeStore {
                 .cloned()
                 .collect(),
             reserved_for_payment,
-            reserved_for_optimization,
+            reserved_for_swap,
         })
     }
 
@@ -705,7 +705,7 @@ mod tests {
     }
 
     #[async_test_all]
-    async fn test_optimization_reservation_included_in_balance() {
+    async fn test_swap_reservation_included_in_balance() {
         let state = InMemoryTreeStore::new();
         let leaves = vec![
             create_test_tree_node("node1", 100),
@@ -714,7 +714,7 @@ mod tests {
         ];
         state.add_leaves(&leaves).await.unwrap();
 
-        // Reserve some leaves for optimization
+        // Reserve some leaves for swap
         let _reservation = state
             .reserve_leaves(
                 Some(&TargetAmounts::new_amount_and_fee(300, None)),
@@ -724,12 +724,12 @@ mod tests {
             .await
             .unwrap();
 
-        // Check that optimization-reserved leaves are included in balance
+        // Check that swap-reserved leaves are included in balance
         let all_leaves = state.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.optimization_reserved_balance(), 300);
+        assert_eq!(all_leaves.swap_reserved_balance(), 300);
         assert_eq!(all_leaves.available_balance(), 300); // node1 + node2 remaining
-        // balance() should include optimization-reserved leaves
-        assert_eq!(all_leaves.balance(), 300 + 300); // available + optimization-reserved
+        // balance() should include swap-reserved leaves
+        assert_eq!(all_leaves.balance(), 300 + 300); // available + swap-reserved
     }
 
     #[async_test_all]

@@ -22,8 +22,8 @@ pub struct Leaves {
     pub available_missing_from_operators: Vec<TreeNode>,
     /// Leaves reserved for payment operations - excluded from balance.
     pub reserved_for_payment: Vec<TreeNode>,
-    /// Leaves reserved for optimization - included in balance.
-    pub reserved_for_optimization: Vec<TreeNode>,
+    /// Leaves reserved for swap - included in balance.
+    pub reserved_for_swap: Vec<TreeNode>,
 }
 
 impl Leaves {
@@ -42,18 +42,13 @@ impl Leaves {
             .map(|leaf| leaf.value)
             .sum()
     }
-    pub fn optimization_reserved_balance(&self) -> u64 {
-        self.reserved_for_optimization
-            .iter()
-            .map(|leaf| leaf.value)
-            .sum()
+    pub fn swap_reserved_balance(&self) -> u64 {
+        self.reserved_for_swap.iter().map(|leaf| leaf.value).sum()
     }
-    /// Total balance including optimization-reserved leaves but excluding
+    /// Total balance including swap-reserved leaves but excluding
     /// payment-reserved leaves (since those are being spent).
     pub fn balance(&self) -> u64 {
-        self.available_balance()
-            + self.missing_operators_balance()
-            + self.optimization_reserved_balance()
+        self.available_balance() + self.missing_operators_balance() + self.swap_reserved_balance()
     }
 }
 
@@ -677,7 +672,7 @@ pub trait TreeService: Send + Sync {
     ///   If `None`, all available leaves are selected.
     /// * `purpose` - The purpose of the reservation, which determines how reserved
     ///   leaves affect balance calculations. Use `Payment` for spending operations
-    ///   and `Optimization` for leaf reorganization.
+    ///   and `Swap` for leaf reorganization.
     ///
     /// # Returns
     ///
