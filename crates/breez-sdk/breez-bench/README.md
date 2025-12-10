@@ -84,8 +84,6 @@ cargo run -p breez-sdk-bench -- --scenario edge-cases
 
 - `random` - Seeded pseudo-random payment amounts and delays (default)
 - `edge-cases` - Deterministic amounts that test various leaf configurations
-- `small-payments` - Small amounts (less likely to need swaps)
-- `large-payments` - Large amounts (more likely to need swaps)
 
 ## Output
 

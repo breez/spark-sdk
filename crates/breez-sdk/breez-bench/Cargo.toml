@@ -12,7 +12,7 @@ path = "src/main.rs"
 breez-sdk-itest = { path = "../breez-itest" }
 
 # SDK under test
-breez-sdk-spark = { workspace = true, features = ["test-utils"] }
+breez-sdk-spark = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
@@ -23,7 +23,6 @@ clap = { workspace = true, features = ["derive"] }
 
 # Random with seeding
 rand = { workspace = true }
-rand_chacha = { workspace = true }
 
 # Tracing for swap detection
 tracing = { workspace = true }

@@ -341,9 +341,6 @@ async fn main() -> Result<()> {
     // Track cumulative amount sent by sender
     let mut cumulative_sent: u64 = 0;
 
-    // Safety margin for balance checks
-    const BALANCE_SAFETY_MARGIN: u64 = 1000;
-
     for (i, payment_spec) in payments.iter().enumerate() {
         // Wait for the specified delay
         if payment_spec.delay.as_millis() > 0 {
@@ -359,7 +356,7 @@ async fn main() -> Result<()> {
             .await?
             .balance_sats;
 
-        let required_balance = payment_spec.amount_sats + BALANCE_SAFETY_MARGIN;
+        let required_balance = payment_spec.amount_sats;
         if sender_balance < required_balance {
             info!(
                 "  [Low balance: {} sats, need {} sats - requesting funds from receiver]",
@@ -376,31 +373,24 @@ async fn main() -> Result<()> {
                 .await?
                 .balance_sats;
 
-            if receiver_balance > BALANCE_SAFETY_MARGIN {
-                let return_amount = receiver_balance.saturating_sub(BALANCE_SAFETY_MARGIN);
-                if return_amount > 0 {
-                    match return_funds_to_sender(
-                        &mut receiver,
-                        &mut sender,
-                        &sender_address,
-                        return_amount,
-                    )
-                    .await
-                    {
-                        Ok(()) => {
-                            info!("  [Returned {} sats to sender]", return_amount);
-                            cumulative_sent = 0;
-                        }
-                        Err(e) => {
-                            warn!("  [Failed to return funds: {}]", e);
-                        }
+            let return_amount = receiver_balance;
+            if return_amount > 0 {
+                match return_funds_to_sender(
+                    &mut receiver,
+                    &mut sender,
+                    &sender_address,
+                    return_amount,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        info!("  [Returned {} sats to sender]", return_amount);
+                        cumulative_sent = 0;
+                    }
+                    Err(e) => {
+                        warn!("  [Failed to return funds: {}]", e);
                     }
                 }
-            } else {
-                warn!(
-                    "  [Receiver has insufficient funds ({} sats) to return]",
-                    receiver_balance
-                );
             }
 
             // Re-check sender balance after potential return
