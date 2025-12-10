@@ -717,10 +717,9 @@ impl SparkWallet {
         // Trigger auto-optimization if enabled (non-blocking)
         if self.config.auto_optimize_enabled
             && self.leaf_operation_coordinator.should_optimize().await?
+            && let Err(e) = self.leaf_operation_coordinator.start_optimization().await
         {
-            if let Err(e) = self.leaf_operation_coordinator.start_optimization().await {
-                debug!("Auto-optimization after transfer failed: {:?}", e);
-            }
+            debug!("Auto-optimization after transfer failed: {:?}", e);
         }
 
         Ok(WalletTransfer::from_transfer(
@@ -1000,10 +999,9 @@ impl SparkWallet {
         // Trigger auto-optimization if enabled (non-blocking)
         if self.config.auto_optimize_enabled
             && self.leaf_operation_coordinator.should_optimize().await?
+            && let Err(e) = self.leaf_operation_coordinator.start_optimization().await
         {
-            if let Err(e) = self.leaf_operation_coordinator.start_optimization().await {
-                debug!("Auto-optimization after sync failed: {:?}", e);
-            }
+            debug!("Auto-optimization after sync failed: {:?}", e);
         }
 
         self.token_output_service.refresh_tokens_outputs().await?;
@@ -1872,10 +1870,11 @@ impl BackgroundProcessor {
             )));
 
         // Trigger auto-optimization if enabled (non-blocking)
-        if self.auto_optimize_enabled && self.leaf_operation_coordinator.should_optimize().await? {
-            if let Err(e) = self.leaf_operation_coordinator.start_optimization().await {
-                debug!("Auto-optimization after transfer failed: {:?}", e);
-            }
+        if self.auto_optimize_enabled
+            && self.leaf_operation_coordinator.should_optimize().await?
+            && let Err(e) = self.leaf_operation_coordinator.start_optimization().await
+        {
+            debug!("Auto-optimization after transfer failed: {:?}", e);
         }
 
         Ok(())

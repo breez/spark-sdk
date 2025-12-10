@@ -481,13 +481,13 @@ fn should_optimize_inner(
 ) -> Result<bool, ServiceError> {
     if multiplicity == 0 {
         // Optimize if it reduces the number of leaves by more than 5x
-        let swaps = maximize_unilateral_exit(&leave_amounts, max_leaves_per_swap);
+        let swaps = maximize_unilateral_exit(leave_amounts, max_leaves_per_swap);
         let num_inputs: usize = swaps.iter().map(|swap| swap.leaves_to_give.len()).sum();
         let num_outputs: usize = swaps.iter().map(|swap| swap.leaves_to_receive.len()).sum();
         Ok(num_outputs * 5 < num_inputs)
     } else {
         // Optimize if the number of input denominations differs from the number of output denominations by more than 2
-        let swaps = minimize_transfer_swap(&leave_amounts, multiplicity, max_leaves_per_swap);
+        let swaps = minimize_transfer_swap(leave_amounts, multiplicity, max_leaves_per_swap);
 
         let input_counter = count_occurrences(
             &swaps
@@ -748,6 +748,8 @@ fn counter_to_flat_array(counter: &std::collections::HashMap<u64, u64>) -> Vec<u
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Not as _;
+
     use super::*;
     use macros::{async_test_all, test_all};
 
@@ -908,33 +910,32 @@ mod tests {
     #[test_all]
     fn test_should_optimize_inner() {
         // Unilateral exit
-        assert_eq!(
-            should_optimize_inner(&[16], 0, DEFAULT_MAX_LEAVES_PER_SWAP).unwrap(),
-            false
+        assert!(
+            should_optimize_inner(&[16], 0, DEFAULT_MAX_LEAVES_PER_SWAP)
+                .unwrap()
+                .not()
         );
-        assert_eq!(
-            should_optimize_inner(&[16, 16], 0, DEFAULT_MAX_LEAVES_PER_SWAP).unwrap(),
-            false
+        assert!(
+            should_optimize_inner(&[16, 16], 0, DEFAULT_MAX_LEAVES_PER_SWAP)
+                .unwrap()
+                .not()
         );
-        assert_eq!(
+        assert!(
             should_optimize_inner(
                 &[16, 16, 16, 16, 16, 16, 16, 16],
                 0,
                 DEFAULT_MAX_LEAVES_PER_SWAP
             )
-            .unwrap(),
-            true
+            .unwrap()
         );
 
         // Swap minimization
-        assert_eq!(
-            should_optimize_inner(&[2], 1, DEFAULT_MAX_LEAVES_PER_SWAP).unwrap(),
-            false
+        assert!(
+            should_optimize_inner(&[2], 1, DEFAULT_MAX_LEAVES_PER_SWAP)
+                .unwrap()
+                .not()
         );
-        assert_eq!(
-            should_optimize_inner(&[64], 1, DEFAULT_MAX_LEAVES_PER_SWAP).unwrap(),
-            true
-        );
+        assert!(should_optimize_inner(&[64], 1, DEFAULT_MAX_LEAVES_PER_SWAP).unwrap());
     }
 
     #[test_all]
