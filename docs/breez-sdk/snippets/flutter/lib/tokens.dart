@@ -107,3 +107,76 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
   // ANCHOR_END: send-token-payment
 }
 
+Future<void> fetchConvertLimits(BreezSdk sdk) async {
+  // ANCHOR: fetch-convert-limits
+  final tokenIdentifier = '<token identifier>';
+
+  final response = await sdk.fetchConvertTokenLimits(
+    request: FetchConvertTokenLimitsRequest(
+      convertType: ConvertType.toBitcoin(fromTokenIdentifier: tokenIdentifier),
+    ),
+  );
+  if (response.minFromAmount != null) {
+    print('Min amount to send: ${response.minFromAmount} token base units');
+  }
+  if (response.minToAmount != null) {
+    print('Min amount to receive: ${response.minToAmount} sats');
+  }
+  // ANCHOR_END: fetch-convert-limits
+}
+
+Future<void> prepareConvertTokenToBitcoin(BreezSdk sdk) async {
+  // ANCHOR: prepare-convert-token-to-bitcoin
+  final tokenIdentifier = '<token identifier>';
+  // Amount in token base units
+  final amount = BigInt.from(10000000);
+
+  final prepareResponse = await sdk.prepareConvertToken(
+    request: PrepareConvertTokenRequest(
+      convertType: ConvertType.toBitcoin(fromTokenIdentifier: tokenIdentifier),
+      amount: amount,
+    ),
+  );
+  final estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount;
+  final fee = prepareResponse.fee;
+  print('Estimated receive amount: $estimatedReceiveAmount sats');
+  print('Fee: $fee token base units');
+  // ANCHOR_END: prepare-convert-token-to-bitcoin
+}
+
+Future<void> prepareConvertTokenFromBitcoin(BreezSdk sdk) async {
+  // ANCHOR: prepare-convert-token-from-bitcoin
+  final tokenIdentifier = '<token identifier>';
+  // Amount in satoshis
+  final amount = BigInt.from(10000);
+
+  final prepareResponse = await sdk.prepareConvertToken(
+    request: PrepareConvertTokenRequest(
+      convertType: ConvertType.fromBitcoin(toTokenIdentifier: tokenIdentifier),
+      amount: amount,
+    ),
+  );
+  final estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount;
+  final fee = prepareResponse.fee;
+  print('Estimated receive amount: $estimatedReceiveAmount token base units');
+  print('Fee: $fee sats');
+  // ANCHOR_END: prepare-convert-token-from-bitcoin
+}
+
+Future<void> convertToken(BreezSdk sdk, PrepareConvertTokenResponse prepareResponse) async {
+  // ANCHOR: convert-token
+  // Set the maximum slippage to 1% in basis points
+  final optionalMaxSlippageBps = 100;
+
+  final response = await sdk.convertToken(
+    request: ConvertTokenRequest(
+      prepareResponse: prepareResponse,
+      maxSlippageBps: optionalMaxSlippageBps,
+    ),
+  );
+  final sentPayment = response.sentPayment;
+  final receivedPayment = response.receivedPayment;
+  print('Sent payment: $sentPayment');
+  print('Received payment: $receivedPayment');
+  // ANCHOR_END: convert-token
+}

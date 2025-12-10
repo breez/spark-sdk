@@ -132,4 +132,114 @@ class Tokens {
         }
         // ANCHOR_END: send-token-payment
     }
+
+    suspend fun fetchConvertLimits(sdk: BreezSdk) {
+        // ANCHOR: fetch-convert-limits
+        try {
+            val tokenIdentifier = "<token identifier>"
+            
+            val response = sdk.fetchConvertTokenLimits(
+                FetchConvertTokenLimitsRequest(
+                    convertType = ConvertType.ToBitcoin(
+                        fromTokenIdentifier = tokenIdentifier
+                    ),
+                )
+            )
+            if (response.minFromAmount != null) {
+                println("Min amount to send: ${response.minFromAmount} token base units")
+            }
+            if (response.minToAmount != null) {
+                println("Min amount to receive: ${response.minToAmount} sats")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: fetch-convert-limits
+    }
+
+    suspend fun prepareConvertTokenToBitcoin(sdk: BreezSdk) {
+        // ANCHOR: prepare-convert-token-to-bitcoin
+        try {
+            val tokenIdentifier = "<token identifier>"
+            // Amount in token base units
+            // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
+            // package)
+            val amount = BigInteger.fromLong(10_000_000L)
+            // Android (BigInteger from java.math)
+            // val amount = BigInteger.valueOf(10_000_000L)
+
+            val prepareResponse =
+                sdk.prepareConvertToken(
+                    PrepareConvertTokenRequest(
+                        convertType = ConvertType.ToBitcoin(
+                            fromTokenIdentifier = tokenIdentifier
+                        ),
+                        amount = amount,
+                    )
+                )
+
+            val estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount
+            val fee = prepareResponse.fee
+            println("Estimated receive amount: $estimatedReceiveAmount sats")
+            println("Fees: $fee token base units")
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: prepare-convert-token-to-bitcoin
+    }
+
+    suspend fun prepareConvertTokenFromBitcoin(sdk: BreezSdk) {
+        // ANCHOR: prepare-convert-token-from-bitcoin
+        try {
+            val tokenIdentifier = "<token identifier>"
+            // Amount in satoshis
+            // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
+            // package)
+            val amount = BigInteger.fromLong(10_000L)
+            // Android (BigInteger from java.math)
+            // val amount = BigInteger.valueOf(10_000L)
+
+            val prepareResponse =
+                sdk.prepareConvertToken(
+                    PrepareConvertTokenRequest(
+                        convertType = ConvertType.FromBitcoin(
+                            toTokenIdentifier = tokenIdentifier
+                        ),
+                        amount = amount,
+                    )
+                )
+
+            val estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount
+            val fee = prepareResponse.fee
+            println("Estimated receive amount: $estimatedReceiveAmount token base units")
+            println("Fees: $fee sats")
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: prepare-convert-token-from-bitcoin
+    }
+
+    suspend fun convertToken(sdk: BreezSdk, prepareResponse: PrepareConvertTokenResponse) {
+        // ANCHOR: convert-token
+        try {
+            // Set the maximum slippage to 1% in basis points
+            val optionalMaxSlippageBps = 100U
+
+            val response =
+                sdk.convertToken(
+                    ConvertTokenRequest(
+                        prepareResponse = prepareResponse,
+                        maxSlippageBps = optionalMaxSlippageBps
+                    )
+                )
+
+            val sentPayment = response.sentPayment
+            val receivedPayment = response.receivedPayment
+            println("Sent payment: $sentPayment")
+            println("Received payment: $receivedPayment")
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: convert-token
+    }
 }

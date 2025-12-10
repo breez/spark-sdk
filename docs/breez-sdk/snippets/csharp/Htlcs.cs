@@ -52,8 +52,13 @@ namespace BreezSdkSnippets
             var request = new ListPaymentsRequest(
                 typeFilter: new List<PaymentType> { PaymentType.Receive },
                 statusFilter: new List<PaymentStatus> { PaymentStatus.Pending },
-                sparkHtlcStatusFilter: new List<SparkHtlcStatus> {
-                    SparkHtlcStatus.WaitingForPreimage
+                paymentDetailsFilter: new List<PaymentDetailsFilter> {
+                    new PaymentDetailsFilter.Spark(
+                        htlcStatus: new List<SparkHtlcStatus> {
+                            SparkHtlcStatus.WaitingForPreimage
+                        },
+                        conversionRefundNeeded: null
+                    )
                 }
             );
 

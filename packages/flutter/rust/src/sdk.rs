@@ -203,15 +203,39 @@ impl BreezSdk {
         self.inner.get_user_settings().await
     }
 
-    pub async fn update_user_settings(&self, request: UpdateUserSettingsRequest) -> Result<(), SdkError> {
+    pub async fn update_user_settings(
+        &self,
+        request: UpdateUserSettingsRequest,
+    ) -> Result<(), SdkError> {
         self.inner.update_user_settings(request).await
     }
-    
+
     #[frb(sync)]
     pub fn get_token_issuer(&self) -> crate::issuer::TokenIssuer {
         let token_issuer = self.inner.get_token_issuer();
         crate::issuer::TokenIssuer {
             token_issuer: Arc::new(token_issuer),
         }
+    }
+
+    pub async fn fetch_convert_token_limits(
+        &self,
+        request: FetchConvertTokenLimitsRequest,
+    ) -> Result<FetchConvertTokenLimitsResponse, SdkError> {
+        self.inner.fetch_convert_token_limits(request).await
+    }
+
+    pub async fn prepare_convert_token(
+        &self,
+        request: PrepareConvertTokenRequest,
+    ) -> Result<PrepareConvertTokenResponse, SdkError> {
+        self.inner.prepare_convert_token(request).await
+    }
+
+    pub async fn convert_token(
+        &self,
+        request: ConvertTokenRequest,
+    ) -> Result<ConvertTokenResponse, SdkError> {
+        self.inner.convert_token(request).await
     }
 }

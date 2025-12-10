@@ -106,3 +106,85 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
     print("Payment: \(payment)")
     // ANCHOR_END: send-token-payment
 }
+
+func fetchConvertLimits(sdk: BreezSdk) async throws {
+    // ANCHOR: fetch-convert-limits
+    let tokenIdentifier = "<token identifier>"
+
+    let response = try await sdk.fetchConvertTokenLimits(
+        request: FetchConvertTokenLimitsRequest(
+            convertType: ConvertType.toBitcoin(
+                fromTokenIdentifier: tokenIdentifier
+            )
+        ))
+
+    if let minFromAmount = response.minFromAmount {
+        print("Min amount to send: \(minFromAmount) token base units")
+    }
+    if let minToAmount = response.minToAmount {
+        print("Min amount to receive: \(minToAmount) sats")
+    }
+    // ANCHOR_END: fetch-convert-limits
+}
+
+func prepareConvertTokenToBitcoin(sdk: BreezSdk) async throws {
+    // ANCHOR: prepare-convert-token-to-bitcoin
+    let tokenIdentifier = "<token identifier>"
+    // Amount in token base units
+    let amount = BInt(10_000_000)
+
+    let prepareResponse = try await sdk.prepareConvertToken(
+        request: PrepareConvertTokenRequest(
+            convertType: ConvertType.toBitcoin(
+                fromTokenIdentifier: tokenIdentifier
+            ),
+            amount: amount
+        ))
+
+    let estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount
+    let fee = prepareResponse.fee
+    print("Estimated receive amount: \(estimatedReceiveAmount) sats")
+    print("Fee: \(fee) token base units")
+    // ANCHOR_END: prepare-convert-token-to-bitcoin
+}
+
+func prepareConvertTokenFromBitcoin(sdk: BreezSdk) async throws {
+    // ANCHOR: prepare-convert-token-from-bitcoin
+    let tokenIdentifier = "<token identifier>"
+    // Amount in satoshis
+    let amount = BInt(10_000)
+
+    let prepareResponse = try await sdk.prepareConvertToken(
+        request: PrepareConvertTokenRequest(
+            convertType: ConvertType.fromBitcoin(
+                toTokenIdentifier: tokenIdentifier
+            ),
+            amount: amount
+        ))
+
+    let estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount
+    let fee = prepareResponse.fee
+    print("Estimated receive amount: \(estimatedReceiveAmount) token base units")
+    print("Fee: \(fee) sats")
+    // ANCHOR_END: prepare-convert-token-from-bitcoin
+}
+
+func convertToken(sdk: BreezSdk, prepareResponse: PrepareConvertTokenResponse) async throws {
+    // ANCHOR: convert-token
+    // Set the maximum slippage to 1% in basis points
+    let optionalMaxSlippageBps = UInt32(100)
+
+    let response = try await sdk.convertToken(
+        request: ConvertTokenRequest(
+            prepareResponse: prepareResponse,
+            maxSlippageBps: optionalMaxSlippageBps
+        ))
+    
+    let sentPayment = response.sentPayment
+    let receivedPayment = response.receivedPayment
+    print("Sent payment: \(sentPayment)")
+    if let receivedPayment = receivedPayment {
+        print("Received payment: \(receivedPayment)")
+    }
+    // ANCHOR_END: convert-token
+}

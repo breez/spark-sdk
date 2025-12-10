@@ -1,7 +1,9 @@
 import {
   ReceivePaymentMethod,
   SendPaymentMethod,
-  type BreezSdk
+  type BreezSdk,
+  ConvertType,
+  type PrepareConvertTokenResponse
 } from '@breeztech/breez-sdk-spark-react-native'
 
 const exampleFetchTokenBalances = async (sdk: BreezSdk) => {
@@ -100,4 +102,80 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const payment = sendResponse.payment
   console.log(`Payment: ${JSON.stringify(payment)}`)
   // ANCHOR_END: send-token-payment
+}
+
+const fetchConvertLimits = async (sdk: BreezSdk) => {
+  // ANCHOR: fetch-convert-limits
+  const tokenIdentifier = '<token identifier>'
+
+  const response = await sdk.fetchConvertTokenLimits({
+    convertType: new ConvertType.ToBitcoin({
+      fromTokenIdentifier: tokenIdentifier
+    })
+  })
+
+  if (response.minFromAmount !== null) {
+    console.log(`Min amount to send: ${response.minFromAmount} token base units`)
+  }
+  if (response.minToAmount !== null) {
+    console.log(`Min amount to receive: ${response.minToAmount} sats`)
+  }
+  // ANCHOR_END: fetch-convert-limits
+}
+
+const prepareConvertTokenToBitcoin = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-convert-token-to-bitcoin
+  const tokenIdentifier = '<token identifier>'
+  // Amount in token base units
+  const amount = BigInt(10_000_000)
+
+  const prepareResponse = await sdk.prepareConvertToken({
+    convertType: new ConvertType.ToBitcoin({
+      fromTokenIdentifier: tokenIdentifier
+    }),
+    amount
+  })
+
+  const estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount
+  const fee = prepareResponse.fee
+  console.log(`Estimated receive amount: ${estimatedReceiveAmount} sats`)
+  console.log(`Fee: ${fee} token base units`)
+  // ANCHOR_END: prepare-convert-token-to-bitcoin
+}
+
+const prepareConvertTokenFromBitcoin = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-convert-token-from-bitcoin
+  const tokenIdentifier = '<token identifier>'
+  // Amount in satoshis
+  const amount = BigInt(10_000)
+
+  const prepareResponse = await sdk.prepareConvertToken({
+    convertType: new ConvertType.FromBitcoin({
+      toTokenIdentifier: tokenIdentifier
+    }),
+    amount
+  })
+
+  const estimatedReceiveAmount = prepareResponse.estimatedReceiveAmount
+  const fee = prepareResponse.fee
+  console.log(`Estimated receive amount: ${estimatedReceiveAmount} token base units`)
+  console.log(`Fee: ${fee} sats`)
+  // ANCHOR_END: prepare-convert-token-from-bitcoin
+}
+
+const convertToken = async (sdk: BreezSdk, prepareResponse: PrepareConvertTokenResponse) => {
+  // ANCHOR: convert-token
+  // Set the maximum slippage to 1% in basis points
+  const optionalMaxSlippageBps = 100
+
+  const response = await sdk.convertToken({
+    prepareResponse,
+    maxSlippageBps: optionalMaxSlippageBps
+  })
+
+  const sentPayment = response.sentPayment
+  const receivedPayment = response.receivedPayment
+  console.log(`Sent payment: ${JSON.stringify(sentPayment)}`)
+  console.log(`Received payment: ${JSON.stringify(receivedPayment)}`)
+  // ANCHOR_END: convert-token
 }

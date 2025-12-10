@@ -981,7 +981,7 @@ impl TokenService {
     }
 }
 
-pub(crate) fn bech32m_encode_token_id(
+pub fn bech32m_encode_token_id(
     raw_token_id: &[u8],
     network: Network,
 ) -> Result<String, ServiceError> {
@@ -1000,7 +1000,7 @@ pub(crate) fn bech32m_encode_token_id(
 /// Decodes a token id from a string.
 ///
 /// If a network is provided, it will be checked against the network in the token id.
-pub(crate) fn bech32m_decode_token_id(
+pub fn bech32m_decode_token_id(
     token_id: &str,
     network: Option<Network>,
 ) -> Result<Vec<u8>, ServiceError> {
@@ -1438,6 +1438,7 @@ mod tests {
     use prost_types::Timestamp;
 
     use crate::{
+        Network,
         operator::rpc::{
             self,
             spark_token::{
@@ -1711,5 +1712,30 @@ mod tests {
         assert!(validate_create_token_params("12345678901234567890", "ABC", 0).is_ok());
         assert!(validate_create_token_params("Bitcoin", "ABC", 0).is_ok());
         assert!(validate_create_token_params("Bitcoin", "ABCDEF", 0).is_ok());
+    }
+
+    #[test_all]
+    fn test_bech32m_decode_token_id() {
+        let token_id = "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87";
+        let decoded = super::bech32m_decode_token_id(token_id, Some(Network::Mainnet)).unwrap();
+        assert_eq!(
+            hex::encode(&decoded),
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca"
+        );
+    }
+
+    #[test_all]
+    fn test_bech32m_encode_token_id() {
+        let raw_token_id =
+            hex::decode("ee2f1dc42cf0866420f2b0195bb3607199a730c85d7138214b6ad09b55e47542")
+                .unwrap();
+        let encoded = super::bech32m_encode_token_id(&raw_token_id, Network::Regtest).unwrap();
+        assert_eq!(
+            encoded,
+            "btknrt1ach3m3pv7zrxgg8jkqv4hvmqwxv6wvxgt4cnsg2tdtgfk40yw4pq98h0dl"
+        );
+
+        let decoded = super::bech32m_decode_token_id(&encoded, Some(Network::Regtest)).unwrap();
+        assert_eq!(decoded, raw_token_id);
     }
 }
