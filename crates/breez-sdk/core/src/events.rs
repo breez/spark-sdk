@@ -35,6 +35,16 @@ pub enum SdkEvent {
     },
 }
 
+impl SdkEvent {
+    pub(crate) fn from_payment(payment: Payment) -> Self {
+        match payment.status {
+            crate::PaymentStatus::Completed => SdkEvent::PaymentSucceeded { payment },
+            crate::PaymentStatus::Pending => SdkEvent::PaymentPending { payment },
+            crate::PaymentStatus::Failed => SdkEvent::PaymentFailed { payment },
+        }
+    }
+}
+
 impl fmt::Display for SdkEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
