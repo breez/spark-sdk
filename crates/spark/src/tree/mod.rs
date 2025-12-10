@@ -440,10 +440,10 @@ pub trait TreeStore: Send + Sync {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeStore, TargetAmounts, ReservationPurpose, TreeServiceError};
+    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError, ReservationPurpose};
     ///
     /// # async fn example(store: &dyn TreeStore) -> Result<(), TreeServiceError> {
-    /// let target = TargetAmounts::new(50_000, Some(1_000));
+    /// let target = TargetAmounts::new_amount_and_fee(50_000, Some(1_000));
     /// let reservation = store.reserve_leaves(Some(&target), false, ReservationPurpose::Payment).await?;
     /// println!("Reserved {} leaves with ID: {}", reservation.leaves.len(), reservation.id);
     /// # Ok(())
@@ -481,11 +481,11 @@ pub trait TreeStore: Send + Sync {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError};
+    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError, ReservationPurpose};
     ///
     /// # async fn example(store: &dyn TreeStore) -> Result<(), TreeServiceError> {
-    /// let target = TargetAmounts::new(25_000, None);
-    /// let reservation = store.reserve_leaves(Some(&target), false).await?;
+    /// let target = TargetAmounts::new_amount_and_fee(25_000, None);
+    /// let reservation = store.reserve_leaves(Some(&target), false, ReservationPurpose::Payment).await?;
     ///
     /// // Later, if the transaction is cancelled
     /// store.cancel_reservation(&reservation.id).await?;
@@ -520,10 +520,10 @@ pub trait TreeStore: Send + Sync {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError};
+    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError, ReservationPurpose};
     ///
     /// # async fn example(store: &dyn TreeStore) -> Result<(), TreeServiceError> {
-    /// let target = TargetAmounts::new(100_000, Some(2_000));
+    /// let target = TargetAmounts::new_amount_and_fee(100_000, Some(2_000));
     /// let reservation = store.reserve_leaves(Some(&target), false, ReservationPurpose::Payment).await?;
     ///
     /// // After successfully using the leaves in a transaction
@@ -699,7 +699,7 @@ pub trait TreeService: Send + Sync {
     ///
     /// # async fn example(tree_service: Box<dyn TreeService>) -> Result<(), TreeServiceError> {
     /// // Select leaves for a specific amount with fee
-    /// let target = TargetAmounts::new(100_000, Some(1_000)); // 100k sats + 1k fee
+    /// let target = TargetAmounts::new_amount_and_fee(100_000, Some(1_000)); // 100k sats + 1k fee
     /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment).await?;
     /// println!("Reserved {} leaves with ID: {}", reservation.leaves.len(), reservation.id);
     ///   
@@ -736,7 +736,7 @@ pub trait TreeService: Send + Sync {
     ///
     /// # async fn example(tree_service: Box<dyn TreeService>) -> Result<(), TreeServiceError> {
     /// // Create a reservation
-    /// let target = TargetAmounts::new(50_000, None);
+    /// let target = TargetAmounts::new_amount_and_fee(50_000, None);
     /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment).await?;
     ///
     /// // Later, if the transaction fails, cancel the reservation
@@ -773,7 +773,7 @@ pub trait TreeService: Send + Sync {
     ///
     /// # async fn example(tree_service: Box<dyn TreeService>) -> Result<(), TreeServiceError> {
     /// // Create a reservation
-    /// let target = TargetAmounts::new(75_000, Some(2_000));
+    /// let target = TargetAmounts::new_amount_and_fee(75_000, Some(2_000));
     /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment).await?;
     ///
     /// // After successfully using the leaves in a transaction, finalize the reservation

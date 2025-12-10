@@ -1336,14 +1336,7 @@ impl SparkWallet {
         Ok(())
     }
 
-    /// Starts leaf optimization.
-    ///
-    /// This method checks if optimization is needed, calculates the required swaps,
-    /// and executes them in rounds. Progress is reported via WalletEvents.
-    ///
-    /// Returns early if:
-    /// - Optimization is already running
-    /// - Leaves are already optimal
+    /// Starts leaf optimization in the background.
     pub async fn start_leaf_optimization(&self) -> Result<(), SparkWalletError> {
         self.leaf_optimizer.start().await?;
         Ok(())

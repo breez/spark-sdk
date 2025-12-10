@@ -18,8 +18,8 @@ pub const DEFAULT_MAX_LEAVES_PER_SWAP: u32 = 64;
 pub struct OptimizationOptions {
     /// Whether optimization should run automatically after sync/receive operations.
     pub auto_enabled: bool,
-    /// Controls the optimization aggressiveness. Higher values create more leaves
-    /// for flexibility but may slow down operations. Recommended: 1 or 2.
+    /// Controls the optimization aggressiveness. Minimum value is 0, maximum value is 5.
+    /// Higher values create more leaves for flexibility but may slow down operations.
     pub multiplicity: u8,
     /// Soft limit on the number of leaves per swap round.
     pub max_leaves_per_swap: u32,
@@ -74,7 +74,7 @@ pub enum OptimizationEvent {
     },
     /// Optimization completed successfully.
     Completed,
-    /// Optimization was cancelled by the user.
+    /// Optimization was cancelled.
     Cancelled,
     /// Optimization failed with an error.
     Failed { error: String },
@@ -106,7 +106,8 @@ struct PreparedSwap {
 /// Service responsible for optimizing leaf denominations.
 ///
 /// The optimizer transforms the current set of leaves into an optimal set
-/// that minimizes the probability of needing swaps during transfers.
+/// that minimizes the probability of needing swaps during transfers or
+/// maximizes the amount that can be unilaterally exited (depending on the configuration).
 /// It operates in multiple rounds, each performing a swap operation.
 pub struct LeafOptimizer {
     config: OptimizationOptions,
@@ -194,6 +195,7 @@ impl LeafOptimizer {
     /// - Optimization is already running
     pub async fn start(self: &Arc<Self>) -> Result<(), ServiceError> {
         // Check if already running
+        // TODO: fix race condition here
         if self.progress.lock().unwrap().is_running {
             debug!("Optimization already running, skipping");
             return Ok(());
@@ -344,9 +346,8 @@ impl LeafOptimizer {
     /// Returns Ok(true) if completed, Ok(false) if cancelled, Err on failure.
     ///
     /// Takes ownership of the reserved leaves and manages the reservation lifecycle:
-    /// - On success: finalizes the reservation (removes old leaves from local store)
-    /// - On cancellation/failure with no progress: cancels reservation (returns leaves to available)
-    /// - On cancellation/failure with partial progress: refreshes leaves from server to sync state
+    /// - On success: finalizes the reservation, and atomically inserts the new leaves into the tree
+    /// - On cancellation/failure: cancels remaining reservations
     async fn execute_optimization_rounds(
         &self,
         swaps: Vec<PreparedSwap>,
