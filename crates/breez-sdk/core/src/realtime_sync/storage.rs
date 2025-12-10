@@ -12,8 +12,8 @@ use serde_json::Value;
 use tracing::{debug, error};
 
 use crate::{
-    ConversionInfo, DepositInfo, EventEmitter, ListPaymentsRequest, Payment, PaymentDetails,
-    PaymentMetadata, SdkEvent, Storage, StorageError, UpdateDepositPayload,
+    DepositInfo, EventEmitter, ListPaymentsRequest, Payment, PaymentDetails, PaymentMetadata,
+    SdkEvent, Storage, StorageError, UpdateDepositPayload,
 };
 use tokio_with_wasm::alias as tokio;
 
@@ -119,7 +119,7 @@ impl SyncedStorage {
             let Some(details) = payment.details else {
                 continue;
             };
-            let (description, lnurl_pay_info, lnurl_withdraw_info, conversion_refund_info) =
+            let (description, lnurl_pay_info, lnurl_withdraw_info, token_conversion_info) =
                 match details {
                     PaymentDetails::Lightning {
                         description,
@@ -128,19 +128,19 @@ impl SyncedStorage {
                         ..
                     } => (description, lnurl_pay_info, lnurl_withdraw_info, None),
                     PaymentDetails::Spark {
-                        conversion_info: Some(ConversionInfo::Refund(refund_info)),
+                        token_conversion_info,
                         ..
                     }
                     | PaymentDetails::Token {
-                        conversion_info: Some(ConversionInfo::Refund(refund_info)),
+                        token_conversion_info,
                         ..
-                    } => (None, None, None, Some(refund_info)),
+                    } => (None, None, None, token_conversion_info),
                     _ => continue,
                 };
 
             if lnurl_pay_info.is_none()
                 && lnurl_withdraw_info.is_none()
-                && conversion_refund_info.is_none()
+                && token_conversion_info.is_none()
             {
                 continue;
             }
@@ -149,7 +149,7 @@ impl SyncedStorage {
                 lnurl_description: description,
                 lnurl_pay_info,
                 lnurl_withdraw_info,
-                conversion_refund_info,
+                token_conversion_info,
             };
             let record_id = RecordId::new(RecordType::PaymentMetadata.to_string(), &payment.id);
             let record_change_request = RecordChangeRequest {

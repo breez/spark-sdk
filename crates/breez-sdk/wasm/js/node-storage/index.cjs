@@ -173,7 +173,7 @@ class SqliteStorage {
             );
             params.push(...paymentDetailsFilter.htlcStatus);
           }
-          // Filter by conversion refund info presence
+          // Filter by token conversion info presence
           if (
             (paymentDetailsFilter.type === "spark" || paymentDetailsFilter.type === "token") &&
               paymentDetailsFilter.conversionRefundNeeded !== undefined
@@ -184,7 +184,9 @@ class SqliteStorage {
                 ? "IS NULL"
                 : "IS NOT NULL";
             paymentDetailsClauses.push(
-              `${typeCheck} AND pm.conversion_refund_info IS NOT NULL AND json_extract(pm.conversion_refund_info, '$.refundIdentifier') ${nullCheck}`
+              `${typeCheck} AND pm.token_conversion_info IS NOT NULL AND
+              json_extract(pm.token_conversion_info, '$.paymentId') IS NULL AND
+              json_extract(pm.token_conversion_info, '$.refundIdentifier') ${nullCheck}`
             );
           }
           // Filter by token transaction hash
@@ -245,14 +247,12 @@ class SqliteStorage {
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
             ,       pm.lnurl_withdraw_info
-            ,       pm.conversion_refund_info
+            ,       pm.token_conversion_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
-            ,       t.conversion_info AS token_conversion_info
             ,       s.invoice_details AS spark_invoice_details
             ,       s.htlc_details AS spark_htlc_details
-            ,       s.conversion_info AS spark_conversion_info
             ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
             ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
             ,       lrm.sender_comment AS lnurl_sender_comment
@@ -270,7 +270,8 @@ class SqliteStorage {
       params.push(actualLimit, actualOffset);
       const stmt = this.db.prepare(query);
       const rows = stmt.all(...params);
-      return Promise.resolve(rows.map(this._rowToPayment.bind(this)));
+      const payments = rows.map(this._rowToPayment.bind(this));
+      return Promise.resolve(payments);
     } catch (error) {
       return Promise.reject(
         new StorageError(
@@ -318,22 +319,20 @@ class SqliteStorage {
       );
       const tokenInsert = this.db.prepare(
         `INSERT INTO payment_details_token 
-          (payment_id, metadata, tx_hash, invoice_details, conversion_info) 
-          VALUES (@id, @metadata, @txHash, @invoiceDetails, @conversionInfo)
+          (payment_id, metadata, tx_hash, invoice_details) 
+          VALUES (@id, @metadata, @txHash, @invoiceDetails)
           ON CONFLICT(payment_id) DO UPDATE SET
             metadata=excluded.metadata,
             tx_hash=excluded.tx_hash,
-            invoice_details=COALESCE(excluded.invoice_details, payment_details_token.invoice_details),
-            conversion_info=COALESCE(excluded.conversion_info, payment_details_token.conversion_info)`
+            invoice_details=COALESCE(excluded.invoice_details, payment_details_token.invoice_details)`
       );
       const sparkInsert = this.db.prepare(
         `INSERT INTO payment_details_spark 
-          (payment_id, invoice_details, htlc_details, conversion_info) 
-          VALUES (@id, @invoiceDetails, @htlcDetails, @conversionInfo)
+          (payment_id, invoice_details, htlc_details) 
+          VALUES (@id, @invoiceDetails, @htlcDetails)
           ON CONFLICT(payment_id) DO UPDATE SET
             invoice_details=COALESCE(excluded.invoice_details, payment_details_spark.invoice_details),
-            htlc_details=COALESCE(excluded.htlc_details, payment_details_spark.htlc_details),
-            conversion_info=COALESCE(excluded.conversion_info, payment_details_spark.conversion_info)`
+            htlc_details=COALESCE(excluded.htlc_details, payment_details_spark.htlc_details)`
       );
       const transaction = this.db.transaction(() => {
         paymentInsert.run({
@@ -351,15 +350,10 @@ class SqliteStorage {
           spark: payment.details?.type === "spark" ? 1 : null,
         });
 
-        const conversionInfo = payment.details?.conversionInfo &&
-          payment.details.conversionInfo.type === "success"
-            ? JSON.stringify(payment.details.conversionInfo)
-            : null;
         if (
           payment.details?.type === "spark" &&
           (payment.details.invoiceDetails != null ||
-            payment.details.htlcDetails != null ||
-            conversionInfo != null)
+            payment.details.htlcDetails != null)
         ) {
           sparkInsert.run({
             id: payment.id,
@@ -369,7 +363,6 @@ class SqliteStorage {
             htlcDetails: payment.details.htlcDetails
               ? JSON.stringify(payment.details.htlcDetails)
               : null,
-            conversionInfo,
           });
         }
 
@@ -392,7 +385,6 @@ class SqliteStorage {
             invoiceDetails: payment.details.invoiceDetails
               ? JSON.stringify(payment.details.invoiceDetails)
               : null,
-            conversionInfo,
           });
         }
       });
@@ -435,14 +427,12 @@ class SqliteStorage {
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
             ,       pm.lnurl_withdraw_info
-            ,       pm.conversion_refund_info
+            ,       pm.token_conversion_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
-            ,       t.conversion_info AS token_conversion_info
             ,       s.invoice_details AS spark_invoice_details
             ,       s.htlc_details AS spark_htlc_details
-            ,       s.conversion_info AS spark_conversion_info
             ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
             ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
             ,       lrm.sender_comment AS lnurl_sender_comment
@@ -501,14 +491,12 @@ class SqliteStorage {
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
             ,       pm.lnurl_withdraw_info
-            ,       pm.conversion_refund_info
+            ,       pm.token_conversion_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
-            ,       t.conversion_info AS token_conversion_info
             ,       s.invoice_details AS spark_invoice_details
             ,       s.htlc_details AS spark_htlc_details
-            ,       s.conversion_info AS spark_conversion_info
             ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
             ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
             ,       lrm.sender_comment AS lnurl_sender_comment
@@ -542,7 +530,7 @@ class SqliteStorage {
   setPaymentMetadata(paymentId, metadata) {
     try {
       const stmt = this.db.prepare(`
-                INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_refund_info) 
+                INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, token_conversion_info) 
                 VALUES (?, ?, ?, ?, ?)
             `);
 
@@ -553,8 +541,8 @@ class SqliteStorage {
           ? JSON.stringify(metadata.lnurlWithdrawInfo)
           : null,
         metadata.lnurlDescription,
-        metadata.conversionRefundInfo
-          ? JSON.stringify(metadata.conversionRefundInfo)
+        metadata.tokenConversionInfo
+          ? JSON.stringify(metadata.tokenConversionInfo)
           : null
       );
       return Promise.resolve();
@@ -758,11 +746,9 @@ class SqliteStorage {
         htlcDetails: row.spark_htlc_details
           ? JSON.parse(row.spark_htlc_details)
           : null,
-        conversionInfo: row.spark_conversion_info
-          ? { type: "success", ...JSON.parse(row.spark_conversion_info) }
-          : row.conversion_refund_info
-            ? { type: "refund", ...JSON.parse(row.conversion_refund_info) }
-            : null,
+        tokenConversionInfo: row.token_conversion_info
+          ? JSON.parse(row.token_conversion_info)
+          : null,
       };
     } else if (row.token_metadata) {
       details = {
@@ -772,11 +758,9 @@ class SqliteStorage {
         invoiceDetails: row.token_invoice_details
           ? JSON.parse(row.token_invoice_details)
           : null,
-        conversionInfo: row.token_conversion_info
-          ? { type: "success", ...JSON.parse(row.token_conversion_info) }
-          : row.conversion_refund_info
-            ? { type: "refund", ...JSON.parse(row.conversion_refund_info) }
-            : null,
+        tokenConversionInfo: row.token_conversion_info
+          ? JSON.parse(row.token_conversion_info)
+          : null,
       };
     }
 

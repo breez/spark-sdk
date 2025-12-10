@@ -647,8 +647,8 @@ class IndexedDBStorage {
           ? JSON.stringify(metadata.lnurlWithdrawInfo)
           : null,
         lnurlDescription: metadata.lnurlDescription,
-        conversionRefundInfo: metadata.conversionRefundInfo
-          ? JSON.stringify(metadata.conversionRefundInfo)
+        tokenConversionInfo: metadata.tokenConversionInfo
+          ? JSON.stringify(metadata.tokenConversionInfo)
           : null,
       };
 
@@ -1499,22 +1499,23 @@ class IndexedDBStorage {
             continue;
           }
         }
-        // Filter by conversion refund info presence
+        // Filter by token conversion info presence
         if (
-          (paymentDetailsFilter.type === "spark" || paymentDetailsFilter.type === "token") &&
-            paymentDetailsFilter.conversionRefundNeeded != null
+          (paymentDetailsFilter.type === "spark" ||
+            paymentDetailsFilter.type === "token") &&
+          paymentDetailsFilter.conversionRefundNeeded != null
         ) {
           if (
             details.type !== paymentDetailsFilter.type ||
-            !details.conversionInfo ||
-            details.conversionInfo.type !== "refund"
+            !details.tokenConversionInfo
           ) {
             continue;
           }
 
           if (
+            details.tokenConversionInfo.paymentId ||
             paymentDetailsFilter.conversionRefundNeeded ===
-            !!details.conversionInfo.refundIdentifier
+              !!details.tokenConversionInfo.refundIdentifier
           ) {
             continue;
           }
@@ -1639,13 +1640,13 @@ class IndexedDBStorage {
           }
         }
       } else if (details.type == "spark" || details.type == "token") {
-        // If conversionRefundInfo exists, parse and add to details
-        if (!details.conversionInfo && metadata.conversionRefundInfo) {
+        // If tokenConversionInfo exists, parse and add to details
+        if (metadata.tokenConversionInfo) {
           try {
-            details.conversionInfo = { type: "refund", ...JSON.parse(metadata.conversionRefundInfo) };
+            details.tokenConversionInfo = JSON.parse(metadata.tokenConversionInfo);
           } catch (e) {
             throw new StorageError(
-              `Failed to parse conversionRefundInfo JSON for payment ${payment.id}: ${e.message}`,
+              `Failed to parse tokenConversionInfo JSON for payment ${payment.id}: ${e.message}`,
               e
             );
           }

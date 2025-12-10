@@ -11,13 +11,12 @@ use thiserror::Error;
 
 use crate::{
     DepositClaimError, DepositInfo, LightningAddressInfo, ListPaymentsRequest, LnurlPayInfo,
-    LnurlWithdrawInfo, RefundConversionInfo, TokenBalance, TokenMetadata, models::Payment,
+    LnurlWithdrawInfo, TokenBalance, TokenConversionInfo, TokenMetadata, models::Payment,
 };
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
 const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
 const LNURL_METADATA_UPDATED_AFTER_KEY: &str = "lnurl_metadata_updated_after";
-const CONVERSION_INFO_OFFSET_KEY: &str = "conversion_info_offset";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
 const TX_CACHE_KEY: &str = "tx_cache";
 const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
@@ -83,7 +82,7 @@ pub struct PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
-    pub conversion_refund_info: Option<RefundConversionInfo>,
+    pub token_conversion_info: Option<TokenConversionInfo>,
 }
 
 /// Trait for persistent storage
@@ -460,29 +459,6 @@ impl ObjectCacheRepository {
             None => Ok(0),
         }
     }
-
-    pub(crate) async fn save_conversion_info_offset(
-        &self,
-        offset: u32,
-    ) -> Result<(), StorageError> {
-        self.storage
-            .set_cached_item(CONVERSION_INFO_OFFSET_KEY.to_string(), offset.to_string())
-            .await?;
-        Ok(())
-    }
-
-    pub(crate) async fn fetch_conversion_info_offset(&self) -> Result<u32, StorageError> {
-        let value = self
-            .storage
-            .get_cached_item(CONVERSION_INFO_OFFSET_KEY.to_string())
-            .await?;
-        match value {
-            Some(value) => Ok(value.parse().map_err(|_| {
-                StorageError::Serialization("invalid conversion_info_offset".to_string())
-            })?),
-            None => Ok(0),
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -851,7 +827,7 @@ pub mod tests {
                     invoice: "invoice_string".to_string(),
                 }),
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -872,7 +848,7 @@ pub mod tests {
                     expiry_time: 15_000,
                     status: SparkHtlcStatus::PreimageShared,
                 }),
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -902,7 +878,7 @@ pub mod tests {
                     description: Some("description_2".to_string()),
                     invoice: "invoice_string_2".to_string(),
                 }),
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -918,7 +894,7 @@ pub mod tests {
             }),
             lnurl_withdraw_info: None,
             lnurl_description: None,
-            conversion_refund_info: None,
+            token_conversion_info: None,
         };
 
         let lightning_lnurl_pay_payment = Payment {
@@ -948,7 +924,7 @@ pub mod tests {
                 withdraw_url: "http://example.com/withdraw".to_string(),
             }),
             lnurl_description: None,
-            conversion_refund_info: None,
+            token_conversion_info: None,
         };
         let lightning_lnurl_withdraw_payment = Payment {
             id: "lightning_pmtabc".to_string(),
@@ -1062,6 +1038,17 @@ pub mod tests {
         };
 
         // Test 11: Successful conversion payment
+        let successful_sent_conversion_payment_metadata = PaymentMetadata {
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_description: None,
+            token_conversion_info: Some(crate::TokenConversionInfo {
+                pool_id: "pool_abc".to_string(),
+                payment_id: Some("conversion_pmt123".to_string()),
+                fee: Some(21),
+                refund_identifier: None,
+            }),
+        };
         let successful_sent_conversion_payment = Payment {
             id: "conversion_pmt123".to_string(),
             payment_type: PaymentType::Send,
@@ -1073,12 +1060,9 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: Some(crate::ConversionInfo::Success(
-                    crate::SuccessConversionInfo {
-                        payment_id: "conversion_pmt123".to_string(),
-                        fee: 21,
-                    },
-                )),
+                token_conversion_info: successful_sent_conversion_payment_metadata
+                    .token_conversion_info
+                    .clone(),
             }),
         };
 
@@ -1087,9 +1071,11 @@ pub mod tests {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_description: None,
-            conversion_refund_info: Some(crate::RefundConversionInfo {
+            token_conversion_info: Some(crate::TokenConversionInfo {
                 pool_id: "pool_xyz".to_string(),
                 refund_identifier: Some("refund_pmt456".to_string()),
+                payment_id: None,
+                fee: None,
             }),
         };
         let failed_with_refund_conversion_payment = Payment {
@@ -1103,10 +1089,9 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: Some(crate::ConversionInfo::Refund(crate::RefundConversionInfo {
-                    pool_id: "pool_xyz".to_string(),
-                    refund_identifier: Some("refund_pmt456".to_string()),
-                })),
+                token_conversion_info: failed_with_refund_conversion_payment_metadata
+                    .token_conversion_info
+                    .clone(),
             }),
         };
 
@@ -1115,9 +1100,11 @@ pub mod tests {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_description: None,
-            conversion_refund_info: Some(crate::RefundConversionInfo {
+            token_conversion_info: Some(crate::TokenConversionInfo {
                 pool_id: "pool_xyz".to_string(),
                 refund_identifier: None,
+                payment_id: None,
+                fee: None,
             }),
         };
         let failed_no_refund_conversion_payment = Payment {
@@ -1131,10 +1118,9 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: Some(crate::ConversionInfo::Refund(crate::RefundConversionInfo {
-                    pool_id: "pool_xyz".to_string(),
-                    refund_identifier: None,
-                })),
+                token_conversion_info: failed_no_refund_conversion_payment_metadata
+                    .token_conversion_info
+                    .clone(),
             }),
         };
 
@@ -1176,6 +1162,13 @@ pub mod tests {
                 payment_hash: lnurl_receive_payment_hash.clone(),
                 sender_comment: lnurl_receive_metadata.sender_comment.clone(),
             }])
+            .await
+            .unwrap();
+        storage
+            .set_payment_metadata(
+                successful_sent_conversion_payment.id.clone(),
+                successful_sent_conversion_payment_metadata,
+            )
             .await
             .unwrap();
         storage
@@ -1228,30 +1221,30 @@ pub mod tests {
                     Some(PaymentDetails::Spark {
                         invoice_details: r_invoice,
                         htlc_details: r_htlc,
-                        conversion_info: r_conversion_info,
+                        token_conversion_info: r_token_conversion_info,
                     }),
                     Some(PaymentDetails::Spark {
                         invoice_details: e_invoice,
                         htlc_details: e_htlc,
-                        conversion_info: e_conversion_info,
+                        token_conversion_info: e_token_conversion_info,
                     }),
                 ) => {
                     assert_eq!(r_invoice, e_invoice);
                     assert_eq!(r_htlc, e_htlc);
-                    assert_eq!(r_conversion_info, e_conversion_info);
+                    assert_eq!(r_token_conversion_info, e_token_conversion_info);
                 }
                 (
                     Some(PaymentDetails::Token {
                         metadata: r_metadata,
                         tx_hash: r_tx_hash,
                         invoice_details: r_invoice,
-                        conversion_info: r_conversion_info,
+                        token_conversion_info: r_token_conversion_info,
                     }),
                     Some(PaymentDetails::Token {
                         metadata: e_metadata,
                         tx_hash: e_tx_hash,
                         invoice_details: e_invoice,
-                        conversion_info: e_conversion_info,
+                        token_conversion_info: e_token_conversion_info,
                     }),
                 ) => {
                     assert_eq!(r_metadata.identifier, e_metadata.identifier);
@@ -1263,7 +1256,7 @@ pub mod tests {
                     assert_eq!(r_metadata.is_freezable, e_metadata.is_freezable);
                     assert_eq!(r_tx_hash, e_tx_hash);
                     assert_eq!(r_invoice, e_invoice);
-                    assert_eq!(r_conversion_info, e_conversion_info);
+                    assert_eq!(r_token_conversion_info, e_token_conversion_info);
                 }
                 (
                     Some(PaymentDetails::Lightning {
@@ -1796,7 +1789,7 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -1811,7 +1804,7 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -1826,7 +1819,7 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -1883,7 +1876,7 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -1927,7 +1920,7 @@ pub mod tests {
                 },
                 tx_hash: "tx_hash_1".to_string(),
                 invoice_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -2031,7 +2024,7 @@ pub mod tests {
                     expiry_time: 2000,
                     status: SparkHtlcStatus::WaitingForPreimage,
                 }),
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -2051,7 +2044,7 @@ pub mod tests {
                     expiry_time: 3000,
                     status: SparkHtlcStatus::PreimageShared,
                 }),
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -2071,7 +2064,7 @@ pub mod tests {
                     expiry_time: 4000,
                     status: SparkHtlcStatus::Returned,
                 }),
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -2090,7 +2083,7 @@ pub mod tests {
                     invoice: "spark_invoice".to_string(),
                 }),
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -2181,7 +2174,18 @@ pub mod tests {
 
     #[allow(clippy::too_many_lines)]
     pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) {
-        // Create payments with and without conversion refund info
+        // Create payments with and without token conversion info
+        let payment_with_refund_metadata = PaymentMetadata {
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_description: None,
+            token_conversion_info: Some(crate::TokenConversionInfo {
+                pool_id: "pool1".to_string(),
+                refund_identifier: Some("refund1".to_string()),
+                payment_id: None,
+                fee: None,
+            }),
+        };
         let payment_with_refund = Payment {
             id: "with_refund".to_string(),
             payment_type: PaymentType::Send,
@@ -2202,16 +2206,19 @@ pub mod tests {
                 },
                 tx_hash: "txhash1".to_string(),
                 invoice_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
-        let payment_with_refund_metadata = PaymentMetadata {
+
+        let successful_conversion_metadata = PaymentMetadata {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_description: None,
-            conversion_refund_info: Some(crate::RefundConversionInfo {
+            token_conversion_info: Some(crate::TokenConversionInfo {
                 pool_id: "pool1".to_string(),
-                refund_identifier: Some("refund1".to_string()),
+                payment_id: Some("conversion1".to_string()),
+                fee: Some(100),
+                refund_identifier: None,
             }),
         };
         let successful_conversion = Payment {
@@ -2225,12 +2232,19 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: Some(crate::ConversionInfo::Success(
-                    crate::SuccessConversionInfo {
-                        payment_id: "conversion1".to_string(),
-                        fee: 100,
-                    },
-                )),
+                token_conversion_info: None,
+            }),
+        };
+
+        let payment_without_refund_metadata = PaymentMetadata {
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_description: None,
+            token_conversion_info: Some(crate::TokenConversionInfo {
+                pool_id: "pool1".to_string(),
+                payment_id: None,
+                fee: None,
+                refund_identifier: None,
             }),
         };
         let payment_without_refund = Payment {
@@ -2244,16 +2258,7 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: None,
-            }),
-        };
-        let payment_without_refund_metadata = PaymentMetadata {
-            lnurl_pay_info: None,
-            lnurl_withdraw_info: None,
-            lnurl_description: None,
-            conversion_refund_info: Some(crate::RefundConversionInfo {
-                pool_id: "pool1".to_string(),
-                refund_identifier: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -2265,6 +2270,13 @@ pub mod tests {
             .unwrap();
         storage
             .set_payment_metadata("with_refund".to_string(), payment_with_refund_metadata)
+            .await
+            .unwrap();
+        storage
+            .set_payment_metadata(
+                "successful_conversion".to_string(),
+                successful_conversion_metadata,
+            )
             .await
             .unwrap();
         storage
@@ -2381,7 +2393,7 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -2396,7 +2408,7 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -2411,7 +2423,7 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -2468,7 +2480,7 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -2567,7 +2579,7 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -2582,7 +2594,7 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -2597,7 +2609,7 @@ pub mod tests {
             details: Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -2733,7 +2745,7 @@ pub mod tests {
                     expiry_time: 1_234_567_990,
                     status: SparkHtlcStatus::WaitingForPreimage,
                 }),
-                conversion_info: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -2767,7 +2779,7 @@ pub mod tests {
                 expiry_time: 1_234_567_990,
                 status: SparkHtlcStatus::PreimageShared,
             }),
-            conversion_info: None,
+            token_conversion_info: None,
         });
         storage.insert_payment(payment.clone()).await.unwrap();
 

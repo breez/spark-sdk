@@ -294,12 +294,8 @@ class MigrationManager {
         sql: `DELETE FROM unclaimed_deposits`
       },
       {
-        name: "Add transfer info to payment_metadata and payment_details tables",
-        sql: [
-          `ALTER TABLE payment_metadata ADD COLUMN conversion_refund_info TEXT`,
-          `ALTER TABLE payment_details_spark ADD COLUMN conversion_info TEXT`,
-          `ALTER TABLE payment_details_token ADD COLUMN conversion_info TEXT`,
-        ],
+        name: "Add token conversion info to payment_metadata",
+        sql: `ALTER TABLE payment_metadata ADD COLUMN token_conversion_info TEXT`
       },
     ];
   }

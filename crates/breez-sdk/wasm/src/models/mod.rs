@@ -414,13 +414,13 @@ pub enum PaymentDetails {
     Spark {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         htlc_details: Option<SparkHtlcDetails>,
-        conversion_info: Option<ConversionInfo>,
+        token_conversion_info: Option<TokenConversionInfo>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         invoice_details: Option<SparkInvoicePaymentDetails>,
-        conversion_info: Option<ConversionInfo>,
+        token_conversion_info: Option<TokenConversionInfo>,
     },
     Lightning {
         description: Option<String>,
@@ -839,7 +839,7 @@ pub struct PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
-    pub conversion_refund_info: Option<RefundConversionInfo>,
+    pub token_conversion_info: Option<TokenConversionInfo>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SetLnurlMetadataItem)]
@@ -1061,22 +1061,12 @@ pub struct LnurlReceiveMetadata {
     pub sender_comment: Option<String>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionInfo)]
-pub enum ConversionInfo {
-    Success(SuccessConversionInfo),
-    Refund(RefundConversionInfo),
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::SuccessConversionInfo)]
-pub struct SuccessConversionInfo {
-    pub payment_id: String,
-    #[serde(with = "serde_u128_as_string")]
-    pub fee: u128,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::RefundConversionInfo)]
-pub struct RefundConversionInfo {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenConversionInfo)]
+pub struct TokenConversionInfo {
     pub pool_id: String,
+    pub payment_id: Option<String>,
+    #[serde(default, with = "serde_option_u128_as_string")]
+    pub fee: Option<u128>,
     pub refund_identifier: Option<String>,
 }
 

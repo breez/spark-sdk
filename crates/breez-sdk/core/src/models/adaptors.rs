@@ -88,7 +88,7 @@ impl PaymentDetails {
                 SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark {
                     invoice_details: None,
                     htlc_details: None,
-                    conversion_info: None,
+                    token_conversion_info: None,
                 },
                 SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
                     tx_id: request.transaction_id.clone(),
@@ -108,7 +108,7 @@ impl PaymentDetails {
             return Ok(Some(PaymentDetails::Spark {
                 invoice_details: Some(invoice_details.into()),
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }));
         }
 
@@ -117,7 +117,7 @@ impl PaymentDetails {
             return Ok(Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: Some(htlc_preimage_request.clone().try_into()?),
-                conversion_info: None,
+                token_conversion_info: None,
             }));
         }
 
@@ -125,7 +125,7 @@ impl PaymentDetails {
             return Ok(Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
-                conversion_info: None,
+                token_conversion_info: None,
             }));
         }
 

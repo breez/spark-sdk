@@ -238,16 +238,16 @@ pub enum PaymentDetails {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         /// The HTLC transfer details if the payment fulfilled an HTLC transfer
         htlc_details: Option<SparkHtlcDetails>,
-        /// The information for a successful or refundable conversion
-        conversion_info: Option<ConversionInfo>,
+        /// The information for a token conversion
+        token_conversion_info: Option<TokenConversionInfo>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         /// The invoice details if the payment fulfilled a spark invoice
         invoice_details: Option<SparkInvoicePaymentDetails>,
-        /// The information for a successful or refundable conversion
-        conversion_info: Option<ConversionInfo>,
+        /// The information for a token conversion
+        token_conversion_info: Option<TokenConversionInfo>,
     },
     Lightning {
         /// Represents the invoice description
@@ -1129,28 +1129,16 @@ pub struct LnurlReceiveMetadata {
     pub sender_comment: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum ConversionInfo {
-    Success(SuccessConversionInfo),
-    Refund(RefundConversionInfo),
-}
-
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SuccessConversionInfo {
-    /// The receiving payment id associated with the conversion
-    pub payment_id: String,
-    /// The fee paid for the conversion
-    /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
-    pub fee: u128,
-}
-
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RefundConversionInfo {
+pub struct TokenConversionInfo {
     /// The pool id associated with the conversion
     pub pool_id: String,
+    /// The receiving payment id associated with the conversion
+    pub payment_id: Option<String>,
+    /// The fee paid for the conversion
+    /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
+    pub fee: Option<u128>,
     /// The refund payment id if a refund payment was made
     pub refund_identifier: Option<String>,
 }

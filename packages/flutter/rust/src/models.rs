@@ -486,13 +486,13 @@ pub enum _PaymentDetails {
     Spark {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         htlc_details: Option<SparkHtlcDetails>,
-        conversion_info: Option<ConversionInfo>,
+        token_conversion_info: Option<TokenConversionInfo>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         invoice_details: Option<SparkInvoicePaymentDetails>,
-        conversion_info: Option<ConversionInfo>,
+        token_conversion_info: Option<TokenConversionInfo>,
     },
     Lightning {
         description: Option<String>,
@@ -538,7 +538,7 @@ pub struct _PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
-    pub conversion_refund_info: Option<RefundConversionInfo>,
+    pub token_conversion_info: Option<TokenConversionInfo>,
 }
 
 #[frb(mirror(PaymentMethod))]
@@ -967,21 +967,11 @@ pub struct _ClaimHtlcPaymentResponse {
     pub payment: Payment,
 }
 
-#[frb(mirror(ConversionInfo))]
-pub enum _ConversionInfo {
-    Success(SuccessConversionInfo),
-    Refund(RefundConversionInfo),
-}
-
-#[frb(mirror(SuccessConversionInfo))]
-pub struct _SuccessConversionInfo {
-    pub payment_id: String,
-    pub fee: u128,
-}
-
-#[frb(mirror(RefundConversionInfo))]
-pub struct _RefundConversionInfo {
+#[frb(mirror(TokenConversionInfo))]
+pub struct _TokenConversionInfo {
     pub pool_id: String,
+    pub payment_id: Option<String>,
+    pub fee: Option<u128>,
     pub refund_identifier: Option<String>,
 }
 
