@@ -447,6 +447,9 @@ impl SparkWallet {
                 .await?
             }
         };
+
+        self.maybe_start_auto_optimize().await?;
+
         Ok(PayLightningInvoiceResult {
             transfer: wallet_transfer,
             lightning_payment: lightning_payment.lightning_send_payment,
@@ -569,6 +572,9 @@ impl SparkWallet {
             .insert_leaves(deposit_nodes.clone())
             .await?;
         info!("Claimed deposit root node: {:?}", deposit_nodes);
+
+        self.maybe_start_auto_optimize().await?;
+
         Ok(deposit_nodes.into_iter().map(WalletLeaf::from).collect())
     }
 
@@ -714,13 +720,7 @@ impl SparkWallet {
         )
         .await?;
 
-        // Trigger auto-optimization if enabled (non-blocking)
-        if self.config.auto_optimize_enabled
-            && self.leaf_operation_coordinator.should_optimize().await?
-            && let Err(e) = self.leaf_operation_coordinator.start_optimization().await
-        {
-            debug!("Auto-optimization after transfer failed: {:?}", e);
-        }
+        self.maybe_start_auto_optimize().await?;
 
         Ok(WalletTransfer::from_transfer(
             transfer,
@@ -733,14 +733,20 @@ impl SparkWallet {
 
     /// Claims all pending transfers.
     pub async fn claim_pending_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
-        claim_pending_transfers(
+        let transfers = claim_pending_transfers(
             self.identity_public_key,
             &self.transfer_service,
             &self.tree_service,
             &self.htlc_service,
             &self.ssp_client,
         )
-        .await
+        .await?;
+
+        if !transfers.is_empty() {
+            self.maybe_start_auto_optimize().await?;
+        }
+
+        Ok(transfers)
     }
 
     pub async fn create_htlc(
@@ -785,6 +791,8 @@ impl SparkWallet {
             expiry_time,
             preimage: None,
         };
+
+        self.maybe_start_auto_optimize().await?;
 
         Ok(WalletTransfer::from_transfer(
             transfer,
@@ -996,13 +1004,7 @@ impl SparkWallet {
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
         self.leaf_operation_coordinator.refresh_if_idle().await?;
 
-        // Trigger auto-optimization if enabled (non-blocking)
-        if self.config.auto_optimize_enabled
-            && self.leaf_operation_coordinator.should_optimize().await?
-            && let Err(e) = self.leaf_operation_coordinator.start_optimization().await
-        {
-            debug!("Auto-optimization after sync failed: {:?}", e);
-        }
+        self.maybe_start_auto_optimize().await?;
 
         self.token_output_service.refresh_tokens_outputs().await?;
         Ok(())
@@ -1492,6 +1494,18 @@ impl SparkWallet {
             Err(e) => Err(e.into()),
         }
     }
+
+    async fn maybe_start_auto_optimize(&self) -> Result<(), SparkWalletError> {
+        // Trigger auto-optimization if enabled (non-blocking)
+        if self.config.auto_optimize_enabled
+            && self.leaf_operation_coordinator.should_optimize().await?
+            && let Err(e) = self.leaf_operation_coordinator.start_optimization().await
+        {
+            debug!("Auto-optimization after transfer failed: {:?}", e);
+        }
+
+        Ok(())
+    }
 }
 
 async fn claim_pending_transfers(
@@ -1869,13 +1883,7 @@ impl BackgroundProcessor {
                 self.ssp_client.identity_public_key(),
             )));
 
-        // Trigger auto-optimization if enabled (non-blocking)
-        if self.auto_optimize_enabled
-            && self.leaf_operation_coordinator.should_optimize().await?
-            && let Err(e) = self.leaf_operation_coordinator.start_optimization().await
-        {
-            debug!("Auto-optimization after transfer failed: {:?}", e);
-        }
+        self.maybe_start_auto_optimize().await?;
 
         Ok(())
     }
@@ -1902,6 +1910,9 @@ impl BackgroundProcessor {
                     self.event_manager
                         .notify_listeners(WalletEvent::TransferClaimed(transfer.clone()));
                 }
+                if !transfers.is_empty() {
+                    self.maybe_start_auto_optimize().await?;
+                }
             }
             Err(e) => {
                 debug!(
@@ -1918,6 +1929,18 @@ impl BackgroundProcessor {
     async fn process_disconnected_event(&self) -> Result<(), SparkWalletError> {
         self.event_manager
             .notify_listeners(WalletEvent::StreamDisconnected);
+        Ok(())
+    }
+
+    async fn maybe_start_auto_optimize(&self) -> Result<(), SparkWalletError> {
+        // Trigger auto-optimization if enabled (non-blocking)
+        if self.auto_optimize_enabled
+            && self.leaf_operation_coordinator.should_optimize().await?
+            && let Err(e) = self.leaf_operation_coordinator.start_optimization().await
+        {
+            debug!("Auto-optimization after transfer failed: {:?}", e);
+        }
+
         Ok(())
     }
 }
