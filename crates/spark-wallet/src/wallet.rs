@@ -1,4 +1,12 @@
-use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use bitcoin::{
     Address, Transaction,
@@ -44,7 +52,7 @@ use spark::{
     },
     utils::paging::{PagingFilter, PagingResult},
 };
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{Notify, broadcast, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, info, trace};
 use web_time::{SystemTime, UNIX_EPOCH};
@@ -58,6 +66,94 @@ use crate::{
 };
 
 use super::{SparkWalletConfig, SparkWalletError};
+
+/// Coordinates leaf operations to prevent concurrent refresh and optimization.
+/// Refreshing while performing optimization swaps can cause balance inconsistencies
+/// due to output leaves not yet being available while input leaves are already locked.
+///
+/// Ensures that:
+/// - Refresh is skipped if optimization is running
+/// - Optimization waits for any ongoing refresh to complete
+pub struct LeafOperationCoordinator {
+    leaf_optimizer: Arc<LeafOptimizer>,
+    tree_service: Arc<dyn TreeService>,
+    /// Set during refresh execution
+    refresh_in_progress: Arc<AtomicBool>,
+    /// Signaled when refresh completes
+    refresh_done: Arc<Notify>,
+}
+
+impl LeafOperationCoordinator {
+    pub fn new(leaf_optimizer: Arc<LeafOptimizer>, tree_service: Arc<dyn TreeService>) -> Self {
+        Self {
+            leaf_optimizer,
+            tree_service,
+            refresh_in_progress: Arc::new(AtomicBool::new(false)),
+            refresh_done: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Refreshes leaves if no optimization is running.
+    /// Returns Ok(true) if refresh was performed, Ok(false) if skipped.
+    pub async fn refresh_if_idle(&self) -> Result<bool, SparkWalletError> {
+        // Skip if optimization is running
+        if self.leaf_optimizer.is_running() {
+            return Ok(false);
+        }
+
+        // Mark refresh as in progress
+        self.refresh_in_progress.store(true, Ordering::SeqCst);
+
+        // Double-check optimization didn't start between our check and setting the flag
+        if self.leaf_optimizer.is_running() {
+            self.refresh_in_progress.store(false, Ordering::SeqCst);
+            return Ok(false);
+        }
+
+        let result = self.tree_service.refresh_leaves().await;
+
+        self.refresh_in_progress.store(false, Ordering::SeqCst);
+        self.refresh_done.notify_waiters();
+
+        result.map(|_| true).map_err(Into::into)
+    }
+
+    /// Starts optimization task.
+    /// If refresh is currently running, optimization will wait for it to complete in the background.
+    pub async fn start_optimization(&self) -> Result<(), SparkWalletError> {
+        // Spawn a task that waits for refresh and then starts optimization
+        let optimizer = Arc::clone(&self.leaf_optimizer);
+        let refresh_in_progress = Arc::clone(&self.refresh_in_progress);
+        let refresh_done = Arc::clone(&self.refresh_done);
+
+        tokio::spawn(async move {
+            // Wait for any ongoing refresh to complete
+            while refresh_in_progress.load(Ordering::SeqCst) {
+                let notified = refresh_done.notified();
+                // Double-check after registering for notification
+                if !refresh_in_progress.load(Ordering::SeqCst) {
+                    break;
+                }
+                notified.await;
+            }
+
+            // Now start the optimization
+            if let Err(e) = optimizer.start().await {
+                error!("Optimization failed: {:?}", e);
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Checks if leaves need optimization.
+    pub async fn should_optimize(&self) -> Result<bool, SparkWalletError> {
+        self.leaf_optimizer
+            .should_optimize()
+            .await
+            .map_err(Into::into)
+    }
+}
 
 pub struct SparkWallet {
     /// Cancellation token to stop background tasks. It is dropped when the wallet is dropped to stop background tasks.
@@ -79,6 +175,7 @@ pub struct SparkWallet {
     operator_pool: Arc<OperatorPool>,
     htlc_service: Arc<HtlcService>,
     leaf_optimizer: Arc<LeafOptimizer>,
+    leaf_operation_coordinator: Arc<LeafOperationCoordinator>,
 }
 
 impl SparkWallet {
@@ -234,6 +331,11 @@ impl SparkWallet {
             Some(optimization_event_handler),
         ));
 
+        let leaf_operation_coordinator = Arc::new(LeafOperationCoordinator::new(
+            Arc::clone(&leaf_optimizer),
+            Arc::clone(&tree_service),
+        ));
+
         let (cancel, cancellation_token) = watch::channel(());
         if with_background_processing {
             let reconnect_interval = Duration::from_secs(config.reconnect_interval_seconds);
@@ -246,7 +348,7 @@ impl SparkWallet {
                 Arc::clone(&service_provider),
                 Arc::clone(&transfer_service),
                 Arc::clone(&htlc_service),
-                Arc::clone(&leaf_optimizer),
+                Arc::clone(&leaf_operation_coordinator),
                 config.auto_optimize_enabled,
             ));
             background_processor
@@ -271,6 +373,7 @@ impl SparkWallet {
             operator_pool,
             htlc_service,
             leaf_optimizer,
+            leaf_operation_coordinator,
         })
     }
 }
@@ -612,9 +715,10 @@ impl SparkWallet {
         .await?;
 
         // Trigger auto-optimization if enabled (non-blocking)
-        if self.config.auto_optimize_enabled && self.leaf_optimizer.should_optimize().await? {
-            let optimizer = Arc::clone(&self.leaf_optimizer);
-            if let Err(e) = optimizer.start().await {
+        if self.config.auto_optimize_enabled
+            && self.leaf_operation_coordinator.should_optimize().await?
+        {
+            if let Err(e) = self.leaf_operation_coordinator.start_optimization().await {
                 debug!("Auto-optimization after transfer failed: {:?}", e);
             }
         }
@@ -891,15 +995,13 @@ impl SparkWallet {
     }
 
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
-        // TODO: consider potential race issue
-        if !self.leaf_optimizer.is_running() {
-            self.tree_service.refresh_leaves().await?;
-        }
+        self.leaf_operation_coordinator.refresh_if_idle().await?;
 
         // Trigger auto-optimization if enabled (non-blocking)
-        if self.config.auto_optimize_enabled && self.leaf_optimizer.should_optimize().await? {
-            let optimizer = Arc::clone(&self.leaf_optimizer);
-            if let Err(e) = optimizer.start().await {
+        if self.config.auto_optimize_enabled
+            && self.leaf_operation_coordinator.should_optimize().await?
+        {
+            if let Err(e) = self.leaf_operation_coordinator.start_optimization().await {
                 debug!("Auto-optimization after sync failed: {:?}", e);
             }
         }
@@ -1334,8 +1436,7 @@ impl SparkWallet {
 
     /// Starts leaf optimization in the background.
     pub async fn start_leaf_optimization(&self) -> Result<(), SparkWalletError> {
-        self.leaf_optimizer.start().await?;
-        Ok(())
+        self.leaf_operation_coordinator.start_optimization().await
     }
 
     /// Cancels the ongoing leaf optimization.
@@ -1601,7 +1702,7 @@ struct BackgroundProcessor {
     ssp_client: Arc<ServiceProvider>,
     transfer_service: Arc<TransferService>,
     htlc_service: Arc<HtlcService>,
-    leaf_optimizer: Arc<LeafOptimizer>,
+    leaf_operation_coordinator: Arc<LeafOperationCoordinator>,
     auto_optimize_enabled: bool,
 }
 
@@ -1616,7 +1717,7 @@ impl BackgroundProcessor {
         ssp_client: Arc<ServiceProvider>,
         transfer_service: Arc<TransferService>,
         htlc_service: Arc<HtlcService>,
-        leaf_optimizer: Arc<LeafOptimizer>,
+        leaf_operation_coordinator: Arc<LeafOperationCoordinator>,
         auto_optimize_enabled: bool,
     ) -> Self {
         Self {
@@ -1628,7 +1729,7 @@ impl BackgroundProcessor {
             ssp_client,
             transfer_service,
             htlc_service,
-            leaf_optimizer,
+            leaf_operation_coordinator,
             auto_optimize_enabled,
         }
     }
@@ -1661,10 +1762,7 @@ impl BackgroundProcessor {
             .await;
         });
 
-        // TODO: consider potential race issue
-        if !self.leaf_optimizer.is_running()
-            && let Err(e) = self.tree_service.refresh_leaves().await
-        {
+        if let Err(e) = self.leaf_operation_coordinator.refresh_if_idle().await {
             error!("Error refreshing leaves on startup: {:?}", e);
         }
 
@@ -1774,9 +1872,8 @@ impl BackgroundProcessor {
             )));
 
         // Trigger auto-optimization if enabled (non-blocking)
-        if self.auto_optimize_enabled && self.leaf_optimizer.should_optimize().await? {
-            let optimizer = Arc::clone(&self.leaf_optimizer);
-            if let Err(e) = optimizer.start().await {
+        if self.auto_optimize_enabled && self.leaf_operation_coordinator.should_optimize().await? {
+            if let Err(e) = self.leaf_operation_coordinator.start_optimization().await {
                 debug!("Auto-optimization after transfer failed: {:?}", e);
             }
         }
