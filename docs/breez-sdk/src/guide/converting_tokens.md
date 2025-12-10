@@ -4,7 +4,7 @@ This process enables funds to be converted either to or from Bitcoin and a selec
 
 1. [Fetching the limits](#fetching-the-limits) - Get the current limits for converting tokens
 2. [Preparing to convert](#preparing-to-convert) - Prepare the conversion by validating the parameters
-3. [Convert](#convert)
+3. [Convert](#convert) - Executing the prepared conversion
 
 <h2 id="fetching-the-limits">
     <a class="header" href="#fetching-the-limits">Fetching the limits</a>

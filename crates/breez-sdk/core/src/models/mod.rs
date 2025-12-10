@@ -887,7 +887,7 @@ pub struct ListPaymentsRequest {
     pub status_filter: Option<Vec<PaymentStatus>>,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub asset_filter: Option<AssetFilter>,
-    /// Only include payments matching these payment details filters
+    /// Only include payments matching at least one of these payment details filters
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub payment_details_filter: Option<Vec<PaymentDetailsFilter>>,
     /// Only include payments created after this timestamp (inclusive)
