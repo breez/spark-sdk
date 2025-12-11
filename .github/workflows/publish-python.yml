@@ -78,18 +78,13 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: bindings-darwin-universal
+          name: bindings-dynamic-darwin-universal
           path: crates/breez-sdk/bindings/langs/python/src/breez_sdk_spark
 
       - uses: actions/download-artifact@v4
         with:
           name: bindings-python
           path: crates/breez-sdk/bindings/langs/python/src/breez_sdk_spark
-
-      - name: Clean up downloaded files
-        run: |
-          rm -f crates/breez-sdk/bindings/langs/python/src/breez_sdk_spark/*.a
-          ls -R crates/breez-sdk/bindings/langs/python
 
       - name: Update package version
         if: ${{ inputs.package-version }}
