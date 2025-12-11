@@ -209,6 +209,7 @@ async fn test_02_lightning_idempotency_key(
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: "idempotency test".to_string(),
                 amount_sats: Some(5),
+                expiry_secs: None,
             },
         })
         .await?

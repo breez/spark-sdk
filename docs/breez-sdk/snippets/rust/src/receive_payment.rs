@@ -13,6 +13,7 @@ async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description,
                 amount_sats: optional_amount_sats,
+                expiry_secs: None,
             },
         })
         .await?;

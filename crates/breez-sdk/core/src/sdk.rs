@@ -1170,6 +1170,7 @@ impl BreezSdk {
             ReceivePaymentMethod::Bolt11Invoice {
                 description,
                 amount_sats,
+                expiry_secs,
             } => Ok(ReceivePaymentResponse {
                 payment_request: self
                     .spark_wallet
@@ -1177,6 +1178,7 @@ impl BreezSdk {
                         amount_sats.unwrap_or_default(),
                         Some(InvoiceDescription::Memo(description.clone())),
                         None,
+                        expiry_secs.map(|s| s as u32),
                         self.config.prefer_spark_over_lightning,
                     )
                     .await?
@@ -1388,6 +1390,7 @@ impl BreezSdk {
                 payment_method: ReceivePaymentMethod::Bolt11Invoice {
                     description: withdraw_request.default_description.clone(),
                     amount_sats: Some(amount_sats),
+                    expiry_secs: None,
                 },
             })
             .await?
