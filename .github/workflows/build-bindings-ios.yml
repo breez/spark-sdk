@@ -67,6 +67,12 @@ jobs:
         with:
           name: bindings-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.a
+      
+      - name: Archive dylib bindings
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-dynamic-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.dylib
 
   merge:
     runs-on: macOS-latest
@@ -77,6 +83,11 @@ jobs:
         with:
           name: bindings-aarch64-apple-ios
           path: aarch64-apple-ios
+      
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-dynamic-aarch64-apple-ios
+          path: dynamic-aarch64-apple-ios
 
       - uses: actions/download-artifact@v4
         with:
@@ -85,18 +96,38 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          name: bindings-dynamic-x86_64-apple-ios
+          path: dynamic-x86_64-apple-ios
+
+      - uses: actions/download-artifact@v4
+        with:
           name: bindings-aarch64-apple-ios-sim
           path: aarch64-apple-ios-sim
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-dynamic-aarch64-apple-ios-sim
+          path: dynamic-aarch64-apple-ios-sim
 
       - name: Build ios-universal
         run: |
           mkdir -p ios-universal
           lipo -create -output ios-universal/libbreez_sdk_spark_bindings.a aarch64-apple-ios/libbreez_sdk_spark_bindings.a x86_64-apple-ios/libbreez_sdk_spark_bindings.a
 
+      - name: Build dynamic ios-universal
+        run: |
+          mkdir -p dynamic-ios-universal
+          lipo -create -output dynamic-ios-universal/libbreez_sdk_spark_bindings.dylib dynamic-aarch64-apple-ios/libbreez_sdk_spark_bindings.dylib dynamic-x86_64-apple-ios/libbreez_sdk_spark_bindings.dylib
+
       - name: Build ios-universal-sim
         run: |
           mkdir -p ios-universal-sim
           lipo -create -output ios-universal-sim/libbreez_sdk_spark_bindings.a aarch64-apple-ios-sim/libbreez_sdk_spark_bindings.a x86_64-apple-ios/libbreez_sdk_spark_bindings.a
+
+      - name: Build dynamic ios-universal-sim
+        run: |
+          mkdir -p dynamic-ios-universal-sim
+          lipo -create -output dynamic-ios-universal-sim/libbreez_sdk_spark_bindings.dylib dynamic-aarch64-apple-ios-sim/libbreez_sdk_spark_bindings.dylib dynamic-x86_64-apple-ios/libbreez_sdk_spark_bindings.dylib
 
       - name: Archive ios-universal
         uses: actions/upload-artifact@v4
@@ -109,6 +140,18 @@ jobs:
         with:
           name: bindings-ios-universal-sim
           path: ios-universal-sim/libbreez_sdk_spark_bindings.a
+
+      - name: Archive dynamic-ios-universal
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-dynamic-ios-universal
+          path: dynamic-ios-universal/libbreez_sdk_spark_bindings.dylib
+
+      - name: Archive dynamic-ios-universal-sim
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-dynamic-ios-universal-sim
+          path: dynamic-ios-universal-sim/libbreez_sdk_spark_bindings.dylib
 
   build-dummies:
     if: ${{ inputs.use-dummy-binaries }}
@@ -127,6 +170,30 @@ jobs:
       - name: Build dummy ios ${{ matrix.target }}
         run: |
           touch libbreez_sdk_spark_bindings.a
+
+      - name: Upload dummy ios ${{ matrix.target }} artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.target }}
+          path: ./*
+  
+  build-dynamic-dummies:
+    if: ${{ inputs.use-dummy-binaries }}
+    runs-on: ubuntu-latest
+    name: Build dummies ${{ matrix.target }}
+    strategy:
+      matrix:
+        target: [
+          dynamic-aarch64-apple-ios,
+          dynamic-x86_64-apple-ios,
+          dynamic-aarch64-apple-ios-sim,
+          dynamic-ios-universal,
+          dynamic-ios-universal-sim,
+        ]
+    steps:
+      - name: Build dummy ios ${{ matrix.target }}
+        run: |
+          touch libbreez_sdk_spark_bindings.dylib
 
       - name: Upload dummy ios ${{ matrix.target }} artifact
         uses: actions/upload-artifact@v4
