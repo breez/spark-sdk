@@ -102,6 +102,8 @@ Add the plugin to your `app.json` or `app.config.js`:
 }
 ```
 
+**Note:** This package contains native code and requires a custom development build. It will not work with Expo Go.
+
 ## Rust
 
 We recommend to add breez sdk as a git dependency with a specific release tag.
