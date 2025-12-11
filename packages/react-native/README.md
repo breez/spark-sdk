@@ -10,11 +10,43 @@ It’s a nodeless integration that offers a self-custodial, end-to-end solution 
 
 ## Installation
 
+### For React Native Apps
+
 To install the package:
 
 ```sh
 npm install @breeztech/breez-sdk-spark-react-native
 ```
+
+### For Expo Managed Workflow
+
+To install the package in an Expo project:
+
+```sh
+npx expo install @breeztech/breez-sdk-spark-react-native
+```
+
+Then add the plugin to your `app.json` or `app.config.js`:
+
+```json
+{
+  "expo": {
+    "plugins": [
+      "@breeztech/breez-sdk-spark-react-native"
+    ]
+  }
+}
+```
+
+After adding the plugin, rebuild your app:
+
+```sh
+npx expo prebuild
+npx expo run:ios
+npx expo run:android
+```
+
+**Note:** This package contains native code and requires a custom development build. It will not work with Expo Go.
 
 ## Usage
 
