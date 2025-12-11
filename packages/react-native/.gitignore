@@ -70,6 +70,7 @@ android/keystores/debug.keystore
 
 # Expo
 .expo/
+plugin/build
 
 # Turborepo
 .turbo/
