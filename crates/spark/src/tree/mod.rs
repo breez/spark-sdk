@@ -214,7 +214,7 @@ pub enum ReservationPurpose {
     #[default]
     Payment,
     /// Leaves will be swapped. Included in balance since we will receive
-    /// the same amount back.
+    /// the same amount back. Not removed by set_leaves to ensure consistent balance calculation.
     Swap,
 }
 

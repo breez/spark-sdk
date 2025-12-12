@@ -93,16 +93,21 @@ impl TreeStore for InMemoryTreeStore {
             .collect();
 
         for (key, entry) in leaves_state.leaves_reservations.clone().iter() {
-            // remove leaves not existing in the main pool
-            let mut filtered_leaves: Vec<TreeNode> = entry
-                .leaves
-                .iter()
-                .filter(|l| {
-                    leaves_state.leaves.contains_key(&l.id)
-                        || leaves_state.missing_operators_leaves.contains_key(&l.id)
-                })
-                .cloned()
-                .collect();
+            // remove leaves not existing in the main pool, except for Swap reservations
+            let mut filtered_leaves: Vec<TreeNode> =
+                if matches!(entry.purpose, ReservationPurpose::Swap) {
+                    entry.leaves.clone()
+                } else {
+                    entry
+                        .leaves
+                        .iter()
+                        .filter(|l| {
+                            leaves_state.leaves.contains_key(&l.id)
+                                || leaves_state.missing_operators_leaves.contains_key(&l.id)
+                        })
+                        .cloned()
+                        .collect()
+                };
 
             // update reserved leaves that just got updated in the main pool
             for l in filtered_leaves.iter_mut() {

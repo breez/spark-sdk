@@ -1,12 +1,4 @@
-use std::{
-    collections::HashMap,
-    str::FromStr,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use bitcoin::{
     Address, Transaction,
@@ -52,7 +44,7 @@ use spark::{
     },
     utils::paging::{PagingFilter, PagingResult},
 };
-use tokio::sync::{Notify, broadcast, watch};
+use tokio::sync::{broadcast, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, info, trace};
 use web_time::{SystemTime, UNIX_EPOCH};
@@ -65,95 +57,9 @@ use crate::{
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
 
+const SELECT_LEAVES_MAX_RETRIES: usize = 3;
+
 use super::{SparkWalletConfig, SparkWalletError};
-
-/// Coordinates leaf operations to prevent concurrent refresh and optimization.
-/// Refreshing while performing optimization swaps can cause balance inconsistencies
-/// due to output leaves not yet being available while input leaves are already locked.
-///
-/// Ensures that:
-/// - Refresh is skipped if optimization is running
-/// - Optimization waits for any ongoing refresh to complete
-pub struct LeafOperationCoordinator {
-    leaf_optimizer: Arc<LeafOptimizer>,
-    tree_service: Arc<dyn TreeService>,
-    /// Set during refresh execution
-    refresh_in_progress: Arc<AtomicBool>,
-    /// Signaled when refresh completes
-    refresh_done: Arc<Notify>,
-}
-
-impl LeafOperationCoordinator {
-    pub fn new(leaf_optimizer: Arc<LeafOptimizer>, tree_service: Arc<dyn TreeService>) -> Self {
-        Self {
-            leaf_optimizer,
-            tree_service,
-            refresh_in_progress: Arc::new(AtomicBool::new(false)),
-            refresh_done: Arc::new(Notify::new()),
-        }
-    }
-
-    /// Refreshes leaves if no optimization is running.
-    /// Returns Ok(true) if refresh was performed, Ok(false) if skipped.
-    pub async fn refresh_if_idle(&self) -> Result<bool, SparkWalletError> {
-        // Skip if optimization is running
-        if self.leaf_optimizer.is_running() {
-            return Ok(false);
-        }
-
-        // Mark refresh as in progress
-        self.refresh_in_progress.store(true, Ordering::SeqCst);
-
-        // Double-check optimization didn't start between our check and setting the flag
-        if self.leaf_optimizer.is_running() {
-            self.refresh_in_progress.store(false, Ordering::SeqCst);
-            return Ok(false);
-        }
-
-        let result = self.tree_service.refresh_leaves().await;
-
-        self.refresh_in_progress.store(false, Ordering::SeqCst);
-        self.refresh_done.notify_waiters();
-
-        result.map(|_| true).map_err(Into::into)
-    }
-
-    /// Starts optimization task.
-    /// If refresh is currently running, optimization will wait for it to complete in the background.
-    pub async fn start_optimization(&self) -> Result<(), SparkWalletError> {
-        // Spawn a task that waits for refresh and then starts optimization
-        let optimizer = Arc::clone(&self.leaf_optimizer);
-        let refresh_in_progress = Arc::clone(&self.refresh_in_progress);
-        let refresh_done = Arc::clone(&self.refresh_done);
-
-        tokio::spawn(async move {
-            // Wait for any ongoing refresh to complete
-            while refresh_in_progress.load(Ordering::SeqCst) {
-                let notified = refresh_done.notified();
-                // Double-check after registering for notification
-                if !refresh_in_progress.load(Ordering::SeqCst) {
-                    break;
-                }
-                notified.await;
-            }
-
-            // Now start the optimization
-            if let Err(e) = optimizer.start().await {
-                error!("Optimization failed: {:?}", e);
-            }
-        });
-
-        Ok(())
-    }
-
-    /// Checks if leaves need optimization.
-    pub async fn should_optimize(&self) -> Result<bool, SparkWalletError> {
-        self.leaf_optimizer
-            .should_optimize()
-            .await
-            .map_err(Into::into)
-    }
-}
 
 pub struct SparkWallet {
     /// Cancellation token to stop background tasks. It is dropped when the wallet is dropped to stop background tasks.
@@ -175,7 +81,6 @@ pub struct SparkWallet {
     operator_pool: Arc<OperatorPool>,
     htlc_service: Arc<HtlcService>,
     leaf_optimizer: Arc<LeafOptimizer>,
-    leaf_operation_coordinator: Arc<LeafOperationCoordinator>,
 }
 
 impl SparkWallet {
@@ -331,26 +236,18 @@ impl SparkWallet {
             Some(optimization_event_handler),
         ));
 
-        let leaf_operation_coordinator = Arc::new(LeafOperationCoordinator::new(
-            Arc::clone(&leaf_optimizer),
-            Arc::clone(&tree_service),
-        ));
-
         tree_service.set_tree_changed_callback(Some(Box::new({
-            let leaf_operation_coordinator = Arc::clone(&leaf_operation_coordinator);
+            let leaf_optimizer = Arc::clone(&leaf_optimizer);
             let auto_optimize_enabled = config.auto_optimize_enabled;
             move || {
                 if !auto_optimize_enabled {
                     return;
                 }
-                let leaf_operation_coordinator = Arc::clone(&leaf_operation_coordinator);
+                let leaf_optimizer = Arc::clone(&leaf_optimizer);
                 tokio::spawn(async move {
-                    match leaf_operation_coordinator.should_optimize().await {
+                    match leaf_optimizer.should_optimize().await {
                         Ok(should_optimize) => {
-                            if should_optimize
-                                && let Err(e) =
-                                    leaf_operation_coordinator.start_optimization().await
-                            {
+                            if should_optimize && let Err(e) = leaf_optimizer.start().await {
                                 debug!("Starting auto-optimization failed: {e:?}");
                             }
                         }
@@ -374,7 +271,7 @@ impl SparkWallet {
                 Arc::clone(&service_provider),
                 Arc::clone(&transfer_service),
                 Arc::clone(&htlc_service),
-                Arc::clone(&leaf_operation_coordinator),
+                Arc::clone(&leaf_optimizer),
                 config.auto_optimize_enabled,
             ));
             background_processor
@@ -399,7 +296,6 @@ impl SparkWallet {
             operator_pool,
             htlc_service,
             leaf_optimizer,
-            leaf_operation_coordinator,
         })
     }
 }
@@ -1014,7 +910,7 @@ impl SparkWallet {
     }
 
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
-        self.leaf_operation_coordinator.refresh_if_idle().await?;
+        self.tree_service.refresh_leaves().await?;
         self.token_output_service.refresh_tokens_outputs().await?;
         Ok(())
     }
@@ -1445,7 +1341,8 @@ impl SparkWallet {
 
     /// Starts leaf optimization in the background.
     pub async fn start_leaf_optimization(&self) -> Result<(), SparkWalletError> {
-        self.leaf_operation_coordinator.start_optimization().await
+        self.leaf_optimizer.start().await?;
+        Ok(())
     }
 
     /// Cancels the ongoing leaf optimization.
@@ -1462,11 +1359,66 @@ impl SparkWallet {
         self.leaf_optimizer.progress()
     }
 
-    /// Selects leaves with automatic retry if insufficient funds due to optimization.
+    /// Selects leaves with automatic retry logic.
+    ///
+    /// This method implements a multi-level retry strategy:
+    /// 1. Outer retry loop (up to SELECT_LEAVES_MAX_RETRIES times) handles general failures like
+    ///    attempting to pay before initial sync by refreshing leaves between retries.
+    /// 2. Inner retry logic handles insufficient funds when optimization is in progress by
+    ///    cancelling the optimization and retrying once.
+    async fn select_leaves_with_retry(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<spark::tree::LeavesReservation, SparkWalletError> {
+        use spark::tree::TreeServiceError;
+
+        let mut reservation: Option<spark::tree::LeavesReservation> = None;
+
+        for i in 0..SELECT_LEAVES_MAX_RETRIES {
+            // Try to select leaves with inner optimization retry logic
+            let reserve_result = self
+                .try_select_leaves_with_optimization_retry(target_amounts)
+                .await;
+
+            match reserve_result {
+                Ok(r) => {
+                    reservation = Some(r);
+                    break;
+                }
+                Err(e) => {
+                    error!("Failed to select leaves: {e:?}");
+                }
+            }
+
+            info!("Failed to select leaves, refreshing leaves and retrying");
+            self.tree_service.refresh_leaves().await?;
+
+            // Check if we have enough funds after refresh
+            if let Some(target_amounts) = target_amounts {
+                let available_balance = self.tree_service.get_available_balance().await?;
+                if available_balance < target_amounts.total_sats() {
+                    info!("Not enough funds to select leaves after refresh");
+                    return Err(TreeServiceError::InsufficientFunds.into());
+                }
+            }
+
+            // Sleep between retries (except on the last one)
+            if i < SELECT_LEAVES_MAX_RETRIES - 1 {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+
+        reservation.ok_or_else(|| {
+            TreeServiceError::Generic("Failed to select leaves after all retries".to_string())
+                .into()
+        })
+    }
+
+    /// Inner helper that tries to select leaves and handles optimization cancellation.
     ///
     /// If select_leaves fails with InsufficientFunds and the optimizer has reserved
     /// leaves, this method cancels the optimization and retries once.
-    async fn select_leaves_with_retry(
+    async fn try_select_leaves_with_optimization_retry(
         &self,
         target_amounts: Option<&TargetAmounts>,
     ) -> Result<spark::tree::LeavesReservation, SparkWalletError> {
@@ -1711,7 +1663,7 @@ struct BackgroundProcessor {
     ssp_client: Arc<ServiceProvider>,
     transfer_service: Arc<TransferService>,
     htlc_service: Arc<HtlcService>,
-    leaf_operation_coordinator: Arc<LeafOperationCoordinator>,
+    leaf_optimizer: Arc<LeafOptimizer>,
     auto_optimize_enabled: bool,
 }
 
@@ -1726,7 +1678,7 @@ impl BackgroundProcessor {
         ssp_client: Arc<ServiceProvider>,
         transfer_service: Arc<TransferService>,
         htlc_service: Arc<HtlcService>,
-        leaf_operation_coordinator: Arc<LeafOperationCoordinator>,
+        leaf_optimizer: Arc<LeafOptimizer>,
         auto_optimize_enabled: bool,
     ) -> Self {
         Self {
@@ -1738,7 +1690,7 @@ impl BackgroundProcessor {
             ssp_client,
             transfer_service,
             htlc_service,
-            leaf_operation_coordinator,
+            leaf_optimizer,
             auto_optimize_enabled,
         }
     }
@@ -1771,7 +1723,7 @@ impl BackgroundProcessor {
             .await;
         });
 
-        if let Err(e) = self.leaf_operation_coordinator.refresh_if_idle().await {
+        if let Err(e) = self.tree_service.refresh_leaves().await {
             error!("Error refreshing leaves on startup: {:?}", e);
         }
 
@@ -1932,8 +1884,8 @@ impl BackgroundProcessor {
     async fn maybe_start_auto_optimize(&self) -> Result<(), SparkWalletError> {
         // Trigger auto-optimization if enabled (non-blocking)
         if self.auto_optimize_enabled
-            && self.leaf_operation_coordinator.should_optimize().await?
-            && let Err(e) = self.leaf_operation_coordinator.start_optimization().await
+            && self.leaf_optimizer.should_optimize().await?
+            && let Err(e) = self.leaf_optimizer.start().await
         {
             debug!("Auto-optimization after transfer failed: {:?}", e);
         }
