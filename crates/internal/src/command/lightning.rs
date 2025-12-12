@@ -10,6 +10,7 @@ pub enum LightningCommand {
     CreateInvoice {
         amount_sat: u64,
         description: Option<String>,
+        expiry_sec: Option<u32>,
     },
     /// Fetch a lightning receive payment.
     FetchReceivePayment { id: String },
@@ -46,10 +47,11 @@ pub async fn handle_command(
         LightningCommand::CreateInvoice {
             amount_sat,
             description,
+            expiry_sec,
         } => {
             let desc = description.map(InvoiceDescription::Memo);
             let payment = wallet
-                .create_lightning_invoice(amount_sat, desc, None, None, true)
+                .create_lightning_invoice(amount_sat, desc, None, expiry_sec, true)
                 .await?;
             let qr = QrCode::with_error_correction_level(&payment.invoice, EcLevel::L)
                 .unwrap()
