@@ -556,6 +556,7 @@ pub enum TransferStatus {
     SenderInitiatedCoordinator,
     ReceiverKeyTweakLocked,
     ReceiverKeyTweakApplied,
+    ApplyingSenderKeyTweak,
 }
 
 impl Display for TransferStatus {
@@ -572,6 +573,7 @@ impl Display for TransferStatus {
             TransferStatus::SenderInitiatedCoordinator => "SenderInitiatedCoordinator",
             TransferStatus::ReceiverKeyTweakLocked => "ReceiverKeyTweakLocked",
             TransferStatus::ReceiverKeyTweakApplied => "ReceiverKeyTweakApplied",
+            TransferStatus::ApplyingSenderKeyTweak => "ApplyingSenderKeyTweak",
         };
         write!(f, "{status_str}")
     }
@@ -605,6 +607,9 @@ impl From<operator_rpc::spark::TransferStatus> for TransferStatus {
             operator_rpc::spark::TransferStatus::ReceiverKeyTweakApplied => {
                 TransferStatus::ReceiverKeyTweakApplied
             }
+            operator_rpc::spark::TransferStatus::ApplyingSenderKeyTweak => {
+                TransferStatus::ApplyingSenderKeyTweak
+            }
         }
     }
 }
@@ -617,6 +622,8 @@ pub enum TransferType {
     UtxoSwap,
     Swap,
     CounterSwap,
+    PrimarySwapV3,
+    CounterSwapV3,
 }
 
 impl From<operator_rpc::spark::TransferType> for TransferType {
@@ -628,6 +635,8 @@ impl From<operator_rpc::spark::TransferType> for TransferType {
             operator_rpc::spark::TransferType::UtxoSwap => TransferType::UtxoSwap,
             operator_rpc::spark::TransferType::Swap => TransferType::Swap,
             operator_rpc::spark::TransferType::CounterSwap => TransferType::CounterSwap,
+            operator_rpc::spark::TransferType::PrimarySwapV3 => TransferType::PrimarySwapV3,
+            operator_rpc::spark::TransferType::CounterSwapV3 => TransferType::CounterSwapV3,
         }
     }
 }
