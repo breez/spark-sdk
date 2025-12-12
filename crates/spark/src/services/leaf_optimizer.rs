@@ -1033,4 +1033,84 @@ mod tests {
         // Should be notified
         notified.await;
     }
+
+    /// Calculate the maximum amount that can be unilaterally exited given fees per leaf
+    fn calculate_max_unilateral_exit(leaves: &[u64], fee_per_leaf: u64) -> u64 {
+        if leaves.is_empty() {
+            return 0;
+        }
+
+        // Sort leaves in descending order (largest first) to maximize exit value per fee paid
+        let mut sorted_leaves = leaves.to_vec();
+        sorted_leaves.sort_by(|a, b| b.cmp(a));
+
+        let mut total_exited = 0u64;
+
+        for &leaf_value in &sorted_leaves {
+            // Check if we can afford to exit this leaf
+            let fee_cost = fee_per_leaf;
+            if leaf_value > fee_cost {
+                total_exited += leaf_value - fee_cost;
+            } else {
+                // If we can't afford to exit this leaf profitably, we're done
+                // since smaller leaves will be even less profitable
+                break;
+            }
+        }
+
+        total_exited
+    }
+
+    /// Analysis of unilateral exit trade-offs across different multiplicities
+    /// This analysis explores how multiplicity affects unilateral exit capability under various fee scenarios
+    /// Run with: cargo test --package spark --lib leaf_optimizer::tests::unilateral_exit_trade_off_analysis -- --nocapture --ignored
+    #[ignore]
+    #[test_all]
+    fn unilateral_exit_trade_off_analysis() {
+        println!("=== Systematic Unilateral Exit Analysis ===");
+        println!("Exploring multiplicity impact across fees and fund sizes\n");
+
+        // Fees per leaf (sats)
+        let fee_values = vec![5000, 10000, 20000, 40000];
+        let total_funds_values = vec![10000, 100000, 1000000, 10000000];
+        let multiplicities = vec![0, 1, 2, 3, 4, 5];
+
+        for &fee_per_leaf in &fee_values {
+            println!(
+                "══════════════════════════════════════════════════════════════════════════════════════════════"
+            );
+            println!("FEE PER LEAF: {} SATS", fee_per_leaf);
+            println!(
+                "══════════════════════════════════════════════════════════════════════════════════════════════"
+            );
+            println!("Total Funds | Mult | Leaves | Exit Amount | Efficiency | Loss Amount");
+            println!("------------|------|--------|-------------|------------|------------");
+
+            for &total_funds in &total_funds_values {
+                for &multiplicity in &multiplicities {
+                    let leaves = if multiplicity == 0 {
+                        greedy_leaves(total_funds)
+                    } else {
+                        swap_minimizing_leaves(total_funds, multiplicity)
+                    };
+                    let max_exit = calculate_max_unilateral_exit(&leaves, fee_per_leaf);
+                    let efficiency = (max_exit as f64) / (total_funds as f64) * 100.0;
+                    let loss = total_funds - max_exit;
+
+                    println!(
+                        "{:>10}k | {:>4} | {:>6} | {:>11} | {:>8.1}% | {:>10}",
+                        total_funds / 1000,
+                        multiplicity,
+                        leaves.len(),
+                        max_exit,
+                        efficiency,
+                        loss
+                    );
+                }
+                println!("------------|------|--------|-------------|------------|------------");
+            }
+
+            println!();
+        }
+    }
 }
