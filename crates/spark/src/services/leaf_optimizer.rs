@@ -319,6 +319,14 @@ impl LeafOptimizer {
             }
             Err(e) => {
                 error!("Leaf optimization failed: {:?}", e);
+
+                info!(
+                    "Refreshing leaves on optimization failure (failure is likely caused by leaves having been spent by a concurrent instance)"
+                );
+                if let Err(e) = self.tree_service.refresh_leaves().await {
+                    error!("Failed to refresh leaves on optimization failure: {:?}", e);
+                }
+
                 self.emit_event(OptimizationEvent::Failed {
                     error: e.to_string(),
                 });
