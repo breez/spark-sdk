@@ -287,6 +287,7 @@ async fn test_03_lightning_invoice_payment(
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: format!("Test payment ({})", test_type),
                 amount_sats: invoice_amount_sats,
+                expiry_secs: None,
             },
         })
         .await?
@@ -547,6 +548,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: "Prefer spark test".to_string(),
                 amount_sats: Some(invoice_amount_sats),
+                expiry_secs: None,
             },
         })
         .await?
@@ -639,6 +641,7 @@ async fn test_06_lightning_timeout_and_wait(
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: "Timeout test".to_string(),
                 amount_sats: None,
+                expiry_secs: None,
             },
         })
         .await?

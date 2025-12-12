@@ -5,12 +5,15 @@ const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
   const description = '<invoice description>'
   // Optionally set the invoice amount you wish the payer to send
   const optionalAmountSats = 5_000
+  // Optionally set the expiry time in seconds
+  const optionalExpirySecs = 3600
 
   const response = await sdk.receivePayment({
     paymentMethod: {
       type: 'bolt11Invoice',
       description,
-      amountSats: optionalAmountSats
+      amountSats: optionalAmountSats,
+      expirySecs: optionalExpirySecs
     }
   })
 

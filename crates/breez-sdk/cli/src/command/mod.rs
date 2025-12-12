@@ -99,7 +99,7 @@ pub enum Command {
         #[arg(short = 't', long)]
         token_identifier: Option<String>,
 
-        /// Optional expiry time for the invoice in seconds from now. Only used if the payment method is a spark invoice.
+        /// Optional expiry time for the invoice in seconds from now. Used for spark invoice and bolt11 invoice.
         #[arg(short = 'e', long)]
         expiry_secs: Option<u64>,
 
@@ -415,6 +415,7 @@ pub(crate) async fn execute_command(
                 "bolt11" => ReceivePaymentMethod::Bolt11Invoice {
                     description: description.unwrap_or_default(),
                     amount_sats: amount.map(TryInto::try_into).transpose()?,
+                    expiry_secs,
                 },
                 _ => return Err(anyhow::anyhow!("Invalid payment method")),
             };
