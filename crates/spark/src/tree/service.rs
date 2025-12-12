@@ -1,6 +1,6 @@
 use futures::future::join_all;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bitcoin::secp256k1::PublicKey;
 use tokio_with_wasm::alias as tokio;
@@ -27,6 +27,8 @@ use crate::{
 
 use super::{TreeNode, error::TreeServiceError};
 
+type TreeChangedCallback = Arc<Mutex<Option<Box<dyn Fn() + Send>>>>;
+
 pub struct SynchronousTreeService {
     identity_pubkey: PublicKey,
     network: Network,
@@ -35,10 +37,15 @@ pub struct SynchronousTreeService {
     timelock_manager: Arc<TimelockManager>,
     signer: Arc<dyn Signer>,
     swap_service: Arc<Swap>,
+    tree_changed_callback: TreeChangedCallback,
 }
 
 #[macros::async_trait]
 impl TreeService for SynchronousTreeService {
+    fn set_tree_changed_callback(&self, callback: Option<Box<dyn Fn() + Send>>) {
+        *self.tree_changed_callback.lock().unwrap() = callback;
+    }
+
     async fn list_leaves(&self) -> Result<Leaves, TreeServiceError> {
         self.state.get_leaves().await
     }
@@ -52,7 +59,9 @@ impl TreeService for SynchronousTreeService {
         id: LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError> {
-        self.state.finalize_reservation(&id, new_leaves).await
+        self.state.finalize_reservation(&id, new_leaves).await?;
+        self.emit_tree_changed();
+        Ok(())
     }
 
     async fn insert_leaves(
@@ -72,6 +81,7 @@ impl TreeService for SynchronousTreeService {
             .await?;
 
         self.state.add_leaves(&result_nodes).await?;
+        self.emit_tree_changed();
         Ok(result_nodes)
     }
 
@@ -246,9 +256,18 @@ impl TreeService for SynchronousTreeService {
             })
             .await?;
 
+        // Get current state before updating
+        let leaves_before = self.state.get_leaves().await?;
+
         self.state
             .set_leaves(&refreshed_leaves, &missing_operator_leaves)
             .await?;
+
+        // Check if anything actually changed
+        let leaves_after = self.state.get_leaves().await?;
+        if leaves_before != leaves_after {
+            self.emit_tree_changed();
+        }
 
         Ok(())
     }
@@ -277,6 +296,13 @@ impl SynchronousTreeService {
             timelock_manager,
             signer,
             swap_service,
+            tree_changed_callback: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn emit_tree_changed(&self) {
+        if let Some(callback) = &*self.tree_changed_callback.lock().unwrap() {
+            callback();
         }
     }
 

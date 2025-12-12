@@ -16,6 +16,7 @@ use bitcoin::{Sequence, Transaction, secp256k1::PublicKey};
 use frost_secp256k1_tr::Identifier;
 use uuid::Uuid;
 
+#[derive(PartialEq)]
 pub struct Leaves {
     pub available: Vec<TreeNode>,
     pub not_available: Vec<TreeNode>,
@@ -105,7 +106,7 @@ impl std::str::FromStr for TreeNodeStatus {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TreeNode {
     pub id: TreeNodeId,
     pub tree_id: String,
@@ -535,6 +536,13 @@ pub trait TreeStore: Send + Sync {
 
 #[macros::async_trait]
 pub trait TreeService: Send + Sync {
+    /// Sets a callback that will be called when the tree structure changes.
+    ///
+    /// # Arguments
+    ///
+    /// * `callback` - The callback to call when tree changes occur, or None to clear it
+    fn set_tree_changed_callback(&self, callback: Option<Box<dyn Fn() + Send>>);
+
     /// Returns the total balance of all available leaves in the tree.
     ///
     /// This method calculates the sum of all leaf values that have a status of
