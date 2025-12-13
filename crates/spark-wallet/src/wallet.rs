@@ -246,11 +246,8 @@ impl SparkWallet {
                 let leaf_optimizer = Arc::clone(&leaf_optimizer);
                 tokio::spawn(async move {
                     match leaf_optimizer.should_optimize().await {
-                        Ok(should_optimize) => {
-                            if should_optimize && let Err(e) = leaf_optimizer.start().await {
-                                debug!("Starting auto-optimization failed: {e:?}");
-                            }
-                        }
+                        Ok(true) => leaf_optimizer.start(),
+                        Ok(false) => {}
                         Err(e) => {
                             debug!("Failed to check if optimization is needed: {e:?}");
                         }
@@ -271,8 +268,6 @@ impl SparkWallet {
                 Arc::clone(&service_provider),
                 Arc::clone(&transfer_service),
                 Arc::clone(&htlc_service),
-                Arc::clone(&leaf_optimizer),
-                config.auto_optimize_enabled,
             ));
             background_processor
                 .run_background_tasks(cancellation_token.clone())
@@ -1340,9 +1335,8 @@ impl SparkWallet {
     }
 
     /// Starts leaf optimization in the background.
-    pub async fn start_leaf_optimization(&self) -> Result<(), SparkWalletError> {
-        self.leaf_optimizer.start().await?;
-        Ok(())
+    pub fn start_leaf_optimization(&self) {
+        self.leaf_optimizer.start();
     }
 
     /// Cancels the ongoing leaf optimization.
@@ -1355,7 +1349,7 @@ impl SparkWallet {
     }
 
     /// Returns the current optimization progress snapshot.
-    pub fn get_optimization_progress(&self) -> OptimizationProgress {
+    pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
         self.leaf_optimizer.progress()
     }
 
@@ -1663,8 +1657,6 @@ struct BackgroundProcessor {
     ssp_client: Arc<ServiceProvider>,
     transfer_service: Arc<TransferService>,
     htlc_service: Arc<HtlcService>,
-    leaf_optimizer: Arc<LeafOptimizer>,
-    auto_optimize_enabled: bool,
 }
 
 impl BackgroundProcessor {
@@ -1678,8 +1670,6 @@ impl BackgroundProcessor {
         ssp_client: Arc<ServiceProvider>,
         transfer_service: Arc<TransferService>,
         htlc_service: Arc<HtlcService>,
-        leaf_optimizer: Arc<LeafOptimizer>,
-        auto_optimize_enabled: bool,
     ) -> Self {
         Self {
             operator_pool,
@@ -1690,8 +1680,6 @@ impl BackgroundProcessor {
             ssp_client,
             transfer_service,
             htlc_service,
-            leaf_optimizer,
-            auto_optimize_enabled,
         }
     }
 
@@ -1832,8 +1820,6 @@ impl BackgroundProcessor {
                 self.ssp_client.identity_public_key(),
             )));
 
-        self.maybe_start_auto_optimize().await?;
-
         Ok(())
     }
 
@@ -1859,9 +1845,6 @@ impl BackgroundProcessor {
                     self.event_manager
                         .notify_listeners(WalletEvent::TransferClaimed(transfer.clone()));
                 }
-                if !transfers.is_empty() {
-                    self.maybe_start_auto_optimize().await?;
-                }
             }
             Err(e) => {
                 debug!(
@@ -1878,18 +1861,6 @@ impl BackgroundProcessor {
     async fn process_disconnected_event(&self) -> Result<(), SparkWalletError> {
         self.event_manager
             .notify_listeners(WalletEvent::StreamDisconnected);
-        Ok(())
-    }
-
-    async fn maybe_start_auto_optimize(&self) -> Result<(), SparkWalletError> {
-        // Trigger auto-optimization if enabled (non-blocking)
-        if self.auto_optimize_enabled
-            && self.leaf_optimizer.should_optimize().await?
-            && let Err(e) = self.leaf_optimizer.start().await
-        {
-            debug!("Auto-optimization after transfer failed: {:?}", e);
-        }
-
         Ok(())
     }
 }

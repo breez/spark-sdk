@@ -115,30 +115,15 @@ impl RunningGuard {
             terminated,
         }
     }
-
-    fn set_running(&self, is_running: bool) {
-        let mut progress = self.progress.lock().unwrap();
-        if is_running {
-            *progress = OptimizationProgress {
-                is_running: true,
-                current_round: 0,
-                total_rounds: 0, // Will be updated when rounds are calculated
-            };
-        } else {
-            *progress = OptimizationProgress::default();
-        }
-        drop(progress);
-        if !is_running {
-            self.terminated.notify_waiters();
-        }
-    }
 }
 
 impl Drop for RunningGuard {
     fn drop(&mut self) {
-        // Clear the running state when the guard is dropped
-        // This ensures cleanup even if optimization fails unexpectedly
-        self.set_running(false);
+        let mut progress = self.progress.lock().unwrap();
+        *progress = OptimizationProgress::default();
+        drop(progress);
+
+        self.terminated.notify_waiters();
     }
 }
 /// Service responsible for optimizing leaf denominations.
@@ -152,7 +137,6 @@ pub struct LeafOptimizer {
     swap_service: Arc<Swap>,
     tree_service: Arc<dyn TreeService>,
     progress: Arc<Mutex<OptimizationProgress>>,
-    start_mutex: tokio::sync::Mutex<()>,
     cancel_tx: watch::Sender<bool>,
     cancel_rx: watch::Receiver<bool>,
     terminated: Arc<Notify>,
@@ -172,7 +156,6 @@ impl LeafOptimizer {
             swap_service,
             tree_service,
             progress: Arc::new(Mutex::new(OptimizationProgress::default())),
-            start_mutex: tokio::sync::Mutex::new(()),
             cancel_tx,
             cancel_rx,
             terminated: Arc::new(Notify::new()),
@@ -210,20 +193,26 @@ impl LeafOptimizer {
     ///
     /// Returns early (without spawning) if:
     /// - Optimization is already running
-    pub async fn start(self: &Arc<Self>) -> Result<(), ServiceError> {
-        // Hold the mutex to ensure atomic check-and-spawn
-        let _guard = self.start_mutex.lock().await;
+    pub fn start(self: &Arc<Self>) {
+        let mut progress = self.progress.lock().unwrap();
 
         // Check if already running
-        if self.progress.lock().unwrap().is_running {
+        if progress.is_running {
             debug!("Optimization already running, skipping");
-            return Ok(());
+            return;
         }
 
-        // Create the running guard and set running state
+        // Set running state
+        *progress = OptimizationProgress {
+            is_running: true,
+            current_round: 0,
+            total_rounds: 0, // Will be updated when rounds are calculated
+        };
+        drop(progress);
+
+        // Create the running guard for cleanup via Drop
         let running_guard =
             RunningGuard::new(Arc::clone(&self.progress), Arc::clone(&self.terminated));
-        running_guard.set_running(true);
 
         // Spawn the optimization work in the background
         let optimizer = Arc::clone(self);
@@ -232,8 +221,6 @@ impl LeafOptimizer {
                 error!("Optimization failed: {:?}", e);
             }
         });
-
-        Ok(())
     }
 
     /// Internal method that runs the actual optimization logic.
@@ -982,61 +969,40 @@ mod tests {
     }
 
     #[test_all]
-    fn test_running_guard_sets_running_state() {
-        let progress = Arc::new(std::sync::Mutex::new(OptimizationProgress::default()));
-        let terminated = Arc::new(tokio::sync::Notify::new());
-
-        let guard = RunningGuard::new(Arc::clone(&progress), Arc::clone(&terminated));
-
-        // Initially not running
-        assert!(!progress.lock().unwrap().is_running);
-
-        // Set running
-        guard.set_running(true);
-        {
-            let p = progress.lock().unwrap();
-            assert!(p.is_running);
-            assert_eq!(p.current_round, 0);
-            assert_eq!(p.total_rounds, 0);
-        }
-
-        // Set not running
-        guard.set_running(false);
-        {
-            let p = progress.lock().unwrap();
-            assert!(!p.is_running);
-            assert_eq!(p.current_round, 0);
-            assert_eq!(p.total_rounds, 0);
-        }
-    }
-
-    #[test_all]
     fn test_running_guard_drop_clears_state() {
-        let progress = Arc::new(std::sync::Mutex::new(OptimizationProgress::default()));
+        let progress = Arc::new(std::sync::Mutex::new(OptimizationProgress {
+            is_running: true,
+            current_round: 4,
+            total_rounds: 10,
+        }));
         let terminated = Arc::new(tokio::sync::Notify::new());
 
         {
-            let guard = RunningGuard::new(Arc::clone(&progress), Arc::clone(&terminated));
-            guard.set_running(true);
+            let _guard = RunningGuard::new(Arc::clone(&progress), Arc::clone(&terminated));
             assert!(progress.lock().unwrap().is_running);
         } // guard dropped here
 
         // After drop, state should be cleared
-        assert!(!progress.lock().unwrap().is_running);
+        let progress = progress.lock().unwrap();
+        assert!(!progress.is_running);
+        assert_eq!(progress.current_round, 0);
+        assert_eq!(progress.total_rounds, 0);
     }
 
     #[async_test_all]
     async fn test_running_guard_notifies_on_clear() {
-        let progress = Arc::new(std::sync::Mutex::new(OptimizationProgress::default()));
+        let progress = Arc::new(std::sync::Mutex::new(OptimizationProgress {
+            is_running: true,
+            current_round: 4,
+            total_rounds: 10,
+        }));
         let terminated = Arc::new(tokio::sync::Notify::new());
 
         let notified = terminated.notified();
 
         let guard = RunningGuard::new(Arc::clone(&progress), Arc::clone(&terminated));
-        guard.set_running(true);
 
-        // Clear state (should notify)
-        guard.set_running(false);
+        drop(guard);
 
         // Should be notified
         notified.await;

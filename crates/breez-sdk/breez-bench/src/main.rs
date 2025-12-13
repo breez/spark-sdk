@@ -626,13 +626,17 @@ async fn initialize_mainnet_sdk_pair(
     sender_data_dir: &str,
     receiver_data_dir: &str,
 ) -> Result<(BenchSdkInstance, BenchSdkInstance)> {
-    let sender = initialize_mainnet_sdk(sender_data_dir, "sender").await?;
-    let receiver = initialize_mainnet_sdk(receiver_data_dir, "receiver").await?;
+    let sender = initialize_mainnet_sdk(sender_data_dir, "sender", 2).await?;
+    let receiver = initialize_mainnet_sdk(receiver_data_dir, "receiver", 0).await?;
     Ok((sender, receiver))
 }
 
 /// Initialize a single SDK instance for mainnet
-async fn initialize_mainnet_sdk(data_dir: &str, name: &str) -> Result<BenchSdkInstance> {
+async fn initialize_mainnet_sdk(
+    data_dir: &str,
+    name: &str,
+    multiplicity: u8,
+) -> Result<BenchSdkInstance> {
     let data_path = expand_path(data_dir);
     fs::create_dir_all(&data_path)?;
 
@@ -644,6 +648,7 @@ async fn initialize_mainnet_sdk(data_dir: &str, name: &str) -> Result<BenchSdkIn
 
     let mut config = default_config(Network::Mainnet);
     config.api_key = breez_api_key;
+    config.optimization_config.multiplicity = multiplicity;
 
     let seed = Seed::Mnemonic {
         mnemonic: mnemonic.to_string(),
