@@ -9,9 +9,10 @@ use spark_wallet::{
 use web_time::UNIX_EPOCH;
 
 use crate::{
-    Fee, Network, OnchainConfirmationSpeed, Payment, PaymentDetails, PaymentMethod, PaymentStatus,
-    PaymentType, SdkError, SendOnchainFeeQuote, SendOnchainSpeedFeeQuote, SparkHtlcDetails,
-    SparkHtlcStatus, SparkInvoicePaymentDetails, TokenBalance, TokenMetadata,
+    Fee, Network, OnchainConfirmationSpeed, OptimizationProgress, Payment, PaymentDetails,
+    PaymentMethod, PaymentStatus, PaymentType, SdkError, SendOnchainFeeQuote,
+    SendOnchainSpeedFeeQuote, SparkHtlcDetails, SparkHtlcStatus, SparkInvoicePaymentDetails,
+    TokenBalance, TokenMetadata,
 };
 
 impl PaymentMethod {
@@ -394,6 +395,16 @@ impl From<PreimageRequestStatus> for SparkHtlcStatus {
             PreimageRequestStatus::WaitingForPreimage => SparkHtlcStatus::WaitingForPreimage,
             PreimageRequestStatus::PreimageShared => SparkHtlcStatus::PreimageShared,
             PreimageRequestStatus::Returned => SparkHtlcStatus::Returned,
+        }
+    }
+}
+
+impl From<spark_wallet::OptimizationProgress> for OptimizationProgress {
+    fn from(value: spark_wallet::OptimizationProgress) -> Self {
+        Self {
+            is_running: value.is_running,
+            current_round: value.current_round,
+            total_rounds: value.total_rounds,
         }
     }
 }

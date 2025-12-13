@@ -268,4 +268,19 @@ impl BreezSdk {
             token_issuer: Rc::new(token_issuer),
         }
     }
+
+    #[wasm_bindgen(js_name = "startLeafOptimization")]
+    pub fn start_leaf_optimization(&self) {
+        self.sdk.start_leaf_optimization();
+    }
+
+    #[wasm_bindgen(js_name = "cancelLeafOptimization")]
+    pub async fn cancel_leaf_optimization(&self) -> WasmResult<()> {
+        Ok(self.sdk.cancel_leaf_optimization().await?)
+    }
+
+    #[wasm_bindgen(js_name = "getLeafOptimizationProgress")]
+    pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
+        self.sdk.get_leaf_optimization_progress().into()
+    }
 }

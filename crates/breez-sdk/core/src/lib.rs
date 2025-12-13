@@ -22,7 +22,7 @@ pub use chain::{
 };
 pub use common::{fiat::*, models::*, rest::*, sync_storage};
 pub use error::{DepositClaimError, SdkError};
-pub use events::{EventEmitter, EventListener, SdkEvent};
+pub use events::{EventEmitter, EventListener, OptimizationEvent, SdkEvent};
 pub use issuer::*;
 pub use models::*;
 pub use persist::{

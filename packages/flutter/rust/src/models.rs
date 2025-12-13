@@ -31,6 +31,13 @@ pub struct _Config {
     pub use_default_external_input_parsers: bool,
     pub real_time_sync_server_url: Option<String>,
     pub private_enabled_default: bool,
+    pub optimization_config: OptimizationConfig,
+}
+
+#[frb(mirror(OptimizationConfig))]
+pub struct _OptimizationConfig {
+    pub auto_enabled: bool,
+    pub multiplicity: u8,
 }
 
 #[frb(mirror(ExternalInputParser))]
@@ -957,4 +964,11 @@ pub struct _ClaimHtlcPaymentRequest {
 #[frb(mirror(ClaimHtlcPaymentResponse))]
 pub struct _ClaimHtlcPaymentResponse {
     pub payment: Payment,
+}
+
+#[frb(mirror(OptimizationProgress))]
+pub struct _OptimizationProgress {
+    pub is_running: bool,
+    pub current_round: u32,
+    pub total_rounds: u32,
 }
