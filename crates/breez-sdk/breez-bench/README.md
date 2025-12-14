@@ -28,6 +28,7 @@ export BREEZ_API_KEY="your-api-key"
 ```
 
 **First run on mainnet:**
+
 - If no funds exist, the benchmark will print the sender address and exit
 - Fund the sender wallet, then run again
 - All funds are consolidated to sender before benchmark starts
@@ -56,29 +57,29 @@ cargo run -p breez-sdk-bench -- --scenario edge-cases
 
 ### CLI Arguments
 
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `--network` | Network to use (regtest, mainnet) | `regtest` |
-| `--sender-data-dir` | Sender wallet data directory (mainnet only) | Required for mainnet |
-| `--receiver-data-dir` | Receiver wallet data directory (mainnet only) | Required for mainnet |
-| `--seed` | Random seed for reproducible benchmarks | `12345` |
-| `--payments` | Number of payments to execute | `100` |
-| `--min-amount` | Minimum payment amount in sats | `100` |
-| `--max-amount` | Maximum payment amount in sats | `2000` |
-| `--min-delay-ms` | Minimum delay between payments | `500` |
-| `--max-delay-ms` | Maximum delay between payments | `3000` |
-| `--return-interval` | How often receiver sends funds back (0 to disable) | `5` |
-| `--scenario` | Scenario preset | `random` |
+| Argument              | Description                                        | Default              |
+| --------------------- | -------------------------------------------------- | -------------------- |
+| `--network`           | Network to use (regtest, mainnet)                  | `regtest`            |
+| `--sender-data-dir`   | Sender wallet data directory (mainnet only)        | Required for mainnet |
+| `--receiver-data-dir` | Receiver wallet data directory (mainnet only)      | Required for mainnet |
+| `--seed`              | Random seed for reproducible benchmarks            | `12345`              |
+| `--payments`          | Number of payments to execute                      | `100`                |
+| `--min-amount`        | Minimum payment amount in sats                     | `100`                |
+| `--max-amount`        | Maximum payment amount in sats                     | `2000`               |
+| `--min-delay-ms`      | Minimum delay between payments                     | `500`                |
+| `--max-delay-ms`      | Maximum delay between payments                     | `3000`               |
+| `--return-interval`   | How often receiver sends funds back (0 to disable) | `5`                  |
+| `--scenario`          | Scenario preset                                    | `random`             |
 
 ### Environment Variables
 
-| Variable | Description | Required |
-|----------|-------------|---------|
-| `BREEZ_API_KEY` | Breez API key | Mainnet only |
-| `FAUCET_URL` | Regtest faucet URL | No (has default) |
-| `FAUCET_USERNAME` | Faucet basic auth username | No |
-| `FAUCET_PASSWORD` | Faucet basic auth password | No |
-| `RUST_LOG` | Logging level | No (default: info) |
+| Variable          | Description                | Required           |
+| ----------------- | -------------------------- | ------------------ |
+| `BREEZ_API_KEY`   | Breez API key              | Mainnet only       |
+| `FAUCET_URL`      | Regtest faucet URL         | No (has default)   |
+| `FAUCET_USERNAME` | Faucet basic auth username | No                 |
+| `FAUCET_PASSWORD` | Faucet basic auth password | No                 |
+| `RUST_LOG`        | Logging level              | No (default: info) |
 
 ### Scenario Presets
 
@@ -95,20 +96,35 @@ Payment Performance Results (seed: 12345, n=100)
 Total time:     Min: 45ms   Max: 2340ms   Mean: 312ms   StdDev: 456ms
   p50: 180ms   p75: 290ms   p90: 680ms   p95: 1200ms   p99: 2100ms
 
-Breakdown:
-  Without swap (n=72): p50: 120ms  p90: 210ms  p99: 380ms
-  With swap (n=28):    p50: 890ms  p90: 1800ms p99: 2300ms
+Payments with swap: 28/100 (28.0%)
+Payments with cancellation: 5/100 (5.0%)
+
+  No swap, no cancellation   (n=67): p50: 120ms  p90: 210ms  p99: 380ms
+  Swap, no cancellation      (n=23): p50: 850ms  p90: 1750ms p99: 2200ms
+  Cancellation, no swap      (n=5):  p50: 920ms  p90: 1100ms p99: 1200ms
+  Swap and cancellation      (n=5):  p50: 950ms  p90: 2000ms p99: 2300ms
 ```
 
-## Swap Detection
+## Operation Detection
 
-The benchmark distinguishes between:
+The benchmark tracks two types of operations that can affect payment performance:
+
 - **Payment-time swaps**: Swaps triggered during payment when leaf denominations don't match (causes slowdowns)
-- **Background optimization swaps**: Swaps triggered by background leaf optimization (not counted)
+- **Optimization cancellations**: When background leaf optimization is cancelled to free up leaves for the payment (causes delays)
+
+Background optimization swaps that don't interfere with payments are not counted.
+
+Results are broken down into four mutually exclusive categories:
+
+1. **No swap, no cancellation**: Normal fast payments
+2. **Swap, no cancellation**: Payment required swapping leaves
+3. **Cancellation, no swap**: Payment cancelled background optimization
+4. **Swap and cancellation**: Payment required both operations
 
 ## Wallet Data Directory Structure
 
 For mainnet, each wallet directory contains:
+
 ```
 ~/.breez-bench/sender/
 ├── phrase          # 12-word mnemonic (auto-generated if missing)

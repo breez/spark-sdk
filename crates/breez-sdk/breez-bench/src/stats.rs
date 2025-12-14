@@ -10,6 +10,8 @@ pub struct PaymentMeasurement {
     pub duration: Duration,
     /// Whether a payment-time swap was triggered
     pub had_swap: bool,
+    /// Whether leaf optimization was cancelled during this payment
+    pub had_cancellation: bool,
     /// Amount sent in satoshis (useful for future analysis by amount buckets)
     #[allow(dead_code)]
     pub amount_sats: u64,
@@ -342,20 +344,38 @@ impl BenchmarkResults {
         self.measurements.iter().map(|m| m.duration).collect()
     }
 
-    /// Get durations for payments that required a swap.
-    pub fn swap_durations(&self) -> Vec<Duration> {
+    /// Get durations for payments with neither swap nor cancellation.
+    pub fn no_swap_no_cancel_durations(&self) -> Vec<Duration> {
         self.measurements
             .iter()
-            .filter(|m| m.had_swap)
+            .filter(|m| !m.had_swap && !m.had_cancellation)
             .map(|m| m.duration)
             .collect()
     }
 
-    /// Get durations for payments that didn't require a swap.
-    pub fn no_swap_durations(&self) -> Vec<Duration> {
+    /// Get durations for payments with swap but no cancellation.
+    pub fn swap_no_cancel_durations(&self) -> Vec<Duration> {
         self.measurements
             .iter()
-            .filter(|m| !m.had_swap)
+            .filter(|m| m.had_swap && !m.had_cancellation)
+            .map(|m| m.duration)
+            .collect()
+    }
+
+    /// Get durations for payments with cancellation but no swap.
+    pub fn cancel_no_swap_durations(&self) -> Vec<Duration> {
+        self.measurements
+            .iter()
+            .filter(|m| !m.had_swap && m.had_cancellation)
+            .map(|m| m.duration)
+            .collect()
+    }
+
+    /// Get durations for payments with both swap and cancellation.
+    pub fn swap_and_cancel_durations(&self) -> Vec<Duration> {
+        self.measurements
+            .iter()
+            .filter(|m| m.had_swap && m.had_cancellation)
             .map(|m| m.duration)
             .collect()
     }
@@ -408,18 +428,47 @@ impl BenchmarkResults {
             "  Payments with swap: {}/{} ({:.1}%)",
             with_swap_count, total, swap_percentage
         );
+
+        // Print cancellation percentage
+        let with_cancellation_count = self
+            .measurements
+            .iter()
+            .filter(|m| m.had_cancellation)
+            .count();
+        let cancellation_percentage = if total > 0 {
+            (with_cancellation_count as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+        println!(
+            "  Payments with cancellation: {}/{} ({:.1}%)",
+            with_cancellation_count, total, cancellation_percentage
+        );
         println!();
 
-        if let Some(no_swap_stats) = DurationStats::from_durations(&self.no_swap_durations()) {
-            no_swap_stats.print_summary("  Without swap");
+        // Print mutually exclusive categories
+        if let Some(stats) = DurationStats::from_durations(&self.no_swap_no_cancel_durations()) {
+            stats.print_summary("  No swap, no cancellation  ");
         } else {
-            println!("  Without swap: (no measurements)");
+            println!("  No swap, no cancellation: (no measurements)");
         }
 
-        if let Some(swap_stats) = DurationStats::from_durations(&self.swap_durations()) {
-            swap_stats.print_summary("  With swap   ");
+        if let Some(stats) = DurationStats::from_durations(&self.swap_no_cancel_durations()) {
+            stats.print_summary("  Swap, no cancellation     ");
         } else {
-            println!("  With swap: (no measurements)");
+            println!("  Swap, no cancellation: (no measurements)");
+        }
+
+        if let Some(stats) = DurationStats::from_durations(&self.cancel_no_swap_durations()) {
+            stats.print_summary("  Cancellation, no swap     ");
+        } else {
+            println!("  Cancellation, no swap: (no measurements)");
+        }
+
+        if let Some(stats) = DurationStats::from_durations(&self.swap_and_cancel_durations()) {
+            stats.print_summary("  Swap and cancellation     ");
+        } else {
+            println!("  Swap and cancellation: (no measurements)");
         }
 
         // Print histograms
@@ -429,17 +478,31 @@ impl BenchmarkResults {
                 histogram.print("Duration Distribution (All Payments)", 40);
             }
 
-            // Show breakdown histograms if there's meaningful data in both categories
-            let no_swap = self.no_swap_durations();
-            let with_swap = self.swap_durations();
+            // Show breakdown histograms for mutually exclusive categories if there's meaningful data
+            let no_swap_no_cancel = self.no_swap_no_cancel_durations();
+            let swap_no_cancel = self.swap_no_cancel_durations();
+            let cancel_no_swap = self.cancel_no_swap_durations();
+            let swap_and_cancel = self.swap_and_cancel_durations();
 
-            if !no_swap.is_empty() && !with_swap.is_empty() {
-                if let Some(histogram) = Histogram::from_durations(&no_swap) {
-                    histogram.print("Duration Distribution (Without Swap)", 40);
-                }
-                if let Some(histogram) = Histogram::from_durations(&with_swap) {
-                    histogram.print("Duration Distribution (With Swap)", 40);
-                }
+            if !no_swap_no_cancel.is_empty()
+                && let Some(histogram) = Histogram::from_durations(&no_swap_no_cancel)
+            {
+                histogram.print("Duration Distribution (No Swap, No Cancellation)", 40);
+            }
+            if !swap_no_cancel.is_empty()
+                && let Some(histogram) = Histogram::from_durations(&swap_no_cancel)
+            {
+                histogram.print("Duration Distribution (Swap, No Cancellation)", 40);
+            }
+            if !cancel_no_swap.is_empty()
+                && let Some(histogram) = Histogram::from_durations(&cancel_no_swap)
+            {
+                histogram.print("Duration Distribution (Cancellation, No Swap)", 40);
+            }
+            if !swap_and_cancel.is_empty()
+                && let Some(histogram) = Histogram::from_durations(&swap_and_cancel)
+            {
+                histogram.print("Duration Distribution (Swap and Cancellation)", 40);
             }
         }
 

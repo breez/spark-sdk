@@ -1,11 +1,11 @@
 //! Breez SDK Performance Benchmark CLI
 //!
-//! Measures payment/transfer performance and the impact of leaf denomination swaps.
+//! Measures payment/transfer performance.
 //! Supports both regtest (with automatic funding) and mainnet (with persistent wallets).
 
+mod operation_detector;
 mod scenarios;
 mod stats;
-mod swap_detector;
 
 use std::fs;
 use std::io;
@@ -28,13 +28,13 @@ use breez_sdk_spark::{
 };
 use tokio::sync::mpsc;
 
+use operation_detector::{OperationDetectionGuard, OperationDetectorLayer, create_operation_flag};
 use scenarios::{
     DEFAULT_MAX_AMOUNT, DEFAULT_MAX_DELAY_MS, DEFAULT_MIN_AMOUNT, DEFAULT_MIN_DELAY_MS,
     DEFAULT_PAYMENT_COUNT, DEFAULT_RETURN_INTERVAL, DEFAULT_SEED, MAX_INITIAL_FUNDING,
     ScenarioConfig, ScenarioPreset, generate_payments,
 };
 use stats::{BenchmarkResults, PaymentMeasurement};
-use swap_detector::{SwapDetectionGuard, SwapDetectorLayer, create_swap_flag};
 
 const PHRASE_FILE_NAME: &str = "phrase";
 const MIN_BALANCE_FOR_BENCHMARK: u64 = 10_000; // Minimum sats needed to run benchmark
@@ -126,9 +126,13 @@ async fn main() -> Result<()> {
         ),
     };
 
-    // Set up tracing with swap detection layer
-    let swap_flag = create_swap_flag();
-    let swap_layer = SwapDetectorLayer::new(swap_flag.clone());
+    // Set up tracing with swap and cancellation detection layers
+    let swap_flag = create_operation_flag();
+    let swap_layer = OperationDetectorLayer::new_swap_detector(swap_flag.clone());
+
+    let cancellation_flag = create_operation_flag();
+    let cancellation_layer =
+        OperationDetectorLayer::new_cancellation_detector(cancellation_flag.clone());
 
     // Filter for console output: info for bench, errors only for SDK internals
     let console_filter = "breez_sdk_bench=info,\
@@ -141,8 +145,9 @@ async fn main() -> Result<()> {
     let console_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(console_filter));
 
-    // Filter for swap detection: need trace level from spark::tree::service
+    // Filter for operation detection: need trace level from spark::tree::service and info from spark::services::leaf_optimizer
     let swap_filter = EnvFilter::new("spark::tree::service=trace");
+    let cancellation_filter = EnvFilter::new("spark::services::leaf_optimizer=info");
 
     tracing_subscriber::registry()
         .with(
@@ -151,6 +156,7 @@ async fn main() -> Result<()> {
                 .with_filter(console_filter),
         )
         .with(swap_layer.with_filter(swap_filter))
+        .with(cancellation_layer.with_filter(cancellation_filter))
         .init();
 
     info!("Breez SDK Performance Benchmark");
@@ -422,8 +428,9 @@ async fn main() -> Result<()> {
             payment_spec.amount_sats
         );
 
-        // Reset swap detection for this payment
-        let guard = SwapDetectionGuard::new(swap_flag.clone());
+        // Reset detection for this payment
+        let swap_guard = OperationDetectionGuard::new(swap_flag.clone());
+        let cancellation_guard = OperationDetectionGuard::new(cancellation_flag.clone());
 
         // Measure payment time
         let start = Instant::now();
@@ -470,17 +477,20 @@ async fn main() -> Result<()> {
             continue;
         }
 
-        let had_swap = guard.had_swap();
+        let had_swap = swap_guard.had_operation();
+        let had_cancellation = cancellation_guard.had_operation();
 
         info!(
-            "  Completed in {:?} (swap: {})",
+            "  Completed in {:?} (swap: {}, cancellation: {})",
             duration,
-            if had_swap { "yes" } else { "no" }
+            if had_swap { "yes" } else { "no" },
+            if had_cancellation { "yes" } else { "no" }
         );
 
         results.add(PaymentMeasurement {
             duration,
             had_swap,
+            had_cancellation,
             amount_sats: payment_spec.amount_sats,
         });
 
