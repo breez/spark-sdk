@@ -1465,15 +1465,41 @@ async fn claim_pending_transfers(
         transfers.len()
     );
 
+    // Insert leaves in one go to avoid premature optimization
+    let mut all_claimed_leaves = Vec::new();
     for (i, transfer) in transfers.items.iter().enumerate() {
         debug!("Claiming transfer: {}/{}", i + 1, transfers.len());
-        claim_transfer(transfer, transfer_service, tree_service).await?;
+
+        let claimed_leaves = match claim_transfer(transfer, transfer_service, tree_service, false)
+            .await
+        {
+            Ok(leaves) => leaves,
+            Err(e) => {
+                error!(
+                    "Failed to claim transfer: {e:?}. Inserting claimed leaves and returning error."
+                );
+                tree_service
+                    .insert_leaves(all_claimed_leaves.clone())
+                    .await?;
+                return Err(e);
+            }
+        };
+
+        all_claimed_leaves.extend(claimed_leaves);
+
         debug!(
             "Successfully claimed transfer: {}/{}",
             i + 1,
             transfers.len()
         );
     }
+
+    if !all_claimed_leaves.is_empty() {
+        tree_service
+            .insert_leaves(all_claimed_leaves.clone())
+            .await?;
+    }
+
     debug!("Claimed all transfers, creating wallet transfers");
     Ok(create_transfers(
         transfers,
@@ -1618,14 +1644,18 @@ async fn claim_transfer(
     transfer: &Transfer,
     transfer_service: &Arc<TransferService>,
     tree_service: &Arc<dyn TreeService>,
+    insert_leaves: bool,
 ) -> Result<Vec<TreeNode>, SparkWalletError> {
     trace!("Claiming transfer with id: {}", transfer.id);
     let claimed_nodes = transfer_service.claim_transfer(transfer, None).await?;
 
-    trace!("Inserting claimed leaves after claiming transfer");
-    let result_nodes = tree_service.insert_leaves(claimed_nodes.clone()).await?;
-
-    Ok(result_nodes)
+    if insert_leaves {
+        trace!("Inserting claimed leaves after claiming transfer");
+        let result_nodes = tree_service.insert_leaves(claimed_nodes.clone()).await?;
+        Ok(result_nodes)
+    } else {
+        Ok(claimed_nodes)
+    }
 }
 
 /// Event handler that bridges OptimizationEvent to WalletEvent.
@@ -1797,7 +1827,7 @@ impl BackgroundProcessor {
             ));
 
         trace!("Claiming transfer from event");
-        claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
+        claim_transfer(&transfer, &self.transfer_service, &self.tree_service, true).await?;
         trace!("Claimed transfer from event");
 
         // Update transfer status before notifying listeners
