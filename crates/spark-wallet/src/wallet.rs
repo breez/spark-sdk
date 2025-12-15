@@ -244,15 +244,7 @@ impl SparkWallet {
                     return;
                 }
                 let leaf_optimizer = Arc::clone(&leaf_optimizer);
-                tokio::spawn(async move {
-                    match leaf_optimizer.should_optimize().await {
-                        Ok(true) => leaf_optimizer.start(),
-                        Ok(false) => {}
-                        Err(e) => {
-                            debug!("Failed to check if optimization is needed: {e:?}");
-                        }
-                    }
-                });
+                leaf_optimizer.start(true)
             }
         })));
 
@@ -1336,7 +1328,7 @@ impl SparkWallet {
 
     /// Starts leaf optimization in the background.
     pub fn start_leaf_optimization(&self) {
-        self.leaf_optimizer.start();
+        self.leaf_optimizer.start(false);
     }
 
     /// Cancels the ongoing leaf optimization.

@@ -193,7 +193,7 @@ impl LeafOptimizer {
     ///
     /// Returns early (without spawning) if:
     /// - Optimization is already running
-    pub fn start(self: &Arc<Self>) {
+    pub fn start(self: &Arc<Self>, only_if_should_optimize: bool) {
         let mut progress = self.progress.lock().unwrap();
 
         // Check if already running
@@ -217,6 +217,21 @@ impl LeafOptimizer {
         // Spawn the optimization work in the background
         let optimizer = Arc::clone(self);
         tokio::spawn(async move {
+            if only_if_should_optimize
+                && !optimizer
+                    .should_optimize()
+                    .await
+                    .inspect_err(|e| {
+                        error!(
+                            "Failed to check if optimization is needed on optimization start: {e:?}"
+                        );
+                    })
+                    .unwrap_or(false)
+            {
+                debug!("Optimization not needed, skipping");
+                return;
+            }
+
             if let Err(e) = optimizer.run_optimization_with_guard(running_guard).await {
                 error!("Optimization failed: {:?}", e);
             }
