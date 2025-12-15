@@ -51,25 +51,30 @@ cargo run -p breez-sdk-bench -- --return-interval 0
 
 # Run deterministic edge-case scenarios
 cargo run -p breez-sdk-bench -- --scenario edge-cases
+
+# Configure sender and receiver wallet multiplicities
+cargo run -p breez-sdk-bench -- --sender-multiplicity 1 --receiver-multiplicity 2
 ```
 
 ## Configuration
 
 ### CLI Arguments
 
-| Argument              | Description                                        | Default              |
-| --------------------- | -------------------------------------------------- | -------------------- |
-| `--network`           | Network to use (regtest, mainnet)                  | `regtest`            |
-| `--sender-data-dir`   | Sender wallet data directory (mainnet only)        | Required for mainnet |
-| `--receiver-data-dir` | Receiver wallet data directory (mainnet only)      | Required for mainnet |
-| `--seed`              | Random seed for reproducible benchmarks            | `12345`              |
-| `--payments`          | Number of payments to execute                      | `100`                |
-| `--min-amount`        | Minimum payment amount in sats                     | `100`                |
-| `--max-amount`        | Maximum payment amount in sats                     | `2000`               |
-| `--min-delay-ms`      | Minimum delay between payments                     | `500`                |
-| `--max-delay-ms`      | Maximum delay between payments                     | `3000`               |
-| `--return-interval`   | How often receiver sends funds back (0 to disable) | `5`                  |
-| `--scenario`          | Scenario preset                                    | `random`             |
+| Argument                  | Description                                           | Default              |
+| ------------------------- | ----------------------------------------------------- | -------------------- |
+| `--network`               | Network to use (regtest, mainnet)                     | `regtest`            |
+| `--sender-data-dir`       | Sender wallet data directory (mainnet only)           | Required for mainnet |
+| `--receiver-data-dir`     | Receiver wallet data directory (mainnet only)         | Required for mainnet |
+| `--seed`                  | Random seed for reproducible benchmarks               | `12345`              |
+| `--payments`              | Number of payments to execute                         | `100`                |
+| `--min-amount`            | Minimum payment amount in sats                        | `100`                |
+| `--max-amount`            | Maximum payment amount in sats                        | `2000`               |
+| `--min-delay-ms`          | Minimum delay between payments                        | `500`                |
+| `--max-delay-ms`          | Maximum delay between payments                        | `3000`               |
+| `--return-interval`       | How often receiver sends funds back (0 to disable)    | `5`                  |
+| `--scenario`              | Scenario preset                                       | `random`             |
+| `--sender-multiplicity`   | Sender wallet multiplicity (optimization parameter)   | None (SDK default)   |
+| `--receiver-multiplicity` | Receiver wallet multiplicity (optimization parameter) | `0`                  |
 
 ### Environment Variables
 

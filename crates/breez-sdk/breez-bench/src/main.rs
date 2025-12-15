@@ -86,6 +86,14 @@ struct Args {
     /// Scenario preset: random, edge-cases, small-payments, large-payments
     #[arg(long, default_value = "random")]
     scenario: String,
+
+    /// Sender wallet multiplicity (optimization parameter)
+    #[arg(long)]
+    sender_multiplicity: Option<u8>,
+
+    /// Receiver wallet multiplicity (optimization parameter)
+    #[arg(long, default_value_t = 0)]
+    receiver_multiplicity: u8,
 }
 
 /// SDK instance wrapper with event channel
@@ -209,7 +217,10 @@ async fn main() -> Result<()> {
     // Initialize SDK instances based on network
     info!("Initializing SDK instances...");
     let (mut sender, mut receiver) = match network {
-        Network::Regtest => initialize_regtest_sdk_pair().await?,
+        Network::Regtest => {
+            initialize_regtest_sdk_pair(args.sender_multiplicity, args.receiver_multiplicity)
+                .await?
+        }
         Network::Mainnet => {
             let sender_dir = args
                 .sender_data_dir
@@ -217,7 +228,13 @@ async fn main() -> Result<()> {
             let receiver_dir = args
                 .receiver_data_dir
                 .ok_or_else(|| anyhow::anyhow!("--receiver-data-dir is required for mainnet"))?;
-            initialize_mainnet_sdk_pair(&sender_dir, &receiver_dir).await?
+            initialize_mainnet_sdk_pair(
+                &sender_dir,
+                &receiver_dir,
+                args.sender_multiplicity,
+                args.receiver_multiplicity,
+            )
+            .await?
         }
     };
 
@@ -597,8 +614,11 @@ async fn main() -> Result<()> {
 }
 
 /// Initialize SDK pair for regtest using temp directories
-async fn initialize_regtest_sdk_pair() -> Result<(BenchSdkInstance, BenchSdkInstance)> {
-    use breez_sdk_itest::build_sdk_with_dir;
+async fn initialize_regtest_sdk_pair(
+    sender_multiplicity: Option<u8>,
+    receiver_multiplicity: u8,
+) -> Result<(BenchSdkInstance, BenchSdkInstance)> {
+    use breez_sdk_itest::build_sdk_with_custom_config;
     use rand::RngCore;
     use tempdir::TempDir;
 
@@ -607,15 +627,27 @@ async fn initialize_regtest_sdk_pair() -> Result<(BenchSdkInstance, BenchSdkInst
     let sender_path = sender_dir.path().to_string_lossy().to_string();
     let mut sender_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut sender_seed);
-    // Pass None for temp_dir to build_sdk_with_dir since we manage it ourselves
-    let itest_sender = build_sdk_with_dir(sender_path, sender_seed, None).await?;
+
+    let mut sender_config = default_config(Network::Regtest);
+    if let Some(multiplicity) = sender_multiplicity {
+        sender_config.optimization_config.multiplicity = multiplicity;
+    }
+
+    let itest_sender =
+        build_sdk_with_custom_config(sender_path, sender_seed, sender_config, None, true).await?;
 
     // Create receiver SDK
     let receiver_dir = TempDir::new("breez-bench-receiver")?;
     let receiver_path = receiver_dir.path().to_string_lossy().to_string();
     let mut receiver_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut receiver_seed);
-    let itest_receiver = build_sdk_with_dir(receiver_path, receiver_seed, None).await?;
+
+    let mut receiver_config = default_config(Network::Regtest);
+    receiver_config.optimization_config.multiplicity = receiver_multiplicity;
+
+    let itest_receiver =
+        build_sdk_with_custom_config(receiver_path, receiver_seed, receiver_config, None, true)
+            .await?;
 
     Ok((
         BenchSdkInstance {
@@ -635,9 +667,12 @@ async fn initialize_regtest_sdk_pair() -> Result<(BenchSdkInstance, BenchSdkInst
 async fn initialize_mainnet_sdk_pair(
     sender_data_dir: &str,
     receiver_data_dir: &str,
+    sender_multiplicity: Option<u8>,
+    receiver_multiplicity: u8,
 ) -> Result<(BenchSdkInstance, BenchSdkInstance)> {
-    let sender = initialize_mainnet_sdk(sender_data_dir, "sender", 2).await?;
-    let receiver = initialize_mainnet_sdk(receiver_data_dir, "receiver", 0).await?;
+    let sender = initialize_mainnet_sdk(sender_data_dir, "sender", sender_multiplicity).await?;
+    let receiver =
+        initialize_mainnet_sdk(receiver_data_dir, "receiver", Some(receiver_multiplicity)).await?;
     Ok((sender, receiver))
 }
 
@@ -645,7 +680,7 @@ async fn initialize_mainnet_sdk_pair(
 async fn initialize_mainnet_sdk(
     data_dir: &str,
     name: &str,
-    multiplicity: u8,
+    multiplicity: Option<u8>,
 ) -> Result<BenchSdkInstance> {
     let data_path = expand_path(data_dir);
     fs::create_dir_all(&data_path)?;
@@ -658,7 +693,9 @@ async fn initialize_mainnet_sdk(
 
     let mut config = default_config(Network::Mainnet);
     config.api_key = breez_api_key;
-    config.optimization_config.multiplicity = multiplicity;
+    if let Some(multiplicity) = multiplicity {
+        config.optimization_config.multiplicity = multiplicity;
+    }
 
     let seed = Seed::Mnemonic {
         mnemonic: mnemonic.to_string(),
