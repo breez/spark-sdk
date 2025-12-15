@@ -46,30 +46,70 @@ async function downloadBinaryArtifacts(): Promise<void> {
   const packageJsonPath = path.join(packageRoot, 'package.json');
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
   const version = packageJson.version;
+  const androidChecksum = packageJson.checksums?.android;
+  const iosChecksum = packageJson.checksums?.ios;
+
+  if (!androidChecksum || !iosChecksum) {
+    throw new Error('Binary checksums not found in package.json');
+  }
 
   const repo = 'https://github.com/breez/breez-sdk-spark-react-native';
   const androidUrl = `${repo}/releases/download/${version}/android-artifacts.zip`;
   const iosUrl = `${repo}/releases/download/${version}/ios-artifacts.zip`;
 
-  // Download Android artifacts
+  // Download and verify Android artifacts
   try {
-    execSync(
-      `curl -L "${androidUrl}" --output android-artifacts.zip && unzip -o android-artifacts.zip && rm -rf android-artifacts.zip`,
-      { cwd: packageRoot, stdio: 'inherit' }
-    );
+    execSync(`curl -L "${androidUrl}" --output android-artifacts.zip`, {
+      cwd: packageRoot,
+      stdio: 'inherit',
+    });
+
+    const actualAndroidChecksum = execSync(
+      'shasum -a 256 android-artifacts.zip | cut -d" " -f1',
+      { cwd: packageRoot, encoding: 'utf-8' }
+    ).trim();
+
+    if (actualAndroidChecksum !== androidChecksum) {
+      throw new Error(
+        `Android artifacts checksum mismatch. Expected: ${androidChecksum}, Got: ${actualAndroidChecksum}`
+      );
+    }
+
+    execSync('unzip -o android-artifacts.zip && rm -rf android-artifacts.zip', {
+      cwd: packageRoot,
+      stdio: 'inherit',
+    });
   } catch (error) {
-    console.error('Failed to download Android artifacts');
+    execSync('rm -f android-artifacts.zip', { cwd: packageRoot });
+    console.error('Failed to download or verify Android artifacts');
     throw error;
   }
 
-  // Download iOS artifacts
+  // Download and verify iOS artifacts
   try {
-    execSync(
-      `curl -L "${iosUrl}" --output ios-artifacts.zip && unzip -o ios-artifacts.zip && rm -rf ios-artifacts.zip`,
-      { cwd: packageRoot, stdio: 'inherit' }
-    );
+    execSync(`curl -L "${iosUrl}" --output ios-artifacts.zip`, {
+      cwd: packageRoot,
+      stdio: 'inherit',
+    });
+
+    const actualIosChecksum = execSync(
+      'shasum -a 256 ios-artifacts.zip | cut -d" " -f1',
+      { cwd: packageRoot, encoding: 'utf-8' }
+    ).trim();
+
+    if (actualIosChecksum !== iosChecksum) {
+      throw new Error(
+        `iOS artifacts checksum mismatch. Expected: ${iosChecksum}, Got: ${actualIosChecksum}`
+      );
+    }
+
+    execSync('unzip -o ios-artifacts.zip && rm -rf ios-artifacts.zip', {
+      cwd: packageRoot,
+      stdio: 'inherit',
+    });
   } catch (error) {
-    console.error('Failed to download iOS artifacts');
+    execSync('rm -f ios-artifacts.zip', { cwd: packageRoot });
+    console.error('Failed to download or verify iOS artifacts');
     throw error;
   }
 }
