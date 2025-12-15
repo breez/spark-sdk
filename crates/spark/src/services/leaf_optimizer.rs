@@ -192,7 +192,7 @@ impl LeafOptimizer {
 
         // Check if already running
         if progress.is_running {
-            debug!("Optimization already running, skipping");
+            trace!("Optimization already running, skipping");
             return;
         }
 
@@ -261,7 +261,15 @@ impl LeafOptimizer {
 
         let total_rounds = swaps.len() as u32;
 
-        info!("Starting leaf optimization with {} rounds", total_rounds);
+        info!(
+            "Starting leaf optimization with {} rounds, {} input leaves, {} output leaves",
+            total_rounds,
+            swaps.iter().map(|s| s.leaves_to_give.len()).sum::<usize>(),
+            swaps
+                .iter()
+                .map(|s| s.leaves_to_receive.len())
+                .sum::<usize>()
+        );
 
         // Update progress with rounds info (is_running already set by start())
         {
