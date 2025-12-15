@@ -105,26 +105,13 @@ jobs:
             packages/react-native/README.md
             packages/react-native/yarn.lock
 
-      - name: Compress Android binaries
-        working-directory: packages/react-native
-        run: zip -9 -r android-artifacts.zip android/src/main/jniLibs
-
-      - name: Compress iOS binaries
-        working-directory: packages/react-native
-        run: zip -9 -r ios-artifacts.zip build
-
-      - name: Archive Android binaries
+      - name: Archive binaries
         uses: actions/upload-artifact@v4
         with:
-          name: react-native-android-artifacts
-          path: packages/react-native/android-artifacts.zip
-          retention-days: 5
-
-      - name: Archive iOS binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: react-native-ios-artifacts
-          path: packages/react-native/ios-artifacts.zip
+          name: react-native-artifacts
+          path: |
+            packages/react-native/android/src/main/jniLibs
+            packages/react-native/build
           retention-days: 5
 
   build-package:
@@ -149,12 +136,15 @@ jobs:
 
       - name: Remove existing bindings
         run: |
-          git rm -r android/generated || true
           git rm android/CMakeLists.txt || true
+          git rm -r android/generated || true
+          git rm -r android/src/main/jniLibs || true
+          git rm -r build || true
           git rm -r cpp || true
           git rm -r lib || true
-          git rm -r src || true
           git rm -r plugin || true
+          git rm -r scripts || true
+          git rm -r src || true
           git rm *.podspec || true
 
       - name: Download React Native bindings
@@ -187,52 +177,25 @@ jobs:
           git tag ${{ inputs.package-version || '0.0.1' }} -m "${{ inputs.package-version || '0.0.1' }}"
           git push --tags
 
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: react-native-artifacts
+
       - name: Install dependencies
-        if: ${{ inputs.publish }}
         run: yarn --mode=skip-build
 
       - name: Apply patches
-        if: ${{ inputs.publish }}
         run: npx patch-package
+
+      - name: Dry-run publish package to npm
+        if: ${{ !inputs.publish }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --dry-run
 
       - name: Publish package to npm
         if: ${{ inputs.publish }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish
-
-  publish-artifacts:
-    name: Publish artifacts
-    if: ${{ inputs.publish }}
-    runs-on: macos-latest
-    needs: build-package
-    steps:
-      - name: Checkout breez-sdk-spark-react-native repo
-        uses: actions/checkout@v4
-        with:
-          repository: breez/breez-sdk-spark-react-native
-          ref: main
-          ssh-key: ${{ secrets.REPO_SSH_KEY }}
-          fetch-depth: 0
-
-      - name: Download Android binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: react-native-android-artifacts
-
-      - name: Download iOS binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: react-native-ios-artifacts
-
-      - name: Release and attach binary artifact
-        uses: softprops/action-gh-release@v2
-        with:
-          repository: breez/breez-sdk-spark-react-native
-          files: |
-            android-artifacts.zip
-            ios-artifacts.zip
-          tag_name: ${{ inputs.package-version || '0.0.1' }}
-          generate_release_notes: false
-          token: ${{ secrets.RN_RELEASE_TOKEN }}
-          prerelease: true
