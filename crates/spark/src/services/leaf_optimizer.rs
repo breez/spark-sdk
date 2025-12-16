@@ -168,18 +168,6 @@ impl LeafOptimizer {
         self.progress.lock().unwrap().is_running
     }
 
-    /// Static helper to check if leaves need optimization.
-    pub async fn should_optimize(&self) -> Result<bool, ServiceError> {
-        let leaves = self.tree_service.list_leaves().await?.available;
-        let leave_amounts = leaves.iter().map(|leaf| leaf.value).collect::<Vec<u64>>();
-
-        should_optimize_inner(
-            &leave_amounts,
-            self.config.multiplicity,
-            self.config.max_leaves_per_swap,
-        )
-    }
-
     /// Starts the optimization process in the background.
     ///
     /// This method spawns the optimization work in a background task and returns
@@ -187,7 +175,7 @@ impl LeafOptimizer {
     ///
     /// Returns early (without spawning) if:
     /// - Optimization is already running
-    pub fn start(self: &Arc<Self>, only_if_should_optimize: bool) {
+    pub fn start(self: &Arc<Self>) {
         let mut progress = self.progress.lock().unwrap();
 
         // Check if already running
@@ -211,21 +199,6 @@ impl LeafOptimizer {
         // Spawn the optimization work in the background
         let optimizer = Arc::clone(self);
         tokio::spawn(async move {
-            if only_if_should_optimize
-                && !optimizer
-                    .should_optimize()
-                    .await
-                    .inspect_err(|e| {
-                        error!(
-                            "Failed to check if optimization is needed on optimization start: {e:?}"
-                        );
-                    })
-                    .unwrap_or(false)
-            {
-                debug!("Optimization not needed, skipping");
-                return;
-            }
-
             if let Err(e) = optimizer.run_optimization_with_guard(running_guard).await {
                 error!("Optimization failed: {:?}", e);
             }
@@ -455,41 +428,6 @@ impl LeafOptimizer {
         if let Some(handler) = &self.event_handler {
             handler.on_optimization_event(event);
         }
-    }
-}
-
-fn should_optimize_inner(
-    leave_amounts: &[u64],
-    multiplicity: u8,
-    max_leaves_per_swap: u32,
-) -> Result<bool, ServiceError> {
-    if multiplicity == 0 {
-        // Optimize if it reduces the number of leaves by more than 5x
-        let swaps = maximize_unilateral_exit(leave_amounts, max_leaves_per_swap);
-        let num_inputs: usize = swaps.iter().map(|swap| swap.leaves_to_give.len()).sum();
-        let num_outputs: usize = swaps.iter().map(|swap| swap.leaves_to_receive.len()).sum();
-        Ok(num_outputs * 5 < num_inputs)
-    } else {
-        // Optimize if the number of input denominations differs from the number of output denominations by more than 2
-        let swaps = minimize_transfer_swap(leave_amounts, multiplicity, max_leaves_per_swap);
-
-        let input_counter = count_occurrences(
-            &swaps
-                .iter()
-                .flat_map(|swap| swap.leaves_to_give.iter())
-                .cloned()
-                .collect::<Vec<_>>(),
-        );
-
-        let output_counter = count_occurrences(
-            &swaps
-                .iter()
-                .flat_map(|swap| swap.leaves_to_receive.iter())
-                .cloned()
-                .collect::<Vec<_>>(),
-        );
-
-        Ok((input_counter.len() as i64 - output_counter.len() as i64).abs() > 2)
     }
 }
 
@@ -732,8 +670,6 @@ fn counter_to_flat_array(counter: &std::collections::HashMap<u64, u64>) -> Vec<u
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Not as _;
-
     use super::*;
     use macros::{async_test_all, test_all};
 
@@ -889,37 +825,6 @@ mod tests {
                 leaves_to_receive: vec![1, 1, 2, 4, 4, 8, 16, 32, 32]
             }]
         );
-    }
-
-    #[test_all]
-    fn test_should_optimize_inner() {
-        // Unilateral exit
-        assert!(
-            should_optimize_inner(&[16], 0, DEFAULT_MAX_LEAVES_PER_SWAP)
-                .unwrap()
-                .not()
-        );
-        assert!(
-            should_optimize_inner(&[16, 16], 0, DEFAULT_MAX_LEAVES_PER_SWAP)
-                .unwrap()
-                .not()
-        );
-        assert!(
-            should_optimize_inner(
-                &[16, 16, 16, 16, 16, 16, 16, 16],
-                0,
-                DEFAULT_MAX_LEAVES_PER_SWAP
-            )
-            .unwrap()
-        );
-
-        // Swap minimization
-        assert!(
-            should_optimize_inner(&[2], 1, DEFAULT_MAX_LEAVES_PER_SWAP)
-                .unwrap()
-                .not()
-        );
-        assert!(should_optimize_inner(&[64], 1, DEFAULT_MAX_LEAVES_PER_SWAP).unwrap());
     }
 
     #[test_all]

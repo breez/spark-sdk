@@ -290,7 +290,7 @@ impl SparkWallet {
     /// Starts leaf optimization if auto-optimization is enabled.
     fn maybe_start_optimization(&self) {
         if self.config.auto_optimize_enabled {
-            self.leaf_optimizer.start(true);
+            self.leaf_optimizer.start();
         }
     }
 
@@ -1341,7 +1341,7 @@ impl SparkWallet {
 
     /// Starts leaf optimization in the background.
     pub fn start_leaf_optimization(&self) {
-        self.leaf_optimizer.start(false);
+        self.leaf_optimizer.start();
     }
 
     /// Cancels the ongoing leaf optimization.
@@ -1697,7 +1697,7 @@ impl BackgroundProcessor {
 
     fn maybe_start_optimization(&self) {
         if self.auto_optimize_enabled {
-            self.leaf_optimizer.start(true);
+            self.leaf_optimizer.start();
         }
     }
 
