@@ -236,18 +236,6 @@ impl SparkWallet {
             Some(optimization_event_handler),
         ));
 
-        tree_service.set_tree_changed_callback(Some(Box::new({
-            let leaf_optimizer = Arc::clone(&leaf_optimizer);
-            let auto_optimize_enabled = config.auto_optimize_enabled;
-            move || {
-                if !auto_optimize_enabled {
-                    return;
-                }
-                let leaf_optimizer = Arc::clone(&leaf_optimizer);
-                leaf_optimizer.start(true)
-            }
-        })));
-
         let (cancel, cancellation_token) = watch::channel(());
         if with_background_processing {
             let reconnect_interval = Duration::from_secs(config.reconnect_interval_seconds);
@@ -260,6 +248,8 @@ impl SparkWallet {
                 Arc::clone(&service_provider),
                 Arc::clone(&transfer_service),
                 Arc::clone(&htlc_service),
+                Arc::clone(&leaf_optimizer),
+                config.auto_optimize_enabled,
             ));
             background_processor
                 .run_background_tasks(cancellation_token.clone())
@@ -295,6 +285,13 @@ impl SparkWallet {
     pub async fn list_leaves(&self) -> Result<WalletLeaves, SparkWalletError> {
         let leaves = self.tree_service.list_leaves().await?;
         Ok(leaves.into())
+    }
+
+    /// Starts leaf optimization if auto-optimization is enabled.
+    fn maybe_start_optimization(&self) {
+        if self.config.auto_optimize_enabled {
+            self.leaf_optimizer.start(true);
+        }
     }
 
     pub async fn pay_lightning_invoice(
@@ -356,6 +353,8 @@ impl SparkWallet {
                 .await?
             }
         };
+
+        self.maybe_start_optimization();
 
         Ok(PayLightningInvoiceResult {
             transfer: wallet_transfer,
@@ -480,6 +479,8 @@ impl SparkWallet {
             .await?;
         info!("Claimed deposit root node: {:?}", deposit_nodes);
 
+        self.maybe_start_optimization();
+
         Ok(deposit_nodes.into_iter().map(WalletLeaf::from).collect())
     }
 
@@ -488,6 +489,8 @@ impl SparkWallet {
         quote: StaticDepositQuote,
     ) -> Result<WalletTransfer, SparkWalletError> {
         let transfer = self.deposit_service.claim_static_deposit(quote).await?;
+
+        self.maybe_start_optimization();
 
         Ok(WalletTransfer::from_transfer(
             transfer,
@@ -625,6 +628,8 @@ impl SparkWallet {
         )
         .await?;
 
+        self.maybe_start_optimization();
+
         Ok(WalletTransfer::from_transfer(
             transfer,
             None,
@@ -636,14 +641,20 @@ impl SparkWallet {
 
     /// Claims all pending transfers.
     pub async fn claim_pending_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
-        claim_pending_transfers(
+        let transfers = claim_pending_transfers(
             self.identity_public_key,
             &self.transfer_service,
             &self.tree_service,
             &self.htlc_service,
             &self.ssp_client,
         )
-        .await
+        .await?;
+
+        if !transfers.is_empty() {
+            self.maybe_start_optimization();
+        }
+
+        Ok(transfers)
     }
 
     pub async fn create_htlc(
@@ -946,6 +957,8 @@ impl SparkWallet {
             &leaves_reservation,
         )
         .await?;
+
+        self.maybe_start_optimization();
 
         create_transfer(
             transfer,
@@ -1465,39 +1478,14 @@ async fn claim_pending_transfers(
         transfers.len()
     );
 
-    // Insert leaves in one go to avoid premature optimization
-    let mut all_claimed_leaves = Vec::new();
     for (i, transfer) in transfers.items.iter().enumerate() {
         debug!("Claiming transfer: {}/{}", i + 1, transfers.len());
-
-        let claimed_leaves = match claim_transfer(transfer, transfer_service, tree_service, false)
-            .await
-        {
-            Ok(leaves) => leaves,
-            Err(e) => {
-                error!(
-                    "Failed to claim transfer: {e:?}. Inserting claimed leaves and returning error."
-                );
-                tree_service
-                    .insert_leaves(all_claimed_leaves.clone())
-                    .await?;
-                return Err(e);
-            }
-        };
-
-        all_claimed_leaves.extend(claimed_leaves);
-
+        claim_transfer(transfer, transfer_service, tree_service).await?;
         debug!(
             "Successfully claimed transfer: {}/{}",
             i + 1,
             transfers.len()
         );
-    }
-
-    if !all_claimed_leaves.is_empty() {
-        tree_service
-            .insert_leaves(all_claimed_leaves.clone())
-            .await?;
     }
 
     debug!("Claimed all transfers, creating wallet transfers");
@@ -1644,18 +1632,14 @@ async fn claim_transfer(
     transfer: &Transfer,
     transfer_service: &Arc<TransferService>,
     tree_service: &Arc<dyn TreeService>,
-    insert_leaves: bool,
 ) -> Result<Vec<TreeNode>, SparkWalletError> {
     trace!("Claiming transfer with id: {}", transfer.id);
     let claimed_nodes = transfer_service.claim_transfer(transfer, None).await?;
 
-    if insert_leaves {
-        trace!("Inserting claimed leaves after claiming transfer");
-        let result_nodes = tree_service.insert_leaves(claimed_nodes.clone()).await?;
-        Ok(result_nodes)
-    } else {
-        Ok(claimed_nodes)
-    }
+    trace!("Inserting claimed leaves after claiming transfer");
+    let result_nodes = tree_service.insert_leaves(claimed_nodes.clone()).await?;
+
+    Ok(result_nodes)
 }
 
 /// Event handler that bridges OptimizationEvent to WalletEvent.
@@ -1679,6 +1663,8 @@ struct BackgroundProcessor {
     ssp_client: Arc<ServiceProvider>,
     transfer_service: Arc<TransferService>,
     htlc_service: Arc<HtlcService>,
+    leaf_optimizer: Arc<LeafOptimizer>,
+    auto_optimize_enabled: bool,
 }
 
 impl BackgroundProcessor {
@@ -1692,6 +1678,8 @@ impl BackgroundProcessor {
         ssp_client: Arc<ServiceProvider>,
         transfer_service: Arc<TransferService>,
         htlc_service: Arc<HtlcService>,
+        leaf_optimizer: Arc<LeafOptimizer>,
+        auto_optimize_enabled: bool,
     ) -> Self {
         Self {
             operator_pool,
@@ -1702,6 +1690,14 @@ impl BackgroundProcessor {
             ssp_client,
             transfer_service,
             htlc_service,
+            leaf_optimizer,
+            auto_optimize_enabled,
+        }
+    }
+
+    fn maybe_start_optimization(&self) {
+        if self.auto_optimize_enabled {
+            self.leaf_optimizer.start(true);
         }
     }
 
@@ -1766,6 +1762,7 @@ impl BackgroundProcessor {
         self.tree_service.insert_leaves(vec![deposit]).await?;
         self.event_manager
             .notify_listeners(WalletEvent::DepositConfirmed(id));
+        self.maybe_start_optimization();
         Ok(())
     }
 
@@ -1827,7 +1824,7 @@ impl BackgroundProcessor {
             ));
 
         trace!("Claiming transfer from event");
-        claim_transfer(&transfer, &self.transfer_service, &self.tree_service, true).await?;
+        claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
         trace!("Claimed transfer from event");
 
         // Update transfer status before notifying listeners
@@ -1841,6 +1838,7 @@ impl BackgroundProcessor {
                 self.identity_public_key,
                 self.ssp_client.identity_public_key(),
             )));
+        self.maybe_start_optimization();
 
         Ok(())
     }
@@ -1866,6 +1864,9 @@ impl BackgroundProcessor {
                 for transfer in &transfers {
                     self.event_manager
                         .notify_listeners(WalletEvent::TransferClaimed(transfer.clone()));
+                }
+                if !transfers.is_empty() {
+                    self.maybe_start_optimization();
                 }
             }
             Err(e) => {

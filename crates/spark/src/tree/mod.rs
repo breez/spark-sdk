@@ -536,13 +536,6 @@ pub trait TreeStore: Send + Sync {
 
 #[macros::async_trait]
 pub trait TreeService: Send + Sync {
-    /// Sets a callback that will be called when the tree structure changes.
-    ///
-    /// # Arguments
-    ///
-    /// * `callback` - The callback to call when tree changes occur, or None to clear it
-    fn set_tree_changed_callback(&self, callback: Option<Box<dyn Fn() + Send>>);
-
     /// Returns the total balance of all available leaves in the tree.
     ///
     /// This method calculates the sum of all leaf values that have a status of
