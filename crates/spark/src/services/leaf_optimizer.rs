@@ -431,6 +431,18 @@ impl LeafOptimizer {
                 }
                 Err(e) => {
                     error!("Swap failed in optimization round {}: {:?}", round, e);
+
+                    if let Err(e) = self
+                        .tree_service
+                        .cancel_reservation(swap_reservation.id)
+                        .await
+                    {
+                        error!(
+                            "Failed to cancel reservation on optimization round failure: {:?}",
+                            e
+                        );
+                    }
+
                     return Err(e);
                 }
             }
