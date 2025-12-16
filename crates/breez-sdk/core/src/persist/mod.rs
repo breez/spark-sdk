@@ -18,6 +18,7 @@ const ACCOUNT_INFO_KEY: &str = "account_info";
 const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
 const LNURL_METADATA_UPDATED_AFTER_KEY: &str = "lnurl_metadata_updated_after";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
+const INITIAL_SYNC_KEY: &str = "initial_sync";
 const TX_CACHE_KEY: &str = "tx_cache";
 const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
 const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
@@ -240,6 +241,24 @@ impl ObjectCacheRepository {
         match value {
             Some(value) => Ok(Some(serde_json::from_str(&value)?)),
             None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn save_initial_sync(&self) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(INITIAL_SYNC_KEY.to_string(), "true".to_string())
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_initial_sync(&self) -> Result<bool, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(INITIAL_SYNC_KEY.to_string())
+            .await?;
+        match value {
+            Some(_) => Ok(true),
+            None => Ok(false),
         }
     }
 

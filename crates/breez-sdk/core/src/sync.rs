@@ -36,7 +36,9 @@ impl SparkSyncService {
         self.sync_bitcoin_payments_to_storage(&object_repository)
             .await?;
         self.sync_token_payments_to_storage(&object_repository)
-            .await
+            .await?;
+        object_repository.save_initial_sync().await?;
+        Ok(())
     }
 
     async fn sync_bitcoin_payments_to_storage(
@@ -156,6 +158,7 @@ impl SparkSyncService {
         object_repository: &ObjectCacheRepository,
     ) -> Result<(), SdkError> {
         info!("Syncing token payments to storage");
+        let initial_sync_done = object_repository.fetch_initial_sync().await?;
         // Get the last synced token payment id we processed from storage
         let cached_sync_info = object_repository
             .fetch_sync_info()
@@ -318,9 +321,11 @@ impl SparkSyncService {
             if let Err(e) = self.storage.insert_payment(payment.clone()).await {
                 error!("Failed to insert token payment: {e:?}");
             }
-            self.event_emitter
-                .emit(&SdkEvent::from_payment(payment.clone()))
-                .await;
+            if initial_sync_done {
+                self.event_emitter
+                    .emit(&SdkEvent::from_payment(payment.clone()))
+                    .await;
+            }
         }
 
         // We have synced all token transactions or found the last synced payment id.
