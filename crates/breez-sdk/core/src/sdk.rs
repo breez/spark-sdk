@@ -1119,7 +1119,8 @@ impl BreezSdk {
                         .transpose()?,
                     description,
                     sender_public_key.map(|key| PublicKey::from_str(&key).unwrap()),
-                )?;
+                )
+                .await?;
                 Ok(ReceivePaymentResponse {
                     fee: 0,
                     payment_request: invoice,

@@ -148,7 +148,7 @@ impl GraphQLClient {
         tracing::debug!("Authenticating with ssp");
 
         // Get the identity public key
-        let identity_public_key = hex::encode(self.signer.get_identity_public_key()?.serialize());
+        let identity_public_key = hex::encode(self.signer.get_identity_public_key().await?.serialize());
 
         // Get a challenge from the server
         let challenge_vars = get_challenge::Variables {
@@ -174,7 +174,7 @@ impl GraphQLClient {
         // Sign the challenge with the identity key
         let signature = self
             .signer
-            .sign_message_ecdsa_with_identity_key(&challenge_bytes)?
+            .sign_message_ecdsa_with_identity_key(&challenge_bytes).await?
             .serialize_der()
             .to_vec();
 

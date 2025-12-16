@@ -69,7 +69,7 @@ pub async fn prepare_leaf_refund_signing_data(
             leaf_key.node.id.clone(),
             LeafRefundSigningData {
                 signing_public_key: signer
-                    .get_public_key_from_private_key_source(&leaf_key.signing_key)?,
+                    .get_public_key_from_private_key_source(&leaf_key.signing_key).await?,
                 signing_private_key: leaf_key.signing_key.clone(),
                 receiving_public_key,
                 tx: leaf_key.node.node_tx.clone(),
@@ -101,7 +101,7 @@ pub async fn sign_refunds(
         payment_hash,
         network,
     } = params;
-    let identity_pubkey = signer.get_identity_public_key()?;
+    let identity_pubkey = signer.get_identity_public_key().await?;
 
     let mut cpfp_signed_refunds = Vec::with_capacity(leaves.len());
     let mut direct_signed_refunds = Vec::with_capacity(leaves.len());
@@ -161,7 +161,7 @@ pub async fn sign_refunds(
         );
 
         let signing_public_key =
-            signer.get_public_key_from_private_key_source(&leaf.signing_key)?;
+            signer.get_public_key_from_private_key_source(&leaf.signing_key).await?;
 
         let cpfp_signed_tx = sign_refund(
             signer,

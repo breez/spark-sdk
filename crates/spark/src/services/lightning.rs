@@ -235,7 +235,7 @@ impl LightningService {
     ) -> Result<LightningReceivePayment, ServiceError> {
         let identity_pubkey = match identity_pubkey {
             Some(pk) => pk,
-            None => self.signer.get_identity_public_key()?,
+            None => self.signer.get_identity_public_key().await?,
         };
         let preimage = preimage.unwrap_or_else(|| {
             bitcoin::secp256k1::SecretKey::new(&mut OsRng)
@@ -285,7 +285,7 @@ impl LightningService {
             &SecretToSplit::Preimage(preimage),
             self.split_secret_threshold,
             self.operator_pool.len(),
-        )?;
+        ).await?;
 
         let requests =
             self.operator_pool
@@ -344,7 +344,7 @@ impl LightningService {
         }
 
         // Prepare leaf tweaks
-        let leaf_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec(), None)?;
+        let leaf_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec(), None).await?;
 
         let transfer_request = self
             .transfer_service

@@ -232,7 +232,7 @@ impl TreeService for SynchronousTreeService {
                 continue;
             }
 
-            let our_node_pubkey = self.signer.get_public_key_for_node(&leaf.id)?;
+            let our_node_pubkey = self.signer.get_public_key_for_node(&leaf.id).await?;
             let other_node_pubkey = leaf.signing_keyshare.public_key;
             let verifying_pubkey = leaf.verifying_public_key;
 

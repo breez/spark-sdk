@@ -69,7 +69,7 @@ pub async fn handle_command(
                 sender_public_key
                     .map(|key| PublicKey::from_str(&key))
                     .transpose()?,
-            )?;
+            ).await?;
             println!("Invoice: {}", invoice);
         }
         InvoicesCommand::Fulfill { invoice, amount } => {

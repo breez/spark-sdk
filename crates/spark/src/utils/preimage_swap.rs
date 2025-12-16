@@ -122,7 +122,7 @@ pub(crate) async fn swap_nodes_for_preimage(
         }),
         transfer: Some(StartUserSignedTransferRequest {
             transfer_id: transfer_id.to_string(),
-            owner_identity_public_key: signer.get_identity_public_key()?.serialize().to_vec(),
+            owner_identity_public_key: signer.get_identity_public_key().await?.serialize().to_vec(),
             receiver_identity_public_key: receiver_pubkey.serialize().to_vec(),
             expiry_time: Some(
                 web_time_to_prost_timestamp(expiry_time)
