@@ -512,6 +512,7 @@ fn check_doc_snippets_react_native_cmd(skip_binding_gen: bool) -> Result<()> {
 
     // Run yarn install (yarn)
     let status = Command::new("yarn")
+        .env("EXPO_PUBLIC_SKIP_POSTINSTALL", "1")
         .current_dir(&doc_snippets_dir)
         .status()?;
     if !status.success() {
