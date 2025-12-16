@@ -23,7 +23,7 @@ pub struct Leaves {
     pub available_missing_from_operators: Vec<TreeNode>,
     /// Leaves reserved for payment operations - excluded from balance.
     pub reserved_for_payment: Vec<TreeNode>,
-    /// Leaves reserved for swap - included in balance.
+    /// Leaves reserved for swap - included in balance and not removed on refresh.
     pub reserved_for_swap: Vec<TreeNode>,
 }
 
@@ -206,7 +206,7 @@ pub struct SigningKeyshare {
 pub type LeavesReservationId = String;
 
 /// The purpose of a leaf reservation, which determines how the reserved
-/// leaves are treated in balance calculations.
+/// leaves are treated in balance calculations and whether they are removed on refresh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReservationPurpose {
     /// Leaves being used for a payment - excluded from balance since they
