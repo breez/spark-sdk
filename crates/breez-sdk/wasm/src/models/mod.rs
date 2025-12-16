@@ -1090,7 +1090,9 @@ pub struct FetchConvertTokenLimitsResponse {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareConvertTokenRequest)]
 pub struct PrepareConvertTokenRequest {
     pub convert_type: ConvertType,
-    pub amount: u128,
+    pub amount_in: Option<u128>,
+    pub min_amount_out: Option<u128>,
+    pub max_slippage_bps: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareConvertTokenResponse)]
@@ -1099,12 +1101,12 @@ pub struct PrepareConvertTokenResponse {
     pub send_amount: u128,
     pub estimated_receive_amount: u128,
     pub fee: u128,
+    pub max_slippage_bps: u32,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConvertTokenRequest)]
 pub struct ConvertTokenRequest {
     pub prepare_response: PrepareConvertTokenResponse,
-    pub max_slippage_bps: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConvertTokenResponse)]

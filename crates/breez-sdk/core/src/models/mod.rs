@@ -1173,9 +1173,20 @@ pub struct FetchConvertTokenLimitsResponse {
 pub struct PrepareConvertTokenRequest {
     /// The type of conversion, either from or to Bitcoin.
     pub convert_type: ConvertType,
-    /// Amount to transfer.
+    /// Amount to send in the conversion.
     /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
-    pub amount: u128,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub amount_in: Option<u128>,
+    /// Min amount to receive in the conversion.
+    /// Denominated in satoshis if converting to Bitcoin, otherwise in the token base units.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub min_amount_out: Option<u128>,
+    /// The optional maximum slippage in basis points (1/100 of a percent) allowed for the
+    /// conversion compared to the estimated amount. Defaults to 50 bps (0.5%) if not set.
+    /// The conversion will fail if the actual amount received is less than
+    /// `estimated_amount * (1 - max_slippage_bps / 10_000)`.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub max_slippage_bps: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1192,18 +1203,15 @@ pub struct PrepareConvertTokenResponse {
     /// The fee for the conversion.
     /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
     pub fee: u128,
+    /// The maximum slippage in basis points (1/100 of a percent) allowed for the
+    /// conversion compared to the estimated amount.
+    pub max_slippage_bps: u32,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConvertTokenRequest {
     /// The prepared convert token response
     pub prepare_response: PrepareConvertTokenResponse,
-    /// The optional maximum slippage in basis points (1/100 of a percent) allowed for the
-    /// conversion compared to the estimated amount. Defaults to 50 bps (0.5%) if not set.
-    /// The conversion will fail if the actual amount received is less than
-    /// `estimated_amount * (1 - max_slippage_bps / 10_000)`.
-    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub max_slippage_bps: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -236,8 +236,13 @@ pub enum Command {
         token_identifier: String,
     },
     ConvertToken {
-        /// The amount to convert
-        amount: u128,
+        /// The amount to send
+        #[clap(short = 'i', long)]
+        amount_in: Option<u128>,
+
+        /// The min amount to receive
+        #[clap(short = 'o', long)]
+        min_amount_out: Option<u128>,
 
         /// Whether we are converting from or to Bitcoin
         #[clap(short = 'f', long, action = clap::ArgAction::SetTrue)]
@@ -652,7 +657,8 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::ConvertToken {
-            amount,
+            amount_in,
+            min_amount_out,
             from_bitcoin,
             token_identifier,
             max_slippage_bps,
@@ -669,7 +675,9 @@ pub(crate) async fn execute_command(
             let prepare_response = sdk
                 .prepare_convert_token(PrepareConvertTokenRequest {
                     convert_type,
-                    amount,
+                    amount_in,
+                    min_amount_out,
+                    max_slippage_bps,
                 })
                 .await?;
             println!("Prepared conversion: {prepare_response:#?}\n Do you want to continue? (y/n)");
@@ -678,10 +686,7 @@ pub(crate) async fn execute_command(
                 return Ok(true);
             }
             let res = sdk
-                .convert_token(ConvertTokenRequest {
-                    prepare_response,
-                    max_slippage_bps,
-                })
+                .convert_token(ConvertTokenRequest { prepare_response })
                 .await?;
             print_value(&res)?;
             Ok(true)

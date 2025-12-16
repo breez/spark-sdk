@@ -999,7 +999,9 @@ pub struct _FetchConvertTokenLimitsResponse {
 #[frb(mirror(PrepareConvertTokenRequest))]
 pub struct _PrepareConvertTokenRequest {
     pub convert_type: ConvertType,
-    pub amount: u128,
+    pub amount_in: Option<u128>,
+    pub min_amount_out: Option<u128>,
+    pub max_slippage_bps: Option<u32>,
 }
 
 #[frb(mirror(PrepareConvertTokenResponse))]
@@ -1008,12 +1010,12 @@ pub struct _PrepareConvertTokenResponse {
     pub send_amount: u128,
     pub estimated_receive_amount: u128,
     pub fee: u128,
+    pub max_slippage_bps: u32,
 }
 
 #[frb(mirror(ConvertTokenRequest))]
 pub struct _ConvertTokenRequest {
     pub prepare_response: PrepareConvertTokenResponse,
-    pub max_slippage_bps: Option<u32>,
 }
 
 #[frb(mirror(ConvertTokenResponse))]

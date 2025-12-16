@@ -1719,9 +1719,15 @@ impl BreezSdk {
         request: PrepareConvertTokenRequest,
     ) -> Result<PrepareConvertTokenResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
-        let (asset_in_address, asset_out_address) = self
-            .validate_convert_token_params(request.amount, &request.convert_type)
-            .await?;
+        let (asset_in_address, asset_out_address) = match &request.convert_type {
+            ConvertType::FromBitcoin {
+                to_token_identifier,
+            } => (BTC_ASSET_ADDRESS.to_string(), to_token_identifier.clone()),
+            ConvertType::ToBitcoin {
+                from_token_identifier,
+            } => (from_token_identifier.clone(), BTC_ASSET_ADDRESS.to_string()),
+        };
+        let max_slippage_bps = request.max_slippage_bps.unwrap_or(50);
         let pools_response = self
             .flashnet_client
             .list_pools(ListPoolsRequest {
@@ -1735,22 +1741,43 @@ impl BreezSdk {
         let pool = pools_response.pools.first().ok_or(SdkError::Generic(
             "No pool found for the given token identifier".to_string(),
         ))?;
+        debug!("Using pool for conversion: {:?}", pool);
+        let amount_in = match (request.amount_in, request.min_amount_out) {
+            (Some(amount_in), None) => amount_in,
+            (None, Some(min_amount_out)) => pool.calculate_amount_in(
+                &asset_in_address,
+                min_amount_out,
+                max_slippage_bps,
+                self.config.network.into(),
+            )?,
+            _ => {
+                return Err(SdkError::InvalidInput(
+                    "Amount in or min amount out must be provided".to_string(),
+                ));
+            }
+        };
+
+        /*let (asset_in_address, asset_out_address) = self
+        .validate_convert_token_params(amount_in, &request.convert_type)
+        .await?;*/
         let response = self
             .flashnet_client
             .simulate_swap(SimulateSwapRequest {
                 asset_in_address: asset_in_address.clone(),
                 asset_out_address: asset_out_address.clone(),
                 pool_id: pool.lp_public_key,
-                amount_in: request.amount,
+                amount_in,
                 integrator_bps: None,
             })
             .await?;
+        debug!("Simulate swap response: {:?}", response);
 
         Ok(PrepareConvertTokenResponse {
             convert_type: request.convert_type,
-            send_amount: request.amount,
+            send_amount: amount_in,
             estimated_receive_amount: response.amount_out,
             fee: response.fee_paid_asset_in.unwrap_or_default(),
+            max_slippage_bps,
         })
     }
 
@@ -1794,7 +1821,7 @@ impl BreezSdk {
         ))?;
         let pool_id = pool.lp_public_key;
         // Calculate min amount out considering max slippage
-        let max_slippage_bps = request.max_slippage_bps.unwrap_or(50);
+        let max_slippage_bps = request.prepare_response.max_slippage_bps;
         let min_amount_out = request
             .prepare_response
             .estimated_receive_amount
