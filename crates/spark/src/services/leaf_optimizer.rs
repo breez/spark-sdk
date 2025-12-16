@@ -26,7 +26,7 @@ pub struct OptimizationOptions {
 impl Default for OptimizationOptions {
     fn default() -> Self {
         Self {
-            multiplicity: 2,
+            multiplicity: 1,
             max_leaves_per_swap: DEFAULT_MAX_LEAVES_PER_SWAP,
         }
     }

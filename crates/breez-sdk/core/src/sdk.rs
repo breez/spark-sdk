@@ -221,7 +221,7 @@ pub fn default_config(network: Network) -> Config {
         private_enabled_default: true,
         optimization_config: OptimizationConfig {
             auto_enabled: true,
-            multiplicity: 2,
+            multiplicity: 1,
         },
     }
 }

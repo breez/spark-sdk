@@ -450,7 +450,7 @@ pub struct OptimizationConfig {
     /// Higher values will optimize for minimizing transfer swaps, with higher values
     /// being more aggressive.
     ///
-    /// Default value is 2.
+    /// Default value is 1.
     pub multiplicity: u8,
 }
 
