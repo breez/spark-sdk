@@ -220,7 +220,10 @@ impl DepositService {
             &quote_signature.serialize_der(),
         );
         // Sign the payload with the identity key
-        let signature = self.signer.sign_message_ecdsa_with_identity_key(&payload).await?;
+        let signature = self
+            .signer
+            .sign_message_ecdsa_with_identity_key(&payload)
+            .await?;
 
         // TODO: Seems unavoidable to use the static deposit secret key here
         let deposit_secret_key = self
@@ -252,7 +255,11 @@ impl DepositService {
             .client
             .query_all_transfers(TransferFilter {
                 participant: Some(Participant::ReceiverIdentityPublicKey(
-                    self.signer.get_identity_public_key().await?.serialize().to_vec(),
+                    self.signer
+                        .get_identity_public_key()
+                        .await?
+                        .serialize()
+                        .to_vec(),
                 )),
                 transfer_ids: vec![resp.transfer_id],
                 network: self.network.to_proto_network() as i32,
@@ -334,7 +341,10 @@ impl DepositService {
             spend_tx_sighash.as_byte_array(),
         );
         // Sign the payload with the identity key
-        let signature = self.signer.sign_message_ecdsa_with_identity_key(&payload).await?;
+        let signature = self
+            .signer
+            .sign_message_ecdsa_with_identity_key(&payload)
+            .await?;
 
         // Create the UTXO swap request
         // Create the UTXO swap request
@@ -495,7 +505,8 @@ impl DepositService {
         let signing_private_key = PrivateKeySource::Derived(deposit_leaf_id.clone());
         let signing_public_key = self
             .signer
-            .get_public_key_from_private_key_source(&signing_private_key).await?;
+            .get_public_key_from_private_key_source(&signing_private_key)
+            .await?;
 
         let deposit_txid = deposit_tx.compute_txid();
         let deposit_tx_out = deposit_tx

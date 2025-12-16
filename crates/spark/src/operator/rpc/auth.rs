@@ -70,7 +70,8 @@ impl OperatorAuth {
 
         let signature = self
             .signer
-            .sign_message_ecdsa_with_identity_key(&challenge_bytes).await?;
+            .sign_message_ecdsa_with_identity_key(&challenge_bytes)
+            .await?;
 
         let verify_req = VerifyChallengeRequest {
             protected_challenge: Some(protected_challenge),

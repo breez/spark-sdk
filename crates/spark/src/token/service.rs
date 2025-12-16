@@ -42,7 +42,11 @@ impl TokenOutputService for SynchronousTokenOutputService {
             .client
             .query_token_outputs(QueryTokenOutputsRequest {
                 owner_public_keys: vec![
-                    self.signer.get_identity_public_key().await?.serialize().to_vec(),
+                    self.signer
+                        .get_identity_public_key()
+                        .await?
+                        .serialize()
+                        .to_vec(),
                 ],
                 network: self.network.to_proto_network().into(),
                 ..Default::default()

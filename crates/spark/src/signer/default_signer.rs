@@ -506,7 +506,8 @@ impl Signer for DefaultSigner {
             .add_tweak(&new_signing_key.negate().into())
             .map_err(|e| SignerError::Generic(format!("failed to add tweak: {e}")))?;
 
-        let ciphertext = self.encrypt_private_key_ecies(&res, &self.get_identity_public_key().await?)?;
+        let ciphertext =
+            self.encrypt_private_key_ecies(&res, &self.get_identity_public_key().await?)?;
 
         Ok(PrivateKeySource::new_encrypted(ciphertext))
     }

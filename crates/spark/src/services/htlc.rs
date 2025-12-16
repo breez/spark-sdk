@@ -137,7 +137,12 @@ impl HtlcService {
             .provide_preimage(ProvidePreimageRequest {
                 payment_hash: payment_hash.to_byte_array().to_vec(),
                 preimage: preimage.to_vec(),
-                identity_public_key: self.signer.get_identity_public_key().await?.serialize().to_vec(),
+                identity_public_key: self
+                    .signer
+                    .get_identity_public_key()
+                    .await?
+                    .serialize()
+                    .to_vec(),
             })
             .await?;
 

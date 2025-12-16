@@ -180,7 +180,11 @@ impl TransferService {
                     transfer_ids: vec![transfer_id.to_string()],
                     network: self.network.to_proto_network() as i32,
                     participant: Some(Participant::SenderIdentityPublicKey(
-                        self.signer.get_identity_public_key().await?.serialize().to_vec(),
+                        self.signer
+                            .get_identity_public_key()
+                            .await?
+                            .serialize()
+                            .to_vec(),
                     )),
                     ..Default::default()
                 })
@@ -224,7 +228,12 @@ impl TransferService {
         // Make request to start transfer
         let start_transfer_request = operator_rpc::spark::StartTransferRequest {
             transfer_id: transfer_id.to_string(),
-            owner_identity_public_key: self.signer.get_identity_public_key().await?.serialize().to_vec(),
+            owner_identity_public_key: self
+                .signer
+                .get_identity_public_key()
+                .await?
+                .serialize()
+                .to_vec(),
             receiver_identity_public_key: receiver_id.serialize().to_vec(),
             transfer_package: Some(transfer_package),
             spark_invoice: spark_invoice.unwrap_or_default(),
@@ -307,14 +316,18 @@ impl TransferService {
         // Calculate the key tweak by subtracting keys
         let privkey_tweak = self
             .signer
-            .subtract_private_keys(&leaf.signing_key, &leaf.new_signing_key).await?;
+            .subtract_private_keys(&leaf.signing_key, &leaf.new_signing_key)
+            .await?;
 
         // Split the secret into threshold shares with proofs
-        let shares = self.signer.split_secret_with_proofs(
-            &SecretToSplit::PrivateKey(privkey_tweak),
-            self.split_secret_threshold,
-            self.operator_pool.len(),
-        ).await?;
+        let shares = self
+            .signer
+            .split_secret_with_proofs(
+                &SecretToSplit::PrivateKey(privkey_tweak),
+                self.split_secret_threshold,
+                self.operator_pool.len(),
+            )
+            .await?;
 
         trace!(
             "prepare transfer: Split secret into {} shares",
@@ -346,9 +359,11 @@ impl TransferService {
                     "Trying to share derived private key".to_string(),
                 ));
             }
-            PrivateKeySource::Encrypted(private_key) => self
-                .signer
-                .encrypt_private_key_for_receiver(private_key, receiver_public_key).await?,
+            PrivateKeySource::Encrypted(private_key) => {
+                self.signer
+                    .encrypt_private_key_for_receiver(private_key, receiver_public_key)
+                    .await?
+            }
         };
 
         // Create the signing payload: leaf_id || transfer_id || secret_cipher
@@ -358,7 +373,10 @@ impl TransferService {
         payload.extend_from_slice(&secret_cipher);
 
         // Sign the hash with identity key
-        let signature = self.signer.sign_message_ecdsa_with_identity_key(&payload).await?;
+        let signature = self
+            .signer
+            .sign_message_ecdsa_with_identity_key(&payload)
+            .await?;
 
         trace!(
             "Prepared leaf key tweak for transfer: leaf_id={}, transfer_id={}, signature={}",
@@ -482,8 +500,9 @@ impl TransferService {
             user_signature: Vec::new(),
         };
 
-        let signed_transfer_package =
-            self.sign_transfer_package(transfer_id, unsigned_transfer_package).await?;
+        let signed_transfer_package = self
+            .sign_transfer_package(transfer_id, unsigned_transfer_package)
+            .await?;
 
         Ok(signed_transfer_package)
     }
@@ -518,7 +537,12 @@ impl TransferService {
 
         Ok(StartTransferRequest {
             transfer_id: transfer_id.to_string(),
-            owner_identity_public_key: self.signer.get_identity_public_key().await?.serialize().to_vec(),
+            owner_identity_public_key: self
+                .signer
+                .get_identity_public_key()
+                .await?
+                .serialize()
+                .to_vec(),
             receiver_identity_public_key: receiver_public_key.serialize().to_vec(),
             expiry_time: expiry_time
                 .map(|t| web_time_to_prost_timestamp(&t))
@@ -808,7 +832,12 @@ impl TransferService {
                 continue;
             };
 
-            let identity_public_key = self.signer.get_identity_public_key().await?.serialize().to_vec();
+            let identity_public_key = self
+                .signer
+                .get_identity_public_key()
+                .await?
+                .serialize()
+                .to_vec();
             let leaves_to_receive = leaves_to_receive.clone();
 
             let task = async move {
@@ -850,7 +879,11 @@ impl TransferService {
                         transfer_ids: vec![transfer.id.to_string()],
                         network: self.network.to_proto_network() as i32,
                         participant: Some(Participant::ReceiverIdentityPublicKey(
-                            self.signer.get_identity_public_key().await?.serialize().to_vec(),
+                            self.signer
+                                .get_identity_public_key()
+                                .await?
+                                .serialize()
+                                .to_vec(),
                         )),
                         ..Default::default()
                     })
@@ -930,14 +963,18 @@ impl TransferService {
         // Calculate the public key tweak by subtracting private keys given public keys
         let privkey_tweak = self
             .signer
-            .subtract_private_keys(&leaf.signing_key, &leaf.new_signing_key).await?;
+            .subtract_private_keys(&leaf.signing_key, &leaf.new_signing_key)
+            .await?;
 
         // Split the secret into threshold shares with proofs
-        let shares = self.signer.split_secret_with_proofs(
-            &SecretToSplit::PrivateKey(privkey_tweak),
-            self.split_secret_threshold,
-            self.operator_pool.len(),
-        ).await?;
+        let shares = self
+            .signer
+            .split_secret_with_proofs(
+                &SecretToSplit::PrivateKey(privkey_tweak),
+                self.split_secret_threshold,
+                self.operator_pool.len(),
+            )
+            .await?;
 
         trace!("prepare claim: Split secret into {} shares", shares.len());
 
@@ -1013,10 +1050,12 @@ impl TransferService {
                     signing_private_key: leaf_key.new_signing_key.clone(),
                     signing_public_key: self
                         .signer
-                        .get_public_key_from_private_key_source(&leaf_key.new_signing_key).await?,
+                        .get_public_key_from_private_key_source(&leaf_key.new_signing_key)
+                        .await?,
                     receiving_public_key: self
                         .signer
-                        .get_public_key_from_private_key_source(&leaf_key.new_signing_key).await?,
+                        .get_public_key_from_private_key_source(&leaf_key.new_signing_key)
+                        .await?,
                     tx: leaf_key.node.node_tx.clone(),
                     direct_tx: leaf_key.node.direct_tx.clone(),
                     refund_tx: None,
@@ -1043,7 +1082,8 @@ impl TransferService {
                 transfer_id: transfer.id.to_string(),
                 owner_identity_public_key: self
                     .signer
-                    .get_identity_public_key().await?
+                    .get_identity_public_key()
+                    .await?
                     .serialize()
                     .to_vec(),
                 signing_jobs,
@@ -1161,7 +1201,11 @@ impl TransferService {
             .query_all_transfers(TransferFilter {
                 order: order.into(),
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
-                    self.signer.get_identity_public_key().await?.serialize().to_vec(),
+                    self.signer
+                        .get_identity_public_key()
+                        .await?
+                        .serialize()
+                        .to_vec(),
                 )),
                 network: self.network.to_proto_network() as i32,
                 limit: paging.limit as i64,
@@ -1212,7 +1256,11 @@ impl TransferService {
             .client
             .query_pending_transfers(operator_rpc::spark::TransferFilter {
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
-                    self.signer.get_identity_public_key().await?.serialize().to_vec(),
+                    self.signer
+                        .get_identity_public_key()
+                        .await?
+                        .serialize()
+                        .to_vec(),
                 )),
                 offset: paging.offset as i64,
                 limit: paging.limit as i64,
@@ -1264,7 +1312,11 @@ impl TransferService {
             .query_pending_transfers(operator_rpc::spark::TransferFilter {
                 network: self.network.to_proto_network() as i32,
                 participant: Some(Participant::ReceiverIdentityPublicKey(
-                    self.signer.get_identity_public_key().await?.serialize().to_vec(),
+                    self.signer
+                        .get_identity_public_key()
+                        .await?
+                        .serialize()
+                        .to_vec(),
                 )),
                 offset: paging.offset as i64,
                 limit: paging.limit as i64,
@@ -1314,7 +1366,11 @@ impl TransferService {
             .client
             .query_all_transfers(TransferFilter {
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
-                    self.signer.get_identity_public_key().await?.serialize().to_vec(),
+                    self.signer
+                        .get_identity_public_key()
+                        .await?
+                        .serialize()
+                        .to_vec(),
                 )),
                 transfer_ids: vec![transfer_id.to_string()],
                 network: self.network.to_proto_network() as i32,

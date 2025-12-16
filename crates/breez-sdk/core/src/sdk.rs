@@ -1107,20 +1107,22 @@ impl BreezSdk {
                 description,
                 sender_public_key,
             } => {
-                let invoice = self.spark_wallet.create_spark_invoice(
-                    amount,
-                    token_identifier.clone(),
-                    expiry_time
-                        .map(|time| {
-                            SystemTime::UNIX_EPOCH
-                                .checked_add(Duration::from_secs(time))
-                                .ok_or(SdkError::Generic("Invalid expiry time".to_string()))
-                        })
-                        .transpose()?,
-                    description,
-                    sender_public_key.map(|key| PublicKey::from_str(&key).unwrap()),
-                )
-                .await?;
+                let invoice = self
+                    .spark_wallet
+                    .create_spark_invoice(
+                        amount,
+                        token_identifier.clone(),
+                        expiry_time
+                            .map(|time| {
+                                SystemTime::UNIX_EPOCH
+                                    .checked_add(Duration::from_secs(time))
+                                    .ok_or(SdkError::Generic("Invalid expiry time".to_string()))
+                            })
+                            .transpose()?,
+                        description,
+                        sender_public_key.map(|key| PublicKey::from_str(&key).unwrap()),
+                    )
+                    .await?;
                 Ok(ReceivePaymentResponse {
                     fee: 0,
                     payment_request: invoice,

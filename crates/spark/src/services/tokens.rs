@@ -188,7 +188,13 @@ impl TokenService {
                 .iter()
                 .map(|k| k.serialize().to_vec())
                 .collect::<Vec<_>>(),
-            None => vec![self.signer.get_identity_public_key().await?.serialize().to_vec()],
+            None => vec![
+                self.signer
+                    .get_identity_public_key()
+                    .await?
+                    .serialize()
+                    .to_vec(),
+            ],
         };
 
         // TODO: ask for ordering field to be added to QueryTokenTransactionsRequest
@@ -285,8 +291,9 @@ impl TokenService {
 
         validate_create_token_params(name, ticker, decimals)?;
 
-        let partial_tx =
-            self.build_create_token_transaction(name, ticker, decimals, is_freezable, max_supply).await?;
+        let partial_tx = self
+            .build_create_token_transaction(name, ticker, decimals, is_freezable, max_supply)
+            .await?;
         let final_tx = self.start_transaction(partial_tx).await?;
 
         self.commit_transaction(final_tx.clone()).await?;
@@ -297,8 +304,9 @@ impl TokenService {
     pub async fn mint_issuer_token(&self, amount: u128) -> Result<TokenTransaction, ServiceError> {
         let issuer_token_metadata = self.get_issuer_token_metadata().await?;
 
-        let partial_tx =
-            self.build_mint_token_transaction(&issuer_token_metadata.identifier, amount).await?;
+        let partial_tx = self
+            .build_mint_token_transaction(&issuer_token_metadata.identifier, amount)
+            .await?;
         let final_tx = self.start_transaction(partial_tx).await?;
 
         self.commit_transaction(final_tx.clone()).await?;
@@ -360,7 +368,8 @@ impl TokenService {
             let payload_hash = hash_freeze_tokens_payload(&freeze_tokens_payload)?;
             let issuer_signature = self
                 .signer
-                .sign_hash_schnorr_with_identity_key(&payload_hash).await?
+                .sign_hash_schnorr_with_identity_key(&payload_hash)
+                .await?
                 .serialize()
                 .to_vec();
 
@@ -501,7 +510,12 @@ impl TokenService {
     ) -> Result<rpc::spark_token::TokenTransaction, ServiceError> {
         let token_inputs = rpc::spark_token::token_transaction::TokenInputs::CreateInput(
             rpc::spark_token::TokenCreateInput {
-                issuer_public_key: self.signer.get_identity_public_key().await?.serialize().to_vec(),
+                issuer_public_key: self
+                    .signer
+                    .get_identity_public_key()
+                    .await?
+                    .serialize()
+                    .to_vec(),
                 token_name: name.to_string(),
                 token_ticker: ticker.to_string(),
                 decimals,
@@ -519,7 +533,12 @@ impl TokenService {
         token_id: &str,
         amount: u128,
     ) -> Result<rpc::spark_token::TokenTransaction, ServiceError> {
-        let identity_public_key = self.signer.get_identity_public_key().await?.serialize().to_vec();
+        let identity_public_key = self
+            .signer
+            .get_identity_public_key()
+            .await?
+            .serialize()
+            .to_vec();
         let token_identifier = bech32m_decode_token_id(token_id, Some(self.network))
             .map_err(|_| ServiceError::Generic("Invalid token id".to_string()))?;
 
@@ -651,7 +670,8 @@ impl TokenService {
         let mut owner_signatures: Vec<SignatureWithIndex> = Vec::new();
         let signature = self
             .signer
-            .sign_hash_schnorr_with_identity_key(&partial_tx_hash).await?
+            .sign_hash_schnorr_with_identity_key(&partial_tx_hash)
+            .await?
             .serialize()
             .to_vec();
         match partial_tx.token_inputs.as_ref() {
@@ -685,7 +705,12 @@ impl TokenService {
             .get_coordinator()
             .client
             .start_transaction(StartTransactionRequest {
-                identity_public_key: self.signer.get_identity_public_key().await?.serialize().to_vec(),
+                identity_public_key: self
+                    .signer
+                    .get_identity_public_key()
+                    .await?
+                    .serialize()
+                    .to_vec(),
                 partial_token_transaction: Some(partial_tx.clone()),
                 partial_token_transaction_owner_signatures: owner_signatures,
                 validity_duration_seconds: self.tokens_config.transaction_validity_duration_seconds,
@@ -714,8 +739,9 @@ impl TokenService {
     ) -> Result<(), ServiceError> {
         let final_tx_hash = final_tx.compute_hash(false)?;
 
-        let per_operator_signatures =
-            self.create_per_operator_signatures(&final_tx, &final_tx_hash).await?;
+        let per_operator_signatures = self
+            .create_per_operator_signatures(&final_tx, &final_tx_hash)
+            .await?;
 
         self.operator_pool
             .get_coordinator()
@@ -726,7 +752,8 @@ impl TokenService {
                 input_ttxo_signatures_per_operator: per_operator_signatures,
                 owner_identity_public_key: self
                     .signer
-                    .get_identity_public_key().await?
+                    .get_identity_public_key()
+                    .await?
                     .serialize()
                     .to_vec(),
             })
@@ -941,7 +968,8 @@ impl TokenService {
             let mut signatures = Vec::new();
             let signature = self
                 .signer
-                .sign_hash_schnorr_with_identity_key(&final_hash).await?
+                .sign_hash_schnorr_with_identity_key(&final_hash)
+                .await?
                 .serialize()
                 .to_vec();
 

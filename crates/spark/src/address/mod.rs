@@ -891,8 +891,7 @@ mod tests {
             expiry_time: Some(SystemTime::now()),
             payment_type: Some(SparkAddressPaymentType::TokensPayment(TokensPayment {
                 token_identifier: Some(
-                    "btknrt15xy2yxnpacs2yl00fnajxylsljq9y0uesr6qylyxq2lxnum8r63qfues7q"
-                        .to_string(),
+                    "btknrt15xy2yxnpacs2yl00fnajxylsljq9y0uesr6qylyxq2lxnum8r63qfues7q".to_string(),
                 ),
                 amount: Some(100),
             })),
@@ -900,7 +899,10 @@ mod tests {
         };
         let address_with_intent =
             SparkAddress::new(public_key, Network::Mainnet, Some(invoice_fields));
-        let string_with_intent = address_with_intent.to_invoice_string(&signer).await.unwrap();
+        let string_with_intent = address_with_intent
+            .to_invoice_string(&signer)
+            .await
+            .unwrap();
 
         // The strings should be different due to the payment intent data
         assert_ne!(string_without_intent, string_with_intent);

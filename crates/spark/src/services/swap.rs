@@ -120,7 +120,8 @@ impl Swap {
                 transfer_id: transfer_id.to_string(),
                 owner_identity_public_key: self
                     .signer
-                    .get_identity_public_key().await?
+                    .get_identity_public_key()
+                    .await?
                     .serialize()
                     .to_vec(),
                 receiver_identity_public_key: receiver_public_key.serialize().to_vec(),
@@ -302,7 +303,11 @@ impl Swap {
             .client
             .query_all_transfers(TransferFilter {
                 participant: Some(Participant::ReceiverIdentityPublicKey(
-                    self.signer.get_identity_public_key().await?.serialize().to_vec(),
+                    self.signer
+                        .get_identity_public_key()
+                        .await?
+                        .serialize()
+                        .to_vec(),
                 )),
                 transfer_ids: vec![transfer_id],
                 network: self.network.to_proto_network() as i32,

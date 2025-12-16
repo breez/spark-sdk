@@ -281,11 +281,14 @@ impl LightningService {
             }
         }
 
-        let shares = self.signer.split_secret_with_proofs(
-            &SecretToSplit::Preimage(preimage),
-            self.split_secret_threshold,
-            self.operator_pool.len(),
-        ).await?;
+        let shares = self
+            .signer
+            .split_secret_with_proofs(
+                &SecretToSplit::Preimage(preimage),
+                self.split_secret_threshold,
+                self.operator_pool.len(),
+            )
+            .await?;
 
         let requests =
             self.operator_pool
@@ -344,7 +347,8 @@ impl LightningService {
         }
 
         // Prepare leaf tweaks
-        let leaf_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec(), None).await?;
+        let leaf_tweaks =
+            prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec(), None).await?;
 
         let transfer_request = self
             .transfer_service
