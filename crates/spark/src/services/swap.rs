@@ -297,7 +297,12 @@ impl Swap {
             .ok_or(ServiceError::Generic(
                 "inbound transfer spark_id missing".to_string(),
             ))?;
-        let identity_public_key = self.signer.get_identity_public_key().await?.serialize().to_vec();
+        let identity_public_key = self
+            .signer
+            .get_identity_public_key()
+            .await?
+            .serialize()
+            .to_vec();
         let transfers = self
             .operator_pool
             .get_coordinator()
