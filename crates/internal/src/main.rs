@@ -137,8 +137,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut vec = shellwords::split(&line)?;
                 vec.insert(0, "".to_string());
                 let command_res = Command::try_parse_from(vec);
-                if command_res.is_err() {
-                    eprintln!("{}", command_res.unwrap_err());
+                if let Err(e) = command_res {
+                    eprintln!("Error: {e}");
                     continue;
                 }
                 if let Err(e) =
