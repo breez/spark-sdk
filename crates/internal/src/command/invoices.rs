@@ -61,15 +61,17 @@ pub async fn handle_command(
             description,
             sender_public_key,
         } => {
-            let invoice = wallet.create_spark_invoice(
-                amount,
-                token_identifier,
-                expiry_secs.map(|secs| SystemTime::now() + Duration::from_secs(secs)),
-                description,
-                sender_public_key
-                    .map(|key| PublicKey::from_str(&key))
-                    .transpose()?,
-            )?;
+            let invoice = wallet
+                .create_spark_invoice(
+                    amount,
+                    token_identifier,
+                    expiry_secs.map(|secs| SystemTime::now() + Duration::from_secs(secs)),
+                    description,
+                    sender_public_key
+                        .map(|key| PublicKey::from_str(&key))
+                        .transpose()?,
+                )
+                .await?;
             println!("Invoice: {}", invoice);
         }
         InvoicesCommand::Fulfill { invoice, amount } => {

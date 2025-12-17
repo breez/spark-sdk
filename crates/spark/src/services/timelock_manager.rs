@@ -166,7 +166,8 @@ impl TimelockManager {
         let signing_key = PrivateKeySource::Derived(node.id.clone());
         let signing_public_key = self
             .signer
-            .get_public_key_from_private_key_source(&signing_key)?;
+            .get_public_key_from_private_key_source(&signing_key)
+            .await?;
 
         let parent_node_tx = &parent_node.node_tx;
 
@@ -360,7 +361,8 @@ impl TimelockManager {
         let signing_key = PrivateKeySource::Derived(node.id.clone());
         let signing_public_key = self
             .signer
-            .get_public_key_from_private_key_source(&signing_key)?;
+            .get_public_key_from_private_key_source(&signing_key)
+            .await?;
 
         let parent_node_tx = &parent_node.node_tx;
         let node_tx = &node.node_tx;
@@ -517,7 +519,8 @@ impl TimelockManager {
         let signing_key = PrivateKeySource::Derived(node.id.clone());
         let signing_public_key = self
             .signer
-            .get_public_key_from_private_key_source(&signing_key)?;
+            .get_public_key_from_private_key_source(&signing_key)
+            .await?;
 
         let node_tx = &node.node_tx;
 

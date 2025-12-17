@@ -385,7 +385,7 @@ impl DefaultSigner {
 
 #[async_trait::async_trait]
 impl Signer for DefaultSigner {
-    fn sign_message_ecdsa_with_identity_key(
+    async fn sign_message_ecdsa_with_identity_key(
         &self,
         message: &[u8],
     ) -> Result<Signature, SignerError> {
@@ -397,7 +397,7 @@ impl Signer for DefaultSigner {
         Ok(sig)
     }
 
-    fn sign_hash_schnorr_with_identity_key(
+    async fn sign_hash_schnorr_with_identity_key(
         &self,
         hash: &[u8],
     ) -> Result<schnorr::Signature, SignerError> {
@@ -418,10 +418,10 @@ impl Signer for DefaultSigner {
     async fn generate_frost_signing_commitments(
         &self,
     ) -> Result<FrostSigningCommitmentsWithNonces, SignerError> {
-        let mut rng = thread_rng();
-
-        let binding_sk = SecretKey::new(&mut rng);
-        let hiding_sk = SecretKey::new(&mut rng);
+        let (binding_sk, hiding_sk) = {
+            let mut rng = thread_rng();
+            (SecretKey::new(&mut rng), SecretKey::new(&mut rng))
+        };
         let binding = Nonce::deserialize(&binding_sk.secret_bytes())
             .map_err(|e| SignerError::NonceCreationError(e.to_string()))?;
         let hiding = Nonce::deserialize(&hiding_sk.secret_bytes())
@@ -429,7 +429,7 @@ impl Signer for DefaultSigner {
 
         let nonces = SigningNonces::from_nonces(hiding, binding);
         let nonces_ciphertext =
-            self.encrypt_nonces_ecies(&nonces, &self.get_identity_public_key()?)?;
+            self.encrypt_nonces_ecies(&nonces, &self.get_identity_public_key().await?)?;
         let commitments = *nonces.commitments();
 
         Ok(FrostSigningCommitmentsWithNonces {
@@ -438,35 +438,35 @@ impl Signer for DefaultSigner {
         })
     }
 
-    fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError> {
+    async fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError> {
         let signing_key = self.derive_signing_key(id)?;
         let public_key = signing_key.public_key(&self.secp);
         Ok(public_key)
     }
 
-    fn generate_random_key(&self) -> Result<PrivateKeySource, SignerError> {
+    async fn generate_random_key(&self) -> Result<PrivateKeySource, SignerError> {
         let (secret_key, _) = self.secp.generate_keypair(&mut thread_rng());
         Ok(PrivateKeySource::new_encrypted(
-            self.encrypt_private_key_ecies(&secret_key, &self.get_identity_public_key()?)?,
+            self.encrypt_private_key_ecies(&secret_key, &self.get_identity_public_key().await?)?,
         ))
     }
 
-    fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
+    async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
         Ok(self.key_set.identity_key_pair.public_key())
     }
 
-    fn get_static_deposit_private_key_source(
+    async fn get_static_deposit_private_key_source(
         &self,
         index: u32,
     ) -> Result<PrivateKeySource, SignerError> {
-        let secret_key = self.get_static_deposit_private_key(index)?;
+        let secret_key = self.get_static_deposit_private_key(index).await?;
         Ok(PrivateKeySource::new_encrypted(
-            self.encrypt_private_key_ecies(&secret_key, &self.get_identity_public_key()?)?,
+            self.encrypt_private_key_ecies(&secret_key, &self.get_identity_public_key().await?)?,
         ))
     }
 
     // Seems unavoidable to expose the static deposit secret key, as its used for claiming static deposits
-    fn get_static_deposit_private_key(&self, index: u32) -> Result<SecretKey, SignerError> {
+    async fn get_static_deposit_private_key(&self, index: u32) -> Result<SecretKey, SignerError> {
         let child_number = ChildNumber::from_hardened_idx(index).map_err(|e| {
             SignerError::Generic(format!("failed to create child from {index}: {e}"))
         })?;
@@ -480,14 +480,15 @@ impl Signer for DefaultSigner {
         Ok(private_key)
     }
 
-    fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError> {
+    async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError> {
         let public_key = self
-            .get_static_deposit_private_key(index)?
+            .get_static_deposit_private_key(index)
+            .await?
             .public_key(&self.secp);
         Ok(public_key)
     }
 
-    fn subtract_private_keys(
+    async fn subtract_private_keys(
         &self,
         signing_key: &PrivateKeySource,
         new_signing_key: &PrivateKeySource,
@@ -505,12 +506,13 @@ impl Signer for DefaultSigner {
             .add_tweak(&new_signing_key.negate().into())
             .map_err(|e| SignerError::Generic(format!("failed to add tweak: {e}")))?;
 
-        let ciphertext = self.encrypt_private_key_ecies(&res, &self.get_identity_public_key()?)?;
+        let ciphertext =
+            self.encrypt_private_key_ecies(&res, &self.get_identity_public_key().await?)?;
 
         Ok(PrivateKeySource::new_encrypted(ciphertext))
     }
 
-    fn encrypt_private_key_for_receiver(
+    async fn encrypt_private_key_for_receiver(
         &self,
         private_key: &EncryptedPrivateKey,
         receiver_public_key: &PublicKey,
@@ -520,7 +522,7 @@ impl Signer for DefaultSigner {
         self.encrypt_private_key_ecies(&private_key, receiver_public_key)
     }
 
-    fn get_public_key_from_private_key_source(
+    async fn get_public_key_from_private_key_source(
         &self,
         private_key: &PrivateKeySource,
     ) -> Result<PublicKey, SignerError> {
@@ -528,7 +530,7 @@ impl Signer for DefaultSigner {
         Ok(private_key.public_key(&self.secp))
     }
 
-    fn split_secret_with_proofs(
+    async fn split_secret_with_proofs(
         &self,
         secret: &SecretToSplit,
         threshold: u32,
@@ -754,7 +756,7 @@ impl PrivateKeySource {
 pub(crate) mod tests {
     use bitcoin::secp256k1::rand::thread_rng;
     use bitcoin::secp256k1::{self, PublicKey, Secp256k1, SecretKey};
-    use macros::{async_test_all, test_all};
+    use macros::async_test_all;
     use std::str::FromStr;
 
     use crate::signer::{EncryptedPrivateKey, PrivateKeySource, Signer, SignerError};
@@ -770,28 +772,30 @@ pub(crate) mod tests {
         DefaultSigner::new(&test_seed, Network::Regtest).expect("Failed to create test signer")
     }
 
-    #[test_all]
-    fn test_sign_verify_signature_ecdsa_round_trip() {
+    #[async_test_all]
+    async fn test_sign_verify_signature_ecdsa_round_trip() {
         let signer = create_test_signer();
         let message = "test message";
         let signature = signer
             .sign_message_ecdsa_with_identity_key(message.as_bytes())
+            .await
             .expect("Failed to sign message");
 
         verify_signature_ecdsa(
             &signer.secp,
             message,
             &signature,
-            &signer.get_identity_public_key().unwrap(),
+            &signer.get_identity_public_key().await.unwrap(),
         )
         .expect("Failed to verify signature");
     }
 
-    #[test_all]
-    fn test_verify_signature_ecdsa_invalid_signature() {
+    #[async_test_all]
+    async fn test_verify_signature_ecdsa_invalid_signature() {
         let signer = create_test_signer();
         let signature = signer
             .sign_message_ecdsa_with_identity_key("signed message".as_bytes())
+            .await
             .expect("Failed to sign message");
 
         // Wrong message
@@ -799,7 +803,7 @@ pub(crate) mod tests {
             &signer.secp,
             "another message",
             &signature,
-            &signer.get_identity_public_key().unwrap(),
+            &signer.get_identity_public_key().await.unwrap(),
         );
         assert!(result.is_err());
         assert!(matches!(result, Err(secp256k1::Error::IncorrectSignature)));
@@ -815,8 +819,8 @@ pub(crate) mod tests {
         assert!(matches!(result, Err(secp256k1::Error::IncorrectSignature)));
     }
 
-    #[test_all]
-    fn test_encrypt_decrypt_private_key_ecies_round_trip() {
+    #[async_test_all]
+    async fn test_encrypt_decrypt_private_key_ecies_round_trip() {
         let signer = create_test_signer();
         let secp = Secp256k1::new();
         let mut rng = thread_rng();
@@ -827,6 +831,7 @@ pub(crate) mod tests {
         // Get the signer's identity public key (receiver)
         let receiver_public_key = signer
             .get_identity_public_key()
+            .await
             .expect("Failed to get identity public key");
 
         // Encrypt the private key
@@ -854,8 +859,8 @@ pub(crate) mod tests {
         assert_eq!(original_public_key, decrypted_public_key);
     }
 
-    #[test_all]
-    fn test_subtract_private_keys_success() {
+    #[async_test_all]
+    async fn test_subtract_private_keys_success() {
         let signer = create_test_signer();
         let mut rng = thread_rng();
 
@@ -866,6 +871,7 @@ pub(crate) mod tests {
         // Encrypt both keys using the signer's identity public key
         let identity_public_key = signer
             .get_identity_public_key()
+            .await
             .expect("Failed to get identity public key");
 
         let encrypted_a = signer
@@ -881,6 +887,7 @@ pub(crate) mod tests {
         // Perform subtraction: A - B = C
         let result = signer
             .subtract_private_keys(&source_a, &source_b)
+            .await
             .expect("Failed to subtract private keys");
 
         // Verify result is encrypted
@@ -897,8 +904,8 @@ pub(crate) mod tests {
         assert_eq!(key_a.secret_bytes(), reconstructed_a.secret_bytes());
     }
 
-    #[test_all]
-    fn test_subtract_private_keys_same_key_error() {
+    #[async_test_all]
+    async fn test_subtract_private_keys_same_key_error() {
         let signer = create_test_signer();
         let mut rng = thread_rng();
 
@@ -908,6 +915,7 @@ pub(crate) mod tests {
         // Encrypt the key using the signer's identity public key
         let identity_public_key = signer
             .get_identity_public_key()
+            .await
             .expect("Failed to get identity public key");
 
         let encrypted_key = signer
@@ -917,7 +925,7 @@ pub(crate) mod tests {
         let source = PrivateKeySource::new_encrypted(encrypted_key);
 
         // Try to subtract the same key from itself
-        let result = signer.subtract_private_keys(&source, &source);
+        let result = signer.subtract_private_keys(&source, &source).await;
 
         // Should return an error
         assert!(result.is_err());
@@ -928,8 +936,8 @@ pub(crate) mod tests {
         }
     }
 
-    #[test_all]
-    fn test_encrypt_private_key_for_receiver_success() {
+    #[async_test_all]
+    async fn test_encrypt_private_key_for_receiver_success() {
         let signer = create_test_signer();
         let mut rng = thread_rng();
 
@@ -937,6 +945,7 @@ pub(crate) mod tests {
         let private_key = SecretKey::new(&mut rng);
         let identity_public_key = signer
             .get_identity_public_key()
+            .await
             .expect("Failed to get identity public key");
 
         let encrypted_private_key = signer
@@ -953,6 +962,7 @@ pub(crate) mod tests {
                 &EncryptedPrivateKey::new(encrypted_private_key),
                 &receiver_public_key,
             )
+            .await
             .expect("Failed to encrypt for receiver");
 
         // Verify result is not empty
@@ -967,8 +977,8 @@ pub(crate) mod tests {
         assert_eq!(private_key.secret_bytes(), decrypted_key.secret_bytes());
     }
 
-    #[test_all]
-    fn test_get_public_key_from_private_key_source() {
+    #[async_test_all]
+    async fn test_get_public_key_from_private_key_source() {
         let signer = create_test_signer();
         let secp = Secp256k1::new();
         let mut rng = thread_rng();
@@ -979,6 +989,7 @@ pub(crate) mod tests {
 
         let identity_public_key = signer
             .get_identity_public_key()
+            .await
             .expect("Failed to get identity public key");
 
         let encrypted_private_key = signer
@@ -989,6 +1000,7 @@ pub(crate) mod tests {
 
         let result_public_key = signer
             .get_public_key_from_private_key_source(&encrypted_source)
+            .await
             .expect("Failed to get public key from encrypted source");
 
         assert_eq!(expected_public_key, result_public_key);
@@ -999,11 +1011,13 @@ pub(crate) mod tests {
 
         let result_public_key = signer
             .get_public_key_from_private_key_source(&derived_source)
+            .await
             .expect("Failed to get public key from derived source");
 
         // Verify it matches what get_public_key_for_node returns
         let expected_public_key = signer
             .get_public_key_for_node(&node_id)
+            .await
             .expect("Failed to get public key for node");
 
         assert_eq!(expected_public_key, result_public_key);

@@ -176,7 +176,8 @@ impl CoopExitService {
 
         // Build leaf key tweaks for all leaves with new signing keys
         let all_leaves = [leaves, fee_leaves.unwrap_or_default()].concat();
-        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, all_leaves, None)?;
+        let leaf_key_tweaks =
+            prepare_leaf_key_tweaks_to_send(&self.signer, all_leaves, None).await?;
 
         // Request cooperative exit from the SSP
         trace!("Requesting cooperative exit");
@@ -312,7 +313,8 @@ impl CoopExitService {
                         leaves_to_send: signing_jobs,
                         owner_identity_public_key: self
                             .signer
-                            .get_identity_public_key()?
+                            .get_identity_public_key()
+                            .await?
                             .serialize()
                             .to_vec(),
                         receiver_identity_public_key: self

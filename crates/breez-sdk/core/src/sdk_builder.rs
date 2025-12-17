@@ -243,6 +243,7 @@ impl SdkBuilder {
             (None, Some(storage_dir)) => {
                 let identity_pub_key = signer
                     .get_identity_public_key()
+                    .await
                     .map_err(|e| SdkError::Generic(e.to_string()))?;
                 let storage =
                     default_storage(&storage_dir, self.config.network, &identity_pub_key)?;

@@ -109,7 +109,7 @@ impl SparkWallet {
         with_background_processing: bool,
     ) -> Result<Self, SparkWalletError> {
         config.validate()?;
-        let identity_public_key = signer.get_identity_public_key()?;
+        let identity_public_key = signer.get_identity_public_key().await?;
 
         let bitcoin_service = BitcoinService::new(config.network);
         let service_provider = Arc::new(ServiceProvider::new(
@@ -500,9 +500,9 @@ impl SparkWallet {
     ) -> Result<Address, SparkWalletError> {
         let leaf_id = TreeNodeId::generate();
         let signing_public_key = if is_static {
-            self.signer.get_static_deposit_public_key(0)?
+            self.signer.get_static_deposit_public_key(0).await?
         } else {
-            self.signer.get_public_key_for_node(&leaf_id)?
+            self.signer.get_public_key_for_node(&leaf_id).await?
         };
         let address = self
             .deposit_service
@@ -751,7 +751,7 @@ impl SparkWallet {
         ))
     }
 
-    pub fn create_spark_invoice(
+    pub async fn create_spark_invoice(
         &self,
         amount: Option<u128>,
         token_identifier: Option<String>,
@@ -788,7 +788,7 @@ impl SparkWallet {
             Some(invoice_fields),
         );
 
-        Ok(invoice.to_invoice_string(&*self.signer)?)
+        Ok(invoice.to_invoice_string(&*self.signer).await?)
     }
 
     pub async fn get_balance(&self) -> Result<u64, SparkWalletError> {
@@ -854,7 +854,8 @@ impl SparkWallet {
     pub async fn sign_message(&self, message: &str) -> Result<Signature, SparkWalletError> {
         Ok(self
             .signer
-            .sign_message_ecdsa_with_identity_key(message.as_bytes())?)
+            .sign_message_ecdsa_with_identity_key(message.as_bytes())
+            .await?)
     }
 
     /// Verifies a message was signed by the given public key and the signature is valid.
