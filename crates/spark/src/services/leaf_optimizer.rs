@@ -200,7 +200,7 @@ impl LeafOptimizer {
         let optimizer = Arc::clone(self);
         tokio::spawn(async move {
             if let Err(e) = optimizer.run_optimization_with_guard(running_guard).await {
-                error!("Optimization failed: {:?}", e);
+                error!("Leaf optimization failed: {:?}", e);
             }
         });
     }
@@ -269,8 +269,6 @@ impl LeafOptimizer {
                 Ok(())
             }
             Err(e) => {
-                error!("Leaf optimization failed: {:?}", e);
-
                 info!(
                     "Refreshing leaves on optimization failure (failure is likely caused by leaves having been spent by a concurrent instance)"
                 );
@@ -352,11 +350,10 @@ impl LeafOptimizer {
             {
                 Ok(reservation) => reservation,
                 Err(e) => {
-                    error!(
+                    return Err(ServiceError::Generic(format!(
                         "Failed to select leaves for optimization round {}: {:?}",
                         round, e
-                    );
-                    return Err(e.into());
+                    )));
                 }
             };
 
@@ -403,8 +400,6 @@ impl LeafOptimizer {
                     debug!("Completed optimization round {}/{}", round, total_rounds);
                 }
                 Err(e) => {
-                    error!("Swap failed in optimization round {}: {:?}", round, e);
-
                     if let Err(e) = self
                         .tree_service
                         .cancel_reservation(swap_reservation.id)
@@ -416,7 +411,10 @@ impl LeafOptimizer {
                         );
                     }
 
-                    return Err(e);
+                    return Err(ServiceError::Generic(format!(
+                        "Failed to cancel reservation for optimization round {}: {:?}",
+                        round, e
+                    )));
                 }
             }
         }
