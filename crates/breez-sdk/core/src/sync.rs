@@ -316,11 +316,22 @@ impl SparkSyncService {
         // Insert what synced payments we have into storage, oldest to newest
         payments_to_sync.sort_by_key(|p| p.timestamp);
         for payment in &payments_to_sync {
+            let maybe_existing_payment_status = if initial_sync_complete {
+                self.storage
+                    .get_payment_by_id(payment.id.clone())
+                    .await
+                    .ok()
+                    .map(|p| p.status)
+            } else {
+                None
+            };
             info!("Inserting token payment: {payment:?}");
             if let Err(e) = self.storage.insert_payment(payment.clone()).await {
                 error!("Failed to insert token payment: {e:?}");
             }
-            if initial_sync_complete {
+            if initial_sync_complete
+                && maybe_existing_payment_status.is_none_or(|s| s != payment.status)
+            {
                 self.event_emitter
                     .emit(&SdkEvent::from_payment(payment.clone()))
                     .await;
