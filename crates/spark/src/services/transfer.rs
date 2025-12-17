@@ -1055,8 +1055,8 @@ impl TransferService {
                 leaf_key.node.id.clone(),
                 LeafRefundSigningData {
                     signing_private_key: leaf_key.new_signing_key.clone(),
-                    signing_public_key: signing_public_key.clone(),
-                    receiving_public_key: signing_public_key.clone(),
+                    signing_public_key,
+                    receiving_public_key: signing_public_key,
                     tx: leaf_key.node.node_tx.clone(),
                     direct_tx: leaf_key.node.direct_tx.clone(),
                     refund_tx: None,
