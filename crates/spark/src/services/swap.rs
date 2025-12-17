@@ -297,18 +297,13 @@ impl Swap {
             .ok_or(ServiceError::Generic(
                 "inbound transfer spark_id missing".to_string(),
             ))?;
+        let identity_public_key = self.signer.get_identity_public_key().await?.serialize().to_vec();
         let transfers = self
             .operator_pool
             .get_coordinator()
             .client
             .query_all_transfers(TransferFilter {
-                participant: Some(Participant::ReceiverIdentityPublicKey(
-                    self.signer
-                        .get_identity_public_key()
-                        .await?
-                        .serialize()
-                        .to_vec(),
-                )),
+                participant: Some(Participant::ReceiverIdentityPublicKey(identity_public_key)),
                 transfer_ids: vec![transfer_id],
                 network: self.network.to_proto_network() as i32,
                 ..Default::default()

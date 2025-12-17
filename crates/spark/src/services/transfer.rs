@@ -827,17 +827,19 @@ impl TransferService {
         // Send claim transfer tweak keys to all signing operators in parallel
         let mut tasks = Vec::new();
 
+        let identity_public_key = self
+            .signer
+            .get_identity_public_key()
+            .await?
+            .serialize()
+            .to_vec();
+
         for operator in self.operator_pool.get_all_operators() {
             let Some(leaves_to_receive) = leaves_tweaks_map.get(&operator.identifier) else {
                 continue;
             };
 
-            let identity_public_key = self
-                .signer
-                .get_identity_public_key()
-                .await?
-                .serialize()
-                .to_vec();
+            let identity_public_key = identity_public_key.clone();
             let leaves_to_receive = leaves_to_receive.clone();
 
             let task = async move {
@@ -1044,18 +1046,17 @@ impl TransferService {
             let direct_from_cpfp_signing_nonce_commitment =
                 self.signer.generate_frost_signing_commitments().await?;
 
+            let signing_public_key = self
+                .signer
+                .get_public_key_from_private_key_source(&leaf_key.new_signing_key)
+                .await?;
+
             leaf_data_map.insert(
                 leaf_key.node.id.clone(),
                 LeafRefundSigningData {
                     signing_private_key: leaf_key.new_signing_key.clone(),
-                    signing_public_key: self
-                        .signer
-                        .get_public_key_from_private_key_source(&leaf_key.new_signing_key)
-                        .await?,
-                    receiving_public_key: self
-                        .signer
-                        .get_public_key_from_private_key_source(&leaf_key.new_signing_key)
-                        .await?,
+                    signing_public_key: signing_public_key.clone(),
+                    receiving_public_key: signing_public_key.clone(),
                     tx: leaf_key.node.node_tx.clone(),
                     direct_tx: leaf_key.node.direct_tx.clone(),
                     refund_tx: None,
