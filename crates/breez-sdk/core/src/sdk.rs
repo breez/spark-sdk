@@ -797,12 +797,13 @@ impl BreezSdk {
     async fn sync_wallet_state_to_storage(&self) -> Result<(), SdkError> {
         update_balances(self.spark_wallet.clone(), self.storage.clone()).await?;
 
+        let initial_sync_complete = *self.initial_synced_watcher.borrow();
         let sync_service = SparkSyncService::new(
             self.spark_wallet.clone(),
             self.storage.clone(),
             self.event_emitter.clone(),
         );
-        sync_service.sync_payments().await?;
+        sync_service.sync_payments(initial_sync_complete).await?;
 
         Ok(())
     }
