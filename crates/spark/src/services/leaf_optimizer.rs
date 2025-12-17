@@ -326,9 +326,7 @@ impl LeafOptimizer {
     ) -> Result<bool, ServiceError> {
         let total_rounds = swaps.len() as u32;
 
-        let mut swaps_left_to_execute = swaps;
-
-        for (index, swap) in swaps_left_to_execute.clone().into_iter().enumerate() {
+        for (index, swap) in swaps.into_iter().enumerate() {
             let round = (index + 1) as u32;
 
             // Check for cancellation before each round
@@ -390,8 +388,6 @@ impl LeafOptimizer {
                         );
                     }
 
-                    swaps_left_to_execute.remove(0);
-
                     self.emit_event(OptimizationEvent::RoundCompleted {
                         current_round: round,
                         total_rounds,
@@ -405,15 +401,11 @@ impl LeafOptimizer {
                         .cancel_reservation(swap_reservation.id)
                         .await
                     {
-                        error!(
-                            "Failed to cancel reservation on optimization round failure: {:?}",
-                            e
-                        );
+                        error!("Failed to cancel reservation on optimization round failure: {e:?}");
                     }
 
                     return Err(ServiceError::Generic(format!(
-                        "Failed to cancel reservation for optimization round {}: {:?}",
-                        round, e
+                        "Failed to perform swap in optimization round {round}: {e:?}"
                     )));
                 }
             }
