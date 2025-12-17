@@ -11,11 +11,12 @@ func initSdk() async throws -> BreezSdk {
     config.apiKey = "<breez api key>"
 
     // Connect to the SDK using the simplified connect method
-    let sdk = try await connect(request: ConnectRequest(
-        config: config,
-        seed: seed,
-        storageDir: "./.data"
-    ))
+    let sdk = try await connect(
+        request: ConnectRequest(
+            config: config,
+            seed: seed,
+            storageDir: "./.data"
+        ))
     // ANCHOR_END: init-sdk
 
     return sdk
@@ -25,9 +26,10 @@ func gettingStartedNodeInfo(sdk: BreezSdk) async throws {
     // ANCHOR: fetch-balance
     // ensureSynced: true will ensure the SDK is synced with the Spark network
     // before returning the balance
-    let info = try await sdk.getInfo(request: GetInfoRequest(
-      ensureSynced: false
-    ))
+    let info = try await sdk.getInfo(
+        request: GetInfoRequest(
+            ensureSynced: false
+        ))
     let balanceSats = info.balanceSats
     // ANCHOR_END: fetch-balance
     print(balanceSats)
@@ -68,6 +70,9 @@ class SdkEventListener: EventListener {
         case .paymentFailed(let paymentFailed):
             // A payment failed
             let _ = paymentFailed
+        case .optimization(let optimizationEvent):
+            // An optimization event occurred
+            let _ = optimizationEvent
         default:
             // Handle any future event types
             break

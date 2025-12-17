@@ -57,3 +57,16 @@ Configures whether the Spark private mode should be enabled by default. By defau
 This configuration option is only relevant when the SDK is initialized for the first time. To update the user settings after that, or to explicitly disable the Spark private mode, see the [User settings](./user_settings.md) page.
 
 </div>
+
+## Optimization configuration
+
+The SDK can automatically optimize the Bitcoin leaf set to maximize unilateral exit efficiency or increase payment speed. Fewer, larger leaves allow more funds to be exited unilaterally, while having more leaves enables payments without requiring swaps, improving payment speed.
+
+This configuration controls optimization through the following options:
+
+- **Automatic optimization enabled**: whether optimization runs automatically when a payment is sent or received. Enabled by default.
+- **Multiplicity**: the desired multiplicity for the leaf set. Values range from 0 to 5. Default value is 1. Setting it to 0 fully optimizes for unilateral exit efficiency. Setting it to a value greater than 0 also optimizes for payment speed, with higher values prioritizing payment speed more aggressively at the cost of higher unilateral exit fees.
+
+See [Custom leaf optimization](./optimize.md) for more information and recommendations on how to configure optimization.
+
+{{#tabs config:optimization-configuration}}

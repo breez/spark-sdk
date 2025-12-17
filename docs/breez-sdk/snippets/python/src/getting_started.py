@@ -87,6 +87,9 @@ class SdkListener(EventListener):
         elif isinstance(event, SdkEvent.PAYMENT_FAILED):
             # A payment failed
             failed_payment = event.payment
+        elif isinstance(event, SdkEvent.OPTIMIZATION):
+            # An optimization event occurred
+            optimization_event = event.optimization_event
         else:
             # Handle any future event types
             pass

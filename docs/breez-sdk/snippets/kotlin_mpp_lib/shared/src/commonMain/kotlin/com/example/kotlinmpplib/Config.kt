@@ -33,4 +33,12 @@ class Config {
         // ANCHOR_END: private-enabled-default
         println("Config: $config")
     }
+
+    fun configureOptimizationConfiguration() {
+        // ANCHOR: optimization-configuration
+        val config = defaultConfig(Network.MAINNET)
+        config.optimizationConfig = OptimizationConfig(autoEnabled = true, multiplicity = 1u)
+        // ANCHOR_END: optimization-configuration
+        println("Config: $config")
+    }
 }

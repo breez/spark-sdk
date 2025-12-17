@@ -30,7 +30,8 @@
   - [Token payments](guide/token_payments.md)
   - [Issuing tokens](guide/issuing_tokens.md)
 - [Advanced features](guide/advanced.md)
-  - [Spark HTLC Payments](guide/htlcs.md)
+  - [Spark HTLC payments](guide/htlcs.md)
+  - [Custom leaf optimization](guide/optimize.md)
 - [Moving to production](guide/moving_to_production.md)
 
 ---
@@ -38,7 +39,7 @@
 # UX Guidelines
 
 - [Overview](guide/uxguide.md)
-- [Receiving Payments](guide/uxguide_receive.md)
-- [Sending Payments](guide/uxguide_send.md)
-- [Displaying Payments](guide/uxguide_display.md)
-- [Seed & Key Management](guide/uxguide_seed.md)
+- [Receiving payments](guide/uxguide_receive.md)
+- [Sending payments](guide/uxguide_send.md)
+- [Displaying payments](guide/uxguide_display.md)
+- [Seed & key management](guide/uxguide_seed.md)

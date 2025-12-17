@@ -34,7 +34,8 @@ pub enum SdkEvent {
         payment: Payment,
     },
     Optimization {
-        event: OptimizationEvent,
+        // Named with `optimization` prefix to avoid collision with `event` keyword in C#
+        optimization_event: OptimizationEvent,
     },
 }
 
@@ -57,7 +58,9 @@ impl fmt::Display for SdkEvent {
             SdkEvent::PaymentFailed { payment } => {
                 write!(f, "PaymentFailed: {payment:?}")
             }
-            SdkEvent::Optimization { event } => {
+            SdkEvent::Optimization {
+                optimization_event: event,
+            } => {
                 write!(f, "Optimization: {event:?}")
             }
         }

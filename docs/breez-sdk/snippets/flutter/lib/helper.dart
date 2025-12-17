@@ -11,6 +11,7 @@ extension ConfigCopyWith on Config {
     List<ExternalInputParser>? externalInputParsers,
     bool? useDefaultExternalInputParsers,
     bool? privateEnabledDefault,
+    OptimizationConfig? optimizationConfig,
   }) {
     return Config(
       apiKey: apiKey ?? this.apiKey,
@@ -25,6 +26,7 @@ extension ConfigCopyWith on Config {
           useDefaultExternalInputParsers ?? this.useDefaultExternalInputParsers,
       privateEnabledDefault:
           privateEnabledDefault ?? this.privateEnabledDefault,
+      optimizationConfig: optimizationConfig ?? this.optimizationConfig,
     );
   }
 }

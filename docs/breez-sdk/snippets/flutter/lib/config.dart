@@ -36,3 +36,12 @@ Future<void> configurePrivateEnabledDefault() async {
   // ANCHOR_END: private-enabled-default
   print(config);
 }
+
+Future<void> configureOptimizationConfiguration() async {
+  // ANCHOR: optimization-configuration
+  var config = defaultConfig(network: Network.mainnet).copyWith(
+      optimizationConfig:
+          OptimizationConfig(autoEnabled: true, multiplicity: 1));
+  // ANCHOR_END: optimization-configuration
+  print(config);
+}

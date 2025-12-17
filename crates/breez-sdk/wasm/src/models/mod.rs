@@ -76,7 +76,7 @@ pub enum SdkEvent {
         payment: Payment,
     },
     Optimization {
-        event: OptimizationEvent,
+        optimization_event: OptimizationEvent,
     },
 }
 
