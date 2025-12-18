@@ -710,6 +710,7 @@ dependencies = [
  "dotenvy",
  "ecies",
  "figment",
+ "frost-secp256k1-tr-unofficial",
  "hex",
  "lnurl-models",
  "macros",
