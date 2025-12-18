@@ -542,6 +542,7 @@ fn minimize_transfer_swap(
                 }
             } else if to_receive_batch.len() > max_leaves {
                 // Find a valid cutoff for receive batch
+                let mut found_valid_cutoff = false;
                 for cutoff in (1..=max_leaves).rev() {
                     let sum_cut: u64 = to_receive_batch.iter().take(cutoff).sum();
                     let remainder = give_sum - sum_cut;
@@ -554,8 +555,16 @@ fn minimize_transfer_swap(
                             leaves_to_give: to_give_batch.clone(),
                             leaves_to_receive: alternate_batch,
                         });
+                        found_valid_cutoff = true;
                         break;
                     }
+                }
+
+                if !found_valid_cutoff {
+                    error!(
+                        "Unexpected: No valid cutoff found for receive batch of length {}, skipping swap.. Maybe max_leaves_per_swap is too low.",
+                        to_receive_batch.len()
+                    );
                 }
             } else {
                 swaps.push(SwapPlan {
