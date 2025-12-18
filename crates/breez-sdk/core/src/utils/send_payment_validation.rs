@@ -12,7 +12,7 @@ pub(crate) fn validate_prepare_send_payment_request(
             validate_spark_invoice_request(spark_invoice_details, request, identity_public_key)
         }
         InputType::SparkAddress(_) => validate_spark_address_request(request),
-        InputType::Bolt11Invoice(_) => validate_bolt11_invoice_request(request),
+        InputType::Bolt11Invoice(_) => Ok(()),
         InputType::BitcoinAddress(_) => validate_bitcoin_address_request(request),
         _ => Err(SdkError::InvalidInput(
             "Unsupported payment method".to_string(),
@@ -91,19 +91,6 @@ fn validate_spark_address_request(request: &PrepareSendPaymentRequest) -> Result
     Ok(())
 }
 
-/// Validates a Bolt11 invoice request.
-fn validate_bolt11_invoice_request(request: &PrepareSendPaymentRequest) -> Result<(), SdkError> {
-    // Token identifier cannot be provided for Bolt11 invoices
-    if request.token_identifier.is_some() {
-        return Err(SdkError::InvalidInput(
-            "Token identifier can't be provided for this payment request: non-spark address"
-                .to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
 /// Validates a Bitcoin address request.
 fn validate_bitcoin_address_request(request: &PrepareSendPaymentRequest) -> Result<(), SdkError> {
     // Token identifier cannot be provided for Bitcoin addresses
@@ -140,6 +127,7 @@ mod tests {
             payment_request: "test_request".to_string(),
             amount: None,
             token_identifier: None,
+            max_slippage_bps: None,
         }
     }
 
@@ -426,36 +414,6 @@ mod tests {
             result.is_ok(),
             "Should succeed when token identifier is provided (optional)"
         );
-    }
-
-    // Bolt11Invoice tests
-    #[test_all]
-    fn test_validate_bolt11_invoice_without_token_identifier() {
-        let request = create_test_request();
-        let result = validate_bolt11_invoice_request(&request);
-        assert!(
-            result.is_ok(),
-            "Should succeed when token identifier is not provided"
-        );
-    }
-
-    #[test_all]
-    fn test_validate_bolt11_invoice_with_token_identifier() {
-        let mut request = create_test_request();
-        request.token_identifier = Some("token123".to_string());
-        let result = validate_bolt11_invoice_request(&request);
-        assert!(
-            result.is_err(),
-            "Should fail when token identifier is provided"
-        );
-        if let Err(SdkError::InvalidInput(msg)) = result {
-            assert!(
-                msg.contains("can't be provided"),
-                "Error message should mention it can't be provided"
-            );
-        } else {
-            panic!("Expected InvalidInput error");
-        }
     }
 
     // BitcoinAddress tests

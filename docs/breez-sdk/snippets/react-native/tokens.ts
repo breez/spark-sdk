@@ -78,7 +78,8 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
     amount: optionalAmount,
-    tokenIdentifier
+    tokenIdentifier,
+    maxSlippageBps: undefined
   })
 
   // If the fees are acceptable, continue to send the token payment

@@ -531,6 +531,7 @@ async fn test_06_client_side_zap_receipt(
             payment_request: invoice.clone(),
             amount: None,
             token_identifier: None,
+            max_slippage_bps: None,
         })
         .await?;
 

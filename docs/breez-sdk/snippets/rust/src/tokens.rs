@@ -90,6 +90,7 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
             payment_request,
             amount: optional_amount,
             token_identifier,
+            max_slippage_bps: None,
         })
         .await?;
 
