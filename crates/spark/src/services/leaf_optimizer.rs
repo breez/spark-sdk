@@ -505,6 +505,14 @@ fn minimize_transfer_swap(
     let mut give = counter_to_flat_array(&leaves_to_give);
     let mut receive = counter_to_flat_array(&leaves_to_receive);
 
+    // Sanity check: give and receive sums should match
+    if give.iter().sum::<u64>() != receive.iter().sum::<u64>() {
+        error!(
+            "Unexpected: Give and receive sums do not match. Give: {give:?}, Receive: {receive:?}"
+        );
+        return vec![];
+    }
+
     // Build swaps by balancing give/receive batches
     let mut swaps = Vec::new();
     let mut to_give_batch: Vec<u64> = Vec::new();
