@@ -391,7 +391,10 @@ impl BreezSdk {
                 }
 
                 // Create the zap receipt using NostrClient
-                let zap_receipt = match self.nostr_client.create_zap_receipt(zap_request, &payment)
+                let zap_receipt = match self
+                    .nostr_client
+                    .create_zap_receipt(zap_request, &payment)
+                    .await
                 {
                     Ok(receipt) => receipt,
                     Err(e) => {

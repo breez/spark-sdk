@@ -1,23 +1,21 @@
 use std::sync::Arc;
 
-use bitcoin::bip32::Xpriv;
 use breez_sdk_common::sync::{BreezSyncerClient, SigningClient, SyncProcessor, SyncService};
 use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
-    EventEmitter, Network,
+    EventEmitter,
     error::SdkError,
     persist::Storage,
-    realtime_sync::{DefaultSyncSigner, SyncedStorage},
+    realtime_sync::SyncedStorage,
     sync_storage::{SyncStorage, SyncStorageWrapper},
 };
 
 pub struct RealTimeSyncParams {
     pub server_url: String,
     pub api_key: Option<String>,
-    pub network: Network,
-    pub master_key: Xpriv,
+    pub signer: Arc<dyn breez_sdk_common::sync::SyncSigner>,
     pub storage: Arc<dyn Storage>,
     pub sync_storage: Arc<dyn SyncStorage>,
     pub shutdown_receiver: tokio::sync::watch::Receiver<()>,
@@ -42,13 +40,9 @@ pub async fn init_and_start_real_time_sync(
     let sync_client = BreezSyncerClient::new(&params.server_url, params.api_key.as_deref())
         .map_err(|e| SdkError::Generic(e.to_string()))?;
 
-    let sync_signer = Arc::new(
-        DefaultSyncSigner::new(&params.master_key, params.network)
-            .map_err(|e| SdkError::Generic(e.to_string()))?,
-    );
     let signing_sync_client = SigningClient::new(
         Arc::new(sync_client),
-        sync_signer,
+        params.signer,
         Uuid::now_v7().to_string(),
     );
     let sync_processor = Arc::new(SyncProcessor::new(
