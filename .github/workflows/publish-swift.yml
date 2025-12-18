@@ -116,13 +116,13 @@ jobs:
           cp swift/*.swift build/crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark/
           cp swift/breez_sdk_*FFI.h build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/Headers
           cp swift/breez_sdk_*FFI.h build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/Headers
-          cp swift/breez_sdk_*FFI.h build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Headers
+          cp swift/breez_sdk_*FFI.h build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/Headers
           cp aarch64-apple-ios/libbreez_sdk_spark_bindings.dylib build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
           cp ios-universal-sim/libbreez_sdk_spark_bindings.dylib build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
-          cp darwin-universal/libbreez_sdk_spark_bindings.dylib build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+          cp darwin-universal/libbreez_sdk_spark_bindings.dylib build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI
           install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
           install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
-          install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+          install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI
 
       - name: Set plist versions
         working-directory: build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework
@@ -130,7 +130,7 @@ jobs:
           SHORT_VERSION=$(echo "${{ inputs.package-version }}" | grep -Eo '^(\d+\.\d+\.\d+)')
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" ios-arm64/breez_sdk_sparkFFI.framework/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/Resources/Info.plist
 
       - name: Compress XCFramework
         working-directory: build/crates/breez-sdk/bindings/langs/swift
