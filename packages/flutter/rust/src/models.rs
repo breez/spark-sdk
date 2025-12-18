@@ -293,6 +293,7 @@ pub struct _PrepareSendPaymentRequest {
     pub payment_request: String,
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
+    pub max_slippage_bps: Option<u32>,
 }
 
 #[frb(mirror(PrepareSendPaymentResponse))]
@@ -300,6 +301,7 @@ pub struct _PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     pub amount: u128,
     pub token_identifier: Option<String>,
+    pub max_slippage_bps: Option<u32>,
 }
 
 #[frb(mirror(ReceivePaymentMethod))]
@@ -369,6 +371,7 @@ pub enum _SendPaymentMethod {
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
         spark_transfer_fee_sats: Option<u64>,
+        token_conversion_fee: Option<u128>,
         lightning_fee_sats: u64,
     },
     SparkAddress {

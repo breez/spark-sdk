@@ -79,6 +79,7 @@ impl From<serde_json::Error> for StorageError {
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PaymentMetadata {
+    pub parent_payment_id: Option<String>,
     pub lnurl_pay_info: Option<LnurlPayInfo>,
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
@@ -892,9 +893,7 @@ pub mod tests {
                 processed_success_action: None,
                 raw_success_action: None,
             }),
-            lnurl_withdraw_info: None,
-            lnurl_description: None,
-            token_conversion_info: None,
+            ..Default::default()
         };
 
         let lightning_lnurl_pay_payment = Payment {
@@ -919,12 +918,10 @@ pub mod tests {
 
         // Test 5: Lightning payment with full details
         let withdraw_metadata = PaymentMetadata {
-            lnurl_pay_info: None,
             lnurl_withdraw_info: Some(LnurlWithdrawInfo {
                 withdraw_url: "http://example.com/withdraw".to_string(),
             }),
-            lnurl_description: None,
-            token_conversion_info: None,
+            ..Default::default()
         };
         let lightning_lnurl_withdraw_payment = Payment {
             id: "lightning_pmtabc".to_string(),
@@ -1039,15 +1036,13 @@ pub mod tests {
 
         // Test 11: Successful conversion payment
         let successful_sent_conversion_payment_metadata = PaymentMetadata {
-            lnurl_pay_info: None,
-            lnurl_withdraw_info: None,
-            lnurl_description: None,
             token_conversion_info: Some(crate::TokenConversionInfo {
                 pool_id: "pool_abc".to_string(),
                 payment_id: Some("conversion_pmt123".to_string()),
                 fee: Some(21),
                 refund_identifier: None,
             }),
+            ..Default::default()
         };
         let successful_sent_conversion_payment = Payment {
             id: "conversion_pmt123".to_string(),
@@ -1068,15 +1063,13 @@ pub mod tests {
 
         // Test 12: Failed conversion payment with refund info
         let failed_with_refund_conversion_payment_metadata = PaymentMetadata {
-            lnurl_pay_info: None,
-            lnurl_withdraw_info: None,
-            lnurl_description: None,
             token_conversion_info: Some(crate::TokenConversionInfo {
                 pool_id: "pool_xyz".to_string(),
                 refund_identifier: Some("refund_pmt456".to_string()),
                 payment_id: None,
                 fee: None,
             }),
+            ..Default::default()
         };
         let failed_with_refund_conversion_payment = Payment {
             id: "conversion_pmt789".to_string(),
@@ -1097,15 +1090,13 @@ pub mod tests {
 
         // Test 13: Failed conversion payment with no refund info
         let failed_no_refund_conversion_payment_metadata = PaymentMetadata {
-            lnurl_pay_info: None,
-            lnurl_withdraw_info: None,
-            lnurl_description: None,
             token_conversion_info: Some(crate::TokenConversionInfo {
                 pool_id: "pool_xyz".to_string(),
                 refund_identifier: None,
                 payment_id: None,
                 fee: None,
             }),
+            ..Default::default()
         };
         let failed_no_refund_conversion_payment = Payment {
             id: "conversion_pmt000".to_string(),
@@ -2176,15 +2167,13 @@ pub mod tests {
     pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) {
         // Create payments with and without token conversion info
         let payment_with_refund_metadata = PaymentMetadata {
-            lnurl_pay_info: None,
-            lnurl_withdraw_info: None,
-            lnurl_description: None,
             token_conversion_info: Some(crate::TokenConversionInfo {
                 pool_id: "pool1".to_string(),
                 refund_identifier: Some("refund1".to_string()),
                 payment_id: None,
                 fee: None,
             }),
+            ..Default::default()
         };
         let payment_with_refund = Payment {
             id: "with_refund".to_string(),
@@ -2211,15 +2200,13 @@ pub mod tests {
         };
 
         let successful_conversion_metadata = PaymentMetadata {
-            lnurl_pay_info: None,
-            lnurl_withdraw_info: None,
-            lnurl_description: None,
             token_conversion_info: Some(crate::TokenConversionInfo {
                 pool_id: "pool1".to_string(),
                 payment_id: Some("conversion1".to_string()),
                 fee: Some(100),
                 refund_identifier: None,
             }),
+            ..Default::default()
         };
         let successful_conversion = Payment {
             id: "successful_conversion".to_string(),
@@ -2237,15 +2224,13 @@ pub mod tests {
         };
 
         let payment_without_refund_metadata = PaymentMetadata {
-            lnurl_pay_info: None,
-            lnurl_withdraw_info: None,
-            lnurl_description: None,
             token_conversion_info: Some(crate::TokenConversionInfo {
                 pool_id: "pool1".to_string(),
                 payment_id: None,
                 fee: None,
                 refund_identifier: None,
             }),
+            ..Default::default()
         };
         let payment_without_refund = Payment {
             id: "without_refund".to_string(),

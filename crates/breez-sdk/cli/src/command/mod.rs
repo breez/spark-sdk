@@ -3,13 +3,14 @@ mod issuer;
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, Fee, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
-    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
-    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
-    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
+    ClaimHtlcPaymentRequest, Fee, FetchTokenConversionLimitsRequest, GetInfoRequest,
+    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
+    MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
+    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
+    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenConversionType,
+    TokenIssuer, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -127,6 +128,11 @@ pub enum Command {
         #[arg(short = 't', long)]
         token_identifier: Option<String>,
 
+        /// The optional maximum slippage in basis points (1/100 of a percent) allowed when
+        /// a token conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
+        #[arg(short = 's', long)]
+        max_slippage_bps: Option<u32>,
+
         /// Optional idempotency key to ensure only one payment is made for multiple requests.
         #[arg(short = 'i', long)]
         idempotency_key: Option<String>,
@@ -229,6 +235,14 @@ pub enum Command {
     GetTokensMetadata {
         /// The token identifiers to get metadata for
         token_identifiers: Vec<String>,
+    },
+    FetchTokenConversionLimits {
+        /// Whether we are converting from or to Bitcoin
+        #[clap(short = 'f', long, action = clap::ArgAction::SetTrue)]
+        from_bitcoin: bool,
+
+        /// The token identifier of the token
+        token_identifier: String,
     },
     GetUserSettings,
     SetUserSettings {
@@ -461,6 +475,7 @@ pub(crate) async fn execute_command(
             payment_request,
             amount,
             token_identifier,
+            max_slippage_bps,
             idempotency_key,
         } => {
             let prepared_payment = sdk
@@ -468,6 +483,7 @@ pub(crate) async fn execute_command(
                     payment_request,
                     amount,
                     token_identifier,
+                    max_slippage_bps,
                 })
                 .await;
 
@@ -625,6 +641,25 @@ pub(crate) async fn execute_command(
             print_value(&res)?;
             Ok(true)
         }
+        Command::FetchTokenConversionLimits {
+            from_bitcoin,
+            token_identifier,
+        } => {
+            let convert_type = if from_bitcoin {
+                TokenConversionType::FromBitcoin {
+                    to_token_identifier: token_identifier,
+                }
+            } else {
+                TokenConversionType::ToBitcoin {
+                    from_token_identifier: token_identifier,
+                }
+            };
+            let res = sdk
+                .fetch_token_conversion_limits(FetchTokenConversionLimitsRequest { convert_type })
+                .await?;
+            print_value(&res)?;
+            Ok(true)
+        }
         Command::GetUserSettings => {
             let res = sdk.get_user_settings().await?;
             print_value(&res)?;
@@ -670,8 +705,20 @@ fn read_payment_options(
         SendPaymentMethod::Bolt11Invoice {
             spark_transfer_fee_sats,
             lightning_fee_sats,
+            token_conversion_fee,
             ..
         } => {
+            if let Some(token_conversion_fee) = token_conversion_fee {
+                println!(
+                    "This payment has an estimated token conversion fee of {token_conversion_fee} token base units"
+                );
+                let line = rl
+                    .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
+                    .to_lowercase();
+                if line != "y" {
+                    return Err(anyhow::anyhow!("Payment cancelled"));
+                }
+            }
             if let Some(spark_transfer_fee_sats) = spark_transfer_fee_sats {
                 println!("Choose payment option:");
                 println!("1. Spark transfer fee: {spark_transfer_fee_sats} sats");

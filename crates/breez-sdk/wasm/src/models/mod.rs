@@ -692,6 +692,8 @@ pub enum SendPaymentMethod {
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
         spark_transfer_fee_sats: Option<u64>,
+        #[serde(with = "serde_option_u128_as_string")]
+        token_conversion_fee: Option<u128>,
         lightning_fee_sats: u64,
     }, // should be replaced with the parsed invoice
     SparkAddress {
@@ -767,6 +769,7 @@ pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
+    pub max_slippage_bps: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
@@ -774,6 +777,7 @@ pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     pub amount: u128,
     pub token_identifier: Option<String>,
+    pub max_slippage_bps: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OnchainConfirmationSpeed)]
@@ -869,6 +873,7 @@ pub struct LogEntry {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentMetadata)]
 pub struct PaymentMetadata {
+    pub parent_payment_id: Option<String>,
     pub lnurl_pay_info: Option<LnurlPayInfo>,
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,

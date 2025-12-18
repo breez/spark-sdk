@@ -12,6 +12,7 @@ async fn prepare_send_payment_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
             payment_request,
             amount: optional_amount_sats,
             token_identifier: None,
+            max_slippage_bps: None,
         })
         .await?;
 
@@ -41,6 +42,7 @@ async fn prepare_send_payment_lightning_onchain(sdk: &BreezSdk) -> Result<()> {
             payment_request,
             amount: amount_sats,
             token_identifier: None,
+            max_slippage_bps: None,
         })
         .await?;
 
@@ -67,6 +69,7 @@ async fn prepare_send_payment_spark_address(sdk: &BreezSdk) -> Result<()> {
             payment_request,
             amount: amount_sats,
             token_identifier: None,
+            max_slippage_bps: None,
         })
         .await?;
 
@@ -88,6 +91,7 @@ async fn prepare_send_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
             payment_request,
             amount: optional_amount_sats,
             token_identifier: None,
+            max_slippage_bps: None,
         })
         .await?;
 

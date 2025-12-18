@@ -59,6 +59,7 @@ async fn test_01_spark_idempotency_key(
             payment_request: bob_spark_address.clone(),
             amount: Some(5),
             token_identifier: None,
+            max_slippage_bps: None,
         })
         .await?;
 
@@ -224,6 +225,7 @@ async fn test_02_lightning_idempotency_key(
             payment_request: bob_invoice.clone(),
             amount: None,
             token_identifier: None,
+            max_slippage_bps: None,
         })
         .await?;
 
@@ -374,6 +376,7 @@ async fn test_03_bitcoin_idempotency_key(
             payment_request: bob_address.clone(),
             amount: Some(amount),
             token_identifier: None,
+            max_slippage_bps: None,
         })
         .await?;
 
@@ -522,6 +525,7 @@ async fn test_04_spark_htlc_idempotency_key(
             payment_request: bob_spark_address.clone(),
             amount: Some(5),
             token_identifier: None,
+            max_slippage_bps: None,
         })
         .await?;
 

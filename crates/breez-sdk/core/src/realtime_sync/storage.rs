@@ -156,6 +156,7 @@ impl SyncedStorage {
                 lnurl_pay_info,
                 lnurl_withdraw_info,
                 token_conversion_info,
+                ..Default::default()
             };
             let record_id = RecordId::new(RecordType::PaymentMetadata.to_string(), &payment.id);
             let record_change_request = RecordChangeRequest {

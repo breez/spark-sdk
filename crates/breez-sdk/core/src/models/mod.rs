@@ -1,5 +1,6 @@
 pub(crate) mod adaptors;
 pub mod payment_observer;
+use flashnet::Pool;
 pub use payment_observer::*;
 
 use core::fmt;
@@ -683,6 +684,7 @@ pub enum SendPaymentMethod {
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
         spark_transfer_fee_sats: Option<u64>,
+        token_conversion_fee: Option<u128>,
         lightning_fee_sats: u64,
     }, // should be replaced with the parsed invoice
     SparkAddress {
@@ -864,6 +866,12 @@ pub struct PrepareSendPaymentRequest {
     /// May only be provided if the payment request is a spark address
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub token_identifier: Option<String>,
+    /// The optional maximum slippage in basis points (1/100 of a percent) allowed when
+    /// a token conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
+    /// The token conversion will fail if the actual amount received is less than
+    /// `estimated_amount * (1 - max_slippage_bps / 10_000)`.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub max_slippage_bps: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -876,6 +884,8 @@ pub struct PrepareSendPaymentResponse {
     /// The presence of this field indicates that the payment is for a token
     /// If empty, it is a Bitcoin payment
     pub token_identifier: Option<String>,
+    /// The optional maximum slippage allowed when a token conversion is needed to fulfill the payment.
+    pub max_slippage_bps: Option<u32>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -1213,4 +1223,43 @@ pub struct TokenConversionInfo {
     pub fee: Option<u128>,
     /// The refund payment id if a refund payment was made
     pub refund_identifier: Option<String>,
+}
+
+pub(crate) struct TokenConversionPool {
+    pub(crate) asset_in_address: String,
+    pub(crate) asset_out_address: String,
+    pub(crate) pool: Pool,
+}
+
+pub(crate) struct TokenConversionResponse {
+    /// The sent payment id for the conversion
+    pub(crate) sent_payment_id: String,
+    /// The received payment id for the conversion
+    pub(crate) received_payment_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum TokenConversionType {
+    /// Converting from Bitcoin to a token
+    FromBitcoin { to_token_identifier: String },
+    /// Converting from a token to Bitcoin
+    ToBitcoin { from_token_identifier: String },
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FetchTokenConversionLimitsRequest {
+    /// The type of conversion, either from or to Bitcoin.
+    pub convert_type: TokenConversionType,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FetchTokenConversionLimitsResponse {
+    /// The minimum amount to be converted.
+    /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
+    pub min_from_amount: Option<u128>,
+    /// The minimum amount to be received from the conversion.
+    /// Denominated in satoshis if converting to Bitcoin, otherwise in the token base units.
+    pub min_to_amount: Option<u128>,
 }

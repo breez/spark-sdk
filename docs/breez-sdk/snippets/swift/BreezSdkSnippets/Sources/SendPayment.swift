@@ -13,7 +13,7 @@ func prepareSendPaymentLightningBolt11(sdk: BreezSdk) async throws {
             amount: optionalAmountSats
         ))
 
-    if case let .bolt11Invoice(_, sparkTransferFeeSats, lightningFeeSats) = prepareResponse
+    if case let .bolt11Invoice(_, sparkTransferFeeSats, _, lightningFeeSats) = prepareResponse
         .paymentMethod
     {
         // Fees to pay via Lightning
