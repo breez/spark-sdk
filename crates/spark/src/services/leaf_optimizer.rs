@@ -7,7 +7,7 @@ use tracing::{debug, error, info, trace};
 
 use crate::{
     services::{ServiceError, Swap},
-    tree::{ReservationPurpose, TargetAmounts, TreeService},
+    tree::{ReservationPurpose, TargetAmounts, TreeNode, TreeService},
 };
 
 /// Default maximum number of leaves per swap round
@@ -168,6 +168,21 @@ impl LeafOptimizer {
         self.progress.lock().unwrap().is_running
     }
 
+    fn should_optimize(&self, leaves: &[TreeNode]) -> bool {
+        if self.config.multiplicity == 0 {
+            let leave_amounts = leaves.iter().map(|leaf| leaf.value).collect::<Vec<u64>>();
+
+            let swaps = maximize_unilateral_exit(&leave_amounts, self.config.max_leaves_per_swap);
+
+            let num_inputs: usize = swaps.iter().map(|swap| swap.leaves_to_give.len()).sum();
+            let num_outputs: usize = swaps.iter().map(|swap| swap.leaves_to_receive.len()).sum();
+
+            num_inputs > num_outputs
+        } else {
+            true
+        }
+    }
+
     /// Starts the optimization process in the background.
     ///
     /// This method spawns the optimization work in a background task and returns
@@ -216,6 +231,12 @@ impl LeafOptimizer {
 
         if leaves.is_empty() {
             debug!("No leaves available for optimization");
+            self.emit_event(OptimizationEvent::Skipped);
+            return Ok(());
+        }
+
+        if !self.should_optimize(&leaves) {
+            debug!("Optimization not needed, skipping");
             self.emit_event(OptimizationEvent::Skipped);
             return Ok(());
         }
