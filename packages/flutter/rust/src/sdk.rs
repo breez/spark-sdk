@@ -203,15 +203,32 @@ impl BreezSdk {
         self.inner.get_user_settings().await
     }
 
-    pub async fn update_user_settings(&self, request: UpdateUserSettingsRequest) -> Result<(), SdkError> {
+    pub async fn update_user_settings(
+        &self,
+        request: UpdateUserSettingsRequest,
+    ) -> Result<(), SdkError> {
         self.inner.update_user_settings(request).await
     }
-    
+
     #[frb(sync)]
     pub fn get_token_issuer(&self) -> crate::issuer::TokenIssuer {
         let token_issuer = self.inner.get_token_issuer();
         crate::issuer::TokenIssuer {
             token_issuer: Arc::new(token_issuer),
         }
+    }
+
+    #[frb(sync)]
+    pub fn start_leaf_optimization(&self) {
+        self.inner.start_leaf_optimization();
+    }
+
+    pub async fn cancel_leaf_optimization(&self) -> Result<(), SdkError> {
+        self.inner.cancel_leaf_optimization().await
+    }
+
+    #[frb(sync)]
+    pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
+        self.inner.get_leaf_optimization_progress().into()
     }
 }

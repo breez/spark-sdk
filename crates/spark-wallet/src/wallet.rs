@@ -23,8 +23,9 @@ use spark::{
     },
     services::{
         CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpUtxo, DepositService, ExitSpeed,
-        Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LeafTxCpfpPsbts,
-        LightningReceivePayment, LightningSendPayment, LightningService, Preimage,
+        Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LeafOptimizer,
+        LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment, LightningService,
+        OptimizationEvent, OptimizationEventHandler, OptimizationProgress, Preimage,
         PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
         QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager, TokenService,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
@@ -39,7 +40,7 @@ use spark::{
     },
     tree::{
         InMemoryTreeStore, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
-        TreeService, TreeStore, select_leaves_by_amounts, with_reserved_leaves,
+        TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult},
 };
@@ -55,6 +56,8 @@ use crate::{
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
+
+const SELECT_LEAVES_MAX_RETRIES: usize = 3;
 
 use super::{SparkWalletConfig, SparkWalletError};
 
@@ -77,6 +80,7 @@ pub struct SparkWallet {
     token_service: Arc<TokenService>,
     operator_pool: Arc<OperatorPool>,
     htlc_service: Arc<HtlcService>,
+    leaf_optimizer: Arc<LeafOptimizer>,
 }
 
 impl SparkWallet {
@@ -174,13 +178,13 @@ impl SparkWallet {
             config.network,
         ));
 
-        let swap_service = Swap::new(
+        let swap_service = Arc::new(Swap::new(
             config.network,
             operator_pool.clone(),
             Arc::clone(&signer),
             Arc::clone(&service_provider),
             Arc::clone(&transfer_service),
-        );
+        ));
 
         let tree_service: Arc<dyn TreeService> = Arc::new(SynchronousTreeService::new(
             identity_public_key,
@@ -189,7 +193,7 @@ impl SparkWallet {
             tree_store.clone(),
             Arc::clone(&timelock_manager),
             Arc::clone(&signer),
-            swap_service,
+            Arc::clone(&swap_service),
         ));
 
         let token_output_service: Arc<dyn TokenOutputService> =
@@ -219,6 +223,19 @@ impl SparkWallet {
         ));
 
         let event_manager = Arc::new(EventManager::new());
+
+        // Create optimization event handler that bridges to WalletEvent
+        let optimization_event_handler = Arc::new(WalletOptimizationEventHandler {
+            event_manager: Arc::clone(&event_manager),
+        });
+
+        let leaf_optimizer = Arc::new(LeafOptimizer::new(
+            config.optimization_options.clone(),
+            Arc::clone(&swap_service),
+            Arc::clone(&tree_service),
+            Some(optimization_event_handler),
+        ));
+
         let (cancel, cancellation_token) = watch::channel(());
         if with_background_processing {
             let reconnect_interval = Duration::from_secs(config.reconnect_interval_seconds);
@@ -231,6 +248,8 @@ impl SparkWallet {
                 Arc::clone(&service_provider),
                 Arc::clone(&transfer_service),
                 Arc::clone(&htlc_service),
+                Arc::clone(&leaf_optimizer),
+                config.auto_optimize_enabled,
             ));
             background_processor
                 .run_background_tasks(cancellation_token.clone())
@@ -253,6 +272,7 @@ impl SparkWallet {
             token_service,
             operator_pool,
             htlc_service,
+            leaf_optimizer,
         })
     }
 }
@@ -265,6 +285,13 @@ impl SparkWallet {
     pub async fn list_leaves(&self) -> Result<WalletLeaves, SparkWalletError> {
         let leaves = self.tree_service.list_leaves().await?;
         Ok(leaves.into())
+    }
+
+    /// Starts leaf optimization if auto-optimization is enabled.
+    fn maybe_start_optimization(&self) {
+        if self.config.auto_optimize_enabled {
+            self.leaf_optimizer.start();
+        }
     }
 
     pub async fn pay_lightning_invoice(
@@ -290,11 +317,8 @@ impl SparkWallet {
             });
         }
 
-        let target_amounts = TargetAmounts::new(total_amount_sat, None);
-        let leaves_reservation = self
-            .tree_service
-            .select_leaves(Some(&target_amounts))
-            .await?;
+        let target_amounts = TargetAmounts::new_amount_and_fee(total_amount_sat, None);
+        let leaves_reservation = self.select_leaves_with_retry(Some(&target_amounts)).await?;
         // start the lightning swap with the operator
         let lightning_payment = with_reserved_leaves(
             self.tree_service.as_ref(),
@@ -329,6 +353,9 @@ impl SparkWallet {
                 .await?
             }
         };
+
+        self.maybe_start_optimization();
+
         Ok(PayLightningInvoiceResult {
             transfer: wallet_transfer,
             lightning_payment: lightning_payment.lightning_send_payment,
@@ -375,10 +402,10 @@ impl SparkWallet {
             .map_err(|_| SparkWalletError::InvalidNetwork)?;
 
         // Selects leaves totaling `amount_sat` if provided, otherwise retrieves all available leaves.
-        let target_amounts = amount_sats.map(|amount| TargetAmounts::new(amount, None));
+        let target_amounts =
+            amount_sats.map(|amount| TargetAmounts::new_amount_and_fee(amount, None));
         let reservation = self
-            .tree_service
-            .select_leaves(target_amounts.as_ref())
+            .select_leaves_with_retry(target_amounts.as_ref())
             .await?;
 
         // Fetches fee quote for the coop exit then cancels the reservation.
@@ -448,9 +475,12 @@ impl SparkWallet {
     ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
         let deposit_nodes = self.deposit_service.claim_deposit(tx, vout).await?;
         self.tree_service
-            .insert_leaves(deposit_nodes.clone(), false)
+            .insert_leaves(deposit_nodes.clone())
             .await?;
         info!("Claimed deposit root node: {:?}", deposit_nodes);
+
+        self.maybe_start_optimization();
+
         Ok(deposit_nodes.into_iter().map(WalletLeaf::from).collect())
     }
 
@@ -459,6 +489,8 @@ impl SparkWallet {
         quote: StaticDepositQuote,
     ) -> Result<WalletTransfer, SparkWalletError> {
         let transfer = self.deposit_service.claim_static_deposit(quote).await?;
+
+        self.maybe_start_optimization();
 
         Ok(WalletTransfer::from_transfer(
             transfer,
@@ -580,11 +612,8 @@ impl SparkWallet {
         let receiver_pubkey = receiver_address.identity_public_key;
 
         // get leaves to transfer
-        let target_amounts = TargetAmounts::new(amount_sat, None);
-        let leaves_reservation = self
-            .tree_service
-            .select_leaves(Some(&target_amounts))
-            .await?;
+        let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
+        let leaves_reservation = self.select_leaves_with_retry(Some(&target_amounts)).await?;
 
         let transfer = with_reserved_leaves(
             self.tree_service.as_ref(),
@@ -599,6 +628,8 @@ impl SparkWallet {
         )
         .await?;
 
+        self.maybe_start_optimization();
+
         Ok(WalletTransfer::from_transfer(
             transfer,
             None,
@@ -610,14 +641,20 @@ impl SparkWallet {
 
     /// Claims all pending transfers.
     pub async fn claim_pending_transfers(&self) -> Result<Vec<WalletTransfer>, SparkWalletError> {
-        claim_pending_transfers(
+        let transfers = claim_pending_transfers(
             self.identity_public_key,
             &self.transfer_service,
             &self.tree_service,
             &self.htlc_service,
             &self.ssp_client,
         )
-        .await
+        .await?;
+
+        if !transfers.is_empty() {
+            self.maybe_start_optimization();
+        }
+
+        Ok(transfers)
     }
 
     pub async fn create_htlc(
@@ -635,11 +672,8 @@ impl SparkWallet {
         let receiver_pubkey = receiver_address.identity_public_key;
 
         // get leaves to transfer
-        let target_amounts = TargetAmounts::new(amount_sat, None);
-        let leaves_reservation = self
-            .tree_service
-            .select_leaves(Some(&target_amounts))
-            .await?;
+        let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
+        let leaves_reservation = self.select_leaves_with_retry(Some(&target_amounts)).await?;
 
         let expiry_time = SystemTime::now() + expiry_duration;
         let transfer = with_reserved_leaves(
@@ -904,11 +938,10 @@ impl SparkWallet {
         trace!("Calculated fee for exit speed {exit_speed:?}: {fee_sats} sats",);
 
         // Select leaves for the withdrawal
-        let target_amounts =
-            amount_sats.map(|amount_sats| TargetAmounts::new(amount_sats, Some(fee_sats)));
+        let target_amounts = amount_sats
+            .map(|amount_sats| TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats)));
         let leaves_reservation = self
-            .tree_service
-            .select_leaves(target_amounts.as_ref())
+            .select_leaves_with_retry(target_amounts.as_ref())
             .await?;
 
         let transfer = with_reserved_leaves(
@@ -925,6 +958,8 @@ impl SparkWallet {
             &leaves_reservation,
         )
         .await?;
+
+        self.maybe_start_optimization();
 
         create_transfer(
             transfer,
@@ -954,7 +989,7 @@ impl SparkWallet {
             (leaves_reservation.leaves.clone(), None, None)
         } else {
             let target_leaves =
-                select_leaves_by_amounts(&leaves_reservation.leaves, target_amounts)?;
+                select_leaves_by_target_amounts(&leaves_reservation.leaves, target_amounts)?;
             (
                 target_leaves.amount_leaves,
                 target_leaves.fee_leaves,
@@ -1305,6 +1340,122 @@ impl SparkWallet {
             .await?;
         Ok(())
     }
+
+    /// Starts leaf optimization in the background.
+    pub fn start_leaf_optimization(&self) {
+        self.leaf_optimizer.start();
+    }
+
+    /// Cancels the ongoing leaf optimization.
+    ///
+    /// This sets a cancellation flag that is checked between rounds.
+    /// The current round will complete before stopping.
+    pub async fn cancel_leaf_optimization(&self) -> Result<(), SparkWalletError> {
+        self.leaf_optimizer.cancel().await?;
+        Ok(())
+    }
+
+    /// Returns the current optimization progress snapshot.
+    pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
+        self.leaf_optimizer.progress()
+    }
+
+    /// Selects leaves with automatic retry logic.
+    ///
+    /// This method implements a multi-level retry strategy:
+    /// 1. Outer retry loop (up to SELECT_LEAVES_MAX_RETRIES times) handles general failures like
+    ///    attempting to pay before initial sync by refreshing leaves between retries.
+    /// 2. Inner retry logic handles insufficient funds when optimization is in progress by
+    ///    cancelling the optimization and retrying once.
+    async fn select_leaves_with_retry(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<spark::tree::LeavesReservation, SparkWalletError> {
+        use spark::tree::TreeServiceError;
+
+        let mut reservation: Option<spark::tree::LeavesReservation> = None;
+
+        for i in 0..SELECT_LEAVES_MAX_RETRIES {
+            // Try to select leaves with inner optimization retry logic
+            let reserve_result = self
+                .try_select_leaves_with_optimization_retry(target_amounts)
+                .await;
+
+            match reserve_result {
+                Ok(r) => {
+                    reservation = Some(r);
+                    break;
+                }
+                Err(e) => {
+                    error!("Failed to select leaves: {e:?}");
+                }
+            }
+
+            info!("Failed to select leaves, refreshing leaves and retrying");
+            self.tree_service.refresh_leaves().await?;
+
+            // Check if we have enough funds after refresh
+            if let Some(target_amounts) = target_amounts {
+                let available_balance = self.tree_service.get_available_balance().await?;
+                if available_balance < target_amounts.total_sats() {
+                    info!("Not enough funds to select leaves after refresh");
+                    return Err(TreeServiceError::InsufficientFunds.into());
+                }
+            }
+
+            // Sleep between retries (except on the last one)
+            if i < SELECT_LEAVES_MAX_RETRIES - 1 {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+
+        reservation.ok_or_else(|| {
+            TreeServiceError::Generic("Failed to select leaves after all retries".to_string())
+                .into()
+        })
+    }
+
+    /// Inner helper that tries to select leaves and handles optimization cancellation.
+    ///
+    /// If select_leaves fails with InsufficientFunds and the optimizer has reserved
+    /// leaves, this method cancels the optimization and retries once.
+    async fn try_select_leaves_with_optimization_retry(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<spark::tree::LeavesReservation, SparkWalletError> {
+        use spark::tree::{ReservationPurpose, TreeServiceError};
+
+        match self
+            .tree_service
+            .select_leaves(target_amounts, ReservationPurpose::Payment)
+            .await
+        {
+            Ok(reservation) => Ok(reservation),
+            Err(TreeServiceError::InsufficientFunds) => {
+                // Check if optimization has reserved leaves
+                if self.leaf_optimizer.is_running() {
+                    debug!(
+                        "Insufficient funds with optimization in progress, cancelling optimization and retrying"
+                    );
+
+                    // Cancel optimization and wait for it to release leaves
+                    if let Err(e) = self.leaf_optimizer.cancel().await {
+                        debug!("Failed to cancel optimization: {:?}", e);
+                    }
+
+                    // Retry select_leaves
+                    let reservation = self
+                        .tree_service
+                        .select_leaves(target_amounts, ReservationPurpose::Payment)
+                        .await?;
+                    Ok(reservation)
+                } else {
+                    Err(TreeServiceError::InsufficientFunds.into())
+                }
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
 }
 
 async fn claim_pending_transfers(
@@ -1338,6 +1489,7 @@ async fn claim_pending_transfers(
             transfers.len()
         );
     }
+
     debug!("Claimed all transfers, creating wallet transfers");
     Ok(create_transfers(
         transfers,
@@ -1462,11 +1614,21 @@ async fn claim_transfer(
     let claimed_nodes = transfer_service.claim_transfer(transfer, None).await?;
 
     trace!("Inserting claimed leaves after claiming transfer");
-    let result_nodes = tree_service
-        .insert_leaves(claimed_nodes.clone(), true)
-        .await?;
+    let result_nodes = tree_service.insert_leaves(claimed_nodes.clone()).await?;
 
     Ok(result_nodes)
+}
+
+/// Event handler that bridges OptimizationEvent to WalletEvent.
+struct WalletOptimizationEventHandler {
+    event_manager: Arc<EventManager>,
+}
+
+impl OptimizationEventHandler for WalletOptimizationEventHandler {
+    fn on_optimization_event(&self, event: OptimizationEvent) {
+        self.event_manager
+            .notify_listeners(WalletEvent::Optimization(event));
+    }
 }
 
 struct BackgroundProcessor {
@@ -1478,6 +1640,8 @@ struct BackgroundProcessor {
     ssp_client: Arc<ServiceProvider>,
     transfer_service: Arc<TransferService>,
     htlc_service: Arc<HtlcService>,
+    leaf_optimizer: Arc<LeafOptimizer>,
+    auto_optimize_enabled: bool,
 }
 
 impl BackgroundProcessor {
@@ -1491,6 +1655,8 @@ impl BackgroundProcessor {
         ssp_client: Arc<ServiceProvider>,
         transfer_service: Arc<TransferService>,
         htlc_service: Arc<HtlcService>,
+        leaf_optimizer: Arc<LeafOptimizer>,
+        auto_optimize_enabled: bool,
     ) -> Self {
         Self {
             operator_pool,
@@ -1501,6 +1667,14 @@ impl BackgroundProcessor {
             ssp_client,
             transfer_service,
             htlc_service,
+            leaf_optimizer,
+            auto_optimize_enabled,
+        }
+    }
+
+    fn maybe_start_optimization(&self) {
+        if self.auto_optimize_enabled {
+            self.leaf_optimizer.start();
         }
     }
 
@@ -1562,11 +1736,10 @@ impl BackgroundProcessor {
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
         let id = deposit.id.clone();
         info!("Inserting deposit leaf: {:?}", deposit);
-        self.tree_service
-            .insert_leaves(vec![deposit], false)
-            .await?;
+        self.tree_service.insert_leaves(vec![deposit]).await?;
         self.event_manager
             .notify_listeners(WalletEvent::DepositConfirmed(id));
+        self.maybe_start_optimization();
         Ok(())
     }
 
@@ -1642,6 +1815,8 @@ impl BackgroundProcessor {
                 self.identity_public_key,
                 self.ssp_client.identity_public_key(),
             )));
+        self.maybe_start_optimization();
+
         Ok(())
     }
 
@@ -1667,6 +1842,9 @@ impl BackgroundProcessor {
                     self.event_manager
                         .notify_listeners(WalletEvent::TransferClaimed(transfer.clone()));
                 }
+                if !transfers.is_empty() {
+                    self.maybe_start_optimization();
+                }
             }
             Err(e) => {
                 debug!(
@@ -1676,6 +1854,7 @@ impl BackgroundProcessor {
             }
         };
         self.event_manager.notify_listeners(WalletEvent::Synced);
+
         Ok(())
     }
 

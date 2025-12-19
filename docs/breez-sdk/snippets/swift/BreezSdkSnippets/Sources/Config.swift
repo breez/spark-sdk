@@ -30,3 +30,11 @@ func configurePrivateEnabledDefault() async throws {
     // ANCHOR_END: private-enabled-default
     print("Config: \(config)")
 }
+
+func configureOptimizationConfiguration() async throws {
+    // ANCHOR: optimization-configuration
+    var config = defaultConfig(network: Network.mainnet)
+    config.optimizationConfig = OptimizationConfig(autoEnabled: true, multiplicity: 1)
+    // ANCHOR_END: optimization-configuration
+    print("Config: \(config)")
+}

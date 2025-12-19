@@ -344,8 +344,7 @@ impl SparkSyncService {
         if !has_more
             && let Some(last_synced_final_token_payment_id) = payments_to_sync
                 .into_iter()
-                .filter(|p| p.status.is_final())
-                .next_back()
+                .rfind(|p| p.status.is_final())
                 .map(|p| p.id)
         {
             // Update last synced token payment id to the newest final payment we have processed

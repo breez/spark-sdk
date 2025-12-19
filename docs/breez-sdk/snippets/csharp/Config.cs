@@ -38,5 +38,15 @@ namespace BreezSdkSnippets
             };
             // ANCHOR_END: private-enabled-default
         }
+
+        void ConfigureOptimizationConfiguration()
+        {
+            // ANCHOR: optimization-configuration
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            {
+                optimizationConfig = new OptimizationConfig(autoEnabled: true, multiplicity: 1)
+            };
+            // ANCHOR_END: optimization-configuration
+        }
     }
 }

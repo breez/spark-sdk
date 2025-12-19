@@ -2,6 +2,7 @@ mod coop_exit;
 mod deposit;
 mod error;
 mod htlc;
+mod leaf_optimizer;
 mod lightning;
 mod models;
 mod swap;
@@ -15,6 +16,7 @@ pub use coop_exit::*;
 pub use deposit::*;
 pub use error::*;
 pub use htlc::*;
+pub use leaf_optimizer::*;
 pub use lightning::{
     InvoiceDescription, LightningReceivePayment, LightningSendPayment, LightningSendStatus,
     LightningService,

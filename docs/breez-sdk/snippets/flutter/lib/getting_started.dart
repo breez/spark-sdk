@@ -111,6 +111,10 @@ class BreezSdkSpark {
           // A payment failed
           final _ = payment;
           break;
+        case SdkEvent_Optimization(:final optimizationEvent):
+          // An optimization event occurred
+          final _ = optimizationEvent;
+          break;
       }
       _eventStreamController.add(sdkEvent);
     }, onError: (e) {

@@ -45,11 +45,12 @@ use crate::{
     GetTokensMetadataResponse, InputType, LightningAddressInfo, ListFiatCurrenciesResponse,
     ListFiatRatesResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
     LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse,
-    Logger, MaxFee, Network, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
-    RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem,
-    SignMessageRequest, SignMessageResponse, SparkHtlcOptions, UpdateUserSettingsRequest,
-    UserSettings, WaitForPaymentIdentifier,
+    Logger, MaxFee, Network, OptimizationConfig, OptimizationProgress, PaymentDetails,
+    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
+    SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem, SignMessageRequest,
+    SignMessageResponse, SparkHtlcOptions, UpdateUserSettingsRequest, UserSettings,
+    WaitForPaymentIdentifier,
     chain::RecommendedFees,
     error::SdkError,
     events::{EventEmitter, EventListener, InternalSyncedEvent, SdkEvent},
@@ -218,6 +219,10 @@ pub fn default_config(network: Network) -> Config {
         use_default_external_input_parsers: true,
         real_time_sync_server_url: Some(BREEZ_SYNC_SERVICE_URL.to_string()),
         private_enabled_default: true,
+        optimization_config: OptimizationConfig {
+            auto_enabled: true,
+            multiplicity: 1,
+        },
     }
 }
 
@@ -577,6 +582,9 @@ impl BreezSdk {
                 {
                     error!("Failed to sync wallet: {e:?}");
                 }
+            }
+            WalletEvent::Optimization(event) => {
+                info!("Optimization event: {:?}", event);
             }
         }
     }
@@ -1908,6 +1916,33 @@ impl BreezSdk {
     /// Returns an instance of the [`TokenIssuer`] for managing token issuance.
     pub fn get_token_issuer(&self) -> TokenIssuer {
         TokenIssuer::new(self.spark_wallet.clone(), self.storage.clone())
+    }
+
+    /// Starts leaf optimization in the background.
+    ///
+    /// This method spawns the optimization work in a background task and returns
+    /// immediately. Progress is reported via events.
+    /// If optimization is already running, no new task will be started.
+    pub fn start_leaf_optimization(&self) {
+        self.spark_wallet.start_leaf_optimization();
+    }
+
+    /// Cancels the ongoing leaf optimization.
+    ///
+    /// This method cancels the ongoing optimization and waits for it to fully stop.
+    /// The current round will complete before stopping. This method blocks
+    /// until the optimization has fully stopped and leaves reserved for optimization
+    /// are available again.
+    ///
+    /// If no optimization is running, this method returns immediately.
+    pub async fn cancel_leaf_optimization(&self) -> Result<(), SdkError> {
+        self.spark_wallet.cancel_leaf_optimization().await?;
+        Ok(())
+    }
+
+    /// Returns the current optimization progress snapshot.
+    pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
+        self.spark_wallet.get_leaf_optimization_progress().into()
     }
 }
 

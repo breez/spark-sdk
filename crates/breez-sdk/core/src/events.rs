@@ -33,6 +33,10 @@ pub enum SdkEvent {
     PaymentFailed {
         payment: Payment,
     },
+    Optimization {
+        // Named with `optimization` prefix to avoid collision with `event` keyword in C#
+        optimization_event: OptimizationEvent,
+    },
 }
 
 impl SdkEvent {
@@ -64,8 +68,33 @@ impl fmt::Display for SdkEvent {
             SdkEvent::PaymentFailed { payment } => {
                 write!(f, "PaymentFailed: {payment:?}")
             }
+            SdkEvent::Optimization {
+                optimization_event: event,
+            } => {
+                write!(f, "Optimization: {event:?}")
+            }
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum OptimizationEvent {
+    /// Optimization has started with the given number of rounds.
+    Started { total_rounds: u32 },
+    /// A round has completed.
+    RoundCompleted {
+        current_round: u32,
+        total_rounds: u32,
+    },
+    /// Optimization completed successfully.
+    Completed,
+    /// Optimization was cancelled.
+    Cancelled,
+    /// Optimization failed with an error.
+    Failed { error: String },
+    /// Optimization was skipped because leaves are already optimal.
+    Skipped,
 }
 
 #[allow(clippy::struct_excessive_bools)]

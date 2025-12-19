@@ -4,7 +4,7 @@ use crate::tree::{
     LeavesReservation, TargetAmounts, TargetLeaves, TreeNode, TreeService, TreeServiceError,
 };
 
-pub fn select_leaves_by_amounts(
+pub fn select_leaves_by_target_amounts(
     leaves: &[TreeNode],
     target_amounts: Option<&TargetAmounts>,
 ) -> Result<TargetLeaves, TreeServiceError> {
@@ -16,33 +16,46 @@ pub fn select_leaves_by_amounts(
         return Ok(TargetLeaves::new(remaining_leaves, None));
     };
 
-    // Select leaves that match the target amount_sats
-    let amount_leaves = select_leaves_by_amount(&remaining_leaves, target_amounts.amount_sats)?
-        .ok_or(TreeServiceError::UnselectableAmount)?;
+    match target_amounts {
+        TargetAmounts::AmountAndFee {
+            amount_sats,
+            fee_sats,
+        } => {
+            // Select leaves that match the target amount_sats
+            let amount_leaves = select_leaves_by_exact_amount(&remaining_leaves, *amount_sats)?
+                .ok_or(TreeServiceError::UnselectableAmount)?;
 
-    let fee_leaves = match target_amounts.fee_sats {
-        Some(fee_sats) => {
-            // Remove the amount_leaves from remaining_leaves to avoid double spending
-            remaining_leaves.retain(|leaf| {
-                !amount_leaves
-                    .iter()
-                    .any(|amount_leaf| amount_leaf.id == leaf.id)
-            });
-            // Select leaves that match the fee_sats from the remaining leaves
-            Some(
-                select_leaves_by_amount(&remaining_leaves, fee_sats)?
-                    .ok_or(TreeServiceError::UnselectableAmount)?,
-            )
+            let fee_leaves = match fee_sats {
+                Some(fee_sats) => {
+                    // Remove the amount_leaves from remaining_leaves to avoid double spending
+                    remaining_leaves.retain(|leaf| {
+                        !amount_leaves
+                            .iter()
+                            .any(|amount_leaf| amount_leaf.id == leaf.id)
+                    });
+                    // Select leaves that match the fee_sats from the remaining leaves
+                    Some(
+                        select_leaves_by_exact_amount(&remaining_leaves, *fee_sats)?
+                            .ok_or(TreeServiceError::UnselectableAmount)?,
+                    )
+                }
+                None => None,
+            };
+
+            Ok(TargetLeaves::new(amount_leaves, fee_leaves))
         }
-        None => None,
-    };
-
-    Ok(TargetLeaves::new(amount_leaves, fee_leaves))
+        TargetAmounts::ExactDenominations { denominations } => {
+            // Select leaves that match the target denominations
+            let denominations_leaves =
+                select_leaves_by_exact_denominations(&remaining_leaves, denominations)?;
+            Ok(TargetLeaves::new(denominations_leaves, None))
+        }
+    }
 }
 
 /// Selects leaves from the tree that sum up to exactly the target amount.
 /// If such a combination of leaves does not exist, it returns `None`.
-pub fn select_leaves_by_amount(
+pub fn select_leaves_by_exact_amount(
     leaves: &[TreeNode],
     target_amount_sat: u64,
 ) -> Result<Option<Vec<TreeNode>>, TreeServiceError> {
@@ -65,6 +78,23 @@ pub fn select_leaves_by_amount(
     }
 
     Ok(None)
+}
+
+pub fn select_leaves_by_exact_denominations(
+    leaves: &[TreeNode],
+    denominations: &[u64],
+) -> Result<Vec<TreeNode>, TreeServiceError> {
+    let mut remaining_leaves = leaves.to_vec();
+    let mut selected_leaves = Vec::new();
+
+    for denomination in denominations {
+        let leaf = find_exact_single_match(&remaining_leaves, *denomination)
+            .ok_or(TreeServiceError::UnselectableAmount)?;
+        selected_leaves.push(leaf.clone());
+        remaining_leaves.retain(|remaining_leaf| remaining_leaf.id != leaf.id);
+    }
+
+    Ok(selected_leaves)
 }
 
 /// Selects leaves from the tree that sum up to at least the target amount.
@@ -183,7 +213,10 @@ where
 {
     match f.await {
         Ok(r) => {
-            if let Err(e) = tree_service.finalize_reservation(leaves.id.clone()).await {
+            if let Err(e) = tree_service
+                .finalize_reservation(leaves.id.clone(), None)
+                .await
+            {
                 error!("Failed to finalize reservation: {e:?}");
             }
             Ok(r)

@@ -1,4 +1,9 @@
-import { defaultConfig, Network, MaxFee } from '@breeztech/breez-sdk-spark-react-native'
+import {
+  defaultConfig,
+  Network,
+  MaxFee,
+  OptimizationConfig
+} from '@breeztech/breez-sdk-spark-react-native'
 
 const exampleConfigureSdk = () => {
   // ANCHOR: max-deposit-claim-fee
@@ -31,4 +36,16 @@ const exampleConfigurePrivateEnabledDefault = () => {
   console.log('Config:', config)
 }
 
-export { exampleConfigureSdk, exampleConfigurePrivateEnabledDefault }
+const exampleConfigureOptimizationConfiguration = () => {
+  // ANCHOR: optimization-configuration
+  const config = defaultConfig(Network.Mainnet)
+  config.optimizationConfig = { autoEnabled: true, multiplicity: 1 }
+  // ANCHOR_END: optimization-configuration
+  console.log('Config:', config)
+}
+
+export {
+  exampleConfigureSdk,
+  exampleConfigurePrivateEnabledDefault,
+  exampleConfigureOptimizationConfiguration
+}
