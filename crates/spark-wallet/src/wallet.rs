@@ -17,7 +17,7 @@ use spark::{
     operator::{
         OperatorPool,
         rpc::{
-            ConnectionManager, DefaultConnectionManager,
+            ConnectionManager, DefaultConnectionManager, OperatorRpcError,
             spark::{PreimageRequestRole, QuerySparkInvoicesRequest, UpdateWalletSettingRequest},
         },
     },
@@ -58,7 +58,7 @@ use crate::{
 };
 
 const SELECT_LEAVES_MAX_RETRIES: usize = 3;
-const TRANSFER_LOCKED_MAX_RETRIES: usize = 3;
+const MAX_LEAF_SPENT_RETRIES: usize = 3;
 
 use super::{SparkWalletConfig, SparkWalletError};
 
@@ -68,10 +68,20 @@ fn is_transfer_locked_error<E: std::fmt::Display>(error: &E) -> bool {
     error.to_string().contains("TRANSFER_LOCKED")
 }
 
+/// Checks if an error is a gRPC PermissionDenied status, which can occur
+/// when we are trying to spend leaves that have already been spent.
+fn is_permission_denied_error(error: &OperatorRpcError) -> bool {
+    matches!(error, OperatorRpcError::Connection(status) if status.code() == tonic::Code::PermissionDenied)
+}
+
+/// Checks if an error should trigger a retry of the operation.
+fn is_leafs_spent_error(error: &OperatorRpcError) -> bool {
+    is_transfer_locked_error(error) || is_permission_denied_error(error)
+}
+
 /// Macro to handle retry logic for operations that may fail due to concurrent leaf spending.
-/// This retries the operation up to TRANSFER_LOCKED_MAX_RETRIES times when a TRANSFER_LOCKED
-/// error is encountered.
-macro_rules! with_transfer_locked_retry {
+/// This retries the operation up to MAX_LEAF_SPENT_RETRIES times.
+macro_rules! with_leafs_spent_retry {
     (
         $self:expr,
         $target_amounts:expr,
@@ -81,17 +91,17 @@ macro_rules! with_transfer_locked_retry {
         let mut attempt = 0;
         loop {
             if attempt > 0 {
-                if attempt >= TRANSFER_LOCKED_MAX_RETRIES {
+                if attempt >= MAX_LEAF_SPENT_RETRIES {
                     break Err(SparkWalletError::Generic(format!(
-                        "{} failed after {} retries due to TRANSFER_LOCKED errors",
-                        $operation_name, TRANSFER_LOCKED_MAX_RETRIES
+                        "{} failed after {} retries due to leaf spending errors",
+                        $operation_name, MAX_LEAF_SPENT_RETRIES
                     )));
                 }
                 info!(
-                    "{} failed with TRANSFER_LOCKED error (attempt {}/{}), refreshing leaves and retrying",
+                    "{} failed with leaf spending error (attempt {}/{}), refreshing leaves and retrying",
                     $operation_name,
                     attempt,
-                    TRANSFER_LOCKED_MAX_RETRIES
+                    MAX_LEAF_SPENT_RETRIES
                 );
                 $self.tree_service.refresh_leaves().await?;
             }
@@ -106,7 +116,7 @@ macro_rules! with_transfer_locked_retry {
 
             match result {
                 Ok(v) => break Ok(v),
-                Err(ServiceError::ServiceConnectionError(e)) if is_transfer_locked_error(&e) => {
+                Err(ServiceError::ServiceConnectionError(e)) if is_leafs_spent_error(&e) => {
                     attempt += 1;
                     continue;
                 }
@@ -375,7 +385,7 @@ impl SparkWallet {
         let target_amounts = TargetAmounts::new_amount_and_fee(total_amount_sat, None);
 
         // Start the lightning swap with the operator, with retry logic for concurrent leaf spending
-        let lightning_payment = with_transfer_locked_retry!(
+        let lightning_payment = with_leafs_spent_retry!(
             self,
             Some(&target_amounts),
             "Lightning payment",
@@ -668,7 +678,7 @@ impl SparkWallet {
 
         // Transfer leaves with retry logic for concurrent leaf spending
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
-        let transfer = with_transfer_locked_retry!(
+        let transfer = with_leafs_spent_retry!(
             self,
             Some(&target_amounts),
             "Transfer",
@@ -727,7 +737,7 @@ impl SparkWallet {
         // Create HTLC with retry logic for concurrent leaf spending
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
         let expiry_time = SystemTime::now() + expiry_duration;
-        let transfer = with_transfer_locked_retry!(
+        let transfer = with_leafs_spent_retry!(
             self,
             Some(&target_amounts),
             "HTLC creation",
@@ -991,7 +1001,7 @@ impl SparkWallet {
         // Withdraw leaves with retry logic for concurrent leaf spending
         let target_amounts = amount_sats
             .map(|amount_sats| TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats)));
-        let transfer = with_transfer_locked_retry!(
+        let transfer = with_leafs_spent_retry!(
             self,
             target_amounts.as_ref(),
             "Withdrawal",
