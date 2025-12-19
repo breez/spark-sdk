@@ -36,7 +36,7 @@ By default, the SDK automatically triggers optimization after each payment (sent
 
 <h3 id="start-optimization">
     <a class="header" href="#start-optimization">Start optimization</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.startLeafOptimization">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.start_leaf_optimization">API docs</a>
 </h3>
 
 You can manually trigger the optimization task to start running in the background. If optimization is already running, no new task will be started.
@@ -45,7 +45,7 @@ You can manually trigger the optimization task to start running in the backgroun
 
 <h3 id="cancel-optimization">
     <a class="header" href="#cancel-optimization">Cancel optimization</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.cancelLeafOptimization">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.cancel_leaf_optimization">API docs</a>
 </h3>
 
 You can cancel an ongoing optimization task and wait for it to stop completely. Optimization is done in rounds, and the current round will complete before stopping.
@@ -61,7 +61,7 @@ The SDK automatically cancels optimization when it would block an immediate paym
 
 <h3 id="get-optimization-progress">
     <a class="header" href="#get-optimization-progress">Get optimization progress</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.getLeafOptimizationProgress">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_leaf_optimization_progress">API docs</a>
 </h3>
 
 You can retrieve the current optimization progress to monitor the optimization task.
