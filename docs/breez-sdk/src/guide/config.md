@@ -60,7 +60,7 @@ This configuration option is only relevant when the SDK is initialized for the f
 
 ## Optimization configuration
 
-The SDK can automatically optimize the Bitcoin leaf set to maximize unilateral exit efficiency or increase payment speed. Fewer, larger leaves allow more funds to be exited unilaterally, while having more leaves enables payments without requiring swaps, improving payment speed.
+The SDK can automatically optimize the Spark leaf set to maximize unilateral exit efficiency or increase payment speed. Fewer, larger leaves allow more funds to be exited unilaterally, while having more leaves enables payments without requiring swaps, improving payment speed.
 
 This configuration controls optimization through the following options:
 
