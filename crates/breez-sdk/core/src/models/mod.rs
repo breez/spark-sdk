@@ -664,6 +664,8 @@ pub enum ReceivePaymentMethod {
     Bolt11Invoice {
         description: String,
         amount_sats: Option<u64>,
+        /// The expiry time of the invoice in seconds
+        expiry_secs: Option<u32>,
     },
 }
 

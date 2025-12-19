@@ -7,12 +7,14 @@ async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     let description = "<invoice description>".to_string();
     // Optionally set the invoice amount you wish the payer to send
     let optional_amount_sats = Some(5_000);
+    let optional_expiry_secs = Some(3600_u32);
 
     let response = sdk
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description,
                 amount_sats: optional_amount_sats,
+                expiry_secs: optional_expiry_secs,
             },
         })
         .await?;

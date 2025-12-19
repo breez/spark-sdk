@@ -6,11 +6,15 @@ Future<ReceivePaymentResponse> receivePaymentLightning(
   String description = "<invoice description>";
   // Optionally set the invoice amount you wish the payer to send
   BigInt optionalAmountSats = BigInt.from(5000);
+  // Optionally set the expiry time in seconds
+  int optionalExpirySecs = 3600;
 
   // Create an invoice and set the amount you wish the payer to send
   ReceivePaymentRequest request = ReceivePaymentRequest(
       paymentMethod: ReceivePaymentMethod.bolt11Invoice(
-          description: description, amountSats: optionalAmountSats));
+          description: description,
+          amountSats: optionalAmountSats,
+          expirySecs: optionalExpirySecs));
   ReceivePaymentResponse response = await sdk.receivePayment(
     request: request,
   );

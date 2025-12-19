@@ -370,6 +370,7 @@ impl SparkWallet {
         amount_sat: u64,
         description: Option<InvoiceDescription>,
         public_key: Option<PublicKey>,
+        expiry_secs: Option<u32>,
         include_spark_address: bool,
     ) -> Result<LightningReceivePayment, SparkWalletError> {
         Ok(self
@@ -378,7 +379,7 @@ impl SparkWallet {
                 amount_sat,
                 description,
                 None,
-                None,
+                expiry_secs,
                 include_spark_address,
                 public_key,
             )

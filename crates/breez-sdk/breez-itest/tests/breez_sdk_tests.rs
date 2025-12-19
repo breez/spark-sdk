@@ -287,6 +287,7 @@ async fn test_03_lightning_invoice_payment(
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: format!("Test payment ({})", test_type),
                 amount_sats: invoice_amount_sats,
+                expiry_secs: None,
             },
         })
         .await?
@@ -547,6 +548,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: "Prefer spark test".to_string(),
                 amount_sats: Some(invoice_amount_sats),
+                expiry_secs: None,
             },
         })
         .await?
@@ -639,6 +641,7 @@ async fn test_06_lightning_timeout_and_wait(
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: "Timeout test".to_string(),
                 amount_sats: None,
+                expiry_secs: None,
             },
         })
         .await?
@@ -824,5 +827,175 @@ async fn test_07_spark_invoice(
     );
 
     info!("=== Test test_07_spark_invoice PASSED ===");
+    Ok(())
+}
+
+/// Test 8: Lightning invoice with custom expiry_secs
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_08_lightning_invoice_expiry_secs(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_08_lightning_invoice_expiry_secs ===");
+
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
+
+    // Ensure Alice is funded
+    ensure_funded(&mut alice, 50_000).await?;
+
+    // Get Alice's initial balance
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_initial_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    info!("Alice initial balance: {} sats", alice_initial_balance);
+
+    // Get Bob's initial balance
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_initial_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    info!("Bob initial balance: {} sats", bob_initial_balance);
+
+    // Test with custom expiry_secs (1 hour = 3600 seconds)
+    let custom_expiry_secs: u32 = 3600 - 1;
+    let invoice_amount_sats = 5_000u64;
+
+    // Bob creates a Lightning invoice with custom expiry
+    let receive_response = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "Test invoice with custom expiry".to_string(),
+                amount_sats: Some(invoice_amount_sats),
+                expiry_secs: Some(custom_expiry_secs),
+            },
+        })
+        .await?;
+
+    let bob_invoice = receive_response.payment_request;
+    info!(
+        "Bob's Lightning invoice with {} secs expiry: {}",
+        custom_expiry_secs, bob_invoice
+    );
+
+    // Parse the invoice to verify expiry is set
+    let parsed = bob.sdk.parse(&bob_invoice).await?;
+    if let InputType::Bolt11Invoice(invoice_details) = parsed {
+        info!(
+            "Parsed invoice - amount: {:?} msat, expiry: {} secs",
+            invoice_details.amount_msat, invoice_details.expiry
+        );
+
+        // Verify the expiry matches what we requested
+        assert_eq!(
+            invoice_details.expiry, custom_expiry_secs as u64,
+            "Invoice expiry should match requested expiry_secs"
+        );
+
+        // Verify the amount is correct (in millisats)
+        assert_eq!(
+            invoice_details.amount_msat,
+            Some(invoice_amount_sats * 1000),
+            "Invoice amount should match requested amount"
+        );
+    } else {
+        anyhow::bail!("Expected Bolt11Invoice input type");
+    }
+
+    // Alice prepares to pay Bob's invoice
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_invoice.clone(),
+            amount: None,
+            token_identifier: None,
+        })
+        .await?;
+
+    info!("Payment prepared - amount: {} sats", prepare.amount);
+
+    // Alice sends the payment
+    info!(
+        "Sending {} sats from Alice to Bob via Lightning with custom expiry...",
+        invoice_amount_sats
+    );
+
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: Some(SendPaymentOptions::Bolt11Invoice {
+                prefer_spark: false,
+                completion_timeout_secs: Some(10),
+            }),
+            idempotency_key: None,
+        })
+        .await?;
+
+    info!("Alice send payment status: {:?}", send_resp.payment.status);
+    assert!(
+        matches!(
+            send_resp.payment.status,
+            PaymentStatus::Completed | PaymentStatus::Pending
+        ),
+        "Payment should be completed or pending"
+    );
+
+    // Wait for Bob to receive the payment
+    info!("Waiting for Bob to receive payment event...");
+    let received_payment =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
+
+    assert_eq!(
+        received_payment.payment_type,
+        PaymentType::Receive,
+        "Bob should receive a payment"
+    );
+    assert_eq!(
+        received_payment.amount, invoice_amount_sats as u128,
+        "Bob should receive the exact amount"
+    );
+
+    info!(
+        "Bob received payment: {} sats, status: {:?}",
+        received_payment.amount, received_payment.status
+    );
+
+    // Verify Bob's balance increased
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_final_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    info!(
+        "Bob's balance: {} -> {} sats (change: +{})",
+        bob_initial_balance,
+        bob_final_balance,
+        bob_final_balance as i64 - bob_initial_balance as i64
+    );
+
+    assert!(
+        bob_final_balance > bob_initial_balance,
+        "Bob's balance should increase"
+    );
+
+    info!("=== Test test_08_lightning_invoice_expiry_secs PASSED ===");
     Ok(())
 }
