@@ -562,6 +562,7 @@ fn minimize_transfer_swap(
             // Create swap, potentially splitting if too large
             if to_give_batch.len() > max_leaves {
                 // Split give batch into chunks
+                // TODO: consider improving this fallback logic in order to minimize the deviation from the optimal set.
                 for chunk in to_give_batch.chunks(max_leaves) {
                     let chunk_sum: u64 = chunk.iter().sum();
                     swaps.push(SwapPlan {
