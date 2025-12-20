@@ -1,7 +1,7 @@
 use lnurl_models::ListMetadataMetadata;
 use sqlx::{Row, SqlitePool};
 
-use crate::repository::LnurlSenderComment;
+use crate::repository::{LnurlPayInvoice, LnurlSenderComment};
 use crate::zap::Zap;
 use crate::{repository::LnurlRepositoryError, time::now, user::User};
 
@@ -256,5 +256,56 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn upsert_lnurl_pay_invoice(
+        &self,
+        invoice: &LnurlPayInvoice,
+    ) -> Result<(), LnurlRepositoryError> {
+        sqlx::query(
+            "REPLACE INTO lnurl_pay_invoices (payment_hash, user_pubkey, domain, username, metadata, invoice_expiry, updated_at, lightning_receive_id, bolt11_invoice)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(&invoice.payment_hash)
+        .bind(&invoice.user_pubkey)
+        .bind(&invoice.domain)
+        .bind(&invoice.username)
+        .bind(&invoice.metadata)
+        .bind(invoice.invoice_expiry)
+        .bind(invoice.updated_at)
+        .bind(&invoice.lightning_receive_id)
+        .bind(&invoice.bolt11_invoice)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_lnurl_pay_invoice_by_payment_hash(
+        &self,
+        payment_hash: &str,
+    ) -> Result<Option<LnurlPayInvoice>, LnurlRepositoryError> {
+        let maybe_invoice = sqlx::query(
+            "SELECT payment_hash, user_pubkey, domain, username, metadata, invoice_expiry, updated_at, lightning_receive_id, bolt11_invoice
+             FROM lnurl_pay_invoices
+             WHERE payment_hash = $1",
+        )
+        .bind(payment_hash)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(|row| {
+            Ok::<_, sqlx::Error>(LnurlPayInvoice {
+                payment_hash: row.try_get(0)?,
+                user_pubkey: row.try_get(1)?,
+                domain: row.try_get(2)?,
+                username: row.try_get(3)?,
+                metadata: row.try_get(4)?,
+                invoice_expiry: row.try_get(5)?,
+                updated_at: row.try_get(6)?,
+                lightning_receive_id: row.try_get(7)?,
+                bolt11_invoice: row.try_get(8)?,
+            })
+        })
+        .transpose()?;
+        Ok(maybe_invoice)
     }
 }
