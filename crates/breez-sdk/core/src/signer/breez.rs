@@ -120,8 +120,9 @@ impl BreezSigner for BreezSignerImpl {
             )
             .serialize_compact();
 
-        let mut complete_signature =
-            vec![31u8.saturating_add(u8::try_from(recovery_id.to_i32()).unwrap())];
+        let mut complete_signature = vec![31u8.saturating_add(
+            u8::try_from(recovery_id.to_i32()).map_err(|e| SdkError::Generic(e.to_string()))?,
+        )];
         complete_signature.extend_from_slice(&sig);
         Ok(complete_signature)
     }
