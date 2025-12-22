@@ -87,8 +87,8 @@ mod tests {
     use spark_wallet::KeySetType;
 
     /// Test that our new signing method produces the same signatures as the old method
-    /// Old method: nostr::Keys with sign_with_keys
-    /// New method: NostrSigner with sign_hash_schnorr
+    /// Old method: `nostr::Keys` with `sign_with_keys`
+    /// New method: `NostrSigner` with `sign_hash_schnorr`
     #[tokio::test]
     async fn test_signing_compatibility_with_nostr_keys() {
         // Create a test seed (deterministic for reproducible tests)
@@ -179,9 +179,9 @@ mod tests {
             .expect("Failed to add signature");
 
         // Debug: Let's see what we got
-        println!("Event ID: {}", event_id);
-        println!("New signature: {}", signature_new);
-        println!("Old signature: {}", signature_old);
+        println!("Event ID: {event_id}");
+        println!("New signature: {signature_new}");
+        println!("Old signature: {signature_old}");
 
         // Verify that both methods produce the same results
         assert_eq!(event_new.id, event_old.id, "Event IDs should match");
