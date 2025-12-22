@@ -104,6 +104,7 @@ async fn run_interactive_mode(data_dir: PathBuf, network: Network) -> Result<()>
         config,
         seed,
         storage_dir: data_dir.to_string_lossy().to_string(),
+        plugins: None,
     })
     .await?;
 

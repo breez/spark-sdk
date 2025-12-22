@@ -4,7 +4,9 @@ use breez_sdk_common::{fiat::FiatService, rest::RestClient};
 use tokio::sync::Mutex;
 
 use crate::sdk_builder::Seed;
-use crate::{BitcoinChainService, BreezSdk, Config, Credentials, KeySetType, SdkError, Storage};
+use crate::{
+    BitcoinChainService, BreezSdk, Config, Credentials, KeySetType, Plugin, SdkError, Storage,
+};
 
 /// Builder for creating `BreezSdk` instances with customizable components.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
@@ -21,8 +23,13 @@ impl SdkBuilder {
     /// - `seed`: The seed for wallet generation.
     /// - `storage`: The storage backend to be used.
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
-    pub fn new(config: Config, seed: Seed, storage: Arc<dyn Storage>) -> Self {
-        let inner = crate::sdk_builder::SdkBuilder::new(config, seed, storage);
+    pub fn new(
+        config: Config,
+        seed: Seed,
+        storage: Arc<dyn Storage>,
+        plugins: Option<Vec<Arc<dyn Plugin>>>,
+    ) -> Self {
+        let inner = crate::sdk_builder::SdkBuilder::new(config, seed, storage, plugins);
         SdkBuilder {
             inner: Mutex::new(inner),
         }
@@ -75,7 +82,7 @@ impl SdkBuilder {
     }
 
     /// Builds the `BreezSdk` instance with the configured components.
-    pub async fn build(&self) -> Result<BreezSdk, SdkError> {
+    pub async fn build(&self) -> Result<Arc<BreezSdk>, SdkError> {
         self.inner.lock().await.clone().build().await
     }
 }

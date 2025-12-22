@@ -21,6 +21,7 @@ use spark_wallet::{
     WalletTransfer,
 };
 use std::{str::FromStr, sync::Arc};
+use tracing::warn;
 use tracing::{error, info, trace};
 use web_time::{Duration, SystemTime};
 
@@ -51,6 +52,7 @@ use crate::{
         CachedAccountInfo, CachedSyncInfo, ObjectCacheRepository, PaymentMetadata,
         StaticDepositAddress, Storage, UpdateDepositPayload,
     },
+    plugin::{Plugin, PluginStorage, PluginWrapper, RustPlugin},
     utils::{
         deposit_chain_syncer::DepositChainSyncer,
         utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
@@ -79,6 +81,7 @@ pub struct BreezSdk {
     shutdown_sender: watch::Sender<()>,
     shutdown_receiver: watch::Receiver<()>,
     sync_trigger: tokio::sync::broadcast::Sender<SyncType>,
+    plugins: Vec<Arc<dyn Plugin>>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -101,7 +104,7 @@ pub fn init_logging(
 /// Result containing either the initialized `BreezSdk` or an `SdkError`
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkError> {
+pub async fn connect(request: crate::ConnectRequest) -> Result<Arc<BreezSdk>, SdkError> {
     let db_path = std::path::PathBuf::from_str(&request.storage_dir)?;
     let path_suffix: String = match &request.seed {
         crate::Seed::Mnemonic {
@@ -127,7 +130,7 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
         .join(path_suffix);
 
     let storage = default_storage(storage_dir.to_string_lossy().to_string())?;
-    let builder = crate::SdkBuilder::new(request.config, request.seed, storage);
+    let builder = crate::SdkBuilder::new(request.config, request.seed, storage, request.plugins);
     builder.build().await
 }
 
@@ -168,6 +171,7 @@ pub(crate) struct BreezSdkParams {
     pub shutdown_sender: watch::Sender<()>,
     pub shutdown_receiver: watch::Receiver<()>,
     pub spark_wallet: Arc<SparkWallet>,
+    pub plugins: Vec<Arc<dyn Plugin>>,
 }
 
 impl BreezSdk {
@@ -189,6 +193,7 @@ impl BreezSdk {
             shutdown_sender: params.shutdown_sender,
             shutdown_receiver: params.shutdown_receiver,
             sync_trigger: tokio::sync::broadcast::channel(10).0,
+            plugins: params.plugins,
         };
         Ok(sdk)
     }
@@ -198,9 +203,33 @@ impl BreezSdk {
     /// This method initiates the following backround tasks:
     /// 1. `periodic_sync`: the wallet with the Spark network    
     /// 2. `monitor_deposits`: monitors for new deposits
-    pub(crate) fn start(&self) {
+    pub(crate) fn start(self: &Arc<Self>) {
+        self.start_plugins();
         self.periodic_sync();
         self.try_recover_lightning_address();
+    }
+
+    /// Starts the provided plugins at runtime
+    fn start_plugins(self: &Arc<Self>) {
+        let plugins: Vec<Box<dyn RustPlugin>> = self
+            .plugins
+            .iter()
+            .map(|plugin| Box::new(PluginWrapper::new(plugin.clone())) as Box<dyn RustPlugin>)
+            .collect();
+        let cloned = self.clone();
+        tokio::spawn(async move {
+            for plugin in plugins {
+                let storage = match PluginStorage::new(Arc::downgrade(&cloned.storage), plugin.id())
+                {
+                    Ok(storage) => storage,
+                    Err(err) => {
+                        warn!("Could not create plugin storage: {err}");
+                        continue;
+                    }
+                };
+                plugin.on_start(Arc::downgrade(&cloned), storage).await;
+            }
+        });
     }
 
     /// Refreshes the user's lightning address on the server on startup.
@@ -556,8 +585,22 @@ impl BreezSdk {
         self.shutdown_sender
             .send(())
             .map_err(|_| SdkError::Generic("Failed to send shutdown signal".to_string()))?;
+        self.stop_plugins();
 
         Ok(())
+    }
+
+    fn stop_plugins(&self) {
+        let plugins: Vec<Box<dyn RustPlugin>> = self
+            .plugins
+            .iter()
+            .map(|plugin| Box::new(PluginWrapper::new(plugin.clone())) as Box<dyn RustPlugin>)
+            .collect();
+        tokio::spawn(async move {
+            for plugin in plugins {
+                plugin.on_stop().await;
+            }
+        });
     }
 
     /// Returns the balance of the wallet in satoshis

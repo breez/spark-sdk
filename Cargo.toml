@@ -14,6 +14,7 @@ members = [
   "crates/breez-sdk/core", 
   "crates/breez-sdk/lnurl-models",
   "crates/breez-sdk/wasm",
+  "crates/breez-sdk/plugins/*",
   "crates/macros",
   "crates/spark",
   "crates/spark-itest",

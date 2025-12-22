@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use breez_sdk_common::{
     fiat::{FiatCurrency, Rate},
     input::{self, BitcoinAddressDetails, Bolt11InvoiceDetails},
@@ -16,13 +17,14 @@ use spark_wallet::{
 use std::{fmt::Display, str::FromStr, time::UNIX_EPOCH};
 
 use crate::sdk_builder::Seed;
-use crate::{SdkError, error::DepositClaimError};
+use crate::{SdkError, error::DepositClaimError, plugin::Plugin};
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConnectRequest {
     pub config: Config,
     pub seed: Seed,
     pub storage_dir: String,
+    pub plugins: Option<Vec<Arc<dyn Plugin>>>,
 }
 
 /// The type of payment

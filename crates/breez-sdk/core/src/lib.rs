@@ -7,6 +7,7 @@ mod lnurl;
 mod logger;
 mod models;
 mod persist;
+mod plugin;
 mod sdk;
 mod sdk_builder;
 mod utils;
@@ -19,6 +20,7 @@ pub use error::{DepositClaimError, SdkError};
 pub use events::{EventEmitter, EventListener, SdkEvent};
 pub use models::*;
 pub use persist::{PaymentMetadata, Storage, StorageError, UpdateDepositPayload};
+pub use plugin::*;
 pub use sdk::{BreezSdk, default_config, init_logging, parse_input};
 #[cfg(not(feature = "uniffi"))]
 pub use sdk_builder::SdkBuilder;

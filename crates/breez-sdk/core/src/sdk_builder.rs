@@ -22,6 +22,7 @@ use crate::{
     lnurl::{LnurlServerClient, ReqwestLnurlServerClient},
     models::Config,
     persist::Storage,
+    plugin::Plugin,
     sdk::{BreezSdk, BreezSdkParams},
 };
 
@@ -54,6 +55,7 @@ pub struct SdkBuilder {
     key_set_type: KeySetType,
     use_address_index: bool,
     account_number: Option<u32>,
+    plugins: Option<Vec<Arc<dyn Plugin>>>,
 }
 
 impl SdkBuilder {
@@ -62,7 +64,13 @@ impl SdkBuilder {
     /// - `config`: The configuration to be used.
     /// - `seed`: The seed for wallet generation.
     /// - `storage`: The storage backend to be used.
-    pub fn new(config: Config, seed: Seed, storage: Arc<dyn Storage>) -> Self {
+    /// - `plugins`: The plugins to be used, if any.
+    pub fn new(
+        config: Config,
+        seed: Seed,
+        storage: Arc<dyn Storage>,
+        plugins: Option<Vec<Arc<dyn Plugin>>>,
+    ) -> Self {
         SdkBuilder {
             config,
             seed,
@@ -74,6 +82,7 @@ impl SdkBuilder {
             key_set_type: KeySetType::Default,
             use_address_index: false,
             account_number: None,
+            plugins,
         }
     }
 
@@ -149,7 +158,7 @@ impl SdkBuilder {
     }
 
     /// Builds the `BreezSdk` instance with the configured components.
-    pub async fn build(self) -> Result<BreezSdk, SdkError> {
+    pub async fn build(self) -> Result<Arc<BreezSdk>, SdkError> {
         // Create the signer from seed
         let seed = match self.seed {
             Seed::Mnemonic {
@@ -243,7 +252,7 @@ impl SdkBuilder {
         let (shutdown_sender, shutdown_receiver) = watch::channel::<()>(());
 
         // Create the SDK instance
-        let sdk = BreezSdk::new(BreezSdkParams {
+        let sdk = Arc::new(BreezSdk::new(BreezSdkParams {
             config: self.config,
             storage: self.storage,
             chain_service,
@@ -253,7 +262,8 @@ impl SdkBuilder {
             shutdown_sender,
             shutdown_receiver,
             spark_wallet,
-        })?;
+            plugins: self.plugins.unwrap_or_default(),
+        })?);
 
         sdk.start();
         Ok(sdk)
