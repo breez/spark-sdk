@@ -7,17 +7,14 @@ use spark_wallet::{DefaultSigner, KeySet, KeySetType, Signer};
 use super::BreezSigner;
 
 pub struct BreezSignerImpl {
-    config: Config,
-
     key_set: KeySet,
-    account_number: Option<u32>,
     secp: Secp256k1<secp256k1::All>,
     spark_signer: DefaultSigner,
 }
 
 impl BreezSignerImpl {
     pub fn new(
-        config: Config,
+        config: &Config,
         seed: &Seed,
         key_set_type: KeySetType,
         use_address_index: bool,
@@ -34,38 +31,10 @@ impl BreezSignerImpl {
         .map_err(|e| SdkError::Generic(e.to_string()))?;
 
         Ok(Self {
-            config,
             key_set: key_set.clone(),
-            account_number,
             secp: Secp256k1::new(),
             spark_signer: DefaultSigner::from_key_set(key_set),
         })
-    }
-
-    pub fn key_set(&self) -> KeySet {
-        self.key_set.clone()
-    }
-
-    fn get_nostr_keys(&self) -> Result<nostr::Keys, SdkError> {
-        let account = self.account_number.unwrap_or(match self.config.network {
-            crate::Network::Mainnet => 0,
-            crate::Network::Regtest => 1,
-        });
-
-        let derivation_path: DerivationPath = format!("m/44'/1237'/{account}'/0/0")
-            .parse()
-            .map_err(|e| SdkError::Generic(format!("Failed to parse derivation path: {e:?}")))?;
-
-        let nostr_key = self
-            .key_set
-            .identity_master_key
-            .derive_priv(&self.secp, &derivation_path)
-            .map_err(|e| SdkError::Generic(format!("Failed to derive nostr child key: {e:?}")))?;
-
-        let nostr_key = nostr::SecretKey::from_slice(&nostr_key.private_key.secret_bytes())
-            .map_err(|e| SdkError::Generic(format!("failed to serialize nostr key: {e:?}")))?;
-
-        Ok(nostr::Keys::new(nostr_key))
     }
 }
 
@@ -171,21 +140,6 @@ impl BreezSigner for BreezSignerImpl {
             Message::from_digest_slice(hash).map_err(|e| SdkError::Generic(e.to_string()))?;
         let keypair = derived.private_key.keypair(&self.secp);
         Ok(self.secp.sign_schnorr(&message, &keypair))
-    }
-
-    async fn nostr_pubkey(&self) -> Result<String, SdkError> {
-        let keys = self.get_nostr_keys()?;
-        Ok(keys.public_key().to_string())
-    }
-
-    async fn sign_nostr_event(
-        &self,
-        builder: ::nostr::event::EventBuilder,
-    ) -> Result<::nostr::event::Event, SdkError> {
-        let keys = self.get_nostr_keys()?;
-        builder
-            .sign_with_keys(&keys)
-            .map_err(|e| SdkError::Generic(format!("Failed to sign nostr event: {e:?}")))
     }
 
     async fn generate_frost_signing_commitments(

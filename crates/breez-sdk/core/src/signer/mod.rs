@@ -98,13 +98,6 @@ pub trait BreezSigner: Send + Sync {
         &self,
         request: spark_wallet::AggregateFrostRequest<'a>,
     ) -> Result<frost_secp256k1_tr::Signature, SdkError>;
-
-    async fn nostr_pubkey(&self) -> Result<String, SdkError>;
-
-    async fn sign_nostr_event(
-        &self,
-        builder: ::nostr::event::EventBuilder,
-    ) -> Result<::nostr::event::Event, SdkError>;
 }
 
 pub mod breez;
