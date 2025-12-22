@@ -10,6 +10,7 @@ mod logger;
 mod models;
 mod nostr;
 mod persist;
+mod plugin;
 mod realtime_sync;
 mod sdk;
 mod sdk_builder;
@@ -30,6 +31,7 @@ pub use persist::{
     PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, UpdateDepositPayload,
     path::default_storage_path,
 };
+pub use plugin::*;
 pub use sdk::{BreezSdk, default_config, init_logging, parse_input};
 pub use sdk_builder::SdkBuilder;
 pub use spark_wallet::KeySet;

@@ -110,7 +110,7 @@ impl SdkBuilder {
     }
 
     /// Builds the `BreezSdk` instance with the configured components.
-    pub async fn build(&self) -> Result<BreezSdk, SdkError> {
-        self.inner.lock().await.clone().build().await
+    pub async fn build(&self) -> Result<Arc<BreezSdk>, SdkError> {
+        Ok(Arc::new(self.inner.lock().await.clone().build().await?))
     }
 }

@@ -28,6 +28,7 @@ use crate::{
     nostr::NostrClient,
     payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::Storage,
+    plugin::{Plugin, PluginWrapper, RustPlugin},
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams},
     signer::{
@@ -62,6 +63,7 @@ pub struct SdkBuilder {
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     payment_observer: Option<Arc<dyn PaymentObserver>>,
     sync_storage: Option<Arc<dyn SyncStorage>>,
+    plugins: Option<Vec<Arc<dyn Plugin>>>,
 }
 
 impl SdkBuilder {
@@ -90,6 +92,7 @@ impl SdkBuilder {
             lnurl_server_client: None,
             payment_observer: None,
             sync_storage: None,
+            plugins: None,
         }
     }
 
@@ -111,6 +114,7 @@ impl SdkBuilder {
             lnurl_server_client: None,
             payment_observer: None,
             sync_storage: None,
+            plugins: None,
         }
     }
 
@@ -231,6 +235,15 @@ impl SdkBuilder {
     #[allow(unused)]
     pub fn with_payment_observer(mut self, payment_observer: Arc<dyn PaymentObserver>) -> Self {
         self.payment_observer = Some(payment_observer);
+        self
+    }
+
+    /// Sets the plugins to be used by the SDK.
+    /// Arguments:
+    /// - `plugins`: The plugins to be used.
+    #[must_use]
+    pub fn with_plugins(mut self, plugins: Vec<Arc<dyn Plugin>>) -> Self {
+        self.plugins = Some(plugins);
         self
     }
 
@@ -448,6 +461,12 @@ impl SdkBuilder {
             event_emitter,
             nostr_client,
             flashnet_client,
+            plugins: self
+                .plugins
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| Arc::new(PluginWrapper::new(p)) as Arc<dyn RustPlugin>)
+                .collect(),
         })?;
         debug!("Initialized and started breez sdk.");
 

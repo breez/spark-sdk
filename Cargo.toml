@@ -16,6 +16,7 @@ members = [
   "crates/breez-sdk/breez-itest",
   "crates/breez-sdk/breez-bench",
   "crates/breez-sdk/wasm",
+  "crates/breez-sdk/plugins/*",
   "crates/flashnet",
   "crates/macros",
   "crates/macro_test",

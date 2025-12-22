@@ -70,6 +70,7 @@ pub struct ConnectRequest {
     pub config: Config,
     pub seed: Seed,
     pub storage_dir: String,
+    pub plugins: Option<Vec<std::sync::Arc<dyn crate::Plugin>>>,
 }
 
 /// Request object for connecting to the Spark network using an external signer.

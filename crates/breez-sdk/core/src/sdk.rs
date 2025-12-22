@@ -74,6 +74,7 @@ use crate::{
         CachedAccountInfo, ObjectCacheRepository, PaymentMetadata, PaymentRequestMetadata,
         StaticDepositAddress, Storage, UpdateDepositPayload,
     },
+    plugin::{PluginStorage, RustPlugin},
     sync::SparkSyncService,
     utils::{
         deposit_chain_syncer::DepositChainSyncer,
@@ -187,6 +188,7 @@ pub struct BreezSdk {
     spark_private_mode_initialized: Arc<OnceCell<()>>,
     nostr_client: Arc<NostrClient>,
     flashnet_client: Arc<FlashnetClient>,
+    plugins: Vec<Arc<dyn RustPlugin>>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -210,8 +212,11 @@ pub fn init_logging(
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkError> {
-    let builder = super::sdk_builder::SdkBuilder::new(request.config, request.seed)
+    let mut builder = super::sdk_builder::SdkBuilder::new(request.config, request.seed)
         .with_default_storage(request.storage_dir);
+    if let Some(plugins) = request.plugins {
+        builder = builder.with_plugins(plugins);
+    }
     let sdk = builder.build().await?;
     Ok(sdk)
 }
@@ -312,6 +317,7 @@ pub(crate) struct BreezSdkParams {
     pub event_emitter: Arc<EventEmitter>,
     pub nostr_client: Arc<NostrClient>,
     pub flashnet_client: Arc<FlashnetClient>,
+    pub plugins: Vec<Arc<dyn RustPlugin>>,
 }
 
 impl BreezSdk {
@@ -345,6 +351,7 @@ impl BreezSdk {
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
             nostr_client: params.nostr_client,
             flashnet_client: params.flashnet_client,
+            plugins: params.plugins,
         };
 
         sdk.start(initial_synced_sender);
@@ -355,16 +362,18 @@ impl BreezSdk {
     ///
     /// This method initiates the following backround tasks:
     /// 1. `spawn_spark_private_mode_initialization`: initializes the spark private mode on startup
-    /// 2. `periodic_sync`: syncs the wallet with the Spark network    
+    /// 2. `periodic_sync`: syncs the wallet with the Spark network
     /// 3. `try_recover_lightning_address`: recovers the lightning address on startup
     /// 4. `spawn_zap_receipt_publisher`: publishes zap receipts for payments with zap requests
     /// 5. `spawm_token_conversion_refunder`: refunds failed token conversions
+    /// 6. `start_plugins`: starts the provided plugins
     fn start(&self, initial_synced_sender: watch::Sender<bool>) {
         self.spawn_spark_private_mode_initialization();
         self.periodic_sync(initial_synced_sender);
         self.try_recover_lightning_address();
         self.spawn_zap_receipt_publisher();
         self.spawn_token_conversion_refunder();
+        self.start_plugins();
     }
 
     fn spawn_spark_private_mode_initialization(&self) {
@@ -372,6 +381,28 @@ impl BreezSdk {
         tokio::spawn(async move {
             if let Err(e) = sdk.ensure_spark_private_mode_initialized().await {
                 error!("Failed to initialize spark private mode: {e:?}");
+            }
+        });
+    }
+
+    /// Starts the provided plugins at runtime
+    fn start_plugins(&self) {
+        let plugins = self.plugins.clone();
+        let storage = Arc::clone(&self.storage);
+        let sdk = self.clone();
+        tokio::spawn(async move {
+            for plugin in plugins {
+                let plugin_storage =
+                    match PluginStorage::new(Arc::downgrade(&storage), plugin.id()) {
+                        Ok(storage) => storage,
+                        Err(err) => {
+                            warn!("Could not create plugin storage: {err}");
+                            continue;
+                        }
+                    };
+                plugin
+                    .on_start(Arc::downgrade(&Arc::new(sdk.clone())), plugin_storage)
+                    .await;
             }
         });
     }
@@ -1296,10 +1327,20 @@ impl BreezSdk {
         self.shutdown_sender
             .send(())
             .map_err(|_| SdkError::Generic("Failed to send shutdown signal".to_string()))?;
+        self.stop_plugins();
 
         self.shutdown_sender.closed().await;
         info!("Breez SDK disconnected");
         Ok(())
+    }
+
+    fn stop_plugins(&self) {
+        let plugins = self.plugins.clone();
+        tokio::spawn(async move {
+            for plugin in plugins {
+                plugin.on_stop().await;
+            }
+        });
     }
 
     pub async fn parse(&self, input: &str) -> Result<InputType, SdkError> {

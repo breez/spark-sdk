@@ -50,8 +50,8 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid.workspace = true
 uniffi = { workspace = true, optional = true }
 web-time.workspace = true
-x509-parser = { version = "0.16.0" }
 anyhow.workspace = true
+x509-parser = { version = "0.16.0" }
 frost-secp256k1-tr = { workspace = true }
 k256 = { workspace = true, features = ["arithmetic"] }
 
@@ -60,9 +60,11 @@ k256 = { workspace = true, features = ["arithmetic"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
+maybe-sync = { version = "0.1.1", features = ["sync"] }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+maybe-sync = "0.1.1"
 tokio = { workspace = true, features = ["macros"] }
 
 [dev-dependencies]
