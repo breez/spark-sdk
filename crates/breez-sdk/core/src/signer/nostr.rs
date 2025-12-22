@@ -85,8 +85,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::NostrSigner;
+    use crate::default_config;
     use crate::signer::breez::BreezSignerImpl;
-    use crate::{Network, Seed, models::Config, signer::BreezSigner};
+    use crate::{Network, Seed, signer::BreezSigner};
     use bitcoin::bip32::DerivationPath;
     use bitcoin::secp256k1::{Message, Secp256k1};
     use spark_wallet::KeySetType;
@@ -101,18 +102,7 @@ mod tests {
         };
 
         // Create a BreezSigner
-        let config = Config {
-            network: Network::Regtest,
-            api_key: None,
-            real_time_sync_server_url: None,
-            lnurl_domain: None,
-            sync_interval_secs: 60,
-            max_deposit_claim_fee: None,
-            prefer_spark_over_lightning: false,
-            external_input_parsers: None,
-            use_default_external_input_parsers: false,
-            private_enabled_default: false,
-        };
+        let config = default_config(Network::Regtest);
 
         let breez_signer: Arc<dyn BreezSigner> = Arc::new(
             BreezSignerImpl::new(&config, &seed, KeySetType::Default, false, Some(1)).unwrap(),
