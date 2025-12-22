@@ -109,6 +109,8 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] LNURL-Withdraw
 - [x] Sign and verify arbitrary messages 
 - [x] Real-time sync
+- [ ] External signer
+- [ ] Seedless restore
 - [ ] NWC
 - [ ] WebLN
 - [ ] LNURL-Auth
