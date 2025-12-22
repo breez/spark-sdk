@@ -16,7 +16,7 @@ const examplePrepareSendPaymentLightningBolt11 = async (sdk: BreezSdk) => {
     paymentRequest,
     amount: optionalAmountSats,
     tokenIdentifier: undefined,
-    maxSlippageBps: undefined
+    tokenConversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -41,7 +41,7 @@ const examplePrepareSendPaymentOnchain = async (sdk: BreezSdk) => {
     paymentRequest,
     amount: amountSats,
     tokenIdentifier: undefined,
-    maxSlippageBps: undefined
+    tokenConversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -67,7 +67,7 @@ const examplePrepareSendPaymentSparkAddress = async (sdk: BreezSdk) => {
     paymentRequest,
     amount: amountSats,
     tokenIdentifier: undefined,
-    maxSlippageBps: undefined
+    tokenConversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -88,7 +88,7 @@ const examplePrepareSendPaymentSparkInvoice = async (sdk: BreezSdk) => {
     paymentRequest,
     amount: optionalAmountSats,
     tokenIdentifier: undefined,
-    maxSlippageBps: undefined
+    tokenConversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment

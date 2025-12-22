@@ -19,7 +19,7 @@ const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
     paymentRequest,
     amount: amountSats,
     tokenIdentifier: undefined,
-    maxSlippageBps: undefined
+    tokenConversionOptions: undefined
   }
   const prepareResponse = await sdk.prepareSendPayment(prepareRequest)
 

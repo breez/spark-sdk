@@ -28,7 +28,7 @@ async fn send_htlc_alice_to_bob(
             payment_request: bob_spark_address.clone(),
             amount: Some(5),
             token_identifier: None,
-            max_slippage_bps: None,
+            token_conversion_options: None,
         })
         .await?;
 

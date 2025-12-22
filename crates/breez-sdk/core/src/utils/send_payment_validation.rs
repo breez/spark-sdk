@@ -1,4 +1,7 @@
-use crate::{InputType, SparkInvoiceDetails, error::SdkError, models::PrepareSendPaymentRequest};
+use crate::{
+    InputType, SparkInvoiceDetails, TokenConversionOptions, TokenConversionType, error::SdkError,
+    models::PrepareSendPaymentRequest,
+};
 use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Validates a send payment request against the parsed input type.
@@ -12,7 +15,7 @@ pub(crate) fn validate_prepare_send_payment_request(
             validate_spark_invoice_request(spark_invoice_details, request, identity_public_key)
         }
         InputType::SparkAddress(_) => validate_spark_address_request(request),
-        InputType::Bolt11Invoice(_) => Ok(()),
+        InputType::Bolt11Invoice(_) => validate_bolt11_invoice_request(request),
         InputType::BitcoinAddress(_) => validate_bitcoin_address_request(request),
         _ => Err(SdkError::InvalidInput(
             "Unsupported payment method".to_string(),
@@ -28,22 +31,46 @@ fn validate_spark_invoice_request(
 ) -> Result<(), SdkError> {
     // Validate token identifier
     if let Some(token_identifier) = &spark_invoice_details.token_identifier {
-        if let Some(requested_token_identifier) = &request.token_identifier {
-            if requested_token_identifier != token_identifier {
-                return Err(SdkError::InvalidInput(
-                    "Requested token identifier does not match invoice token identifier"
-                        .to_string(),
-                ));
-            }
-        } else {
+        let Some(requested_token_identifier) = &request.token_identifier else {
             return Err(SdkError::InvalidInput(
                 "Token identifier is required for tokens invoice".to_string(),
             ));
+        };
+        if requested_token_identifier != token_identifier {
+            return Err(SdkError::InvalidInput(
+                "Requested token identifier does not match invoice token identifier".to_string(),
+            ));
+        }
+        if let Some(token_conversion_options) = &request.token_conversion_options {
+            let TokenConversionType::FromBitcoin {
+                to_token_identifier,
+            } = &token_conversion_options.conversion_type
+            else {
+                return Err(SdkError::InvalidInput(
+                    "Token conversion must be from Bitcoin for tokens invoice".to_string(),
+                ));
+            };
+            if to_token_identifier != token_identifier {
+                return Err(SdkError::InvalidInput(
+                    "Token conversion identifier does not match invoice token identifier"
+                        .to_string(),
+                ));
+            }
         }
     } else if request.token_identifier.is_some() {
         return Err(SdkError::InvalidInput(
             "Token identifier can't be provided for this payment request: non-tokens invoice"
                 .to_string(),
+        ));
+    } else if matches!(
+        &request.token_conversion_options,
+        Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::FromBitcoin { .. },
+            ..
+        })
+    ) {
+        return Err(SdkError::InvalidInput(
+            "Token conversion must be to Bitcoin for non-tokens invoice".to_string(),
         ));
     }
 
@@ -86,8 +113,61 @@ fn validate_spark_address_request(request: &PrepareSendPaymentRequest) -> Result
     if request.amount.is_none() {
         return Err(SdkError::InvalidInput("Amount is required".to_string()));
     }
+    // Validate token conversion options
+    if let Some(token_conversion_options) = &request.token_conversion_options {
+        match &token_conversion_options.conversion_type {
+            TokenConversionType::FromBitcoin {
+                to_token_identifier,
+            } => {
+                // Token identifier is required when converting from Bitcoin
+                let Some(token_identifier) = &request.token_identifier else {
+                    return Err(SdkError::InvalidInput(
+                        "Token identifier is required when converting from Bitcoin".to_string(),
+                    ));
+                };
+                // Token identifier must match when converting from Bitcoin
+                if to_token_identifier != token_identifier {
+                    return Err(SdkError::InvalidInput(
+                        "Token identifier does not match token conversion identifier".to_string(),
+                    ));
+                }
+            }
+            TokenConversionType::ToBitcoin { .. } => {
+                // Token identifier cannot be provided when converting to Bitcoin
+                if request.token_identifier.is_some() {
+                    return Err(SdkError::InvalidInput(
+                        "Token identifier cannot be provided when converting to Bitcoin"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+    }
 
     // Token identifier is optional for spark addresses
+    Ok(())
+}
+
+/// Validates a Bolt11 invoice request.
+fn validate_bolt11_invoice_request(request: &PrepareSendPaymentRequest) -> Result<(), SdkError> {
+    // Token identifier cannot be provided for Bolt11 invoices
+    if request.token_identifier.is_some() {
+        return Err(SdkError::InvalidInput(
+            "Token identifier can't be provided for this payment request: non-spark address"
+                .to_string(),
+        ));
+    }
+    // Token conversion from Bitcoin is not supported for Bolt11 invoices
+    if let Some(TokenConversionOptions {
+        conversion_type: TokenConversionType::FromBitcoin { .. },
+        ..
+    }) = &request.token_conversion_options
+    {
+        return Err(SdkError::InvalidInput(
+            "Token conversion must be to Bitcoin for Bolt11 invoices".to_string(),
+        ));
+    }
+
     Ok(())
 }
 
@@ -100,10 +180,19 @@ fn validate_bitcoin_address_request(request: &PrepareSendPaymentRequest) -> Resu
                 .to_string(),
         ));
     }
-
     // Amount is required for Bitcoin addresses
     if request.amount.is_none() {
         return Err(SdkError::InvalidInput("Amount is required".to_string()));
+    }
+    // Validate token conversion from Bitcoin is not supported for Bitcoin addresses
+    if let Some(TokenConversionOptions {
+        conversion_type: TokenConversionType::FromBitcoin { .. },
+        ..
+    }) = &request.token_conversion_options
+    {
+        return Err(SdkError::InvalidInput(
+            "Token conversion must be to Bitcoin for Bitcoin addresses".to_string(),
+        ));
     }
 
     Ok(())
@@ -127,7 +216,7 @@ mod tests {
             payment_request: "test_request".to_string(),
             amount: None,
             token_identifier: None,
-            max_slippage_bps: None,
+            token_conversion_options: None,
         }
     }
 
@@ -380,6 +469,112 @@ mod tests {
         assert!(result.is_ok(), "Should succeed when all validations pass");
     }
 
+    #[test_all]
+    fn test_validate_spark_invoice_with_valid_token_conversion() {
+        let invoice = create_test_invoice();
+
+        let mut request = create_test_request();
+        request.token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::ToBitcoin {
+                from_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+        });
+
+        let identity_key = "test_identity".to_string();
+        let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
+        assert!(
+            result.is_ok(),
+            "Should succeed when token conversion to Bitcoin is provided"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_token_spark_invoice_with_valid_token_conversion() {
+        let mut invoice = create_test_invoice();
+        invoice.token_identifier = Some("token123".to_string());
+
+        let mut request = create_test_request();
+        request.token_identifier = Some("token123".to_string());
+        request.token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::FromBitcoin {
+                to_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+        });
+
+        let identity_key = "test_identity".to_string();
+        let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
+        assert!(
+            result.is_ok(),
+            "Should succeed when token conversion from Bitcoin is provided"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_spark_invoice_with_invalid_token_conversion() {
+        let invoice = create_test_invoice();
+
+        let mut request = create_test_request();
+        request.token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::FromBitcoin {
+                to_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+        });
+
+        let identity_key = "test_identity".to_string();
+        let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
+        assert!(
+            result.is_err(),
+            "Should fail when token conversion from Bitcoin is provided"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_token_spark_invoice_with_invalid_token_conversion() {
+        let mut invoice = create_test_invoice();
+        invoice.token_identifier = Some("token123".to_string());
+
+        let mut request = create_test_request();
+        request.token_identifier = Some("token123".to_string());
+        request.token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::ToBitcoin {
+                from_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+        });
+
+        let identity_key = "test_identity".to_string();
+        let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
+        assert!(
+            result.is_err(),
+            "Should fail when token conversion to Bitcoin is provided"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_token_spark_invoice_with_invalid_token_conversio_mismatch() {
+        let mut invoice = create_test_invoice();
+        invoice.token_identifier = Some("token123".to_string());
+
+        let mut request = create_test_request();
+        request.token_identifier = Some("token123".to_string());
+        request.token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::FromBitcoin {
+                to_token_identifier: "token789".to_string(),
+            },
+            max_slippage_bps: None,
+        });
+
+        let identity_key = "test_identity".to_string();
+        let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
+        assert!(
+            result.is_err(),
+            "Should fail when token conversion to Bitcoin token identifier mismatches"
+        );
+    }
+
     // SparkAddress tests
     #[test_all]
     fn test_validate_spark_address_with_amount() {
@@ -413,6 +608,156 @@ mod tests {
         assert!(
             result.is_ok(),
             "Should succeed when token identifier is provided (optional)"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_spark_address_with_valid_token_conversion() {
+        let mut request = create_test_request();
+        request.amount = Some(1000);
+        request.token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::ToBitcoin {
+                from_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+        });
+        let result = validate_spark_address_request(&request);
+        assert!(
+            result.is_ok(),
+            "Should succeed when token conversion to Bitcoin is provided"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_token_spark_address_with_valid_token_conversion() {
+        let mut request = create_test_request();
+        request.amount = Some(1000);
+        request.token_identifier = Some("token123".to_string());
+        request.token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::FromBitcoin {
+                to_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+        });
+        let result = validate_spark_address_request(&request);
+        assert!(
+            result.is_ok(),
+            "Should succeed when token conversion from Bitcoin is provided"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_spark_address_with_invalid_token_conversion() {
+        let mut request = create_test_request();
+        request.amount = Some(1000);
+        request.token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::FromBitcoin {
+                to_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+        });
+        let result = validate_spark_address_request(&request);
+        assert!(
+            result.is_err(),
+            "Should fail when token conversion from Bitcoin is provided"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_token_spark_address_with_invalid_token_conversion() {
+        let mut request = create_test_request();
+        request.amount = Some(1000);
+        request.token_identifier = Some("token123".to_string());
+        request.token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::ToBitcoin {
+                from_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+        });
+        let result = validate_spark_address_request(&request);
+        assert!(
+            result.is_err(),
+            "Should fail when token conversion to Bitcoin is provided"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_token_spark_address_with_invalid_token_conversion_mismatch() {
+        let mut request = create_test_request();
+        request.amount = Some(1000);
+        request.token_identifier = Some("token123".to_string());
+        request.token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::FromBitcoin {
+                to_token_identifier: "token789".to_string(),
+            },
+            max_slippage_bps: None,
+        });
+        let result = validate_spark_address_request(&request);
+        assert!(
+            result.is_err(),
+            "Should fail when token conversion from Bitcoin token identifier mismatches"
+        );
+    }
+
+    // Bolt11Invoice tests
+    #[test_all]
+    fn test_validate_bolt11_invoice_without_token_identifier() {
+        let request = create_test_request();
+        let result = validate_bolt11_invoice_request(&request);
+        assert!(
+            result.is_ok(),
+            "Should succeed when token identifier is not provided"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_bolt11_invoice_with_token_identifier() {
+        let mut request = create_test_request();
+        request.token_identifier = Some("token123".to_string());
+        let result = validate_bolt11_invoice_request(&request);
+        assert!(
+            result.is_err(),
+            "Should fail when token identifier is provided"
+        );
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("can't be provided"),
+                "Error message should mention it can't be provided"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_bolt11_invoice_with_valid_token_conversion() {
+        let mut request = create_test_request();
+        request.token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::ToBitcoin {
+                from_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+        });
+        let result = validate_bolt11_invoice_request(&request);
+        assert!(
+            result.is_ok(),
+            "Should succeed when token conversion to Bitcoin is provided"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_bolt11_invoice_with_invalid_token_conversion() {
+        let mut request = create_test_request();
+        request.token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::FromBitcoin {
+                to_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+        });
+        let result = validate_bolt11_invoice_request(&request);
+        assert!(
+            result.is_err(),
+            "Should fail when token conversion from Bitcoin is provided"
         );
     }
 
@@ -458,6 +803,40 @@ mod tests {
         } else {
             panic!("Expected InvalidInput error");
         }
+    }
+
+    #[test_all]
+    fn test_validate_bitcoin_address_with_valid_token_conversion() {
+        let mut request = create_test_request();
+        request.amount = Some(1000);
+        request.token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::ToBitcoin {
+                from_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+        });
+        let result = validate_bitcoin_address_request(&request);
+        assert!(
+            result.is_ok(),
+            "Should succeed when token conversion to Bitcoin is provided"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_bitcoin_address_with_invalid_token_conversion() {
+        let mut request = create_test_request();
+        request.amount = Some(1000);
+        request.token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::FromBitcoin {
+                to_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+        });
+        let result = validate_bitcoin_address_request(&request);
+        assert!(
+            result.is_err(),
+            "Should fail when token conversion from Bitcoin is provided"
+        );
     }
 
     // Integration tests using validate_send_payment_request

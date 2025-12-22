@@ -9,8 +9,8 @@ use breez_sdk_spark::{
     MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
     PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
     RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
-    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenConversionType,
-    TokenIssuer, UpdateUserSettingsRequest,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest,
+    TokenConversionOptions, TokenConversionType, TokenIssuer, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -128,14 +128,24 @@ pub enum Command {
         #[arg(short = 't', long)]
         token_identifier: Option<String>,
 
-        /// The optional maximum slippage in basis points (1/100 of a percent) allowed when
-        /// a token conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
-        #[arg(short = 's', long)]
-        max_slippage_bps: Option<u32>,
-
         /// Optional idempotency key to ensure only one payment is made for multiple requests.
         #[arg(short = 'i', long)]
         idempotency_key: Option<String>,
+
+        // If provided, the payment will include a token conversion step, converting from the
+        // specified token to Bitcoin to fulfill the payment.
+        #[arg(long = "from-token")]
+        convert_from_token_identifier: Option<String>,
+
+        /// If provided, the payment will include a token conversion step, converting from Bitcoin
+        /// to the specified token to fulfill the payment.
+        #[arg(long = "to-token")]
+        convert_to_token_identifier: Option<String>,
+
+        /// The optional maximum slippage in basis points (1/100 of a percent) allowed when
+        /// a token conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
+        #[arg(short = 's', long)]
+        convert_max_slippage_bps: Option<u32>,
     },
 
     /// Pay using LNURL
@@ -475,15 +485,38 @@ pub(crate) async fn execute_command(
             payment_request,
             amount,
             token_identifier,
-            max_slippage_bps,
             idempotency_key,
+            convert_to_token_identifier,
+            convert_from_token_identifier,
+            convert_max_slippage_bps: max_slippage_bps,
         } => {
+            let token_conversion_options =
+                match (convert_from_token_identifier, convert_to_token_identifier) {
+                    (Some(from_token_identifier), None) => Some(TokenConversionOptions {
+                        conversion_type: TokenConversionType::ToBitcoin {
+                            from_token_identifier,
+                        },
+                        max_slippage_bps,
+                    }),
+                    (None, Some(to_token_identifier)) => Some(TokenConversionOptions {
+                        conversion_type: TokenConversionType::FromBitcoin {
+                            to_token_identifier,
+                        },
+                        max_slippage_bps,
+                    }),
+                    (None, None) => None,
+                    (Some(_), Some(_)) => {
+                        return Err(anyhow::anyhow!(
+                            "Cannot specify both from_token and to_token"
+                        ));
+                    }
+                };
             let prepared_payment = sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request,
                     amount,
                     token_identifier,
-                    max_slippage_bps,
+                    token_conversion_options,
                 })
                 .await;
 
@@ -493,6 +526,18 @@ pub(crate) async fn execute_command(
                     prepared_payment.err().unwrap()
                 ));
             };
+
+            if let Some(token_conversion_fee) = prepare_response.token_conversion_fee {
+                println!(
+                    "This payment has an estimated token conversion fee of {token_conversion_fee}"
+                );
+                let line = rl
+                    .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
+                    .to_lowercase();
+                if line != "y" {
+                    return Err(anyhow::anyhow!("Payment cancelled"));
+                }
+            }
 
             let payment_options =
                 read_payment_options(prepare_response.payment_method.clone(), rl)?;
@@ -645,7 +690,7 @@ pub(crate) async fn execute_command(
             from_bitcoin,
             token_identifier,
         } => {
-            let convert_type = if from_bitcoin {
+            let conversion_type = if from_bitcoin {
                 TokenConversionType::FromBitcoin {
                     to_token_identifier: token_identifier,
                 }
@@ -655,7 +700,9 @@ pub(crate) async fn execute_command(
                 }
             };
             let res = sdk
-                .fetch_token_conversion_limits(FetchTokenConversionLimitsRequest { convert_type })
+                .fetch_token_conversion_limits(FetchTokenConversionLimitsRequest {
+                    conversion_type,
+                })
                 .await?;
             print_value(&res)?;
             Ok(true)
@@ -705,20 +752,8 @@ fn read_payment_options(
         SendPaymentMethod::Bolt11Invoice {
             spark_transfer_fee_sats,
             lightning_fee_sats,
-            token_conversion_fee,
             ..
         } => {
-            if let Some(token_conversion_fee) = token_conversion_fee {
-                println!(
-                    "This payment has an estimated token conversion fee of {token_conversion_fee} token base units"
-                );
-                let line = rl
-                    .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
-                    .to_lowercase();
-                if line != "y" {
-                    return Err(anyhow::anyhow!("Payment cancelled"));
-                }
-            }
             if let Some(spark_transfer_fee_sats) = spark_transfer_fee_sats {
                 println!("Choose payment option:");
                 println!("1. Spark transfer fee: {spark_transfer_fee_sats} sats");

@@ -683,9 +683,8 @@ pub enum SendPaymentMethod {
     },
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
-        spark_transfer_fee_sats: Option<u64>,
-        token_conversion_fee: Option<u128>,
         lightning_fee_sats: u64,
+        spark_transfer_fee_sats: Option<u64>,
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
@@ -862,16 +861,13 @@ pub struct PrepareSendPaymentRequest {
     /// If a token identifier is provided, the amount will be denominated in the token base units.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub amount: Option<u128>,
-    /// If provided, the payment will be for a token
-    /// May only be provided if the payment request is a spark address
+    /// If provided, the payment will be for a token.
+    /// May only be provided if the payment request is a spark address.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub token_identifier: Option<String>,
-    /// The optional maximum slippage in basis points (1/100 of a percent) allowed when
-    /// a token conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
-    /// The token conversion will fail if the actual amount received is less than
-    /// `estimated_amount * (1 - max_slippage_bps / 10_000)`.
+    /// If provided, the payment will include a token conversion step before sending the payment
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub max_slippage_bps: Option<u32>,
+    pub token_conversion_options: Option<TokenConversionOptions>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -881,11 +877,13 @@ pub struct PrepareSendPaymentResponse {
     /// Amount to send. By default is denominated in sats.
     /// If a token identifier is provided, the amount will be denominated in the token base units.
     pub amount: u128,
-    /// The presence of this field indicates that the payment is for a token
-    /// If empty, it is a Bitcoin payment
+    /// The presence of this field indicates that the payment is for a token.
+    /// If empty, it is a Bitcoin payment.
     pub token_identifier: Option<String>,
-    /// The optional maximum slippage allowed when a token conversion is needed to fulfill the payment.
-    pub max_slippage_bps: Option<u32>,
+    /// When set, the payment will include a token conversion step before sending the payment
+    pub token_conversion_options: Option<TokenConversionOptions>,
+    /// The estimated token conversion fee if the payment involves a token conversion
+    pub token_conversion_fee: Option<u128>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -1238,6 +1236,19 @@ pub(crate) struct TokenConversionResponse {
     pub(crate) received_payment_id: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct TokenConversionOptions {
+    /// The type of token conversion to perform when fulfilling the payment
+    pub conversion_type: TokenConversionType,
+    /// The optional maximum slippage in basis points (1/100 of a percent) allowed when
+    /// a token conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
+    /// The token conversion will fail if the actual amount received is less than
+    /// `estimated_amount * (1 - max_slippage_bps / 10_000)`.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub max_slippage_bps: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum TokenConversionType {
@@ -1250,7 +1261,7 @@ pub enum TokenConversionType {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FetchTokenConversionLimitsRequest {
     /// The type of conversion, either from or to Bitcoin.
-    pub convert_type: TokenConversionType,
+    pub conversion_type: TokenConversionType,
 }
 
 #[derive(Debug, Clone, Serialize)]

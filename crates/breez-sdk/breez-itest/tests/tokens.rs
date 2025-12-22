@@ -99,7 +99,7 @@ async fn test_01_token_transfer(
             payment_request: bob_spark_address.clone(),
             amount: Some(5),
             token_identifier: Some(token_metadata.identifier.clone()),
-            max_slippage_bps: None,
+            token_conversion_options: None,
         })
         .await?;
     info!("Prepare response amount: {} (token units)", prepare.amount);
@@ -302,7 +302,7 @@ async fn test_02_token_invoice(
             payment_request: bob_invoice.payment_request.clone(),
             amount: None, // Amount comes from invoice
             token_identifier: Some(token_metadata.identifier.clone()),
-            max_slippage_bps: None,
+            token_conversion_options: None,
         })
         .await?;
 
@@ -582,7 +582,7 @@ async fn test_04_token_freeze_unfreeze(
             payment_request: bob_address,
             amount: Some(100),
             token_identifier: Some(token_metadata.identifier.clone()),
-            max_slippage_bps: None,
+            token_conversion_options: None,
         })
         .await?;
 
@@ -660,7 +660,7 @@ async fn test_04_token_freeze_unfreeze(
             payment_request: alice_address.clone(),
             amount: Some(50),
             token_identifier: Some(token_metadata.identifier.clone()),
-            max_slippage_bps: None,
+            token_conversion_options: None,
         })
         .await;
 
@@ -719,7 +719,7 @@ async fn test_04_token_freeze_unfreeze(
             payment_request: alice_address,
             amount: Some(50),
             token_identifier: Some(token_metadata.identifier.clone()),
-            max_slippage_bps: None,
+            token_conversion_options: None,
         })
         .await?;
 
@@ -793,7 +793,7 @@ async fn test_05_invoice_expiry(
             payment_request: bob_invoice.payment_request.clone(),
             amount: None,
             token_identifier: Some(token_metadata.identifier.clone()),
-            max_slippage_bps: None,
+            token_conversion_options: None,
         })
         .await?;
 
@@ -809,7 +809,7 @@ async fn test_05_invoice_expiry(
             payment_request: bob_invoice.payment_request.clone(),
             amount: None,
             token_identifier: Some(token_metadata.identifier.clone()),
-            max_slippage_bps: None,
+            token_conversion_options: None,
         })
         .await;
 

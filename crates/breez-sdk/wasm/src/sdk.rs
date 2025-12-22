@@ -283,4 +283,16 @@ impl BreezSdk {
     pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
         self.sdk.get_leaf_optimization_progress().into()
     }
+
+    #[wasm_bindgen(js_name = "fetchTokenConversionLimits")]
+    pub async fn fetch_token_conversion_limits(
+        &self,
+        request: FetchTokenConversionLimitsRequest,
+    ) -> WasmResult<FetchTokenConversionLimitsResponse> {
+        Ok(self
+            .sdk
+            .fetch_token_conversion_limits(request.into())
+            .await?
+            .into())
+    }
 }

@@ -62,7 +62,7 @@ async fn test_01_spark_transfer(
             payment_request: bob_spark_address.clone(),
             amount: Some(5),
             token_identifier: None,
-            max_slippage_bps: None,
+            token_conversion_options: None,
         })
         .await?;
 
@@ -304,7 +304,7 @@ async fn test_03_lightning_invoice_payment(
             payment_request: bob_invoice.clone(),
             amount: sender_amount.map(|a| a as u128),
             token_identifier: None,
-            max_slippage_bps: None,
+            token_conversion_options: None,
         })
         .await?;
 
@@ -563,7 +563,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
             payment_request: bob_invoice.clone(),
             amount: None,
             token_identifier: None,
-            max_slippage_bps: None,
+            token_conversion_options: None,
         })
         .await?;
 
@@ -656,7 +656,7 @@ async fn test_06_lightning_timeout_and_wait(
             payment_request: bob_invoice.clone(),
             amount: Some(expected_amount as u128),
             token_identifier: None,
-            max_slippage_bps: None,
+            token_conversion_options: None,
         })
         .await?;
 
@@ -765,7 +765,7 @@ async fn test_07_spark_invoice(
             payment_request: bob_spark_invoice.clone(),
             amount: None,
             token_identifier: None,
-            max_slippage_bps: None,
+            token_conversion_options: None,
         })
         .await?;
 
