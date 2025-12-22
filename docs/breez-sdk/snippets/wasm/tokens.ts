@@ -1,4 +1,4 @@
-import { type BreezSdk, type PrepareSendPaymentResponse } from '@breeztech/breez-sdk-spark'
+import type { BreezSdk } from '@breeztech/breez-sdk-spark'
 
 const exampleFetchTokenBalances = async (sdk: BreezSdk) => {
   // ANCHOR: fetch-token-balances

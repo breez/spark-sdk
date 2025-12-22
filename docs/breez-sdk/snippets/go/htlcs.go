@@ -71,14 +71,18 @@ func ListClaimableHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spar
 	statusFilter := []breez_sdk_spark.PaymentStatus{
 		breez_sdk_spark.PaymentStatusPending,
 	}
-	sparkHtlcStatusFilter := []breez_sdk_spark.SparkHtlcStatus{
-		breez_sdk_spark.SparkHtlcStatusWaitingForPreimage,
+	paymentDetailsFilter := []breez_sdk_spark.PaymentDetailsFilter{
+		breez_sdk_spark.PaymentDetailsFilterSpark{
+			HtlcStatus: &[]breez_sdk_spark.SparkHtlcStatus{
+				breez_sdk_spark.SparkHtlcStatusWaitingForPreimage,
+			},
+		},
 	}
 
 	request := breez_sdk_spark.ListPaymentsRequest{
 		TypeFilter:            &typeFilter,
 		StatusFilter:          &statusFilter,
-		SparkHtlcStatusFilter: &sparkHtlcStatusFilter,
+		PaymentDetailsFilter:  &paymentDetailsFilter,
 	}
 
 	response, err := sdk.ListPayments(request)

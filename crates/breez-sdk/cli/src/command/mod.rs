@@ -5,11 +5,11 @@ use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
     ClaimHtlcPaymentRequest, Fee, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentStatus,
-    PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest,
-    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
-    SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
+    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
+    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
+    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -60,6 +60,10 @@ pub enum Command {
         /// Filter by Spark HTLC status
         #[arg(long)]
         spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
+
+        /// Filter by token transaction hash
+        #[arg(long)]
+        tx_hash: Option<String>,
 
         /// Only include payments created after this timestamp (inclusive)
         #[arg(long)]
@@ -278,11 +282,30 @@ pub(crate) async fn execute_command(
             type_filter,
             status_filter,
             spark_htlc_status_filter,
+            tx_hash,
             asset_filter,
             from_timestamp,
             to_timestamp,
             sort_ascending,
         } => {
+            let mut payment_details_filter = Vec::new();
+            if let Some(statuses) = spark_htlc_status_filter {
+                payment_details_filter.push(PaymentDetailsFilter::Spark {
+                    htlc_status: Some(statuses),
+                    conversion_refund_needed: None,
+                });
+            }
+            if let Some(tx_hash) = tx_hash {
+                payment_details_filter.push(PaymentDetailsFilter::Token {
+                    conversion_refund_needed: None,
+                    tx_hash: Some(tx_hash),
+                });
+            }
+            let payment_details_filter = if payment_details_filter.is_empty() {
+                None
+            } else {
+                Some(payment_details_filter)
+            };
             let value = sdk
                 .list_payments(ListPaymentsRequest {
                     limit,
@@ -290,7 +313,7 @@ pub(crate) async fn execute_command(
                     type_filter,
                     status_filter,
                     asset_filter,
-                    spark_htlc_status_filter,
+                    payment_details_filter,
                     from_timestamp,
                     to_timestamp,
                     sort_ascending,

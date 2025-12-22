@@ -172,12 +172,24 @@ pub enum _InputType {
     SparkInvoice(SparkInvoiceDetails),
 }
 
+#[frb(mirror(PaymentDetailsFilter))]
+pub enum _PaymentDetailsFilter {
+    Spark {
+        htlc_status: Option<Vec<SparkHtlcStatus>>,
+        conversion_refund_needed: Option<bool>,
+    },
+    Token {
+        conversion_refund_needed: Option<bool>,
+        tx_hash: Option<String>,
+    },
+}
+
 #[frb(mirror(ListPaymentsRequest))]
 pub struct _ListPaymentsRequest {
     pub type_filter: Option<Vec<PaymentType>>,
     pub status_filter: Option<Vec<PaymentStatus>>,
     pub asset_filter: Option<AssetFilter>,
-    pub spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
+    pub payment_details_filter: Option<Vec<PaymentDetailsFilter>>,
     pub from_timestamp: Option<u64>,
     pub to_timestamp: Option<u64>,
     pub offset: Option<u32>,
@@ -489,11 +501,13 @@ pub enum _PaymentDetails {
     Spark {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         htlc_details: Option<SparkHtlcDetails>,
+        token_conversion_info: Option<TokenConversionInfo>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         invoice_details: Option<SparkInvoicePaymentDetails>,
+        token_conversion_info: Option<TokenConversionInfo>,
     },
     Lightning {
         description: Option<String>,
@@ -539,6 +553,7 @@ pub struct _PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
+    pub token_conversion_info: Option<TokenConversionInfo>,
 }
 
 #[frb(mirror(PaymentMethod))]
@@ -972,4 +987,12 @@ pub struct _OptimizationProgress {
     pub is_running: bool,
     pub current_round: u32,
     pub total_rounds: u32,
+}
+
+#[frb(mirror(TokenConversionInfo))]
+pub struct _TokenConversionInfo {
+    pub pool_id: String,
+    pub payment_id: Option<String>,
+    pub fee: Option<u128>,
+    pub refund_identifier: Option<String>,
 }

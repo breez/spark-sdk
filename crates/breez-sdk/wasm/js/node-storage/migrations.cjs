@@ -306,7 +306,11 @@ class MigrationManager {
           `UPDATE sync_revision SET revision = 0`,
           `DELETE FROM settings WHERE key = 'sync_initial_complete'`
         ]
-      }
+      },
+      {
+        name: "Add token conversion info to payment_metadata",
+        sql: `ALTER TABLE payment_metadata ADD COLUMN token_conversion_info TEXT`
+      },
     ];
   }
 }

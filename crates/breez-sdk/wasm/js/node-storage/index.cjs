@@ -154,18 +154,58 @@ class SqliteStorage {
         params.push(request.toTimestamp);
       }
 
-      // Filter by Spark HTLC status
-      if (
-        request.sparkHtlcStatusFilter &&
-        request.sparkHtlcStatusFilter.length > 0
-      ) {
-        const placeholders = request.sparkHtlcStatusFilter
-          .map(() => "?")
-          .join(", ");
-        whereClauses.push(
-          `json_extract(s.htlc_details, '$.status') IN (${placeholders})`
-        );
-        params.push(...request.sparkHtlcStatusFilter);
+      // Filter by payment details. If any filter matches, we include the payment
+      if (request.paymentDetailsFilter && request.paymentDetailsFilter.length > 0) {
+        const allPaymentDetailsClauses = [];
+        for (const paymentDetailsFilter of request.paymentDetailsFilter) {
+          const paymentDetailsClauses = [];
+          // Filter by Spark HTLC status
+          if (
+            paymentDetailsFilter.type === "spark" &&
+            paymentDetailsFilter.htlcStatus !== undefined &&
+            paymentDetailsFilter.htlcStatus.length > 0
+          ) {
+            const placeholders = paymentDetailsFilter.htlcStatus
+              .map(() => "?")
+              .join(", ");
+            paymentDetailsClauses.push(
+              `json_extract(s.htlc_details, '$.status') IN (${placeholders})`
+            );
+            params.push(...paymentDetailsFilter.htlcStatus);
+          }
+          // Filter by token conversion info presence
+          if (
+            (paymentDetailsFilter.type === "spark" || paymentDetailsFilter.type === "token") &&
+              paymentDetailsFilter.conversionRefundNeeded !== undefined
+          ) {
+            const typeCheck = paymentDetailsFilter.type === "spark" ? "p.spark = 1" : "p.spark IS NULL";
+            const nullCheck =
+              paymentDetailsFilter.conversionRefundNeeded === true
+                ? "IS NULL"
+                : "IS NOT NULL";
+            paymentDetailsClauses.push(
+              `${typeCheck} AND pm.token_conversion_info IS NOT NULL AND
+              json_extract(pm.token_conversion_info, '$.paymentId') IS NULL AND
+              json_extract(pm.token_conversion_info, '$.refundIdentifier') ${nullCheck}`
+            );
+          }
+          // Filter by token transaction hash
+          if (
+            paymentDetailsFilter.type === "token" &&
+            paymentDetailsFilter.txHash !== undefined
+          ) {
+            paymentDetailsClauses.push("t.tx_hash = ?");
+            params.push(paymentDetailsFilter.txHash);
+          }
+
+          if (paymentDetailsClauses.length > 0) {
+            allPaymentDetailsClauses.push(`(${paymentDetailsClauses.join(" AND ")})`);
+          }
+        }
+
+        if (allPaymentDetailsClauses.length > 0) {
+          whereClauses.push(`(${allPaymentDetailsClauses.join(" OR ")})`);
+        }
       }
 
       // Filter by payment details/method
@@ -207,6 +247,7 @@ class SqliteStorage {
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
             ,       pm.lnurl_withdraw_info
+            ,       pm.token_conversion_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -229,7 +270,8 @@ class SqliteStorage {
       params.push(actualLimit, actualOffset);
       const stmt = this.db.prepare(query);
       const rows = stmt.all(...params);
-      return Promise.resolve(rows.map(this._rowToPayment.bind(this)));
+      const payments = rows.map(this._rowToPayment.bind(this));
+      return Promise.resolve(payments);
     } catch (error) {
       return Promise.reject(
         new StorageError(
@@ -385,6 +427,7 @@ class SqliteStorage {
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
             ,       pm.lnurl_withdraw_info
+            ,       pm.token_conversion_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -448,6 +491,7 @@ class SqliteStorage {
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
             ,       pm.lnurl_withdraw_info
+            ,       pm.token_conversion_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -486,8 +530,8 @@ class SqliteStorage {
   setPaymentMetadata(paymentId, metadata) {
     try {
       const stmt = this.db.prepare(`
-                INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description) 
-                VALUES (?, ?, ?, ?)
+                INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, token_conversion_info) 
+                VALUES (?, ?, ?, ?, ?)
             `);
 
       stmt.run(
@@ -496,7 +540,10 @@ class SqliteStorage {
         metadata.lnurlWithdrawInfo
           ? JSON.stringify(metadata.lnurlWithdrawInfo)
           : null,
-        metadata.lnurlDescription
+        metadata.lnurlDescription,
+        metadata.tokenConversionInfo
+          ? JSON.stringify(metadata.tokenConversionInfo)
+          : null
       );
       return Promise.resolve();
     } catch (error) {
@@ -699,6 +746,9 @@ class SqliteStorage {
         htlcDetails: row.spark_htlc_details
           ? JSON.parse(row.spark_htlc_details)
           : null,
+        tokenConversionInfo: row.token_conversion_info
+          ? JSON.parse(row.token_conversion_info)
+          : null,
       };
     } else if (row.token_metadata) {
       details = {
@@ -707,6 +757,9 @@ class SqliteStorage {
         txHash: row.token_tx_hash,
         invoiceDetails: row.token_invoice_details
           ? JSON.parse(row.token_invoice_details)
+          : null,
+        tokenConversionInfo: row.token_conversion_info
+          ? JSON.parse(row.token_conversion_info)
           : null,
       };
     }
