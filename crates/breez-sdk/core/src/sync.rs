@@ -86,7 +86,17 @@ impl SparkSyncService {
                     );
                 }
 
-                if initial_sync_complete {
+                // Insert payment into storage
+                if let Err(err) = self.storage.insert_payment(payment.clone()).await {
+                    error!("Failed to insert payment: {err:?}");
+                }
+                if payment.status == PaymentStatus::Pending {
+                    pending_payments = pending_payments.saturating_add(1);
+                }
+                info!("Inserted payment: {payment:?}");
+
+                // Emit events for new payment statuses after initial sync, or even before initial sync if the payment is pending
+                if initial_sync_complete || payment.status == PaymentStatus::Pending {
                     let maybe_existing_payment_status = self
                         .storage
                         .get_payment_by_id(payment.id.clone())
@@ -99,15 +109,6 @@ impl SparkSyncService {
                             .await;
                     }
                 }
-
-                // Insert payment into storage
-                if let Err(err) = self.storage.insert_payment(payment.clone()).await {
-                    error!("Failed to insert payment: {err:?}");
-                }
-                if payment.status == PaymentStatus::Pending {
-                    pending_payments = pending_payments.saturating_add(1);
-                }
-                info!("Inserted payment: {payment:?}");
             }
 
             // Check if we have more transfers to fetch
@@ -332,25 +333,23 @@ impl SparkSyncService {
         // Insert what synced payments we have into storage, oldest to newest
         payments_to_sync.sort_by_key(|p| p.timestamp);
         for payment in &payments_to_sync {
-            let maybe_existing_payment_status = if initial_sync_complete {
-                self.storage
-                    .get_payment_by_id(payment.id.clone())
-                    .await
-                    .ok()
-                    .map(|p| p.status)
-            } else {
-                None
-            };
             info!("Inserting token payment: {payment:?}");
             if let Err(e) = self.storage.insert_payment(payment.clone()).await {
                 error!("Failed to insert token payment: {e:?}");
             }
-            if initial_sync_complete
-                && maybe_existing_payment_status.is_none_or(|s| s != payment.status)
-            {
-                self.event_emitter
-                    .emit(&SdkEvent::from_payment(payment.clone()))
-                    .await;
+
+            if initial_sync_complete || payment.status == PaymentStatus::Pending {
+                let maybe_existing_payment_status = self
+                    .storage
+                    .get_payment_by_id(payment.id.clone())
+                    .await
+                    .ok()
+                    .map(|p| p.status);
+                if maybe_existing_payment_status.is_none_or(|s| s != payment.status) {
+                    self.event_emitter
+                        .emit(&SdkEvent::from_payment(payment.clone()))
+                        .await;
+                }
             }
         }
 
