@@ -18,6 +18,7 @@ and also returns the fees related to the payment so they can be confirmed.
 </h2>
 
 Once the payment has been prepared and the fees are accepted, the payment can be sent by passing:
+
 - **Prepare Response** - The response from the [Preparing LNURL Payments](lnurl_pay.md#preparing-lnurl-payments) step.
 - **Idempotency Key** - An optional UUID that identifies the payment. If set, providing the same idempotency key for multiple requests will ensure that only one payment is made.
 
@@ -26,6 +27,11 @@ Once the payment has been prepared and the fees are accepted, the payment can be
 <div class="warning">
 <h4>Developer note</h4>
 By default when the LNURL-pay results in a success action with a URL, the URL is validated to check if there is a mismatch with the LNURL callback domain. You can disable this behaviour by setting the optional validation <code>PrepareLnurlPayRequest</code> param to false.
+</div>
+
+<div class="warning">
+<h4>Developer note</h4>
+Currently, the "Prefer Spark over Lightning" <a href="config.md#prefer-spark-over-lightning">configuration option</a> is incompatible with sending LNURL-Pay payments. Enabling this option will cause LNURL-Pay payment attempts to fail with an error.
 </div>
 
 ## Supported Specs

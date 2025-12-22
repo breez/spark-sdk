@@ -1284,7 +1284,14 @@ impl BreezSdk {
     }
 
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
+        if self.config.prefer_spark_over_lightning {
+            return Err(SdkError::Generic(
+                "Prefer Spark over Lightning is not compatible with LNURL-Pay. Please disable it and try again.".to_string(),
+            ));
+        }
+
         self.ensure_spark_private_mode_initialized().await?;
+
         let mut payment = Box::pin(self.send_payment_internal(
             SendPaymentRequest {
                 prepare_response: PrepareSendPaymentResponse {
