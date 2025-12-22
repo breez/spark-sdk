@@ -106,4 +106,3 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
   print('Payment: $payment');
   // ANCHOR_END: send-token-payment
 }
-
