@@ -83,6 +83,7 @@ impl NostrSigner {
 mod tests {
     use super::*;
     use crate::{Seed, models::Config, signer::breez::BreezSignerImpl};
+    use bitcoin::secp256k1::Message;
     use bitcoin::secp256k1::Secp256k1;
     use spark_wallet::KeySetType;
 
@@ -168,7 +169,6 @@ mod tests {
                 .expect("Failed to serialize nostr key");
 
         // Sign the same unsigned event using secp256k1 directly
-        use bitcoin::secp256k1::Message;
         let message =
             Message::from_digest_slice(event_id.as_bytes()).expect("Failed to create message");
         let keypair = nostr_key.private_key.keypair(&secp);
