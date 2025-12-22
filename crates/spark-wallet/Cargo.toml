@@ -21,6 +21,7 @@ spark.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }
 tokio_with_wasm.workspace = true
+tonic.workspace = true
 tracing.workspace = true
 web-time.workspace = true
 

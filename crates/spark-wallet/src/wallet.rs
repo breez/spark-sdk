@@ -17,7 +17,7 @@ use spark::{
     operator::{
         OperatorPool,
         rpc::{
-            ConnectionManager, DefaultConnectionManager,
+            ConnectionManager, DefaultConnectionManager, OperatorRpcError,
             spark::{PreimageRequestRole, QuerySparkInvoicesRequest, UpdateWalletSettingRequest},
         },
     },
@@ -27,9 +27,9 @@ use spark::{
         LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment, LightningService,
         OptimizationEvent, OptimizationEventHandler, OptimizationProgress, Preimage,
         PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
-        QueryTokenTransactionsFilter, StaticDepositQuote, Swap, TimelockManager, TokenService,
-        TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
-        TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
+        QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
+        TokenService, TokenTransaction, Transfer, TransferId, TransferObserver, TransferService,
+        TransferStatus, TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
@@ -58,8 +58,73 @@ use crate::{
 };
 
 const SELECT_LEAVES_MAX_RETRIES: usize = 3;
+const MAX_LEAF_SPENT_RETRIES: usize = 3;
 
 use super::{SparkWalletConfig, SparkWalletError};
+
+/// Checks if an error indicates a transfer lock conflict that should trigger a retry.
+// TODO: We want to move to an error code but it isn't available yet.
+fn is_transfer_locked_error<E: std::fmt::Display>(error: &E) -> bool {
+    error.to_string().contains("TRANSFER_LOCKED")
+}
+
+/// Checks if an error is a gRPC PermissionDenied status, which can occur
+/// when we are trying to spend leaves that have already been spent.
+fn is_permission_denied_error(error: &OperatorRpcError) -> bool {
+    matches!(error, OperatorRpcError::Connection(status) if status.code() == tonic::Code::PermissionDenied)
+}
+
+/// Checks if an error should trigger a retry of the operation.
+fn is_leafs_spent_error(error: &OperatorRpcError) -> bool {
+    is_transfer_locked_error(error) || is_permission_denied_error(error)
+}
+
+/// Macro to handle retry logic for operations that may fail due to concurrent leaf spending.
+/// This retries the operation up to MAX_LEAF_SPENT_RETRIES times.
+macro_rules! with_leafs_spent_retry {
+    (
+        $self:expr,
+        $target_amounts:expr,
+        $operation_name:literal,
+        |$leaves_reservation:ident| $operation:expr
+    ) => {{
+        let mut attempt = 0;
+        loop {
+            if attempt > 0 {
+                if attempt >= MAX_LEAF_SPENT_RETRIES {
+                    break Err(SparkWalletError::Generic(format!(
+                        "{} failed after {} retries due to leaf spending errors",
+                        $operation_name, MAX_LEAF_SPENT_RETRIES
+                    )));
+                }
+                info!(
+                    "{} failed with leaf spending error (attempt {}/{}), refreshing leaves and retrying",
+                    $operation_name,
+                    attempt,
+                    MAX_LEAF_SPENT_RETRIES
+                );
+                $self.tree_service.refresh_leaves().await?;
+            }
+            let $leaves_reservation = $self.select_leaves_with_retry($target_amounts).await?;
+
+            let result = with_reserved_leaves(
+                $self.tree_service.as_ref(),
+                $operation,
+                &$leaves_reservation,
+            )
+            .await;
+
+            match result {
+                Ok(v) => break Ok(v),
+                Err(ServiceError::ServiceConnectionError(e)) if is_leafs_spent_error(&e) => {
+                    attempt += 1;
+                    continue;
+                }
+                Err(e) => break Err(e.into()),
+            }
+        }
+    }};
+}
 
 pub struct SparkWallet {
     /// Cancellation token to stop background tasks. It is dropped when the wallet is dropped to stop background tasks.
@@ -318,19 +383,19 @@ impl SparkWallet {
         }
 
         let target_amounts = TargetAmounts::new_amount_and_fee(total_amount_sat, None);
-        let leaves_reservation = self.select_leaves_with_retry(Some(&target_amounts)).await?;
-        // start the lightning swap with the operator
-        let lightning_payment = with_reserved_leaves(
-            self.tree_service.as_ref(),
-            self.lightning_service.pay_lightning_invoice(
+
+        // Start the lightning swap with the operator, with retry logic for concurrent leaf spending
+        let lightning_payment = with_leafs_spent_retry!(
+            self,
+            Some(&target_amounts),
+            "Lightning payment",
+            |leaves_reservation| self.lightning_service.pay_lightning_invoice(
                 invoice,
                 amount_to_send,
                 &leaves_reservation.leaves,
-                transfer_id,
-            ),
-            &leaves_reservation,
-        )
-        .await?;
+                transfer_id.clone(),
+            )
+        )?;
 
         // Collect the wallet transfer information from the lightning send payment result. If
         // not present, we need to query for the SSP user request to get the transfer details.
@@ -611,22 +676,20 @@ impl SparkWallet {
         }
         let receiver_pubkey = receiver_address.identity_public_key;
 
-        // get leaves to transfer
+        // Transfer leaves with retry logic for concurrent leaf spending
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
-        let leaves_reservation = self.select_leaves_with_retry(Some(&target_amounts)).await?;
-
-        let transfer = with_reserved_leaves(
-            self.tree_service.as_ref(),
-            self.transfer_service.transfer_leaves_to(
+        let transfer = with_leafs_spent_retry!(
+            self,
+            Some(&target_amounts),
+            "Transfer",
+            |leaves_reservation| self.transfer_service.transfer_leaves_to(
                 leaves_reservation.leaves.clone(),
                 &receiver_pubkey,
-                transfer_id,
+                transfer_id.clone(),
                 None,
-                spark_invoice,
-            ),
-            &leaves_reservation,
-        )
-        .await?;
+                spark_invoice.clone(),
+            )
+        )?;
 
         self.maybe_start_optimization();
 
@@ -671,23 +734,21 @@ impl SparkWallet {
         }
         let receiver_pubkey = receiver_address.identity_public_key;
 
-        // get leaves to transfer
+        // Create HTLC with retry logic for concurrent leaf spending
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
-        let leaves_reservation = self.select_leaves_with_retry(Some(&target_amounts)).await?;
-
         let expiry_time = SystemTime::now() + expiry_duration;
-        let transfer = with_reserved_leaves(
-            self.tree_service.as_ref(),
-            self.htlc_service.create_htlc(
+        let transfer = with_leafs_spent_retry!(
+            self,
+            Some(&target_amounts),
+            "HTLC creation",
+            |leaves_reservation| self.htlc_service.create_htlc(
                 leaves_reservation.leaves.clone(),
                 &receiver_pubkey,
                 payment_hash,
                 expiry_time,
-                transfer_id,
-            ),
-            &leaves_reservation,
-        )
-        .await?;
+                transfer_id.clone(),
+            )
+        )?;
 
         let htlc_preimage_request = PreimageRequest {
             payment_hash: *payment_hash,
@@ -937,27 +998,23 @@ impl SparkWallet {
         let fee_sats = fee_quote.fee_sats(&exit_speed);
         trace!("Calculated fee for exit speed {exit_speed:?}: {fee_sats} sats",);
 
-        // Select leaves for the withdrawal
+        // Withdraw leaves with retry logic for concurrent leaf spending
         let target_amounts = amount_sats
             .map(|amount_sats| TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats)));
-        let leaves_reservation = self
-            .select_leaves_with_retry(target_amounts.as_ref())
-            .await?;
-
-        let transfer = with_reserved_leaves(
-            self.tree_service.as_ref(),
-            self.withdraw_inner(WithdrawInnerParams {
-                address: withdrawal_address,
+        let transfer = with_leafs_spent_retry!(
+            self,
+            target_amounts.as_ref(),
+            "Withdrawal",
+            |leaves_reservation| self.withdraw_inner(WithdrawInnerParams {
+                address: withdrawal_address.clone(),
                 exit_speed,
                 leaves_reservation: &leaves_reservation,
                 target_amounts: target_amounts.as_ref(),
                 fee_sats,
-                fee_quote_id: fee_quote.id,
-                transfer_id,
-            }),
-            &leaves_reservation,
-        )
-        .await?;
+                fee_quote_id: fee_quote.id.clone(),
+                transfer_id: transfer_id.clone(),
+            })
+        )?;
 
         self.maybe_start_optimization();
 
@@ -974,7 +1031,7 @@ impl SparkWallet {
     async fn withdraw_inner(
         &self,
         params: WithdrawInnerParams<'_>,
-    ) -> Result<Transfer, SparkWalletError> {
+    ) -> Result<Transfer, ServiceError> {
         let WithdrawInnerParams {
             address,
             exit_speed,
@@ -1004,7 +1061,7 @@ impl SparkWallet {
                 "Insufficient funds for withdrawal: amount {} sats, fee {} sats",
                 withdraw_leaves_sum, fee_sats
             );
-            return Err(SparkWalletError::InsufficientFunds);
+            return Err(ServiceError::InsufficientFunds);
         }
 
         // Perform the cooperative exit with the SSP
