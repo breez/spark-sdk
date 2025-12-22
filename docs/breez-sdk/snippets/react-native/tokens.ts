@@ -79,7 +79,7 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
     paymentRequest,
     amount: optionalAmount,
     tokenIdentifier,
-    maxSlippageBps: undefined
+    tokenConversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to send the token payment

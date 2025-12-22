@@ -690,10 +690,8 @@ pub enum SendPaymentMethod {
     },
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
-        spark_transfer_fee_sats: Option<u64>,
-        #[serde(with = "serde_option_u128_as_string")]
-        token_conversion_fee: Option<u128>,
         lightning_fee_sats: u64,
+        spark_transfer_fee_sats: Option<u64>,
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
@@ -768,7 +766,7 @@ pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
-    pub max_slippage_bps: Option<u32>,
+    pub token_conversion_options: Option<TokenConversionOptions>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
@@ -776,7 +774,8 @@ pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     pub amount: u128,
     pub token_identifier: Option<String>,
-    pub max_slippage_bps: Option<u32>,
+    pub token_conversion_options: Option<TokenConversionOptions>,
+    pub token_conversion_fee: Option<u128>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OnchainConfirmationSpeed)]
@@ -1112,4 +1111,27 @@ pub struct TokenConversionInfo {
     #[serde(default, with = "serde_option_u128_as_string")]
     pub fee: Option<u128>,
     pub refund_identifier: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenConversionOptions)]
+pub struct TokenConversionOptions {
+    pub conversion_type: TokenConversionType,
+    pub max_slippage_bps: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenConversionType)]
+pub enum TokenConversionType {
+    FromBitcoin { to_token_identifier: String },
+    ToBitcoin { from_token_identifier: String },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchTokenConversionLimitsRequest)]
+pub struct FetchTokenConversionLimitsRequest {
+    pub conversion_type: TokenConversionType,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchTokenConversionLimitsResponse)]
+pub struct FetchTokenConversionLimitsResponse {
+    pub min_from_amount: Option<u128>,
+    pub min_to_amount: Option<u128>,
 }
