@@ -80,16 +80,17 @@ impl NostrSigner {
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use super::*;
-    use crate::{Seed, models::Config, signer::breez::BreezSignerImpl};
-    use bitcoin::secp256k1::Message;
-    use bitcoin::secp256k1::Secp256k1;
+    use std::sync::Arc;
+
+    use super::NostrSigner;
+    use crate::signer::breez::BreezSignerImpl;
+    use crate::{Network, Seed, models::Config, signer::BreezSigner};
+    use bitcoin::bip32::DerivationPath;
+    use bitcoin::secp256k1::{Message, Secp256k1};
     use spark_wallet::KeySetType;
 
-    /// Test that our new signing method produces the same signatures as the old method
-    /// Old method: `nostr::Keys` with `sign_with_keys`
-    /// New method: `NostrSigner` with `sign_hash_schnorr`
     #[tokio::test]
     async fn test_signing_compatibility_with_nostr_keys() {
         // Create a test seed (deterministic for reproducible tests)
@@ -113,7 +114,7 @@ mod tests {
             private_enabled_default: false,
         };
 
-        let breez_signer = Arc::new(
+        let breez_signer: Arc<dyn BreezSigner> = Arc::new(
             BreezSignerImpl::new(&config, &seed, KeySetType::Default, false, Some(1)).unwrap(),
         );
 
