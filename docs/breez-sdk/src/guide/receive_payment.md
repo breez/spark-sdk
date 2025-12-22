@@ -71,7 +71,7 @@ Once a receive payment is initiated, you can follow and react to the different p
 
 ### Spark
 
-| Event                | Description                                                       | UX Suggestion                                    |
-| -------------------- | ----------------------------------------------------------------- | ------------------------------------------------ |
-| **PaymentPending**   | The Spark transfer was detected and the claim process will start. | Show payment as pending.                         |
-| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete.        | Update the balance and show payment as complete. |
+| Event                | Description                                                                                                                                                                                          | UX Suggestion                                    |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| **PaymentPending**   | The Spark transfer was detected and the claim process will start. For Spark HTLC payments, the claim will only start once the HTLC is claimed. For more details see [Spark HTLC payments](htlcs.md). | Show payment as pending.                         |
+| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete.                                                                                                                                           | Update the balance and show payment as complete. |

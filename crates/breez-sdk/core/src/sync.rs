@@ -33,7 +33,7 @@ impl SparkSyncService {
 
     pub async fn sync_payments(&self, initial_sync_complete: bool) -> Result<(), SdkError> {
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
-        self.sync_bitcoin_payments_to_storage(&object_repository)
+        self.sync_bitcoin_payments_to_storage(&object_repository, initial_sync_complete)
             .await?;
         self.sync_token_payments_to_storage(&object_repository, initial_sync_complete)
             .await?;
@@ -43,6 +43,7 @@ impl SparkSyncService {
     async fn sync_bitcoin_payments_to_storage(
         &self,
         object_repository: &ObjectCacheRepository,
+        initial_sync_complete: bool,
     ) -> Result<(), SdkError> {
         // Get the last offset we processed from storage
         let cached_sync_info = object_repository
@@ -84,6 +85,7 @@ impl SparkSyncService {
                         payment.id
                     );
                 }
+
                 // Insert payment into storage
                 if let Err(err) = self.storage.insert_payment(payment.clone()).await {
                     error!("Failed to insert payment: {err:?}");
@@ -92,6 +94,21 @@ impl SparkSyncService {
                     pending_payments = pending_payments.saturating_add(1);
                 }
                 info!("Inserted payment: {payment:?}");
+
+                // Emit events for new payment statuses after initial sync, or even before initial sync if the payment is pending
+                if initial_sync_complete || payment.status == PaymentStatus::Pending {
+                    let maybe_existing_payment_status = self
+                        .storage
+                        .get_payment_by_id(payment.id.clone())
+                        .await
+                        .ok()
+                        .map(|p| p.status);
+                    if maybe_existing_payment_status.is_none_or(|s| s != payment.status) {
+                        self.event_emitter
+                            .emit(&SdkEvent::from_payment(payment.clone()))
+                            .await;
+                    }
+                }
             }
 
             // Check if we have more transfers to fetch
@@ -316,25 +333,23 @@ impl SparkSyncService {
         // Insert what synced payments we have into storage, oldest to newest
         payments_to_sync.sort_by_key(|p| p.timestamp);
         for payment in &payments_to_sync {
-            let maybe_existing_payment_status = if initial_sync_complete {
-                self.storage
-                    .get_payment_by_id(payment.id.clone())
-                    .await
-                    .ok()
-                    .map(|p| p.status)
-            } else {
-                None
-            };
             info!("Inserting token payment: {payment:?}");
             if let Err(e) = self.storage.insert_payment(payment.clone()).await {
                 error!("Failed to insert token payment: {e:?}");
             }
-            if initial_sync_complete
-                && maybe_existing_payment_status.is_none_or(|s| s != payment.status)
-            {
-                self.event_emitter
-                    .emit(&SdkEvent::from_payment(payment.clone()))
-                    .await;
+
+            if initial_sync_complete || payment.status == PaymentStatus::Pending {
+                let maybe_existing_payment_status = self
+                    .storage
+                    .get_payment_by_id(payment.id.clone())
+                    .await
+                    .ok()
+                    .map(|p| p.status);
+                if maybe_existing_payment_status.is_none_or(|s| s != payment.status) {
+                    self.event_emitter
+                        .emit(&SdkEvent::from_payment(payment.clone()))
+                        .await;
+                }
             }
         }
 
