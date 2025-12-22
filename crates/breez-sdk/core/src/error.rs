@@ -20,6 +20,9 @@ pub enum SdkError {
     #[error("SparkSdkError: {0}")]
     SparkError(String),
 
+    #[error("Insufficient funds")]
+    InsufficientFunds,
+
     #[error("Invalid UUID: {0}")]
     InvalidUuid(String),
 
@@ -83,6 +86,21 @@ impl From<bitcoin::address::ParseError> for SdkError {
     }
 }
 
+impl From<flashnet::FlashnetError> for SdkError {
+    fn from(e: flashnet::FlashnetError) -> Self {
+        match e {
+            flashnet::FlashnetError::Network { reason, code } => {
+                let code = match code {
+                    Some(c) => format!(" (code: {c})"),
+                    None => String::new(),
+                };
+                SdkError::NetworkError(format!("{reason}{code}"))
+            }
+            _ => SdkError::Generic(e.to_string()),
+        }
+    }
+}
+
 impl From<persist::StorageError> for SdkError {
     fn from(e: persist::StorageError) -> Self {
         SdkError::StorageError(e.to_string())
@@ -127,7 +145,10 @@ impl From<serde_json::Error> for SdkError {
 
 impl From<SparkWalletError> for SdkError {
     fn from(e: SparkWalletError) -> Self {
-        SdkError::SparkError(e.to_string())
+        match e {
+            SparkWalletError::InsufficientFunds => SdkError::InsufficientFunds,
+            _ => SdkError::SparkError(e.to_string()),
+        }
     }
 }
 

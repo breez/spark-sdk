@@ -292,7 +292,11 @@ class MigrationManager {
         // Deposits will be recovered on next sync.
         name: "Clear unclaimed deposits for claim_error format change",
         sql: `DELETE FROM unclaimed_deposits`
-      }
+      },
+      {
+        name: "Add token conversion info to payment_metadata",
+        sql: `ALTER TABLE payment_metadata ADD COLUMN token_conversion_info TEXT`
+      },
     ];
   }
 }
