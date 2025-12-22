@@ -203,7 +203,7 @@ impl SdkBuilder {
 
         let signer = Arc::new(
             BreezSignerImpl::new(
-                self.config.clone(),
+                &self.config,
                 &self.seed,
                 key_set_type.into(),
                 use_address_index,
@@ -220,8 +220,7 @@ impl SdkBuilder {
                 .map_err(|e| SdkError::Generic(e.to_string()))?,
         );
         let nostr_signer = Arc::new(
-            NostrSigner::new(signer.clone())
-                .await
+            NostrSigner::new(signer.clone(), self.config.network, account_number)
                 .map_err(|e| SdkError::Generic(format!("{e:?}")))?,
         );
 
