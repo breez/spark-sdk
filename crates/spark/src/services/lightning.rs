@@ -233,6 +233,17 @@ impl LightningService {
         include_spark_address: bool,
         identity_pubkey: Option<PublicKey>,
     ) -> Result<LightningReceivePayment, ServiceError> {
+        // Validate expiry_secs does not exceed i32::MAX (server limitation)
+        if let Some(expiry) = expiry_secs
+            && expiry > i32::MAX as u32
+        {
+            return Err(ServiceError::ValidationError(format!(
+                "expiry_secs {} exceeds maximum allowed value of {}",
+                expiry,
+                i32::MAX
+            )));
+        }
+
         let identity_pubkey = match identity_pubkey {
             Some(pk) => pk,
             None => self.signer.get_identity_public_key().await?,

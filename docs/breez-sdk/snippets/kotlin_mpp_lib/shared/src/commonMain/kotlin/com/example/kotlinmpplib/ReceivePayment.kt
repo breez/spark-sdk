@@ -10,9 +10,11 @@ class ReceivePayment {
             val description = "<invoice description>"
             // Optionally set the invoice amount you wish the payer to send
             val optionalAmountSats = 5_000.toULong()
+            // Optionally set the expiry time in seconds
+            val optionalExpirySecs = 3600.toUInt()
 
             val request = ReceivePaymentRequest(
-                ReceivePaymentMethod.Bolt11Invoice(description, optionalAmountSats)
+                ReceivePaymentMethod.Bolt11Invoice(description, optionalAmountSats, optionalExpirySecs)
             )
             val response = sdk.receivePayment(request)
 
