@@ -12,11 +12,27 @@ class SendPayment {
         val optionalAmountSats = BigInteger.fromLong(5_000L)
         // Android (BigInteger from java.math)
         // val optionalAmountSats = BigInteger.valueOf(5_000L)
+        // Optionally set to use token funds to pay via token conversion
+        val optionalTokenConversionOptions = TokenConversionOptions(
+            conversionType = TokenConversionType.ToBitcoin(
+                "<token identifier>"
+            ),
+            maxSlippageBps = 50u
+        )
+
         try {
-            val req = PrepareSendPaymentRequest(paymentRequest, optionalAmountSats)
+            val req = PrepareSendPaymentRequest(
+                paymentRequest,
+                optionalAmountSats,
+                tokenConversionOptions = optionalTokenConversionOptions
+            )
             val prepareResponse = sdk.prepareSendPayment(req)
 
             // If the fees are acceptable, continue to create the Send Payment
+            if (prepareResponse.tokenConversionFee != null) {
+                val tokenConversionFee = prepareResponse.tokenConversionFee
+                // Log.v("Breez", "Estimated token conversion fee: ${tokenConversionFee} token base units")
+            }
             val paymentMethod = prepareResponse.paymentMethod
             if (paymentMethod is SendPaymentMethod.Bolt11Invoice) {
                 // Fees to pay via Lightning
@@ -40,11 +56,27 @@ class SendPayment {
         val amountSats = BigInteger.fromLong(50_000L)
         // Android (BigInteger from java.math)
         // val amountSats = BigInteger.valueOf(50_000L)
+        // Optionally set to use token funds to pay via token conversion
+        val optionalTokenConversionOptions = TokenConversionOptions(
+            conversionType = TokenConversionType.ToBitcoin(
+                "<token identifier>"
+            ),
+            maxSlippageBps = 50u
+        )
+
         try {
-            val req = PrepareSendPaymentRequest(paymentRequest, amountSats)
+            val req = PrepareSendPaymentRequest(
+                paymentRequest,
+                amountSats,
+                tokenConversionOptions = optionalTokenConversionOptions
+            )
             val prepareResponse = sdk.prepareSendPayment(req)
 
             // If the fees are acceptable, continue to create the Send Payment
+            if (prepareResponse.tokenConversionFee != null) {
+                val tokenConversionFee = prepareResponse.tokenConversionFee
+                // Log.v("Breez", "Estimated token conversion fee: ${tokenConversionFee} token base units")
+            }
             val paymentMethod = prepareResponse.paymentMethod
             if (paymentMethod is SendPaymentMethod.BitcoinAddress) {
                 val feeQuote = paymentMethod.feeQuote
@@ -69,11 +101,27 @@ class SendPayment {
         val amountSats = BigInteger.fromLong(50_000L)
         // Android (BigInteger from java.math)
         // val amountSats = BigInteger.valueOf(50_000L)
+        // Optionally set to use token funds to pay via token conversion
+        val optionalTokenConversionOptions = TokenConversionOptions(
+            conversionType = TokenConversionType.ToBitcoin(
+                "<token identifier>"
+            ),
+            maxSlippageBps = 50u
+        )
+
         try {
-            val req = PrepareSendPaymentRequest(paymentRequest, amountSats)
+            val req = PrepareSendPaymentRequest(
+                paymentRequest,
+                amountSats,
+                tokenConversionOptions = optionalTokenConversionOptions
+            )
             val prepareResponse = sdk.prepareSendPayment(req)
 
             // If the fees are acceptable, continue to create the Send Payment
+            if (prepareResponse.tokenConversionFee != null) {
+                val tokenConversionFee = prepareResponse.tokenConversionFee
+                // Log.v("Breez", "Estimated token conversion fee: ${tokenConversionFee} token base units")
+            }
             val paymentMethod = prepareResponse.paymentMethod
             if (paymentMethod is SendPaymentMethod.SparkAddress) {
                 val feeSats = paymentMethod.fee
@@ -94,11 +142,27 @@ class SendPayment {
         val optionalAmountSats = BigInteger.fromLong(50_000L)
         // Android (BigInteger from java.math)
         // val optionalAmountSats = BigInteger.valueOf(50_000L)
+        // Optionally set to use token funds to pay via token conversion
+        val optionalTokenConversionOptions = TokenConversionOptions(
+            conversionType = TokenConversionType.ToBitcoin(
+                "<token identifier>"
+            ),
+            maxSlippageBps = 50u
+        )
+
         try {
-            val req = PrepareSendPaymentRequest(paymentRequest, optionalAmountSats)
+            val req = PrepareSendPaymentRequest(
+                paymentRequest,
+                optionalAmountSats,
+                tokenConversionOptions = optionalTokenConversionOptions
+            )
             val prepareResponse = sdk.prepareSendPayment(req)
 
             // If the fees are acceptable, continue to create the Send Payment
+            if (prepareResponse.tokenConversionFee != null) {
+                val tokenConversionFee = prepareResponse.tokenConversionFee
+                // Log.v("Breez", "Estimated token conversion fee: ${tokenConversionFee} token base units")
+            }
             val paymentMethod = prepareResponse.paymentMethod
             if (paymentMethod is SendPaymentMethod.SparkInvoice) {
                 val feeSats = paymentMethod.fee

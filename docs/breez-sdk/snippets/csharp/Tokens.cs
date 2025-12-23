@@ -84,16 +84,26 @@ namespace BreezSdkSnippets
             var tokenIdentifier = "<token identifier>";
             // Set the amount of tokens you wish to send.
             var optionalAmount = new BigInteger(1000);
+            // Optionally set to use Bitcoin funds to pay via token conversion
+            var optionalTokenConversionOptions = new TokenConversionOptions(
+                conversionType: new TokenConversionType.FromBitcoin(),
+                maxSlippageBps: 50U
+            );
 
             var prepareResponse = await sdk.PrepareSendPayment(
                 request: new PrepareSendPaymentRequest(
                     paymentRequest: paymentRequest,
                     amount: optionalAmount,
-                    tokenIdentifier: tokenIdentifier
+                    tokenIdentifier: tokenIdentifier,
+                    tokenConversionOptions: optionalTokenConversionOptions
                 )
             );
 
             // If the fees are acceptable, continue to send the token payment
+            if (prepareResponse.tokenConversionFee != null) {
+                Console.WriteLine("Estimated token conversion fee: " + 
+                    $"{prepareResponse.tokenConversionFee} sats");
+            }
             if (prepareResponse.paymentMethod is SendPaymentMethod.SparkAddress sparkAddress)
             {
                 Console.WriteLine($"Token ID: {sparkAddress.tokenIdentifier}");

@@ -78,15 +78,24 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
     let tokenIdentifier = "<token identifier>"
     // Set the amount of tokens you wish to send. (requires 'import BigNumber')
     let optionalAmount = BInt(1_000)
+    // Optionally set to use Bitcoin funds to pay via token conversion
+    let optionalTokenConversionOptions = TokenConversionOptions(
+        conversionType: TokenConversionType.fromBitcoin,
+        maxSlippageBps: 50
+    )
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
             amount: optionalAmount,
-            tokenIdentifier: tokenIdentifier
+            tokenIdentifier: tokenIdentifier,
+            tokenConversionOptions: optionalTokenConversionOptions
         ))
 
     // If the fees are acceptable, continue to send the token payment
+    if let tokenConversionFee = prepareResponse.tokenConversionFee {
+        print("Estimated token conversion fee: \(tokenConversionFee) sats")
+    }
     if case let .sparkAddress(address, fee, tokenId) = prepareResponse.paymentMethod {
         print("Token ID: \(String(describing: tokenId))")
         print("Fees: \(fee) token base units")

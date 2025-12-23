@@ -9,6 +9,8 @@ from breez_sdk_spark import (
     SendPaymentRequest,
     SendPaymentMethod,
     GetTokensMetadataRequest,
+    TokenConversionOptions,
+    TokenConversionType,
 )
 
 
@@ -94,16 +96,27 @@ async def send_token_payment(sdk: BreezSdk):
         token_identifier = "<token identifier>"
         # Set the amount of tokens you wish to send.
         optional_amount = 1_000
+        # Optionally set to use Bitcoin funds to pay via token conversion
+        optional_token_conversion_options = TokenConversionOptions(
+            conversion_type=TokenConversionType.FROM_BITCOIN(),
+            max_slippage_bps=50,
+        )
 
         prepare_response = await sdk.prepare_send_payment(
             request=PrepareSendPaymentRequest(
                 payment_request=payment_request,
                 amount=optional_amount,
                 token_identifier=token_identifier,
+                token_conversion_options=optional_token_conversion_options,
             )
         )
 
         # If the fees are acceptable, continue to send the token payment
+        if prepare_response.token_conversion_fee is not None:
+            token_conversion_fee = prepare_response.token_conversion_fee
+            logging.debug(
+                f"Estimated token conversion fee: {token_conversion_fee} sats"
+            )
         if isinstance(prepare_response.payment_method, SendPaymentMethod.SPARK_ADDRESS):
             print(f"Token ID: {prepare_response.payment_method.token_identifier}")
             print(f"Fees: {prepare_response.payment_method.fee} token base units")
