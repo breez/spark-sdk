@@ -1,4 +1,4 @@
-import type { BreezSdk } from '@breeztech/breez-sdk-spark'
+import type { BreezSdk, TokenConversionOptions } from '@breeztech/breez-sdk-spark'
 
 const exampleFetchTokenBalances = async (sdk: BreezSdk) => {
   // ANCHOR: fetch-token-balances
@@ -71,14 +71,27 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const tokenIdentifier = '<token identifier>'
   // Set the amount of tokens you wish to send.
   const optionalAmount = BigInt(1_000)
+  // Optionally set to use token funds to pay via token conversion
+  const optionalTokenConversionOptions: TokenConversionOptions = {
+    conversionType: {
+      type: 'toBitcoin',
+      fromTokenIdentifier: '<token identifier>'
+    },
+    maxSlippageBps: 50
+  }
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
     amount: optionalAmount,
-    tokenIdentifier
+    tokenIdentifier,
+    tokenConversionOptions: optionalTokenConversionOptions
   })
 
   // If the fees are acceptable, continue to send the token payment
+  if (prepareResponse.tokenConversionFee !== undefined) {
+    const tokenConversionFee = prepareResponse.tokenConversionFee
+    console.log(`Estimated token conversion fee: ${tokenConversionFee} sats`)
+  }
   if (prepareResponse.paymentMethod.type === 'sparkAddress') {
     console.log(`Token ID: ${prepareResponse.paymentMethod.tokenIdentifier}`)
     console.log(`Fees: ${prepareResponse.paymentMethod.fee} token base units`)

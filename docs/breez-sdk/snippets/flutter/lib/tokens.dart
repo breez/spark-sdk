@@ -74,16 +74,26 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
   final tokenIdentifier = '<token identifier>';
   // Set the amount of tokens you wish to send.
   final optionalAmount = BigInt.from(1000);
-  
+  // Optionally set to use Bitcoin funds to pay via token conversion
+  final optionalTokenConversionOptions = TokenConversionOptions(
+    conversionType: TokenConversionType.fromBitcoin(),
+    maxSlippageBps: 50,
+  );
+
   final prepareResponse = await sdk.prepareSendPayment(
     request: PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
       amount: optionalAmount,
       tokenIdentifier: tokenIdentifier,
+      tokenConversionOptions: optionalTokenConversionOptions
     ),
   );
   
   // If the fees are acceptable, continue to send the token payment
+  if (prepareResponse.tokenConversionFee != null) {
+    print(
+        "Estimated token conversion fee: ${prepareResponse.tokenConversionFee} sats");
+  }
   if (prepareResponse.paymentMethod is SendPaymentMethod_SparkAddress) {
     final method = prepareResponse.paymentMethod as SendPaymentMethod_SparkAddress;
     print('Token ID: ${method.tokenIdentifier}');
