@@ -63,6 +63,13 @@ pub struct _ConnectRequest {
     pub storage_dir: String,
 }
 
+#[frb(mirror(KeySetConfig))]
+pub struct _KeySetConfig {
+    pub key_set_type: KeySetType,
+    pub use_address_index: bool,
+    pub account_number: Option<u32>,
+}
+
 #[frb(mirror(CheckMessageRequest))]
 pub struct _CheckMessageRequest {
     pub message: String,

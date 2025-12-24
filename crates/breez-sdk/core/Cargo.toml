@@ -46,6 +46,7 @@ reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 shellwords.workspace = true
+spark.workspace = true
 spark-wallet.workspace = true
 tempdir.workspace = true
 thiserror.workspace = true
@@ -60,6 +61,7 @@ semver = "1.0.27"
 anyhow.workspace = true
 zbase32 = "0.1.2"
 frost-secp256k1-tr = { workspace = true }
+k256 = { workspace = true, features = ["arithmetic"] }
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]

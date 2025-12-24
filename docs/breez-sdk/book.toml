@@ -1,6 +1,5 @@
 [book]
 language = "en"
-multilingual = true
 src = "src"
 title = "Breez SDK - Nodeless (Spark)"
 
@@ -19,11 +18,11 @@ enable = true
 enable = false
 
 [preprocessor.snippets]
-after = ["links"]
+
+[preprocessor.pagetoc]
+command = "mdbook-pagetoc"
+renderer = ["html"]
 
 [preprocessor.variables.variables]
 api_key_form_uri = "https://breez.technology/request-api-key/#contact-us-form-sdk"
 
-[preprocessor.pagetoc]
-command = "mdbook-pagetoc"
-renderer = "html"

@@ -2,7 +2,7 @@ use crate::SdkError;
 use bitcoin::bip32::DerivationPath;
 use bitcoin::secp256k1;
 
-#[async_trait::async_trait]
+#[macros::async_trait]
 pub trait BreezSigner: Send + Sync {
     /// Returns the identity public key.
     fn identity_public_key(&self) -> secp256k1::PublicKey;
@@ -103,7 +103,24 @@ pub trait BreezSigner: Send + Sync {
     ) -> Result<frost_secp256k1_tr::Signature, SdkError>;
 }
 
-pub mod breez;
-pub mod nostr;
-pub mod rtsync;
-pub mod spark;
+// Internal signer implementations - accessible within crate but not exposed publicly
+pub(crate) mod breez;
+pub(crate) mod nostr;
+pub(crate) mod rtsync;
+pub(crate) mod spark;
+
+// External signer support - private adapter
+mod adapter;
+mod default_external;
+
+// Public external signer API
+pub mod external;
+pub mod external_types;
+
+// Re-export only the external signer trait and types
+pub use external::ExternalSigner;
+pub use external_types::*;
+
+// Internal-only exports (used by adapter and builder)
+pub(crate) use adapter::ExternalSignerAdapter;
+pub(crate) use default_external::DefaultExternalSigner;

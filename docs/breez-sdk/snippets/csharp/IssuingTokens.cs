@@ -44,7 +44,12 @@ namespace BreezSdkSnippets
             await builder.WithDefaultStorage(storageDir: "./.data");
 
             // Set the account number for the SDK
-            await builder.WithKeySet(KeySetType.Default, false, accountNumber);
+            var keySetConfig = new KeySetConfig(
+                keySetType: KeySetType.Default,
+                useAddressIndex: false,
+                accountNumber: accountNumber
+            );
+            await builder.WithKeySet(keySetConfig);
 
             var sdk = await builder.Build();
             // ANCHOR_END: custom-account-number
