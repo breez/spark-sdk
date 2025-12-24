@@ -71,6 +71,17 @@ pub struct ConnectRequest {
     pub storage_dir: String,
 }
 
+/// Request object for connecting to the Spark network using an external signer.
+///
+/// This allows using a custom signer implementation instead of providing a seed directly.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ConnectWithSignerRequest {
+    pub config: Config,
+    pub signer: std::sync::Arc<dyn crate::signer::ExternalSigner>,
+    pub storage_dir: String,
+}
+
 /// The type of payment
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]

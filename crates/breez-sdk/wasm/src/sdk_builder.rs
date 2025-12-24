@@ -48,6 +48,27 @@ impl SdkBuilder {
         }
     }
 
+    #[wasm_bindgen(js_name = "newWithSigner")]
+    pub fn new_with_signer(config: Config, signer: crate::signer::ExternalSigner) -> Self {
+        use crate::signer::WasmExternalSigner;
+        use std::sync::Arc;
+
+        let config_core: breez_sdk_spark::Config = config.into();
+        let signer_adapter: Arc<dyn breez_sdk_spark::signer::ExternalSigner> =
+            Arc::new(WasmExternalSigner { inner: signer });
+
+        Self {
+            network: config_core.network,
+            seed: breez_sdk_spark::Seed::Entropy(vec![]), // Placeholder, won't be used
+            builder: breez_sdk_spark::SdkBuilder::new_with_signer(config_core, signer_adapter),
+            default_storage_dir: None,
+            storage: None,
+            key_set_type: breez_sdk_spark::KeySetType::Default,
+            use_address_index: false,
+            account_number: None,
+        }
+    }
+
     #[wasm_bindgen(js_name = "withDefaultStorage")]
     pub async fn with_default_storage(mut self, storage_dir: String) -> WasmResult<Self> {
         self.default_storage_dir = Some(storage_dir);
