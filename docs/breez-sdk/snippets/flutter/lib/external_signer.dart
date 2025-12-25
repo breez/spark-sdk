@@ -22,7 +22,7 @@ Future<ExternalSigner> createSigner() async {
 // ANCHOR_END: default-external-signer
 
 // ANCHOR: connect-with-signer
-Future<BreezSdk> connectWithExternalSigner() async {
+Future<BreezSdk> connectWithSigner() async {
   // Create the signer
   final signer = await defaultExternalSigner(
     mnemonic: '<mnemonic words>',

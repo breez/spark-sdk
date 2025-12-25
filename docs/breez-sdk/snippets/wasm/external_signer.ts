@@ -28,7 +28,7 @@ async function createSigner() {
 // ANCHOR_END: default-external-signer
 
 // ANCHOR: connect-with-signer
-async function connectWithExternalSigner() {
+async function connectWithSigner() {
   // Create the signer
   const signer = await defaultExternalSigner({
     mnemonic: '<mnemonic words>',
@@ -54,4 +54,4 @@ async function connectWithExternalSigner() {
 }
 // ANCHOR_END: connect-with-signer
 
-export { createSigner, connectWithExternalSigner }
+export { createSigner, connectWithSigner }

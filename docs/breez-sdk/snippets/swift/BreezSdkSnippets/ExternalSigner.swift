@@ -24,7 +24,7 @@ class ExternalSignerSnippets {
     // ANCHOR_END: default-external-signer
     
     // ANCHOR: connect-with-signer
-    func connectWithExternalSigner() async throws -> BreezSdk {
+    func connectWithSigner() async throws -> BreezSdk {
         // Create the signer
         let signer = try defaultExternalSigner(
             mnemonic: "<mnemonic words>",

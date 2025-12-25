@@ -27,7 +27,7 @@ public class ExternalSignerSnippets
     // ANCHOR_END: default-external-signer
     
     // ANCHOR: connect-with-signer
-    public static async Task<BreezSdk> ConnectWithExternalSigner()
+    public static async Task<BreezSdk> ConnectWithSigner()
     {
         // Create the signer
         var signer = BreezSdkMethods.DefaultExternalSigner(

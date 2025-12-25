@@ -21,7 +21,7 @@ def create_signer() -> ExternalSigner:
 # ANCHOR_END: default-external-signer
 
 # ANCHOR: connect-with-signer
-def connect_with_external_signer() -> BreezSdk:
+def connect_with_signer() -> BreezSdk:
     # Create the signer
     signer = default_external_signer(
         mnemonic="<mnemonic words>",

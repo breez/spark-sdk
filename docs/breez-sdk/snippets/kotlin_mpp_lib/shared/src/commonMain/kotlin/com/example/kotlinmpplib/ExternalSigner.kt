@@ -25,7 +25,7 @@ class ExternalSigner {
     // ANCHOR_END: default-external-signer
     
     // ANCHOR: connect-with-signer
-    suspend fun connectWithExternalSigner() {
+    suspend fun connectWithSigner() {
         // Create the signer
         val signer = defaultExternalSigner(
             mnemonic = "<mnemonic words>",

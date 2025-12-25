@@ -22,7 +22,7 @@ fn create_signer() -> Result<Arc<dyn ExternalSigner>, SdkError> {
 // ANCHOR_END: default-external-signer
 
 // ANCHOR: connect-with-signer
-async fn connect_with_external_signer() -> Result<BreezSdk, SdkError> {
+async fn connect_with_signer() -> Result<BreezSdk, SdkError> {
     // Create the signer
     let signer = default_external_signer(
         "<mnemonic words>".to_string(),

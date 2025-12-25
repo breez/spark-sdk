@@ -30,7 +30,7 @@ func createSigner() (breez_sdk_spark.ExternalSigner, error) {
 // ANCHOR_END: default-external-signer
 
 // ANCHOR: connect-with-signer
-func connectWithExternalSigner() (*breez_sdk_spark.BreezSdk, error) {
+func connectWithSigner() (*breez_sdk_spark.BreezSdk, error) {
 	// Create the signer
 	signer, err := breez_sdk_spark.DefaultExternalSigner(
 		"<mnemonic words>",
