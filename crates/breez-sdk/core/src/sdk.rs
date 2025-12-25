@@ -55,7 +55,7 @@ use crate::{
     error::SdkError,
     events::{EventEmitter, EventListener, InternalSyncedEvent, SdkEvent},
     issuer::TokenIssuer,
-    lnurl::{ListMetadataRequest, LnurlServerClient, PublishZapReceiptRequest},
+    lnurl::{ListMetadataRequest, LnurlServerClient, MarkInvoicePaidRequest, PublishZapReceiptRequest},
     logger,
     models::{
         Config, GetInfoRequest, GetInfoResponse, ListPaymentsRequest, ListPaymentsResponse,
@@ -169,6 +169,7 @@ pub struct BreezSdk {
     shutdown_sender: watch::Sender<()>,
     sync_trigger: tokio::sync::broadcast::Sender<SyncRequest>,
     zap_receipt_trigger: tokio::sync::broadcast::Sender<()>,
+    lnurl_payment_trigger: tokio::sync::broadcast::Sender<()>,
     initial_synced_watcher: watch::Receiver<bool>,
     external_input_parsers: Vec<ExternalInputParser>,
     spark_private_mode_initialized: Arc<OnceCell<()>>,
@@ -264,6 +265,7 @@ impl BreezSdk {
             shutdown_sender: params.shutdown_sender,
             sync_trigger: tokio::sync::broadcast::channel(10).0,
             zap_receipt_trigger: tokio::sync::broadcast::channel(10).0,
+            lnurl_payment_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
             external_input_parsers,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
@@ -281,11 +283,13 @@ impl BreezSdk {
     /// 2. `periodic_sync`: syncs the wallet with the Spark network    
     /// 3. `try_recover_lightning_address`: recovers the lightning address on startup
     /// 4. `spawn_zap_receipt_publisher`: publishes zap receipts for payments with zap requests
+    /// 5. `spawn_lnurl_payment_notifier`: notifies the server of paid LNURL invoices (privacy mode)
     fn start(&self, initial_synced_sender: watch::Sender<bool>) {
         self.spawn_spark_private_mode_initialization();
         self.periodic_sync(initial_synced_sender);
         self.try_recover_lightning_address();
         self.spawn_zap_receipt_publisher();
+        self.spawn_lnurl_payment_notifier();
     }
 
     fn spawn_spark_private_mode_initialization(&self) {
@@ -337,6 +341,35 @@ impl BreezSdk {
                     _ = trigger_receiver.recv() => {
                         if let Err(e) = Self::process_pending_zap_receipts(&sdk).await {
                             error!("Failed to process pending zap receipts: {e:?}");
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Background task that notifies the LNURL server of paid invoices (privacy mode).
+    /// This allows the server to respond correctly to LUD-21 verify requests.
+    /// Triggered on startup and after syncing lnurl metadata.
+    fn spawn_lnurl_payment_notifier(&self) {
+        let sdk = self.clone();
+        let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
+        let mut trigger_receiver = sdk.lnurl_payment_trigger.clone().subscribe();
+
+        tokio::spawn(async move {
+            if let Err(e) = Self::process_pending_lnurl_payments(&sdk).await {
+                error!("Failed to process pending LNURL payments on startup: {e:?}");
+            }
+
+            loop {
+                tokio::select! {
+                    _ = shutdown_receiver.changed() => {
+                        info!("LNURL payment notifier shutdown signal received");
+                        return;
+                    }
+                    _ = trigger_receiver.recv() => {
+                        if let Err(e) = Self::process_pending_lnurl_payments(&sdk).await {
+                            error!("Failed to process pending LNURL payments: {e:?}");
                         }
                     }
                 }
@@ -435,6 +468,91 @@ impl BreezSdk {
                         "Failed to store zap receipt for payment {}: {}",
                         payment.id, e
                     );
+                }
+            }
+
+            if len < limit {
+                break;
+            }
+
+            offset = offset.saturating_add(len);
+        }
+
+        Ok(())
+    }
+
+    /// Notifies the LNURL server of paid invoices for LUD-21 verify support (privacy mode).
+    /// For users with their own nostr pubkey (privacy mode), the server doesn't monitor
+    /// payment events directly. Instead, the client notifies the server when payments are received.
+    async fn process_pending_lnurl_payments(&self) -> Result<(), SdkError> {
+        let Some(lnurl_server_client) = self.lnurl_server_client.clone() else {
+            return Ok(());
+        };
+
+        let mut offset = 0;
+        let limit = 100;
+        loop {
+            let payments = self
+                .storage
+                .list_payments(ListPaymentsRequest {
+                    offset: Some(offset),
+                    limit: Some(limit),
+                    status_filter: Some(vec![PaymentStatus::Completed]),
+                    type_filter: Some(vec![PaymentType::Receive]),
+                    asset_filter: Some(AssetFilter::Bitcoin),
+                    ..Default::default()
+                })
+                .await?;
+            if payments.is_empty() {
+                break;
+            }
+
+            let len = u32::try_from(payments.len())?;
+            for payment in payments {
+                let Some(PaymentDetails::Lightning {
+                    ref payment_hash,
+                    ref payment_preimage,
+                    ..
+                }) = payment.details
+                else {
+                    continue;
+                };
+
+                // Skip payments without a preimage (shouldn't happen for completed payments)
+                let Some(preimage) = payment_preimage else {
+                    continue;
+                };
+
+                // Notify the server that this payment was received
+                // The server will store the preimage for LUD-21 verify responses
+                match lnurl_server_client
+                    .mark_invoice_paid(&MarkInvoicePaidRequest {
+                        payment_hash: payment_hash.clone(),
+                        preimage: preimage.clone(),
+                    })
+                    .await
+                {
+                    Ok(response) => {
+                        if response.already_paid {
+                            trace!(
+                                "Invoice {} already marked as paid on server",
+                                payment_hash
+                            );
+                        } else {
+                            debug!(
+                                "Notified server of paid invoice {}",
+                                payment_hash
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        // Log but don't fail - the invoice might not be an LNURL invoice
+                        // or might have been created before LUD-21 support was added
+                        trace!(
+                            "Failed to notify server of paid invoice {}: {}",
+                            payment_hash, e
+                        );
+                    }
                 }
             }
 
@@ -915,6 +1033,7 @@ impl BreezSdk {
                 .await?;
 
             let _ = self.zap_receipt_trigger.send(());
+            let _ = self.lnurl_payment_trigger.send(());
             if len < LNURL_METADATA_LIMIT {
                 // No more invoices to fetch
                 break;

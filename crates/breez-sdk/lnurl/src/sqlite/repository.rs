@@ -263,8 +263,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         invoice: &LnurlPayInvoice,
     ) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "REPLACE INTO lnurl_pay_invoices (payment_hash, user_pubkey, domain, username, metadata, invoice_expiry, updated_at, lightning_receive_id, bolt11_invoice)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            "REPLACE INTO lnurl_pay_invoices (payment_hash, user_pubkey, domain, username, metadata, invoice_expiry, updated_at, lightning_receive_id, bolt11_invoice, preimage, is_privacy_mode)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
         .bind(&invoice.payment_hash)
         .bind(&invoice.user_pubkey)
@@ -275,6 +275,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(invoice.updated_at)
         .bind(&invoice.lightning_receive_id)
         .bind(&invoice.bolt11_invoice)
+        .bind(&invoice.preimage)
+        .bind(invoice.is_privacy_mode)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -285,7 +287,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         payment_hash: &str,
     ) -> Result<Option<LnurlPayInvoice>, LnurlRepositoryError> {
         let maybe_invoice = sqlx::query(
-            "SELECT payment_hash, user_pubkey, domain, username, metadata, invoice_expiry, updated_at, lightning_receive_id, bolt11_invoice
+            "SELECT payment_hash, user_pubkey, domain, username, metadata, invoice_expiry, updated_at, lightning_receive_id, bolt11_invoice, preimage, is_privacy_mode
              FROM lnurl_pay_invoices
              WHERE payment_hash = $1",
         )
@@ -303,9 +305,61 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                 updated_at: row.try_get(6)?,
                 lightning_receive_id: row.try_get(7)?,
                 bolt11_invoice: row.try_get(8)?,
+                preimage: row.try_get(9)?,
+                is_privacy_mode: row.try_get(10)?,
             })
         })
         .transpose()?;
         Ok(maybe_invoice)
+    }
+
+    async fn get_lnurl_pay_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError> {
+        let now = now();
+        let rows = sqlx::query(
+            "SELECT DISTINCT user_pubkey
+             FROM lnurl_pay_invoices
+             WHERE invoice_expiry > $1 AND preimage IS NULL AND is_privacy_mode = 0",
+        )
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await?;
+        let keys = rows
+            .into_iter()
+            .map(|row| row.try_get(0))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(keys)
+    }
+
+    async fn is_lnurl_pay_monitored_user(
+        &self,
+        user_pubkey: &str,
+    ) -> Result<bool, LnurlRepositoryError> {
+        let now = now();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM lnurl_pay_invoices
+             WHERE user_pubkey = $1 AND invoice_expiry > $2 AND preimage IS NULL AND is_privacy_mode = 0",
+        )
+        .bind(user_pubkey)
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count > 0)
+    }
+
+    async fn set_lnurl_pay_invoice_preimage(
+        &self,
+        payment_hash: &str,
+        preimage: &str,
+    ) -> Result<(), LnurlRepositoryError> {
+        sqlx::query(
+            "UPDATE lnurl_pay_invoices SET preimage = $1, updated_at = $2 WHERE payment_hash = $3",
+        )
+        .bind(preimage)
+        .bind(now())
+        .bind(payment_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }

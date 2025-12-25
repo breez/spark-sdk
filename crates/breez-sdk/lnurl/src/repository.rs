@@ -28,6 +28,10 @@ pub struct LnurlPayInvoice {
     pub updated_at: i64,
     pub lightning_receive_id: Option<String>,
     pub bolt11_invoice: Option<String>,
+    /// The preimage of the payment, set when the invoice is paid
+    pub preimage: Option<String>,
+    /// Whether the user is in privacy mode (client handles payment notification)
+    pub is_privacy_mode: bool,
 }
 
 #[async_trait::async_trait]
@@ -82,4 +86,21 @@ pub trait LnurlRepository {
         &self,
         payment_hash: &str,
     ) -> Result<Option<LnurlPayInvoice>, LnurlRepositoryError>;
+
+    /// Get list of user pubkeys that have unexpired LNURL-pay invoices needing server-side monitoring
+    /// (non-privacy mode invoices without a preimage)
+    async fn get_lnurl_pay_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError>;
+
+    /// Check if a specific user has any unexpired LNURL-pay invoices needing server-side monitoring
+    async fn is_lnurl_pay_monitored_user(
+        &self,
+        user_pubkey: &str,
+    ) -> Result<bool, LnurlRepositoryError>;
+
+    /// Update the preimage for an LNURL-pay invoice (marks it as paid)
+    async fn set_lnurl_pay_invoice_preimage(
+        &self,
+        payment_hash: &str,
+        preimage: &str,
+    ) -> Result<(), LnurlRepositoryError>;
 }

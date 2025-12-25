@@ -32,6 +32,7 @@ use x509_parser::prelude::{FromDer, X509Certificate};
 
 mod auth;
 mod error;
+mod lnurl_pay;
 mod postgresql;
 mod repository;
 mod routes;
@@ -233,6 +234,7 @@ where
         .transpose()?;
 
     let subscribed_keys = Arc::new(Mutex::new(HashSet::new()));
+    let lnurl_pay_subscribed_keys = Arc::new(Mutex::new(HashSet::new()));
 
     // Initialize zap subscriptions if nostr keys are provided
     if let Some(nostr_keys) = &nostr_keys {
@@ -256,6 +258,24 @@ where
         }
     }
 
+    // Initialize LNURL-pay invoice subscriptions for non-privacy mode users
+    for user in repository.get_lnurl_pay_monitored_users().await? {
+        let user_pubkey = bitcoin::secp256k1::PublicKey::from_str(&user)
+            .map_err(|e| anyhow!("failed to parse user pubkey for LNURL-pay: {e:?}"))?;
+
+        lnurl_pay::create_rpc_client_and_subscribe(
+            repository.clone(),
+            user_pubkey,
+            &connection_manager,
+            &coordinator,
+            signer.clone(),
+            session_manager.clone(),
+            Arc::clone(&service_provider),
+            Arc::clone(&lnurl_pay_subscribed_keys),
+        )
+        .await?;
+    }
+
     let state = State {
         db: repository,
         wallet,
@@ -272,6 +292,7 @@ where
         session_manager,
         service_provider,
         subscribed_keys,
+        lnurl_pay_subscribed_keys,
     };
 
     let server_router = Router::new()
@@ -292,6 +313,10 @@ where
         .route(
             "/lnurlpay/{pubkey}/metadata/{payment_hash}/zap",
             post(LnurlServer::<DB>::publish_zap_receipt),
+        )
+        .route(
+            "/lnurlpay/{pubkey}/invoice/{payment_hash}/paid",
+            post(LnurlServer::<DB>::mark_invoice_paid),
         )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

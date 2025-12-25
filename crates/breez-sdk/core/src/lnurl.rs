@@ -1,8 +1,8 @@
 use bitcoin::hex::DisplayHex;
 use lnurl_models::{
-    CheckUsernameAvailableResponse, ListMetadataResponse, RecoverLnurlPayRequest,
-    RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
-    UnregisterLnurlPayRequest,
+    CheckUsernameAvailableResponse, ListMetadataResponse, MarkInvoicePaidResponse,
+    RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
+    RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
 };
 use reqwest::{
     StatusCode,
@@ -63,6 +63,12 @@ pub struct PublishZapReceiptRequest {
     pub zap_receipt: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct MarkInvoicePaidRequest {
+    pub payment_hash: String,
+    pub preimage: String,
+}
+
 #[macros::async_trait]
 pub trait LnurlServerClient: Send + Sync {
     fn domain(&self) -> &str;
@@ -86,6 +92,12 @@ pub trait LnurlServerClient: Send + Sync {
         &self,
         request: &PublishZapReceiptRequest,
     ) -> Result<String, LnurlServerError>;
+    /// Mark an LNURL-pay invoice as paid (for privacy mode)
+    /// This notifies the server that the payment was received so it can respond to verify requests
+    async fn mark_invoice_paid(
+        &self,
+        request: &MarkInvoicePaidRequest,
+    ) -> Result<MarkInvoicePaidResponse, LnurlServerError>;
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -432,6 +444,55 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
                     message: response.text().await.ok(),
                 });
             }
+        }
+    }
+
+    async fn mark_invoice_paid(
+        &self,
+        request: &MarkInvoicePaidRequest,
+    ) -> Result<MarkInvoicePaidResponse, LnurlServerError> {
+        let spark_address = self.wallet.get_spark_address().map_err(|e| {
+            LnurlServerError::SigningError(format!("Failed to get spark address: {e}"))
+        })?;
+        let pubkey = spark_address.identity_public_key;
+
+        let (signature, timestamp) = self.sign_message(&request.preimage).await?;
+
+        let url = format!(
+            "{}/lnurlpay/{}/invoice/{}/paid",
+            self.base_url(),
+            pubkey,
+            request.payment_hash
+        );
+
+        let payload = lnurl_models::MarkInvoicePaidRequest {
+            preimage: request.preimage.clone(),
+            signature,
+            timestamp: Some(timestamp),
+        };
+
+        let result = self.client.post(url).json(&payload).send().await;
+        let response = match result {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(LnurlServerError::RequestFailure(e.to_string()));
+            }
+        };
+
+        match response.status() {
+            StatusCode::UNAUTHORIZED => Err(LnurlServerError::InvalidApiKey),
+            success if success.is_success() => {
+                let body: MarkInvoicePaidResponse = response.json().await.map_err(|e| {
+                    LnurlServerError::RequestFailure(format!(
+                        "failed to deserialize response json: {e}"
+                    ))
+                })?;
+                Ok(body)
+            }
+            other => Err(LnurlServerError::Network {
+                statuscode: other.as_u16(),
+                message: response.text().await.ok(),
+            }),
         }
     }
 }

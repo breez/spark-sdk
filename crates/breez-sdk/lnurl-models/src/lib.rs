@@ -81,6 +81,19 @@ pub struct PublishZapReceiptResponse {
     pub zap_receipt: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MarkInvoicePaidRequest {
+    pub preimage: String,
+    pub signature: String,
+    pub timestamp: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MarkInvoicePaidResponse {
+    pub success: bool,
+    pub already_paid: bool,
+}
+
 pub fn sanitize_username(username: &str) -> String {
     username.trim().to_lowercase()
 }
