@@ -239,11 +239,7 @@ impl BreezSigner for ExternalSignerAdapter {
             .external
             .split_secret(secret_ext, threshold, num_shares_u32)
             .await
-            .map_err(|e| {
-                SdkError::Generic(format!(
-                    "External signer split_secret failed: {e}"
-                ))
-            })?;
+            .map_err(|e| SdkError::Generic(format!("External signer split_secret failed: {e}")))?;
 
         shares_ext
             .into_iter()
