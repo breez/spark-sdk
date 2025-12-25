@@ -1,3 +1,4 @@
+use crate::error::SignerError;
 #[cfg(test)]
 use crate::signer::external_types::derivation_path_to_string;
 use crate::signer::external_types::{
@@ -64,12 +65,13 @@ impl ExternalSigner for DefaultExternalSigner {
         PublicKeyBytes::from_public_key(&pk)
     }
 
-    fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, String> {
-        let derivation_path = string_to_derivation_path(&path).map_err(|e| e.to_string())?;
+    fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, SignerError> {
+        let derivation_path =
+            string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
         let pk = self
             .inner
             .derive_public_key(&derivation_path)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(PublicKeyBytes::from_public_key(&pk))
     }
 
@@ -77,13 +79,14 @@ impl ExternalSigner for DefaultExternalSigner {
         &self,
         message: Vec<u8>,
         path: String,
-    ) -> Result<EcdsaSignatureBytes, String> {
-        let derivation_path = string_to_derivation_path(&path).map_err(|e| e.to_string())?;
+    ) -> Result<EcdsaSignatureBytes, SignerError> {
+        let derivation_path =
+            string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
         let sig = self
             .inner
             .sign_ecdsa(&message, &derivation_path)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(EcdsaSignatureBytes::from_signature(&sig))
     }
 
@@ -91,102 +94,116 @@ impl ExternalSigner for DefaultExternalSigner {
         &self,
         message: Vec<u8>,
         path: String,
-    ) -> Result<Vec<u8>, String> {
-        let derivation_path = string_to_derivation_path(&path).map_err(|e| e.to_string())?;
+    ) -> Result<Vec<u8>, SignerError> {
+        let derivation_path =
+            string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
         self.inner
             .sign_ecdsa_recoverable(&message, &derivation_path)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, String> {
-        let derivation_path = string_to_derivation_path(&path).map_err(|e| e.to_string())?;
+    async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+        let derivation_path =
+            string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
         self.inner
             .ecies_encrypt(&message, &derivation_path)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, String> {
-        let derivation_path = string_to_derivation_path(&path).map_err(|e| e.to_string())?;
+    async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+        let derivation_path =
+            string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
         self.inner
             .ecies_decrypt(&message, &derivation_path)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
     async fn sign_hash_schnorr(
         &self,
         hash: Vec<u8>,
         path: String,
-    ) -> Result<SchnorrSignatureBytes, String> {
-        let derivation_path = string_to_derivation_path(&path).map_err(|e| e.to_string())?;
+    ) -> Result<SchnorrSignatureBytes, SignerError> {
+        let derivation_path =
+            string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
         let sig = self
             .inner
             .sign_hash_schnorr(&hash, &derivation_path)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(SchnorrSignatureBytes::from_signature(&sig))
     }
 
-    async fn generate_frost_signing_commitments(&self) -> Result<ExternalFrostCommitments, String> {
+    async fn generate_frost_signing_commitments(
+        &self,
+    ) -> Result<ExternalFrostCommitments, SignerError> {
         let commitments = self
             .inner
             .generate_frost_signing_commitments()
             .await
-            .map_err(|e| e.to_string())?;
-        ExternalFrostCommitments::from_frost_commitments(&commitments).map_err(|e| e.to_string())
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        ExternalFrostCommitments::from_frost_commitments(&commitments)
+            .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
     async fn get_public_key_for_node(
         &self,
         id: ExternalTreeNodeId,
-    ) -> Result<PublicKeyBytes, String> {
-        let tree_node_id = id.to_tree_node_id().map_err(|e| e.to_string())?;
+    ) -> Result<PublicKeyBytes, SignerError> {
+        let tree_node_id = id
+            .to_tree_node_id()
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         let pk = self
             .inner
             .get_public_key_for_node(&tree_node_id)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(PublicKeyBytes::from_public_key(&pk))
     }
 
-    async fn generate_random_key(&self) -> Result<ExternalPrivateKeySource, String> {
+    async fn generate_random_key(&self) -> Result<ExternalPrivateKeySource, SignerError> {
         let key = self
             .inner
             .generate_random_key()
             .await
-            .map_err(|e| e.to_string())?;
-        ExternalPrivateKeySource::from_private_key_source(&key).map_err(|e| e.to_string())
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        ExternalPrivateKeySource::from_private_key_source(&key)
+            .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
     async fn get_static_deposit_private_key_source(
         &self,
         index: u32,
-    ) -> Result<ExternalPrivateKeySource, String> {
+    ) -> Result<ExternalPrivateKeySource, SignerError> {
         let key = self
             .inner
             .get_static_deposit_private_key_source(index)
             .await
-            .map_err(|e| e.to_string())?;
-        ExternalPrivateKeySource::from_private_key_source(&key).map_err(|e| e.to_string())
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        ExternalPrivateKeySource::from_private_key_source(&key)
+            .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_private_key(&self, index: u32) -> Result<Vec<u8>, String> {
+    async fn get_static_deposit_private_key(&self, index: u32) -> Result<Vec<u8>, SignerError> {
         let secret = self
             .inner
             .get_static_deposit_private_key(index)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(secret.secret_bytes().to_vec())
     }
 
-    async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKeyBytes, String> {
+    async fn get_static_deposit_public_key(
+        &self,
+        index: u32,
+    ) -> Result<PublicKeyBytes, SignerError> {
         let pk = self
             .inner
             .get_static_deposit_public_key(index)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(PublicKeyBytes::from_public_key(&pk))
     }
 
@@ -194,39 +211,42 @@ impl ExternalSigner for DefaultExternalSigner {
         &self,
         signing_key: ExternalPrivateKeySource,
         new_signing_key: ExternalPrivateKeySource,
-    ) -> Result<ExternalPrivateKeySource, String> {
+    ) -> Result<ExternalPrivateKeySource, SignerError> {
         let sk = signing_key
             .to_private_key_source()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         let nsk = new_signing_key
             .to_private_key_source()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         let result = self
             .inner
             .subtract_private_keys(&sk, &nsk)
             .await
-            .map_err(|e| e.to_string())?;
-        ExternalPrivateKeySource::from_private_key_source(&result).map_err(|e| e.to_string())
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        ExternalPrivateKeySource::from_private_key_source(&result)
+            .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn split_secret_with_proofs(
+    async fn split_secret(
         &self,
         secret: ExternalSecretToSplit,
         threshold: u32,
         num_shares: u32,
-    ) -> Result<Vec<ExternalVerifiableSecretShare>, String> {
-        let sec = secret.to_secret_to_split().map_err(|e| e.to_string())?;
+    ) -> Result<Vec<ExternalVerifiableSecretShare>, SignerError> {
+        let sec = secret
+            .to_secret_to_split()
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         let shares = self
             .inner
             .split_secret_with_proofs(&sec, threshold, num_shares as usize)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SignerError::Frost(e.to_string()))?;
 
         shares
             .iter()
-            .map(|share| {
-                ExternalVerifiableSecretShare::from_verifiable_secret_share(share)
-                    .map_err(|e| e.to_string())
+            .map(|s| {
+                ExternalVerifiableSecretShare::from_verifiable_secret_share(s)
+                    .map_err(|e| SignerError::Generic(e.to_string()))
             })
             .collect()
     }
@@ -235,62 +255,104 @@ impl ExternalSigner for DefaultExternalSigner {
         &self,
         private_key: ExternalEncryptedPrivateKey,
         receiver_public_key: PublicKeyBytes,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, SignerError> {
         let pk_internal = private_key
             .to_encrypted_private_key()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         let receiver_pk = receiver_public_key
             .to_public_key()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         self.inner
             .encrypt_private_key_for_receiver(&pk_internal, &receiver_pk)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
     async fn get_public_key_from_private_key_source(
         &self,
         private_key: ExternalPrivateKeySource,
-    ) -> Result<PublicKeyBytes, String> {
+    ) -> Result<PublicKeyBytes, SignerError> {
         let pk_source = private_key
             .to_private_key_source()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         let pk = self
             .inner
             .get_public_key_from_private_key_source(&pk_source)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(PublicKeyBytes::from_public_key(&pk))
     }
 
     async fn sign_frost(
         &self,
         request: ExternalSignFrostRequest,
-    ) -> Result<ExternalFrostSignatureShare, String> {
-        let req = request.to_sign_frost_request().map_err(|e| e.to_string())?;
+    ) -> Result<ExternalFrostSignatureShare, SignerError> {
+        let req = request
+            .to_sign_frost_request()
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
 
         let share = self
             .inner
             .sign_frost(req)
             .await
-            .map_err(|e| e.to_string())?;
-        ExternalFrostSignatureShare::from_signature_share(&share).map_err(|e| e.to_string())
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        ExternalFrostSignatureShare::from_signature_share(&share).map_err(|e| e.to_string().into())
     }
 
-    async fn aggregate_frost(
+    async fn recover_secret(
+        &self,
+        _shares: Vec<ExternalVerifiableSecretShare>,
+    ) -> Result<Vec<u8>, SignerError> {
+        // This method doesn't have a direct implementation in BreezSignerImpl
+        // Return a not implemented error for now
+        Err(SignerError::Generic(
+            "recover_secret not yet implemented for DefaultExternalSigner".to_string(),
+        ))
+    }
+
+    async fn derive_public_key_from_identity(
+        &self,
+        _identity: PublicKeyBytes,
+        path: String,
+    ) -> Result<PublicKeyBytes, SignerError> {
+        // This delegates to the derive_public_key method since identity is the root
+        let derivation_path = string_to_derivation_path(&path)
+            .map_err(|e| SignerError::InvalidInput(e.to_string()))?;
+
+        // Use the standard derive_public_key
+        let public_key = self
+            .inner
+            .derive_public_key(&derivation_path)
+            .map_err(|e| SignerError::KeyDerivation(e.to_string()))?;
+
+        Ok(PublicKeyBytes::from_public_key(&public_key))
+    }
+
+    async fn encrypt_random_key(
+        &self,
+        _key: ExternalPrivateKeySource,
+    ) -> Result<ExternalPrivateKeySource, SignerError> {
+        // This method requires complex key encryption logic that isn't directly available
+        Err(SignerError::Generic(
+            "encrypt_random_key not yet implemented for DefaultExternalSigner".to_string(),
+        ))
+    }
+
+    async fn aggregate_frost_signatures(
         &self,
         request: ExternalAggregateFrostRequest,
-    ) -> Result<ExternalFrostSignature, String> {
+    ) -> Result<ExternalFrostSignature, SignerError> {
         let req = request
             .to_aggregate_frost_request()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
 
         let sig = self
             .inner
             .aggregate_frost(req)
             .await
-            .map_err(|e| e.to_string())?;
-        ExternalFrostSignature::from_frost_signature(&sig).map_err(|e| e.to_string())
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        ExternalFrostSignature::from_frost_signature(&sig)
+            .map_err(|e| SignerError::Generic(e.to_string()))
     }
 }
 

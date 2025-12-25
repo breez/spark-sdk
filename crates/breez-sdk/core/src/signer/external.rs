@@ -1,3 +1,5 @@
+use crate::error::SignerError;
+
 use super::external_types::{
     EcdsaSignatureBytes, ExternalAggregateFrostRequest, ExternalEncryptedPrivateKey,
     ExternalFrostCommitments, ExternalFrostSignature, ExternalFrostSignatureShare,
@@ -15,7 +17,7 @@ use super::external_types::{
 /// - Public keys, signatures, and other crypto primitives as Vec<u8>
 /// - Spark-specific types as serialized representations
 ///
-/// Errors are returned as String for FFI compatibility.
+/// Errors are returned as `SignerError` for FFI compatibility.
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
 pub trait ExternalSigner: Send + Sync {
@@ -28,8 +30,8 @@ pub trait ExternalSigner: Send + Sync {
     /// * `path` - BIP32 derivation path as a string (e.g., "m/44'/0'/0'/0/0")
     ///
     /// # Returns
-    /// The derived public key as 33 bytes, or an error string
-    fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, String>;
+    /// The derived public key as 33 bytes, or a `SignerError`
+    fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, SignerError>;
 
     /// Signs a message using ECDSA at the given derivation path.
     ///
@@ -38,12 +40,12 @@ pub trait ExternalSigner: Send + Sync {
     /// * `path` - BIP32 derivation path as a string
     ///
     /// # Returns
-    /// 64-byte compact ECDSA signature, or an error string
+    /// 64-byte compact ECDSA signature, or a `SignerError`
     async fn sign_ecdsa(
         &self,
         message: Vec<u8>,
         path: String,
-    ) -> Result<EcdsaSignatureBytes, String>;
+    ) -> Result<EcdsaSignatureBytes, SignerError>;
 
     /// Signs a message using recoverable ECDSA at the given derivation path.
     ///
@@ -52,12 +54,24 @@ pub trait ExternalSigner: Send + Sync {
     /// * `path` - BIP32 derivation path as a string
     ///
     /// # Returns
-    /// 65 bytes: recovery ID (31 + `recovery_id`) + 64-byte signature, or an error string
+    /// 65 bytes: recovery ID (31 + `recovery_id`) + 64-byte signature, or a `SignerError`
     async fn sign_ecdsa_recoverable(
         &self,
         message: Vec<u8>,
         path: String,
-    ) -> Result<Vec<u8>, String>;
+    ) -> Result<Vec<u8>, SignerError>;
+
+    /// Recovers a secret from a vector of verifiable secret shares.
+    ///
+    /// # Arguments
+    /// * `shares` - The shares to recover the secret from
+    ///
+    /// # Returns
+    /// The recovered secret as bytes, or a `SignerError`
+    async fn recover_secret(
+        &self,
+        shares: Vec<ExternalVerifiableSecretShare>,
+    ) -> Result<Vec<u8>, SignerError>;
 
     /// Encrypts a message using ECIES at the given derivation path.
     ///
@@ -66,8 +80,8 @@ pub trait ExternalSigner: Send + Sync {
     /// * `path` - BIP32 derivation path for the encryption key
     ///
     /// # Returns
-    /// Encrypted data, or an error string
-    async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, String>;
+    /// Encrypted data, or a `SignerError`
+    async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError>;
 
     /// Decrypts a message using ECIES at the given derivation path.
     ///
@@ -76,8 +90,8 @@ pub trait ExternalSigner: Send + Sync {
     /// * `path` - BIP32 derivation path for the decryption key
     ///
     /// # Returns
-    /// Decrypted data, or an error string
-    async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, String>;
+    /// Decrypted data, or a `SignerError`
+    async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError>;
 
     /// Signs a hash using Schnorr signature at the given derivation path.
     ///
@@ -86,18 +100,20 @@ pub trait ExternalSigner: Send + Sync {
     /// * `path` - BIP32 derivation path as a string
     ///
     /// # Returns
-    /// 64-byte Schnorr signature, or an error string
+    /// 64-byte Schnorr signature, or a `SignerError`
     async fn sign_hash_schnorr(
         &self,
         hash: Vec<u8>,
         path: String,
-    ) -> Result<SchnorrSignatureBytes, String>;
+    ) -> Result<SchnorrSignatureBytes, SignerError>;
 
     /// Generates Frost signing commitments for multi-party signing.
     ///
     /// # Returns
-    /// Frost commitments with nonces, or an error string
-    async fn generate_frost_signing_commitments(&self) -> Result<ExternalFrostCommitments, String>;
+    /// Frost commitments with nonces, or a `SignerError`
+    async fn generate_frost_signing_commitments(
+        &self,
+    ) -> Result<ExternalFrostCommitments, SignerError>;
 
     /// Gets the public key for a specific tree node in the Spark wallet.
     ///
@@ -109,13 +125,27 @@ pub trait ExternalSigner: Send + Sync {
     async fn get_public_key_for_node(
         &self,
         id: ExternalTreeNodeId,
-    ) -> Result<PublicKeyBytes, String>;
+    ) -> Result<PublicKeyBytes, SignerError>;
+
+    /// Derives a public key from an identity public key and a BIP32 derivation path.
+    ///
+    /// # Arguments
+    /// * `identity` - The identity public key
+    /// * `path` - BIP32 derivation path as a string
+    ///
+    /// # Returns
+    /// The derived public key as 33 bytes, or a `SignerError`
+    async fn derive_public_key_from_identity(
+        &self,
+        identity: PublicKeyBytes,
+        path: String,
+    ) -> Result<PublicKeyBytes, SignerError>;
 
     /// Generates a random private key.
     ///
     /// # Returns
     /// A randomly generated private key source, or an error string
-    async fn generate_random_key(&self) -> Result<ExternalPrivateKeySource, String>;
+    async fn generate_random_key(&self) -> Result<ExternalPrivateKeySource, SignerError>;
 
     /// Gets a static deposit private key source by index.
     ///
@@ -127,7 +157,7 @@ pub trait ExternalSigner: Send + Sync {
     async fn get_static_deposit_private_key_source(
         &self,
         index: u32,
-    ) -> Result<ExternalPrivateKeySource, String>;
+    ) -> Result<ExternalPrivateKeySource, SignerError>;
 
     /// Gets a static deposit private key by index.
     ///
@@ -136,7 +166,7 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// The 32-byte private key, or an error string
-    async fn get_static_deposit_private_key(&self, index: u32) -> Result<Vec<u8>, String>;
+    async fn get_static_deposit_private_key(&self, index: u32) -> Result<Vec<u8>, SignerError>;
 
     /// Gets a static deposit public key by index.
     ///
@@ -145,7 +175,10 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// The 33-byte public key, or an error string
-    async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKeyBytes, String>;
+    async fn get_static_deposit_public_key(
+        &self,
+        index: u32,
+    ) -> Result<PublicKeyBytes, SignerError>;
 
     /// Subtracts one private key from another.
     ///
@@ -159,7 +192,19 @@ pub trait ExternalSigner: Send + Sync {
         &self,
         signing_key: ExternalPrivateKeySource,
         new_signing_key: ExternalPrivateKeySource,
-    ) -> Result<ExternalPrivateKeySource, String>;
+    ) -> Result<ExternalPrivateKeySource, SignerError>;
+
+    /// Encrypts a random key.
+    ///
+    /// # Arguments
+    /// * `key` - The key to encrypt
+    ///
+    /// # Returns
+    /// The encrypted key, or a `SignerError`
+    async fn encrypt_random_key(
+        &self,
+        key: ExternalPrivateKeySource,
+    ) -> Result<ExternalPrivateKeySource, SignerError>;
 
     /// Splits a secret with proofs using Shamir's Secret Sharing.
     ///
@@ -170,12 +215,12 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// Vector of verifiable secret shares, or an error string
-    async fn split_secret_with_proofs(
+    async fn split_secret(
         &self,
         secret: ExternalSecretToSplit,
         threshold: u32,
         num_shares: u32,
-    ) -> Result<Vec<ExternalVerifiableSecretShare>, String>;
+    ) -> Result<Vec<ExternalVerifiableSecretShare>, SignerError>;
 
     /// Encrypts a private key for a specific receiver's public key.
     ///
@@ -189,7 +234,7 @@ pub trait ExternalSigner: Send + Sync {
         &self,
         private_key: ExternalEncryptedPrivateKey,
         receiver_public_key: PublicKeyBytes,
-    ) -> Result<Vec<u8>, String>;
+    ) -> Result<Vec<u8>, SignerError>;
 
     /// Gets the public key from a private key source.
     ///
@@ -201,7 +246,7 @@ pub trait ExternalSigner: Send + Sync {
     async fn get_public_key_from_private_key_source(
         &self,
         private_key: ExternalPrivateKeySource,
-    ) -> Result<PublicKeyBytes, String>;
+    ) -> Result<PublicKeyBytes, SignerError>;
 
     /// Signs using Frost protocol (multi-party signing).
     ///
@@ -213,7 +258,7 @@ pub trait ExternalSigner: Send + Sync {
     async fn sign_frost(
         &self,
         request: ExternalSignFrostRequest,
-    ) -> Result<ExternalFrostSignatureShare, String>;
+    ) -> Result<ExternalFrostSignatureShare, SignerError>;
 
     /// Aggregates Frost signature shares into a final signature.
     ///
@@ -222,8 +267,8 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// The aggregated Frost signature, or an error string
-    async fn aggregate_frost(
+    async fn aggregate_frost_signatures(
         &self,
         request: ExternalAggregateFrostRequest,
-    ) -> Result<ExternalFrostSignature, String>;
+    ) -> Result<ExternalFrostSignature, SignerError>;
 }

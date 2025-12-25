@@ -49,7 +49,7 @@ impl SdkBuilder {
     }
 
     #[wasm_bindgen(js_name = "newWithSigner")]
-    pub fn new_with_signer(config: Config, signer: crate::signer::ExternalSigner) -> Self {
+    pub fn new_with_signer(config: Config, signer: crate::signer::JsExternalSigner) -> Self {
         use crate::signer::WasmExternalSigner;
         use std::sync::Arc;
 

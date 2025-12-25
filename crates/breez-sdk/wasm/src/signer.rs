@@ -137,24 +137,14 @@ pub struct ExternalFrostSignature {
 }
 
 pub struct WasmExternalSigner {
-    pub inner: ExternalSigner,
+    pub inner: JsExternalSigner,
 }
 
 // This assumes that we'll always be running in a single thread (true for Wasm environments)
 unsafe impl Send for WasmExternalSigner {}
 unsafe impl Sync for WasmExternalSigner {}
 
-/// Helper function to convert JS exceptions to String error
-fn js_error_to_string(js_error: JsValue) -> String {
-    if let Some(error_str) = js_error.as_string() {
-        format!("JavaScript error: {}", error_str)
-    } else if js_error.is_instance_of::<js_sys::Error>() {
-        let error = js_sys::Error::from(js_error);
-        format!("JavaScript error: {}", error.message())
-    } else {
-        "JavaScript signer operation failed".to_string()
-    }
-}
+use breez_sdk_spark::SignerError;
 
 #[async_trait]
 impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
@@ -163,11 +153,11 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         wasm_pubkey.into()
     }
 
-    fn derive_public_key(&self, path: String) -> Result<core_types::PublicKeyBytes, String> {
+    fn derive_public_key(&self, path: String) -> Result<core_types::PublicKeyBytes, SignerError> {
         let wasm_pubkey: PublicKeyBytes = self
             .inner
             .derive_public_key(path)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         Ok(wasm_pubkey.into())
     }
 
@@ -175,15 +165,17 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         &self,
         message: Vec<u8>,
         path: String,
-    ) -> Result<core_types::EcdsaSignatureBytes, String> {
+    ) -> Result<core_types::EcdsaSignatureBytes, SignerError> {
         let promise = self
             .inner
             .sign_ecdsa(message, path)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let wasm_sig: EcdsaSignatureBytes = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize signature: {}", e))?;
+            .map_err(|e| SignerError::Generic(format!("Failed to deserialize signature: {}", e)))?;
         Ok(wasm_sig.into())
     }
 
@@ -191,135 +183,224 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         &self,
         message: Vec<u8>,
         path: String,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, SignerError> {
         let promise = self
             .inner
             .sign_ecdsa_recoverable(message, path)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
-        serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize recoverable signature: {}", e))
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        serde_wasm_bindgen::from_value(result).map_err(|e| {
+            SignerError::Generic(format!(
+                "Failed to deserialize recoverable signature: {}",
+                e
+            ))
+        })
     }
 
-    async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, String> {
+    async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
         let promise = self
             .inner
             .ecies_encrypt(message, path)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
-        serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize encrypted data: {}", e))
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        serde_wasm_bindgen::from_value(result).map_err(|e| {
+            SignerError::Generic(format!("Failed to deserialize encrypted data: {}", e))
+        })
     }
 
-    async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, String> {
+    async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
         let promise = self
             .inner
             .ecies_decrypt(message, path)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize decrypted data: {}", e))
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))
+    }
+
+    async fn recover_secret(
+        &self,
+        shares: Vec<core_types::ExternalVerifiableSecretShare>,
+    ) -> Result<Vec<u8>, SignerError> {
+        let wasm_shares: Vec<ExternalVerifiableSecretShare> =
+            shares.into_iter().map(Into::into).collect();
+        let promise = self
+            .inner
+            .recover_secret(wasm_shares.into_boxed_slice())
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let bytes: Vec<u8> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        Ok(bytes)
+    }
+
+    async fn derive_public_key_from_identity(
+        &self,
+        identity: core_types::PublicKeyBytes,
+        path: String,
+    ) -> Result<core_types::PublicKeyBytes, SignerError> {
+        let promise = self
+            .inner
+            .derive_public_key_from_identity(identity.bytes.into_boxed_slice(), path)
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let bytes: Vec<u8> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        Ok(core_types::PublicKeyBytes { bytes })
+    }
+
+    async fn encrypt_random_key(
+        &self,
+        key: core_types::ExternalPrivateKeySource,
+    ) -> Result<core_types::ExternalPrivateKeySource, SignerError> {
+        let wasm_key: ExternalPrivateKeySource = key.into();
+        let promise = self
+            .inner
+            .encrypt_random_key(wasm_key)
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let wasm_result: ExternalPrivateKeySource = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        Ok(wasm_result.into())
     }
 
     async fn sign_hash_schnorr(
         &self,
         hash: Vec<u8>,
         path: String,
-    ) -> Result<core_types::SchnorrSignatureBytes, String> {
+    ) -> Result<core_types::SchnorrSignatureBytes, SignerError> {
         let promise = self
             .inner
             .sign_hash_schnorr(hash, path)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
-        let wasm_sig: SchnorrSignatureBytes = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize schnorr signature: {}", e))?;
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let wasm_sig: SchnorrSignatureBytes =
+            serde_wasm_bindgen::from_value(result).map_err(|e| {
+                SignerError::Generic(format!("Failed to deserialize schnorr signature: {}", e))
+            })?;
         Ok(wasm_sig.into())
     }
 
     async fn generate_frost_signing_commitments(
         &self,
-    ) -> Result<core_types::ExternalFrostCommitments, String> {
+    ) -> Result<core_types::ExternalFrostCommitments, SignerError> {
         let promise = self
             .inner
             .generate_frost_signing_commitments()
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let wasm_commitments: ExternalFrostCommitments = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize FROST commitments: {}", e))?;
+            .map_err(|e| {
+                SignerError::Generic(format!("Failed to deserialize FROST commitments: {}", e))
+            })?;
         Ok(wasm_commitments.into())
     }
 
     async fn get_public_key_for_node(
         &self,
         id: core_types::ExternalTreeNodeId,
-    ) -> Result<core_types::PublicKeyBytes, String> {
+    ) -> Result<core_types::PublicKeyBytes, SignerError> {
         let wasm_id: ExternalTreeNodeId = id.into();
         let promise = self
             .inner
             .get_public_key_for_node(wasm_id)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
-        let wasm_pubkey: PublicKeyBytes = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize public key: {}", e))?;
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let wasm_pubkey: PublicKeyBytes = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            SignerError::Generic(format!("Failed to deserialize public key: {}", e))
+        })?;
         Ok(wasm_pubkey.into())
     }
 
-    async fn generate_random_key(&self) -> Result<core_types::ExternalPrivateKeySource, String> {
+    async fn generate_random_key(
+        &self,
+    ) -> Result<core_types::ExternalPrivateKeySource, SignerError> {
         let promise = self
             .inner
             .generate_random_key()
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let wasm_source: ExternalPrivateKeySource = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize private key source: {}", e))?;
+            .map_err(|e| {
+                SignerError::Generic(format!("Failed to deserialize private key source: {}", e))
+            })?;
         Ok(wasm_source.into())
     }
 
     async fn get_static_deposit_private_key_source(
         &self,
         index: u32,
-    ) -> Result<core_types::ExternalPrivateKeySource, String> {
+    ) -> Result<core_types::ExternalPrivateKeySource, SignerError> {
         let promise = self
             .inner
             .get_static_deposit_private_key_source(index)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let wasm_source: ExternalPrivateKeySource = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize private key source: {}", e))?;
+            .map_err(|e| {
+                SignerError::Generic(format!("Failed to deserialize private key source: {}", e))
+            })?;
         Ok(wasm_source.into())
     }
 
-    async fn get_static_deposit_private_key(&self, index: u32) -> Result<Vec<u8>, String> {
+    async fn get_static_deposit_private_key(&self, index: u32) -> Result<Vec<u8>, SignerError> {
         let promise = self
             .inner
             .get_static_deposit_private_key(index)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize private key: {}", e))
+            .map_err(|e| SignerError::Generic(format!("Failed to deserialize private key: {}", e)))
     }
 
     async fn get_static_deposit_public_key(
         &self,
         index: u32,
-    ) -> Result<core_types::PublicKeyBytes, String> {
+    ) -> Result<core_types::PublicKeyBytes, SignerError> {
         let promise = self
             .inner
             .get_static_deposit_public_key(index)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
-        let wasm_pubkey: PublicKeyBytes = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize public key: {}", e))?;
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let wasm_pubkey: PublicKeyBytes = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            SignerError::Generic(format!("Failed to deserialize public key: {}", e))
+        })?;
         Ok(wasm_pubkey.into())
     }
 
@@ -327,36 +408,43 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         &self,
         signing_key: core_types::ExternalPrivateKeySource,
         new_signing_key: core_types::ExternalPrivateKeySource,
-    ) -> Result<core_types::ExternalPrivateKeySource, String> {
+    ) -> Result<core_types::ExternalPrivateKeySource, SignerError> {
         let wasm_signing_key: ExternalPrivateKeySource = signing_key.into();
         let wasm_new_signing_key: ExternalPrivateKeySource = new_signing_key.into();
         let promise = self
             .inner
             .subtract_private_keys(wasm_signing_key, wasm_new_signing_key)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let wasm_result: ExternalPrivateKeySource = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize private key source: {}", e))?;
+            .map_err(|e| {
+                SignerError::Generic(format!("Failed to deserialize private key source: {}", e))
+            })?;
         Ok(wasm_result.into())
     }
 
-    async fn split_secret_with_proofs(
+    async fn split_secret(
         &self,
         secret: core_types::ExternalSecretToSplit,
         threshold: u32,
         num_shares: u32,
-    ) -> Result<Vec<core_types::ExternalVerifiableSecretShare>, String> {
+    ) -> Result<Vec<core_types::ExternalVerifiableSecretShare>, SignerError> {
         let wasm_secret: ExternalSecretToSplit = secret.into();
         let promise = self
             .inner
             .split_secret_with_proofs(wasm_secret, threshold, num_shares)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let wasm_shares: Vec<ExternalVerifiableSecretShare> =
-            serde_wasm_bindgen::from_value(result)
-                .map_err(|e| format!("Failed to deserialize secret shares: {}", e))?;
+            serde_wasm_bindgen::from_value(result).map_err(|e| {
+                SignerError::Generic(format!("Failed to deserialize secret shares: {}", e))
+            })?;
         Ok(wasm_shares.into_iter().map(|s| s.into()).collect())
     }
 
@@ -364,64 +452,81 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         &self,
         private_key: core_types::ExternalEncryptedPrivateKey,
         receiver_public_key: core_types::PublicKeyBytes,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, SignerError> {
         let wasm_private_key: ExternalEncryptedPrivateKey = private_key.into();
         let wasm_receiver_pubkey: PublicKeyBytes = receiver_public_key.into();
         let promise = self
             .inner
             .encrypt_private_key_for_receiver(wasm_private_key, wasm_receiver_pubkey)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
-        serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize encrypted key: {}", e))
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        serde_wasm_bindgen::from_value(result).map_err(|e| {
+            SignerError::Generic(format!("Failed to deserialize encrypted key: {}", e))
+        })
     }
 
     async fn get_public_key_from_private_key_source(
         &self,
         private_key: core_types::ExternalPrivateKeySource,
-    ) -> Result<core_types::PublicKeyBytes, String> {
+    ) -> Result<core_types::PublicKeyBytes, SignerError> {
         let wasm_private_key: ExternalPrivateKeySource = private_key.into();
         let promise = self
             .inner
             .get_public_key_from_private_key_source(wasm_private_key)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
-        let wasm_pubkey: PublicKeyBytes = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize public key: {}", e))?;
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let wasm_pubkey: PublicKeyBytes = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            SignerError::Generic(format!("Failed to deserialize public key: {}", e))
+        })?;
         Ok(wasm_pubkey.into())
     }
 
     async fn sign_frost(
         &self,
         request: core_types::ExternalSignFrostRequest,
-    ) -> Result<core_types::ExternalFrostSignatureShare, String> {
+    ) -> Result<core_types::ExternalFrostSignatureShare, SignerError> {
         let wasm_request: ExternalSignFrostRequest = request.into();
         let promise = self
             .inner
             .sign_frost(wasm_request)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let wasm_share: ExternalFrostSignatureShare = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize FROST signature share: {}", e))?;
+            .map_err(|e| {
+                SignerError::Generic(format!(
+                    "Failed to deserialize FROST signature share: {}",
+                    e
+                ))
+            })?;
         Ok(wasm_share.into())
     }
 
-    async fn aggregate_frost(
+    async fn aggregate_frost_signatures(
         &self,
         request: core_types::ExternalAggregateFrostRequest,
-    ) -> Result<core_types::ExternalFrostSignature, String> {
+    ) -> Result<core_types::ExternalFrostSignature, SignerError> {
         let wasm_request: ExternalAggregateFrostRequest = request.into();
         let promise = self
             .inner
             .aggregate_frost(wasm_request)
-            .map_err(js_error_to_string)?;
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_string)?;
-        let wasm_sig: ExternalFrostSignature = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| format!("Failed to deserialize FROST signature: {}", e))?;
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let wasm_sig: ExternalFrostSignature =
+            serde_wasm_bindgen::from_value(result).map_err(|e| {
+                SignerError::Generic(format!("Failed to deserialize FROST signature: {}", e))
+            })?;
         Ok(wasm_sig.into())
     }
 }
@@ -452,63 +557,82 @@ const SIGNER_INTERFACE: &'static str = r#"export interface ExternalSigner {
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(typescript_type = "ExternalSigner")]
-    pub type ExternalSigner;
+    pub type JsExternalSigner;
 
     #[wasm_bindgen(structural, method, js_name = "identityPublicKey")]
-    pub fn identity_public_key(this: &ExternalSigner) -> PublicKeyBytes;
+    pub fn identity_public_key(this: &JsExternalSigner) -> PublicKeyBytes;
 
     #[wasm_bindgen(structural, method, js_name = "derivePublicKey", catch)]
     pub fn derive_public_key(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         path: String,
     ) -> Result<PublicKeyBytes, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signEcdsa", catch)]
     pub fn sign_ecdsa(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         message: Vec<u8>,
         path: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signEcdsaRecoverable", catch)]
     pub fn sign_ecdsa_recoverable(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         message: Vec<u8>,
         path: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "eciesEncrypt", catch)]
     pub fn ecies_encrypt(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         message: Vec<u8>,
         path: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "eciesDecrypt", catch)]
     pub fn ecies_decrypt(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         message: Vec<u8>,
         path: String,
     ) -> Result<Promise, JsValue>;
 
+    #[wasm_bindgen(structural, method, js_name = "recoverSecret", catch)]
+    pub fn recover_secret(
+        this: &JsExternalSigner,
+        shares: Box<[ExternalVerifiableSecretShare]>,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "derivePublicKeyFromIdentity", catch)]
+    pub fn derive_public_key_from_identity(
+        this: &JsExternalSigner,
+        identity: Box<[u8]>,
+        path: String,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "encryptRandomKey", catch)]
+    pub fn encrypt_random_key(
+        this: &JsExternalSigner,
+        key: ExternalPrivateKeySource,
+    ) -> Result<Promise, JsValue>;
+
     #[wasm_bindgen(structural, method, js_name = "signHashSchnorr", catch)]
     pub fn sign_hash_schnorr(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         hash: Vec<u8>,
         path: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "generateFrostSigningCommitments", catch)]
-    pub fn generate_frost_signing_commitments(this: &ExternalSigner) -> Result<Promise, JsValue>;
+    pub fn generate_frost_signing_commitments(this: &JsExternalSigner) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "getPublicKeyForNode", catch)]
     pub fn get_public_key_for_node(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         id: ExternalTreeNodeId,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "generateRandomKey", catch)]
-    pub fn generate_random_key(this: &ExternalSigner) -> Result<Promise, JsValue>;
+    pub fn generate_random_key(this: &JsExternalSigner) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(
         structural,
@@ -517,32 +641,32 @@ extern "C" {
         catch
     )]
     pub fn get_static_deposit_private_key_source(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         index: u32,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "getStaticDepositPrivateKey", catch)]
     pub fn get_static_deposit_private_key(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         index: u32,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "getStaticDepositPublicKey", catch)]
     pub fn get_static_deposit_public_key(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         index: u32,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "subtractPrivateKeys", catch)]
     pub fn subtract_private_keys(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         signing_key: ExternalPrivateKeySource,
         new_signing_key: ExternalPrivateKeySource,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "splitSecretWithProofs", catch)]
     pub fn split_secret_with_proofs(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         secret: ExternalSecretToSplit,
         threshold: u32,
         num_shares: u32,
@@ -550,7 +674,7 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = "encryptPrivateKeyForReceiver", catch)]
     pub fn encrypt_private_key_for_receiver(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         private_key: ExternalEncryptedPrivateKey,
         receiver_public_key: PublicKeyBytes,
     ) -> Result<Promise, JsValue>;
@@ -562,19 +686,19 @@ extern "C" {
         catch
     )]
     pub fn get_public_key_from_private_key_source(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         private_key: ExternalPrivateKeySource,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signFrost", catch)]
     pub fn sign_frost(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         request: ExternalSignFrostRequest,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "aggregateFrost", catch)]
     pub fn aggregate_frost(
-        this: &ExternalSigner,
+        this: &JsExternalSigner,
         request: ExternalAggregateFrostRequest,
     ) -> Result<Promise, JsValue>;
 }

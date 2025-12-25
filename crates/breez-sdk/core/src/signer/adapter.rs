@@ -237,11 +237,11 @@ impl BreezSigner for ExternalSignerAdapter {
             .map_err(|_| SdkError::Generic("num_shares value too large".to_string()))?;
         let shares_ext = self
             .external
-            .split_secret_with_proofs(secret_ext, threshold, num_shares_u32)
+            .split_secret(secret_ext, threshold, num_shares_u32)
             .await
             .map_err(|e| {
                 SdkError::Generic(format!(
-                    "External signer split_secret_with_proofs failed: {e}"
+                    "External signer split_secret failed: {e}"
                 ))
             })?;
 
@@ -307,7 +307,7 @@ impl BreezSigner for ExternalSignerAdapter {
 
         let sig_ext = self
             .external
-            .aggregate_frost(request_ext)
+            .aggregate_frost_signatures(request_ext)
             .await
             .map_err(|e| {
                 SdkError::Generic(format!("External signer aggregate_frost failed: {e}"))
