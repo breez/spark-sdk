@@ -42,6 +42,19 @@ pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
     Ok(sdk)
 }
 
+#[wasm_bindgen(js_name = "connectWithSigner")]
+pub async fn connect_with_signer(
+    config: Config,
+    signer: crate::signer::JsExternalSigner,
+    storage_dir: String,
+) -> WasmResult<BreezSdk> {
+    let builder = SdkBuilder::new_with_signer(config, signer)
+        .with_default_storage(storage_dir)
+        .await?;
+    let sdk = builder.build().await?;
+    Ok(sdk)
+}
+
 #[wasm_bindgen(js_name = "defaultConfig")]
 pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network.into()).into()
