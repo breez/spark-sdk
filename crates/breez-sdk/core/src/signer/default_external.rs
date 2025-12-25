@@ -15,13 +15,11 @@ use crate::{Network, SdkError, Seed, default_config, models::KeySetType};
 ///
 /// This provides a reference implementation and allows users to easily create a signer
 /// from a mnemonic without implementing the trait themselves.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub struct DefaultExternalSigner {
     inner: BreezSignerImpl,
 }
 
-#[cfg_attr(feature = "uniffi", uniffi::export)]
 impl DefaultExternalSigner {
     /// Creates a new `DefaultExternalSigner` from a mnemonic.
     ///
@@ -32,7 +30,6 @@ impl DefaultExternalSigner {
     /// * `key_set_type` - Type of key set to use
     /// * `use_address_index` - Whether to use address index in derivation
     /// * `account_number` - Optional account number for key derivation
-    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn new(
         mnemonic: String,
