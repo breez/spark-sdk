@@ -18,6 +18,18 @@ impl SdkBuilder {
     }
 
     #[frb(sync)]
+    pub fn new_with_signer(
+        config: Config,
+        signer: Arc<dyn breez_sdk_spark::signer::ExternalSigner>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(breez_sdk_spark::SdkBuilder::new_with_signer(
+                config, signer,
+            )),
+        }
+    }
+
+    #[frb(sync)]
     pub fn with_default_storage(self, storage_dir: String) -> Self {
         let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
             .with_default_storage(storage_dir);
@@ -34,9 +46,11 @@ impl SdkBuilder {
         account_number: Option<u32>,
     ) -> Self {
         let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner).with_key_set(
-            key_set_type,
-            use_address_index,
-            account_number,
+            breez_sdk_spark::KeySetConfig {
+                key_set_type: key_set_type.into(),
+                use_address_index,
+                account_number,
+            },
         );
         Self {
             inner: Arc::new(builder),

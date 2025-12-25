@@ -14,6 +14,25 @@ pub async fn connect(request: ConnectRequest) -> Result<BreezSdk, SdkError> {
     })
 }
 
+pub async fn connect_with_signer(
+    request: ConnectWithSignerRequest,
+) -> Result<BreezSdk, SdkError> {
+    let sdk = breez_sdk_spark::connect_with_signer(request).await?;
+    Ok(BreezSdk {
+        inner: Arc::new(sdk),
+    })
+}
+
+#[frb(sync)]
+pub fn default_external_signer(
+    mnemonic: String,
+    passphrase: Option<String>,
+    network: Network,
+    key_set_config: Option<KeySetConfig>,
+) -> Result<Arc<dyn breez_sdk_spark::signer::ExternalSigner>, SdkError> {
+    breez_sdk_spark::default_external_signer(mnemonic, passphrase, network, key_set_config)
+}
+
 #[frb(sync)]
 pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network)
