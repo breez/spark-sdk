@@ -27,9 +27,11 @@ def connect_with_signer() -> BreezSdk:
         mnemonic="<mnemonic words>",
         passphrase=None,
         network=Network.MAINNET,
-        key_set_type=KeySetType.DEFAULT,
-        use_address_index=False,
-        account_number=0
+        key_set_config=KeySetConfig(
+            key_set_type=KeySetType.DEFAULT,
+            use_address_index=False,
+            account_number=None,
+        ),
     )
     
     # Create the config

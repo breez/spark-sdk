@@ -119,16 +119,9 @@ impl SdkBuilder {
     /// when using an external signer (created with `new_with_signer`).
     ///
     /// # Arguments
-    /// - `key_set_type`: The key set type which determines the derivation path.
-    /// - `use_address_index`: Controls the structure of the BIP derivation path.
-    /// - `account_number`: Optional account number for key derivation.
+    /// - `config`: Key set configuration containing the key set type, address index flag, and optional account number.
     #[must_use]
-    pub fn with_key_set(
-        mut self,
-        key_set_type: KeySetType,
-        use_address_index: bool,
-        account_number: Option<u32>,
-    ) -> Self {
+    pub fn with_key_set(mut self, config: crate::models::KeySetConfig) -> Self {
         if let SignerSource::Seed {
             key_set_type: ref mut kst,
             use_address_index: ref mut uai,
@@ -136,9 +129,9 @@ impl SdkBuilder {
             ..
         } = self.signer_source
         {
-            *kst = key_set_type;
-            *uai = use_address_index;
-            *an = account_number;
+            *kst = config.key_set_type;
+            *uai = config.use_address_index;
+            *an = config.account_number;
         }
         self
     }

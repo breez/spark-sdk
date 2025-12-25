@@ -36,9 +36,11 @@ func connectWithSigner() (*breez_sdk_spark.BreezSdk, error) {
 		"<mnemonic words>",
 		nil, // passphrase
 		breez_sdk_spark.NetworkMainnet,
-		breez_sdk_spark.KeySetTypeDefault,
-		false, // useAddressIndex
-		nil,   // accountNumber (will use default)
+		&breez_sdk_spark.KeySetConfig{
+			KeySetType:      breez_sdk_spark.KeySetTypeDefault,
+			UseAddressIndex: false,
+			AccountNumber:   nil,
+		},
 	)
 	if err != nil {
 		return nil, err

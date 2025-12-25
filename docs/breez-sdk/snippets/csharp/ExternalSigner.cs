@@ -34,9 +34,12 @@ public class ExternalSignerSnippets
             mnemonic: "<mnemonic words>",
             passphrase: null,
             network: Network.Mainnet,
-            keySetType: KeySetType.Default,
-            useAddressIndex: false,
-            accountNumber: 0
+            keySetConfig: new KeySetConfig
+            {
+                keySetType = KeySetType.Default,
+                useAddressIndex = false,
+                accountNumber = 0
+            }
         );
         
         // Create the config

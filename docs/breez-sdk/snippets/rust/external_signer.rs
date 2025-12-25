@@ -26,11 +26,13 @@ async fn connect_with_signer() -> Result<BreezSdk, SdkError> {
     // Create the signer
     let signer = default_external_signer(
         "<mnemonic words>".to_string(),
-        None, // passphrase
+        Some("<optional passphrase>".to_string()),
         Network::Mainnet,
-        KeySetType::Default,
-        false, // use_address_index
-        Some(0), // account_number
+        Some(KeySetConfig {
+            key_set_type: KeySetType::Default,
+            use_address_index: false,
+            account_number: None,
+        }),
     )?;
     
     // Create the config

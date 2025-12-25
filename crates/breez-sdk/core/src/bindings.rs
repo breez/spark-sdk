@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::{
-    BitcoinChainService, BreezSdk, Config, Credentials, FiatService, KeySetType, PaymentObserver,
+    BitcoinChainService, BreezSdk, Config, Credentials, FiatService, KeySetConfig, PaymentObserver,
     RestClient, SdkError, Seed, Storage, chain::rest_client::ChainApiType,
     sync_storage::SyncStorage,
 };
@@ -57,18 +57,10 @@ impl SdkBuilder {
 
     /// Sets the key set type to be used by the SDK.
     /// Arguments:
-    /// - `key_set_type`: The key set type which determines the derivation path.
-    /// - `use_address_index`: Controls the structure of the BIP derivation path.
-    pub async fn with_key_set(
-        &self,
-        key_set_type: KeySetType,
-        use_address_index: bool,
-        account_number: Option<u32>,
-    ) {
+    /// - `config`: Key set configuration containing the key set type, address index flag, and optional account number.
+    pub async fn with_key_set(&self, config: KeySetConfig) {
         let mut builder = self.inner.lock().await;
-        *builder = builder
-            .clone()
-            .with_key_set(key_set_type, use_address_index, account_number);
+        *builder = builder.clone().with_key_set(config);
     }
 
     /// Sets the chain service to be used by the SDK.

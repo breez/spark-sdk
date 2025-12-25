@@ -30,14 +30,16 @@ async function createSigner() {
 // ANCHOR: connect-with-signer
 async function connectWithSigner() {
   // Create the signer
-  const signer = await defaultExternalSigner({
-    mnemonic: '<mnemonic words>',
-    passphrase: null,
-    network: Network.MAINNET,
-    keySetType: KeySetType.DEFAULT,
-    useAddressIndex: false,
-    accountNumber: 0
-  })
+  const signer = await defaultExternalSigner(
+    "<mnemonic words>",
+    null, // passphrase
+    Network.MAINNET, // Changed to MAINNET to match import and ensure correctness
+    {
+      keySetType: KeySetType.DEFAULT, // Changed to DEFAULT to match import and ensure correctness
+      useAddressIndex: false,
+      accountNumber: 0,
+    },
+  );
 
   // Create the config
   const config = defaultConfig(Network.MAINNET)

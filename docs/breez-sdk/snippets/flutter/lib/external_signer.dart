@@ -28,9 +28,11 @@ Future<BreezSdk> connectWithSigner() async {
     mnemonic: '<mnemonic words>',
     passphrase: null,
     network: Network.mainnet,
-    keySetType: KeySetType.default_,
-    useAddressIndex: false,
-    accountNumber: 0,
+    keySetConfig: KeySetConfig(
+      keySetType: KeySetType.default_,
+      useAddressIndex: false,
+      accountNumber: 0,
+    ),
   );
   
   // Create the config

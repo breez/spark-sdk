@@ -26,14 +26,17 @@ class ExternalSignerSnippets {
     // ANCHOR: connect-with-signer
     func connectWithSigner() async throws -> BreezSdk {
         // Create the signer
-        let signer = try defaultExternalSigner(
+        let signer = try! defaultExternalSigner(
             mnemonic: "<mnemonic words>",
             passphrase: nil,
-            network: .mainnet,
-            keySetType: .default,
-            useAddressIndex: false,
-            accountNumber: 0
+            network: Network.mainnet,
+            keySetConfig: KeySetConfig(
+                keySetType: KeySetType.default,
+                useAddressIndex: false,
+                accountNumber: 0
+            )
         )
+
         
         // Create the config
         var config = defaultConfig(network: .mainnet)

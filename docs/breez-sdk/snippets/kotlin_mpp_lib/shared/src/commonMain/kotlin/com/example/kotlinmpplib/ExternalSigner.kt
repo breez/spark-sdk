@@ -31,9 +31,11 @@ class ExternalSigner {
             mnemonic = "<mnemonic words>",
             passphrase = null,
             network = Network.MAINNET,
-            keySetType = KeySetType.DEFAULT,
-            useAddressIndex = false,
-            accountNumber = 0U
+            keySetConfig = KeySetConfig(
+                keySetType = KeySetType.DEFAULT,
+                useAddressIndex = false,
+                accountNumber = 0U
+            )
         )
         
         // Create the config

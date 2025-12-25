@@ -91,9 +91,12 @@ impl SdkBuilder {
         self.key_set_type = key_set_type.clone().into();
         self.use_address_index = use_address_index;
         self.account_number = account_number;
-        self.builder =
-            self.builder
-                .with_key_set(key_set_type.into(), use_address_index, account_number);
+        let config = breez_sdk_spark::KeySetConfig {
+            key_set_type: key_set_type.into(),
+            use_address_index,
+            account_number,
+        };
+        self.builder = self.builder.with_key_set(config);
         self
     }
 

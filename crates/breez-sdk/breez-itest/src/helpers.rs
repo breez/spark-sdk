@@ -156,9 +156,11 @@ pub async fn build_sdk_with_external_signer(
         mnemonic,
         None, // no passphrase
         Network::Regtest,
-        KeySetType::Default,
-        false, // use_address_index
-        None,  // account_number
+        Some(KeySetConfig {
+            key_set_type: KeySetType::Default,
+            use_address_index: false,
+            account_number: None,
+        }),
     )?;
 
     // Use connect_with_signer instead of connect

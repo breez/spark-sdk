@@ -259,9 +259,7 @@ pub fn default_config(network: Network) -> Config {
 /// * `mnemonic` - BIP39 mnemonic phrase (12 or 24 words)
 /// * `passphrase` - Optional passphrase for the mnemonic
 /// * `network` - Network to use (Mainnet or Regtest)
-/// * `key_set_type` - Type of key set to use
-/// * `use_address_index` - Whether to use address index in derivation
-/// * `account_number` - Optional account number for key derivation
+/// * `key_set_config` - Optional key set configuration. If None, uses default configuration.
 ///
 /// # Returns
 ///
@@ -272,19 +270,18 @@ pub fn default_external_signer(
     mnemonic: String,
     passphrase: Option<String>,
     network: Network,
-    key_set_type: crate::models::KeySetType,
-    use_address_index: bool,
-    account_number: Option<u32>,
+    key_set_config: Option<crate::models::KeySetConfig>,
 ) -> Result<Arc<dyn crate::signer::ExternalSigner>, SdkError> {
     use crate::signer::DefaultExternalSigner;
 
+    let config = key_set_config.unwrap_or_default();
     let signer = DefaultExternalSigner::new(
         mnemonic,
         passphrase,
         network,
-        key_set_type,
-        use_address_index,
-        account_number,
+        config.key_set_type,
+        config.use_address_index,
+        config.account_number,
     )?;
 
     Ok(Arc::new(signer))
