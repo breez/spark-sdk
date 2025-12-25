@@ -63,6 +63,20 @@ pub struct _ConnectRequest {
     pub storage_dir: String,
 }
 
+#[frb(mirror(ConnectWithSignerRequest))]
+pub struct _ConnectWithSignerRequest {
+    pub config: Config,
+    pub signer: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalSigner>,
+    pub storage_dir: String,
+}
+
+#[frb(mirror(KeySetConfig))]
+pub struct _KeySetConfig {
+    pub key_set_type: KeySetType,
+    pub use_address_index: bool,
+    pub account_number: Option<u32>,
+}
+
 #[frb(mirror(CheckMessageRequest))]
 pub struct _CheckMessageRequest {
     pub message: String,
