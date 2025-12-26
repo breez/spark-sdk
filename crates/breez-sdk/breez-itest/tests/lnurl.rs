@@ -8,6 +8,7 @@ use rand::RngCore;
 use rstest::*;
 use tempdir::TempDir;
 use tracing::{debug, info};
+use hex;
 
 // ---------------------
 // Fixtures
@@ -666,6 +667,376 @@ async fn test_06_client_side_zap_receipt(
     info!("Verified zap receipt is valid NIP-57 event (kind 9735)");
 
     info!("=== Test test_06_client_side_zap_receipt PASSED ===");
+    Ok(())
+}
+
+/// Test LUD-21 LNURL-verify with non-private mode
+/// Bob has private mode disabled, so the server monitors for payments directly
+/// Verify the /verify endpoint returns correct settled status and preimage
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_07_lnurl_verify_non_private_mode(
+    #[future] lnurl_fixture: LnurlFixture,
+    #[future] alice_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_07_lnurl_verify_non_private_mode ===");
+
+    // Setup Bob with private mode DISABLED (non-private mode)
+    let lnurl = Arc::new(lnurl_fixture.await);
+    let lnurl_domain = lnurl.http_url().to_string();
+
+    let temp_dir = TempDir::new("breez-sdk-bob-verify-nonprivate")?;
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+
+    let mut config = default_config(Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = Some(lnurl_domain.clone());
+    config.sync_interval_secs = 1;
+    config.real_time_sync_server_url = None;
+    config.private_enabled_default = false; // Non-private mode
+
+    let mut bob = build_sdk_with_custom_config(
+        temp_dir.path().to_string_lossy().to_string(),
+        seed,
+        config,
+        Some(temp_dir),
+        false,
+    )
+    .await?;
+    bob.lnurl_fixture = Some(Arc::clone(&lnurl));
+
+    let mut alice = alice_sdk.await?;
+
+    // Bob registers a Lightning address
+    let username = "bobverify1";
+    let description = "Bob's verify test Lightning address (non-private)";
+
+    let register_response = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: Some(description.to_string()),
+        })
+        .await?;
+
+    let bob_lightning_address = register_response.lightning_address.clone();
+    info!(
+        "Bob registered Lightning address (non-private): {}",
+        bob_lightning_address
+    );
+
+    // Fund Alice with sats for testing
+    receive_and_fund(&mut alice, 50_000, false).await?;
+    info!("Alice funded with sats");
+
+    // Wait for sync to complete
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Alice parses Bob's Lightning address
+    let details = match alice.sdk.parse(&bob_lightning_address).await? {
+        InputType::LightningAddress(address) => address,
+        _ => anyhow::bail!("Expected Lightning address"),
+    };
+
+    // Get an invoice from Bob's LNURL callback
+    let payment_amount_sats = 1000_u64;
+    let callback_url = format!(
+        "{}?amount={}",
+        details.pay_request.callback,
+        payment_amount_sats * 1000, // amount in millisats
+    );
+
+    info!("Calling LNURL callback: {callback_url}");
+
+    let client = reqwest::Client::new();
+    let callback_response = client.get(&callback_url).send().await?;
+
+    if !callback_response.status().is_success() {
+        anyhow::bail!("Callback request failed: {}", callback_response.status());
+    }
+
+    let callback_json: serde_json::Value = callback_response.json().await?;
+    info!("Callback response: {}", callback_json);
+
+    // Extract the invoice and verify URL
+    let invoice = callback_json["pr"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No invoice in callback response"))?
+        .to_string();
+
+    let verify_url = callback_json["verify"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No verify URL in callback response"))?
+        .to_string();
+
+    info!("Got invoice: {invoice}");
+    info!("Got verify URL: {verify_url}");
+
+    // Call verify before payment - should be unsettled
+    let verify_url_with_pr = format!("{}?pr={}", verify_url, percent_encode(&invoice));
+    let verify_response = client.get(&verify_url_with_pr).send().await?;
+    let verify_json: serde_json::Value = verify_response.json().await?;
+    info!("Verify response (before payment): {}", verify_json);
+
+    assert_eq!(verify_json["settled"].as_bool(), Some(false));
+    assert!(verify_json["preimage"].is_null());
+    info!("Verified: invoice is NOT settled before payment");
+
+    // Alice pays the invoice
+    let prepare_response = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: invoice.clone(),
+            amount: None,
+            token_identifier: None,
+        })
+        .await?;
+
+    let send_response = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response,
+            options: Some(SendPaymentOptions {
+                lnurl_comment: None,
+                lnurl_payer_data: None,
+                spark_htlc_options: Some(SparkHtlcOptions { timeout_secs: Some(300) }),
+            }),
+        })
+        .await?;
+
+    info!("Alice sent payment: {:?}", send_response.payment.id);
+
+    // Wait for server to detect payment (server subscribes to events in non-private mode)
+    // Poll the verify endpoint until settled or timeout
+    let max_attempts = 30;
+    let mut settled = false;
+    let mut preimage: Option<String> = None;
+
+    for attempt in 1..=max_attempts {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        debug!("Checking verify endpoint (attempt {}/{})", attempt, max_attempts);
+
+        let verify_response = client.get(&verify_url_with_pr).send().await?;
+        let verify_json: serde_json::Value = verify_response.json().await?;
+
+        if verify_json["settled"].as_bool() == Some(true) {
+            settled = true;
+            preimage = verify_json["preimage"].as_str().map(String::from);
+            info!("Invoice settled! Preimage: {:?}", preimage);
+            break;
+        }
+    }
+
+    assert!(settled, "Invoice should be settled after payment");
+    assert!(preimage.is_some(), "Preimage should be present");
+
+    // Validate preimage: sha256(preimage) == payment_hash
+    let preimage_hex = preimage.unwrap();
+    let preimage_bytes = hex::decode(&preimage_hex)?;
+    use bitcoin::hashes::{Hash, sha256};
+    let computed_hash = sha256::Hash::hash(&preimage_bytes);
+
+    // Extract payment_hash from the invoice
+    let parsed_invoice = invoice.parse::<lightning_invoice::Bolt11Invoice>()?;
+    let payment_hash = parsed_invoice.payment_hash().to_string();
+
+    assert_eq!(
+        computed_hash.to_string(),
+        payment_hash,
+        "Preimage should hash to payment_hash"
+    );
+    info!("Preimage validation passed: sha256(preimage) == payment_hash");
+
+    info!("=== Test test_07_lnurl_verify_non_private_mode PASSED ===");
+    Ok(())
+}
+
+/// Test LUD-21 LNURL-verify with private mode
+/// Bob has private mode enabled, so the client notifies the server when payment is received
+/// Verify the /verify endpoint returns correct settled status and preimage after client notification
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_08_lnurl_verify_private_mode(
+    #[future] lnurl_fixture: LnurlFixture,
+    #[future] alice_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_08_lnurl_verify_private_mode ===");
+
+    // Setup Bob with private mode ENABLED
+    let lnurl = Arc::new(lnurl_fixture.await);
+    let lnurl_domain = lnurl.http_url().to_string();
+
+    let temp_dir = TempDir::new("breez-sdk-bob-verify-private")?;
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+
+    let mut config = default_config(Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = Some(lnurl_domain.clone());
+    config.sync_interval_secs = 1;
+    config.real_time_sync_server_url = None;
+    config.private_enabled_default = true; // Private mode
+
+    let mut bob = build_sdk_with_custom_config(
+        temp_dir.path().to_string_lossy().to_string(),
+        seed,
+        config,
+        Some(temp_dir),
+        false,
+    )
+    .await?;
+    bob.lnurl_fixture = Some(Arc::clone(&lnurl));
+
+    let mut alice = alice_sdk.await?;
+
+    // Bob registers a Lightning address
+    let username = "bobverify2";
+    let description = "Bob's verify test Lightning address (private)";
+
+    let register_response = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: Some(description.to_string()),
+        })
+        .await?;
+
+    let bob_lightning_address = register_response.lightning_address.clone();
+    info!(
+        "Bob registered Lightning address (private): {}",
+        bob_lightning_address
+    );
+
+    // Fund Alice with sats for testing
+    receive_and_fund(&mut alice, 50_000, false).await?;
+    info!("Alice funded with sats");
+
+    // Wait for sync to complete
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Alice parses Bob's Lightning address
+    let details = match alice.sdk.parse(&bob_lightning_address).await? {
+        InputType::LightningAddress(address) => address,
+        _ => anyhow::bail!("Expected Lightning address"),
+    };
+
+    // Get an invoice from Bob's LNURL callback
+    let payment_amount_sats = 1000_u64;
+    let callback_url = format!(
+        "{}?amount={}",
+        details.pay_request.callback,
+        payment_amount_sats * 1000, // amount in millisats
+    );
+
+    info!("Calling LNURL callback: {callback_url}");
+
+    let client = reqwest::Client::new();
+    let callback_response = client.get(&callback_url).send().await?;
+
+    if !callback_response.status().is_success() {
+        anyhow::bail!("Callback request failed: {}", callback_response.status());
+    }
+
+    let callback_json: serde_json::Value = callback_response.json().await?;
+    info!("Callback response: {}", callback_json);
+
+    // Extract the invoice and verify URL
+    let invoice = callback_json["pr"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No invoice in callback response"))?
+        .to_string();
+
+    let verify_url = callback_json["verify"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No verify URL in callback response"))?
+        .to_string();
+
+    info!("Got invoice: {invoice}");
+    info!("Got verify URL: {verify_url}");
+
+    // Call verify before payment - should be unsettled
+    let verify_url_with_pr = format!("{}?pr={}", verify_url, percent_encode(&invoice));
+    let verify_response = client.get(&verify_url_with_pr).send().await?;
+    let verify_json: serde_json::Value = verify_response.json().await?;
+    info!("Verify response (before payment): {}", verify_json);
+
+    assert_eq!(verify_json["settled"].as_bool(), Some(false));
+    assert!(verify_json["preimage"].is_null());
+    info!("Verified: invoice is NOT settled before payment");
+
+    // Alice pays the invoice
+    let prepare_response = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: invoice.clone(),
+            amount: None,
+            token_identifier: None,
+        })
+        .await?;
+
+    let send_response = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response,
+            options: Some(SendPaymentOptions {
+                lnurl_comment: None,
+                lnurl_payer_data: None,
+                spark_htlc_options: Some(SparkHtlcOptions { timeout_secs: Some(300) }),
+            }),
+        })
+        .await?;
+
+    info!("Alice sent payment: {:?}", send_response.payment.id);
+
+    // In private mode, Bob's client needs to sync and notify the server
+    // Trigger Bob's sync which will run process_pending_lnurl_payments
+    // Poll the verify endpoint until settled or timeout
+    let max_attempts = 30;
+    let mut settled = false;
+    let mut preimage: Option<String> = None;
+
+    for attempt in 1..=max_attempts {
+        // Trigger sync on Bob's SDK (this runs the lnurl payment notifier)
+        if let Err(e) = bob.sdk.sync().await {
+            debug!("Bob sync error (may be expected): {:?}", e);
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        debug!("Checking verify endpoint (attempt {}/{})", attempt, max_attempts);
+
+        let verify_response = client.get(&verify_url_with_pr).send().await?;
+        let verify_json: serde_json::Value = verify_response.json().await?;
+
+        if verify_json["settled"].as_bool() == Some(true) {
+            settled = true;
+            preimage = verify_json["preimage"].as_str().map(String::from);
+            info!("Invoice settled! Preimage: {:?}", preimage);
+            break;
+        }
+    }
+
+    assert!(settled, "Invoice should be settled after payment and client notification");
+    assert!(preimage.is_some(), "Preimage should be present");
+
+    // Validate preimage: sha256(preimage) == payment_hash
+    let preimage_hex = preimage.unwrap();
+    let preimage_bytes = hex::decode(&preimage_hex)?;
+    use bitcoin::hashes::{Hash, sha256};
+    let computed_hash = sha256::Hash::hash(&preimage_bytes);
+
+    // Extract payment_hash from the invoice
+    let parsed_invoice = invoice.parse::<lightning_invoice::Bolt11Invoice>()?;
+    let payment_hash = parsed_invoice.payment_hash().to_string();
+
+    assert_eq!(
+        computed_hash.to_string(),
+        payment_hash,
+        "Preimage should hash to payment_hash"
+    );
+    info!("Preimage validation passed: sha256(preimage) == payment_hash");
+
+    info!("=== Test test_08_lnurl_verify_private_mode PASSED ===");
     Ok(())
 }
 

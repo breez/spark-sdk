@@ -66,7 +66,7 @@ use crate::{
     nostr::NostrClient,
     persist::{
         CachedAccountInfo, ObjectCacheRepository, PaymentMetadata, PaymentRequestMetadata,
-        StaticDepositAddress, Storage, UpdateDepositPayload,
+        SetLnurlMetadataItem, StaticDepositAddress, Storage, UpdateDepositPayload,
     },
     sync::SparkSyncService,
     utils::{
@@ -512,6 +512,7 @@ impl BreezSdk {
                 let Some(PaymentDetails::Lightning {
                     ref payment_hash,
                     ref payment_preimage,
+                    ref lnurl_receive_metadata,
                     ..
                 }) = payment.details
                 else {
@@ -522,6 +523,13 @@ impl BreezSdk {
                 let Some(preimage) = payment_preimage else {
                     continue;
                 };
+
+                // Skip if we've already notified the server for this payment
+                if let Some(metadata) = lnurl_receive_metadata {
+                    if metadata.lnurl_verify_notified {
+                        continue;
+                    }
+                }
 
                 // Notify the server that this payment was received
                 // The server will store the preimage for LUD-21 verify responses
@@ -542,6 +550,30 @@ impl BreezSdk {
                             debug!(
                                 "Notified server of paid invoice {}",
                                 payment_hash
+                            );
+                        }
+
+                        // Mark as notified in local storage to avoid re-notifying
+                        if let Err(e) = self
+                            .storage
+                            .set_lnurl_metadata(vec![SetLnurlMetadataItem {
+                                payment_hash: payment_hash.clone(),
+                                sender_comment: lnurl_receive_metadata
+                                    .as_ref()
+                                    .and_then(|m| m.sender_comment.clone()),
+                                nostr_zap_request: lnurl_receive_metadata
+                                    .as_ref()
+                                    .and_then(|m| m.nostr_zap_request.clone()),
+                                nostr_zap_receipt: lnurl_receive_metadata
+                                    .as_ref()
+                                    .and_then(|m| m.nostr_zap_receipt.clone()),
+                                lnurl_verify_notified: Some(true),
+                            }])
+                            .await
+                        {
+                            error!(
+                                "Failed to store lnurl_verify_notified for payment {}: {}",
+                                payment.id, e
                             );
                         }
                     }

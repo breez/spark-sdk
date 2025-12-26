@@ -1169,6 +1169,8 @@ pub struct LnurlReceiveMetadata {
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
     pub sender_comment: Option<String>,
+    /// Whether we've notified the LNURL server about this payment (for LUD-21 verify)
+    pub lnurl_verify_notified: bool,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

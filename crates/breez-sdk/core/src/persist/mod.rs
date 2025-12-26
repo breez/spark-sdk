@@ -41,6 +41,8 @@ pub struct SetLnurlMetadataItem {
     pub sender_comment: Option<String>,
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
+    /// Whether we've notified the LNURL server about this payment (for LUD-21 verify)
+    pub lnurl_verify_notified: Option<bool>,
 }
 
 impl From<lnurl_models::ListMetadataMetadata> for SetLnurlMetadataItem {
@@ -50,6 +52,7 @@ impl From<lnurl_models::ListMetadataMetadata> for SetLnurlMetadataItem {
             sender_comment: value.sender_comment,
             nostr_zap_request: value.nostr_zap_request,
             nostr_zap_receipt: value.nostr_zap_receipt,
+            lnurl_verify_notified: None,
         }
     }
 }

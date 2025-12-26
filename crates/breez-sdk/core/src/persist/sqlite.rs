@@ -251,6 +251,9 @@ impl SqliteStorage {
             // Delete all unclaimed deposits to clear old claim_error JSON format.
             // Deposits will be recovered on next sync.
             "DELETE FROM unclaimed_deposits;",
+            // Add lnurl_verify_notified column for LUD-21 verify support
+            // Tracks whether we've notified the server about a paid invoice
+            "ALTER TABLE lnurl_receive_metadata ADD COLUMN lnurl_verify_notified INTEGER DEFAULT 0;",
         ]
     }
 }
@@ -396,6 +399,7 @@ impl Storage for SqliteStorage {
             ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
             ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
             ,       lrm.sender_comment AS lnurl_sender_comment
+            ,       lrm.lnurl_verify_notified AS lnurl_verify_notified
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
@@ -586,6 +590,7 @@ impl Storage for SqliteStorage {
             ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
             ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
             ,       lrm.sender_comment AS lnurl_sender_comment
+            ,       lrm.lnurl_verify_notified AS lnurl_verify_notified
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
@@ -631,6 +636,7 @@ impl Storage for SqliteStorage {
             ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
             ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
             ,       lrm.sender_comment AS lnurl_sender_comment
+            ,       lrm.lnurl_verify_notified AS lnurl_verify_notified
              FROM payments p
              LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
              LEFT JOIN payment_details_token t ON p.id = t.payment_id
@@ -727,13 +733,14 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
         for metadata in metadata {
             connection.execute(
-                "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-                 VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, lnurl_verify_notified)
+                 VALUES (?, ?, ?, ?, ?)",
                 params![
                     metadata.payment_hash,
                     metadata.nostr_zap_request,
                     metadata.nostr_zap_receipt,
                     metadata.sender_comment,
+                    metadata.lnurl_verify_notified.map(|b| if b { 1 } else { 0 }),
                 ],
             )?;
         }
@@ -1156,12 +1163,14 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             let lnurl_nostr_zap_request: Option<String> = row.get(22)?;
             let lnurl_nostr_zap_receipt: Option<String> = row.get(23)?;
             let lnurl_sender_comment: Option<String> = row.get(24)?;
+            let lnurl_verify_notified: Option<i32> = row.get(25)?;
             let lnurl_receive_metadata =
-                if lnurl_nostr_zap_request.is_some() || lnurl_sender_comment.is_some() {
+                if lnurl_nostr_zap_request.is_some() || lnurl_sender_comment.is_some() || lnurl_verify_notified.is_some() {
                     Some(LnurlReceiveMetadata {
                         nostr_zap_request: lnurl_nostr_zap_request,
                         nostr_zap_receipt: lnurl_nostr_zap_receipt,
                         sender_comment: lnurl_sender_comment,
+                        lnurl_verify_notified: lnurl_verify_notified.map(|v| v != 0).unwrap_or(false),
                     })
                 } else {
                     None
