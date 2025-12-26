@@ -21,7 +21,10 @@ pub struct State<DB> {
     pub signer: Arc<DefaultSigner>,
     pub session_manager: Arc<InMemorySessionManager>,
     pub service_provider: Arc<ServiceProvider>,
+    /// Set of user pubkeys currently subscribed for zap monitoring
     pub subscribed_keys: Arc<Mutex<HashSet<String>>>,
+    /// Set of user pubkeys currently subscribed for LNURL-pay invoice monitoring
+    pub lnurl_pay_subscribed_keys: Arc<Mutex<HashSet<String>>>,
 }
 
 impl<DB> Clone for State<DB>
@@ -45,6 +48,7 @@ where
             session_manager: self.session_manager.clone(),
             service_provider: self.service_provider.clone(),
             subscribed_keys: Arc::clone(&self.subscribed_keys),
+            lnurl_pay_subscribed_keys: Arc::clone(&self.lnurl_pay_subscribed_keys),
         }
     }
 }
