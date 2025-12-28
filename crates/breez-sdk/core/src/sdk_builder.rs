@@ -36,14 +36,23 @@ use crate::{
     sync_storage::SyncStorage,
 };
 
+/// Source for the signer - either a seed or an external signer implementation
+#[derive(Clone)]
+enum SignerSource {
+    Seed {
+        seed: Seed,
+        key_set_type: KeySetType,
+        use_address_index: bool,
+        account_number: Option<u32>,
+    },
+    External(Arc<dyn crate::signer::ExternalSigner>),
+}
+
 /// Builder for creating `BreezSdk` instances with customizable components.
 #[derive(Clone)]
 pub struct SdkBuilder {
     config: Config,
-    seed: Seed,
-    key_set_type: KeySetType,
-    use_address_index: bool,
-    account_number: Option<u32>,
+    signer_source: SignerSource,
 
     storage_dir: Option<String>,
     storage: Option<Arc<dyn Storage>>,
@@ -56,18 +65,44 @@ pub struct SdkBuilder {
 }
 
 impl SdkBuilder {
-    /// Creates a new `SdkBuilder` with the provided configuration.
-    /// Arguments:
+    /// Creates a new `SdkBuilder` with the provided configuration and seed.
+    ///
+    /// For external signer support, use `new_with_signer` instead.
+    ///
+    /// # Arguments
     /// - `config`: The configuration to be used.
     /// - `seed`: The seed for wallet generation.
     #[allow(clippy::needless_pass_by_value)]
     pub fn new(config: Config, seed: Seed) -> Self {
         SdkBuilder {
             config,
-            seed,
-            key_set_type: KeySetType::Default,
-            use_address_index: false,
-            account_number: None,
+            signer_source: SignerSource::Seed {
+                seed,
+                key_set_type: KeySetType::Default,
+                use_address_index: false,
+                account_number: None,
+            },
+            storage_dir: None,
+            storage: None,
+            chain_service: None,
+            fiat_service: None,
+            lnurl_client: None,
+            lnurl_server_client: None,
+            payment_observer: None,
+            sync_storage: None,
+        }
+    }
+
+    /// Creates a new `SdkBuilder` with the provided configuration and external signer.
+    ///
+    /// # Arguments
+    /// - `config`: The configuration to be used.
+    /// - `signer`: An external signer implementation.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn new_with_signer(config: Config, signer: Arc<dyn crate::signer::ExternalSigner>) -> Self {
+        SdkBuilder {
+            config,
+            signer_source: SignerSource::External(signer),
             storage_dir: None,
             storage: None,
             chain_service: None,
@@ -80,19 +115,25 @@ impl SdkBuilder {
     }
 
     /// Sets the key set type to be used by the SDK.
-    /// Arguments:
-    /// - `key_set_type`: The key set type which determines the derivation path.
-    /// - `use_address_index`: Controls the structure of the BIP derivation path.
+    ///
+    /// Note: This only applies when using a seed-based signer. It has no effect
+    /// when using an external signer (created with `new_with_signer`).
+    ///
+    /// # Arguments
+    /// - `config`: Key set configuration containing the key set type, address index flag, and optional account number.
     #[must_use]
-    pub fn with_key_set(
-        mut self,
-        key_set_type: KeySetType,
-        use_address_index: bool,
-        account_number: Option<u32>,
-    ) -> Self {
-        self.key_set_type = key_set_type;
-        self.use_address_index = use_address_index;
-        self.account_number = account_number;
+    pub fn with_key_set(mut self, config: crate::models::KeySetConfig) -> Self {
+        if let SignerSource::Seed {
+            key_set_type: ref mut kst,
+            use_address_index: ref mut uai,
+            account_number: ref mut an,
+            ..
+        } = self.signer_source
+        {
+            *kst = config.key_set_type;
+            *uai = config.use_address_index;
+            *an = config.account_number;
+        }
         self
     }
 
@@ -196,25 +237,37 @@ impl SdkBuilder {
     /// Builds the `BreezSdk` instance with the configured components.
     #[allow(clippy::too_many_lines)]
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
-        let (key_set_type, use_address_index, account_number) = (
-            self.key_set_type,
-            self.use_address_index,
-            self.account_number,
-        );
-
-        // Create the signer from seed
-        let signer = Arc::new(
-            BreezSignerImpl::new(
-                &self.config,
-                &self.seed,
-                key_set_type.into(),
+        // Create the base signer based on the signer source
+        let (signer, account_number) = match self.signer_source {
+            SignerSource::Seed {
+                seed,
+                key_set_type,
                 use_address_index,
                 account_number,
-            )
-            .map_err(|e| SdkError::Generic(e.to_string()))?,
-        );
+            } => {
+                let breez_signer = Arc::new(
+                    BreezSignerImpl::new(
+                        &self.config,
+                        &seed,
+                        key_set_type.into(),
+                        use_address_index,
+                        account_number,
+                    )
+                    .map_err(|e| SdkError::Generic(e.to_string()))?,
+                );
+                (
+                    breez_signer as Arc<dyn crate::signer::BreezSigner>,
+                    account_number,
+                )
+            }
+            SignerSource::External(external_signer) => {
+                use crate::signer::ExternalSignerAdapter;
+                let adapter = Arc::new(ExternalSignerAdapter::new(external_signer));
+                (adapter as Arc<dyn crate::signer::BreezSigner>, None)
+            }
+        };
 
-        // Create the signers
+        // Create the specialized signers
         let spark_signer = Arc::new(SparkSigner::new(signer.clone()));
         let rtsync_signer = Arc::new(
             RTSyncSigner::new(signer.clone(), self.config.network)

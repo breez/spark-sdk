@@ -12,6 +12,7 @@ from breez_sdk_spark import (
     Network,
     SdkBuilder,
     KeySetType,
+    KeySetConfig,
     default_config,
 )
 
@@ -52,11 +53,12 @@ async def create_token_with_custom_account_number():
         await builder.with_default_storage(storage_dir="./.data")
 
         # Set the account number for the SDK
-        builder.with_key_set(
+        key_set_config = KeySetConfig(
             key_set_type=KeySetType.DEFAULT,
             use_address_index=False,
             account_number=account_number,
         )
+        await builder.with_key_set(config=key_set_config)
 
         sdk = await builder.build()
         return sdk

@@ -53,7 +53,14 @@ func WithKeySet(builder *breez_sdk_spark.SdkBuilder) {
 	keySetType := breez_sdk_spark.KeySetTypeDefault
 	useAccountIndex := true
 	optionalAccountNumber := uint32(21)
-	builder.WithKeySet(keySetType, useAccountIndex, &optionalAccountNumber)
+
+	keySetConfig := breez_sdk_spark.KeySetConfig{
+		KeySetType:      keySetType,
+		UseAddressIndex: useAccountIndex,
+		AccountNumber:   &optionalAccountNumber,
+	}
+
+	builder.WithKeySet(keySetConfig)
 	// ANCHOR_END: with-key-set
 }
 
@@ -71,4 +78,5 @@ func WithPaymentObserver(builder *breez_sdk_spark.SdkBuilder) {
 	observer := ExamplePaymentObserver{}
 	builder.WithPaymentObserver(observer)
 }
+
 // ANCHOR_END: with-payment-observer

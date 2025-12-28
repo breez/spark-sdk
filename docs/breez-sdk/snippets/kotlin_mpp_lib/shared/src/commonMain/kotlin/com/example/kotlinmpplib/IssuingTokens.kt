@@ -44,7 +44,12 @@ class IssuingTokens {
             builder.withDefaultStorage("./.data")
 
             // Set the account number for the SDK
-            builder.withKeySet(KeySetType.DEFAULT, false, accountNumber)
+            val keySetConfig = KeySetConfig(
+                keySetType = KeySetType.DEFAULT,
+                useAddressIndex = false,
+                accountNumber = accountNumber
+            )
+            builder.withKeySet(keySetConfig)
 
             val sdk = builder.build()
         } catch (e: Exception) {

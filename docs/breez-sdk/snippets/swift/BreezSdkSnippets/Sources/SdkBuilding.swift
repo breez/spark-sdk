@@ -47,11 +47,14 @@ func withKeySet(builder: SdkBuilder) async {
     let keySetType = KeySetType.default
     let useAddressIndex = false
     let optionalAccountNumber = UInt32(21)
-    await builder.withKeySet(
+    
+    let config = KeySetConfig(
         keySetType: keySetType,
         useAddressIndex: useAddressIndex,
         accountNumber: optionalAccountNumber
     )
+    
+    await builder.withKeySet(config: config)
     // ANCHOR_END: with-key-set
 }
 

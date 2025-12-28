@@ -51,11 +51,14 @@ class SdkBuilding {
         val keySetType = KeySetType.DEFAULT
         val useAddressIndex = false
         val optionalAccountNumber = 21u
-        builder.withKeySet(
+        
+        val keySetConfig = KeySetConfig(
             keySetType = keySetType,
             useAddressIndex = useAddressIndex,
             accountNumber = optionalAccountNumber
         )
+        
+        builder.withKeySet(keySetConfig)
         // ANCHOR_END: with-key-set
     }
 
