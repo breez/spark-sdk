@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
@@ -228,7 +226,7 @@ async fn test_02_htlc_refund(
     info!("Waiting for HTLC to expire...");
 
     // HTLC fails and is returned a little bit after the expiry
-    tokio::time::sleep(Duration::from_secs(60)).await;
+    wait_for_payment_failed_event(&mut bob.events, PaymentType::Receive, 120).await?;
 
     info!("Verifying Bob's failed payment...");
 
