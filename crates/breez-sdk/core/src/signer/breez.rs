@@ -44,7 +44,10 @@ impl BreezSigner for BreezSignerImpl {
         self.key_set.identity_key_pair.public_key()
     }
 
-    fn derive_public_key(&self, path: &DerivationPath) -> Result<secp256k1::PublicKey, SdkError> {
+    async fn derive_public_key(
+        &self,
+        path: &DerivationPath,
+    ) -> Result<secp256k1::PublicKey, SdkError> {
         let derived = self
             .key_set
             .identity_master_key

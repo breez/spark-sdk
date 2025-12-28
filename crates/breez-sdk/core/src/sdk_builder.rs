@@ -201,6 +201,7 @@ impl SdkBuilder {
             self.account_number,
         );
 
+        // Create the signer from seed
         let signer = Arc::new(
             BreezSignerImpl::new(
                 &self.config,
@@ -212,7 +213,6 @@ impl SdkBuilder {
             .map_err(|e| SdkError::Generic(e.to_string()))?,
         );
 
-        // Create the signer from seed
         // Create the signers
         let spark_signer = Arc::new(SparkSigner::new(signer.clone()));
         let rtsync_signer = Arc::new(
@@ -221,6 +221,7 @@ impl SdkBuilder {
         );
         let nostr_signer = Arc::new(
             NostrSigner::new(signer.clone(), self.config.network, account_number)
+                .await
                 .map_err(|e| SdkError::Generic(format!("{e:?}")))?,
         );
 
