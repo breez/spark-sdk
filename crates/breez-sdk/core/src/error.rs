@@ -240,3 +240,41 @@ impl From<SdkError> for DepositClaimError {
         }
     }
 }
+
+/// Error type for signer operations
+#[derive(Debug, Error, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
+pub enum SignerError {
+    #[error("Key derivation error: {0}")]
+    KeyDerivation(String),
+
+    #[error("Signing error: {0}")]
+    Signing(String),
+
+    #[error("Encryption error: {0}")]
+    Encryption(String),
+
+    #[error("Decryption error: {0}")]
+    Decryption(String),
+
+    #[error("FROST error: {0}")]
+    Frost(String),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
+    #[error("Generic signer error: {0}")]
+    Generic(String),
+}
+
+impl From<String> for SignerError {
+    fn from(s: String) -> Self {
+        SignerError::Generic(s)
+    }
+}
+
+impl From<&str> for SignerError {
+    fn from(s: &str) -> Self {
+        SignerError::Generic(s.to_string())
+    }
+}

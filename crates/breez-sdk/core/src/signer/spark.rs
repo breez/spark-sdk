@@ -6,12 +6,12 @@ use spark_wallet::{
 use std::sync::Arc;
 
 use crate::signer::BreezSigner;
-use async_trait::async_trait;
 use bitcoin::{
     bip32::DerivationPath,
     secp256k1::{self, PublicKey, SecretKey, schnorr},
 };
 use frost_secp256k1_tr::round2::SignatureShare;
+use macros::async_trait;
 
 pub struct SparkSigner {
     signer: Arc<dyn BreezSigner>,

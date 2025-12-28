@@ -706,6 +706,7 @@ dependencies = [
  "ecies",
  "frost-secp256k1-tr-unofficial",
  "hex",
+ "k256",
  "lnurl-models",
  "macros",
  "nostr",
