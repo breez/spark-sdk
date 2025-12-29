@@ -26,7 +26,7 @@ pub use spark::{
     session_manager::*,
     signer::{DefaultSigner, DefaultSignerError, KeySet, KeySetType, Signer},
     ssp::*,
-    token::{TokenMetadata, TokenOutputSelectionStrategy, TokenOutputWithPrevOut},
+    token::{SelectionStrategy, TokenMetadata, TokenOutputWithPrevOut},
     tree::{SigningKeyshare, TreeNodeId},
     utils::{
         paging::{Order, PagingFilter, PagingResult},

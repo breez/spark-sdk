@@ -11,9 +11,9 @@ use crate::{
     },
     signer::Signer,
     token::{
-        GetTokenOutputsFilter, TokenMetadata, TokenOutputSelectionStrategy, TokenOutputService,
-        TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs, TokenOutputsReservation,
-        TokenOutputsReservationId, error::TokenOutputServiceError,
+        GetTokenOutputsFilter, ReservationTarget, SelectionStrategy, TokenMetadata,
+        TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs,
+        TokenOutputsReservation, TokenOutputsReservationId, error::TokenOutputServiceError,
     },
 };
 
@@ -116,9 +116,9 @@ impl TokenOutputService for SynchronousTokenOutputService {
     async fn reserve_token_outputs(
         &self,
         token_identifier: &str,
-        amount: u128,
+        target: ReservationTarget,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
-        selection_strategy: Option<TokenOutputSelectionStrategy>,
+        selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
         let mut reservation: Option<TokenOutputsReservation> = None;
 
@@ -127,9 +127,9 @@ impl TokenOutputService for SynchronousTokenOutputService {
                 .state
                 .reserve_token_outputs(
                     token_identifier,
-                    amount,
+                    target,
                     preferred_outputs.clone(),
-                    selection_strategy.clone(),
+                    selection_strategy,
                 )
                 .await;
             if let Ok(token_outputs_reservation) = reserve_res {
@@ -147,7 +147,9 @@ impl TokenOutputService for SynchronousTokenOutputService {
                 .iter()
                 .map(|o| o.output.token_amount)
                 .sum();
-            if amount > available_amount {
+            if let ReservationTarget::MinTotalValue(amount) = &target
+                && *amount > available_amount
+            {
                 info!(
                     "Insufficient funds to select token outputs after refresh: requested {amount}, available {available_amount}"
                 );

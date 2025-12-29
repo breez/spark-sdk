@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
 use bitcoin::secp256k1::PublicKey;
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,7 @@ pub struct SparkWalletConfig {
     pub tokens_config: TokensConfig,
     pub leaf_optimization_options: LeafOptimizationOptions,
     pub leaf_auto_optimize_enabled: bool,
+    pub token_outputs_optimization_options: TokenOutputsOptimizationOptions,
 }
 
 impl SparkWalletConfig {
@@ -54,6 +55,10 @@ impl SparkWalletConfig {
                 tokens_config: Self::default_tokens_config(),
                 leaf_optimization_options: LeafOptimizationOptions::default(),
                 leaf_auto_optimize_enabled: true,
+                token_outputs_optimization_options: TokenOutputsOptimizationOptions {
+                    min_outputs_threshold: 50,
+                    auto_optimize_interval: Some(Duration::from_secs(60 * 2)),
+                },
             },
             _ => Self {
                 network,
@@ -69,6 +74,10 @@ impl SparkWalletConfig {
                 tokens_config: Self::default_tokens_config(),
                 leaf_optimization_options: LeafOptimizationOptions::default(),
                 leaf_auto_optimize_enabled: true,
+                token_outputs_optimization_options: TokenOutputsOptimizationOptions {
+                    min_outputs_threshold: 50,
+                    auto_optimize_interval: Some(Duration::from_secs(60 * 2)),
+                },
             },
         }
     }
@@ -151,4 +160,10 @@ impl SparkWalletConfig {
             transaction_validity_duration_seconds: 180,
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TokenOutputsOptimizationOptions {
+    pub min_outputs_threshold: u32,
+    pub auto_optimize_interval: Option<Duration>,
 }
