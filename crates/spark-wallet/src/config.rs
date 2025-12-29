@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use spark::{
     Network,
     operator::{OperatorConfig, OperatorPoolConfig},
-    services::{OptimizationOptions, TokensConfig},
+    services::{LeafOptimizationOptions, TokensConfig},
     ssp::ServiceProviderConfig,
 };
 
@@ -19,8 +19,8 @@ pub struct SparkWalletConfig {
     pub service_provider_config: ServiceProviderConfig,
     pub split_secret_threshold: u32,
     pub tokens_config: TokensConfig,
-    pub optimization_options: OptimizationOptions,
-    pub auto_optimize_enabled: bool,
+    pub leaf_optimization_options: LeafOptimizationOptions,
+    pub leaf_auto_optimize_enabled: bool,
 }
 
 impl SparkWalletConfig {
@@ -31,7 +31,7 @@ impl SparkWalletConfig {
             ));
         }
 
-        self.optimization_options
+        self.leaf_optimization_options
             .validate()
             .map_err(|e| SparkWalletError::ValidationError(e.to_string()))?;
 
@@ -52,8 +52,8 @@ impl SparkWalletConfig {
                 .unwrap(),
                 split_secret_threshold: 2,
                 tokens_config: Self::default_tokens_config(),
-                optimization_options: OptimizationOptions::default(),
-                auto_optimize_enabled: true,
+                leaf_optimization_options: LeafOptimizationOptions::default(),
+                leaf_auto_optimize_enabled: true,
             },
             _ => Self {
                 network,
@@ -67,8 +67,8 @@ impl SparkWalletConfig {
                 .unwrap(),
                 split_secret_threshold: 2,
                 tokens_config: Self::default_tokens_config(),
-                optimization_options: OptimizationOptions::default(),
-                auto_optimize_enabled: true,
+                leaf_optimization_options: LeafOptimizationOptions::default(),
+                leaf_auto_optimize_enabled: true,
             },
         }
     }
