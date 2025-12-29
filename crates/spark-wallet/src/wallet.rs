@@ -35,8 +35,8 @@ use spark::{
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     token::{
-        InMemoryTokenOutputStore, SynchronousTokenOutputService, TokenMetadata, TokenOutputService,
-        TokenOutputStore, TokenOutputWithPrevOut,
+        InMemoryTokenOutputStore, SynchronousTokenOutputService, TokenMetadata,
+        TokenOutputSelectionStrategy, TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut,
     },
     tree::{
         InMemoryTreeStore, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
@@ -295,7 +295,7 @@ impl SparkWallet {
         });
 
         let leaf_optimizer = Arc::new(LeafOptimizer::new(
-            config.optimization_options.clone(),
+            config.leaf_optimization_options.clone(),
             Arc::clone(&swap_service),
             Arc::clone(&tree_service),
             Some(optimization_event_handler),
@@ -314,7 +314,7 @@ impl SparkWallet {
                 Arc::clone(&transfer_service),
                 Arc::clone(&htlc_service),
                 Arc::clone(&leaf_optimizer),
-                config.auto_optimize_enabled,
+                config.leaf_auto_optimize_enabled,
             ));
             background_processor
                 .run_background_tasks(cancellation_token.clone())
@@ -354,7 +354,7 @@ impl SparkWallet {
 
     /// Starts leaf optimization if auto-optimization is enabled.
     fn maybe_start_optimization(&self) {
-        if self.config.auto_optimize_enabled {
+        if self.config.leaf_auto_optimize_enabled {
             self.leaf_optimizer.start();
         }
     }
@@ -1146,6 +1146,7 @@ impl SparkWallet {
         &self,
         outputs: Vec<TransferTokenOutput>,
         selected_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<TokenOutputSelectionStrategy>,
     ) -> Result<TokenTransaction, SparkWalletError> {
         if outputs.iter().any(|o| o.spark_invoice.is_some()) {
             return Err(SparkWalletError::Generic(
@@ -1155,7 +1156,7 @@ impl SparkWallet {
 
         let tx = self
             .token_service
-            .transfer_tokens(outputs, selected_outputs)
+            .transfer_tokens(outputs, selected_outputs, selection_strategy)
             .await?;
         Ok(tx)
     }
@@ -1247,7 +1248,7 @@ impl SparkWallet {
     ) -> Result<TokenTransaction, SparkWalletError> {
         let token_transaction = self
             .token_service
-            .burn_issuer_token(amount, preferred_outputs)
+            .burn_issuer_token(amount, preferred_outputs, None)
             .await?;
         Ok(token_transaction)
     }
@@ -1347,6 +1348,7 @@ impl SparkWallet {
                             spark_invoice: Some(invoice_str.to_string()),
                         }],
                         None,
+                        None,
                     )
                     .await?;
 
@@ -1426,6 +1428,14 @@ impl SparkWallet {
     /// Returns the current optimization progress snapshot.
     pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
         self.leaf_optimizer.progress()
+    }
+
+    /// Optimizes token outputs by consolidating them when there are more than the configured threshold.
+    pub async fn optimize_token_outputs(
+        &self,
+        token_identifier: Option<&str>,
+    ) -> Result<(), SparkWalletError> {
+        todo!()
     }
 
     /// Selects leaves with automatic retry logic.

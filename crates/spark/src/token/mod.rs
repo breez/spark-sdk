@@ -104,6 +104,12 @@ where
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum TokenOutputSelectionStrategy {
+    SmallestFirst,
+    LargestFirst,
+}
+
 #[macros::async_trait]
 pub trait TokenOutputStore: Send + Sync {
     async fn set_tokens_outputs(
@@ -128,6 +134,7 @@ pub trait TokenOutputStore: Send + Sync {
         token_identifier: &str,
         amount: u128,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<TokenOutputSelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError>;
 
     async fn cancel_reservation(
@@ -162,6 +169,7 @@ pub trait TokenOutputService: Send + Sync {
         token_identifier: &str,
         amount: u128,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<TokenOutputSelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError>;
 
     async fn cancel_reservation(

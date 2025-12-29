@@ -28,8 +28,8 @@ use crate::{
     },
     signer::Signer,
     token::{
-        GetTokenOutputsFilter, TokenMetadata, TokenOutputService, TokenOutputWithPrevOut,
-        TokenOutputs, with_reserved_token_outputs,
+        GetTokenOutputsFilter, TokenMetadata, TokenOutputSelectionStrategy, TokenOutputService,
+        TokenOutputWithPrevOut, TokenOutputs, with_reserved_token_outputs,
     },
     utils::{
         paging::{PagingFilter, PagingResult, pager},
@@ -318,6 +318,7 @@ impl TokenService {
         &self,
         amount: u128,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<TokenOutputSelectionStrategy>,
     ) -> Result<TokenTransaction, ServiceError> {
         let burn_public_key =
             PublicKey::from_slice(&[2; 33]).map_err(|_| ServiceError::InvalidPublicKey)?;
@@ -328,7 +329,7 @@ impl TokenService {
             receiver_address: burn_spark_address,
             spark_invoice: None,
         }];
-        self.transfer_tokens(receiver_outputs, preferred_outputs)
+        self.transfer_tokens(receiver_outputs, preferred_outputs, selection_strategy)
             .await
     }
 
@@ -398,6 +399,7 @@ impl TokenService {
         &self,
         receiver_outputs: Vec<TransferTokenOutput>,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<TokenOutputSelectionStrategy>,
     ) -> Result<TokenTransaction, ServiceError> {
         // Validate parameters
         if receiver_outputs.is_empty() {
@@ -416,7 +418,12 @@ impl TokenService {
 
         let reservation = self
             .token_output_service
-            .reserve_token_outputs(&token_id, total_amount, preferred_outputs.clone())
+            .reserve_token_outputs(
+                &token_id,
+                total_amount,
+                preferred_outputs.clone(),
+                selection_strategy,
+            )
             .await?;
 
         let token_transaction = with_reserved_token_outputs(

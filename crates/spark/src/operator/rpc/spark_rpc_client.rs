@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::auth::OperatorAuth;
@@ -17,6 +16,7 @@ use crate::operator::rpc::transport::grpc_client::Transport;
 use crate::session_manager::Session;
 use crate::session_manager::SessionManager;
 use crate::signer::Signer;
+use crate::utils::paging::{PagingFilter, PagingResult};
 use bitcoin::secp256k1::PublicKey;
 use tonic::Request;
 use tonic::Status;
@@ -26,10 +26,20 @@ use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
 use tracing::{debug, error};
 
-pub struct QueryAllNodesRequest {
+#[derive(Clone, Default)]
+pub struct QueryNodesPaginatedRequest {
     pub include_parents: bool,
-    pub network: Network,
+    pub network: i32,
+    pub statuses: Vec<i32>,
     pub source: Option<Source>,
+}
+
+#[derive(Clone, Default)]
+pub struct QueryAllTokenOutputsRequest {
+    pub owner_public_keys: Vec<Vec<u8>>,
+    pub issuer_public_keys: Vec<Vec<u8>>,
+    pub token_identifiers: Vec<Vec<u8>>,
+    pub network: i32,
 }
 
 #[derive(Clone)]
@@ -292,45 +302,6 @@ impl SparkRpcClient {
             .into_inner())
     }
 
-    // TODO: move this to an upper layer where we can handle paging for all queries where it makes sense
-    pub async fn query_nodes_all_pages(
-        &self,
-        req: QueryAllNodesRequest,
-    ) -> Result<QueryNodesResponse> {
-        let mut aggregated_nodes: HashMap<String, TreeNode> = HashMap::new();
-        let page_size = 100;
-        let mut offset = 0;
-
-        loop {
-            let query_request = QueryNodesRequest {
-                source: req.source.clone(),
-                include_parents: req.include_parents,
-                limit: page_size,
-                offset,
-                network: req.network as i32,
-                statuses: vec![],
-            };
-
-            let response = self.query_nodes(query_request).await?;
-
-            // Check if we received fewer nodes than requested (this is the last page)
-            let received = response.nodes.len() as i64;
-
-            // Merge nodes from this page, deduplicating by node id
-            for (node_id, node) in response.nodes {
-                aggregated_nodes.insert(node_id, node);
-            }
-            if received < page_size {
-                return Ok(QueryNodesResponse {
-                    nodes: aggregated_nodes,
-                    offset: response.offset,
-                });
-            }
-
-            offset += page_size;
-        }
-    }
-
     pub async fn query_nodes(&self, req: QueryNodesRequest) -> Result<QueryNodesResponse> {
         debug!("Calling query_nodes with request: {:?}", req);
         Ok(self
@@ -339,6 +310,53 @@ impl SparkRpcClient {
             .query_nodes(req)
             .await?
             .into_inner())
+    }
+
+    /// Paginated version of query_nodes
+    ///
+    /// If `req.paging` is `Some`, returns a single page according to the filter.
+    /// If `req.paging` is `None`, fetches all pages automatically.
+    pub async fn query_nodes_paginated(
+        &self,
+        req: QueryNodesPaginatedRequest,
+        paging: Option<PagingFilter>,
+    ) -> Result<PagingResult<(String, TreeNode)>> {
+        match paging {
+            Some(paging) => self.query_nodes_paginated_inner(&req, paging.clone()).await,
+            None => {
+                crate::utils::paging::pager(
+                    |pf| self.query_nodes_paginated_inner(&req, pf),
+                    PagingFilter::default(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn query_nodes_paginated_inner(
+        &self,
+        req: &QueryNodesPaginatedRequest,
+        pf: PagingFilter,
+    ) -> Result<PagingResult<(String, TreeNode)>> {
+        let response = self
+            .query_nodes(QueryNodesRequest {
+                source: req.source.clone(),
+                include_parents: req.include_parents,
+                limit: pf.limit as i64,
+                offset: pf.offset as i64,
+                network: req.network,
+                statuses: vec![],
+            })
+            .await?;
+
+        // Convert HashMap response to Vec for PagingResult
+        let items: Vec<_> = response.nodes.into_iter().collect();
+        let has_next = items.len() == pf.limit as usize;
+
+        Ok(PagingResult {
+            items,
+            next: if has_next { Some(pf.next()) } else { None },
+        })
     }
 
     pub async fn query_balance(&self, req: QueryBalanceRequest) -> Result<QueryBalanceResponse> {
@@ -388,6 +406,48 @@ impl SparkRpcClient {
             .query_token_outputs(req)
             .await?
             .into_inner())
+    }
+
+    /// Query all token outputs by automatically fetching all pages.
+    pub async fn query_all_token_outputs(
+        &self,
+        req: QueryAllTokenOutputsRequest,
+    ) -> Result<Vec<spark_token::OutputWithPreviousTransactionData>> {
+        let mut all_items = Vec::new();
+        let mut current_cursor: Option<String> = None;
+
+        loop {
+            let response = self
+                .query_token_outputs(spark_token::QueryTokenOutputsRequest {
+                    owner_public_keys: req.owner_public_keys.clone(),
+                    issuer_public_keys: req.issuer_public_keys.clone(),
+                    token_identifiers: req.token_identifiers.clone(),
+                    network: req.network,
+                    page_request: Some(PageRequest {
+                        cursor: current_cursor.unwrap_or_default(),
+                        ..Default::default()
+                    }),
+                })
+                .await?;
+
+            let items = response.outputs_with_previous_transaction_data;
+
+            if items.is_empty() {
+                break;
+            }
+
+            all_items.extend(items);
+
+            // Check if there's a next page
+            match response.page_response {
+                Some(page_resp) if page_resp.has_next_page => {
+                    current_cursor = Some(page_resp.next_cursor);
+                }
+                _ => break,
+            }
+        }
+
+        Ok(all_items)
     }
 
     pub async fn query_token_metadata(

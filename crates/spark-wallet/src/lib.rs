@@ -17,9 +17,9 @@ pub use spark::{
     services::TokensConfig,
     services::{
         CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,
-        FreezeIssuerTokenResponse, InvoiceDescription, LightningSendPayment, LightningSendStatus,
-        OptimizationEvent, OptimizationOptions, OptimizationProgress, Preimage,
-        PreimageRequestStatus, ReceiverTokenOutput, TokenInputs, TokenTransaction,
+        FreezeIssuerTokenResponse, InvoiceDescription, LeafOptimizationOptions,
+        LightningSendPayment, LightningSendStatus, OptimizationEvent, OptimizationProgress,
+        Preimage, PreimageRequestStatus, ReceiverTokenOutput, TokenInputs, TokenTransaction,
         TokenTransactionStatus, TransferId, TransferObserver, TransferObserverError,
         TransferStatus, TransferTokenOutput, TransferType, Utxo,
     },
@@ -30,7 +30,7 @@ pub use spark::{
         SignFrostRequest, Signer, SignerError, VerifiableSecretShare,
     },
     ssp::*,
-    token::{TokenMetadata, TokenOutputWithPrevOut},
+    token::{TokenMetadata, TokenOutputSelectionStrategy, TokenOutputWithPrevOut},
     tree::{SigningKeyshare, TreeNodeId},
     utils::{
         paging::{Order, PagingFilter, PagingResult},

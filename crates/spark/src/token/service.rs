@@ -7,16 +7,13 @@ use crate::{
     Network,
     operator::{
         OperatorPool,
-        rpc::{
-            self,
-            spark_token::{QueryTokenMetadataRequest, QueryTokenOutputsRequest},
-        },
+        rpc::{self, QueryAllTokenOutputsRequest, spark_token::QueryTokenMetadataRequest},
     },
     signer::Signer,
     token::{
-        GetTokenOutputsFilter, TokenMetadata, TokenOutputService, TokenOutputStore,
-        TokenOutputWithPrevOut, TokenOutputs, TokenOutputsReservation, TokenOutputsReservationId,
-        error::TokenOutputServiceError,
+        GetTokenOutputsFilter, TokenMetadata, TokenOutputSelectionStrategy, TokenOutputService,
+        TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs, TokenOutputsReservation,
+        TokenOutputsReservationId, error::TokenOutputServiceError,
     },
 };
 
@@ -40,7 +37,7 @@ impl TokenOutputService for SynchronousTokenOutputService {
             .operator_pool
             .get_coordinator()
             .client
-            .query_token_outputs(QueryTokenOutputsRequest {
+            .query_all_token_outputs(QueryAllTokenOutputsRequest {
                 owner_public_keys: vec![
                     self.signer
                         .get_identity_public_key()
@@ -51,8 +48,7 @@ impl TokenOutputService for SynchronousTokenOutputService {
                 network: self.network.to_proto_network().into(),
                 ..Default::default()
             })
-            .await?
-            .outputs_with_previous_transaction_data;
+            .await?;
         if outputs.is_empty() {
             // Clear stored token outputs if none are returned
             self.state.set_tokens_outputs(&[]).await?;
@@ -122,13 +118,19 @@ impl TokenOutputService for SynchronousTokenOutputService {
         token_identifier: &str,
         amount: u128,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<TokenOutputSelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
         let mut reservation: Option<TokenOutputsReservation> = None;
 
         for i in 0..SELECT_TOKEN_OUTPUTS_MAX_RETRIES {
             let reserve_res = self
                 .state
-                .reserve_token_outputs(token_identifier, amount, preferred_outputs.clone())
+                .reserve_token_outputs(
+                    token_identifier,
+                    amount,
+                    preferred_outputs.clone(),
+                    selection_strategy.clone(),
+                )
                 .await;
             if let Ok(token_outputs_reservation) = reserve_res {
                 reservation = Some(token_outputs_reservation);

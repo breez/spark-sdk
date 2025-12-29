@@ -5,8 +5,8 @@ use tracing::{trace, warn};
 use uuid::Uuid;
 
 use crate::token::{
-    GetTokenOutputsFilter, TokenOutputServiceError, TokenOutputStore, TokenOutputWithPrevOut,
-    TokenOutputs, TokenOutputsReservation, TokenOutputsReservationId,
+    GetTokenOutputsFilter, TokenOutputSelectionStrategy, TokenOutputServiceError, TokenOutputStore,
+    TokenOutputWithPrevOut, TokenOutputs, TokenOutputsReservation, TokenOutputsReservationId,
 };
 
 #[derive(Default)]
@@ -157,6 +157,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         token_identifier: &str,
         amount: u128,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<TokenOutputSelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
         if amount == 0 {
             return Err(TokenOutputServiceError::Generic(
@@ -193,9 +194,16 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
                 // If there's an exact match, return it
                 vec![output.clone()]
             } else {
-                // TODO: support other selection strategies (JS supports either smallest or largest first)
-                // Sort outputs by amount, smallest first
-                outputs.sort_by_key(|o| o.output.token_amount);
+                match selection_strategy {
+                    None | Some(TokenOutputSelectionStrategy::SmallestFirst) => {
+                        // Sort outputs by amount, smallest first
+                        outputs.sort_by_key(|o| o.output.token_amount);
+                    }
+                    Some(TokenOutputSelectionStrategy::LargestFirst) => {
+                        // Sort outputs by amount, largest first
+                        outputs.sort_by_key(|o| std::cmp::Reverse(o.output.token_amount));
+                    }
+                }
 
                 // Select outputs to match the amount
                 let mut selected_outputs = Vec::new();
@@ -507,7 +515,7 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", 300, None)
+            .reserve_token_outputs("token-1", 300, None, None)
             .await
             .unwrap();
         assert_eq!(reservation.token_outputs.metadata.identifier, "token-1");
@@ -537,7 +545,7 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", 300, None)
+            .reserve_token_outputs("token-1", 300, None, None)
             .await
             .unwrap();
 
@@ -576,7 +584,7 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", 300, None)
+            .reserve_token_outputs("token-1", 300, None, None)
             .await
             .unwrap();
 
@@ -615,7 +623,7 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", 300, None)
+            .reserve_token_outputs("token-1", 300, None, None)
             .await
             .unwrap();
 
@@ -666,7 +674,7 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", 300, None)
+            .reserve_token_outputs("token-1", 300, None, None)
             .await
             .unwrap();
 
@@ -699,7 +707,7 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", 300, None)
+            .reserve_token_outputs("token-1", 300, None, None)
             .await
             .unwrap();
 
@@ -747,15 +755,15 @@ mod tests {
 
         // Create multiple reservations in parallel
         let reservation1 = store
-            .reserve_token_outputs("token-1", 100, None)
+            .reserve_token_outputs("token-1", 100, None, None)
             .await
             .unwrap();
         let reservation2 = store
-            .reserve_token_outputs("token-1", 200, None)
+            .reserve_token_outputs("token-1", 200, None, None)
             .await
             .unwrap();
         let reservation3 = store
-            .reserve_token_outputs("token-1", 300, None)
+            .reserve_token_outputs("token-1", 300, None, None)
             .await
             .unwrap();
 
@@ -841,7 +849,7 @@ mod tests {
 
         // Reserve using preferred outputs
         let reservation = store
-            .reserve_token_outputs("token-1", 250, Some(preferred))
+            .reserve_token_outputs("token-1", 250, Some(preferred), None)
             .await
             .unwrap();
 
@@ -870,7 +878,9 @@ mod tests {
         assert!(result.is_ok());
 
         // Try to reserve more than available
-        let result = store.reserve_token_outputs("token-1", 500, None).await;
+        let result = store
+            .reserve_token_outputs("token-1", 500, None, None)
+            .await;
         assert!(result.is_err());
 
         if let Err(TokenOutputServiceError::Generic(msg)) = result {
@@ -888,7 +898,9 @@ mod tests {
         assert!(result.is_ok());
 
         // Try to reserve from non-existent token
-        let result = store.reserve_token_outputs("token-999", 100, None).await;
+        let result = store
+            .reserve_token_outputs("token-999", 100, None, None)
+            .await;
         assert!(result.is_err());
 
         if let Err(TokenOutputServiceError::Generic(msg)) = result {
@@ -907,7 +919,7 @@ mod tests {
 
         // Reserve exact match amount
         let reservation = store
-            .reserve_token_outputs("token-1", 150, None)
+            .reserve_token_outputs("token-1", 150, None, None)
             .await
             .unwrap();
 
@@ -937,7 +949,7 @@ mod tests {
 
         // Reserve amount that requires combining multiple outputs
         let reservation = store
-            .reserve_token_outputs("token-1", 75, None)
+            .reserve_token_outputs("token-1", 75, None, None)
             .await
             .unwrap();
 
@@ -963,7 +975,7 @@ mod tests {
 
         // Reserve total amount
         let reservation = store
-            .reserve_token_outputs("token-1", 600, None)
+            .reserve_token_outputs("token-1", 600, None, None)
             .await
             .unwrap();
 
@@ -998,7 +1010,7 @@ mod tests {
 
         // Try to reserve more than preferred outputs can provide
         let result = store
-            .reserve_token_outputs("token-1", 500, Some(preferred))
+            .reserve_token_outputs("token-1", 500, Some(preferred), None)
             .await;
 
         assert!(result.is_err());
@@ -1014,7 +1026,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Reserve zero amount
-        let reservation = store.reserve_token_outputs("token-1", 0, None).await;
+        let reservation = store.reserve_token_outputs("token-1", 0, None, None).await;
         assert!(reservation.is_err());
     }
 
@@ -1082,7 +1094,7 @@ mod tests {
 
         // Reserve amount that's less than the large output
         let reservation = store
-            .reserve_token_outputs("token-1", 500, None)
+            .reserve_token_outputs("token-1", 500, None, None)
             .await
             .unwrap();
 
@@ -1124,7 +1136,7 @@ mod tests {
 
         // Reserve some outputs
         let _reservation = store
-            .reserve_token_outputs("token-1", 300, None)
+            .reserve_token_outputs("token-1", 300, None, None)
             .await
             .unwrap();
 
@@ -1135,5 +1147,103 @@ mod tests {
         // Verify reservation is removed
         let token_outputs_state = store.token_outputs.lock().await;
         assert!(token_outputs_state.reservations.is_empty());
+    }
+
+    #[async_test_all]
+    async fn test_reserve_token_outputs_selection_strategy_smallest_first() {
+        let store = InMemoryTokenOutputStore::default();
+
+        // Create token outputs with various amounts: [50, 100, 150, 200, 500]
+        let token1 = create_token_outputs(1, vec![50, 100, 150, 200, 500]);
+
+        let result = store.set_tokens_outputs(slice::from_ref(&token1)).await;
+        assert!(result.is_ok());
+
+        // Reserve 300 using SmallestFirst strategy
+        // Expected: 50 + 100 + 150 = 300 (smallest outputs first)
+        let reservation = store
+            .reserve_token_outputs(
+                "token-1",
+                300,
+                None,
+                Some(TokenOutputSelectionStrategy::SmallestFirst),
+            )
+            .await
+            .unwrap();
+
+        // Verify selected outputs: should be 3 outputs with amounts 50, 100, 150
+        assert_eq!(reservation.token_outputs.outputs.len(), 3);
+        let selected_amounts: Vec<u128> = reservation
+            .token_outputs
+            .outputs
+            .iter()
+            .map(|o| o.output.token_amount)
+            .collect();
+        assert_eq!(selected_amounts, vec![50, 100, 150]);
+
+        // Verify total amount
+        let total_selected: u128 = selected_amounts.iter().sum();
+        assert_eq!(total_selected, 300);
+
+        // Verify remaining outputs: should be [200, 500]
+        let stored_token1 = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        let remaining_amounts: Vec<u128> = stored_token1
+            .outputs
+            .iter()
+            .map(|o| o.output.token_amount)
+            .collect();
+        assert_eq!(remaining_amounts, vec![200, 500]);
+    }
+
+    #[async_test_all]
+    async fn test_reserve_token_outputs_selection_strategy_largest_first() {
+        let store = InMemoryTokenOutputStore::default();
+
+        // Create token outputs with various amounts: [50, 100, 150, 200, 500]
+        let token1 = create_token_outputs(1, vec![50, 100, 150, 200, 500]);
+
+        let result = store.set_tokens_outputs(slice::from_ref(&token1)).await;
+        assert!(result.is_ok());
+
+        // Reserve 300 using LargestFirst strategy
+        // Expected: 500 (greedy algorithm takes largest available output >= target)
+        let reservation = store
+            .reserve_token_outputs(
+                "token-1",
+                300,
+                None,
+                Some(TokenOutputSelectionStrategy::LargestFirst),
+            )
+            .await
+            .unwrap();
+
+        // Verify selected outputs: should be 1 output with amount 500
+        assert_eq!(reservation.token_outputs.outputs.len(), 1);
+        let selected_amounts: Vec<u128> = reservation
+            .token_outputs
+            .outputs
+            .iter()
+            .map(|o| o.output.token_amount)
+            .collect();
+        assert_eq!(selected_amounts, vec![500]);
+
+        // Verify total amount
+        let total_selected: u128 = selected_amounts.iter().sum();
+        assert_eq!(total_selected, 500); // Note: 500 > 300, this is how the greedy algorithm works
+
+        // Verify remaining outputs: should be [50, 100, 150, 200]
+        let stored_token1 = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        let remaining_amounts: Vec<u128> = stored_token1
+            .outputs
+            .iter()
+            .map(|o| o.output.token_amount)
+            .collect();
+        assert_eq!(remaining_amounts, vec![50, 100, 150, 200]);
     }
 }
