@@ -1,5 +1,5 @@
 use crate::error::SignerError;
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 use crate::signer::external_types::derivation_path_to_string;
 use crate::signer::external_types::{
     EcdsaSignatureBytes, ExternalAggregateFrostRequest, ExternalEncryptedPrivateKey,
@@ -62,12 +62,13 @@ impl ExternalSigner for DefaultExternalSigner {
         PublicKeyBytes::from_public_key(&pk)
     }
 
-    fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, SignerError> {
+    async fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, SignerError> {
         let derivation_path =
             string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
         let pk = self
             .inner
             .derive_public_key(&derivation_path)
+            .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(PublicKeyBytes::from_public_key(&pk))
     }
@@ -320,6 +321,7 @@ impl ExternalSigner for DefaultExternalSigner {
         let public_key = self
             .inner
             .derive_public_key(&derivation_path)
+            .await
             .map_err(|e| SignerError::KeyDerivation(e.to_string()))?;
 
         Ok(PublicKeyBytes::from_public_key(&public_key))
@@ -357,9 +359,11 @@ impl ExternalSigner for DefaultExternalSigner {
 mod tests {
     use super::*;
     use crate::models::KeySetType;
+    #[cfg(not(target_family = "wasm"))]
     use bitcoin::bip32::DerivationPath;
-    #[cfg(all(test, not(target_family = "wasm")))]
+    #[cfg(not(target_family = "wasm"))]
     use bitcoin::hashes::Hash;
+    #[cfg(not(target_family = "wasm"))]
     use std::str::FromStr;
 
     fn create_test_signer() -> (DefaultExternalSigner, BreezSignerImpl) {
@@ -410,15 +414,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_derive_public_key() {
+    #[cfg(not(target_family = "wasm"))]
+    #[tokio::test]
+    async fn test_derive_public_key() {
         let (external, internal) = create_test_signer();
 
         let path = DerivationPath::from_str("m/0'/0'/0'").unwrap();
         let path_str = derivation_path_to_string(&path);
 
-        let external_pk = external.derive_public_key(path_str).unwrap();
-        let internal_pk = internal.derive_public_key(&path).unwrap();
+        let external_pk = external.derive_public_key(path_str).await.unwrap();
+        let internal_pk = internal.derive_public_key(&path).await.unwrap();
 
         assert_eq!(
             external_pk.to_public_key().unwrap(),
@@ -523,7 +528,7 @@ mod tests {
         let path_str = derivation_path_to_string(&path);
 
         // Get the public key for this derivation path
-        let pubkey = internal.derive_public_key(&path).unwrap();
+        let pubkey = internal.derive_public_key(&path).await.unwrap();
         let x_only_pubkey = XOnlyPublicKey::from(pubkey);
 
         // Sign with both signers

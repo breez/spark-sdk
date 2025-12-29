@@ -31,7 +31,7 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// The derived public key as 33 bytes, or a `SignerError`
-    fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, SignerError>;
+    async fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, SignerError>;
 
     /// Signs a message using ECDSA at the given derivation path.
     ///

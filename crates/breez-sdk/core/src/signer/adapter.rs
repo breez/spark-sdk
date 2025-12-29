@@ -32,11 +32,18 @@ impl BreezSigner for ExternalSignerAdapter {
             .expect("Invalid identity public key from external signer")
     }
 
-    fn derive_public_key(&self, path: &DerivationPath) -> Result<secp256k1::PublicKey, SdkError> {
+    async fn derive_public_key(
+        &self,
+        path: &DerivationPath,
+    ) -> Result<secp256k1::PublicKey, SdkError> {
         let path_str = derivation_path_to_string(path);
-        let pk_bytes = self.external.derive_public_key(path_str).map_err(|e| {
-            SdkError::Generic(format!("External signer derive_public_key failed: {e}"))
-        })?;
+        let pk_bytes = self
+            .external
+            .derive_public_key(path_str)
+            .await
+            .map_err(|e| {
+                SdkError::Generic(format!("External signer derive_public_key failed: {e}"))
+            })?;
         pk_bytes.to_public_key()
     }
 

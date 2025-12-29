@@ -183,9 +183,10 @@ impl DefaultSigner {
     }
 
     #[wasm_bindgen(js_name = "derivePublicKey")]
-    pub fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, JsValue> {
+    pub async fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, JsValue> {
         self.inner
             .derive_public_key(path)
+            .await
             .map(|pk| pk.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
@@ -398,8 +399,11 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
         self.inner.identity_public_key()
     }
 
-    fn derive_public_key(&self, path: String) -> Result<core_types::PublicKeyBytes, SignerError> {
-        self.inner.derive_public_key(path)
+    async fn derive_public_key(
+        &self,
+        path: String,
+    ) -> Result<core_types::PublicKeyBytes, SignerError> {
+        self.inner.derive_public_key(path).await
     }
 
     async fn sign_ecdsa(
@@ -557,7 +561,10 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         wasm_pubkey.into()
     }
 
-    fn derive_public_key(&self, path: String) -> Result<core_types::PublicKeyBytes, SignerError> {
+    async fn derive_public_key(
+        &self,
+        path: String,
+    ) -> Result<core_types::PublicKeyBytes, SignerError> {
         let wasm_pubkey: PublicKeyBytes = self
             .inner
             .derive_public_key(path)
