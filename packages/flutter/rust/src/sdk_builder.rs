@@ -34,9 +34,11 @@ impl SdkBuilder {
         account_number: Option<u32>,
     ) -> Self {
         let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner).with_key_set(
-            key_set_type,
-            use_address_index,
-            account_number,
+            breez_sdk_spark::KeySetConfig {
+                key_set_type: key_set_type.into(),
+                use_address_index,
+                account_number,
+            },
         );
         Self {
             inner: Arc::new(builder),

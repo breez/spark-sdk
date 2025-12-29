@@ -4,9 +4,11 @@ import {
   defaultConfig,
   Network,
   ChainApiType,
-  KeySetType
+  KeySetType,
+  type KeySetConfig,
+  type ProvisionalPayment,
+  type Credentials
 } from '@breeztech/breez-sdk-spark-react-native'
-import type { ProvisionalPayment, Credentials } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 
 const exampleGettingStartedAdvanced = async () => {
@@ -47,10 +49,12 @@ const exampleWithRestChainService = async (builder: SdkBuilder) => {
 
 const exampleWithKeySet = async (builder: SdkBuilder) => {
   // ANCHOR: with-key-set
-  const keySetType = KeySetType.Default
-  const useAddressIndex = false
-  const optionalAccountNumber = 21
-  await builder.withKeySet(keySetType, useAddressIndex, optionalAccountNumber)
+  const keySetConfig: KeySetConfig = {
+    keySetType: KeySetType.Default,
+    useAddressIndex: false,
+    accountNumber: 21
+  }
+  await builder.withKeySet(keySetConfig)
   // ANCHOR_END: with-key-set
 }
 

@@ -1548,9 +1548,15 @@ async fn claim_pending_transfers(
         );
     }
 
+    // Update status to Completed since all transfers have been successfully claimed
+    let completed_transfers = transfers.map(|mut t| {
+        t.status = TransferStatus::Completed;
+        t
+    });
+
     debug!("Claimed all transfers, creating wallet transfers");
     Ok(create_transfers(
-        transfers,
+        completed_transfers,
         ssp_client,
         htlc_service,
         our_pubkey,

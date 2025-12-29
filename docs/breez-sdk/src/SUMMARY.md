@@ -30,6 +30,7 @@
   - [Token payments](guide/token_payments.md)
   - [Issuing tokens](guide/issuing_tokens.md)
 - [Advanced features](guide/advanced.md)
+  - [Using an External Signer](guide/external_signer.md)
   - [Spark HTLC payments](guide/htlcs.md)
   - [Custom leaf optimization](guide/optimize.md)
 - [Moving to production](guide/moving_to_production.md)
