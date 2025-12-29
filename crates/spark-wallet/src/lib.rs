@@ -30,7 +30,7 @@ pub use spark::{
         SignFrostRequest, Signer, SignerError, VerifiableSecretShare,
     },
     ssp::*,
-    token::{TokenMetadata, TokenOutputSelectionStrategy, TokenOutputWithPrevOut},
+    token::{SelectionStrategy, TokenMetadata, TokenOutputWithPrevOut},
     tree::{SigningKeyshare, TreeNodeId},
     utils::{
         paging::{Order, PagingFilter, PagingResult},

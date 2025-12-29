@@ -1,20 +1,18 @@
 use anyhow::Result;
 use rand::Rng;
 use rstest::*;
-use spark_wallet::{
-    DefaultSigner, Network, TokenInputs, TokenOutputSelectionStrategy, TransferTokenOutput,
-};
+use spark_wallet::{DefaultSigner, Network, SelectionStrategy, TransferTokenOutput};
 use tracing::info;
 
-/// Test creating massive outputs via self-sends then send all to Bob
+/// Test creating many outputs via self-sends then send all to Bob
 #[rstest]
 #[tokio::test]
 #[test_log::test]
-async fn test_massive_outputs() -> Result<()> {
+async fn test_many_outputs() -> Result<()> {
     use spark_wallet::{SparkWallet, SparkWalletConfig};
     use std::sync::Arc;
 
-    info!("=== Starting test_massive_outputs ===");
+    info!("=== Starting test_many_outputs ===");
 
     // Use production operators for this test since they have DKG keys for test issuers
     let config = SparkWalletConfig::default_config(Network::Regtest);
@@ -35,20 +33,20 @@ async fn test_massive_outputs() -> Result<()> {
     let mut bob_listener = bob_wallet.subscribe_events();
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            if let Some(event) = alice_listener.recv().await.ok() {
-                if matches!(event, spark_wallet::WalletEvent::Synced) {
-                    break;
-                }
+            if let Ok(event) = alice_listener.recv().await
+                && matches!(event, spark_wallet::WalletEvent::Synced)
+            {
+                break;
             }
         }
     })
     .await?;
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            if let Some(event) = bob_listener.recv().await.ok() {
-                if matches!(event, spark_wallet::WalletEvent::Synced) {
-                    break;
-                }
+            if let Ok(event) = bob_listener.recv().await
+                && matches!(event, spark_wallet::WalletEvent::Synced)
+            {
+                break;
             }
         }
     })
@@ -102,9 +100,9 @@ async fn test_massive_outputs() -> Result<()> {
         alice_spark_address
     );
 
-    // Perform self-sends to create many outputs (fewer transactions since each can create multiple outputs)
-    let num_self_sends = 3;
-    let outputs_per_send = 300; // total outputs = 3 * 300 = 900 > 500
+    // Perform self-sends to create many outputs
+    let num_self_sends = 4;
+    let outputs_per_send = 300; // total outputs = 4 * 300 = 1200 > 500 * 2 (will require 2 optimization rounds)
     let self_send_amount = 5;
 
     info!(
@@ -126,11 +124,7 @@ async fn test_massive_outputs() -> Result<()> {
             .collect();
 
         alice_wallet
-            .transfer_tokens(
-                outputs,
-                None,
-                Some(TokenOutputSelectionStrategy::LargestFirst),
-            )
+            .transfer_tokens(outputs, None, Some(SelectionStrategy::LargestFirst))
             .await?;
     }
 
@@ -171,25 +165,9 @@ async fn test_massive_outputs() -> Result<()> {
         spark_invoice: None,
     }];
 
-    let transfer_tx = alice_wallet
+    alice_wallet
         .transfer_tokens(outputs_to_bob, None, None)
         .await?;
-
-    // Assert that the transaction has more than 500 inputs
-    if let TokenInputs::Transfer(transfer_input) = &transfer_tx.inputs {
-        assert!(
-            transfer_input.outputs_to_spend.len() > 500,
-            "Expected more than 500 inputs, got {}",
-            transfer_input.outputs_to_spend.len()
-        );
-    } else {
-        panic!(
-            "Expected transfer transaction inputs, but got {:?}",
-            transfer_tx.inputs
-        );
-    }
-
-    info!("Transfer to Bob transaction: {:?}", transfer_tx);
 
     // Sync both wallets to see final state
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -227,6 +205,6 @@ async fn test_massive_outputs() -> Result<()> {
         initial_balance
     );
 
-    info!("=== Test test_massive_outputs PASSED ===");
+    info!("=== Test test_many_outputs PASSED ===");
     Ok(())
 }

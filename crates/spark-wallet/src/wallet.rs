@@ -35,8 +35,8 @@ use spark::{
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     token::{
-        InMemoryTokenOutputStore, SynchronousTokenOutputService, TokenMetadata,
-        TokenOutputSelectionStrategy, TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut,
+        InMemoryTokenOutputStore, SelectionStrategy, SynchronousTokenOutputService, TokenMetadata,
+        TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut,
     },
     tree::{
         InMemoryTreeStore, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
@@ -60,7 +60,7 @@ use crate::{
 const SELECT_LEAVES_MAX_RETRIES: usize = 3;
 const MAX_LEAF_SPENT_RETRIES: usize = 3;
 
-use super::{SparkWalletConfig, SparkWalletError};
+use super::{SparkWalletConfig, SparkWalletError, TokenOutputsOptimizationOptions};
 
 /// Checks if an error indicates a transfer lock conflict that should trigger a retry.
 // TODO: We want to move to an error code but it isn't available yet.
@@ -315,6 +315,8 @@ impl SparkWallet {
                 Arc::clone(&htlc_service),
                 Arc::clone(&leaf_optimizer),
                 config.leaf_auto_optimize_enabled,
+                Arc::clone(&token_service),
+                config.token_outputs_optimization_options.clone(),
             ));
             background_processor
                 .run_background_tasks(cancellation_token.clone())
@@ -1146,7 +1148,7 @@ impl SparkWallet {
         &self,
         outputs: Vec<TransferTokenOutput>,
         selected_outputs: Option<Vec<TokenOutputWithPrevOut>>,
-        selection_strategy: Option<TokenOutputSelectionStrategy>,
+        selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenTransaction, SparkWalletError> {
         if outputs.iter().any(|o| o.spark_invoice.is_some()) {
             return Err(SparkWalletError::Generic(
@@ -1431,11 +1433,21 @@ impl SparkWallet {
     }
 
     /// Optimizes token outputs by consolidating them when there are more than the configured threshold.
+    /// Processes one token at a time. Token identifier can be provided, otherwise one is automatically selected.
+    /// Only optimizes if the number of outputs is greater than the configured threshold.
     pub async fn optimize_token_outputs(
         &self,
         token_identifier: Option<&str>,
     ) -> Result<(), SparkWalletError> {
-        todo!()
+        self.token_service
+            .optimize_token_outputs(
+                token_identifier,
+                self.config
+                    .token_outputs_optimization_options
+                    .min_outputs_threshold,
+            )
+            .await?;
+        Ok(())
     }
 
     /// Selects leaves with automatic retry logic.
@@ -1725,6 +1737,8 @@ struct BackgroundProcessor {
     htlc_service: Arc<HtlcService>,
     leaf_optimizer: Arc<LeafOptimizer>,
     auto_optimize_enabled: bool,
+    token_service: Arc<TokenService>,
+    token_outputs_optimization_options: TokenOutputsOptimizationOptions,
 }
 
 impl BackgroundProcessor {
@@ -1740,6 +1754,8 @@ impl BackgroundProcessor {
         htlc_service: Arc<HtlcService>,
         leaf_optimizer: Arc<LeafOptimizer>,
         auto_optimize_enabled: bool,
+        token_service: Arc<TokenService>,
+        token_outputs_optimization_options: TokenOutputsOptimizationOptions,
     ) -> Self {
         Self {
             operator_pool,
@@ -1752,6 +1768,8 @@ impl BackgroundProcessor {
             htlc_service,
             leaf_optimizer,
             auto_optimize_enabled,
+            token_service,
+            token_outputs_optimization_options,
         }
     }
 
@@ -1770,27 +1788,39 @@ impl BackgroundProcessor {
         });
     }
 
-    async fn run_background_tasks_inner(
-        self: &Arc<Self>,
-        mut cancellation_token: watch::Receiver<()>,
-    ) {
+    async fn run_background_tasks_inner(self: &Arc<Self>, cancellation_token: watch::Receiver<()>) {
         let (event_tx, event_stream) = broadcast::channel(100);
         let operator_pool = Arc::clone(&self.operator_pool);
         let reconnect_interval = self.reconnect_interval;
         let identity_public_key = self.identity_public_key;
+        let mut cancellation_token_for_events = cancellation_token.clone();
         tokio::spawn(async move {
             subscribe_server_events(
                 identity_public_key,
                 operator_pool,
                 &event_tx,
                 reconnect_interval,
-                &mut cancellation_token,
+                &mut cancellation_token_for_events,
             )
             .await;
         });
 
         if let Err(e) = self.tree_service.refresh_leaves().await {
             error!("Error refreshing leaves on startup: {:?}", e);
+        }
+
+        // Start token output optimization background task if configured
+        if let Some(interval) = self
+            .token_outputs_optimization_options
+            .auto_optimize_interval
+        {
+            let cloned_self = Arc::clone(self);
+            let cancellation_token_clone = cancellation_token.clone();
+            tokio::spawn(async move {
+                cloned_self
+                    .run_token_output_optimization(interval, cancellation_token_clone)
+                    .await;
+            });
         }
 
         self.process_events(event_stream).await;
@@ -1946,5 +1976,37 @@ impl BackgroundProcessor {
         self.event_manager
             .notify_listeners(WalletEvent::StreamDisconnected);
         Ok(())
+    }
+
+    async fn run_token_output_optimization(
+        &self,
+        interval: Duration,
+        mut cancellation_token: watch::Receiver<()>,
+    ) {
+        info!(
+            "Starting automatic token output optimization with interval: {:?}",
+            interval
+        );
+
+        loop {
+            // Wait for the interval or cancellation
+            tokio::select! {
+                _ = tokio::time::sleep(interval) => {
+                    debug!("Running automatic token output optimization");
+                    match self.token_service.optimize_token_outputs(None, self.token_outputs_optimization_options.min_outputs_threshold).await {
+                        Ok(_) => {
+                            debug!("Automatic token output optimization completed successfully");
+                        }
+                        Err(e) => {
+                            error!("Error during automatic token output optimization: {:?}", e);
+                        }
+                    }
+                }
+                _ = cancellation_token.changed() => {
+                    info!("Stopping automatic token output optimization");
+                    break;
+                }
+            }
+        }
     }
 }

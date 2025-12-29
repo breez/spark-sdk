@@ -2,7 +2,7 @@ use anyhow::Result;
 use rand::Rng;
 use spark_wallet::{
     DefaultSigner, LeafOptimizationOptions, Network, OperatorConfig, OperatorPoolConfig, PublicKey,
-    ServiceProviderConfig, SparkWalletConfig,
+    ServiceProviderConfig, SparkWalletConfig, TokenOutputsOptimizationOptions,
 };
 use tracing::info;
 
@@ -85,6 +85,10 @@ impl TestFixtures {
             tokens_config: SparkWalletConfig::default_tokens_config(),
             leaf_optimization_options: LeafOptimizationOptions::default(),
             leaf_auto_optimize_enabled: false,
+            token_outputs_optimization_options: TokenOutputsOptimizationOptions {
+                min_outputs_threshold: 50,
+                auto_optimize_interval: None,
+            },
         })
     }
 }

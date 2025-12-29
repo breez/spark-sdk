@@ -5,8 +5,9 @@ use tracing::{trace, warn};
 use uuid::Uuid;
 
 use crate::token::{
-    GetTokenOutputsFilter, TokenOutputSelectionStrategy, TokenOutputServiceError, TokenOutputStore,
-    TokenOutputWithPrevOut, TokenOutputs, TokenOutputsReservation, TokenOutputsReservationId,
+    GetTokenOutputsFilter, ReservationTarget, SelectionStrategy, TokenOutputServiceError,
+    TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs, TokenOutputsReservation,
+    TokenOutputsReservationId,
 };
 
 #[derive(Default)]
@@ -155,14 +156,25 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
     async fn reserve_token_outputs(
         &self,
         token_identifier: &str,
-        amount: u128,
+        target: ReservationTarget,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
-        selection_strategy: Option<TokenOutputSelectionStrategy>,
+        selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
-        if amount == 0 {
-            return Err(TokenOutputServiceError::Generic(
-                "Amount to reserve must be greater than zero".to_string(),
-            ));
+        match target {
+            ReservationTarget::MinTotalValue(amount) => {
+                if amount == 0 {
+                    return Err(TokenOutputServiceError::Generic(
+                        "Amount to reserve must be greater than zero".to_string(),
+                    ));
+                }
+            }
+            ReservationTarget::MaxOutputCount(count) => {
+                if count == 0 {
+                    return Err(TokenOutputServiceError::Generic(
+                        "Count to reserve must be greater than zero".to_string(),
+                    ));
+                }
+            }
         }
 
         let mut token_outputs_state = self.token_outputs.lock().await;
@@ -185,44 +197,56 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             token_outputs.outputs.clone()
         };
 
-        if outputs.iter().map(|o| o.output.token_amount).sum::<u128>() < amount {
+        if let ReservationTarget::MinTotalValue(amount) = target
+            && outputs.iter().map(|o| o.output.token_amount).sum::<u128>() < amount
+        {
             return Err(TokenOutputServiceError::InsufficientFunds);
         }
 
-        let selected_outputs =
-            if let Some(output) = outputs.iter().find(|o| o.output.token_amount == amount) {
-                // If there's an exact match, return it
-                vec![output.clone()]
-            } else {
-                match selection_strategy {
-                    None | Some(TokenOutputSelectionStrategy::SmallestFirst) => {
-                        // Sort outputs by amount, smallest first
-                        outputs.sort_by_key(|o| o.output.token_amount);
-                    }
-                    Some(TokenOutputSelectionStrategy::LargestFirst) => {
-                        // Sort outputs by amount, largest first
-                        outputs.sort_by_key(|o| std::cmp::Reverse(o.output.token_amount));
-                    }
+        let selected_outputs = if let ReservationTarget::MinTotalValue(amount) = target
+            && let Some(output) = outputs.iter().find(|o| o.output.token_amount == amount)
+        {
+            // If there's an exact match, return it
+            vec![output.clone()]
+        } else {
+            match selection_strategy {
+                None | Some(SelectionStrategy::SmallestFirst) => {
+                    // Sort outputs by amount, smallest first
+                    outputs.sort_by_key(|o| o.output.token_amount);
                 }
+                Some(SelectionStrategy::LargestFirst) => {
+                    // Sort outputs by amount, largest first
+                    outputs.sort_by_key(|o| std::cmp::Reverse(o.output.token_amount));
+                }
+            }
 
-                // Select outputs to match the amount
-                let mut selected_outputs = Vec::new();
-                let mut remaining_amount = amount;
-                for output in outputs {
-                    if remaining_amount == 0 {
-                        break;
+            match target {
+                ReservationTarget::MinTotalValue(amount) => {
+                    // Select outputs to match the amount
+                    let mut selected_outputs = Vec::new();
+                    let mut remaining_amount = amount;
+                    for output in outputs {
+                        if remaining_amount == 0 {
+                            break;
+                        }
+                        selected_outputs.push(output.clone());
+                        remaining_amount =
+                            remaining_amount.saturating_sub(output.output.token_amount);
                     }
-                    selected_outputs.push(output.clone());
-                    remaining_amount = remaining_amount.saturating_sub(output.output.token_amount);
-                }
 
-                // We should never get here, but just in case
-                if remaining_amount > 0 {
-                    return Err(TokenOutputServiceError::InsufficientFunds);
-                }
+                    // We should never get here, but just in case
+                    if remaining_amount > 0 {
+                        return Err(TokenOutputServiceError::InsufficientFunds);
+                    }
 
-                selected_outputs
-            };
+                    selected_outputs
+                }
+                ReservationTarget::MaxOutputCount(count) => {
+                    outputs.truncate(count);
+                    outputs
+                }
+            }
+        };
 
         let reservation_id = Uuid::now_v7().to_string();
         let reservation_token_outputs = TokenOutputs {
@@ -515,7 +539,7 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", 300, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
             .await
             .unwrap();
         assert_eq!(reservation.token_outputs.metadata.identifier, "token-1");
@@ -545,7 +569,7 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", 300, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
             .await
             .unwrap();
 
@@ -584,7 +608,7 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", 300, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
             .await
             .unwrap();
 
@@ -623,7 +647,7 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", 300, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
             .await
             .unwrap();
 
@@ -674,7 +698,7 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", 300, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
             .await
             .unwrap();
 
@@ -707,7 +731,7 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", 300, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
             .await
             .unwrap();
 
@@ -755,15 +779,15 @@ mod tests {
 
         // Create multiple reservations in parallel
         let reservation1 = store
-            .reserve_token_outputs("token-1", 100, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(100), None, None)
             .await
             .unwrap();
         let reservation2 = store
-            .reserve_token_outputs("token-1", 200, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(200), None, None)
             .await
             .unwrap();
         let reservation3 = store
-            .reserve_token_outputs("token-1", 300, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
             .await
             .unwrap();
 
@@ -849,7 +873,12 @@ mod tests {
 
         // Reserve using preferred outputs
         let reservation = store
-            .reserve_token_outputs("token-1", 250, Some(preferred), None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(250),
+                Some(preferred),
+                None,
+            )
             .await
             .unwrap();
 
@@ -879,7 +908,7 @@ mod tests {
 
         // Try to reserve more than available
         let result = store
-            .reserve_token_outputs("token-1", 500, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(500), None, None)
             .await;
         assert!(result.is_err());
 
@@ -899,7 +928,12 @@ mod tests {
 
         // Try to reserve from non-existent token
         let result = store
-            .reserve_token_outputs("token-999", 100, None, None)
+            .reserve_token_outputs(
+                "token-999",
+                ReservationTarget::MinTotalValue(100),
+                None,
+                None,
+            )
             .await;
         assert!(result.is_err());
 
@@ -919,7 +953,7 @@ mod tests {
 
         // Reserve exact match amount
         let reservation = store
-            .reserve_token_outputs("token-1", 150, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(150), None, None)
             .await
             .unwrap();
 
@@ -949,7 +983,7 @@ mod tests {
 
         // Reserve amount that requires combining multiple outputs
         let reservation = store
-            .reserve_token_outputs("token-1", 75, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(75), None, None)
             .await
             .unwrap();
 
@@ -975,7 +1009,7 @@ mod tests {
 
         // Reserve total amount
         let reservation = store
-            .reserve_token_outputs("token-1", 600, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(600), None, None)
             .await
             .unwrap();
 
@@ -1010,7 +1044,12 @@ mod tests {
 
         // Try to reserve more than preferred outputs can provide
         let result = store
-            .reserve_token_outputs("token-1", 500, Some(preferred), None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(500),
+                Some(preferred),
+                None,
+            )
             .await;
 
         assert!(result.is_err());
@@ -1026,7 +1065,9 @@ mod tests {
         assert!(result.is_ok());
 
         // Reserve zero amount
-        let reservation = store.reserve_token_outputs("token-1", 0, None, None).await;
+        let reservation = store
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(0), None, None)
+            .await;
         assert!(reservation.is_err());
     }
 
@@ -1094,7 +1135,7 @@ mod tests {
 
         // Reserve amount that's less than the large output
         let reservation = store
-            .reserve_token_outputs("token-1", 500, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(500), None, None)
             .await
             .unwrap();
 
@@ -1136,7 +1177,7 @@ mod tests {
 
         // Reserve some outputs
         let _reservation = store
-            .reserve_token_outputs("token-1", 300, None, None)
+            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
             .await
             .unwrap();
 
@@ -1164,9 +1205,9 @@ mod tests {
         let reservation = store
             .reserve_token_outputs(
                 "token-1",
-                300,
+                ReservationTarget::MinTotalValue(300),
                 None,
-                Some(TokenOutputSelectionStrategy::SmallestFirst),
+                Some(SelectionStrategy::SmallestFirst),
             )
             .await
             .unwrap();
@@ -1213,9 +1254,9 @@ mod tests {
         let reservation = store
             .reserve_token_outputs(
                 "token-1",
-                300,
+                ReservationTarget::MinTotalValue(300),
                 None,
-                Some(TokenOutputSelectionStrategy::LargestFirst),
+                Some(SelectionStrategy::LargestFirst),
             )
             .await
             .unwrap();
@@ -1245,5 +1286,139 @@ mod tests {
             .map(|o| o.output.token_amount)
             .collect();
         assert_eq!(remaining_amounts, vec![50, 100, 150, 200]);
+    }
+
+    #[async_test_all]
+    async fn test_reserve_max_output_count_smallest_first() {
+        let store = InMemoryTokenOutputStore::default();
+
+        // Create token outputs with amounts: [50, 100, 150, 200, 500]
+        let token_outputs = create_token_outputs(1, vec![50, 100, 150, 200, 500]);
+        store.set_tokens_outputs(&[token_outputs]).await.unwrap();
+
+        // Reserve with MaxOutputCount(2) using default strategy (SmallestFirst)
+        let reservation = store
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MaxOutputCount(2),
+                None,
+                None, // Default to SmallestFirst
+            )
+            .await
+            .unwrap();
+
+        // Verify selected outputs: should be 2 smallest outputs [50, 100]
+        assert_eq!(reservation.token_outputs.outputs.len(), 2);
+        let selected_amounts: Vec<u128> = reservation
+            .token_outputs
+            .outputs
+            .iter()
+            .map(|o| o.output.token_amount)
+            .collect();
+        assert_eq!(selected_amounts, vec![50, 100]);
+
+        // Verify remaining outputs: should be [150, 200, 500]
+        let stored_token1 = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        let remaining_amounts: Vec<u128> = stored_token1
+            .outputs
+            .iter()
+            .map(|o| o.output.token_amount)
+            .collect();
+        assert_eq!(remaining_amounts, vec![150, 200, 500]);
+    }
+
+    #[async_test_all]
+    async fn test_reserve_max_output_count_largest_first() {
+        let store = InMemoryTokenOutputStore::default();
+
+        // Create token outputs with amounts: [50, 100, 150, 200, 500]
+        let token_outputs = create_token_outputs(1, vec![50, 100, 150, 200, 500]);
+        store.set_tokens_outputs(&[token_outputs]).await.unwrap();
+
+        // Reserve with MaxOutputCount(3) using LargestFirst strategy
+        let reservation = store
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MaxOutputCount(3),
+                None,
+                Some(SelectionStrategy::LargestFirst),
+            )
+            .await
+            .unwrap();
+
+        // Verify selected outputs: should be 3 largest outputs [500, 200, 150]
+        assert_eq!(reservation.token_outputs.outputs.len(), 3);
+        let selected_amounts: Vec<u128> = reservation
+            .token_outputs
+            .outputs
+            .iter()
+            .map(|o| o.output.token_amount)
+            .collect();
+        assert_eq!(selected_amounts, vec![500, 200, 150]);
+
+        // Verify remaining outputs: should be [50, 100]
+        let stored_token1 = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        let remaining_amounts: Vec<u128> = stored_token1
+            .outputs
+            .iter()
+            .map(|o| o.output.token_amount)
+            .collect();
+        assert_eq!(remaining_amounts, vec![50, 100]);
+    }
+
+    #[async_test_all]
+    async fn test_reserve_max_output_count_more_than_available() {
+        let store = InMemoryTokenOutputStore::default();
+
+        // Create token outputs with amounts: [50, 100, 150]
+        let token_outputs = create_token_outputs(1, vec![50, 100, 150]);
+        store.set_tokens_outputs(&[token_outputs]).await.unwrap();
+
+        // Reserve with MaxOutputCount(10) - more than available (3)
+        let reservation = store
+            .reserve_token_outputs("token-1", ReservationTarget::MaxOutputCount(10), None, None)
+            .await
+            .unwrap();
+
+        // Should select all available outputs
+        assert_eq!(reservation.token_outputs.outputs.len(), 3);
+        let selected_amounts: Vec<u128> = reservation
+            .token_outputs
+            .outputs
+            .iter()
+            .map(|o| o.output.token_amount)
+            .collect();
+        assert_eq!(selected_amounts, vec![50, 100, 150]); // SmallestFirst by default
+
+        // Verify no outputs remain
+        let stored_token1 = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        assert_eq!(stored_token1.outputs.len(), 0);
+    }
+
+    #[async_test_all]
+    async fn test_reserve_max_output_count_zero_rejected() {
+        let store = InMemoryTokenOutputStore::default();
+
+        // Create token outputs
+        let token_outputs = create_token_outputs(1, vec![100, 200]);
+        store.set_tokens_outputs(&[token_outputs]).await.unwrap();
+
+        // Try to reserve with count = 0 - should be rejected
+        let result = store
+            .reserve_token_outputs("token-1", ReservationTarget::MaxOutputCount(0), None, None)
+            .await;
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), TokenOutputServiceError::Generic(msg) if msg.contains("Count to reserve must be greater than zero"))
+        );
     }
 }
