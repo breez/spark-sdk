@@ -165,14 +165,6 @@ impl DefaultSigner {
     pub fn new(inner: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalSigner>) -> Self {
         Self { inner }
     }
-
-    pub fn into_arc(self) -> std::sync::Arc<dyn breez_sdk_spark::signer::ExternalSigner> {
-        self.inner
-    }
-
-    pub fn arc_clone(&self) -> std::sync::Arc<dyn breez_sdk_spark::signer::ExternalSigner> {
-        self.inner.clone()
-    }
 }
 
 #[wasm_bindgen]
@@ -565,10 +557,18 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         &self,
         path: String,
     ) -> Result<core_types::PublicKeyBytes, SignerError> {
-        let wasm_pubkey: PublicKeyBytes = self
+        //let wasm_pubkey: PublicKeyBytes = self
+        let promise = self
             .inner
             .derive_public_key(path)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let future = JsFuture::from(promise);
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let wasm_pubkey: PublicKeyBytes = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            SignerError::Generic(format!("Failed to deserialize public key: {}", e))
+        })?;
         Ok(wasm_pubkey.into())
     }
 
@@ -945,7 +945,7 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
 #[wasm_bindgen(typescript_custom_section)]
 const SIGNER_INTERFACE: &'static str = r#"export interface ExternalSigner {
     identityPublicKey(): PublicKeyBytes;
-    derivePublicKey(path: string): PublicKeyBytes;
+    derivePublicKey(path: string): Promise<PublicKeyBytes>;
     signEcdsa(message: Uint8Array, path: string): Promise<EcdsaSignatureBytes>;
     signEcdsaRecoverable(message: Uint8Array, path: string): Promise<Uint8Array>;
     eciesEncrypt(message: Uint8Array, path: string): Promise<Uint8Array>;
@@ -974,10 +974,7 @@ extern "C" {
     pub fn identity_public_key(this: &JsExternalSigner) -> PublicKeyBytes;
 
     #[wasm_bindgen(structural, method, js_name = "derivePublicKey", catch)]
-    pub fn derive_public_key(
-        this: &JsExternalSigner,
-        path: String,
-    ) -> Result<PublicKeyBytes, JsValue>;
+    pub fn derive_public_key(this: &JsExternalSigner, path: String) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signEcdsa", catch)]
     pub fn sign_ecdsa(
