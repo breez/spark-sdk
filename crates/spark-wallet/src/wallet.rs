@@ -376,6 +376,12 @@ impl SparkWallet {
 
         // In case the invoice is for a spark address, we can just transfer the amount to the receiver.
         if let Some(receiver_spark_address) = receiver_spark_address {
+            if !self.config.self_payment_allowed
+                && receiver_spark_address.identity_public_key == self.identity_public_key
+            {
+                return Err(SparkWalletError::SelfPaymentNotAllowed);
+            }
+
             return Ok(PayLightningInvoiceResult {
                 transfer: self
                     .transfer(total_amount_sat, &receiver_spark_address, transfer_id)
@@ -677,7 +683,12 @@ impl SparkWallet {
         if self.config.network != receiver_address.network {
             return Err(SparkWalletError::InvalidNetwork);
         }
-        let receiver_pubkey = receiver_address.identity_public_key;
+
+        if !self.config.self_payment_allowed
+            && receiver_address.identity_public_key == self.identity_public_key
+        {
+            return Err(SparkWalletError::SelfPaymentNotAllowed);
+        }
 
         // Transfer leaves with retry logic for concurrent leaf spending
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
@@ -687,7 +698,7 @@ impl SparkWallet {
             "Transfer",
             |leaves_reservation| self.transfer_service.transfer_leaves_to(
                 leaves_reservation.leaves.clone(),
-                &receiver_pubkey,
+                &receiver_address.identity_public_key,
                 transfer_id.clone(),
                 None,
                 spark_invoice.clone(),
@@ -740,7 +751,12 @@ impl SparkWallet {
         if self.config.network != receiver_address.network {
             return Err(SparkWalletError::InvalidNetwork);
         }
-        let receiver_pubkey = receiver_address.identity_public_key;
+
+        if !self.config.self_payment_allowed
+            && receiver_address.identity_public_key == self.identity_public_key
+        {
+            return Err(SparkWalletError::SelfPaymentNotAllowed);
+        }
 
         // Create HTLC with retry logic for concurrent leaf spending
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
@@ -751,7 +767,7 @@ impl SparkWallet {
             "HTLC creation",
             |leaves_reservation| self.htlc_service.create_htlc(
                 leaves_reservation.leaves.clone(),
-                &receiver_pubkey,
+                &receiver_address.identity_public_key,
                 payment_hash,
                 expiry_time,
                 transfer_id.clone(),
@@ -1154,6 +1170,14 @@ impl SparkWallet {
             return Err(SparkWalletError::Generic(
                 "Spark invoices are not supported for token transfers. Use the `fulfill_spark_invoice` method instead.".to_string(),
             ));
+        }
+
+        if !self.config.self_payment_allowed
+            && outputs
+                .iter()
+                .any(|o| o.receiver_address.identity_public_key == self.identity_public_key)
+        {
+            return Err(SparkWalletError::SelfPaymentNotAllowed);
         }
 
         let tx = self

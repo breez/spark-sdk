@@ -50,8 +50,7 @@ pub async fn get_tokens_metadata_cached_or_query(
 
 /// Converts a token transaction to payments
 ///
-/// Each resulting payment corresponds to a potential group of outputs that share the same owner public key.
-/// The id of the payment is the id of the first output in the group.
+/// Each resulting payment corresponds to a tx output (change outputs don't result in payments).
 ///
 /// Assumptions:
 /// - All outputs of a token transaction share the same token identifier
