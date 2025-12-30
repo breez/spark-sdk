@@ -488,7 +488,6 @@ impl TokenService {
         receiver_outputs: Vec<TransferTokenOutput>,
     ) -> Result<TokenTransaction, ServiceError> {
         if inputs.len() > MAX_TOKEN_TX_INPUTS {
-            // We may consider doing an intermediate self transfer here to aggregate the inputs
             return Err(ServiceError::NeededTooManyOutputs);
         }
 
