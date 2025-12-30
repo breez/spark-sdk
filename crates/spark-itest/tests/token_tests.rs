@@ -1,7 +1,8 @@
 use anyhow::Result;
 use rand::Rng;
 use rstest::*;
-use spark_wallet::{DefaultSigner, Network, SelectionStrategy, TransferTokenOutput};
+use spark_itest::helpers::wait_for_event;
+use spark_wallet::{DefaultSigner, Network, SelectionStrategy, TransferTokenOutput, WalletEvent};
 use tracing::info;
 
 /// Test creating many outputs via self-sends then send all to Bob
@@ -15,7 +16,9 @@ async fn test_many_outputs() -> Result<()> {
     info!("=== Starting test_many_outputs ===");
 
     // Use production operators for this test since they have DKG keys for test issuers
-    let config = SparkWalletConfig::default_config(Network::Regtest);
+    let mut config = SparkWalletConfig::default_config(Network::Regtest);
+    config.self_payment_allowed = true;
+
     // Use random seeds for Alice and Bob
     let mut alice_seed = [0u8; 32];
     rand::thread_rng().fill(&mut alice_seed);
@@ -31,24 +34,14 @@ async fn test_many_outputs() -> Result<()> {
     // Wait for wallets to sync
     let mut alice_listener = alice_wallet.subscribe_events();
     let mut bob_listener = bob_wallet.subscribe_events();
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            if let Ok(event) = alice_listener.recv().await
-                && matches!(event, spark_wallet::WalletEvent::Synced)
-            {
-                break;
-            }
-        }
+    wait_for_event(&mut alice_listener, 30, "Synced", |event| match event {
+        WalletEvent::Synced => Ok(Some(event)),
+        _ => Ok(None),
     })
     .await?;
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            if let Ok(event) = bob_listener.recv().await
-                && matches!(event, spark_wallet::WalletEvent::Synced)
-            {
-                break;
-            }
-        }
+    wait_for_event(&mut bob_listener, 30, "Synced", |event| match event {
+        WalletEvent::Synced => Ok(Some(event)),
+        _ => Ok(None),
     })
     .await?;
 

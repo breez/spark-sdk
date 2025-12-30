@@ -89,6 +89,7 @@ impl TestFixtures {
                 min_outputs_threshold: 50,
                 auto_optimize_interval: None,
             },
+            self_payment_allowed: false,
         })
     }
 }

@@ -22,6 +22,7 @@ pub struct SparkWalletConfig {
     pub leaf_optimization_options: LeafOptimizationOptions,
     pub leaf_auto_optimize_enabled: bool,
     pub token_outputs_optimization_options: TokenOutputsOptimizationOptions,
+    pub self_payment_allowed: bool,
 }
 
 impl SparkWalletConfig {
@@ -59,6 +60,7 @@ impl SparkWalletConfig {
                     min_outputs_threshold: 50,
                     auto_optimize_interval: Some(Duration::from_secs(60 * 2)),
                 },
+                self_payment_allowed: false,
             },
             _ => Self {
                 network,
@@ -78,6 +80,7 @@ impl SparkWalletConfig {
                     min_outputs_threshold: 50,
                     auto_optimize_interval: Some(Duration::from_secs(60 * 2)),
                 },
+                self_payment_allowed: false,
             },
         }
     }
