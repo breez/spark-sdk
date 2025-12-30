@@ -178,15 +178,17 @@ class MigrationManager {
           if (!db.objectStoreNames.contains("sync_state")) {
             db.createObjectStore("sync_state", { keyPath: ["type", "dataId"] });
           }
-        }
+        },
       },
       {
         name: "Create lnurl_receive_metadata store",
         upgrade: (db) => {
           if (!db.objectStoreNames.contains("lnurl_receive_metadata")) {
-            db.createObjectStore("lnurl_receive_metadata", { keyPath: "paymentHash" });
+            db.createObjectStore("lnurl_receive_metadata", {
+              keyPath: "paymentHash",
+            });
           }
-        }
+        },
       },
       {
         // Delete all unclaimed deposits to clear old claim_error JSON format.
@@ -197,8 +199,66 @@ class MigrationManager {
             const store = transaction.objectStore("unclaimed_deposits");
             store.clear();
           }
-        }
-      }
+        },
+      },
+      {
+        name: "Add tx_type to token payments and trigger token re-sync",
+        upgrade: (db, transaction) => {
+          // Update all existing token payments to have a default txType
+          if (db.objectStoreNames.contains("payments")) {
+            const paymentStore = transaction.objectStore("payments");
+            const getAllRequest = paymentStore.getAll();
+
+            getAllRequest.onsuccess = () => {
+              const payments = getAllRequest.result;
+
+              payments.forEach((payment) => {
+                // Parse details if it's a string
+                let details = null;
+                if (payment.details && typeof payment.details === "string") {
+                  try {
+                    details = JSON.parse(payment.details);
+                  } catch (e) {
+                    return; // Skip this payment if parsing fails
+                  }
+                } else {
+                  details = payment.details;
+                }
+
+                // Add default txType to token payments
+                if (details && details.type === "token" && !details.txType) {
+                  details.txType = "transfer";
+                  payment.details = JSON.stringify(details);
+                  paymentStore.put(payment);
+                }
+              });
+            };
+          }
+
+          // Reset sync cache to trigger token re-sync
+          if (db.objectStoreNames.contains("settings")) {
+            const settingsStore = transaction.objectStore("settings");
+            const getRequest = settingsStore.get("sync_offset");
+
+            getRequest.onsuccess = () => {
+              const syncCache = getRequest.result;
+              if (syncCache && syncCache.value) {
+                try {
+                  const syncInfo = JSON.parse(syncCache.value);
+                  // Reset only the token sync position, keep the bitcoin offset
+                  syncInfo.last_synced_final_token_payment_id = null;
+                  settingsStore.put({
+                    key: "sync_offset",
+                    value: JSON.stringify(syncInfo),
+                  });
+                } catch (e) {
+                  // If parsing fails, just continue
+                }
+              }
+            };
+          }
+        },
+      },
     ];
   }
 }
@@ -222,7 +282,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 6; // Current schema version
+    this.dbVersion = 7; // Current schema version
   }
 
   /**
@@ -396,7 +456,9 @@ class IndexedDBStorage {
       );
       const paymentStore = transaction.objectStore("payments");
       const metadataStore = transaction.objectStore("payment_metadata");
-      const lnurlReceiveMetadataStore = transaction.objectStore("lnurl_receive_metadata");
+      const lnurlReceiveMetadataStore = transaction.objectStore(
+        "lnurl_receive_metadata"
+      );
 
       const payments = [];
       let count = 0;
@@ -440,9 +502,12 @@ class IndexedDBStorage {
             cursor.continue();
             return;
           }
-          
+
           // Fetch lnurl receive metadata if it's a lightning payment
-          this._fetchLnurlReceiveMetadata(paymentWithMetadata, lnurlReceiveMetadataStore)
+          this._fetchLnurlReceiveMetadata(
+            paymentWithMetadata,
+            lnurlReceiveMetadataStore
+          )
             .then((mergedPayment) => {
               payments.push(mergedPayment);
               count++;
@@ -522,7 +587,9 @@ class IndexedDBStorage {
       );
       const paymentStore = transaction.objectStore("payments");
       const metadataStore = transaction.objectStore("payment_metadata");
-      const lnurlReceiveMetadataStore = transaction.objectStore("lnurl_receive_metadata");
+      const lnurlReceiveMetadataStore = transaction.objectStore(
+        "lnurl_receive_metadata"
+      );
 
       const paymentRequest = paymentStore.get(id);
 
@@ -541,9 +608,12 @@ class IndexedDBStorage {
             payment,
             metadata
           );
-          
+
           // Fetch lnurl receive metadata if it's a lightning payment
-          this._fetchLnurlReceiveMetadata(paymentWithMetadata, lnurlReceiveMetadataStore)
+          this._fetchLnurlReceiveMetadata(
+            paymentWithMetadata,
+            lnurlReceiveMetadataStore
+          )
             .then(resolve)
             .catch(() => {
               // Continue without lnurl receive metadata if fetch fails
@@ -582,7 +652,9 @@ class IndexedDBStorage {
       const paymentStore = transaction.objectStore("payments");
       const invoiceIndex = paymentStore.index("invoice");
       const metadataStore = transaction.objectStore("payment_metadata");
-      const lnurlReceiveMetadataStore = transaction.objectStore("lnurl_receive_metadata");
+      const lnurlReceiveMetadataStore = transaction.objectStore(
+        "lnurl_receive_metadata"
+      );
 
       const paymentRequest = invoiceIndex.get(invoice);
 
@@ -601,9 +673,12 @@ class IndexedDBStorage {
             payment,
             metadata
           );
-          
+
           // Fetch lnurl receive metadata if it's a lightning payment
-          this._fetchLnurlReceiveMetadata(paymentWithMetadata, lnurlReceiveMetadataStore)
+          this._fetchLnurlReceiveMetadata(
+            paymentWithMetadata,
+            lnurlReceiveMetadataStore
+          )
             .then(resolve)
             .catch(() => {
               // Continue without lnurl receive metadata if fetch fails
@@ -870,9 +945,9 @@ class IndexedDBStorage {
         request.onerror = () => {
           reject(
             new StorageError(
-              `Failed to add lnurl metadata for payment hash '${item.paymentHash}': ${
-                request.error?.message || "Unknown error"
-              }`,
+              `Failed to add lnurl metadata for payment hash '${
+                item.paymentHash
+              }': ${request.error?.message || "Unknown error"}`,
               request.error
             )
           );
@@ -1463,7 +1538,10 @@ class IndexedDBStorage {
     }
 
     // Filter by payment details
-    if (request.paymentDetailsFilter && request.paymentDetailsFilter.length > 0) {
+    if (
+      request.paymentDetailsFilter &&
+      request.paymentDetailsFilter.length > 0
+    ) {
       let details = null;
 
       // Parse details if it's a string (stored in IndexedDB)
@@ -1494,7 +1572,9 @@ class IndexedDBStorage {
           if (
             details.type !== "spark" ||
             !details.htlcDetails ||
-            !paymentDetailsFilter.htlcStatus.includes(details.htlcDetails.status)
+            !paymentDetailsFilter.htlcStatus.includes(
+              details.htlcDetails.status
+            )
           ) {
             continue;
           }
@@ -1532,11 +1612,23 @@ class IndexedDBStorage {
             continue;
           }
         }
+        // Filter by token transaction type
+        if (
+          paymentDetailsFilter.type === "token" &&
+          paymentDetailsFilter.txType != null
+        ) {
+          if (
+            details.type !== "token" ||
+            details.txType !== paymentDetailsFilter.txType
+          ) {
+            continue;
+          }
+        }
 
         paymentDetailsFilterMatches = true;
         break;
       }
-      
+
       if (!paymentDetailsFilterMatches) {
         return false;
       }
@@ -1643,7 +1735,9 @@ class IndexedDBStorage {
         // If tokenConversionInfo exists, parse and add to details
         if (metadata.tokenConversionInfo) {
           try {
-            details.tokenConversionInfo = JSON.parse(metadata.tokenConversionInfo);
+            details.tokenConversionInfo = JSON.parse(
+              metadata.tokenConversionInfo
+            );
           } catch (e) {
             throw new StorageError(
               `Failed to parse tokenConversionInfo JSON for payment ${payment.id}: ${e.message}`,
@@ -1668,7 +1762,11 @@ class IndexedDBStorage {
 
   _fetchLnurlReceiveMetadata(payment, lnurlReceiveMetadataStore) {
     // Only fetch for lightning payments with a payment hash
-    if (!payment.details || payment.details.type !== "lightning" || !payment.details.paymentHash) {
+    if (
+      !payment.details ||
+      payment.details.type !== "lightning" ||
+      !payment.details.paymentHash
+    ) {
       return Promise.resolve(payment);
     }
 
@@ -1677,11 +1775,17 @@ class IndexedDBStorage {
     }
 
     return new Promise((resolve, reject) => {
-      const lnurlReceiveRequest = lnurlReceiveMetadataStore.get(payment.details.paymentHash);
-      
+      const lnurlReceiveRequest = lnurlReceiveMetadataStore.get(
+        payment.details.paymentHash
+      );
+
       lnurlReceiveRequest.onsuccess = () => {
         const lnurlReceiveMetadata = lnurlReceiveRequest.result;
-        if (lnurlReceiveMetadata && (lnurlReceiveMetadata.nostrZapRequest || lnurlReceiveMetadata.senderComment)) {
+        if (
+          lnurlReceiveMetadata &&
+          (lnurlReceiveMetadata.nostrZapRequest ||
+            lnurlReceiveMetadata.senderComment)
+        ) {
           payment.details.lnurlReceiveMetadata = {
             nostrZapRequest: lnurlReceiveMetadata.nostrZapRequest || null,
             nostrZapReceipt: lnurlReceiveMetadata.nostrZapReceipt || null,
@@ -1690,7 +1794,7 @@ class IndexedDBStorage {
         }
         resolve(payment);
       };
-      
+
       lnurlReceiveRequest.onerror = () => {
         // Continue without lnurlReceiveMetadata if fetch fails
         reject(new Error("Failed to fetch lnurl receive metadata"));

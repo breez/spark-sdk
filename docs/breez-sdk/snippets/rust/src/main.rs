@@ -7,6 +7,7 @@ mod lightning_address;
 mod list_payments;
 mod lnurl_pay;
 mod messages;
+mod optimize;
 mod parsing_inputs;
 mod receive_payment;
 mod refunding_payments;
@@ -14,7 +15,6 @@ mod sdk_building;
 mod send_payment;
 mod tokens;
 mod user_settings;
-mod optimize;
 
 use anyhow::Result;
 

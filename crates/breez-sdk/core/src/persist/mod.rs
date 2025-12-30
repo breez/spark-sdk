@@ -499,7 +499,7 @@ pub mod tests {
     use crate::{
         DepositClaimError, ListPaymentsRequest, LnurlWithdrawInfo, Payment, PaymentDetails,
         PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, SparkHtlcDetails,
-        SparkHtlcStatus, Storage, UpdateDepositPayload,
+        SparkHtlcStatus, Storage, TokenMetadata, TokenTransactionType, UpdateDepositPayload,
         persist::{ObjectCacheRepository, PaymentRequestMetadata},
         sync_storage::{Record, RecordId, SyncStorage, UnversionedRecordChange},
     };
@@ -852,7 +852,7 @@ pub mod tests {
             }),
         };
 
-        // Test 3: Token payment
+        // Test 3: Transfer token payment with invoice
         let token_metadata = TokenMetadata {
             identifier: "token123".to_string(),
             issuer_public_key:
@@ -863,8 +863,8 @@ pub mod tests {
             max_supply: 21_000_000,
             is_freezable: false,
         };
-        let token_payment = Payment {
-            id: "token_pmt456".to_string(),
+        let token_transfer_payment = Payment {
+            id: "token_transfer_pmt456".to_string(),
             payment_type: PaymentType::Receive,
             status: PaymentStatus::Pending,
             amount: 50_000,
@@ -874,6 +874,7 @@ pub mod tests {
             details: Some(PaymentDetails::Token {
                 metadata: token_metadata.clone(),
                 tx_hash: "tx_hash".to_string(),
+                tx_type: TokenTransactionType::Transfer,
                 invoice_details: Some(crate::SparkInvoicePaymentDetails {
                     description: Some("description_2".to_string()),
                     invoice: "invoice_string_2".to_string(),
@@ -882,7 +883,43 @@ pub mod tests {
             }),
         };
 
-        // Test 4: Lightning payment with full details
+        // Test 4: Mint token payment
+        let token_mint_payment = Payment {
+            id: "token_mint_pmt789".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 100_000,
+            fees: 0,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Token,
+            details: Some(PaymentDetails::Token {
+                metadata: token_metadata.clone(),
+                tx_hash: "tx_hash_mint".to_string(),
+                tx_type: TokenTransactionType::Mint,
+                invoice_details: None,
+                token_conversion_info: None,
+            }),
+        };
+
+        // Test 5: Burn token payment
+        let token_burn_payment = Payment {
+            id: "token_burn_pmt012".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 20_000,
+            fees: 0,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Token,
+            details: Some(PaymentDetails::Token {
+                metadata: token_metadata.clone(),
+                tx_hash: "tx_hash_burn".to_string(),
+                tx_type: TokenTransactionType::Burn,
+                invoice_details: None,
+                token_conversion_info: None,
+            }),
+        };
+
+        // Test 6: Lightning payment with full details
         let pay_metadata = PaymentMetadata {
             lnurl_pay_info: Some(LnurlPayInfo {
                 ln_address: Some("test@example.com".to_string()),
@@ -917,7 +954,7 @@ pub mod tests {
             }),
         };
 
-        // Test 5: Lightning payment with full details
+        // Test 7: Lightning payment with full details
         let withdraw_metadata = PaymentMetadata {
             lnurl_pay_info: None,
             lnurl_withdraw_info: Some(LnurlWithdrawInfo {
@@ -946,7 +983,7 @@ pub mod tests {
             }),
         };
 
-        // Test 6: Lightning payment with minimal details
+        // Test 8: Lightning payment with minimal details
         let lightning_minimal_payment = Payment {
             id: "lightning_minimal_pmt012".to_string(),
             payment_type: PaymentType::Receive,
@@ -967,7 +1004,7 @@ pub mod tests {
             }),
         };
 
-        // Test 7: Lightning payment with LNURL receive metadata
+        // Test 9: Lightning payment with LNURL receive metadata
         let lnurl_receive_payment_hash =
             "receivehash1234567890abcdef1234567890abcdef1234567890abcdef1234".to_string();
         let lnurl_receive_metadata = crate::LnurlReceiveMetadata {
@@ -995,7 +1032,7 @@ pub mod tests {
             }),
         };
 
-        // Test 8: Withdraw payment
+        // Test 10: Withdraw payment
         let withdraw_payment = Payment {
             id: "withdraw_pmt345".to_string(),
             payment_type: PaymentType::Send,
@@ -1010,7 +1047,7 @@ pub mod tests {
             }),
         };
 
-        // Test 9: Deposit payment
+        // Test 11: Deposit payment
         let deposit_payment = Payment {
             id: "deposit_pmt678".to_string(),
             payment_type: PaymentType::Receive,
@@ -1025,7 +1062,7 @@ pub mod tests {
             }),
         };
 
-        // Test 10: Payment with no details
+        // Test 12: Payment with no details
         let no_details_payment = Payment {
             id: "no_details_pmt901".to_string(),
             payment_type: PaymentType::Send,
@@ -1037,7 +1074,7 @@ pub mod tests {
             details: None,
         };
 
-        // Test 11: Successful conversion payment
+        // Test 13: Successful conversion payment
         let successful_sent_conversion_payment_metadata = PaymentMetadata {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
@@ -1066,7 +1103,7 @@ pub mod tests {
             }),
         };
 
-        // Test 12: Failed conversion payment with refund info
+        // Test 14: Failed conversion payment with refund info
         let failed_with_refund_conversion_payment_metadata = PaymentMetadata {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
@@ -1095,7 +1132,7 @@ pub mod tests {
             }),
         };
 
-        // Test 13: Failed conversion payment with no refund info
+        // Test 15: Failed conversion payment with no refund info
         let failed_no_refund_conversion_payment_metadata = PaymentMetadata {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
@@ -1127,7 +1164,9 @@ pub mod tests {
         let test_payments = vec![
             spark_payment.clone(),
             spark_htlc_payment.clone(),
-            token_payment.clone(),
+            token_transfer_payment.clone(),
+            token_mint_payment.clone(),
+            token_burn_payment.clone(),
             lightning_lnurl_pay_payment.clone(),
             lightning_lnurl_withdraw_payment.clone(),
             lightning_minimal_payment.clone(),
@@ -1189,12 +1228,12 @@ pub mod tests {
         let payments = storage
             .list_payments(ListPaymentsRequest {
                 offset: Some(0),
-                limit: Some(14),
+                limit: Some(20),
                 ..Default::default()
             })
             .await
             .unwrap();
-        assert_eq!(payments.len(), 13);
+        assert_eq!(payments.len(), 15);
 
         // Test each payment type individually
         for (i, expected_payment) in test_payments.iter().enumerate() {
@@ -1237,12 +1276,14 @@ pub mod tests {
                     Some(PaymentDetails::Token {
                         metadata: r_metadata,
                         tx_hash: r_tx_hash,
+                        tx_type: r_tx_type,
                         invoice_details: r_invoice,
                         token_conversion_info: r_token_conversion_info,
                     }),
                     Some(PaymentDetails::Token {
                         metadata: e_metadata,
                         tx_hash: e_tx_hash,
+                        tx_type: e_tx_type,
                         invoice_details: e_invoice,
                         token_conversion_info: e_token_conversion_info,
                     }),
@@ -1255,6 +1296,7 @@ pub mod tests {
                     assert_eq!(r_metadata.max_supply, e_metadata.max_supply);
                     assert_eq!(r_metadata.is_freezable, e_metadata.is_freezable);
                     assert_eq!(r_tx_hash, e_tx_hash);
+                    assert_eq!(r_tx_type, e_tx_type);
                     assert_eq!(r_invoice, e_invoice);
                     assert_eq!(r_token_conversion_info, e_token_conversion_info);
                 }
@@ -1352,8 +1394,8 @@ pub mod tests {
             .iter()
             .filter(|p| p.payment_type == PaymentType::Receive)
             .count();
-        assert_eq!(send_payments, 7); // spark, lightning_lnurl_pay, withdraw, no_details, conversion x3
-        assert_eq!(receive_payments, 6); // spark_htlc, token, lightning_lnurl_withdraw, lightning_minimal, lightning_lnurl_receive, deposit
+        assert_eq!(send_payments, 8); // spark, lightning_lnurl_pay, withdraw, no_details, conversion x3, token
+        assert_eq!(receive_payments, 7); // spark_htlc, token x2, lightning_lnurl_withdraw, lightning_minimal, lightning_lnurl_receive, deposit
 
         // Test filtering by status
         let completed_payments = payments
@@ -1368,7 +1410,7 @@ pub mod tests {
             .iter()
             .filter(|p| p.status == PaymentStatus::Failed)
             .count();
-        assert_eq!(completed_payments, 10); // spark, spark_htlc, lightning_lnurl_pay, lightning_lnurl_withdraw, lightning_lnurl_receive, withdraw, deposit, conversion x3
+        assert_eq!(completed_payments, 12); // spark, spark_htlc, lightning_lnurl_pay, lightning_lnurl_withdraw, lightning_lnurl_receive, withdraw, deposit, conversion x3, token x2
         assert_eq!(pending_payments, 2); // token, no_details
         assert_eq!(failed_payments, 1); // lightning_minimal
 
@@ -1919,6 +1961,7 @@ pub mod tests {
                     is_freezable: false,
                 },
                 tx_hash: "tx_hash_1".to_string(),
+                tx_type: TokenTransactionType::Transfer,
                 invoice_details: None,
                 token_conversion_info: None,
             }),
@@ -2205,6 +2248,7 @@ pub mod tests {
                     is_freezable: false,
                 },
                 tx_hash: "txhash1".to_string(),
+                tx_type: TokenTransactionType::Transfer,
                 invoice_details: None,
                 token_conversion_info: None,
             }),
@@ -2313,6 +2357,7 @@ pub mod tests {
                 payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Token {
                     conversion_refund_needed: Some(false),
                     tx_hash: None,
+                    tx_type: None,
                 }]),
                 ..Default::default()
             })
@@ -2332,6 +2377,7 @@ pub mod tests {
                     crate::PaymentDetailsFilter::Token {
                         conversion_refund_needed: Some(false),
                         tx_hash: None,
+                        tx_type: None,
                     },
                 ]),
                 ..Default::default()
@@ -2346,6 +2392,7 @@ pub mod tests {
                 payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Token {
                     conversion_refund_needed: Some(true),
                     tx_hash: None,
+                    tx_type: None,
                 }]),
                 ..Default::default()
             })
@@ -2378,6 +2425,118 @@ pub mod tests {
             .await
             .unwrap();
         assert_eq!(all_payments_filter.len(), 3);
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub async fn test_token_transaction_type_filtering(storage: Box<dyn Storage>) {
+        let token_metadata = TokenMetadata {
+            identifier: "token123".to_string(),
+            issuer_public_key:
+                "02abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab".to_string(),
+            name: "Test Token".to_string(),
+            ticker: "TTK".to_string(),
+            decimals: 8,
+            max_supply: 21_000_000,
+            is_freezable: false,
+        };
+        // Create payments with different transaction types
+        let payment1 = Payment {
+            id: "transfer_1".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 10_000,
+            fees: 100,
+            timestamp: 1000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Token {
+                metadata: token_metadata.clone(),
+                tx_hash: "tx_hash_transfer".to_string(),
+                tx_type: TokenTransactionType::Transfer,
+                invoice_details: None,
+                token_conversion_info: None,
+            }),
+        };
+        let payment2 = Payment {
+            id: "mint_2".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 20_000,
+            fees: 200,
+            timestamp: 2000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Token {
+                metadata: token_metadata.clone(),
+                tx_hash: "tx_hash_mint".to_string(),
+                tx_type: TokenTransactionType::Mint,
+                invoice_details: None,
+                token_conversion_info: None,
+            }),
+        };
+        let payment3 = Payment {
+            id: "burn_3".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 30_000,
+            fees: 300,
+            timestamp: 3000,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Token {
+                metadata: token_metadata.clone(),
+                tx_hash: "tx_hash_burn".to_string(),
+                tx_type: TokenTransactionType::Burn,
+                invoice_details: None,
+                token_conversion_info: None,
+            }),
+        };
+        storage.insert_payment(payment1).await.unwrap();
+        storage.insert_payment(payment2).await.unwrap();
+        storage.insert_payment(payment3).await.unwrap();
+
+        // Test filter by transaction type
+        let transfer_filter = storage
+            .list_payments(ListPaymentsRequest {
+                payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Token {
+                    tx_type: Some(TokenTransactionType::Transfer),
+                    tx_hash: None,
+                    conversion_refund_needed: None,
+                }]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(transfer_filter.len(), 1);
+        assert_eq!(transfer_filter[0].id, "transfer_1");
+
+        // Test filter by mint transaction type
+
+        let mint_filter = storage
+            .list_payments(ListPaymentsRequest {
+                payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Token {
+                    tx_type: Some(TokenTransactionType::Mint),
+                    tx_hash: None,
+                    conversion_refund_needed: None,
+                }]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(mint_filter.len(), 1);
+        assert_eq!(mint_filter[0].id, "mint_2");
+
+        // Test filter by burn transaction type
+        let burn_filter = storage
+            .list_payments(ListPaymentsRequest {
+                payment_details_filter: Some(vec![crate::PaymentDetailsFilter::Token {
+                    tx_type: Some(TokenTransactionType::Burn),
+                    tx_hash: None,
+                    conversion_refund_needed: None,
+                }]),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(burn_filter.len(), 1);
+        assert_eq!(burn_filter[0].id, "burn_3");
     }
 
     pub async fn test_timestamp_filtering(storage: Box<dyn Storage>) {

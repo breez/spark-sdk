@@ -16,7 +16,7 @@ pub use spark::{
     operator::rpc::{ConnectionManager, DefaultConnectionManager},
     services::TokensConfig,
     services::{
-        CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,
+        BURN_PUBLIC_KEY, CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,
         FreezeIssuerTokenResponse, InvoiceDescription, LightningSendPayment, LightningSendStatus,
         OptimizationEvent, OptimizationOptions, OptimizationProgress, Preimage,
         PreimageRequestStatus, ReceiverTokenOutput, TokenInputs, TokenTransaction,

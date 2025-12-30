@@ -976,6 +976,7 @@ impl BreezSdk {
                     PaymentDetailsFilter::Token {
                         conversion_refund_needed: Some(true),
                         tx_hash: None,
+                        tx_type: None,
                     },
                 ]),
                 ..Default::default()

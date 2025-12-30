@@ -285,17 +285,29 @@ class MigrationManager {
                 nostr_zap_request TEXT,
                 nostr_zap_receipt TEXT,
                 sender_comment TEXT
-            )`
+            )`,
       },
       {
         // Delete all unclaimed deposits to clear old claim_error JSON format.
         // Deposits will be recovered on next sync.
         name: "Clear unclaimed deposits for claim_error format change",
-        sql: `DELETE FROM unclaimed_deposits`
+        sql: `DELETE FROM unclaimed_deposits`,
       },
       {
         name: "Add token conversion info to payment_metadata",
-        sql: `ALTER TABLE payment_metadata ADD COLUMN token_conversion_info TEXT`
+        sql: `ALTER TABLE payment_metadata ADD COLUMN token_conversion_info TEXT`,
+      },
+      {
+        name: "Add tx_type column to payment_details_token",
+        sql: [
+          // Add tx_type column with a default value of 'transfer'.
+          // Delete sync cache to trigger token re-sync which will update all records with correct tx_type.
+          // Note: This intentionally couples to the CachedSyncInfo schema at migration time.
+          `ALTER TABLE payment_details_token ADD COLUMN tx_type TEXT NOT NULL DEFAULT '"transfer"'`,
+          `UPDATE settings 
+           SET value = json_set(value, '$.last_synced_final_token_payment_id', NULL)
+           WHERE key = 'sync_offset' AND json_valid(value) AND json_type(value, '$.last_synced_final_token_payment_id') IS NOT NULL`,
+        ],
       },
     ];
   }

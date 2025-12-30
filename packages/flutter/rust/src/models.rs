@@ -181,6 +181,7 @@ pub enum _PaymentDetailsFilter {
     Token {
         conversion_refund_needed: Option<bool>,
         tx_hash: Option<String>,
+        tx_type: Option<TokenTransactionType>,
     },
 }
 
@@ -505,6 +506,7 @@ pub enum _PaymentDetails {
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
+        tx_type: TokenTransactionType,
         invoice_details: Option<SparkInvoicePaymentDetails>,
         token_conversion_info: Option<TokenConversionInfo>,
     },
@@ -524,6 +526,13 @@ pub enum _PaymentDetails {
     Deposit {
         tx_id: String,
     },
+}
+
+#[frb(mirror(TokenTransactionType))]
+pub enum _TokenTransactionType {
+    Transfer,
+    Mint,
+    Burn,
 }
 
 #[frb(mirror(SparkInvoicePaymentDetails))]
