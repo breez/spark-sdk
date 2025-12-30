@@ -60,6 +60,33 @@ impl TokenOutputs {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct TokenOutputsPerStatus {
+    pub metadata: TokenMetadata,
+    pub available: Vec<TokenOutputWithPrevOut>,
+    /// Tokens reserved for payment. Should be excluded from balance since they are being spent.
+    pub reserved_for_payment: Vec<TokenOutputWithPrevOut>,
+    /// Tokens reserved for swap. Should be included in balance since they will be received back.
+    pub reserved_for_swap: Vec<TokenOutputWithPrevOut>,
+}
+
+impl TokenOutputsPerStatus {
+    pub fn available_balance(&self) -> u128 {
+        self.available.iter().map(|o| o.output.token_amount).sum()
+    }
+
+    pub fn reserved_for_swap_balance(&self) -> u128 {
+        self.reserved_for_swap
+            .iter()
+            .map(|o| o.output.token_amount)
+            .sum()
+    }
+
+    pub fn balance(&self) -> u128 {
+        self.available_balance() + self.reserved_for_swap_balance()
+    }
+}
+
 pub type TokenOutputsReservationId = String;
 
 #[derive(Clone, Debug)]
@@ -112,8 +139,20 @@ pub enum SelectionStrategy {
 
 #[derive(Clone, Debug, Copy)]
 pub enum ReservationTarget {
+    /// The minimum total value of the token outputs to reserve.
     MinTotalValue(u128),
+    /// The maximum number of token outputs to reserve.
     MaxOutputCount(usize),
+}
+
+#[derive(Clone, Debug, Copy)]
+pub enum ReservationPurpose {
+    /// Leaves being used for a payment - excluded from balance since they
+    /// are about to be spent.
+    Payment,
+    /// Leaves will be swapped. Included in balance since we will receive
+    /// the same amount back.
+    Swap,
 }
 
 #[macros::async_trait]
@@ -123,12 +162,14 @@ pub trait TokenOutputStore: Send + Sync {
         token_outputs: &[TokenOutputs],
     ) -> Result<(), TokenOutputServiceError>;
 
-    async fn list_tokens_outputs(&self) -> Result<Vec<TokenOutputs>, TokenOutputServiceError>;
+    async fn list_tokens_outputs(
+        &self,
+    ) -> Result<Vec<TokenOutputsPerStatus>, TokenOutputServiceError>;
 
     async fn get_token_outputs(
         &self,
         filter: GetTokenOutputsFilter<'_>,
-    ) -> Result<TokenOutputs, TokenOutputServiceError>;
+    ) -> Result<TokenOutputsPerStatus, TokenOutputServiceError>;
 
     async fn insert_token_outputs(
         &self,
@@ -139,6 +180,7 @@ pub trait TokenOutputStore: Send + Sync {
         &self,
         token_identifier: &str,
         target: ReservationTarget,
+        purpose: ReservationPurpose,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError>;
@@ -156,7 +198,9 @@ pub trait TokenOutputStore: Send + Sync {
 
 #[macros::async_trait]
 pub trait TokenOutputService: Send + Sync {
-    async fn list_tokens_outputs(&self) -> Result<Vec<TokenOutputs>, TokenOutputServiceError>;
+    async fn list_tokens_outputs(
+        &self,
+    ) -> Result<Vec<TokenOutputsPerStatus>, TokenOutputServiceError>;
 
     async fn refresh_tokens_outputs(&self) -> Result<(), TokenOutputServiceError>;
 
@@ -174,6 +218,7 @@ pub trait TokenOutputService: Send + Sync {
         &self,
         token_identifier: &str,
         target: ReservationTarget,
+        purpose: ReservationPurpose,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError>;

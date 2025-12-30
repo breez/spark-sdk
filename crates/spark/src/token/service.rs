@@ -11,9 +11,10 @@ use crate::{
     },
     signer::Signer,
     token::{
-        GetTokenOutputsFilter, ReservationTarget, SelectionStrategy, TokenMetadata,
-        TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs,
-        TokenOutputsReservation, TokenOutputsReservationId, error::TokenOutputServiceError,
+        GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy,
+        TokenMetadata, TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs,
+        TokenOutputsPerStatus, TokenOutputsReservation, TokenOutputsReservationId,
+        error::TokenOutputServiceError,
     },
 };
 
@@ -28,7 +29,9 @@ pub struct SynchronousTokenOutputService {
 
 #[macros::async_trait]
 impl TokenOutputService for SynchronousTokenOutputService {
-    async fn list_tokens_outputs(&self) -> Result<Vec<TokenOutputs>, TokenOutputServiceError> {
+    async fn list_tokens_outputs(
+        &self,
+    ) -> Result<Vec<TokenOutputsPerStatus>, TokenOutputServiceError> {
         self.state.list_tokens_outputs().await
     }
 
@@ -117,6 +120,7 @@ impl TokenOutputService for SynchronousTokenOutputService {
         &self,
         token_identifier: &str,
         target: ReservationTarget,
+        purpose: ReservationPurpose,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
@@ -128,6 +132,7 @@ impl TokenOutputService for SynchronousTokenOutputService {
                 .reserve_token_outputs(
                     token_identifier,
                     target,
+                    purpose,
                     preferred_outputs.clone(),
                     selection_strategy,
                 )
@@ -139,19 +144,16 @@ impl TokenOutputService for SynchronousTokenOutputService {
 
             info!("Failed to reserve token outputs, refreshing and retrying");
             self.refresh_tokens_outputs().await?;
-            let available_amount: u128 = self
+            let token_balance = self
                 .state
                 .get_token_outputs(GetTokenOutputsFilter::Identifier(token_identifier))
                 .await?
-                .outputs
-                .iter()
-                .map(|o| o.output.token_amount)
-                .sum();
+                .balance();
             if let ReservationTarget::MinTotalValue(amount) = &target
-                && *amount > available_amount
+                && *amount > token_balance
             {
                 info!(
-                    "Insufficient funds to select token outputs after refresh: requested {amount}, available {available_amount}"
+                    "Insufficient funds to select token outputs after refresh: requested {amount}, balance {token_balance}"
                 );
                 break;
             }

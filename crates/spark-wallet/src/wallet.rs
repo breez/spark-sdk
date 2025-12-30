@@ -1126,13 +1126,13 @@ impl SparkWallet {
 
         let balances = token_outputs
             .into_iter()
-            .map(|output| {
-                let balance = output.outputs.iter().map(|o| o.output.token_amount).sum();
+            .map(|token_outputs| {
+                let balance = token_outputs.balance();
                 (
-                    output.metadata.identifier.clone(),
+                    token_outputs.metadata.identifier.clone(),
                     TokenBalance {
                         balance,
-                        token_metadata: output.metadata,
+                        token_metadata: token_outputs.metadata,
                     },
                 )
             })
