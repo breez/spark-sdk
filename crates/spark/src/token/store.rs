@@ -5,9 +5,9 @@ use tracing::{trace, warn};
 use uuid::Uuid;
 
 use crate::token::{
-    GetTokenOutputsFilter, ReservationTarget, SelectionStrategy, TokenOutputServiceError,
-    TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs, TokenOutputsReservation,
-    TokenOutputsReservationId,
+    GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy,
+    TokenOutputServiceError, TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs,
+    TokenOutputsPerStatus, TokenOutputsReservation, TokenOutputsReservationId,
 };
 
 #[derive(Default)]
@@ -15,10 +15,16 @@ pub struct InMemoryTokenOutputStore {
     token_outputs: Mutex<TokenOutputsState>,
 }
 
+#[derive(Clone)]
+struct TokenOutputsEntry {
+    token_outputs: TokenOutputs,
+    purpose: ReservationPurpose,
+}
+
 #[derive(Default)]
 struct TokenOutputsState {
-    token_outputs: HashMap<String, TokenOutputs>,
-    reservations: HashMap<TokenOutputsReservationId, TokenOutputs>,
+    available_token_outputs: HashMap<String, TokenOutputs>,
+    reservations: HashMap<TokenOutputsReservationId, TokenOutputsEntry>,
 }
 
 #[macros::async_trait]
@@ -29,7 +35,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
     ) -> Result<(), TokenOutputServiceError> {
         let mut token_outputs_state = self.token_outputs.lock().await;
         // Update the pool of available token outputs
-        token_outputs_state.token_outputs = token_outputs
+        token_outputs_state.available_token_outputs = token_outputs
             .iter()
             .map(|to| (to.metadata.identifier.clone(), to.clone()))
             .collect();
@@ -38,8 +44,8 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         for (id, reserved_token_outputs) in token_outputs_state.reservations.clone().iter() {
             // Get the token outputs for the reserved token identifier
             let Some(token_outputs) = token_outputs_state
-                .token_outputs
-                .get_mut(&reserved_token_outputs.metadata.identifier)
+                .available_token_outputs
+                .get_mut(&reserved_token_outputs.token_outputs.metadata.identifier)
             else {
                 // If the token outputs no longer exist, remove the reservation
                 token_outputs_state.reservations.remove(id);
@@ -48,6 +54,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             // Filter out any reserved outputs no longer in the pool
             let output_ids = token_outputs.ids();
             let reserved_outputs = reserved_token_outputs
+                .token_outputs
                 .outputs
                 .iter()
                 .filter(|o| output_ids.contains(&o.output.id))
@@ -71,9 +78,12 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             // Update the reservation with the reconciled outputs
             token_outputs_state.reservations.insert(
                 id.clone(),
-                TokenOutputs {
-                    metadata: reserved_token_outputs.metadata.clone(),
-                    outputs: reserved_outputs,
+                TokenOutputsEntry {
+                    token_outputs: TokenOutputs {
+                        metadata: reserved_token_outputs.token_outputs.metadata.clone(),
+                        outputs: reserved_outputs,
+                    },
+                    purpose: reserved_token_outputs.purpose,
                 },
             );
         }
@@ -85,35 +95,141 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         Ok(())
     }
 
-    async fn list_tokens_outputs(&self) -> Result<Vec<TokenOutputs>, TokenOutputServiceError> {
+    async fn list_tokens_outputs(
+        &self,
+    ) -> Result<Vec<TokenOutputsPerStatus>, TokenOutputServiceError> {
         let token_outputs_state = self.token_outputs.lock().await;
-        Ok(token_outputs_state
-            .token_outputs
-            .values()
-            .cloned()
-            .collect())
+
+        let mut map = HashMap::new();
+
+        for (token_id, token_outputs) in token_outputs_state.available_token_outputs.iter() {
+            let entry = map
+                .entry(token_id.clone())
+                .or_insert(TokenOutputsPerStatus {
+                    metadata: token_outputs.metadata.clone(),
+                    available: Vec::new(),
+                    reserved_for_payment: Vec::new(),
+                    reserved_for_swap: Vec::new(),
+                });
+            entry.available = token_outputs.outputs.clone();
+        }
+
+        for token_outputs_entry in token_outputs_state.reservations.values() {
+            let entry = map
+                .entry(
+                    token_outputs_entry
+                        .token_outputs
+                        .metadata
+                        .identifier
+                        .clone(),
+                )
+                .or_insert(TokenOutputsPerStatus {
+                    metadata: token_outputs_entry.token_outputs.metadata.clone(),
+                    available: Vec::new(),
+                    reserved_for_payment: Vec::new(),
+                    reserved_for_swap: Vec::new(),
+                });
+            match token_outputs_entry.purpose {
+                ReservationPurpose::Payment => {
+                    entry
+                        .reserved_for_payment
+                        .extend(token_outputs_entry.token_outputs.outputs.iter().cloned());
+                }
+                ReservationPurpose::Swap => {
+                    entry
+                        .reserved_for_swap
+                        .extend(token_outputs_entry.token_outputs.outputs.iter().cloned());
+                }
+            }
+        }
+
+        Ok(map.into_values().collect())
     }
 
     async fn get_token_outputs(
         &self,
         filter: GetTokenOutputsFilter<'_>,
-    ) -> Result<TokenOutputs, TokenOutputServiceError> {
+    ) -> Result<TokenOutputsPerStatus, TokenOutputServiceError> {
         let token_outputs_state = self.token_outputs.lock().await;
-        let token_outputs = match filter {
+
+        // Find the matching token identifier and metadata
+        // Check both available_token_outputs and reservations
+        let (token_id, metadata) = match filter {
             GetTokenOutputsFilter::Identifier(token_id) => {
-                token_outputs_state.token_outputs.get(token_id).cloned()
+                // Try available outputs first
+                if let Some(token_outputs) =
+                    token_outputs_state.available_token_outputs.get(token_id)
+                {
+                    (token_id, token_outputs.metadata.clone())
+                } else {
+                    // If not in available, check reservations
+                    let reservation = token_outputs_state
+                        .reservations
+                        .values()
+                        .find(|r| r.token_outputs.metadata.identifier == token_id)
+                        .ok_or(TokenOutputServiceError::Generic(
+                            "Token outputs not found".to_string(),
+                        ))?;
+                    (token_id, reservation.token_outputs.metadata.clone())
+                }
             }
-            GetTokenOutputsFilter::IssuerPublicKey(issuer_pk) => token_outputs_state
-                .token_outputs
-                .values()
-                .into_iter()
-                .find(|to| &to.metadata.issuer_public_key == issuer_pk)
-                .cloned(),
+            GetTokenOutputsFilter::IssuerPublicKey(issuer_pk) => {
+                // Try available outputs first
+                if let Some(token_outputs) = token_outputs_state
+                    .available_token_outputs
+                    .values()
+                    .find(|to| &to.metadata.issuer_public_key == issuer_pk)
+                {
+                    (
+                        token_outputs.metadata.identifier.as_str(),
+                        token_outputs.metadata.clone(),
+                    )
+                } else {
+                    // If not in available, check reservations
+                    let reservation = token_outputs_state
+                        .reservations
+                        .values()
+                        .find(|r| &r.token_outputs.metadata.issuer_public_key == issuer_pk)
+                        .ok_or(TokenOutputServiceError::Generic(
+                            "Token outputs not found".to_string(),
+                        ))?;
+                    (
+                        reservation.token_outputs.metadata.identifier.as_str(),
+                        reservation.token_outputs.metadata.clone(),
+                    )
+                }
+            }
         };
 
-        token_outputs.ok_or(TokenOutputServiceError::Generic(
-            "Token outputs not found".to_string(),
-        ))
+        let mut result = TokenOutputsPerStatus {
+            metadata,
+            available: Vec::new(),
+            reserved_for_payment: Vec::new(),
+            reserved_for_swap: Vec::new(),
+        };
+
+        if let Some(token_outputs) = token_outputs_state.available_token_outputs.get(token_id) {
+            result.available = token_outputs.outputs.clone();
+        }
+
+        for token_outputs_entry in token_outputs_state.reservations.values() {
+            if token_outputs_entry.token_outputs.metadata.identifier == token_id {
+                match token_outputs_entry.purpose {
+                    ReservationPurpose::Payment => {
+                        result
+                            .reserved_for_payment
+                            .extend(token_outputs_entry.token_outputs.outputs.iter().cloned());
+                    }
+                    ReservationPurpose::Swap => {
+                        result
+                            .reserved_for_swap
+                            .extend(token_outputs_entry.token_outputs.outputs.iter().cloned());
+                    }
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     async fn insert_token_outputs(
@@ -123,7 +239,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         let mut token_outputs_state = self.token_outputs.lock().await;
 
         match token_outputs_state
-            .token_outputs
+            .available_token_outputs
             .get_mut(&token_outputs.metadata.identifier)
         {
             Some(existing_token_outputs) => {
@@ -139,7 +255,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             }
             None => {
                 // Insert new token outputs
-                token_outputs_state.token_outputs.insert(
+                token_outputs_state.available_token_outputs.insert(
                     token_outputs.metadata.identifier.clone(),
                     token_outputs.clone(),
                 );
@@ -157,6 +273,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         &self,
         token_identifier: &str,
         target: ReservationTarget,
+        purpose: ReservationPurpose,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
@@ -178,7 +295,9 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         }
 
         let mut token_outputs_state = self.token_outputs.lock().await;
-        let Some(token_outputs) = token_outputs_state.token_outputs.get_mut(token_identifier)
+        let Some(token_outputs) = token_outputs_state
+            .available_token_outputs
+            .get_mut(token_identifier)
         else {
             return Err(TokenOutputServiceError::Generic(format!(
                 "Token outputs not found for identifier: {}",
@@ -264,9 +383,13 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             .retain(|to| !selected_output_ids.contains(&to.output.id));
 
         // Insert the reservation
-        token_outputs_state
-            .reservations
-            .insert(reservation_id.clone(), reservation_token_outputs.clone());
+        token_outputs_state.reservations.insert(
+            reservation_id.clone(),
+            TokenOutputsEntry {
+                token_outputs: reservation_token_outputs.clone(),
+                purpose,
+            },
+        );
 
         Ok(TokenOutputsReservation::new(
             reservation_id,
@@ -281,10 +404,10 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         let mut token_outputs_state = self.token_outputs.lock().await;
         if let Some(reserved_token_outputs) = token_outputs_state.reservations.remove(id)
             && let Some(token_outputs) = token_outputs_state
-                .token_outputs
-                .get_mut(&reserved_token_outputs.metadata.identifier)
+                .available_token_outputs
+                .get_mut(&reserved_token_outputs.token_outputs.metadata.identifier)
         {
-            for output in reserved_token_outputs.outputs {
+            for output in reserved_token_outputs.token_outputs.outputs {
                 token_outputs.outputs.push(output);
             }
         }
@@ -370,7 +493,14 @@ mod tests {
     #[async_test_all]
     async fn test_default() {
         let state: InMemoryTokenOutputStore = InMemoryTokenOutputStore::default();
-        assert!(state.token_outputs.lock().await.token_outputs.is_empty());
+        assert!(
+            state
+                .token_outputs
+                .lock()
+                .await
+                .available_token_outputs
+                .is_empty()
+        );
         assert!(state.token_outputs.lock().await.reservations.is_empty());
     }
 
@@ -413,7 +543,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stored_token1.metadata.identifier, "token-1");
-        assert_eq!(stored_token1.outputs.len(), 3);
+        assert_eq!(stored_token1.available.len(), 3);
 
         let pk1 = create_public_key(1);
         let stored_token1_by_pk = store
@@ -421,7 +551,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stored_token1_by_pk.metadata.identifier, "token-1");
-        assert_eq!(stored_token1_by_pk.outputs.len(), 3);
+        assert_eq!(stored_token1_by_pk.available.len(), 3);
 
         // Verify token2
         let stored_token2 = store
@@ -429,7 +559,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stored_token2.metadata.identifier, "token-2");
-        assert_eq!(stored_token2.outputs.len(), 2);
+        assert_eq!(stored_token2.available.len(), 2);
 
         let pk2 = create_public_key(2);
         let stored_token2_by_pk = store
@@ -437,7 +567,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stored_token2_by_pk.metadata.identifier, "token-2");
-        assert_eq!(stored_token2_by_pk.outputs.len(), 2);
+        assert_eq!(stored_token2_by_pk.available.len(), 2);
     }
 
     #[async_test_all]
@@ -470,9 +600,9 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 2);
-        assert_eq!(stored_token1.outputs[0].output.token_amount, 150);
-        assert_eq!(stored_token1.outputs[1].output.token_amount, 250);
+        assert_eq!(stored_token1.available.len(), 2);
+        assert_eq!(stored_token1.available[0].output.token_amount, 150);
+        assert_eq!(stored_token1.available[1].output.token_amount, 250);
 
         // Verify token2 is gone (not included in the update)
         let stored_outputs = store.list_tokens_outputs().await.unwrap();
@@ -508,7 +638,7 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 5);
+        assert_eq!(stored_token1.available.len(), 5);
 
         // Insert some duplicate outputs for token2 (should not duplicate)
         let token2_duplicate = create_token_outputs(2, vec![500, 750, 1000]);
@@ -520,7 +650,7 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-2"))
             .await
             .unwrap();
-        assert_eq!(stored_token2.outputs.len(), 3);
+        assert_eq!(stored_token2.available.len(), 3);
     }
 
     #[async_test_all]
@@ -539,7 +669,13 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(300),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(reservation.token_outputs.metadata.identifier, "token-1");
@@ -550,7 +686,7 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 2);
+        assert_eq!(stored_token1.available.len(), 2);
     }
 
     #[async_test_all]
@@ -569,7 +705,13 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(300),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -578,7 +720,8 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 2);
+        assert_eq!(stored_token1.available.len(), 2);
+        assert_eq!(stored_token1.reserved_for_payment.len(), 1);
 
         // Cancel the reservation
         let result = store.cancel_reservation(&reservation.id).await;
@@ -589,7 +732,8 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 3);
+        assert_eq!(stored_token1.available.len(), 3);
+        assert_eq!(stored_token1.reserved_for_payment.len(), 0);
     }
 
     #[async_test_all]
@@ -608,7 +752,13 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(300),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -617,7 +767,8 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 2);
+        assert_eq!(stored_token1.available.len(), 2);
+        assert_eq!(stored_token1.reserved_for_payment.len(), 1);
 
         // Finalize the reservation
         let result = store.finalize_reservation(&reservation.id).await;
@@ -628,7 +779,8 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 2);
+        assert_eq!(stored_token1.available.len(), 2);
+        assert_eq!(stored_token1.reserved_for_payment.len(), 0);
     }
 
     #[async_test_all]
@@ -647,7 +799,13 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(300),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -656,7 +814,8 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 2);
+        assert_eq!(stored_token1.available.len(), 2);
+        assert_eq!(stored_token1.reserved_for_payment.len(), 1);
 
         // Set new token outputs, simulating an external update
         let token1_updated = create_token_outputs(1, vec![100, 200, 300, 400]);
@@ -671,7 +830,7 @@ mod tests {
             .reservations
             .get(&reservation.id)
             .unwrap();
-        assert_eq!(reserved_token_outputs.outputs.len(), 1);
+        assert_eq!(reserved_token_outputs.token_outputs.outputs.len(), 1);
         drop(token_outputs_state);
 
         // Verify token1 has 3 outputs (400 added, 300 reserved)
@@ -679,7 +838,8 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 3);
+        assert_eq!(stored_token1.available.len(), 3);
+        assert_eq!(stored_token1.reserved_for_payment.len(), 1);
     }
 
     #[async_test_all]
@@ -698,7 +858,13 @@ mod tests {
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(300),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -707,7 +873,8 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 2);
+        assert_eq!(stored_token1.available.len(), 2);
+        assert_eq!(stored_token1.reserved_for_payment.len(), 1);
 
         // Set new token outputs, simulating an external update
         let token1_updated = create_token_outputs(1, vec![100, 200, 400]);
@@ -727,11 +894,18 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 3);
+        assert_eq!(stored_token1.available.len(), 3);
+        assert_eq!(stored_token1.reserved_for_payment.len(), 0);
 
         // Reserve some outputs from token1
         let reservation = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(300),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -740,7 +914,8 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 1);
+        assert_eq!(stored_token1.available.len(), 1);
+        assert_eq!(stored_token1.reserved_for_payment.len(), 2);
 
         // Set new token outputs, simulating an external update
         let token1_updated = create_token_outputs(1, vec![100, 400]);
@@ -755,7 +930,7 @@ mod tests {
             .reservations
             .get(&reservation.id)
             .unwrap();
-        assert_eq!(reserved_token_outputs.outputs.len(), 1);
+        assert_eq!(reserved_token_outputs.token_outputs.outputs.len(), 1);
         drop(token_outputs_state);
 
         // Verify token1 has 1 output (100 reserved, 200 removed, 400)
@@ -763,7 +938,8 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 1);
+        assert_eq!(stored_token1.available.len(), 1);
+        assert_eq!(stored_token1.reserved_for_payment.len(), 1);
     }
 
     #[async_test_all]
@@ -779,15 +955,33 @@ mod tests {
 
         // Create multiple reservations in parallel
         let reservation1 = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(100), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(100),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
         let reservation2 = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(200), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(200),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
         let reservation3 = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(300),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -815,7 +1009,7 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 2);
+        assert_eq!(stored_token1.available.len(), 2);
 
         // Cancel one reservation
         let result = store.cancel_reservation(&reservation2.id).await;
@@ -826,7 +1020,7 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 3);
+        assert_eq!(stored_token1.available.len(), 3);
 
         // Finalize another reservation
         let result = store.finalize_reservation(&reservation1.id).await;
@@ -837,7 +1031,7 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 3);
+        assert_eq!(stored_token1.available.len(), 3);
 
         // Cancel the last reservation
         let result = store.cancel_reservation(&reservation3.id).await;
@@ -848,7 +1042,7 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 4);
+        assert_eq!(stored_token1.available.len(), 4);
     }
 
     #[async_test_all]
@@ -867,8 +1061,8 @@ mod tests {
             .unwrap();
 
         let preferred = vec![
-            all_outputs.outputs[2].clone(), // 300
-            all_outputs.outputs[4].clone(), // 500
+            all_outputs.available[2].clone(), // 300
+            all_outputs.available[4].clone(), // 500
         ];
 
         // Reserve using preferred outputs
@@ -876,6 +1070,7 @@ mod tests {
             .reserve_token_outputs(
                 "token-1",
                 ReservationTarget::MinTotalValue(250),
+                ReservationPurpose::Payment,
                 Some(preferred),
                 None,
             )
@@ -894,7 +1089,7 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 4);
+        assert_eq!(stored_token1.available.len(), 4);
     }
 
     #[async_test_all]
@@ -908,7 +1103,13 @@ mod tests {
 
         // Try to reserve more than available
         let result = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(500), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(500),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await;
         assert!(result.is_err());
 
@@ -931,6 +1132,7 @@ mod tests {
             .reserve_token_outputs(
                 "token-999",
                 ReservationTarget::MinTotalValue(100),
+                ReservationPurpose::Payment,
                 None,
                 None,
             )
@@ -953,7 +1155,13 @@ mod tests {
 
         // Reserve exact match amount
         let reservation = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(150), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(150),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -969,7 +1177,7 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 4);
+        assert_eq!(stored_token1.available.len(), 4);
     }
 
     #[async_test_all]
@@ -983,7 +1191,13 @@ mod tests {
 
         // Reserve amount that requires combining multiple outputs
         let reservation = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(75), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(75),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -1009,7 +1223,13 @@ mod tests {
 
         // Reserve total amount
         let reservation = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(600), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(600),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -1020,7 +1240,7 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 0);
+        assert_eq!(stored_token1.available.len(), 0);
     }
 
     #[async_test_all]
@@ -1038,8 +1258,8 @@ mod tests {
             .unwrap();
 
         let preferred = vec![
-            all_outputs.outputs[0].clone(), // 100
-            all_outputs.outputs[1].clone(), // 200
+            all_outputs.available[0].clone(), // 100
+            all_outputs.available[1].clone(), // 200
         ];
 
         // Try to reserve more than preferred outputs can provide
@@ -1047,6 +1267,7 @@ mod tests {
             .reserve_token_outputs(
                 "token-1",
                 ReservationTarget::MinTotalValue(500),
+                ReservationPurpose::Payment,
                 Some(preferred),
                 None,
             )
@@ -1066,7 +1287,13 @@ mod tests {
 
         // Reserve zero amount
         let reservation = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(0), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(0),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await;
         assert!(reservation.is_err());
     }
@@ -1135,7 +1362,13 @@ mod tests {
 
         // Reserve amount that's less than the large output
         let reservation = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(500), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(500),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -1177,7 +1410,13 @@ mod tests {
 
         // Reserve some outputs
         let _reservation = store
-            .reserve_token_outputs("token-1", ReservationTarget::MinTotalValue(300), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(300),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -1206,6 +1445,7 @@ mod tests {
             .reserve_token_outputs(
                 "token-1",
                 ReservationTarget::MinTotalValue(300),
+                ReservationPurpose::Payment,
                 None,
                 Some(SelectionStrategy::SmallestFirst),
             )
@@ -1232,7 +1472,7 @@ mod tests {
             .await
             .unwrap();
         let remaining_amounts: Vec<u128> = stored_token1
-            .outputs
+            .available
             .iter()
             .map(|o| o.output.token_amount)
             .collect();
@@ -1255,6 +1495,7 @@ mod tests {
             .reserve_token_outputs(
                 "token-1",
                 ReservationTarget::MinTotalValue(300),
+                ReservationPurpose::Payment,
                 None,
                 Some(SelectionStrategy::LargestFirst),
             )
@@ -1281,7 +1522,7 @@ mod tests {
             .await
             .unwrap();
         let remaining_amounts: Vec<u128> = stored_token1
-            .outputs
+            .available
             .iter()
             .map(|o| o.output.token_amount)
             .collect();
@@ -1301,6 +1542,7 @@ mod tests {
             .reserve_token_outputs(
                 "token-1",
                 ReservationTarget::MaxOutputCount(2),
+                ReservationPurpose::Payment,
                 None,
                 None, // Default to SmallestFirst
             )
@@ -1323,7 +1565,7 @@ mod tests {
             .await
             .unwrap();
         let remaining_amounts: Vec<u128> = stored_token1
-            .outputs
+            .available
             .iter()
             .map(|o| o.output.token_amount)
             .collect();
@@ -1343,6 +1585,7 @@ mod tests {
             .reserve_token_outputs(
                 "token-1",
                 ReservationTarget::MaxOutputCount(3),
+                ReservationPurpose::Payment,
                 None,
                 Some(SelectionStrategy::LargestFirst),
             )
@@ -1365,7 +1608,7 @@ mod tests {
             .await
             .unwrap();
         let remaining_amounts: Vec<u128> = stored_token1
-            .outputs
+            .available
             .iter()
             .map(|o| o.output.token_amount)
             .collect();
@@ -1382,7 +1625,13 @@ mod tests {
 
         // Reserve with MaxOutputCount(10) - more than available (3)
         let reservation = store
-            .reserve_token_outputs("token-1", ReservationTarget::MaxOutputCount(10), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MaxOutputCount(10),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -1401,7 +1650,7 @@ mod tests {
             .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
             .await
             .unwrap();
-        assert_eq!(stored_token1.outputs.len(), 0);
+        assert_eq!(stored_token1.available.len(), 0);
     }
 
     #[async_test_all]
@@ -1414,11 +1663,206 @@ mod tests {
 
         // Try to reserve with count = 0 - should be rejected
         let result = store
-            .reserve_token_outputs("token-1", ReservationTarget::MaxOutputCount(0), None, None)
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MaxOutputCount(0),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
             .await;
         assert!(result.is_err());
         assert!(
             matches!(result.unwrap_err(), TokenOutputServiceError::Generic(msg) if msg.contains("Count to reserve must be greater than zero"))
         );
+    }
+
+    #[async_test_all]
+    async fn test_reserve_for_payment_affects_balance() {
+        let store = InMemoryTokenOutputStore::default();
+
+        // Create token outputs with amounts: [100, 200, 300]
+        let token_outputs = create_token_outputs(1, vec![100, 200, 300]);
+        store.set_tokens_outputs(&[token_outputs]).await.unwrap();
+
+        // Get initial balance
+        let stored_token1 = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        let initial_balance = stored_token1.balance();
+        assert_eq!(initial_balance, 600); // 100 + 200 + 300
+
+        // Reserve 200 for payment
+        let reservation = store
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(200),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Get balance after reservation
+        let stored_token1 = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        let balance_after_reservation = stored_token1.balance();
+
+        // Balance should decrease by the reserved amount (200)
+        // Available: 100 + 300 = 400, Reserved for payment: 200 (excluded)
+        assert_eq!(balance_after_reservation, 400);
+        assert_eq!(stored_token1.available.len(), 2);
+        assert_eq!(stored_token1.reserved_for_payment.len(), 1);
+        assert_eq!(stored_token1.reserved_for_swap.len(), 0);
+        assert_eq!(
+            stored_token1.reserved_for_payment[0].output.token_amount,
+            200
+        );
+
+        // Cancel the reservation
+        store.cancel_reservation(&reservation.id).await.unwrap();
+
+        // Balance should return to original
+        let stored_token1 = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        assert_eq!(stored_token1.balance(), initial_balance);
+    }
+
+    #[async_test_all]
+    async fn test_reserve_for_swap_does_not_affect_balance() {
+        let store = InMemoryTokenOutputStore::default();
+
+        // Create token outputs with amounts: [100, 200, 300]
+        let token_outputs = create_token_outputs(1, vec![100, 200, 300]);
+        store.set_tokens_outputs(&[token_outputs]).await.unwrap();
+
+        // Get initial balance
+        let stored_token1 = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        let initial_balance = stored_token1.balance();
+        assert_eq!(initial_balance, 600); // 100 + 200 + 300
+
+        // Reserve 200 for swap
+        let reservation = store
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(200),
+                ReservationPurpose::Swap,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Get balance after reservation
+        let stored_token1 = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        let balance_after_reservation = stored_token1.balance();
+
+        // Balance should remain the same (swap doesn't affect balance)
+        // Available: 100 + 300 = 400, Reserved for swap: 200 (included in balance)
+        assert_eq!(balance_after_reservation, 600);
+        assert_eq!(stored_token1.available.len(), 2);
+        assert_eq!(stored_token1.reserved_for_payment.len(), 0);
+        assert_eq!(stored_token1.reserved_for_swap.len(), 1);
+        assert_eq!(stored_token1.reserved_for_swap[0].output.token_amount, 200);
+
+        // Cancel the reservation
+        store.cancel_reservation(&reservation.id).await.unwrap();
+
+        // Balance should still be the same
+        let stored_token1 = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        assert_eq!(stored_token1.balance(), initial_balance);
+    }
+
+    #[async_test_all]
+    async fn test_mixed_reservation_purposes_balance() {
+        let store = InMemoryTokenOutputStore::default();
+
+        // Create token outputs with amounts: [100, 200, 300, 400, 500]
+        let token_outputs = create_token_outputs(1, vec![100, 200, 300, 400, 500]);
+        store.set_tokens_outputs(&[token_outputs]).await.unwrap();
+
+        // Get initial balance
+        let stored_token1 = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        let initial_balance = stored_token1.balance();
+        assert_eq!(initial_balance, 1500); // 100 + 200 + 300 + 400 + 500
+
+        // Reserve 100 for payment
+        let payment_reservation = store
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(100),
+                ReservationPurpose::Payment,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Reserve 200 for swap
+        let swap_reservation = store
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(200),
+                ReservationPurpose::Swap,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Get balance after both reservations
+        let stored_token1 = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        let balance_after_reservations = stored_token1.balance();
+
+        // Balance should only decrease by payment reservation (100)
+        // Available: 300 + 400 + 500 = 1200
+        // Reserved for payment: 100 (excluded)
+        // Reserved for swap: 200 (included)
+        // Total balance: 1200 + 200 = 1400
+        assert_eq!(balance_after_reservations, 1400);
+        assert_eq!(stored_token1.available.len(), 3);
+        assert_eq!(stored_token1.reserved_for_payment.len(), 1);
+        assert_eq!(stored_token1.reserved_for_swap.len(), 1);
+
+        // Cancel both reservations
+        store
+            .cancel_reservation(&payment_reservation.id)
+            .await
+            .unwrap();
+        store
+            .cancel_reservation(&swap_reservation.id)
+            .await
+            .unwrap();
+
+        // Balance should return to original
+        let stored_token1 = store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        assert_eq!(stored_token1.balance(), initial_balance);
+        assert_eq!(stored_token1.available.len(), 5);
+        assert_eq!(stored_token1.reserved_for_payment.len(), 0);
+        assert_eq!(stored_token1.reserved_for_swap.len(), 0);
     }
 }

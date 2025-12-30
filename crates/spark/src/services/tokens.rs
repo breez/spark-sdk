@@ -28,8 +28,9 @@ use crate::{
     },
     signer::Signer,
     token::{
-        GetTokenOutputsFilter, ReservationTarget, SelectionStrategy, TokenMetadata,
-        TokenOutputService, TokenOutputWithPrevOut, TokenOutputs, with_reserved_token_outputs,
+        GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy,
+        TokenMetadata, TokenOutputService, TokenOutputWithPrevOut, TokenOutputs,
+        with_reserved_token_outputs,
     },
     utils::{
         paging::{PagingFilter, PagingResult, pager},
@@ -428,6 +429,7 @@ impl TokenService {
                 .reserve_token_outputs(
                     &token_id,
                     ReservationTarget::MinTotalValue(total_amount),
+                    ReservationPurpose::Payment,
                     preferred_outputs.clone(),
                     selection_strategy,
                 )
@@ -546,7 +548,7 @@ impl TokenService {
         let mut did_optimize = false;
 
         for output in outputs {
-            if output.outputs.len() <= min_outputs_threshold as usize {
+            if output.available.len() <= min_outputs_threshold as usize {
                 continue;
             }
 
@@ -557,15 +559,16 @@ impl TokenService {
                 .reserve_token_outputs(
                     &output.metadata.identifier,
                     ReservationTarget::MaxOutputCount(MAX_TOKEN_TX_INPUTS),
+                    ReservationPurpose::Swap,
                     None,
                     Some(SelectionStrategy::SmallestFirst),
                 )
                 .await?;
 
             info!(
-                "Optimizing token {} - currently has {} outputs",
+                "Optimizing token {} - currently has {} available outputs",
                 output.metadata.identifier,
-                output.outputs.len(),
+                output.available.len(),
             );
 
             let amount = reservation
