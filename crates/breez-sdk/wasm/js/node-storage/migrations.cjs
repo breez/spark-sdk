@@ -292,6 +292,20 @@ class MigrationManager {
         // Deposits will be recovered on next sync.
         name: "Clear unclaimed deposits for claim_error format change",
         sql: `DELETE FROM unclaimed_deposits`
+      },
+      {
+        // Clear all sync tables due to BreezSigner signature change.
+        // This forces users to sync from scratch to the sync server.
+        // Also delete the sync_initial_complete flag to force re-populating
+        // all payment metadata for outgoing sync using the new key.
+        name: "Clear sync tables for BreezSigner backward compatibility",
+        sql: [
+          `DELETE FROM sync_outgoing`,
+          `DELETE FROM sync_incoming`,
+          `DELETE FROM sync_state`,
+          `UPDATE sync_revision SET revision = 0`,
+          `DELETE FROM settings WHERE key = 'sync_initial_complete'`
+        ]
       }
     ];
   }
