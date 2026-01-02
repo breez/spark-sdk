@@ -7,16 +7,16 @@ edition = "2024"
 bip39.workspace = true
 bitcoin.workspace = true
 clap = { workspace = true, features = ["derive"] }
-dotenvy.workspace = true
+dotenvy = "0.15.7"
 figment = { workspace = true, features = ["env", "yaml"] }
 hex.workspace = true
-qrcode-rs.workspace = true
+qrcode-rs = { version = "0.1", default-features = false }
 rand.workspace = true
 reqwest = { workspace = true, features = ["default-tls"] }
 rustyline = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-shellwords.workspace = true
+shellwords = "1.1.0"
 spark-wallet.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
