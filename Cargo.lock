@@ -659,6 +659,7 @@ dependencies = [
  "tonic-build",
  "tonic-web-wasm-client",
  "tracing",
+ "url",
  "wasm-bindgen-test",
  "web-time",
  "zbase32",

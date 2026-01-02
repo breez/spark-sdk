@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::BuyBitcoinProviderApi;
 use crate::{breez_server::BreezServer, grpc::SignUrlRequest};
 use anyhow::Result;
-use reqwest::Url;
+use url::Url;
 
 #[derive(Clone)]
 struct MoonPayConfig {

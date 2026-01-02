@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -30,7 +28,7 @@ pub fn build_withdraw_callback_url(
     withdraw_request: &LnurlWithdrawRequestDetails,
     invoice: &str,
 ) -> LnurlResult<String> {
-    let mut url = reqwest::Url::from_str(&withdraw_request.callback)
+    let mut url = url::Url::parse(&withdraw_request.callback)
         .map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
 
     url.query_pairs_mut()

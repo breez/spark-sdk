@@ -217,7 +217,7 @@ where
             "https://"
         };
 
-        let Ok(url) = reqwest::Url::parse(&format!("{scheme}{domain}/.well-known/lnurlp/{user}"))
+        let Ok(url) = url::Url::parse(&format!("{scheme}{domain}/.well-known/lnurlp/{user}"))
         else {
             return None;
         };
@@ -272,7 +272,7 @@ where
             }
         }
 
-        let Ok(parsed_url) = reqwest::Url::parse(&input) else {
+        let Ok(parsed_url) = url::Url::parse(&input) else {
             return Ok(None);
         };
 
@@ -295,15 +295,14 @@ where
             }
             scheme if supported_prefixes.contains(&scheme) => {
                 if has_extension(&host, "onion") {
-                    url = reqwest::Url::parse(&replace_prefix(&input, scheme, "http")).map_err(
-                        |_| {
+                    url =
+                        url::Url::parse(&replace_prefix(&input, scheme, "http")).map_err(|_| {
                             LnurlError::General(
                                 "failed to rewrite lnurl scheme to http".to_string(),
                             )
-                        },
-                    )?;
+                        })?;
                 } else {
-                    url = reqwest::Url::parse(&replace_prefix(&input, scheme, "https")).map_err(
+                    url = url::Url::parse(&replace_prefix(&input, scheme, "https")).map_err(
                         |_| {
                             LnurlError::General(
                                 "failed to rewrite lnurl scheme to https".to_string(),
@@ -320,7 +319,7 @@ where
 
     async fn resolve_lnurl(
         &self,
-        url: &reqwest::Url,
+        url: &url::Url,
         _source: &PaymentRequestSource,
     ) -> Result<InputType, LnurlError> {
         if let Some(query) = url.query()
@@ -378,7 +377,7 @@ where
 
             // Try to parse as LnurlRequestDetails
             if let Ok(lnurl_data) = serde_json::from_str::<LnurlRequestDetails>(&body) {
-                let domain = reqwest::Url::parse(&parser_url)
+                let domain = url::Url::parse(&parser_url)
                     .ok()
                     .and_then(|url| url.host_str().map(ToString::to_string))
                     .unwrap_or_default();
