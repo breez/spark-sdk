@@ -4,14 +4,9 @@ edition = "2024"
 version.workspace = true
 
 [features]
-default = ["default-tls"]
 browser-tests = [] # Enable browser wasm-pack tests
 # flutter = ["dep:flutter_rust_bridge"]
 test-utils = []
-# TLS features
-default-tls = ["reqwest/default-tls", "spark-wallet/default-tls"]
-rustls-tls = ["reqwest/rustls-tls", "spark-wallet/rustls-tls"]
-native-tls = ["reqwest/native-tls", "spark-wallet/native-tls"]
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
@@ -32,9 +27,9 @@ cbc = { workspace = true, features = ["std"] }
 hex.workspace = true
 lightning.workspace = true
 macros.workspace = true
+platform-utils.workspace = true
 prost.workspace = true
 regex.workspace = true
-reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 strum = { workspace = true, features = ["derive"] }
@@ -46,6 +41,7 @@ web-time.workspace = true
 spark-wallet.workspace = true
 futures.workspace = true
 tokio_with_wasm.workspace = true
+url.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
@@ -64,6 +60,7 @@ tonic = { workspace = true, features = [
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 dnssec-prover = { workspace = true, features = ["validation"] }
+reqwest.workspace = true
 tonic = { workspace = true, features = ["codegen", "prost"] }
 tonic-web-wasm-client.workspace = true
 

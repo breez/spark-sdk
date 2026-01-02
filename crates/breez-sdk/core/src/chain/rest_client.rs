@@ -1,7 +1,6 @@
 use base64::{Engine as _, engine::general_purpose};
 use bitcoin::{Address, address::NetworkUnchecked};
-use breez_sdk_common::rest::RestClient as CommonRestClient;
-use breez_sdk_common::{error::ServiceConnectivityError, rest::RestResponse};
+use platform_utils::{HttpClient, HttpError, HttpResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -45,7 +44,7 @@ impl BasicAuth {
 pub struct RestClientChainService {
     base_url: String,
     network: Network,
-    client: Box<dyn breez_sdk_common::rest::RestClient>,
+    client: Box<dyn HttpClient>,
     max_retries: usize,
     basic_auth: Option<BasicAuth>,
     api_type: ChainApiType,
@@ -85,14 +84,14 @@ impl RestClientChainService {
         base_url: String,
         network: Network,
         max_retries: usize,
-        rest_client: Box<dyn CommonRestClient>,
+        http_client: Box<dyn HttpClient>,
         basic_auth: Option<BasicAuth>,
         api_type: ChainApiType,
     ) -> Self {
         Self {
             base_url,
             network,
-            client: rest_client,
+            client: http_client,
             max_retries,
             basic_auth,
             api_type,
@@ -123,7 +122,7 @@ impl RestClientChainService {
     async fn get_with_retry(
         &self,
         url: &str,
-        client: &dyn CommonRestClient,
+        client: &dyn HttpClient,
     ) -> Result<(String, u16), ChainServiceError> {
         let mut delay = BASE_BACKOFF_MILLIS;
         let mut attempts = 0;
@@ -141,8 +140,7 @@ impl RestClientChainService {
                 );
             }
 
-            let RestResponse { body, status } =
-                client.get_request(url.to_string(), headers).await?;
+            let HttpResponse { body, status } = client.get(url.to_string(), headers).await?;
             match status {
                 status if attempts < self.max_retries && is_status_retryable(status) => {
                     tokio::time::sleep(delay).await;
@@ -151,7 +149,7 @@ impl RestClientChainService {
                 }
                 _ => {
                     if !(200..300).contains(&status) {
-                        return Err(ServiceConnectivityError::Status { status, body }.into());
+                        return Err(HttpError::Status { status, body }.into());
                     }
                     return Ok((body, status));
                 }
@@ -173,12 +171,12 @@ impl RestClientChainService {
             body.clone().unwrap_or_default(),
             headers
         );
-        let RestResponse { body, status } = self
+        let HttpResponse { body, status } = self
             .client
-            .post_request(url.to_string(), Some(headers), body)
+            .post(url.to_string(), Some(headers), body)
             .await?;
         if !(200..300).contains(&status) {
-            return Err(ServiceConnectivityError::Status { status, body }.into());
+            return Err(HttpError::Status { status, body }.into());
         }
 
         Ok(body)

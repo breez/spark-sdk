@@ -2,6 +2,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::ServiceConnectivityError;
 
+/// REST client trait for making HTTP requests.
+///
+/// This trait provides a way for users to supply their own HTTP client implementation
+/// for use with the SDK. The SDK will use this client for all HTTP operations including
+/// LNURL flows and chain service requests.
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
 pub trait RestClient: Send + Sync {
@@ -40,14 +45,15 @@ pub trait RestClient: Send + Sync {
     ) -> Result<RestResponse, ServiceConnectivityError>;
 }
 
-#[macros::derive_from(breez_sdk_common::rest::RestResponse)]
-#[macros::derive_into(breez_sdk_common::rest::RestResponse)]
+#[macros::derive_from(platform_utils::HttpResponse)]
+#[macros::derive_into(platform_utils::HttpResponse)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RestResponse {
     pub status: u16,
     pub body: String,
 }
 
+/// Wrapper that adapts an external `RestClient` to `platform_utils::HttpClient`
 pub(crate) struct RestClientWrapper {
     inner: Arc<dyn RestClient>,
 }
@@ -59,39 +65,30 @@ impl RestClientWrapper {
 }
 
 #[macros::async_trait]
-impl breez_sdk_common::rest::RestClient for RestClientWrapper {
-    async fn get_request(
+impl platform_utils::HttpClient for RestClientWrapper {
+    async fn get(
         &self,
         url: String,
         headers: Option<HashMap<String, String>>,
-    ) -> Result<
-        breez_sdk_common::rest::RestResponse,
-        breez_sdk_common::error::ServiceConnectivityError,
-    > {
+    ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
         Ok(self.inner.get_request(url, headers).await?.into())
     }
 
-    async fn post_request(
+    async fn post(
         &self,
         url: String,
         headers: Option<HashMap<String, String>>,
         body: Option<String>,
-    ) -> Result<
-        breez_sdk_common::rest::RestResponse,
-        breez_sdk_common::error::ServiceConnectivityError,
-    > {
+    ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
         Ok(self.inner.post_request(url, headers, body).await?.into())
     }
 
-    async fn delete_request(
+    async fn delete(
         &self,
         url: String,
         headers: Option<HashMap<String, String>>,
         body: Option<String>,
-    ) -> Result<
-        breez_sdk_common::rest::RestResponse,
-        breez_sdk_common::error::ServiceConnectivityError,
-    > {
+    ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
         Ok(self.inner.delete_request(url, headers, body).await?.into())
     }
 }

@@ -35,6 +35,7 @@ pub struct FlashnetClient {
     pub(crate) config: FlashnetConfig,
     pub(crate) cache_store: Arc<CacheStore>,
     pub(crate) spark_wallet: Arc<SparkWallet>,
+    pub(crate) http_client: platform_utils::DefaultHttpClient,
 }
 
 impl FlashnetClient {
@@ -47,6 +48,7 @@ impl FlashnetClient {
             config,
             cache_store,
             spark_wallet,
+            http_client: platform_utils::DefaultHttpClient::default(),
         }
     }
 

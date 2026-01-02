@@ -4,7 +4,6 @@ edition = "2024"
 version.workspace = true
 
 [features]
-default = ["default-tls"]
 browser-tests = [] # Enable browser wasm-pack tests
 uniffi = [
     "dep:uniffi",
@@ -14,10 +13,6 @@ openssl-vendored = ["openssl"]
 test-utils = []
 # PostgreSQL storage backend (optional, for server-side use cases)
 postgres = ["dep:tokio-postgres", "dep:deadpool-postgres", "dep:deadpool", "dep:tokio-postgres-rustls", "dep:rustls", "dep:webpki-roots"]
-# TLS features
-default-tls = ["reqwest/default-tls", "breez-sdk-common/default-tls", "flashnet/default-tls"]
-rustls-tls = ["reqwest/rustls-tls", "breez-sdk-common/rustls-tls", "flashnet/rustls-tls"]
-native-tls = ["reqwest/native-tls", "breez-sdk-common/native-tls", "flashnet/native-tls"]
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
@@ -33,6 +28,7 @@ bip39.workspace = true
 bitcoin.workspace = true
 bitflags.workspace = true
 breez-sdk-common.workspace = true
+platform-utils.workspace = true
 chrono.workspace = true
 ecies.workspace = true
 flashnet.workspace = true
@@ -41,7 +37,6 @@ lnurl-models.workspace = true
 macros.workspace = true
 nostr.workspace = true
 openssl = { workspace = true, optional = true }
-reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 spark-wallet.workspace = true

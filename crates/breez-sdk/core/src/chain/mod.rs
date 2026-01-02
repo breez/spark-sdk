@@ -14,8 +14,8 @@ pub enum ChainServiceError {
     Generic(String),
 }
 
-impl From<breez_sdk_common::error::ServiceConnectivityError> for ChainServiceError {
-    fn from(value: breez_sdk_common::error::ServiceConnectivityError) -> Self {
+impl From<platform_utils::HttpError> for ChainServiceError {
+    fn from(value: platform_utils::HttpError) -> Self {
         ChainServiceError::ServiceConnectivity(value.to_string())
     }
 }

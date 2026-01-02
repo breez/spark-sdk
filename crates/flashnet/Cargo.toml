@@ -8,21 +8,17 @@ publish = false
 workspace = true
 
 [features]
-default = ["default-tls"]
+default = []
 # Enable browser wasm-pack tests
 browser-tests = []
-# TLS features
-default-tls = ["reqwest/default-tls"]
-rustls-tls = ["reqwest/rustls-tls"]
-native-tls = ["reqwest/native-tls"]
 
 [dependencies]
 bitcoin.workspace = true
 hex.workspace = true
 jwt = "0.16.0"
 macros.workspace = true
+platform-utils.workspace = true
 rand.workspace = true
-reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_qs = "1.0.0-rc.3"

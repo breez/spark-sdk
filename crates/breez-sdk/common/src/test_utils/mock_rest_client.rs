@@ -3,12 +3,8 @@ use std::{
     sync::Mutex,
 };
 
+use platform_utils::{HttpClient, HttpError, HttpResponse};
 use tracing::debug;
-
-use crate::{
-    error::ServiceConnectivityError,
-    rest::{RestClient, RestResponse},
-};
 
 #[derive(Debug)]
 pub struct MockResponse {
@@ -41,56 +37,54 @@ impl MockRestClient {
 }
 
 #[macros::async_trait]
-impl RestClient for MockRestClient {
-    async fn get_request(
+impl HttpClient for MockRestClient {
+    async fn get(
         &self,
         _url: String,
         _headers: Option<HashMap<String, String>>,
-    ) -> Result<RestResponse, ServiceConnectivityError> {
+    ) -> Result<HttpResponse, HttpError> {
         let mut responses = self.responses.lock().unwrap();
         let response = responses.pop_front().ok_or_else(|| {
-            ServiceConnectivityError::Other(String::from("No response available for GET request"))
+            HttpError::Other(String::from("No response available for GET request"))
         })?;
         debug!("Pop GET response: {response:?}");
         let status = response.status_code;
         let body = response.text;
 
-        Ok(RestResponse { status, body })
+        Ok(HttpResponse { status, body })
     }
 
-    async fn post_request(
+    async fn post(
         &self,
         _url: String,
         _headers: Option<HashMap<String, String>>,
         _body: Option<String>,
-    ) -> Result<RestResponse, ServiceConnectivityError> {
+    ) -> Result<HttpResponse, HttpError> {
         let mut responses = self.responses.lock().unwrap();
         let response = responses.pop_front().ok_or_else(|| {
-            ServiceConnectivityError::Other(String::from("No response available for POST request"))
+            HttpError::Other(String::from("No response available for POST request"))
         })?;
         debug!("Pop POST response: {response:?}");
         let status = response.status_code;
         let body = response.text;
 
-        Ok(RestResponse { status, body })
+        Ok(HttpResponse { status, body })
     }
 
-    async fn delete_request(
+    async fn delete(
         &self,
         _url: String,
         _headers: Option<HashMap<String, String>>,
         _body: Option<String>,
-    ) -> Result<RestResponse, ServiceConnectivityError> {
+    ) -> Result<HttpResponse, HttpError> {
         let mut responses = self.responses.lock().unwrap();
         let response = responses.pop_front().ok_or_else(|| {
-            ServiceConnectivityError::Other(String::from(
-                "No response available for DELETE request",
-            ))
+            HttpError::Other(String::from("No response available for DELETE request"))
         })?;
         debug!("Pop DELETE response: {response:?}");
         let status = response.status_code;
         let body = response.text;
 
-        Ok(RestResponse { status, body })
+        Ok(HttpResponse { status, body })
     }
 }

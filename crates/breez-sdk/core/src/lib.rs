@@ -22,7 +22,8 @@ pub use chain::{
     BitcoinChainService, ChainServiceError, RecommendedFees, TxStatus, Utxo,
     rest_client::{ChainApiType, RestClientChainService},
 };
-pub use common::{fiat::*, models::*, rest::*, sync_storage};
+pub use common::rest::{RestClient, RestResponse};
+pub use common::{fiat::*, models::*, sync_storage};
 pub use error::{DepositClaimError, SdkError, SignerError};
 pub use events::{EventEmitter, EventListener, OptimizationEvent, SdkEvent};
 pub use issuer::*;
