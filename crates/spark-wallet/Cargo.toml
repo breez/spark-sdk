@@ -4,12 +4,7 @@ version.workspace = true
 edition = "2024"
 
 [features]
-default = ["default-tls"]
 browser-tests = [] # Enable browser wasm-pack tests
-# TLS features
-default-tls = ["spark/default-tls"]
-rustls-tls = ["spark/rustls-tls"]
-native-tls = ["spark/native-tls"]
 
 [dependencies]
 bitcoin = { workspace = true, features = ["serde"] }

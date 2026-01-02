@@ -30,11 +30,6 @@ pub(crate) enum GraphQLError {
 }
 
 impl GraphQLError {
-    /// Creates a new authentication error
-    pub fn authentication<S: Into<String>>(reason: S) -> Self {
-        Self::Authentication(reason.into())
-    }
-
     /// Creates a new serialization error
     pub fn serialization<S: Into<String>>(reason: S) -> Self {
         Self::Serialization(reason.into())
@@ -47,6 +42,7 @@ impl GraphQLError {
     }
 }
 
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 impl From<reqwest::Error> for GraphQLError {
     fn from(err: reqwest::Error) -> Self {
         let mut err_str = err.to_string();
@@ -58,6 +54,15 @@ impl From<reqwest::Error> for GraphQLError {
         Self::Network {
             reason: err_str,
             code: err.status().map(|s| s.as_u16()),
+        }
+    }
+}
+
+impl From<super::http::HttpError> for GraphQLError {
+    fn from(err: super::http::HttpError) -> Self {
+        Self::Network {
+            reason: err.to_string(),
+            code: None,
         }
     }
 }

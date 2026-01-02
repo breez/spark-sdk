@@ -4,7 +4,6 @@ edition = "2024"
 version.workspace = true
 
 [features]
-default = ["default-tls"]
 browser-tests = [] # Enable browser wasm-pack tests
 uniffi = [
     "dep:uniffi",
@@ -12,10 +11,6 @@ uniffi = [
 ]
 openssl-vendored = ["openssl"]
 test-utils = []
-# TLS features
-default-tls = ["reqwest/default-tls", "breez-sdk-common/default-tls"]
-rustls-tls = ["reqwest/rustls-tls", "breez-sdk-common/rustls-tls"]
-native-tls = ["reqwest/native-tls", "breez-sdk-common/native-tls"]
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
@@ -42,7 +37,7 @@ macros.workspace = true
 nostr.workspace = true
 openssl = { workspace = true, optional = true }
 qrcode-rs.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 shellwords.workspace = true

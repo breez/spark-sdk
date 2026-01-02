@@ -24,6 +24,8 @@ pub enum ServiceConnectivityError {
     Other(String),
 }
 
+// Reqwest error conversion (WASM only)
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 impl From<reqwest::Error> for ServiceConnectivityError {
     fn from(err: reqwest::Error) -> Self {
         let mut err_str = err.to_string();
@@ -32,8 +34,7 @@ impl From<reqwest::Error> for ServiceConnectivityError {
             err_str.push_str(format!(" : {src}").as_str());
             walk = src;
         }
-        #[allow(unused_mut)]
-        let mut res = if err.is_builder() {
+        if err.is_builder() {
             Self::Builder(err_str)
         } else if err.is_redirect() {
             Self::Redirect(err_str)
@@ -52,11 +53,20 @@ impl From<reqwest::Error> for ServiceConnectivityError {
             Self::Decode(err_str)
         } else {
             Self::Other(err_str)
-        };
-        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-        if err.is_connect() {
-            res = Self::Connect(err.to_string());
         }
-        res
+    }
+}
+
+// Bitreq error conversion (native only)
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+impl From<bitreq::Error> for ServiceConnectivityError {
+    fn from(err: bitreq::Error) -> Self {
+        let err_str = format!("{err:?}");
+        match err {
+            bitreq::Error::IoError(_) => Self::Connect(err_str),
+            bitreq::Error::InvalidUtf8InBody(_) => Self::Decode(err_str),
+            bitreq::Error::Other(msg) => Self::Other(msg.to_string()),
+            _ => Self::Other(err_str),
+        }
     }
 }
