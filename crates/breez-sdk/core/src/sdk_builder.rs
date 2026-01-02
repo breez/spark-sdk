@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
-    rest::ReqwestRestClient as CommonRequestRestClient,
+    rest::DefaultRestClient as CommonDefaultRestClient,
 };
 
 use flashnet::{CacheStore, FlashnetClient, FlashnetConfig};
@@ -23,7 +23,7 @@ use crate::{
         rest_client::{BasicAuth, ChainApiType, RestClientChainService},
     },
     error::SdkError,
-    lnurl::{LnurlServerClient, ReqwestLnurlServerClient},
+    lnurl::{DefaultLnurlServerClient, LnurlServerClient},
     models::Config,
     nostr::NostrClient,
     payment_observer::{PaymentObserver, SparkTransferObserver},
@@ -150,7 +150,7 @@ impl SdkBuilder {
             url,
             self.config.network,
             5,
-            Box::new(CommonRequestRestClient::new().unwrap()),
+            Box::new(CommonDefaultRestClient::new().unwrap()),
             credentials.map(|c| BasicAuth::new(c.username, c.password)),
             api_type,
         )));
@@ -230,7 +230,7 @@ impl SdkBuilder {
             service
         } else {
             let inner_client =
-                CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?;
+                CommonDefaultRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?;
             match self.config.network {
                 Network::Mainnet => Arc::new(RestClientChainService::new(
                     "https://blockstream.info/api".to_string(),
@@ -305,7 +305,7 @@ impl SdkBuilder {
         let lnurl_client: Arc<dyn breez_sdk_common::rest::RestClient> = match self.lnurl_client {
             Some(client) => Arc::new(RestClientWrapper::new(client)),
             None => Arc::new(
-                CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?,
+                CommonDefaultRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?,
             ),
         };
         let user_agent = format!(
@@ -339,12 +339,14 @@ impl SdkBuilder {
             Some(client) => Some(client),
             None => match &self.config.lnurl_domain {
                 Some(domain) => {
-                    // Get the SparkWallet instance for signing
-                    Some(Arc::new(ReqwestLnurlServerClient::new(
+                    let rest_client: Arc<dyn breez_sdk_common::rest::RestClient> =
+                        Arc::new(CommonDefaultRestClient::new()?);
+                    Some(Arc::new(DefaultLnurlServerClient::new(
+                        rest_client,
                         domain.clone(),
                         self.config.api_key.clone(),
                         Arc::clone(&spark_wallet),
-                    )?))
+                    )))
                 }
                 None => None,
             },

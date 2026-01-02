@@ -15,7 +15,7 @@ use crate::{
         SparkAddressDetails, SparkInvoiceDetails,
     },
     lnurl::{auth, error::LnurlError, pay::LnurlPayRequestDetails},
-    rest::{ReqwestRestClient, RestClient, RestResponse},
+    rest::{DefaultRestClient, RestClient, RestResponse},
 };
 
 use super::{
@@ -39,7 +39,7 @@ pub async fn parse(
 ) -> Result<InputType, ParseError> {
     InputParser::new(
         dns::Resolver::new(),
-        ReqwestRestClient::new()?,
+        DefaultRestClient::new()?,
         external_input_parsers,
     )
     .parse(input)
