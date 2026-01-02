@@ -3,6 +3,7 @@ mod auth;
 mod cache;
 mod config;
 mod error;
+mod http;
 mod models;
 mod pool_selection;
 mod utils;
