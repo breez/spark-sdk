@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use serde::{Deserialize, Serialize};
@@ -73,7 +71,7 @@ pub fn build_pay_callback_url(
     pay_request: &LnurlPayRequestDetails,
 ) -> LnurlResult<String> {
     let amount_msat = user_amount_msat.to_string();
-    let mut url = reqwest::Url::from_str(&pay_request.callback)
+    let mut url = url::Url::parse(&pay_request.callback)
         .map_err(|_| LnurlError::invalid_uri("invalid callback uri"))?;
 
     url.query_pairs_mut().append_pair("amount", &amount_msat);
@@ -374,14 +372,14 @@ impl UrlSuccessActionData {
             )
         );
 
-        let req_url = reqwest::Url::parse(&pay_request.callback)
+        let req_url = url::Url::parse(&pay_request.callback)
             .map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
         let req_domain = req_url
             .domain()
             .ok_or_else(|| LnurlError::InvalidUri("Could not determine callback domain".into()))?;
 
         let action_res_url =
-            reqwest::Url::parse(&self.url).map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
+            url::Url::parse(&self.url).map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
         let action_res_domain = action_res_url.domain().ok_or_else(|| {
             LnurlError::invalid_uri("Could not determine Success Action URL domain")
         })?;
