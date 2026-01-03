@@ -7,15 +7,13 @@ use crate::{
     Network,
     operator::{
         OperatorPool,
-        rpc::{
-            self,
-            spark_token::{QueryTokenMetadataRequest, QueryTokenOutputsRequest},
-        },
+        rpc::{self, QueryAllTokenOutputsRequest, spark_token::QueryTokenMetadataRequest},
     },
     signer::Signer,
     token::{
-        GetTokenOutputsFilter, TokenMetadata, TokenOutputService, TokenOutputStore,
-        TokenOutputWithPrevOut, TokenOutputs, TokenOutputsReservation, TokenOutputsReservationId,
+        GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy,
+        TokenMetadata, TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs,
+        TokenOutputsPerStatus, TokenOutputsReservation, TokenOutputsReservationId,
         error::TokenOutputServiceError,
     },
 };
@@ -31,7 +29,9 @@ pub struct SynchronousTokenOutputService {
 
 #[macros::async_trait]
 impl TokenOutputService for SynchronousTokenOutputService {
-    async fn list_tokens_outputs(&self) -> Result<Vec<TokenOutputs>, TokenOutputServiceError> {
+    async fn list_tokens_outputs(
+        &self,
+    ) -> Result<Vec<TokenOutputsPerStatus>, TokenOutputServiceError> {
         self.state.list_tokens_outputs().await
     }
 
@@ -40,7 +40,7 @@ impl TokenOutputService for SynchronousTokenOutputService {
             .operator_pool
             .get_coordinator()
             .client
-            .query_token_outputs(QueryTokenOutputsRequest {
+            .query_all_token_outputs(QueryAllTokenOutputsRequest {
                 owner_public_keys: vec![
                     self.signer
                         .get_identity_public_key()
@@ -51,8 +51,7 @@ impl TokenOutputService for SynchronousTokenOutputService {
                 network: self.network.to_proto_network().into(),
                 ..Default::default()
             })
-            .await?
-            .outputs_with_previous_transaction_data;
+            .await?;
         if outputs.is_empty() {
             // Clear stored token outputs if none are returned
             self.state.set_tokens_outputs(&[]).await?;
@@ -120,15 +119,23 @@ impl TokenOutputService for SynchronousTokenOutputService {
     async fn reserve_token_outputs(
         &self,
         token_identifier: &str,
-        amount: u128,
+        target: ReservationTarget,
+        purpose: ReservationPurpose,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
         let mut reservation: Option<TokenOutputsReservation> = None;
 
         for i in 0..SELECT_TOKEN_OUTPUTS_MAX_RETRIES {
             let reserve_res = self
                 .state
-                .reserve_token_outputs(token_identifier, amount, preferred_outputs.clone())
+                .reserve_token_outputs(
+                    token_identifier,
+                    target,
+                    purpose,
+                    preferred_outputs.clone(),
+                    selection_strategy,
+                )
                 .await;
             if let Ok(token_outputs_reservation) = reserve_res {
                 reservation = Some(token_outputs_reservation);
@@ -137,17 +144,16 @@ impl TokenOutputService for SynchronousTokenOutputService {
 
             info!("Failed to reserve token outputs, refreshing and retrying");
             self.refresh_tokens_outputs().await?;
-            let available_amount: u128 = self
+            let token_balance = self
                 .state
                 .get_token_outputs(GetTokenOutputsFilter::Identifier(token_identifier))
                 .await?
-                .outputs
-                .iter()
-                .map(|o| o.output.token_amount)
-                .sum();
-            if amount > available_amount {
+                .balance();
+            if let ReservationTarget::MinTotalValue(amount) = &target
+                && *amount > token_balance
+            {
                 info!(
-                    "Insufficient funds to select token outputs after refresh: requested {amount}, available {available_amount}"
+                    "Insufficient funds to select token outputs after refresh: requested {amount}, balance {token_balance}"
                 );
                 break;
             }
