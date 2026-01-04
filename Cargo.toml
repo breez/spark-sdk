@@ -45,7 +45,6 @@ arithmetic_side_effects = "warn"
 aes = "0.8.4"
 anyhow = "1.0.98"
 async-trait = "0.1.88"
-axum = "0.8.4"
 base64 = "0.22.1"
 bech32 = "0.11.0"
 bip39 = "2.2.0"
@@ -132,7 +131,6 @@ tokio_with_wasm = { version = "0.8.7", features = [
 tonic = { version = "0.12.3", default-features = false }
 tonic-build = { version = "0.12.3", features = ["prost"] }
 tonic-web-wasm-client = "0.6"
-tower-http = "0.6.6"
 tower-service = "0.3.3"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
@@ -144,5 +142,4 @@ wasm-bindgen-futures = "0.4.50"
 wasm-bindgen-test = "0.3.50"
 web-sys = { version = "0.3.77", features = ["console", "DomException"] }
 web-time = { version = "1.1.0", features = ["serde"] }
-x509-parser = "0.18.0"
 xshell = "0.2"
