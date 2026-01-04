@@ -2,10 +2,10 @@ use base64::{Engine as _, engine::general_purpose};
 use bitcoin::{Address, address::NetworkUnchecked};
 use breez_sdk_common::rest::RestClient as CommonRestClient;
 use breez_sdk_common::{error::ServiceConnectivityError, rest::RestResponse};
+use platform_utils::tokio;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio_with_wasm::alias as tokio;
 use tracing::info;
 
 use crate::chain::RecommendedFees;

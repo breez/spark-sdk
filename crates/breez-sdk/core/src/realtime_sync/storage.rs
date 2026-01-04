@@ -15,7 +15,7 @@ use crate::{
     DepositInfo, EventEmitter, ListPaymentsRequest, Payment, PaymentDetails, PaymentMetadata,
     Storage, StorageError, UpdateDepositPayload, events::InternalSyncedEvent,
 };
-use tokio_with_wasm::alias as tokio;
+use platform_utils::tokio;
 
 const INITIAL_SYNC_CACHE_KEY: &str = "sync_initial_complete";
 

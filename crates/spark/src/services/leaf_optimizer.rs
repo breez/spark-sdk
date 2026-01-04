@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
+use platform_utils::tokio;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, watch};
-use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, info, trace};
 
 use crate::{

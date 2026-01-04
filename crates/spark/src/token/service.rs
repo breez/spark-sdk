@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use tokio_with_wasm::alias as tokio;
+use platform_utils::tokio;
 use tracing::{info, warn};
 
 use crate::{

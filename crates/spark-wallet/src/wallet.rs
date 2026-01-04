@@ -8,6 +8,7 @@ use bitcoin::{
     secp256k1::{PublicKey, ecdsa::Signature},
 };
 
+use platform_utils::tokio;
 use spark::{
     address::{
         SatsPayment, SparkAddress, SparkAddressPaymentType, SparkInvoiceFields, TokensPayment,
@@ -45,7 +46,6 @@ use spark::{
     utils::paging::{PagingFilter, PagingResult},
 };
 use tokio::sync::{broadcast, watch};
-use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, info, trace};
 use web_time::{SystemTime, UNIX_EPOCH};
 

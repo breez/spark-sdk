@@ -658,6 +658,7 @@ dependencies = [
  "macros",
  "mockall",
  "percent-encoding-rfc3986",
+ "platform-utils",
  "prost",
  "rand 0.8.5",
  "regex",
@@ -732,6 +733,7 @@ dependencies = [
  "macros",
  "nostr",
  "openssl",
+ "platform-utils",
  "qrcode-rs",
  "reqwest",
  "rusqlite",
@@ -3382,6 +3384,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
+name = "platform-utils"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "tokio_with_wasm",
+]
+
+[[package]]
 name = "poly1305"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4630,6 +4640,7 @@ dependencies = [
  "k256",
  "lightning-invoice",
  "macros",
+ "platform-utils",
  "prost",
  "prost-types",
  "rand 0.8.5",
@@ -4710,6 +4721,7 @@ dependencies = [
  "frost-secp256k1-tr-unofficial",
  "futures",
  "hex",
+ "platform-utils",
  "serde",
  "spark",
  "thiserror 2.0.14",

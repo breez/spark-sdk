@@ -36,6 +36,7 @@ lnurl-models.workspace = true
 macros.workspace = true
 nostr.workspace = true
 openssl = { workspace = true, optional = true }
+platform-utils.workspace = true
 qrcode-rs.workspace = true
 reqwest = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
@@ -44,7 +45,6 @@ shellwords.workspace = true
 spark-wallet.workspace = true
 tempdir.workspace = true
 thiserror.workspace = true
-tokio_with_wasm.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid.workspace = true
@@ -57,13 +57,14 @@ zbase32 = "0.1.2"
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 tokio = { workspace = true, features = ["macros"] }
+tokio_with_wasm.workspace = true
 
 [dev-dependencies]
 breez-sdk-common = { workspace = true, features = ["test-utils"] }

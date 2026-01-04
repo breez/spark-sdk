@@ -11,19 +11,21 @@ bitcoin = { workspace = true, features = ["serde"] }
 frost-secp256k1-tr.workspace = true
 futures.workspace = true
 hex.workspace = true
+platform-utils.workspace = true
 serde = { workspace = true, features = ["derive"] }
 spark.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["time"] }
-tokio_with_wasm.workspace = true
 tonic.workspace = true
 tracing.workspace = true
 web-time.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 uuid.workspace = true
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+tokio = { workspace = true, features = ["macros"] }
+tokio_with_wasm.workspace = true
 uuid = { workspace = true, features = ["js"] }

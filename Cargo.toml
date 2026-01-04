@@ -11,13 +11,14 @@ members = [
   "crates/breez-sdk/bindings",
   "crates/breez-sdk/cli",
   "crates/breez-sdk/common",
-  "crates/breez-sdk/core", 
+  "crates/breez-sdk/core",
   "crates/breez-sdk/lnurl-models",
   "crates/breez-sdk/breez-itest",
   "crates/breez-sdk/breez-bench",
   "crates/breez-sdk/wasm",
   "crates/macros",
   "crates/macro_test",
+  "crates/platform-utils",
   "crates/spark",
   "crates/spark-itest",
   "crates/spark-wallet",
@@ -85,6 +86,7 @@ lightning-invoice = "0.33.1"
 lnurl-models = { path = "crates/breez-sdk/lnurl-models" }
 macros = { path = "crates/macros" }
 nostr = { version = "0.43.1", default-features = false, features = ["std", "nip57"] }
+platform-utils = { path = "crates/platform-utils" }
 openssl = { version = "0.10.70", default-features = false, features = ["vendored"] }
 percent-encoding-rfc3986 = "0.1.3"
 proc-macro2 = "1.0.97"
