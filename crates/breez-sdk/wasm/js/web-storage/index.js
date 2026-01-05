@@ -198,6 +198,33 @@ class MigrationManager {
             store.clear();
           }
         }
+      },
+      {
+        name: "Clear sync tables for BreezSigner backward compatibility",
+        upgrade: (db, transaction) => {
+          // Clear all sync tables due to BreezSigner signature change.
+          // This forces users to sync from scratch to the sync server.
+          // Also delete the sync_initial_complete flag to force re-populating
+          // all payment metadata for outgoing sync using the new key.
+
+          const syncOutgoing = transaction.objectStore("sync_outgoing");
+          const syncIncoming = transaction.objectStore("sync_incoming");
+          const syncState = transaction.objectStore("sync_state");
+          const syncRevision = transaction.objectStore("sync_revision");
+          const settings = transaction.objectStore("settings");
+
+          // Clear sync tables
+          syncOutgoing.clear();
+          syncIncoming.clear();
+          syncState.clear();
+
+          // Reset revision to 0
+          syncRevision.clear();
+          syncRevision.put({ id: 1, revision: "0" });
+
+          // Delete sync_initial_complete setting
+          settings.delete("sync_initial_complete");
+        }
       }
     ];
   }
@@ -222,7 +249,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 6; // Current schema version
+    this.dbVersion = 7; // Current schema version
   }
 
   /**
