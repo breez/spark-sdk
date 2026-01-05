@@ -121,6 +121,20 @@ impl BreezSigner for ExternalSignerAdapter {
         sig_bytes.to_signature()
     }
 
+    async fn hmac_sha256(
+        &self,
+        key_path: &DerivationPath,
+        input: &[u8],
+    ) -> Result<bitcoin::hashes::Hmac<bitcoin::hashes::sha256::Hash>, SdkError> {
+        let path_str = derivation_path_to_string(key_path);
+        let hash_bytes = self
+            .external
+            .hmac_sha256(input.to_vec(), path_str)
+            .await
+            .map_err(|e| SdkError::Signer(format!("External signer hmac_sha256 failed: {e}")))?;
+        hash_bytes.to_hmac()
+    }
+
     async fn generate_frost_signing_commitments(
         &self,
     ) -> Result<spark_wallet::FrostSigningCommitmentsWithNonces, SdkError> {

@@ -1,4 +1,4 @@
-use crate::error::SignerError;
+use crate::{error::SignerError, signer::HashedMessageBytes};
 
 use super::external_types::{
     EcdsaSignatureBytes, ExternalAggregateFrostRequest, ExternalEncryptedPrivateKey,
@@ -96,6 +96,19 @@ pub trait ExternalSigner: Send + Sync {
         path: String,
     ) -> Result<SchnorrSignatureBytes, SignerError>;
 
+    /// HMAC-SHA256 of a message at the given derivation path.
+    ///
+    /// # Arguments
+    /// * `message` - The message to hash
+    /// * `path` - BIP32 derivation path as a string
+    ///
+    /// # Returns
+    /// 32-byte HMAC-SHA256, or a `SignerError`
+    async fn hmac_sha256(
+        &self,
+        message: Vec<u8>,
+        path: String,
+    ) -> Result<HashedMessageBytes, SignerError>;
     /// Generates Frost signing commitments for multi-party signing.
     ///
     /// # Returns

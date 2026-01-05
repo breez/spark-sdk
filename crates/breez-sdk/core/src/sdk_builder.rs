@@ -31,7 +31,8 @@ use crate::{
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams},
     signer::{
-        breez::BreezSignerImpl, nostr::NostrSigner, rtsync::RTSyncSigner, spark::SparkSigner,
+        breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, nostr::NostrSigner,
+        rtsync::RTSyncSigner, spark::SparkSigner,
     },
     sync_storage::SyncStorage,
 };
@@ -278,6 +279,7 @@ impl SdkBuilder {
                 .await
                 .map_err(|e| SdkError::Generic(format!("{e:?}")))?,
         );
+        let lnurl_auth_signer = Arc::new(LnurlAuthSignerAdapter::new(signer.clone()));
 
         let chain_service = if let Some(service) = self.chain_service {
             service
@@ -443,6 +445,7 @@ impl SdkBuilder {
             fiat_service,
             lnurl_client,
             lnurl_server_client,
+            lnurl_auth_signer,
             shutdown_sender,
             spark_wallet,
             event_emitter,

@@ -1,4 +1,5 @@
 use crate::error::SignerError;
+use crate::signer::HashedMessageBytes;
 #[cfg(test)]
 use crate::signer::external_types::derivation_path_to_string;
 use crate::signer::external_types::{
@@ -136,6 +137,21 @@ impl ExternalSigner for DefaultExternalSigner {
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(SchnorrSignatureBytes::from_signature(&sig))
+    }
+
+    async fn hmac_sha256(
+        &self,
+        message: Vec<u8>,
+        path: String,
+    ) -> Result<HashedMessageBytes, SignerError> {
+        let derivation_path =
+            string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
+        let sig = self
+            .inner
+            .hmac_sha256(&derivation_path, &message)
+            .await
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        Ok(HashedMessageBytes::from_hmac(&sig))
     }
 
     async fn generate_frost_signing_commitments(

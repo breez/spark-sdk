@@ -1,9 +1,8 @@
-use std::str::FromStr;
-
-use bitcoin::bip32::{ChildNumber, Xpub};
+use bitcoin::bip32::ChildNumber;
+use bitcoin::secp256k1::PublicKey;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use tracing::{error, warn};
+use tracing::warn;
 
 use crate::rest::{RestClient, RestResponse, parse_json};
 
@@ -38,7 +37,7 @@ pub struct LnurlAuthRequestDetails {
 
 #[macros::async_trait]
 pub trait LnurlAuthSigner {
-    async fn derive_bip32_pub_key(&self, derivation_path: &[ChildNumber]) -> LnurlResult<Vec<u8>>;
+    async fn derive_public_key(&self, derivation_path: &[ChildNumber]) -> LnurlResult<PublicKey>;
     async fn sign_ecdsa(&self, msg: &[u8], derivation_path: &[ChildNumber])
     -> LnurlResult<Vec<u8>>;
     async fn hmac_sha256(
@@ -60,7 +59,7 @@ pub async fn perform_lnurl_auth<C: RestClient + ?Sized, S: LnurlAuthSigner>(
     auth_request: &LnurlAuthRequestDetails,
     signer: &S,
 ) -> LnurlResult<LnurlCallbackStatus> {
-    let url = Url::from_str(&auth_request.url).map_err(|e| {
+    let url = Url::parse(&auth_request.url).map_err(|e| {
         warn!("Lnurl auth URL is invalid: {:?}", e);
         LnurlError::invalid_uri("invalid lnurl auth uri")
     })?;
@@ -71,14 +70,10 @@ pub async fn perform_lnurl_auth<C: RestClient + ?Sized, S: LnurlAuthSigner>(
             &derivation_path,
         )
         .await?;
-    let xpub_bytes = signer.derive_bip32_pub_key(&derivation_path).await?;
-    let xpub = Xpub::decode(xpub_bytes.as_slice()).map_err(|e| {
-        error!("Failed to decode xpub: {:?}", e);
-        LnurlError::General("failed to decode xpub".to_string())
-    })?;
+    let public_key = signer.derive_public_key(&derivation_path).await?;
 
     // <LNURL_hostname_and_path>?<LNURL_existing_query_parameters>&sig=<hex(sign(utf8ToBytes(k1), linkingPrivKey))>&key=<hex(linkingKey)>
-    let mut callback_url = Url::from_str(&auth_request.url).map_err(|e| {
+    let mut callback_url = Url::parse(&auth_request.url).map_err(|e| {
         warn!("Lnurl auth callback URL is invalid: {:?}", e);
         LnurlError::invalid_uri("invalid lnurl auth callback uri")
     })?;
@@ -87,7 +82,7 @@ pub async fn perform_lnurl_auth<C: RestClient + ?Sized, S: LnurlAuthSigner>(
         .append_pair("sig", &hex::encode(&sig));
     callback_url
         .query_pairs_mut()
-        .append_pair("key", &xpub.public_key.to_string());
+        .append_pair("key", &public_key.to_string());
     let RestResponse { body, .. } = rest_client
         .get_request(callback_url.to_string(), None)
         .await?;

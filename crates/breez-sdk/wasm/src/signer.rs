@@ -34,6 +34,11 @@ pub struct PrivateKeyBytes {
     pub bytes: Vec<u8>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::HashedMessageBytes)]
+pub struct HashedMessageBytes {
+    pub bytes: Vec<u8>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalTreeNodeId)]
 pub struct ExternalTreeNodeId {
     pub id: String,
@@ -401,6 +406,19 @@ impl DefaultSigner {
             .map(|sig| sig.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
+
+    #[wasm_bindgen(js_name = "hmacSha256")]
+    pub async fn hmac_sha256(
+        &self,
+        message: Vec<u8>,
+        path: String,
+    ) -> Result<HashedMessageBytes, JsValue> {
+        self.inner
+            .hmac_sha256(message, path)
+            .await
+            .map(|h| h.into())
+            .map_err(|e| JsValue::from_str(&format!("{e:?}")))
+    }
 }
 
 use breez_sdk_spark::SignerError;
@@ -542,6 +560,14 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
         request: core_types::ExternalAggregateFrostRequest,
     ) -> Result<core_types::ExternalFrostSignature, SignerError> {
         self.inner.aggregate_frost_signatures(request).await
+    }
+
+    async fn hmac_sha256(
+        &self,
+        message: Vec<u8>,
+        path: String,
+    ) -> Result<core_types::HashedMessageBytes, SignerError> {
+        self.inner.hmac_sha256(message, path).await
     }
 }
 
@@ -896,6 +922,26 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
             })?;
         Ok(wasm_sig.into())
     }
+
+    async fn hmac_sha256(
+        &self,
+        message: Vec<u8>,
+        path: String,
+    ) -> Result<core_types::HashedMessageBytes, SignerError> {
+        let promise = self
+            .inner
+            .hmac_sha256(message, path)
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let future = JsFuture::from(promise);
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let wasm_hash: HashedMessageBytes =
+            serde_wasm_bindgen::from_value(result).map_err(|e| {
+                SignerError::Generic(format!("Failed to deserialize HMAC-SHA256 hash: {}", e))
+            })?;
+        Ok(wasm_hash.into())
+    }
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -919,6 +965,7 @@ const SIGNER_INTERFACE: &'static str = r#"export interface ExternalSigner {
     getPublicKeyFromPrivateKeySource(privateKey: ExternalPrivateKeySource): Promise<PublicKeyBytes>;
     signFrost(request: ExternalSignFrostRequest): Promise<ExternalFrostSignatureShare>;
     aggregateFrost(request: ExternalAggregateFrostRequest): Promise<ExternalFrostSignature>;
+    hmacSha256(message: Uint8Array, path: string): Promise<HashedMessageBytes>;
 }"#;
 
 #[wasm_bindgen]
@@ -1045,5 +1092,12 @@ extern "C" {
     pub fn aggregate_frost(
         this: &JsExternalSigner,
         request: ExternalAggregateFrostRequest,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "hmacSha256", catch)]
+    pub fn hmac_sha256(
+        this: &JsExternalSigner,
+        message: Vec<u8>,
+        path: String,
     ) -> Result<Promise, JsValue>;
 }
