@@ -30,7 +30,7 @@ tempdir = "0.3.7"
 testcontainers.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-dotenvy.workspace = true
+dotenvy = "0.15.7"
 rand.workspace = true
 uuid.workspace = true
 futures.workspace = true
