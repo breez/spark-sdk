@@ -1548,6 +1548,11 @@ async fn claim_pending_transfers(
         );
     }
 
+    let mut transfers = transfers;
+    for transfer in transfers.items.iter_mut() {
+        transfer.status = TransferStatus::Completed;
+    }
+
     debug!("Claimed all transfers, creating wallet transfers");
     Ok(create_transfers(
         transfers,
@@ -1802,6 +1807,7 @@ impl BackgroundProcessor {
     }
 
     async fn process_transfer_event(&self, transfer: Transfer) -> Result<(), SparkWalletError> {
+        // Skip claiming counter swap transfer as these are claimed synchronously by the Swap::swap_leaves() method.
         if transfer.transfer_type == spark::services::TransferType::CounterSwap {
             debug!(
                 "Received counter swap transfer, not claiming: {:?}",
