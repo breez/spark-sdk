@@ -456,6 +456,7 @@ dependencies = [
  "chrono",
  "ecies",
  "flashnet",
+ "frost-secp256k1-tr-unofficial",
  "hex",
  "lnurl-models",
  "macros",

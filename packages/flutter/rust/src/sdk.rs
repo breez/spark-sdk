@@ -88,6 +88,13 @@ impl BreezSdk {
         self.inner.lnurl_withdraw(request).await
     }
 
+    pub async fn lnurl_auth(
+        &self,
+        request_data: LnurlAuthRequestDetails,
+    ) -> Result<LnurlCallbackStatus, SdkError> {
+        self.inner.lnurl_auth(request_data).await
+    }
+
     pub async fn prepare_send_payment(
         &self,
         request: PrepareSendPaymentRequest,
