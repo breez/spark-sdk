@@ -124,6 +124,12 @@ fn to_sequence(blocks: u16, spark_sequence_flag: u32) -> Sequence {
 fn check_next_timelock(current_sequence: Sequence) -> Option<u16> {
     trace!("Current sequence: {current_sequence:?}");
     let current_sequence_num = current_sequence.to_consensus_u32();
+
+    if current_sequence_num > u16::MAX as u32 {
+        trace!("Sequence number {} exceeds u16 max", current_sequence_num);
+        return None;
+    }
+    
     let timelock = current_sequence_num as u16;
     timelock.checked_sub(TIME_LOCK_INTERVAL).or_else(|| {
         trace!(
