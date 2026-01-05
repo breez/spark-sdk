@@ -32,20 +32,15 @@ bitcoin.workspace = true
 bitflags.workspace = true
 breez-sdk-common.workspace = true
 chrono.workspace = true
-clap = { workspace = true, features = ["derive"] }
-dotenvy.workspace = true
 ecies.workspace = true
-figment = { workspace = true, features = ["env", "yaml"] }
 hex.workspace = true
 lnurl-models.workspace = true
 macros.workspace = true
 nostr.workspace = true
 openssl = { workspace = true, optional = true }
-qrcode-rs.workspace = true
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-shellwords.workspace = true
 spark-wallet.workspace = true
 tempdir.workspace = true
 thiserror.workspace = true
@@ -56,9 +51,7 @@ uuid.workspace = true
 uniffi = { workspace = true, optional = true }
 web-time.workspace = true
 x509-parser = { version = "0.16.0" }
-semver = "1.0.27"
 anyhow.workspace = true
-zbase32 = "0.1.2"
 frost-secp256k1-tr = { workspace = true }
 
 # Non-Wasm dependencies

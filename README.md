@@ -109,13 +109,13 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] LNURL-Withdraw
 - [x] Sign and verify arbitrary messages 
 - [x] Real-time sync
+- [x] External input parsers
 - [ ] External signer
 - [ ] Seedless restore
 - [ ] NWC
 - [ ] WebLN
 - [ ] LNURL-Auth
 - [ ] Fiat on-ramp
-- [ ] External input parsers
 - [ ] BTC <> USDX swaps
 - [ ] Hodl invoice support 
 - [ ] Bolt12
