@@ -1,7 +1,7 @@
 use crate::{Seed, error::SdkError, models::Config};
 use bitcoin::bip32::DerivationPath;
 use bitcoin::hashes::Hash;
-use bitcoin::secp256k1::{self, Message, Secp256k1};
+use bitcoin::secp256k1::{self, Message, Secp256k1, rand::thread_rng};
 use spark_wallet::{DefaultSigner, KeySet, KeySetType, Signer};
 
 use super::BreezSigner;
@@ -133,6 +133,7 @@ impl BreezSigner for BreezSignerImpl {
         &self,
         hash: &[u8],
         path: &DerivationPath,
+        use_aux_rand: bool,
     ) -> Result<secp256k1::schnorr::Signature, SdkError> {
         let derived = self
             .key_set
@@ -142,7 +143,14 @@ impl BreezSigner for BreezSignerImpl {
         let message =
             Message::from_digest_slice(hash).map_err(|e| SdkError::Generic(e.to_string()))?;
         let keypair = derived.private_key.keypair(&self.secp);
-        Ok(self.secp.sign_schnorr(&message, &keypair))
+
+        // Use auxiliary randomness based on the flag
+        Ok(if use_aux_rand {
+            let mut rng = thread_rng();
+            self.secp.sign_schnorr_with_rng(&message, &keypair, &mut rng)
+        } else {
+            self.secp.sign_schnorr_no_aux_rand(&message, &keypair)
+        })
     }
 
     async fn generate_frost_signing_commitments(

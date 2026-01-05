@@ -35,6 +35,7 @@ pub trait BreezSigner: Send + Sync {
         &self,
         hash: &[u8],
         path: &DerivationPath,
+        use_aux_rand: bool,
     ) -> Result<secp256k1::schnorr::Signature, SdkError>;
 
     async fn derive_public_key(

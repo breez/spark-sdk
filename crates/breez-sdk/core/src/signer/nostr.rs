@@ -66,9 +66,10 @@ impl NostrSigner {
         let event_id = unsigned_event.id();
 
         // Sign the event ID using the signer's Schnorr signing
+        // Use auxiliary randomness (true) for enhanced security in Nostr event signatures
         let signature = self
             .signer
-            .sign_hash_schnorr(event_id.as_bytes(), &self.derivation_path)
+            .sign_hash_schnorr(event_id.as_bytes(), &self.derivation_path, true)
             .await
             .map_err(|e| NostrSignerError::ZapReceiptCreationError(e.to_string()))?;
 
