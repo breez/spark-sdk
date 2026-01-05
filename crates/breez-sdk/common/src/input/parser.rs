@@ -2,7 +2,6 @@ use std::ops::Not;
 
 use bitcoin::{Address, Denomination, address::NetworkUnchecked};
 use lightning::bolt11_invoice::Bolt11InvoiceDescriptionRef;
-use percent_encoding_rfc3986::{NON_ALPHANUMERIC, percent_decode_str};
 use regex::Regex;
 use spark_wallet::{SparkAddress, SparkAddressPaymentType};
 use tracing::{debug, error, warn};
@@ -31,6 +30,8 @@ const BIP_353_USER_BITCOIN_PAYMENT_PREFIX: &str = "user._bitcoin-payment";
 const LIGHTNING_PREFIX: &str = "lightning:";
 const LIGHTNING_PREFIX_LEN: usize = LIGHTNING_PREFIX.len();
 const LNURL_HRP: &str = "lnurl";
+
+mod percent_encode;
 
 pub async fn parse(
     input: &str,
@@ -366,8 +367,7 @@ where
             }
 
             // Build URL
-            let urlsafe_input =
-                percent_encoding_rfc3986::utf8_percent_encode(input, NON_ALPHANUMERIC).to_string();
+            let urlsafe_input = percent_encode::encode(input);
             let parser_url = parser.parser_url.replacen("<input>", &urlsafe_input, 1);
 
             // Make request
@@ -565,13 +565,9 @@ fn parse_bip21_key(
             return Err(Bip21Error::multiple_params(key));
         }
         "label" => {
-            let percent_decoded =
-                percent_decode_str(value).map_err(Bip21Error::invalid_parameter_func("label"))?;
             bip_21.label = Some(
-                percent_decoded
-                    .decode_utf8()
-                    .map_err(Bip21Error::invalid_parameter_func("label"))?
-                    .to_string(),
+                percent_encode::decode(value)
+                    .map_err(Bip21Error::invalid_parameter_func("label"))?,
             );
         }
         "lightning" => {
@@ -592,13 +588,9 @@ fn parse_bip21_key(
             return Err(Bip21Error::multiple_params(key));
         }
         "message" => {
-            let percent_decoded =
-                percent_decode_str(value).map_err(Bip21Error::invalid_parameter_func("label"))?;
             bip_21.message = Some(
-                percent_decoded
-                    .decode_utf8()
-                    .map_err(Bip21Error::invalid_parameter_func("label"))?
-                    .to_string(),
+                percent_encode::decode(value)
+                    .map_err(Bip21Error::invalid_parameter_func("message"))?,
             );
         }
         "sp" => {

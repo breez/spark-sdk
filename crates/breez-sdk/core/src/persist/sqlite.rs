@@ -1373,99 +1373,110 @@ impl FromSql for U128SqlWrapper {
 mod tests {
 
     use crate::SqliteStorage;
+    use std::path::PathBuf;
+
+    /// Helper function to create a temporary directory for tests
+    /// Uses std library to avoid external dependency
+    fn create_temp_dir(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        // Use UUID for uniqueness to avoid conflicts between parallel tests
+        path.push(format!("breez-test-{}-{}", name, uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
 
     #[tokio::test]
     async fn test_sqlite_storage() {
-        let temp_dir = tempdir::TempDir::new("sqlite_storage").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+        let temp_dir = create_temp_dir("sqlite_storage");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_sqlite_storage(Box::new(storage)).await;
     }
 
     #[tokio::test]
     async fn test_unclaimed_deposits_crud() {
-        let temp_dir = tempdir::TempDir::new("sqlite_storage_deposits").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+        let temp_dir = create_temp_dir("sqlite_storage_deposits");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_unclaimed_deposits_crud(Box::new(storage)).await;
     }
 
     #[tokio::test]
     async fn test_deposit_refunds() {
-        let temp_dir = tempdir::TempDir::new("sqlite_storage_refund_tx").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+        let temp_dir = create_temp_dir("sqlite_storage_refund_tx");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_deposit_refunds(Box::new(storage)).await;
     }
 
     #[tokio::test]
     async fn test_payment_type_filtering() {
-        let temp_dir = tempdir::TempDir::new("sqlite_storage_type_filter").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+        let temp_dir = create_temp_dir("sqlite_storage_type_filter");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_payment_type_filtering(Box::new(storage)).await;
     }
 
     #[tokio::test]
     async fn test_payment_status_filtering() {
-        let temp_dir = tempdir::TempDir::new("sqlite_storage_status_filter").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+        let temp_dir = create_temp_dir("sqlite_storage_status_filter");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_payment_status_filtering(Box::new(storage)).await;
     }
 
     #[tokio::test]
     async fn test_payment_details_filtering() {
-        let temp_dir = tempdir::TempDir::new("sqlite_storage_details_filter").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+        let temp_dir = create_temp_dir("sqlite_storage_details_filter");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_asset_filtering(Box::new(storage)).await;
     }
 
     #[tokio::test]
     async fn test_timestamp_filtering() {
-        let temp_dir = tempdir::TempDir::new("sqlite_storage_timestamp_filter").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+        let temp_dir = create_temp_dir("sqlite_storage_timestamp_filter");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_timestamp_filtering(Box::new(storage)).await;
     }
 
     #[tokio::test]
     async fn test_spark_htlc_status_filtering() {
-        let temp_dir = tempdir::TempDir::new("sqlite_storage_htlc_filter").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+        let temp_dir = create_temp_dir("sqlite_storage_htlc_filter");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_spark_htlc_status_filtering(Box::new(storage)).await;
     }
 
     #[tokio::test]
     async fn test_combined_filters() {
-        let temp_dir = tempdir::TempDir::new("sqlite_storage_combined_filter").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+        let temp_dir = create_temp_dir("sqlite_storage_combined_filter");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_combined_filters(Box::new(storage)).await;
     }
 
     #[tokio::test]
     async fn test_sort_order() {
-        let temp_dir = tempdir::TempDir::new("sqlite_storage_sort_order").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+        let temp_dir = create_temp_dir("sqlite_storage_sort_order");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_sort_order(Box::new(storage)).await;
     }
 
     #[tokio::test]
     async fn test_payment_request_metadata() {
-        let temp_dir = tempdir::TempDir::new("sqlite_storage_payment_request_metadata").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+        let temp_dir = create_temp_dir("sqlite_storage_payment_request_metadata");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_payment_request_metadata(Box::new(storage)).await;
     }
 
     #[tokio::test]
     async fn test_sync_storage() {
-        let temp_dir = tempdir::TempDir::new("sqlite_sync_storage").unwrap();
-        let storage = SqliteStorage::new(temp_dir.path()).unwrap();
+        let temp_dir = create_temp_dir("sqlite_sync_storage");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_sqlite_sync_storage(Box::new(storage)).await;
     }

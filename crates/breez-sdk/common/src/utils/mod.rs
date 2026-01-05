@@ -1,5 +1,7 @@
 use web_time::SystemTime;
 
+pub mod zbase32;
+
 #[macro_export]
 macro_rules! ensure_sdk {
     ($cond:expr, $err:expr) => {
