@@ -132,15 +132,15 @@ pub enum Command {
         #[arg(short = 'i', long)]
         idempotency_key: Option<String>,
 
-        // If provided, the payment will include a token conversion step, converting from the
-        // specified token to Bitcoin to fulfill the payment.
-        #[arg(long = "from-token")]
-        convert_from_token_identifier: Option<String>,
-
         /// If provided, the payment will include a token conversion step, converting from Bitcoin
         /// to the specified token to fulfill the payment.
-        #[arg(long = "to-token")]
-        convert_to_token_identifier: Option<String>,
+        #[clap(long = "from-bitcoin", conflicts_with = "convert_from_token_identifier", action = clap::ArgAction::SetTrue)]
+        convert_from_bitcoin: Option<bool>,
+
+        // If provided, the payment will include a token conversion step, converting from the
+        // specified token to Bitcoin to fulfill the payment.
+        #[arg(long = "from-token", conflicts_with = "convert_from_bitcoin")]
+        convert_from_token_identifier: Option<String>,
 
         /// The optional maximum slippage in basis points (1/100 of a percent) allowed when
         /// a token conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
@@ -486,30 +486,23 @@ pub(crate) async fn execute_command(
             amount,
             token_identifier,
             idempotency_key,
-            convert_to_token_identifier,
+            convert_from_bitcoin,
             convert_from_token_identifier,
             convert_max_slippage_bps: max_slippage_bps,
         } => {
             let token_conversion_options =
-                match (convert_from_token_identifier, convert_to_token_identifier) {
-                    (Some(from_token_identifier), None) => Some(TokenConversionOptions {
+                match (convert_from_bitcoin, convert_from_token_identifier) {
+                    (Some(true), None) => Some(TokenConversionOptions {
+                        conversion_type: TokenConversionType::FromBitcoin,
+                        max_slippage_bps,
+                    }),
+                    (None, Some(from_token_identifier)) => Some(TokenConversionOptions {
                         conversion_type: TokenConversionType::ToBitcoin {
                             from_token_identifier,
                         },
                         max_slippage_bps,
                     }),
-                    (None, Some(to_token_identifier)) => Some(TokenConversionOptions {
-                        conversion_type: TokenConversionType::FromBitcoin {
-                            to_token_identifier,
-                        },
-                        max_slippage_bps,
-                    }),
-                    (None, None) => None,
-                    (Some(_), Some(_)) => {
-                        return Err(anyhow::anyhow!(
-                            "Cannot specify both from_token and to_token"
-                        ));
-                    }
+                    _ => None,
                 };
             let prepared_payment = sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
@@ -690,20 +683,20 @@ pub(crate) async fn execute_command(
             from_bitcoin,
             token_identifier,
         } => {
-            let conversion_type = if from_bitcoin {
-                TokenConversionType::FromBitcoin {
-                    to_token_identifier: token_identifier,
+            let request = if from_bitcoin {
+                FetchTokenConversionLimitsRequest {
+                    conversion_type: TokenConversionType::FromBitcoin,
+                    token_identifier: Some(token_identifier),
                 }
             } else {
-                TokenConversionType::ToBitcoin {
-                    from_token_identifier: token_identifier,
+                FetchTokenConversionLimitsRequest {
+                    conversion_type: TokenConversionType::ToBitcoin {
+                        from_token_identifier: token_identifier,
+                    },
+                    token_identifier: None,
                 }
             };
-            let res = sdk
-                .fetch_token_conversion_limits(FetchTokenConversionLimitsRequest {
-                    conversion_type,
-                })
-                .await?;
+            let res = sdk.fetch_token_conversion_limits(request).await?;
             print_value(&res)?;
             Ok(true)
         }

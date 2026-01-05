@@ -1,6 +1,7 @@
 import {
   ReceivePaymentMethod,
   SendPaymentMethod_Tags,
+  TokenConversionType,
   type BreezSdk
 } from '@breeztech/breez-sdk-spark-react-native'
 
@@ -74,15 +75,24 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const tokenIdentifier = '<token identifier>'
   // Set the amount of tokens you wish to send.
   const optionalAmount = BigInt(1_000)
+  // Optionally set to use Bitcoin funds to pay via token conversion
+  const optionalTokenConversionOptions = {
+    conversionType: new TokenConversionType.FromBitcoin(),
+    maxSlippageBps: 50
+  }
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
     amount: optionalAmount,
     tokenIdentifier,
-    tokenConversionOptions: undefined
+    tokenConversionOptions: optionalTokenConversionOptions
   })
 
   // If the fees are acceptable, continue to send the token payment
+  if (prepareResponse.tokenConversionFee !== undefined) {
+    const tokenConversionFee = prepareResponse.tokenConversionFee
+    console.debug(`Estimated token conversion fee: ${tokenConversionFee} sats`)
+  }
   if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.SparkAddress) {
     console.log(`Token ID: ${prepareResponse.paymentMethod.inner.tokenIdentifier}`)
     console.log(`Fees: ${prepareResponse.paymentMethod.inner.fee} token base units`)

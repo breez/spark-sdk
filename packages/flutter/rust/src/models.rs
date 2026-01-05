@@ -372,7 +372,6 @@ pub enum _SendPaymentMethod {
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
         spark_transfer_fee_sats: Option<u64>,
-        token_conversion_fee: Option<u128>,
         lightning_fee_sats: u64,
     },
     SparkAddress {
@@ -1009,17 +1008,14 @@ pub struct _TokenConversionOptions {
 
 #[frb(mirror(TokenConversionType))]
 pub enum _TokenConversionType {
-    FromBitcoin {
-        to_token_identifier: String,
-    },
-    ToBitcoin {
-        from_token_identifier: String,
-    },
+    FromBitcoin,
+    ToBitcoin { from_token_identifier: String },
 }
 
 #[frb(mirror(FetchTokenConversionLimitsRequest))]
 pub struct _FetchTokenConversionLimitsRequest {
     pub conversion_type: TokenConversionType,
+    pub token_identifier: Option<String>,
 }
 
 #[frb(mirror(FetchTokenConversionLimitsResponse))]

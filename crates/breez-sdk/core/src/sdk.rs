@@ -1652,7 +1652,11 @@ impl BreezSdk {
                     .amount
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
                 let token_conversion_fee = self
-                    .validate_token_conversion(request.token_conversion_options.as_ref(), amount)
+                    .validate_token_conversion(
+                        request.token_conversion_options.as_ref(),
+                        request.token_identifier.as_ref(),
+                        amount,
+                    )
                     .await?;
 
                 Ok(PrepareSendPaymentResponse {
@@ -1673,7 +1677,11 @@ impl BreezSdk {
                     .or(request.amount)
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
                 let token_conversion_fee = self
-                    .validate_token_conversion(request.token_conversion_options.as_ref(), amount)
+                    .validate_token_conversion(
+                        request.token_conversion_options.as_ref(),
+                        request.token_identifier.as_ref(),
+                        amount,
+                    )
                     .await?;
 
                 Ok(PrepareSendPaymentResponse {
@@ -1718,6 +1726,7 @@ impl BreezSdk {
                 let token_conversion_fee = self
                     .validate_token_conversion(
                         request.token_conversion_options.as_ref(),
+                        request.token_identifier.as_ref(),
                         amount.saturating_add(u128::from(lightning_fee_sats)),
                     )
                     .await?;
@@ -1749,6 +1758,7 @@ impl BreezSdk {
                 let token_conversion_fee = self
                     .validate_token_conversion(
                         request.token_conversion_options.as_ref(),
+                        request.token_identifier.as_ref(),
                         amount.saturating_add(u128::from(fee_quote.speed_fast.total_fee_sat())),
                     )
                     .await?;
@@ -1783,9 +1793,12 @@ impl BreezSdk {
     ) -> Result<FetchTokenConversionLimitsResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
         let (asset_in_address, asset_out_address) = match request.conversion_type {
-            TokenConversionType::FromBitcoin {
-                to_token_identifier,
-            } => (BTC_ASSET_ADDRESS.to_string(), to_token_identifier),
+            TokenConversionType::FromBitcoin => (
+                BTC_ASSET_ADDRESS.to_string(),
+                request.token_identifier.ok_or(SdkError::InvalidInput(
+                    "Token identifier is required for from Bitcoin conversion".to_string(),
+                ))?,
+            ),
             TokenConversionType::ToBitcoin {
                 from_token_identifier,
             } => (from_token_identifier, BTC_ASSET_ADDRESS.to_string()),
@@ -2234,6 +2247,7 @@ impl BreezSdk {
         res
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn convert_token_send_payment_internal(
         &self,
         token_conversion_options: &TokenConversionOptions,
@@ -2250,7 +2264,11 @@ impl BreezSdk {
                     .parse::<SparkAddress>()
                     .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
                 let res = self
-                    .convert_token(token_conversion_options, request.prepare_response.amount)
+                    .convert_token(
+                        token_conversion_options,
+                        request.prepare_response.token_identifier.as_ref(),
+                        request.prepare_response.amount,
+                    )
                     .await?;
                 let is_self_payment = spark_address.identity_public_key
                     == self.spark_wallet.get_identity_public_key();
@@ -2265,7 +2283,11 @@ impl BreezSdk {
                 ..
             } => {
                 let res = self
-                    .convert_token(token_conversion_options, request.prepare_response.amount)
+                    .convert_token(
+                        token_conversion_options,
+                        request.prepare_response.token_identifier.as_ref(),
+                        request.prepare_response.amount,
+                    )
                     .await?;
                 let own_identity_public_key =
                     self.spark_wallet.get_identity_public_key().to_string();
@@ -2295,7 +2317,10 @@ impl BreezSdk {
             }
         };
         // Trigger a wallet state sync if converting from Bitcoin to token
-        if let TokenConversionType::FromBitcoin { .. } = token_conversion_options.conversion_type {
+        if matches!(
+            token_conversion_options.conversion_type,
+            TokenConversionType::FromBitcoin
+        ) {
             let _ = self
                 .sync_trigger
                 .send(SyncRequest::no_reply(SyncType::WalletState));
@@ -2890,8 +2915,12 @@ impl BreezSdk {
             .amount
             .saturating_add(u128::from(fee_sats));
 
-        self.convert_token(token_conversion_options, min_amount_out)
-            .await
+        self.convert_token(
+            token_conversion_options,
+            request.prepare_response.token_identifier.as_ref(),
+            min_amount_out,
+        )
+        .await
     }
 
     async fn convert_token_for_bitcoin_address(
@@ -2918,18 +2947,23 @@ impl BreezSdk {
             .amount
             .saturating_add(u128::from(fee_sats));
 
-        self.convert_token(token_conversion_options, min_amount_out)
-            .await
+        self.convert_token(
+            token_conversion_options,
+            request.prepare_response.token_identifier.as_ref(),
+            min_amount_out,
+        )
+        .await
     }
 
     #[allow(clippy::too_many_lines)]
     async fn convert_token(
         &self,
         conversion_options: &TokenConversionOptions,
+        token_identifier: Option<&String>,
         min_amount_out: u128,
     ) -> Result<TokenConversionResponse, SdkError> {
         let conversion_pool = self
-            .get_token_conversion_pool(&conversion_options.conversion_type)
+            .get_token_conversion_pool(&conversion_options.conversion_type, token_identifier)
             .await?;
         let (amount_in, _) = self
             .validate_token_conversion_internal(
@@ -3017,11 +3051,17 @@ impl BreezSdk {
     async fn get_token_conversion_pool(
         &self,
         conversion_type: &TokenConversionType,
+        token_identifier: Option<&String>,
     ) -> Result<TokenConversionPool, SdkError> {
         let (asset_in_address, asset_out_address) = match conversion_type {
-            TokenConversionType::FromBitcoin {
-                to_token_identifier,
-            } => (BTC_ASSET_ADDRESS.to_string(), to_token_identifier.clone()),
+            TokenConversionType::FromBitcoin => (
+                BTC_ASSET_ADDRESS.to_string(),
+                token_identifier
+                    .ok_or(SdkError::InvalidInput(
+                        "Token identifier is required for from Bitcoin conversion".to_string(),
+                    ))?
+                    .clone(),
+            ),
             TokenConversionType::ToBitcoin {
                 from_token_identifier,
             } => (from_token_identifier.clone(), BTC_ASSET_ADDRESS.to_string()),
@@ -3050,13 +3090,14 @@ impl BreezSdk {
     async fn validate_token_conversion(
         &self,
         conversion_options: Option<&TokenConversionOptions>,
+        token_identifier: Option<&String>,
         amount_out: u128,
     ) -> Result<Option<u128>, SdkError> {
         let Some(conversion_options) = conversion_options else {
             return Ok(None);
         };
         let conversion_pool = self
-            .get_token_conversion_pool(&conversion_options.conversion_type)
+            .get_token_conversion_pool(&conversion_options.conversion_type, token_identifier)
             .await?;
 
         let (_, fee) = self

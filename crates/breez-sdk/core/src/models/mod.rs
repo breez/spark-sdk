@@ -683,8 +683,8 @@ pub enum SendPaymentMethod {
     },
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
-        lightning_fee_sats: u64,
         spark_transfer_fee_sats: Option<u64>,
+        lightning_fee_sats: u64,
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
@@ -1253,7 +1253,7 @@ pub struct TokenConversionOptions {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum TokenConversionType {
     /// Converting from Bitcoin to a token
-    FromBitcoin { to_token_identifier: String },
+    FromBitcoin,
     /// Converting from a token to Bitcoin
     ToBitcoin { from_token_identifier: String },
 }
@@ -1262,6 +1262,9 @@ pub enum TokenConversionType {
 pub struct FetchTokenConversionLimitsRequest {
     /// The type of conversion, either from or to Bitcoin.
     pub conversion_type: TokenConversionType,
+    /// The token identifier when converting to a token.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub token_identifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

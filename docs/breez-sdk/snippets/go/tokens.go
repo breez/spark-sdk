@@ -96,11 +96,18 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	tokenIdentifier := "<token identifier>"
 	// Set the amount of tokens you wish to send.
 	optionalAmount := new(big.Int).SetInt64(1_000)
+	// Optionally set to use Bitcoin funds to pay via token conversion
+	optionalMaxSlippageBps := uint32(50)
+	optionalTokenConversionOptions := &breez_sdk_spark.TokenConversionOptions{
+		ConversionType: breez_sdk_spark.TokenConversionTypeToBitcoin{},
+		MaxSlippageBps: &optionalMaxSlippageBps,
+	}
 
 	prepareResponse, err := sdk.PrepareSendPayment(breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest:  paymentRequest,
-		Amount:          &optionalAmount,
-		TokenIdentifier: &tokenIdentifier,
+		PaymentRequest:         paymentRequest,
+		Amount:                 &optionalAmount,
+		TokenIdentifier:        &tokenIdentifier,
+		TokenConversionOptions: optionalTokenConversionOptions,
 	})
 
 	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
@@ -108,6 +115,9 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	}
 
 	// If the fees are acceptable, continue to send the token payment
+	if prepareResponse.TokenConversionFee != nil {
+		log.Printf("Estimated token conversion fee: %v sats", *prepareResponse.TokenConversionFee)
+	}
 	switch method := prepareResponse.PaymentMethod.(type) {
 	case breez_sdk_spark.SendPaymentMethodSparkAddress:
 		log.Printf("Token ID: %v", method.TokenIdentifier)

@@ -691,8 +691,8 @@ pub enum SendPaymentMethod {
     },
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
-        lightning_fee_sats: u64,
         spark_transfer_fee_sats: Option<u64>,
+        lightning_fee_sats: u64,
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
@@ -1122,13 +1122,14 @@ pub struct TokenConversionOptions {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenConversionType)]
 pub enum TokenConversionType {
-    FromBitcoin { to_token_identifier: String },
+    FromBitcoin,
     ToBitcoin { from_token_identifier: String },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::FetchTokenConversionLimitsRequest)]
 pub struct FetchTokenConversionLimitsRequest {
     pub conversion_type: TokenConversionType,
+    pub token_identifier: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::FetchTokenConversionLimitsResponse)]
