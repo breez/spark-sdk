@@ -207,23 +207,34 @@ class MigrationManager {
           // Also delete the sync_initial_complete flag to force re-populating
           // all payment metadata for outgoing sync using the new key.
 
-          const syncOutgoing = transaction.objectStore("sync_outgoing");
-          const syncIncoming = transaction.objectStore("sync_incoming");
-          const syncState = transaction.objectStore("sync_state");
-          const syncRevision = transaction.objectStore("sync_revision");
-          const settings = transaction.objectStore("settings");
+          // Clear sync tables (only if they exist)
+          if (db.objectStoreNames.contains("sync_outgoing")) {
+            const syncOutgoing = transaction.objectStore("sync_outgoing");
+            syncOutgoing.clear();
+          }
 
-          // Clear sync tables
-          syncOutgoing.clear();
-          syncIncoming.clear();
-          syncState.clear();
+          if (db.objectStoreNames.contains("sync_incoming")) {
+            const syncIncoming = transaction.objectStore("sync_incoming");
+            syncIncoming.clear();
+          }
 
-          // Reset revision to 0
-          syncRevision.clear();
-          syncRevision.put({ id: 1, revision: "0" });
+          if (db.objectStoreNames.contains("sync_state")) {
+            const syncState = transaction.objectStore("sync_state");
+            syncState.clear();
+          }
 
-          // Delete sync_initial_complete setting
-          settings.delete("sync_initial_complete");
+          // Reset revision to 0 (only if store exists)
+          if (db.objectStoreNames.contains("sync_revision")) {
+            const syncRevision = transaction.objectStore("sync_revision");
+            syncRevision.clear();
+            syncRevision.put({ id: 1, revision: "0" });
+          }
+
+          // Delete sync_initial_complete setting (only if store exists)
+          if (db.objectStoreNames.contains("settings")) {
+            const settings = transaction.objectStore("settings");
+            settings.delete("sync_initial_complete");
+          }
         }
       }
     ];
