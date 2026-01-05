@@ -147,7 +147,8 @@ impl BreezSigner for BreezSignerImpl {
         // Use auxiliary randomness based on the flag
         Ok(if use_aux_rand {
             let mut rng = thread_rng();
-            self.secp.sign_schnorr_with_rng(&message, &keypair, &mut rng)
+            self.secp
+                .sign_schnorr_with_rng(&message, &keypair, &mut rng)
         } else {
             self.secp.sign_schnorr_no_aux_rand(&message, &keypair)
         })
