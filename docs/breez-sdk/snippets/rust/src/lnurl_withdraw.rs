@@ -22,7 +22,7 @@ async fn withdraw(sdk: &BreezSdk) -> Result<()> {
             .await?;
 
         let payment = response.payment;
-        info!("Payment: {payment}");
+        info!("Payment: {payment:?}");
     }
     // ANCHOR_END: lnurl-withdraw
 

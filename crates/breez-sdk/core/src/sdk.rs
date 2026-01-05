@@ -44,13 +44,13 @@ use crate::{
     ExternalInputParser, GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest,
     GetTokensMetadataResponse, InputType, LightningAddressInfo, ListFiatCurrenciesResponse,
     ListFiatRatesResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
-    LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse,
-    Logger, MaxFee, Network, OptimizationConfig, OptimizationProgress, PaymentDetails,
-    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
-    SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem, SignMessageRequest,
-    SignMessageResponse, SparkHtlcOptions, UpdateUserSettingsRequest, UserSettings,
-    WaitForPaymentIdentifier,
+    LnurlAuthRequestDetails, LnurlCallbackStatus, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse,
+    LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, MaxFee, Network, OptimizationConfig,
+    OptimizationProgress, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
+    PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
+    RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem,
+    SignMessageRequest, SignMessageResponse, SparkHtlcOptions, UpdateUserSettingsRequest,
+    UserSettings, WaitForPaymentIdentifier,
     chain::RecommendedFees,
     error::SdkError,
     events::{EventEmitter, EventListener, InternalSyncedEvent, SdkEvent},
@@ -165,6 +165,7 @@ pub struct BreezSdk {
     fiat_service: Arc<dyn FiatService>,
     lnurl_client: Arc<dyn RestClient>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
+    lnurl_auth_signer: Arc<crate::signer::lnurl_auth::LnurlAuthSignerAdapter>,
     event_emitter: Arc<EventEmitter>,
     shutdown_sender: watch::Sender<()>,
     sync_trigger: tokio::sync::broadcast::Sender<SyncRequest>,
@@ -233,6 +234,7 @@ pub(crate) struct BreezSdkParams {
     pub fiat_service: Arc<dyn FiatService>,
     pub lnurl_client: Arc<dyn RestClient>,
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
+    pub lnurl_auth_signer: Arc<crate::signer::lnurl_auth::LnurlAuthSignerAdapter>,
     pub shutdown_sender: watch::Sender<()>,
     pub spark_wallet: Arc<SparkWallet>,
     pub event_emitter: Arc<EventEmitter>,
@@ -260,6 +262,7 @@ impl BreezSdk {
             fiat_service: params.fiat_service,
             lnurl_client: params.lnurl_client,
             lnurl_server_client: params.lnurl_server_client,
+            lnurl_auth_signer: params.lnurl_auth_signer,
             event_emitter: params.event_emitter,
             shutdown_sender: params.shutdown_sender,
             sync_trigger: tokio::sync::broadcast::channel(10).0,
@@ -1461,6 +1464,72 @@ impl BreezSdk {
             payment_request,
             payment,
         })
+    }
+
+    /// Performs LNURL-auth with the service.
+    ///
+    /// This method implements the LNURL-auth protocol as specified in LUD-04 and LUD-05.
+    /// It derives a domain-specific linking key, signs the challenge, and sends the
+    /// authentication request to the service.
+    ///
+    /// # Arguments
+    ///
+    /// * `request_data` - The parsed LNURL-auth request details obtained from [`parse`]
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(LnurlCallbackStatus::Ok)` - Authentication was successful
+    /// * `Ok(LnurlCallbackStatus::ErrorStatus{reason})` - Service returned an error
+    /// * `Err(SdkError)` - An error occurred during the authentication process
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use breez_sdk_spark::{BreezSdk, InputType};
+    /// # async fn example(sdk: BreezSdk) -> Result<(), Box<dyn std::error::Error>> {
+    /// // 1. Parse the LNURL-auth string
+    /// let input = sdk.parse("lnurl1...").await?;
+    /// let auth_request = match input {
+    ///     InputType::LnurlAuth(data) => data,
+    ///     _ => return Err("Not an auth request".into()),
+    /// };
+    ///
+    /// // 2. Show user the domain and get confirmation
+    /// println!("Authenticate with {}?", auth_request.domain);
+    ///
+    /// // 3. Perform authentication
+    /// let status = sdk.lnurl_auth(auth_request).await?;
+    /// match status {
+    ///     breez_sdk_spark::LnurlCallbackStatus::Ok => println!("Success!"),
+    ///     breez_sdk_spark::LnurlCallbackStatus::ErrorStatus { error_details } => {
+    ///         println!("Error: {}", error_details.reason)
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// * LUD-04: <https://github.com/lnurl/luds/blob/luds/04.md>
+    /// * LUD-05: <https://github.com/lnurl/luds/blob/luds/05.md>
+    pub async fn lnurl_auth(
+        &self,
+        request_data: LnurlAuthRequestDetails,
+    ) -> Result<LnurlCallbackStatus, SdkError> {
+        let request: breez_sdk_common::lnurl::auth::LnurlAuthRequestDetails = request_data.into();
+        let status = breez_sdk_common::lnurl::auth::perform_lnurl_auth(
+            self.lnurl_client.as_ref(),
+            &request,
+            self.lnurl_auth_signer.as_ref(),
+        )
+        .await
+        .map_err(|e| match e {
+            LnurlError::ServiceConnectivity(msg) => SdkError::NetworkError(msg.to_string()),
+            LnurlError::InvalidUri(msg) => SdkError::InvalidInput(msg),
+            _ => SdkError::Generic(e.to_string()),
+        })?;
+        Ok(status.into())
     }
 
     #[allow(clippy::too_many_lines)]
