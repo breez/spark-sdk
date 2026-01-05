@@ -1,7 +1,9 @@
 use crate::{Seed, error::SdkError, models::Config};
-use bitcoin::bip32::DerivationPath;
+use bitcoin::bip32::{DerivationPath, Xpub};
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{self, Message, Secp256k1, rand::thread_rng};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use spark_wallet::{DefaultSigner, KeySet, KeySetType, Signer};
 
 use super::BreezSigner;
@@ -268,5 +270,31 @@ impl BreezSigner for BreezSignerImpl {
             .aggregate_frost(request)
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
+    }
+
+    async fn derive_xpub(&self, path: &DerivationPath) -> Result<bitcoin::bip32::Xpub, SdkError> {
+        let derived = self
+            .key_set
+            .identity_master_key
+            .derive_priv(&self.secp, path)
+            .map_err(|e| SdkError::Generic(e.to_string()))?;
+        Ok(Xpub::from_priv(&self.secp, &derived))
+    }
+
+    async fn hmac_sha256(
+        &self,
+        key_path: &DerivationPath,
+        input: &[u8],
+    ) -> Result<Vec<u8>, SdkError> {
+        let derived = self
+            .key_set
+            .identity_master_key
+            .derive_priv(&self.secp, key_path)
+            .map_err(|e| SdkError::Generic(e.to_string()))?;
+
+        let mut mac = Hmac::<Sha256>::new_from_slice(&derived.private_key.secret_bytes())
+            .map_err(|e| SdkError::Generic(e.to_string()))?;
+        mac.update(input);
+        Ok(mac.finalize().into_bytes().to_vec())
     }
 }

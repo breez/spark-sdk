@@ -101,9 +101,21 @@ pub trait BreezSigner: Send + Sync {
         &self,
         request: spark_wallet::AggregateFrostRequest<'a>,
     ) -> Result<frost_secp256k1_tr::Signature, SdkError>;
+
+    /// Derives an extended public key (xpub) at the given derivation path.
+    /// Returns the xpub encoded bytes including chain code.
+    async fn derive_xpub(&self, path: &DerivationPath) -> Result<bitcoin::bip32::Xpub, SdkError>;
+
+    /// Computes HMAC-SHA256 using a key derived at the given path.
+    async fn hmac_sha256(
+        &self,
+        key_path: &DerivationPath,
+        input: &[u8],
+    ) -> Result<Vec<u8>, SdkError>;
 }
 
 pub mod breez;
+pub mod lnurl_auth;
 pub mod nostr;
 pub mod rtsync;
 pub mod spark;

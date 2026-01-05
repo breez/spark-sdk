@@ -332,6 +332,7 @@ pub struct LnurlPayRequestDetails {
 /// See <https://github.com/lnurl/luds/blob/luds/04.md>
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[macros::derive_from(breez_sdk_common::lnurl::auth::LnurlAuthRequestDetails)]
+#[macros::derive_into(breez_sdk_common::lnurl::auth::LnurlAuthRequestDetails)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LnurlAuthRequestDetails {
     /// Hex encoded 32 bytes of challenge
@@ -349,6 +350,31 @@ pub struct LnurlAuthRequestDetails {
     /// extended with the signed challenge and the linking key, then called in the second step of the workflow.
     #[serde(skip_serializing, skip_deserializing)]
     pub url: String,
+}
+
+/// LNURL error details
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[macros::derive_from(breez_sdk_common::lnurl::LnurlErrorDetails)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct LnurlErrorDetails {
+    pub reason: String,
+}
+
+/// The response from a LNURL-auth callback, indicating success or failure.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[macros::derive_from(breez_sdk_common::lnurl::LnurlCallbackStatus)]
+#[serde(rename_all = "UPPERCASE")]
+#[serde(tag = "status")]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum LnurlCallbackStatus {
+    /// On-wire format is: `{"status": "OK"}`
+    Ok,
+    /// On-wire format is: `{"status": "ERROR", "reason": "error details..."}`
+    #[serde(rename = "ERROR")]
+    ErrorStatus {
+        #[serde(flatten)]
+        error_details: LnurlErrorDetails,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

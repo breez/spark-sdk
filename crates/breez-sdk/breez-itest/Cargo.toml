@@ -35,3 +35,6 @@ rand.workspace = true
 uuid.workspace = true
 futures.workspace = true
 nostr.workspace = true
+warp = "0.3"
+tokio-stream = { version = "0.1", features = ["net"] }
+bech32.workspace = true

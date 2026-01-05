@@ -34,6 +34,7 @@ breez-sdk-common.workspace = true
 chrono.workspace = true
 ecies.workspace = true
 hex.workspace = true
+hmac.workspace = true
 lnurl-models.workspace = true
 macros.workspace = true
 nostr.workspace = true
@@ -41,6 +42,7 @@ openssl = { workspace = true, optional = true }
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+sha2.workspace = true
 spark-wallet.workspace = true
 thiserror.workspace = true
 tokio_with_wasm.workspace = true
