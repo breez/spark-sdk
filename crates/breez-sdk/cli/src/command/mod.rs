@@ -666,7 +666,14 @@ fn read_payment_options(
                 completion_timeout_secs: Some(0),
             }))
         }
-        SendPaymentMethod::SparkAddress { .. } => {
+        SendPaymentMethod::SparkAddress {
+            token_identifier, ..
+        } => {
+            // HTLC options are only valid for Bitcoin payments, not token payments
+            if token_identifier.is_some() {
+                return Ok(None);
+            }
+
             let line = rl
                 .readline_with_initial("Do you want to create an HTLC transfer? (y/n)", ("n", ""))?
                 .to_lowercase();
