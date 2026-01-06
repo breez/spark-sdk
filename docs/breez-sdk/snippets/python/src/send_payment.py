@@ -18,27 +18,14 @@ async def prepare_send_payment_lightning_bolt11(sdk: BreezSdk):
     payment_request = "<bolt11 invoice>"
     # Optionally set the amount you wish the pay the receiver
     optional_amount_sats = 5_000
-    # Optionally set to use token funds to pay via token conversion
-    optional_token_conversion_options = TokenConversionOptions(
-        conversion_type=TokenConversionType.TO_BITCOIN(
-            from_token_identifier="<token identifier>"
-        ),
-        max_slippage_bps=50,
-    )
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
             amount=optional_amount_sats,
-            token_conversion_options=optional_token_conversion_options,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
         # If the fees are acceptable, continue to create the Send Payment
-        if prepare_response.token_conversion_fee is not None:
-            token_conversion_fee = prepare_response.token_conversion_fee
-            logging.debug(
-                f"Estimated token conversion fee: {token_conversion_fee} token base units"
-            )
         if isinstance(
             prepare_response.payment_method, SendPaymentMethod.BOLT11_INVOICE
         ):
@@ -61,27 +48,14 @@ async def prepare_send_payment_onchain(sdk: BreezSdk):
     payment_request = "<bitcoin address>"
     # Set the amount you wish the pay the receiver
     amount_sats = 50_000
-    # Optionally set to use token funds to pay via token conversion
-    optional_token_conversion_options = TokenConversionOptions(
-        conversion_type=TokenConversionType.TO_BITCOIN(
-            from_token_identifier="<token identifier>"
-        ),
-        max_slippage_bps=50,
-    )
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
             amount=amount_sats,
-            token_conversion_options=optional_token_conversion_options,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
         # If the fees are acceptable, continue to create the Send Payment
-        if prepare_response.token_conversion_fee is not None:
-            token_conversion_fee = prepare_response.token_conversion_fee
-            logging.debug(
-                f"Estimated token conversion fee: {token_conversion_fee} token base units"
-            )
         if isinstance(
             prepare_response.payment_method, SendPaymentMethod.BITCOIN_ADDRESS
         ):
@@ -112,27 +86,14 @@ async def prepare_send_payment_spark_address(sdk: BreezSdk):
     payment_request = "<spark address>"
     # Set the amount you wish the pay the receiver
     amount_sats = 50_000
-    # Optionally set to use token funds to pay via token conversion
-    optional_token_conversion_options = TokenConversionOptions(
-        conversion_type=TokenConversionType.TO_BITCOIN(
-            from_token_identifier="<token identifier>"
-        ),
-        max_slippage_bps=50,
-    )
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
             amount=amount_sats,
-            token_conversion_options=optional_token_conversion_options,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
         # If the fees are acceptable, continue to create the Send Payment
-        if prepare_response.token_conversion_fee is not None:
-            token_conversion_fee = prepare_response.token_conversion_fee
-            logging.debug(
-                f"Estimated token conversion fee: {token_conversion_fee} token base units"
-            )
         if isinstance(prepare_response.payment_method, SendPaymentMethod.SPARK_ADDRESS):
             fee = prepare_response.payment_method.fee
             logging.debug(f"Fees: {fee} sats")
@@ -147,18 +108,40 @@ async def prepare_send_payment_spark_invoice(sdk: BreezSdk):
     payment_request = "<spark invoice>"
     # Optionally set the amount you wish the pay the receiver
     optional_amount_sats = 50_000
-    # Optionally set to use token funds to pay via token conversion
-    optional_token_conversion_options = TokenConversionOptions(
-        conversion_type=TokenConversionType.TO_BITCOIN(
-            from_token_identifier="<token identifier>"
-        ),
-        max_slippage_bps=50,
-    )
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
             amount=optional_amount_sats,
-            token_conversion_options=optional_token_conversion_options,
+        )
+        prepare_response = await sdk.prepare_send_payment(request=request)
+
+        # If the fees are acceptable, continue to create the Send Payment
+        if isinstance(prepare_response.payment_method, SendPaymentMethod.SPARK_INVOICE):
+            fee = prepare_response.payment_method.fee
+            logging.debug(f"Fees: {fee} sats")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: prepare-send-payment-spark-invoice
+
+
+async def prepare_send_payment_token_conversion(sdk: BreezSdk):
+    # ANCHOR: prepare-send-payment-token-conversion
+    payment_request = "<payment request>"
+    # Set to use token funds to pay via token conversion
+    optional_max_slippage_bps = 50
+    optional_completion_timeout_secs = 30
+    token_conversion_options = TokenConversionOptions(
+        conversion_type=TokenConversionType.TO_BITCOIN(
+            from_token_identifier="<token identifier>"
+        ),
+        max_slippage_bps=optional_max_slippage_bps,
+        completion_timeout_secs=optional_completion_timeout_secs,
+    )
+    try:
+        request = PrepareSendPaymentRequest(
+            payment_request=payment_request,
+            token_conversion_options=token_conversion_options,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
@@ -168,13 +151,10 @@ async def prepare_send_payment_spark_invoice(sdk: BreezSdk):
             logging.debug(
                 f"Estimated token conversion fee: {token_conversion_fee} token base units"
             )
-        if isinstance(prepare_response.payment_method, SendPaymentMethod.SPARK_INVOICE):
-            fee = prepare_response.payment_method.fee
-            logging.debug(f"Fees: {fee} sats")
     except Exception as error:
         logging.error(error)
         raise
-    # ANCHOR_END: prepare-send-payment-spark-invoice
+    # ANCHOR_END: prepare-send-payment-token-conversion
 
 
 async def send_payment_lightning_bolt11(

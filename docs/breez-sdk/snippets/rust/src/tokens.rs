@@ -84,25 +84,17 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
     let token_identifier = Some("<token identifier>".to_string());
     // Set the amount of tokens you wish to send.
     let optional_amount = Some(1_000);
-    // Optionally set to use Bitcoin funds to pay via token conversion
-    let optional_token_conversion_options = Some(TokenConversionOptions {
-        conversion_type: TokenConversionType::FromBitcoin,
-        max_slippage_bps: Some(50),
-    });
 
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             amount: optional_amount,
             token_identifier,
-            token_conversion_options: optional_token_conversion_options,
+            token_conversion_options: None,
         })
         .await?;
 
     // If the fees are acceptable, continue to send the token payment
-    if let Some(token_conversion_fee) = prepare_response.token_conversion_fee {
-        info!("Estimated token conversion fee: {token_conversion_fee} sats");
-    }
     match &prepare_response.payment_method {
         SendPaymentMethod::SparkAddress {
             fee,
@@ -134,5 +126,38 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
     let payment = send_response.payment;
     info!("Payment: {payment:?}");
     // ANCHOR_END: send-token-payment
+    Ok(())
+}
+
+async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: prepare-send-payment-token-conversion
+    let payment_request = "<spark address or invoice>".to_string();
+    // Token identifier must match the invoice in case it specifies one.
+    let token_identifier = Some("<token identifier>".to_string());
+    // Set the amount of tokens you wish to send.
+    let optional_amount = Some(1_000);
+    // Set to use Bitcoin funds to pay via token conversion
+    let optional_max_slippage_bps = Some(50);
+    let optional_completion_timeout_secs = Some(30);
+    let token_conversion_options = Some(TokenConversionOptions {
+        conversion_type: TokenConversionType::FromBitcoin,
+        max_slippage_bps: optional_max_slippage_bps,
+        completion_timeout_secs: optional_completion_timeout_secs,
+    });
+
+    let prepare_response = sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request,
+            amount: optional_amount,
+            token_identifier,
+            token_conversion_options,
+        })
+        .await?;
+
+    // If the fees are acceptable, continue to send the token payment
+    if let Some(token_conversion_fee) = prepare_response.token_conversion_fee {
+        info!("Estimated token conversion fee: {token_conversion_fee} sats");
+    }
+    // ANCHOR_END: prepare-send-payment-token-conversion
     Ok(())
 }

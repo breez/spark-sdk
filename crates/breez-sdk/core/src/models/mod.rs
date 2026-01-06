@@ -1247,6 +1247,11 @@ pub struct TokenConversionOptions {
     /// `estimated_amount * (1 - max_slippage_bps / 10_000)`.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub max_slippage_bps: Option<u32>,
+    /// The optional timeout in seconds to wait for the token conversion to complete
+    /// when fulfilling the payment. If the timeout is reached before the conversion
+    /// is complete, the payment will fail. Defaults to 30 seconds if not set.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub completion_timeout_secs: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

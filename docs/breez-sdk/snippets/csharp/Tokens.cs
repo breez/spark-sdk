@@ -84,26 +84,16 @@ namespace BreezSdkSnippets
             var tokenIdentifier = "<token identifier>";
             // Set the amount of tokens you wish to send.
             var optionalAmount = new BigInteger(1000);
-            // Optionally set to use Bitcoin funds to pay via token conversion
-            var optionalTokenConversionOptions = new TokenConversionOptions(
-                conversionType: new TokenConversionType.FromBitcoin(),
-                maxSlippageBps: 50U
-            );
 
             var prepareResponse = await sdk.PrepareSendPayment(
                 request: new PrepareSendPaymentRequest(
                     paymentRequest: paymentRequest,
                     amount: optionalAmount,
-                    tokenIdentifier: tokenIdentifier,
-                    tokenConversionOptions: optionalTokenConversionOptions
+                    tokenIdentifier: tokenIdentifier
                 )
             );
 
             // If the fees are acceptable, continue to send the token payment
-            if (prepareResponse.tokenConversionFee != null) {
-                Console.WriteLine("Estimated token conversion fee: " + 
-                    $"{prepareResponse.tokenConversionFee} sats");
-            }
             if (prepareResponse.paymentMethod is SendPaymentMethod.SparkAddress sparkAddress)
             {
                 Console.WriteLine($"Token ID: {sparkAddress.tokenIdentifier}");
@@ -125,6 +115,41 @@ namespace BreezSdkSnippets
             var payment = sendResponse.payment;
             Console.WriteLine($"Payment: {payment}");
             // ANCHOR_END: send-token-payment
+        }
+
+        async Task PrepareSendPaymentTokenConversion(BreezSdk sdk)
+        {
+            // ANCHOR: prepare-send-payment-token-conversion
+            var paymentRequest = "<spark address or invoice>";
+            // Token identifier must match the invoice in case it specifies one.
+            var tokenIdentifier = "<token identifier>";
+            // Set the amount of tokens you wish to send.
+            var optionalAmount = new BigInteger(1000);
+            // Optionally set to use Bitcoin funds to pay via token conversion
+            var optionalMaxSlippageBps = 50U;
+            var optionalCompletionTimeoutSecs = 30U;
+            var tokenConversionOptions = new TokenConversionOptions(
+                conversionType: new TokenConversionType.FromBitcoin(),
+                maxSlippageBps: optionalMaxSlippageBps,
+                completionTimeoutSecs: optionalCompletionTimeoutSecs
+            );
+
+            var prepareResponse = await sdk.PrepareSendPayment(
+                request: new PrepareSendPaymentRequest(
+                    paymentRequest: paymentRequest,
+                    amount: optionalAmount,
+                    tokenIdentifier: tokenIdentifier,
+                    tokenConversionOptions: tokenConversionOptions
+                )
+            );
+
+            // If the fees are acceptable, continue to send the token payment
+            if (prepareResponse.tokenConversionFee != null)
+            {
+                Console.WriteLine("Estimated token conversion fee: " +
+                    $"{prepareResponse.tokenConversionFee} sats");
+            }
+            // ANCHOR_END: prepare-send-payment-token-conversion
         }
     }
 }

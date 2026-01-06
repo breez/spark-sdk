@@ -470,6 +470,7 @@ mod tests {
                 from_token_identifier: "token123".to_string(),
             },
             max_slippage_bps: None,
+            completion_timeout_secs: None,
         });
 
         let identity_key = "test_identity".to_string();
@@ -490,6 +491,7 @@ mod tests {
         request.token_conversion_options = Some(TokenConversionOptions {
             conversion_type: TokenConversionType::FromBitcoin,
             max_slippage_bps: None,
+            completion_timeout_secs: None,
         });
 
         let identity_key = "test_identity".to_string();
@@ -508,6 +510,7 @@ mod tests {
         request.token_conversion_options = Some(TokenConversionOptions {
             conversion_type: TokenConversionType::FromBitcoin,
             max_slippage_bps: None,
+            completion_timeout_secs: None,
         });
 
         let identity_key = "test_identity".to_string();
@@ -530,6 +533,7 @@ mod tests {
                 from_token_identifier: "token123".to_string(),
             },
             max_slippage_bps: None,
+            completion_timeout_secs: None,
         });
 
         let identity_key = "test_identity".to_string();
@@ -585,6 +589,7 @@ mod tests {
                 from_token_identifier: "token123".to_string(),
             },
             max_slippage_bps: None,
+            completion_timeout_secs: None,
         });
         let result = validate_spark_address_request(&request);
         assert!(
@@ -601,6 +606,7 @@ mod tests {
         request.token_conversion_options = Some(TokenConversionOptions {
             conversion_type: TokenConversionType::FromBitcoin,
             max_slippage_bps: None,
+            completion_timeout_secs: None,
         });
         let result = validate_spark_address_request(&request);
         assert!(
@@ -616,6 +622,7 @@ mod tests {
         request.token_conversion_options = Some(TokenConversionOptions {
             conversion_type: TokenConversionType::FromBitcoin,
             max_slippage_bps: None,
+            completion_timeout_secs: None,
         });
         let result = validate_spark_address_request(&request);
         assert!(
@@ -634,6 +641,7 @@ mod tests {
                 from_token_identifier: "token123".to_string(),
             },
             max_slippage_bps: None,
+            completion_timeout_secs: None,
         });
         let result = validate_spark_address_request(&request);
         assert!(
@@ -680,6 +688,7 @@ mod tests {
                 from_token_identifier: "token123".to_string(),
             },
             max_slippage_bps: None,
+            completion_timeout_secs: None,
         });
         let result = validate_bolt11_invoice_request(&request);
         assert!(
@@ -694,6 +703,7 @@ mod tests {
         request.token_conversion_options = Some(TokenConversionOptions {
             conversion_type: TokenConversionType::FromBitcoin,
             max_slippage_bps: None,
+            completion_timeout_secs: None,
         });
         let result = validate_bolt11_invoice_request(&request);
         assert!(
@@ -755,6 +765,7 @@ mod tests {
                 from_token_identifier: "token123".to_string(),
             },
             max_slippage_bps: None,
+            completion_timeout_secs: None,
         });
         let result = validate_bitcoin_address_request(&request);
         assert!(
@@ -770,6 +781,7 @@ mod tests {
         request.token_conversion_options = Some(TokenConversionOptions {
             conversion_type: TokenConversionType::FromBitcoin,
             max_slippage_bps: None,
+            completion_timeout_secs: None,
         });
         let result = validate_bitcoin_address_request(&request);
         assert!(

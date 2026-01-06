@@ -76,9 +76,12 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   // Set the amount of tokens you wish to send.
   const optionalAmount = BigInt(1_000)
   // Optionally set to use Bitcoin funds to pay via token conversion
+  const optionalMaxSlippageBps = 50
+  const optionalCompletionTimeoutSecs = 30
   const optionalTokenConversionOptions = {
     conversionType: new TokenConversionType.FromBitcoin(),
-    maxSlippageBps: 50
+    maxSlippageBps: optionalMaxSlippageBps,
+    completionTimeoutSecs: optionalCompletionTimeoutSecs
   }
 
   const prepareResponse = await sdk.prepareSendPayment({
@@ -111,4 +114,35 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const payment = sendResponse.payment
   console.log(`Payment: ${JSON.stringify(payment)}`)
   // ANCHOR_END: send-token-payment
+}
+
+const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-send-payment-token-conversion
+  const paymentRequest = '<spark address or invoice>'
+  // Token identifier must match the invoice in case it specifies one.
+  const tokenIdentifier = '<token identifier>'
+  // Set the amount of tokens you wish to send.
+  const optionalAmount = BigInt(1_000)
+  // Set to use Bitcoin funds to pay via token conversion
+  const optionalMaxSlippageBps = 50
+  const optionalCompletionTimeoutSecs = 30
+  const tokenConversionOptions = {
+    conversionType: new TokenConversionType.FromBitcoin(),
+    maxSlippageBps: optionalMaxSlippageBps,
+    completionTimeoutSecs: optionalCompletionTimeoutSecs
+  }
+
+  const prepareResponse = await sdk.prepareSendPayment({
+    paymentRequest,
+    amount: optionalAmount,
+    tokenIdentifier,
+    tokenConversionOptions
+  })
+
+  // If the fees are acceptable, continue to send the token payment
+  if (prepareResponse.tokenConversionFee !== undefined) {
+    const tokenConversionFee = prepareResponse.tokenConversionFee
+    console.debug(`Estimated token conversion fee: ${tokenConversionFee} sats`)
+  }
+  // ANCHOR_END: prepare-send-payment-token-conversion
 }

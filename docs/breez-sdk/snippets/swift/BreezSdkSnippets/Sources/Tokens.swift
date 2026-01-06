@@ -78,24 +78,15 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
     let tokenIdentifier = "<token identifier>"
     // Set the amount of tokens you wish to send. (requires 'import BigNumber')
     let optionalAmount = BInt(1_000)
-    // Optionally set to use Bitcoin funds to pay via token conversion
-    let optionalTokenConversionOptions = TokenConversionOptions(
-        conversionType: TokenConversionType.fromBitcoin,
-        maxSlippageBps: 50
-    )
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
             amount: optionalAmount,
-            tokenIdentifier: tokenIdentifier,
-            tokenConversionOptions: optionalTokenConversionOptions
+            tokenIdentifier: tokenIdentifier
         ))
 
     // If the fees are acceptable, continue to send the token payment
-    if let tokenConversionFee = prepareResponse.tokenConversionFee {
-        print("Estimated token conversion fee: \(tokenConversionFee) sats")
-    }
     if case let .sparkAddress(address, fee, tokenId) = prepareResponse.paymentMethod {
         print("Token ID: \(String(describing: tokenId))")
         print("Fees: \(fee) token base units")
@@ -114,4 +105,35 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
     let payment = sendResponse.payment
     print("Payment: \(payment)")
     // ANCHOR_END: send-token-payment
+}
+
+func prepareSendPaymentTokenConversion(sdk: BreezSdk) async throws {
+    // ANCHOR: prepare-send-payment-token-conversion
+    let paymentRequest = "<spark address or invoice>"
+    // Token identifier must match the invoice in case it specifies one.
+    let tokenIdentifier = "<token identifier>"
+    // Set the amount of tokens you wish to send. (requires 'import BigNumber')
+    let optionalAmount = BInt(1_000)
+    // Set to use Bitcoin funds to pay via token conversion
+    let optionalMaxSlippageBps = UInt32(50)
+    let optionalCompletionTimeoutSecs = UInt32(30)
+    let tokenConversionOptions = TokenConversionOptions(
+        conversionType: TokenConversionType.fromBitcoin,
+        maxSlippageBps: optionalMaxSlippageBps,
+        completionTimeoutSecs: optionalCompletionTimeoutSecs
+    )
+
+    let prepareResponse = try await sdk.prepareSendPayment(
+        request: PrepareSendPaymentRequest(
+            paymentRequest: paymentRequest,
+            amount: optionalAmount,
+            tokenIdentifier: tokenIdentifier,
+            tokenConversionOptions: tokenConversionOptions
+        ))
+
+    // If the fees are acceptable, continue to send the token payment
+    if let tokenConversionFee = prepareResponse.tokenConversionFee {
+        print("Estimated token conversion fee: \(tokenConversionFee) sats")
+    }
+    // ANCHOR_END: prepare-send-payment-token-conversion
 }

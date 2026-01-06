@@ -2,6 +2,11 @@
 
 Spark supports tokens using the [BTKN protocol](https://docs.spark.money/learn/tokens/hello-btkn). The Breez SDK enables you to send and receive these tokens using the standard payments API.
 
+<div class="warning">
+<h4>Developer note</h4>
+To perform a token conversion as a step before sending the payment, see <a href="#token-conversion">Token Conversion</a>.
+</div>
+
 <h2 id="fetching-the-balance">
     <a class="header" href="#fetching-the-balance">Fetching token balances</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_info">API docs</a>
@@ -57,6 +62,27 @@ Your application can use the [parse](./parse.md) functionality to determine if a
 The code example below demonstrates manual specification. Follow the standard prepare/send payment flow as described in the [Sending a payment](./send_payment.md) guide.
 
 {{#tabs tokens:send-token-payment}}
+
+<h2 id="token-conversion">
+    <a class="header" href="#token-conversion">Token Conversion</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
+</h2>
+
+Token conversion enables payments of tokens like <a href="https://sparkscan.io/token/3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca?network=mainnet" target="_blank">USDB</a> to be made without holding the token, but instead using Bitcoin.
+
+To do so, when preparing to send a payment, set the token conversion options. The token conversion will first calculate the Bitcoin amount needed to be converted into the token, convert Bitcoin into that token amount, and then finally complete the payment. 
+
+{{#tabs tokens:prepare-send-payment-token-conversion}}
+
+<div class="warning">
+<h4>Developer note</h4>
+When a token conversion fails due to exceeding the maximum slippage, the conversion will be refunded automatically.
+</div>
+
+<div class="warning">
+<h4>Developer note</h4>
+The token conversion may result in some token balance remaining in the wallet after the payment is send. This remaining balance is to account for slippage in the token conversion.
+</div>
 
 <h2 id="listing-payments">
     <a class="header" href="#listing-payments">Listing token payments</a>

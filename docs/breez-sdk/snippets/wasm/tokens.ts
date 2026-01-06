@@ -71,27 +71,14 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const tokenIdentifier = '<token identifier>'
   // Set the amount of tokens you wish to send.
   const optionalAmount = BigInt(1_000)
-  // Optionally set to use token funds to pay via token conversion
-  const optionalTokenConversionOptions: TokenConversionOptions = {
-    conversionType: {
-      type: 'toBitcoin',
-      fromTokenIdentifier: '<token identifier>'
-    },
-    maxSlippageBps: 50
-  }
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
     amount: optionalAmount,
-    tokenIdentifier,
-    tokenConversionOptions: optionalTokenConversionOptions
+    tokenIdentifier
   })
 
   // If the fees are acceptable, continue to send the token payment
-  if (prepareResponse.tokenConversionFee !== undefined) {
-    const tokenConversionFee = prepareResponse.tokenConversionFee
-    console.log(`Estimated token conversion fee: ${tokenConversionFee} sats`)
-  }
   if (prepareResponse.paymentMethod.type === 'sparkAddress') {
     console.log(`Token ID: ${prepareResponse.paymentMethod.tokenIdentifier}`)
     console.log(`Fees: ${prepareResponse.paymentMethod.fee} token base units`)
@@ -109,4 +96,37 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const payment = sendResponse.payment
   console.log(`Payment: ${JSON.stringify(payment)}`)
   // ANCHOR_END: send-token-payment
+}
+
+const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-send-payment-token-conversion
+  const paymentRequest = '<spark address or invoice>'
+  // Token identifier must match the invoice in case it specifies one.
+  const tokenIdentifier = '<token identifier>'
+  // Set the amount of tokens you wish to send.
+  const optionalAmount = BigInt(1_000)
+  // Optionally set to use token funds to pay via token conversion
+  const optionalMaxSlippageBps = 50
+  const optionalCompletionTimeoutSecs = 30
+  const tokenConversionOptions: TokenConversionOptions = {
+    conversionType: {
+      type: 'fromBitcoin'
+    },
+    maxSlippageBps: optionalMaxSlippageBps,
+    completionTimeoutSecs: optionalCompletionTimeoutSecs
+  }
+
+  const prepareResponse = await sdk.prepareSendPayment({
+    paymentRequest,
+    amount: optionalAmount,
+    tokenIdentifier,
+    tokenConversionOptions
+  })
+
+  // If the fees are acceptable, continue to send the token payment
+  if (prepareResponse.tokenConversionFee !== undefined) {
+    const tokenConversionFee = prepareResponse.tokenConversionFee
+    console.log(`Estimated token conversion fee: ${tokenConversionFee} sats`)
+  }
+  // ANCHOR_END: prepare-send-payment-token-conversion
 }

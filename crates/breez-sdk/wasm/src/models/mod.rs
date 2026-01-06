@@ -1118,6 +1118,7 @@ pub struct TokenConversionInfo {
 pub struct TokenConversionOptions {
     pub conversion_type: TokenConversionType,
     pub max_slippage_bps: Option<u32>,
+    pub completion_timeout_secs: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenConversionType)]

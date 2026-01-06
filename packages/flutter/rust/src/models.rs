@@ -1004,6 +1004,7 @@ pub struct _TokenConversionInfo {
 pub struct _TokenConversionOptions {
     pub conversion_type: TokenConversionType,
     pub max_slippage_bps: Option<u32>,
+    pub completion_timeout_secs: Option<u32>,
 }
 
 #[frb(mirror(TokenConversionType))]

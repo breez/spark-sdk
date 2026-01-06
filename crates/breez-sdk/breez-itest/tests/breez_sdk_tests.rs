@@ -927,6 +927,7 @@ async fn test_08_lightning_invoice_expiry_secs(
             payment_request: bob_invoice.clone(),
             amount: None,
             token_identifier: None,
+            token_conversion_options: None,
         })
         .await?;
 

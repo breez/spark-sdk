@@ -492,15 +492,17 @@ pub(crate) async fn execute_command(
         } => {
             let token_conversion_options =
                 match (convert_from_bitcoin, convert_from_token_identifier) {
-                    (Some(true), None) => Some(TokenConversionOptions {
+                    (Some(true), _) => Some(TokenConversionOptions {
                         conversion_type: TokenConversionType::FromBitcoin,
                         max_slippage_bps,
+                        completion_timeout_secs: None,
                     }),
-                    (None, Some(from_token_identifier)) => Some(TokenConversionOptions {
+                    (_, Some(from_token_identifier)) => Some(TokenConversionOptions {
                         conversion_type: TokenConversionType::ToBitcoin {
                             from_token_identifier,
                         },
                         max_slippage_bps,
+                        completion_timeout_secs: None,
                     }),
                     _ => None,
                 };

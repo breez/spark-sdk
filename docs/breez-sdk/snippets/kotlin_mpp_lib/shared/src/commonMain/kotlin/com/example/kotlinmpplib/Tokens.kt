@@ -98,9 +98,12 @@ class Tokens {
             // Android (BigInteger from java.math)
             // val optionalAmount = BigInteger.valueOf(1_000L)
             // Optionally set to use Bitcoin funds to pay via token conversion
+            val optionalMaxSlippageBps = 50u
+            val optionalCompletionTimeoutSecs = 30u
             val optionalTokenConversionOptions = TokenConversionOptions(
                 conversionType = TokenConversionType.FromBitcoin,
-                maxSlippageBps = 50u
+                maxSlippageBps = optionalMaxSlippageBps,
+                completionTimeoutSecs = optionalCompletionTimeoutSecs
             )
 
             val prepareResponse =
@@ -141,5 +144,47 @@ class Tokens {
             // handle error
         }
         // ANCHOR_END: send-token-payment
+    }
+
+    suspend fun prepareSendPaymentTokenConversion(sdk: BreezSdk) {
+        // ANCHOR: prepare-send-payment-token-conversion
+        try {
+            val paymentRequest = "<spark address or invoice>"
+            // Token identifier must match the invoice in case it specifies one.
+            val tokenIdentifier = "<token identifier>"
+            // Set the amount of tokens you wish to send.
+            // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
+            // package)
+            val optionalAmount = BigInteger.fromLong(1_000L)
+            // Android (BigInteger from java.math)
+            // val optionalAmount = BigInteger.valueOf(1_000L)
+            // set to use Bitcoin funds to pay via token conversion
+            val optionalMaxSlippageBps = 50u
+            val optionalCompletionTimeoutSecs = 30u
+            val tokenConversionOptions = TokenConversionOptions(
+                conversionType = TokenConversionType.FromBitcoin,
+                maxSlippageBps = optionalMaxSlippageBps,
+                completionTimeoutSecs = optionalCompletionTimeoutSecs
+            )
+
+            val prepareResponse =
+                sdk.prepareSendPayment(
+                    PrepareSendPaymentRequest(
+                        paymentRequest = paymentRequest,
+                        amount = optionalAmount,
+                        tokenIdentifier = tokenIdentifier,
+                        tokenConversionOptions = tokenConversionOptions
+                    )
+                )
+
+            // If the fees are acceptable, continue to send the token payment
+            if (prepareResponse.tokenConversionFee != null) {
+                val tokenConversionFee = prepareResponse.tokenConversionFee
+                println("Estimated token conversion fee: ${tokenConversionFee} sats")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: prepare-send-payment-token-conversion
     }
 }

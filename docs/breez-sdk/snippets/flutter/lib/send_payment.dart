@@ -6,25 +6,12 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentLightningBolt11(
   String paymentRequest = "<bolt11 invoice>";
   // Optionally set the amount you wish the pay the receiver
   BigInt optionalAmountSats = BigInt.from(5000);
-  // Optionally set to use token funds to pay via token conversion
-  final optionalTokenConversionOptions = TokenConversionOptions(
-    conversionType: TokenConversionType.toBitcoin(
-      fromTokenIdentifier: "<token identifier>",
-    ),
-    maxSlippageBps: 50,
-  );
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest,
-      amount: optionalAmountSats,
-      tokenConversionOptions: optionalTokenConversionOptions);
+      paymentRequest: paymentRequest, amount: optionalAmountSats);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
-  if (response.tokenConversionFee != null) {
-    print(
-        "Estimated token conversion fee: ${response.tokenConversionFee} token base units");
-  }
   final paymentMethod = response.paymentMethod;
   if (paymentMethod is SendPaymentMethod_Bolt11Invoice) {
     // Fees to pay via Lightning
@@ -44,25 +31,12 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentOnchain(
   String paymentRequest = "<bitcoin address>";
   // Set the amount you wish the pay the receiver
   BigInt amountSats = BigInt.from(50000);
-  // Optionally set to use token funds to pay via token conversion
-  final optionalTokenConversionOptions = TokenConversionOptions(
-    conversionType: TokenConversionType.toBitcoin(
-      fromTokenIdentifier: "<token identifier>",
-    ),
-    maxSlippageBps: 50,
-  );
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest,
-      amount: amountSats,
-      tokenConversionOptions: optionalTokenConversionOptions);
+      paymentRequest: paymentRequest, amount: amountSats);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
-  if (response.tokenConversionFee != null) {
-    print(
-        "Estimated token conversion fee: ${response.tokenConversionFee} token base units");
-  }
   final paymentMethod = response.paymentMethod;
   if (paymentMethod is SendPaymentMethod_BitcoinAddress) {
     final feeQuote = paymentMethod.feeQuote;
@@ -80,30 +54,18 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentOnchain(
   return response;
 }
 
-Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(BreezSdk sdk) async {
+Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(
+    BreezSdk sdk) async {
   // ANCHOR: prepare-send-payment-spark-address
   String paymentRequest = "<spark address>";
   // Set the amount you wish the pay the receiver
   BigInt amountSats = BigInt.from(50000);
-  // Optionally set to use token funds to pay via token conversion
-  final optionalTokenConversionOptions = TokenConversionOptions(
-    conversionType: TokenConversionType.toBitcoin(
-      fromTokenIdentifier: "<token identifier>",
-    ),
-    maxSlippageBps: 50,
-  );
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest,
-      amount: amountSats,
-      tokenConversionOptions: optionalTokenConversionOptions);
+      paymentRequest: paymentRequest, amount: amountSats);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
-  if (response.tokenConversionFee != null) {
-    print(
-        "Estimated token conversion fee: ${response.tokenConversionFee} token base units");
-  }
   final paymentMethod = response.paymentMethod;
   if (paymentMethod is SendPaymentMethod_SparkAddress) {
     final feeSats = paymentMethod.fee;
@@ -113,24 +75,45 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(BreezSdk sdk) 
   return response;
 }
 
-Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(BreezSdk sdk) async {
+Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(
+    BreezSdk sdk) async {
   // ANCHOR: prepare-send-payment-spark-invoice
   String paymentRequest = "<spark invoice>";
   // Optionally set the amount you wish the pay the receiver
   BigInt optionalAmountSats = BigInt.from(50000);
-  // Optionally set to use token funds to pay via token conversion
-  final optionalTokenConversionOptions = TokenConversionOptions(
+
+  final request = PrepareSendPaymentRequest(
+      paymentRequest: paymentRequest, amount: optionalAmountSats);
+  final response = await sdk.prepareSendPayment(request: request);
+
+  // If the fees are acceptable, continue to create the Send Payment
+  final paymentMethod = response.paymentMethod;
+  if (paymentMethod is SendPaymentMethod_SparkInvoice) {
+    final feeSats = paymentMethod.fee;
+    print("Fees: $feeSats sats");
+  }
+  // ANCHOR_END: prepare-send-payment-spark-invoice
+  return response;
+}
+
+Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
+    BreezSdk sdk) async {
+  // ANCHOR: prepare-send-payment-token-conversion
+  String paymentRequest = "<payment request>";
+  // Set to use token funds to pay via token conversion
+  int optionalMaxSlippageBps = 50;
+  int optionalCompletionTimeoutSecs = 30;
+  final tokenConversionOptions = TokenConversionOptions(
     conversionType: TokenConversionType.toBitcoin(
       fromTokenIdentifier: "<token identifier>",
     ),
-    maxSlippageBps: 50,
+    maxSlippageBps: optionalMaxSlippageBps,
+    completionTimeoutSecs: optionalCompletionTimeoutSecs,
   );
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest, 
-      amount: optionalAmountSats,
-      tokenConversionOptions: optionalTokenConversionOptions
-  );
+      paymentRequest: paymentRequest,
+      tokenConversionOptions: tokenConversionOptions);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -138,12 +121,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(BreezSdk sdk) 
     print(
         "Estimated token conversion fee: ${response.tokenConversionFee} token base units");
   }
-  final paymentMethod = response.paymentMethod;
-  if (paymentMethod is SendPaymentMethod_SparkInvoice) {
-    final feeSats = paymentMethod.fee;
-    print("Fees: $feeSats sats");
-  }
-  // ANCHOR_END: prepare-send-payment-spark-invoice
+  // ANCHOR_END: prepare-send-payment-token-conversion
   return response;
 }
 
@@ -168,12 +146,12 @@ Future<SendPaymentResponse> sendPaymentOnchain(
     BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-onchain
   final options = SendPaymentOptions.bitcoinAddress(
-    confirmationSpeed: OnchainConfirmationSpeed.medium);
+      confirmationSpeed: OnchainConfirmationSpeed.medium);
   String? optionalIdempotencyKey = "<idempotency key uuid>";
   final request = SendPaymentRequest(
-    prepareResponse: prepareResponse,
-    options: options,
-    idempotencyKey: optionalIdempotencyKey);
+      prepareResponse: prepareResponse,
+      options: options,
+      idempotencyKey: optionalIdempotencyKey);
   SendPaymentResponse response = await sdk.sendPayment(request: request);
   Payment payment = response.payment;
   // ANCHOR_END: send-payment-onchain
@@ -186,8 +164,7 @@ Future<SendPaymentResponse> sendPaymentSpark(
   // ANCHOR: send-payment-spark
   String? optionalIdempotencyKey = "<idempotency key uuid>";
   final request = SendPaymentRequest(
-    prepareResponse: prepareResponse,
-    idempotencyKey: optionalIdempotencyKey);
+      prepareResponse: prepareResponse, idempotencyKey: optionalIdempotencyKey);
   SendPaymentResponse response = await sdk.sendPayment(request: request);
   Payment payment = response.payment;
   // ANCHOR_END: send-payment-spark

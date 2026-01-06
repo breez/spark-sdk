@@ -105,10 +105,10 @@ const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology";
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology:442";
 
+const CLAIM_TX_SIZE_VBYTES: u64 = 99;
 const SYNC_PAGING_LIMIT: u32 = 100;
 const DEFAULT_TOKEN_CONVERSION_MAX_SLIPPAGE_BPS: u32 = 50;
-
-const CLAIM_TX_SIZE_VBYTES: u64 = 99;
+const DEFAULT_TOKEN_CONVERSION_TIMEOUT_SECS: u32 = 30;
 
 bitflags! {
     #[derive(Clone, Debug)]
@@ -2331,7 +2331,9 @@ impl BreezSdk {
                 WaitForPaymentIdentifier::PaymentId(
                     token_conversion_response.received_payment_id.clone(),
                 ),
-                30,
+                token_conversion_options
+                    .completion_timeout_secs
+                    .unwrap_or(DEFAULT_TOKEN_CONVERSION_TIMEOUT_SECS),
             )
             .await
             .map_err(|e| {

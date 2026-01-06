@@ -6,24 +6,13 @@ func prepareSendPaymentLightningBolt11(sdk: BreezSdk) async throws {
     let paymentRequest = "<bolt11 invoice>"
     // Optionally set the amount you wish the pay the receiver (requires 'import BigNumber')
     let optionalAmountSats = BInt(5_000)
-    // Optionally set to use token funds to pay via token conversion
-    let optionalTokenConversionOptions = TokenConversionOptions(
-        conversionType: TokenConversionType.toBitcoin(
-            fromTokenIdentifier: "<token identifier>"
-        ),
-        maxSlippageBps: 50
-    )
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            amount: optionalAmountSats,
-            tokenConversionOptions: optionalTokenConversionOptions
+            amount: optionalAmountSats
         ))
 
-    if let tokenConversionFee = prepareResponse.tokenConversionFee {
-        print("Estimated token conversion fee: \(tokenConversionFee) token base units")
-    }
     if case let .bolt11Invoice(_, sparkTransferFeeSats, lightningFeeSats) = prepareResponse
         .paymentMethod
     {
@@ -42,24 +31,13 @@ func prepareSendPaymentOnchain(sdk: BreezSdk) async throws {
     let paymentRequest = "<bitcoin address>"
     // Set the amount you wish the pay the receiver (requires 'import BigNumber')
     let amountSats = BInt(50_000)
-    // Optionally set to use token funds to pay via token conversion
-    let optionalTokenConversionOptions = TokenConversionOptions(
-        conversionType: TokenConversionType.toBitcoin(
-            fromTokenIdentifier: "<token identifier>"
-        ),
-        maxSlippageBps: 50
-    )
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            amount: amountSats,
-            tokenConversionOptions: optionalTokenConversionOptions
+            amount: amountSats
         ))
 
-    if let tokenConversionFee = prepareResponse.tokenConversionFee {
-        print("Estimated token conversion fee: \(tokenConversionFee) token base units")
-    }
     if case let .bitcoinAddress(_, feeQuote) = prepareResponse.paymentMethod {
         let slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
         let mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
@@ -76,24 +54,13 @@ func prepareSendPaymentSparkAddress(sdk: BreezSdk) async throws {
     let paymentRequest = "<spark address>"
     // Set the amount you wish the pay the receiver (requires 'import BigNumber')
     let amountSats = BInt(50_000)
-    // Optionally set to use token funds to pay via token conversion
-    let optionalTokenConversionOptions = TokenConversionOptions(
-        conversionType: TokenConversionType.toBitcoin(
-            fromTokenIdentifier: "<token identifier>"
-        ),
-        maxSlippageBps: 50
-    )
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            amount: amountSats,
-            tokenConversionOptions: optionalTokenConversionOptions
+            amount: amountSats
         ))
 
-    if let tokenConversionFee = prepareResponse.tokenConversionFee {
-        print("Estimated token conversion fee: \(tokenConversionFee) token base units")
-    }
     if case let .sparkAddress(_, feeSats, _) = prepareResponse.paymentMethod {
         print("Fees: \(feeSats) sats")
     }
@@ -105,28 +72,43 @@ func prepareSendPaymentSparkInvoice(sdk: BreezSdk) async throws {
     let paymentRequest = "<spark invoice>"
     // Optionally set the amount you wish the pay the receiver (requires 'import BigNumber')
     let optionalAmountSats = BInt(50_000)
-    // Optionally set to use token funds to pay via token conversion
-    let optionalTokenConversionOptions = TokenConversionOptions(
+
+    let prepareResponse = try await sdk.prepareSendPayment(
+        request: PrepareSendPaymentRequest(
+            paymentRequest: paymentRequest,
+            amount: optionalAmountSats
+        ))
+
+    if case let .sparkInvoice(_, feeSats, _) = prepareResponse.paymentMethod {
+        print("Fees: \(feeSats) sats")
+    }
+    // ANCHOR_END: prepare-send-payment-spark-invoice
+}
+
+func prepareSendTokenPaymentTokenConversion(sdk: BreezSdk) async throws {
+    // ANCHOR: prepare-send-payment-token-conversion
+    let paymentRequest = "<bolt11 invoice>"
+    // Set to use token funds to pay via token conversion
+    let optionalMaxSlippageBps = UInt32(50)
+    let optionalCompletionTimeoutSecs = UInt32(30)
+    let tokenConversionOptions = TokenConversionOptions(
         conversionType: TokenConversionType.toBitcoin(
             fromTokenIdentifier: "<token identifier>"
         ),
-        maxSlippageBps: 50
+        maxSlippageBps: optionalMaxSlippageBps,
+        completionTimeoutSecs: optionalCompletionTimeoutSecs
     )
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            amount: optionalAmountSats,
-            tokenConversionOptions: optionalTokenConversionOptions
+            tokenConversionOptions: tokenConversionOptions
         ))
 
     if let tokenConversionFee = prepareResponse.tokenConversionFee {
         print("Estimated token conversion fee: \(tokenConversionFee) token base units")
     }
-    if case let .sparkInvoice(_, feeSats, _) = prepareResponse.paymentMethod {
-        print("Fees: \(feeSats) sats")
-    }
-    // ANCHOR_END: prepare-send-payment-spark-invoice
+    // ANCHOR_END: prepare-send-payment-token-conversion
 }
 
 func sendPaymentLightningBolt11(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse)
