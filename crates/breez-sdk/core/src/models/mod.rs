@@ -1236,6 +1236,9 @@ pub(crate) struct TokenConversionResponse {
     pub(crate) received_payment_id: String,
 }
 
+/// Options for token conversion when fulfilling a payment. When set, the SDK will
+/// perform a token conversion before fulfilling the payment. If not set, the payment
+/// will only be fulfilled if the wallet has sufficient balance of the required asset.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct TokenConversionOptions {
@@ -1248,7 +1251,8 @@ pub struct TokenConversionOptions {
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub max_slippage_bps: Option<u32>,
     /// The optional timeout in seconds to wait for the token conversion to complete
-    /// when fulfilling the payment. If the timeout is reached before the conversion
+    /// when fulfilling the payment. This timeout only concerns waiting for the received
+    /// payment of the token conversion. If the timeout is reached before the conversion
     /// is complete, the payment will fail. Defaults to 30 seconds if not set.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub completion_timeout_secs: Option<u32>,

@@ -412,6 +412,12 @@ pub struct Pool {
 }
 
 impl Pool {
+    /// Calculate the required amount of the input asset to receive the desired amount of the output asset,
+    /// taking into account pool reserves, fees, and slippage. Returns an error if the calculation
+    /// cannot be performed due to insufficient pool data or invalid parameters.
+    ///
+    /// If calculating the required input amount when the output asset is BTC, the output amount
+    /// is rounded up to the next multiple of 64 sats to account for BTC variable fee bit masking.
     pub fn calculate_amount_in(
         &self,
         asset_in_address: &str,
