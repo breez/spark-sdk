@@ -76,10 +76,56 @@ setup_rust() {
 }
 
 # ============================================
+# 3. Setup Docker (for integration tests)
+# ============================================
+setup_docker() {
+    if command -v docker &> /dev/null; then
+        echo "Docker already installed"
+        return 0
+    fi
+
+    echo "Installing Docker..."
+
+    # Detect OS
+    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+    if [[ "$OS" == "darwin" ]] && command -v brew &> /dev/null; then
+        brew install --cask docker
+        echo "Note: Docker Desktop installed. You may need to start it manually from Applications."
+    elif [[ "$OS" == "linux" ]]; then
+        # Install Docker Engine for Ubuntu/Debian
+        sudo apt-get update
+        sudo apt-get install -y ca-certificates curl gnupg lsb-release
+
+        # Add Docker's official GPG key
+        sudo install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+        # Set up the repository
+        echo \
+          "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+          $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+        # Install Docker Engine
+        sudo apt-get update
+        sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+        # Add current user to docker group to run without sudo
+        sudo usermod -aG docker $USER
+        echo "Note: You may need to log out and back in for docker group membership to take effect."
+    else
+        echo "Warning: Could not install Docker. Please install manually from https://docs.docker.com/get-docker/"
+        return 1
+    fi
+}
+
+# ============================================
 # Run setup
 # ============================================
 install_protoc
 setup_rust
+setup_docker
 
 # ============================================
 # Persist PATH for subsequent Claude commands
@@ -98,5 +144,6 @@ echo "Build environment ready:"
 command -v protoc &> /dev/null && echo "  - protoc $(protoc --version | grep -oE '[0-9]+\.[0-9]+')"
 command -v rustc &> /dev/null && echo "  - rustc $(rustc --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
 command -v cargo &> /dev/null && echo "  - cargo $(cargo --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+command -v docker &> /dev/null && echo "  - docker $(docker --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" || echo "  - docker not found (optional for integration tests)"
 
 exit 0
