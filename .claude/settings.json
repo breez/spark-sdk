@@ -15,14 +15,15 @@
         ]
       }
     ],
-    "PreToolUse": [
+    "PostToolUse": [
       {
-        "matcher": "Bash\\(git push.*\\)",
+        "matcher": "Write|Edit",
         "hooks": [
           {
-            "type": "command",
-            "command": "make claude-check",
-            "statusMessage": "Running verification checks before push..."
+            "type": "agent",
+            "prompt": "Code changes were just made. Verify the changes by running 'make claude-check' (which runs fmt-check, clippy-check, and cargo-test). If any checks fail, analyze the error output and provide a clear summary of what failed and what needs to be fixed. If all checks pass, confirm that verification succeeded. The main Claude session will see your response and can iterate on fixes if needed.",
+            "timeout": 300,
+            "statusMessage": "Verifying code changes..."
           }
         ]
       }
