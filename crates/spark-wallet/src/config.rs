@@ -37,6 +37,8 @@ impl SparkWalletConfig {
             .validate()
             .map_err(|e| SparkWalletError::ValidationError(e.to_string()))?;
 
+        self.token_outputs_optimization_options.validate()?;
+
         Ok(())
     }
 
@@ -169,4 +171,15 @@ impl SparkWalletConfig {
 pub struct TokenOutputsOptimizationOptions {
     pub min_outputs_threshold: u32,
     pub auto_optimize_interval: Option<Duration>,
+}
+
+impl TokenOutputsOptimizationOptions {
+    pub fn validate(&self) -> Result<(), SparkWalletError> {
+        if self.min_outputs_threshold <= 1 {
+            return Err(SparkWalletError::ValidationError(
+                "min_outputs_threshold must be greater than 1".to_string(),
+            ));
+        }
+        Ok(())
+    }
 }

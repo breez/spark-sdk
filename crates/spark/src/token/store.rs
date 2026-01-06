@@ -1113,9 +1113,10 @@ mod tests {
             .await;
         assert!(result.is_err());
 
-        if let Err(TokenOutputServiceError::Generic(msg)) = result {
-            assert!(msg.contains("Not enough outputs"));
-        }
+        assert!(matches!(
+            result,
+            Err(TokenOutputServiceError::InsufficientFunds)
+        ));
     }
 
     #[async_test_all]

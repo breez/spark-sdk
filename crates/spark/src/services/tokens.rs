@@ -451,7 +451,7 @@ impl TokenService {
                 Err(ServiceError::NeededTooManyOutputs)
                     if attempt < MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS - 1 =>
                 {
-                    self.optimize_token_outputs(Some(&token_id), 0).await?;
+                    self.optimize_token_outputs(Some(&token_id), 2).await?;
                     attempt += 1;
                     continue;
                 }
@@ -527,12 +527,18 @@ impl TokenService {
 
     /// Optimizes token outputs by consolidating them when there are more than the configured threshold.
     /// Processes one token at a time. Token identifier can be provided, otherwise one is automatically selected.
-    /// Only optimizes if the number of outputs is greater than the provided threshold.
+    /// Only optimizes if the number of outputs is greater than the provided `min_outputs_threshold` (min 2).
     pub async fn optimize_token_outputs(
         &self,
         token_identifier: Option<&str>,
         min_outputs_threshold: u32,
     ) -> Result<(), ServiceError> {
+        if min_outputs_threshold <= 1 {
+            return Err(ServiceError::ValidationError(
+                "min_outputs_threshold must be greater than 1".to_string(),
+            ));
+        }
+
         info!(
             "Optimizing token outputs starting (optional token identifier: {:?})",
             token_identifier
