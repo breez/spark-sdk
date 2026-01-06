@@ -44,6 +44,34 @@ pub fn current_sequence(current_sequence: Sequence) -> (Sequence, Sequence) {
     )
 }
 
+/// Enforces timelock alignment to `TIME_LOCK_INTERVAL` (100 blocks) by rounding down.
+///
+/// This is used during claim operations to ensure timelocks are aligned to 100-block
+/// boundaries (X00 or X50 with the direct offset).
+///
+/// # Examples
+/// - 1950 -> 1900
+/// - 1900 -> 1900 (already aligned)
+/// - 1899 -> 1800
+pub fn enforce_timelock(sequence: Sequence) -> Sequence {
+    let current_sequence_num = sequence.to_consensus_u32();
+
+    // Extract lower 16 bits (timelock value)
+    const TIMELOCK_MASK: u32 = 0x0000_FFFF;
+    let timelock = (current_sequence_num & TIMELOCK_MASK) as u16;
+
+    // Round down to nearest TIME_LOCK_INTERVAL
+    let remainder = timelock % TIME_LOCK_INTERVAL;
+    let enforced_timelock = if remainder != 0 {
+        timelock - remainder
+    } else {
+        timelock
+    };
+
+    let spark_flag = spark_sequence_flag(sequence);
+    to_sequence(enforced_timelock, spark_flag)
+}
+
 /// Calculates the next pair of sequence numbers for transaction timelocks.
 ///
 /// This function is used in the Spark protocol to generate decreasing timelocks
@@ -246,5 +274,47 @@ mod tests {
 
         let next = next_sequence(cpfp_sequence);
         assert!(next.is_none());
+    }
+
+    #[test_all]
+    fn test_enforce_timelock_rounds_down() {
+        // 1950 should round down to 1900
+        let sequence = Sequence::from_consensus(1950 | SPARK_SEQUENCE_FLAG);
+        let enforced = enforce_timelock(sequence);
+
+        let LockTime::Blocks(height) = enforced.to_relative_lock_time().unwrap() else {
+            panic!("Expected block height locktime");
+        };
+        assert_eq!(height.value(), 1900);
+
+        // Spark flag should be preserved
+        assert_eq!(
+            enforced.to_consensus_u32() & SPARK_SEQUENCE_FLAG,
+            SPARK_SEQUENCE_FLAG
+        );
+    }
+
+    #[test_all]
+    fn test_enforce_timelock_already_aligned() {
+        // 1900 should stay 1900
+        let sequence = Sequence::from_consensus(1900 | SPARK_SEQUENCE_FLAG);
+        let enforced = enforce_timelock(sequence);
+
+        let LockTime::Blocks(height) = enforced.to_relative_lock_time().unwrap() else {
+            panic!("Expected block height locktime");
+        };
+        assert_eq!(height.value(), 1900);
+    }
+
+    #[test_all]
+    fn test_enforce_timelock_edge_case() {
+        // 99 should round down to 0
+        let sequence = Sequence::from_consensus(99 | SPARK_SEQUENCE_FLAG);
+        let enforced = enforce_timelock(sequence);
+
+        let LockTime::Blocks(height) = enforced.to_relative_lock_time().unwrap() else {
+            panic!("Expected block height locktime");
+        };
+        assert_eq!(height.value(), 0);
     }
 }
