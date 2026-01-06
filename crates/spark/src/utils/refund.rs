@@ -30,7 +30,6 @@ pub struct RefundSignatures {
 pub struct RefundTxConstructor<'a> {
     pub node: &'a TreeNode,
     pub vout: u32,
-    pub refund_tx: Transaction,
     pub cpfp_sequence: Sequence,
     pub direct_sequence: Sequence,
     pub receiving_pubkey: &'a PublicKey,
@@ -476,7 +475,6 @@ where
         } = refund_tx_constructor(RefundTxConstructor {
             node: &leaf.node,
             vout: i as u32,
-            refund_tx,
             cpfp_sequence,
             direct_sequence,
             receiving_pubkey: &refund_signing_data.receiving_public_key,

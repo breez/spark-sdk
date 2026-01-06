@@ -372,17 +372,12 @@ impl CoopExitService {
                 create_connector_refund_txs(ConnectorRefundTxsParams {
                     cpfp_sequence: refund_tx_constructor.cpfp_sequence,
                     direct_sequence: refund_tx_constructor.direct_sequence,
-                    cpfp_outpoint: refund_tx_constructor.refund_tx.input[0].previous_output,
-                    direct_outpoint: refund_tx_constructor
-                        .node
-                        .direct_refund_tx
-                        .as_ref()
-                        .map(|tx| tx.input[0].previous_output),
+                    node_tx: &refund_tx_constructor.node.node_tx,
+                    direct_tx: refund_tx_constructor.node.direct_tx.as_ref(),
                     connector_outpoint: OutPoint {
                         txid: connector_txid,
                         vout: refund_tx_constructor.vout,
                     },
-                    amount_sats: refund_tx_constructor.node.value,
                     receiving_pubkey: refund_tx_constructor.receiving_pubkey,
                     network: self.network,
                 })

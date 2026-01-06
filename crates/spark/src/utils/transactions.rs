@@ -31,10 +31,9 @@ pub(crate) struct RefundTransactions {
 pub(crate) struct ConnectorRefundTxsParams<'a> {
     pub cpfp_sequence: Sequence,
     pub direct_sequence: Sequence,
-    pub cpfp_outpoint: OutPoint,
-    pub direct_outpoint: Option<OutPoint>,
+    pub node_tx: &'a Transaction,
+    pub direct_tx: Option<&'a Transaction>,
     pub connector_outpoint: OutPoint,
-    pub amount_sats: u64,
     pub receiving_pubkey: &'a PublicKey,
     pub network: Network,
 }
@@ -344,7 +343,11 @@ pub(crate) fn create_connector_refund_txs(
     // TODO: Isolate secp256k1 initialization to avoid multiple initializations
     let secp = Secp256k1::new();
     let network: bitcoin::Network = params.network.into();
-    let value = Amount::from_sat(params.amount_sats);
+    let node_value = params.node_tx.output[0].value;
+    let cpfp_outpoint = OutPoint {
+        txid: params.node_tx.compute_txid(),
+        vout: 0,
+    };
     let addr = Address::p2tr(
         &secp,
         params.receiving_pubkey.x_only_public_key().0,
@@ -353,23 +356,28 @@ pub(crate) fn create_connector_refund_txs(
     );
 
     let mut cpfp_tx = create_spark_tx(
-        params.cpfp_outpoint,
+        cpfp_outpoint,
         params.cpfp_sequence,
-        value,
+        node_value,
         addr.script_pubkey(),
         false,
-        false,
+        true,
     );
     cpfp_tx.input.push(TxIn {
         previous_output: params.connector_outpoint,
         ..Default::default()
     });
 
-    let direct_tx = params.direct_outpoint.map(|outpoint| {
+    let direct_tx = params.direct_tx.map(|tx| {
+        let direct_value = tx.output[0].value;
+        let direct_outpoint = OutPoint {
+            txid: tx.compute_txid(),
+            vout: 0,
+        };
         let mut tx = create_spark_tx(
-            outpoint,
+            direct_outpoint,
             params.direct_sequence,
-            value,
+            direct_value,
             addr.script_pubkey(),
             true,
             false,
@@ -381,11 +389,11 @@ pub(crate) fn create_connector_refund_txs(
         tx
     });
 
-    let direct_from_cpfp_tx = params.direct_outpoint.map(|_| {
+    let direct_from_cpfp_tx = params.direct_tx.map(|_| {
         let mut tx = create_spark_tx(
-            params.cpfp_outpoint,
+            cpfp_outpoint,
             params.direct_sequence,
-            value,
+            node_value,
             addr.script_pubkey(),
             true,
             false,
