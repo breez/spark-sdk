@@ -61,5 +61,8 @@ itest:
 breez-itest:
 	cargo xtask test --package breez-sdk-itest -- --test-threads=1
 
+claude-check:
+	fmt-check clippy-check cargo-test breez-itest
+
 open-core-rustdocs:
 	cd crates/breez-sdk/core && cargo doc --no-deps --open

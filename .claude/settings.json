@@ -1,4 +1,8 @@
 {
+  "env": {
+    "FAUCET_USERNAME": "${{ secrets.FAUCET_USERNAME }}",
+    "FAUCET_PASSWORD": "${{ secrets.FAUCET_PASSWORD }}"
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -7,6 +11,18 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/setup-build.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash\\(git push.*\\)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "make claude-check",
+            "statusMessage": "Running verification checks before push..."
           }
         ]
       }
@@ -27,6 +43,7 @@
       "Bash(make clippy-check:*)",
       "Bash(make cargo-clippy-check:*)",
       "Bash(make fmt-check:*)",
+      "Bash(make breez-itest:*)",
       "Bash(gh pr view:*)",
       "Bash(gh pr diff:*)",
       "Bash(gh api:*)",
