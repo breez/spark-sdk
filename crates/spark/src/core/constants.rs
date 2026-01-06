@@ -124,7 +124,12 @@ fn to_sequence(blocks: u16, spark_sequence_flag: u32) -> Sequence {
 fn check_next_timelock(current_sequence: Sequence) -> Option<u16> {
     trace!("Current sequence: {current_sequence:?}");
     let current_sequence_num = current_sequence.to_consensus_u32();
-    let timelock = current_sequence_num as u16;
+
+    // Extract only the lower 16 bits (timelock value)
+    // Upper bits including SPARK_SEQUENCE_FLAG are ignored for timelock calculation
+    const TIMELOCK_MASK: u32 = 0x0000FFFF;
+    let timelock = (current_sequence_num & TIMELOCK_MASK) as u16;
+
     timelock.checked_sub(TIME_LOCK_INTERVAL).or_else(|| {
         trace!(
             "Current sequence locktime {} is too low to calculate next sequence",
