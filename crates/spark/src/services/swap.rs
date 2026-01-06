@@ -97,7 +97,12 @@ impl Swap {
         }
 
         let transfer_id = TransferId::generate();
-        let expiry_time = SystemTime::now() + SWAP_EXPIRY_DURATION;
+        let expiry_time =
+            SystemTime::now()
+                .checked_add(SWAP_EXPIRY_DURATION)
+                .ok_or(ServiceError::Generic(
+                    "failed to compute swap expiry time".to_string(),
+                ))?;
         let receiver_public_key = self.ssp_client.identity_public_key();
         // Prepare leaf data map with refund signing information
         let mut leaf_data_map =
