@@ -323,10 +323,9 @@ pub(crate) fn create_initial_timelock_refund_txs(
 /// * `params` - A `ConnectorRefundTxsParams` struct containing:
 ///   - `cpfp_sequence`: The sequence number for the CPFP transaction
 ///   - `direct_sequence`: The sequence number for direct transactions
-///   - `cpfp_outpoint`: The CPFP outpoint to spend
-///   - `direct_outpoint`: Optional direct outpoint to spend
+///   - `node_tx`: The node transaction to extract outpoint and amount from
+///   - `direct_tx`: Optional direct transaction to extract outpoint and amount from
 ///   - `connector_outpoint`: The connector's outpoint that must be spent along with node outpoints
-///   - `amount_sats`: The amount in satoshis to send
 ///   - `receiving_pubkey`: The public key to send funds to (used to create P2TR address)
 ///   - `network`: The Bitcoin network to use (affects address format)
 ///
@@ -334,9 +333,9 @@ pub(crate) fn create_initial_timelock_refund_txs(
 ///
 /// A `RefundTransactions` struct containing:
 /// - `cpfp_tx`: Always present, spends both CPFP and connector outpoints
-/// - `direct_tx`: Only present if `direct_outpoint` is provided, spends direct and connector outpoints
+/// - `direct_tx`: Only present if `direct_tx` is provided, spends direct and connector outpoints
 /// - `direct_from_cpfp_tx`: Alternative transaction that spends CPFP and connector outpoints with
-///   the direct sequence number (only present if `direct_outpoint` is provided)
+///   the direct sequence number (only present if `direct_tx` is provided)
 pub(crate) fn create_connector_refund_txs(
     params: ConnectorRefundTxsParams<'_>,
 ) -> RefundTransactions {
