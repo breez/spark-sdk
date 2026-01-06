@@ -18,6 +18,22 @@ pub struct LnurlSenderComment {
     pub updated_at: i64,
 }
 
+pub struct LnurlPayInvoice {
+    pub payment_hash: String,
+    pub user_pubkey: String,
+    pub domain: String,
+    pub username: String,
+    pub metadata: String,
+    pub invoice_expiry: i64,
+    pub updated_at: i64,
+    pub lightning_receive_id: Option<String>,
+    pub bolt11_invoice: Option<String>,
+    /// The preimage of the payment, set when the invoice is paid
+    pub preimage: Option<String>,
+    /// Whether the user is in privacy mode (client handles payment notification)
+    pub is_privacy_mode: bool,
+}
+
 #[async_trait::async_trait]
 pub trait LnurlRepository {
     async fn delete_user(&self, domain: &str, pubkey: &str) -> Result<(), LnurlRepositoryError>;
@@ -58,4 +74,33 @@ pub trait LnurlRepository {
 
     /// Insert a domain if it doesn't already exist
     async fn add_domain(&self, domain: &str) -> Result<(), LnurlRepositoryError>;
+
+    /// Insert or update an LNURL-pay invoice for verification
+    async fn upsert_lnurl_pay_invoice(
+        &self,
+        invoice: &LnurlPayInvoice,
+    ) -> Result<(), LnurlRepositoryError>;
+
+    /// Get an LNURL-pay invoice by payment hash
+    async fn get_lnurl_pay_invoice_by_payment_hash(
+        &self,
+        payment_hash: &str,
+    ) -> Result<Option<LnurlPayInvoice>, LnurlRepositoryError>;
+
+    /// Get list of user pubkeys that have unexpired LNURL-pay invoices needing server-side monitoring
+    /// (non-privacy mode invoices without a preimage)
+    async fn get_lnurl_pay_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError>;
+
+    /// Check if a specific user has any unexpired LNURL-pay invoices needing server-side monitoring
+    async fn is_lnurl_pay_monitored_user(
+        &self,
+        user_pubkey: &str,
+    ) -> Result<bool, LnurlRepositoryError>;
+
+    /// Update the preimage for an LNURL-pay invoice (marks it as paid)
+    async fn set_lnurl_pay_invoice_preimage(
+        &self,
+        payment_hash: &str,
+        preimage: &str,
+    ) -> Result<(), LnurlRepositoryError>;
 }

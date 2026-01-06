@@ -11,9 +11,10 @@ use bitcoin::{
 use lightning_invoice::Bolt11Invoice;
 use lnurl_models::{
     CheckUsernameAvailableResponse, ListMetadataRequest, ListMetadataResponse,
-    PublishZapReceiptRequest, PublishZapReceiptResponse, RecoverLnurlPayRequest,
-    RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
-    UnregisterLnurlPayRequest, sanitize_username,
+    MarkInvoicePaidRequest, MarkInvoicePaidResponse, PublishZapReceiptRequest,
+    PublishZapReceiptResponse, RecoverLnurlPayRequest, RecoverLnurlPayResponse,
+    RegisterLnurlPayRequest, RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
+    sanitize_username,
 };
 use nostr::{Alphabet, Event, JsonUtil, Kind, TagStandard, key::Keys};
 use regex::Regex;
@@ -25,7 +26,7 @@ use std::sync::Arc;
 use tracing::{debug, error, trace, warn};
 
 use crate::{
-    repository::LnurlSenderComment,
+    repository::{LnurlPayInvoice, LnurlSenderComment},
     time::{now_millis, now_u64},
     zap::Zap,
 };
@@ -44,6 +45,11 @@ pub struct LnurlPayCallbackParams {
     pub amount: Option<u64>,
     pub comment: Option<String>,
     pub nostr: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LnurlVerifyParams {
+    pub pr: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -626,7 +632,8 @@ where
                 _ => (None, false),
             };
 
-        let desc_hash = if let Some(event) = &params.nostr {
+        // Compute description hash and capture metadata for LNURL-verify
+        let (desc_hash, verify_metadata) = if let Some(event) = &params.nostr {
             if nostr_pubkey.is_none() {
                 trace!("nostr zap not supported");
                 return Err(lnurl_error("nostr zap not supported"));
@@ -637,10 +644,11 @@ where
                 lnurl_error("invalid nostr event")
             })?;
             validate_nostr_zap_request(amount_msat, &event)?;
-            sha256::Hash::hash(event.as_json().as_bytes())
+            let event_json = event.as_json();
+            (sha256::Hash::hash(event_json.as_bytes()), event_json)
         } else {
             let metadata = get_metadata(&user.domain, &user);
-            sha256::Hash::hash(metadata.as_bytes())
+            (sha256::Hash::hash(metadata.as_bytes()), metadata)
         };
 
         let pubkey = parse_pubkey(&user.pubkey)?;
@@ -744,14 +752,209 @@ where
             }
         }
 
-        // TODO: Save things like the invoice/preimage/transfer id?
-        // TODO: Validate invoice?
-        // TODO: Add lnurl-verify
+        // LNURL-verify: Store invoice metadata for verification
+        let invoice_expiry_secs: i64 = i64::try_from(expiry_timestamp.as_secs()).map_err(|e| {
+            error!("invoice has invalid expiry for lnurl-verify: {e}");
+            lnurl_error("internal server error")
+        })?;
+
+        // Determine if user is in privacy mode (has their own nostr key)
+        // In privacy mode, the client will notify the server when payment is received
+        // Otherwise, the server subscribes to events to detect payment
+        let is_privacy_mode = user.nostr_pubkey.is_some();
+
+        let lnurl_pay_invoice = LnurlPayInvoice {
+            payment_hash: invoice.payment_hash().to_string(),
+            user_pubkey: user.pubkey.clone(),
+            domain: domain.clone(),
+            username: user.name.clone(),
+            metadata: verify_metadata,
+            invoice_expiry: invoice_expiry_secs,
+            updated_at,
+            lightning_receive_id: Some(res.id.clone()),
+            bolt11_invoice: Some(res.invoice.clone()),
+            preimage: None,
+            is_privacy_mode,
+        };
+        state
+            .db
+            .upsert_lnurl_pay_invoice(&lnurl_pay_invoice)
+            .await
+            .map_err(|e| {
+                error!("failed to save lnurl invoice: {}", e);
+                lnurl_error("internal server error")
+            })?;
+
+        // Subscribe to user for LNURL-pay invoice monitoring if not in privacy mode
+        if !is_privacy_mode {
+            crate::lnurl_pay::create_rpc_client_and_subscribe(
+                state.db.clone(),
+                pubkey,
+                &state.connection_manager,
+                &state.coordinator,
+                state.signer.clone(),
+                state.session_manager.clone(),
+                Arc::clone(&state.service_provider),
+                Arc::clone(&state.lnurl_pay_subscribed_keys),
+            )
+            .await
+            .map_err(|e| {
+                error!("failed to subscribe to user for LNURL-pay: {}", e);
+                lnurl_error("internal server error")
+            })?;
+        }
 
         Ok(Json(json!({
             "pr": res.invoice,
             "routes": Vec::<String>::new(),
+            "verify": format!("{}://{}/lnurlp/{}/verify", state.scheme, domain, user.name),
         })))
+    }
+
+    pub async fn handle_lnurl_verify(
+        Host(host): Host,
+        Path(identifier): Path<String>,
+        Query(params): Query<LnurlVerifyParams>,
+        Extension(state): Extension<State<DB>>,
+    ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+        let domain = sanitize_domain(&state, &host)?;
+
+        // Parse the invoice to get payment_hash
+        let invoice = Bolt11Invoice::from_str(&params.pr).map_err(|e| {
+            trace!("invalid invoice: {}", e);
+            lnurl_error("invalid invoice")
+        })?;
+
+        let payment_hash = invoice.payment_hash().to_string();
+
+        // Look up stored invoice
+        let lnurl_pay_invoice = state
+            .db
+            .get_lnurl_pay_invoice_by_payment_hash(&payment_hash)
+            .await
+            .map_err(|e| {
+                error!("database error: {}", e);
+                lnurl_error("internal server error")
+            })?
+            .ok_or_else(|| lnurl_error("invoice not found"))?;
+
+        // Verify domain and username match
+        if lnurl_pay_invoice.domain != domain
+            || lnurl_pay_invoice.username != sanitize_username(&identifier)
+        {
+            return Err(lnurl_error("invoice does not belong to this user"));
+        }
+
+        // Get the stored invoice string
+        let bolt11_invoice = lnurl_pay_invoice
+            .bolt11_invoice
+            .ok_or_else(|| lnurl_error("invoice not found"))?;
+
+        // Check if settled (preimage is present in the stored invoice record)
+        let settled = lnurl_pay_invoice.preimage.is_some();
+
+        Ok(Json(json!({
+            "status": "OK",
+            "settled": settled,
+            "preimage": lnurl_pay_invoice.preimage,
+            "pr": bolt11_invoice,
+        })))
+    }
+
+    /// Mark an LNURL-pay invoice as paid (for privacy mode clients)
+    /// This endpoint allows clients to notify the server when a payment is received
+    pub async fn mark_invoice_paid(
+        Path((pubkey, payment_hash)): Path<(String, String)>,
+        Extension(state): Extension<State<DB>>,
+        Json(payload): Json<MarkInvoicePaidRequest>,
+    ) -> Result<Json<MarkInvoicePaidResponse>, (StatusCode, Json<Value>)> {
+        let pubkey = validate(
+            &pubkey,
+            &payload.signature,
+            &payload.preimage,
+            payload.timestamp,
+            &state,
+        )
+        .await?;
+
+        // Get the existing invoice record
+        let lnurl_pay_invoice = state
+            .db
+            .get_lnurl_pay_invoice_by_payment_hash(&payment_hash)
+            .await
+            .map_err(|e| {
+                error!("failed to query lnurl pay invoice: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "internal server error"})),
+                )
+            })?
+            .ok_or_else(|| {
+                trace!("lnurl pay invoice not found for payment hash: {}", payment_hash);
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": "invoice not found"})),
+                )
+            })?;
+
+        // Verify the invoice belongs to this user
+        if lnurl_pay_invoice.user_pubkey != pubkey.to_string() {
+            trace!("invoice does not belong to this user");
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "unauthorized"})),
+            ));
+        }
+
+        // Check if already marked as paid
+        if lnurl_pay_invoice.preimage.is_some() {
+            debug!(
+                "Invoice already marked as paid for payment hash {}",
+                payment_hash
+            );
+            return Ok(Json(MarkInvoicePaidResponse {
+                success: true,
+                already_paid: true,
+            }));
+        }
+
+        // Validate the preimage matches the payment hash
+        use bitcoin::hashes::{Hash, sha256};
+        let preimage_bytes = hex::decode(&payload.preimage).map_err(|e| {
+            trace!("invalid preimage hex: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid preimage format"})),
+            )
+        })?;
+        let computed_hash = sha256::Hash::hash(&preimage_bytes);
+        if computed_hash.to_string() != payment_hash {
+            trace!("preimage does not match payment hash");
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "preimage does not match payment hash"})),
+            ));
+        }
+
+        // Update the invoice with the preimage
+        state
+            .db
+            .set_lnurl_pay_invoice_preimage(&payment_hash, &payload.preimage)
+            .await
+            .map_err(|e| {
+                error!("failed to update lnurl pay invoice: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "internal server error"})),
+                )
+            })?;
+
+        debug!("Marked invoice as paid for payment hash {}", payment_hash);
+
+        Ok(Json(MarkInvoicePaidResponse {
+            success: true,
+            already_paid: false,
+        }))
     }
 }
 
