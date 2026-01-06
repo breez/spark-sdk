@@ -419,12 +419,20 @@ impl Storage for SqliteStorage {
         Ok(payments)
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn insert_payment(&self, payment: Payment) -> Result<(), StorageError> {
         let mut connection = self.get_connection()?;
         let tx = connection.transaction()?;
         tx.execute(
-            "INSERT OR REPLACE INTO payments (id, payment_type, status, amount, fees, timestamp, method) 
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET 
+                payment_type=excluded.payment_type,
+                status=excluded.status,
+                amount=excluded.amount,
+                fees=excluded.fees,
+                timestamp=excluded.timestamp,
+                method=excluded.method",
             params![
                 payment.id,
                 payment.payment_type.to_string(),
@@ -457,14 +465,25 @@ impl Storage for SqliteStorage {
                     "UPDATE payments SET spark = 1 WHERE id = ?",
                     params![payment.id],
                 )?;
-                if let Some(invoice_details) = invoice_details {
-                    tx.execute("INSERT OR REPLACE INTO payment_details_spark (payment_id, invoice_details) VALUES (?, ?)",
-                        params![payment.id, serde_json::to_string(&invoice_details)?],
-                    )?;
-                }
-                if let Some(htlc_details) = htlc_details {
-                    tx.execute("INSERT OR REPLACE INTO payment_details_spark (payment_id, htlc_details) VALUES (?, ?)",
-                        params![payment.id, serde_json::to_string(&htlc_details)?],
+                if invoice_details.is_some() || htlc_details.is_some() {
+                    // Upsert both details together and avoid overwriting existing data with NULLs
+                    tx.execute(
+                        "INSERT INTO payment_details_spark (payment_id, invoice_details, htlc_details)
+                         VALUES (?, ?, ?)
+                         ON CONFLICT(payment_id) DO UPDATE SET
+                            invoice_details=COALESCE(excluded.invoice_details, payment_details_spark.invoice_details),
+                            htlc_details=COALESCE(excluded.htlc_details, payment_details_spark.htlc_details)",
+                        params![
+                            payment.id,
+                            invoice_details
+                                .as_ref()
+                                .map(serde_json::to_string)
+                                .transpose()?,
+                            htlc_details
+                                .as_ref()
+                                .map(serde_json::to_string)
+                                .transpose()?,
+                        ],
                     )?;
                 }
             }
@@ -474,8 +493,18 @@ impl Storage for SqliteStorage {
                 invoice_details,
             }) => {
                 tx.execute(
-                    "INSERT OR REPLACE INTO payment_details_token (payment_id, metadata, tx_hash, invoice_details) VALUES (?, ?, ?, ?)",
-                    params![payment.id, serde_json::to_string(&metadata)?, tx_hash, invoice_details.map(|d| serde_json::to_string(&d)).transpose()?],
+                    "INSERT INTO payment_details_token (payment_id, metadata, tx_hash, invoice_details)
+                     VALUES (?, ?, ?, ?)
+                     ON CONFLICT(payment_id) DO UPDATE SET
+                        metadata=excluded.metadata,
+                        tx_hash=excluded.tx_hash,
+                        invoice_details=COALESCE(excluded.invoice_details, payment_details_token.invoice_details)",
+                    params![
+                        payment.id,
+                        serde_json::to_string(&metadata)?,
+                        tx_hash,
+                        invoice_details.map(|d| serde_json::to_string(&d)).transpose()?,
+                    ],
                 )?;
             }
             Some(PaymentDetails::Lightning {
@@ -487,8 +516,14 @@ impl Storage for SqliteStorage {
                 ..
             }) => {
                 tx.execute(
-                    "INSERT OR REPLACE INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage) 
-                     VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage) 
+                     VALUES (?, ?, ?, ?, ?, ?)
+                     ON CONFLICT(payment_id) DO UPDATE SET
+                        invoice=excluded.invoice,
+                        payment_hash=excluded.payment_hash,
+                        destination_pubkey=excluded.destination_pubkey,
+                        description=excluded.description,
+                        preimage=COALESCE(excluded.preimage, payment_details_lightning.preimage)",
                     params![
                         payment.id,
                         invoice,
@@ -514,7 +549,8 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         connection.execute(
-            "INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description) VALUES (?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description)
+             VALUES (?, ?, ?, ?)",
             params![payment_id, metadata.lnurl_pay_info, metadata.lnurl_withdraw_info, metadata.lnurl_description],
         )?;
 
@@ -1471,6 +1507,14 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_payment_request_metadata(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_details_update_persistence() {
+        let temp_dir = create_temp_dir("sqlite_storage_payment_details_update");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_payment_details_update_persistence(Box::new(storage)).await;
     }
 
     #[tokio::test]

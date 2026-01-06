@@ -2364,4 +2364,76 @@ pub mod tests {
             .unwrap();
         assert!(deleted.is_none());
     }
+
+    pub async fn test_payment_details_update_persistence(storage: Box<dyn Storage>) {
+        // Create a payment with incomplete details
+        let mut payment = Payment {
+            id: "payment_1".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Pending,
+            amount: 15_000,
+            fees: 150,
+            timestamp: 1_234_567_890,
+            method: PaymentMethod::Lightning,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: Some(SparkHtlcDetails {
+                    payment_hash: "hash_123".to_string(),
+                    preimage: None,
+                    expiry_time: 1_234_567_990,
+                    status: SparkHtlcStatus::WaitingForPreimage,
+                }),
+            }),
+        };
+
+        // Insert the payment into storage
+        storage.insert_payment(payment.clone()).await.unwrap();
+
+        // Simulate payment completion by updating status
+        payment.status = PaymentStatus::Completed;
+        storage.insert_payment(payment.clone()).await.unwrap();
+
+        // Check the payment details
+        let updated_payment = storage
+            .get_payment_by_id("payment_1".to_string())
+            .await
+            .unwrap();
+        assert_eq!(updated_payment.status, PaymentStatus::Completed);
+        let Some(PaymentDetails::Spark { htlc_details, .. }) = &updated_payment.details else {
+            panic!("Payment details are not of Spark type");
+        };
+        assert_eq!(
+            htlc_details.as_ref().unwrap().status,
+            SparkHtlcStatus::WaitingForPreimage
+        );
+
+        // Now, update the payment details
+        payment.details = Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: Some(SparkHtlcDetails {
+                payment_hash: "hash_123".to_string(),
+                preimage: Some("preimage_123".to_string()),
+                expiry_time: 1_234_567_990,
+                status: SparkHtlcStatus::PreimageShared,
+            }),
+        });
+        storage.insert_payment(payment.clone()).await.unwrap();
+
+        // Check the updated payment details
+        let updated_payment = storage
+            .get_payment_by_id("payment_1".to_string())
+            .await
+            .unwrap();
+        let Some(PaymentDetails::Spark { htlc_details, .. }) = &updated_payment.details else {
+            panic!("Payment details are not of Spark type");
+        };
+        assert_eq!(
+            htlc_details.as_ref().unwrap().status,
+            SparkHtlcStatus::PreimageShared
+        );
+        assert_eq!(
+            htlc_details.as_ref().unwrap().preimage.as_ref().unwrap(),
+            "preimage_123"
+        );
+    }
 }
