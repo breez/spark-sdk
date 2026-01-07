@@ -28,7 +28,7 @@ use spark_wallet::{
     ExitSpeed, InvoiceDescription, ListTokenTransactionsRequest, ListTransfersRequest, Preimage,
     SparkAddress, SparkWallet, TransferId, TransferTokenOutput, WalletEvent, WalletTransfer,
 };
-use std::{str::FromStr, sync::Arc};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 use tracing::{debug, error, info, trace, warn};
 use web_time::{Duration, SystemTime};
 
@@ -2965,7 +2965,7 @@ impl BreezSdk {
         min_amount_out: u128,
     ) -> Result<TokenConversionResponse, SdkError> {
         let conversion_pool = self
-            .get_token_conversion_pool(&conversion_options.conversion_type, token_identifier)
+            .get_token_conversion_pool(conversion_options, token_identifier, min_amount_out)
             .await?;
         let (amount_in, _) = self
             .validate_token_conversion_internal(
@@ -3052,9 +3052,11 @@ impl BreezSdk {
 
     async fn get_token_conversion_pool(
         &self,
-        conversion_type: &TokenConversionType,
+        conversion_options: &TokenConversionOptions,
         token_identifier: Option<&String>,
+        amount_out: u128,
     ) -> Result<TokenConversionPool, SdkError> {
+        let conversion_type = &conversion_options.conversion_type;
         let (asset_in_address, asset_out_address) = match conversion_type {
             TokenConversionType::FromBitcoin => (
                 BTC_ASSET_ADDRESS.to_string(),
@@ -3068,24 +3070,50 @@ impl BreezSdk {
                 from_token_identifier,
             } => (from_token_identifier.clone(), BTC_ASSET_ADDRESS.to_string()),
         };
-        let pools_response = self
-            .flashnet_client
-            .list_pools(ListPoolsRequest {
-                asset_a_address: Some(asset_in_address.clone()),
-                asset_b_address: Some(asset_out_address.clone()),
-                sort: Some(PoolSortOrder::Volume24hDesc),
-                ..Default::default()
-            })
-            .await?;
-        // Get the pool for the conversion
-        let pool = pools_response.pools.first().ok_or(SdkError::Generic(
-            "No pool found for the given token identifier".to_string(),
-        ))?;
+
+        // List available pools for the asset pair
+        let a_in_pools_fut = self.flashnet_client.list_pools(ListPoolsRequest {
+            asset_a_address: Some(asset_in_address.clone()),
+            asset_b_address: Some(asset_out_address.clone()),
+            sort: Some(PoolSortOrder::Volume24hDesc),
+            ..Default::default()
+        });
+        let b_in_pools_fut = self.flashnet_client.list_pools(ListPoolsRequest {
+            asset_a_address: Some(asset_out_address.clone()),
+            asset_b_address: Some(asset_in_address.clone()),
+            sort: Some(PoolSortOrder::Volume24hDesc),
+            ..Default::default()
+        });
+        let (a_in_pools_res, b_in_pools_res) = tokio::join!(a_in_pools_fut, b_in_pools_fut);
+        let mut pools = a_in_pools_res.map_or(HashMap::new(), |res| {
+            res.pools
+                .into_iter()
+                .map(|pool| (pool.lp_public_key, pool))
+                .collect::<HashMap<_, _>>()
+        });
+        if let Ok(res) = b_in_pools_res {
+            pools.extend(res.pools.into_iter().map(|pool| (pool.lp_public_key, pool)));
+        }
+        let pools = pools.into_values().collect::<Vec<_>>();
+
+        // Extract max_slippage_bps with default fallback
+        let max_slippage_bps = conversion_options
+            .max_slippage_bps
+            .unwrap_or(DEFAULT_TOKEN_CONVERSION_MAX_SLIPPAGE_BPS);
+
+        // Select the best pool using multi-factor scoring
+        let pool = flashnet::select_best_pool(
+            &pools,
+            &asset_in_address,
+            amount_out,
+            max_slippage_bps,
+            self.config.network.into(),
+        )?;
 
         Ok(TokenConversionPool {
             asset_in_address,
             asset_out_address,
-            pool: pool.clone(),
+            pool,
         })
     }
 
@@ -3099,7 +3127,7 @@ impl BreezSdk {
             return Ok(None);
         };
         let conversion_pool = self
-            .get_token_conversion_pool(&conversion_options.conversion_type, token_identifier)
+            .get_token_conversion_pool(conversion_options, token_identifier, amount_out)
             .await?;
 
         let (_, fee) = self
