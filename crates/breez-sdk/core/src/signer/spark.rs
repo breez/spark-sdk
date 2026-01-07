@@ -7,7 +7,10 @@ use std::sync::Arc;
 
 use crate::signer::BreezSigner;
 use async_trait::async_trait;
-use bitcoin::secp256k1::{self, PublicKey, SecretKey, schnorr};
+use bitcoin::{
+    bip32::DerivationPath,
+    secp256k1::{self, PublicKey, SecretKey, schnorr},
+};
 use frost_secp256k1_tr::round2::SignatureShare;
 
 pub struct SparkSigner {
@@ -26,9 +29,7 @@ impl Signer for SparkSigner {
         &self,
         message: &[u8],
     ) -> Result<secp256k1::ecdsa::Signature, SignerError> {
-        let identity_path = "m"
-            .parse()
-            .map_err(|e: bitcoin::bip32::Error| SignerError::Generic(e.to_string()))?;
+        let identity_path = DerivationPath::master();
         self.signer
             .sign_ecdsa(message, &identity_path)
             .await
@@ -39,9 +40,7 @@ impl Signer for SparkSigner {
         &self,
         hash: &[u8],
     ) -> Result<schnorr::Signature, SignerError> {
-        let identity_path = "m"
-            .parse()
-            .map_err(|e: bitcoin::bip32::Error| SignerError::Generic(e.to_string()))?;
+        let identity_path = DerivationPath::master();
         self.signer
             .sign_hash_schnorr(hash, &identity_path)
             .await
