@@ -5,6 +5,7 @@ use bitcoin::{
 use tracing::trace;
 
 const SPARK_SEQUENCE_FLAG: u32 = 1 << 30;
+const TIMELOCK_MASK: u32 = 0x0000_FFFF;
 const INITIAL_TIME_LOCK: u16 = 2000;
 const TIME_LOCK_INTERVAL: u16 = 100;
 const DIRECT_TIME_LOCK_OFFSET: u16 = 50;
@@ -57,7 +58,6 @@ pub fn enforce_timelock(sequence: Sequence) -> Sequence {
     let current_sequence_num = sequence.to_consensus_u32();
 
     // Extract lower 16 bits (timelock value)
-    const TIMELOCK_MASK: u32 = 0x0000_FFFF;
     let timelock = (current_sequence_num & TIMELOCK_MASK) as u16;
 
     // Round down to nearest TIME_LOCK_INTERVAL
@@ -155,7 +155,6 @@ fn check_next_timelock(current_sequence: Sequence) -> Option<u16> {
 
     // Extract only the lower 16 bits (timelock value)
     // Upper bits including SPARK_SEQUENCE_FLAG are ignored for timelock calculation
-    const TIMELOCK_MASK: u32 = 0x0000FFFF;
     let timelock = (current_sequence_num & TIMELOCK_MASK) as u16;
 
     timelock.checked_sub(TIME_LOCK_INTERVAL).or_else(|| {
