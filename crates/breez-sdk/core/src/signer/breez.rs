@@ -133,7 +133,6 @@ impl BreezSigner for BreezSignerImpl {
         &self,
         hash: &[u8],
         path: &DerivationPath,
-        use_aux_rand: bool,
     ) -> Result<secp256k1::schnorr::Signature, SdkError> {
         let derived = self
             .key_set
@@ -144,14 +143,11 @@ impl BreezSigner for BreezSignerImpl {
             Message::from_digest_slice(hash).map_err(|e| SdkError::Generic(e.to_string()))?;
         let keypair = derived.private_key.keypair(&self.secp);
 
-        // Use auxiliary randomness based on the flag
-        Ok(if use_aux_rand {
-            let mut rng = thread_rng();
-            self.secp
-                .sign_schnorr_with_rng(&message, &keypair, &mut rng)
-        } else {
-            self.secp.sign_schnorr_no_aux_rand(&message, &keypair)
-        })
+        // Always use auxiliary randomness for enhanced security
+        let mut rng = thread_rng();
+        Ok(self
+            .secp
+            .sign_schnorr_with_rng(&message, &keypair, &mut rng))
     }
 
     async fn generate_frost_signing_commitments(

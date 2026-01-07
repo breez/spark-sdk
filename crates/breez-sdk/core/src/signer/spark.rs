@@ -42,9 +42,8 @@ impl Signer for SparkSigner {
         let identity_path = "m"
             .parse()
             .map_err(|e: bitcoin::bip32::Error| SignerError::Generic(e.to_string()))?;
-        // Use deterministic signing (false) for Spark operations
         self.signer
-            .sign_hash_schnorr(hash, &identity_path, false)
+            .sign_hash_schnorr(hash, &identity_path)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
