@@ -53,14 +53,14 @@ Once a receive payment is initiated, you can follow and react to the different p
 | ---------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | **Synced** | The SDK has synced payments in the background. | Update the payments list and balance. See [listing payments](/guide/list_payments.md) and [fetching the balance](/guide/get_info.md). |
 
-### Lightning
+#### Lightning
 
 | Event                | Description                                                       | UX Suggestion                                    |
 | -------------------- | ----------------------------------------------------------------- | ------------------------------------------------ |
 | **PaymentPending**   | The Spark transfer was detected and the claim process will start. | Show payment as pending.                         |
 | **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete.        | Update the balance and show payment as complete. |
 
-### Bitcoin
+#### Bitcoin
 
 | Event                 | Description                                                                                                                                                                                               | UX Suggestion                                                                                                    |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
@@ -69,7 +69,7 @@ Once a receive payment is initiated, you can follow and react to the different p
 | **PaymentPending**    | The Spark transfer was detected and the claim process will start.                                                                                                                                         | Show payment as pending.                                                                                         |
 | **PaymentSucceeded**  | The Spark transfer is claimed and the payment is complete.                                                                                                                                                | Update the balance and show payment as complete.                                                                 |
 
-### Spark
+#### Spark
 
 | Event                | Description                                                       | UX Suggestion                                    |
 | -------------------- | ----------------------------------------------------------------- | ------------------------------------------------ |
