@@ -133,6 +133,49 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
+func FetchTokenConversionLimits(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: fetch-token-conversion-limits
+	// Fetch limits for converting Bitcoin to a token
+	tokenIdentifier := "<token identifier>"
+	fromBitcoinResponse, err := sdk.FetchTokenConversionLimits(breez_sdk_spark.FetchTokenConversionLimitsRequest{
+		ConversionType:  breez_sdk_spark.TokenConversionTypeFromBitcoin{},
+		TokenIdentifier: &tokenIdentifier,
+	})
+
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return err
+	}
+
+	if fromBitcoinResponse.MinFromAmount != nil {
+		log.Printf("Minimum BTC to convert: %v sats", *fromBitcoinResponse.MinFromAmount)
+	}
+	if fromBitcoinResponse.MinToAmount != nil {
+		log.Printf("Minimum tokens to receive: %v base units", *fromBitcoinResponse.MinToAmount)
+	}
+
+	// Fetch limits for converting a token to Bitcoin
+	fromTokenIdentifier := "<token identifier>"
+	toBitcoinResponse, err := sdk.FetchTokenConversionLimits(breez_sdk_spark.FetchTokenConversionLimitsRequest{
+		ConversionType: breez_sdk_spark.TokenConversionTypeToBitcoin{
+			FromTokenIdentifier: fromTokenIdentifier,
+		},
+		TokenIdentifier: nil,
+	})
+
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return err
+	}
+
+	if toBitcoinResponse.MinFromAmount != nil {
+		log.Printf("Minimum tokens to convert: %v base units", *toBitcoinResponse.MinFromAmount)
+	}
+	if toBitcoinResponse.MinToAmount != nil {
+		log.Printf("Minimum BTC to receive: %v sats", *toBitcoinResponse.MinToAmount)
+	}
+	// ANCHOR_END: fetch-token-conversion-limits
+	return nil
+}
+
 func PrepareSendTokenPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: prepare-send-payment-token-conversion
 	paymentRequest := "<spark address or invoice>"

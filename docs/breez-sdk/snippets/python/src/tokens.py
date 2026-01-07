@@ -2,13 +2,14 @@
 import logging
 from breez_sdk_spark import (
     BreezSdk,
+    FetchTokenConversionLimitsRequest,
     GetInfoRequest,
+    GetTokensMetadataRequest,
     PrepareSendPaymentRequest,
     ReceivePaymentMethod,
     ReceivePaymentRequest,
-    SendPaymentRequest,
     SendPaymentMethod,
-    GetTokensMetadataRequest,
+    SendPaymentRequest,
     TokenConversionOptions,
     TokenConversionType,
 )
@@ -126,6 +127,42 @@ async def send_token_payment(sdk: BreezSdk):
         logging.error(error)
         raise
     # ANCHOR_END: send-token-payment
+
+
+async def fetch_token_conversion_limits(sdk: BreezSdk):
+    # ANCHOR: fetch-token-conversion-limits
+    try:
+        # Fetch limits for converting Bitcoin to a token
+        from_bitcoin_response = await sdk.fetch_token_conversion_limits(
+            request=FetchTokenConversionLimitsRequest(
+                conversion_type=TokenConversionType.FROM_BITCOIN(),
+                token_identifier="<token identifier>",
+            )
+        )
+
+        if from_bitcoin_response.min_from_amount is not None:
+            print(f"Minimum BTC to convert: {from_bitcoin_response.min_from_amount} sats")
+        if from_bitcoin_response.min_to_amount is not None:
+            print(f"Minimum tokens to receive: {from_bitcoin_response.min_to_amount} base units")
+
+        # Fetch limits for converting a token to Bitcoin
+        to_bitcoin_response = await sdk.fetch_token_conversion_limits(
+            request=FetchTokenConversionLimitsRequest(
+                conversion_type=TokenConversionType.TO_BITCOIN(
+                    from_token_identifier="<token identifier>"
+                ),
+                token_identifier=None,
+            )
+        )
+
+        if to_bitcoin_response.min_from_amount is not None:
+            print(f"Minimum tokens to convert: {to_bitcoin_response.min_from_amount} base units")
+        if to_bitcoin_response.min_to_amount is not None:
+            print(f"Minimum BTC to receive: {to_bitcoin_response.min_to_amount} sats")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: fetch-token-conversion-limits
 
 
 async def prepare_send_payment_token_conversion(sdk: BreezSdk):

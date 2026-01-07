@@ -117,6 +117,47 @@ namespace BreezSdkSnippets
             // ANCHOR_END: send-token-payment
         }
 
+        async Task FetchTokenConversionLimits(BreezSdk sdk)
+        {
+            // ANCHOR: fetch-token-conversion-limits
+            // Fetch limits for converting Bitcoin to a token
+            var fromBitcoinResponse = await sdk.FetchTokenConversionLimits(
+                request: new FetchTokenConversionLimitsRequest(
+                    conversionType: new TokenConversionType.FromBitcoin(),
+                    tokenIdentifier: "<token identifier>"
+                )
+            );
+
+            if (fromBitcoinResponse.minFromAmount != null)
+            {
+                Console.WriteLine($"Minimum BTC to convert: {fromBitcoinResponse.minFromAmount} sats");
+            }
+            if (fromBitcoinResponse.minToAmount != null)
+            {
+                Console.WriteLine($"Minimum tokens to receive: {fromBitcoinResponse.minToAmount} base units");
+            }
+
+            // Fetch limits for converting a token to Bitcoin
+            var toBitcoinResponse = await sdk.FetchTokenConversionLimits(
+                request: new FetchTokenConversionLimitsRequest(
+                    conversionType: new TokenConversionType.ToBitcoin(
+                        fromTokenIdentifier: "<token identifier>"
+                    ),
+                    tokenIdentifier: null
+                )
+            );
+
+            if (toBitcoinResponse.minFromAmount != null)
+            {
+                Console.WriteLine($"Minimum tokens to convert: {toBitcoinResponse.minFromAmount} base units");
+            }
+            if (toBitcoinResponse.minToAmount != null)
+            {
+                Console.WriteLine($"Minimum BTC to receive: {toBitcoinResponse.minToAmount} sats");
+            }
+            // ANCHOR_END: fetch-token-conversion-limits
+        }
+
         async Task PrepareSendPaymentTokenConversion(BreezSdk sdk)
         {
             // ANCHOR: prepare-send-payment-token-conversion

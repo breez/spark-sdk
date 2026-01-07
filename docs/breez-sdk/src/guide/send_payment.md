@@ -17,11 +17,6 @@ and also returns the fees related to the payment so they can be confirmed.
 
 The payment request field supports Lightning invoices, Bitcoin addresses, Spark addresses and Spark invoices.
 
-<div class="warning">
-<h4>Developer note</h4>
-To perform a token conversion as a step before sending the payment, see <a href="#token-conversion">Token Conversion</a>.
-</div>
-
 ## Lightning
 
 #### BOLT11 invoice
@@ -30,11 +25,15 @@ For BOLT11 invoices the amount can be optionally set. The amount set in the requ
 
 If the invoice also contains a Spark address, the payment can be sent directly via a Spark transfer instead. When this is the case, the prepare response includes the Spark transfer fee.
 
+To perform a token conversion as a step before sending the payment, see the <a href="./token_conversion.md">Token conversion</a> page.
+
 {{#tabs send_payment:prepare-send-payment-lightning-bolt11}}
 
 ## Bitcoin
 
 For Bitcoin addresses, the amount must be set in the request. The prepare response includes fee quotes for three payment speeds: Slow, Medium, and Fast.
+
+To perform a token conversion as a step before sending the payment, see the <a href="./token_conversion.md">Token conversion</a> page.
 
 {{#tabs send_payment:prepare-send-payment-onchain}}
 
@@ -44,11 +43,15 @@ For Bitcoin addresses, the amount must be set in the request. The prepare respon
 
 For Spark addresses, the amount must be set in the request. Sending to a Spark address uses a direct Spark transfer.
 
+To perform a token conversion as a step before sending the payment, see the <a href="./token_conversion.md">Token conversion</a> page.
+
 {{#tabs send_payment:prepare-send-payment-spark-address}}
 
 #### Spark invoice
 
 For Spark invoices, the amount can be optionally set. It is only required if the invoice doesn't specify an amount. If the invoice specifies an amount, providing a different amount is not supported.
+
+To perform a token conversion as a step before sending the payment, see the <a href="./token_conversion.md">Token conversion</a> page.
 
 <div class="warning">
 <h4>Developer note</h4>
@@ -88,27 +91,6 @@ In the optional send payment options for Spark addresses, you can set:
 - **HTLC Options** - Enables Spark HTLC payments, which are an advanced feature that allows for conditional payments. See the [Spark HTLC Payments](htlcs.md) page for more details and example usage.
 
 {{#tabs send_payment:send-payment-spark}}
-
-<h2 id="token-conversion">
-    <a class="header" href="#token-conversion">Token Conversion</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
-</h2>
-
-Token conversion enables Bitcoin payments to be made without holding the required Bitcoin, but instead using a supported token asset like <a href="https://sparkscan.io/token/3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca?network=mainnet" target="_blank">USDB</a>.
-
-To do so, when preparing to send a payment, set the token conversion options. The token conversion will first calculate the amount needed to be converted into Bitcoin, convert the token into that Bitcoin amount, and then finally complete the payment. 
-
-{{#tabs send_payment:prepare-send-payment-token-conversion}}
-
-<div class="warning">
-<h4>Developer note</h4>
-When a token conversion fails due to exceeding the maximum slippage, the conversion will be refunded automatically.
-</div>
-
-<div class="warning">
-<h4>Developer note</h4>
-The token conversion may result in some Bitcoin remaining in the wallet after the payment is send. This remaining Bitcoin is to account for slippage in the token conversion.
-</div>
 
 ## Event Flows
 

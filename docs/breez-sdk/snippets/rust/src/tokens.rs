@@ -129,6 +129,43 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+async fn fetch_token_conversion_limits(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: fetch-token-conversion-limits
+    // Fetch limits for converting Bitcoin to a token
+    let response = sdk
+        .fetch_token_conversion_limits(FetchTokenConversionLimitsRequest {
+            conversion_type: TokenConversionType::FromBitcoin,
+            token_identifier: Some("<token identifier>".to_string()),
+        })
+        .await?;
+
+    if let Some(min_from) = response.min_from_amount {
+        info!("Minimum BTC to convert: {} sats", min_from);
+    }
+    if let Some(min_to) = response.min_to_amount {
+        info!("Minimum tokens to receive: {} base units", min_to);
+    }
+
+    // Fetch limits for converting a token to Bitcoin
+    let response = sdk
+        .fetch_token_conversion_limits(FetchTokenConversionLimitsRequest {
+            conversion_type: TokenConversionType::ToBitcoin {
+                from_token_identifier: "<token identifier>".to_string(),
+            },
+            token_identifier: None,
+        })
+        .await?;
+
+    if let Some(min_from) = response.min_from_amount {
+        info!("Minimum tokens to convert: {} base units", min_from);
+    }
+    if let Some(min_to) = response.min_to_amount {
+        info!("Minimum BTC to receive: {} sats", min_to);
+    }
+    // ANCHOR_END: fetch-token-conversion-limits
+    Ok(())
+}
+
 async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-token-conversion
     let payment_request = "<spark address or invoice>".to_string();

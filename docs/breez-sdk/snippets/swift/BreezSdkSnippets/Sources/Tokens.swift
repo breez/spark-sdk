@@ -107,6 +107,40 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
     // ANCHOR_END: send-token-payment
 }
 
+func fetchTokenConversionLimits(sdk: BreezSdk) async throws {
+    // ANCHOR: fetch-token-conversion-limits
+    // Fetch limits for converting Bitcoin to a token
+    let fromBitcoinResponse = try await sdk.fetchTokenConversionLimits(
+        request: FetchTokenConversionLimitsRequest(
+            conversionType: TokenConversionType.fromBitcoin,
+            tokenIdentifier: "<token identifier>"
+        ))
+
+    if let minFrom = fromBitcoinResponse.minFromAmount {
+        print("Minimum BTC to convert: \(minFrom) sats")
+    }
+    if let minTo = fromBitcoinResponse.minToAmount {
+        print("Minimum tokens to receive: \(minTo) base units")
+    }
+
+    // Fetch limits for converting a token to Bitcoin
+    let toBitcoinResponse = try await sdk.fetchTokenConversionLimits(
+        request: FetchTokenConversionLimitsRequest(
+            conversionType: TokenConversionType.toBitcoin(
+                fromTokenIdentifier: "<token identifier>"
+            ),
+            tokenIdentifier: nil
+        ))
+
+    if let minFrom = toBitcoinResponse.minFromAmount {
+        print("Minimum tokens to convert: \(minFrom) base units")
+    }
+    if let minTo = toBitcoinResponse.minToAmount {
+        print("Minimum BTC to receive: \(minTo) sats")
+    }
+    // ANCHOR_END: fetch-token-conversion-limits
+}
+
 func prepareSendPaymentTokenConversion(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-token-conversion
     let paymentRequest = "<spark address or invoice>"

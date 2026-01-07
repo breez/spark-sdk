@@ -98,6 +98,39 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   // ANCHOR_END: send-token-payment
 }
 
+const exampleFetchTokenConversionLimits = async (sdk: BreezSdk) => {
+  // ANCHOR: fetch-token-conversion-limits
+  // Fetch limits for converting Bitcoin to a token
+  const fromBitcoinResponse = await sdk.fetchTokenConversionLimits({
+    conversionType: { type: 'fromBitcoin' },
+    tokenIdentifier: '<token identifier>'
+  })
+
+  if (fromBitcoinResponse.minFromAmount !== undefined) {
+    console.log(`Minimum BTC to convert: ${fromBitcoinResponse.minFromAmount} sats`)
+  }
+  if (fromBitcoinResponse.minToAmount !== undefined) {
+    console.log(`Minimum tokens to receive: ${fromBitcoinResponse.minToAmount} base units`)
+  }
+
+  // Fetch limits for converting a token to Bitcoin
+  const toBitcoinResponse = await sdk.fetchTokenConversionLimits({
+    conversionType: {
+      type: 'toBitcoin',
+      fromTokenIdentifier: '<token identifier>'
+    },
+    tokenIdentifier: undefined
+  })
+
+  if (toBitcoinResponse.minFromAmount !== undefined) {
+    console.log(`Minimum tokens to convert: ${toBitcoinResponse.minFromAmount} base units`)
+  }
+  if (toBitcoinResponse.minToAmount !== undefined) {
+    console.log(`Minimum BTC to receive: ${toBitcoinResponse.minToAmount} sats`)
+  }
+  // ANCHOR_END: fetch-token-conversion-limits
+}
+
 const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-send-payment-token-conversion
   const paymentRequest = '<spark address or invoice>'
