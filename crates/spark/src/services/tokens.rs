@@ -544,6 +544,7 @@ impl TokenService {
             token_identifier
         );
 
+        self.token_output_service.refresh_tokens_outputs().await?;
         let mut outputs = self.token_output_service.list_tokens_outputs().await?;
 
         if let Some(token_identifier) = token_identifier {

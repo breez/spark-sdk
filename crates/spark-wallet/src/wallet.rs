@@ -2012,19 +2012,34 @@ impl BackgroundProcessor {
             interval
         );
 
+        let run_optimization = || async {
+            debug!("Running automatic token output optimization");
+            match self
+                .token_service
+                .optimize_token_outputs(
+                    None,
+                    self.token_outputs_optimization_options
+                        .min_outputs_threshold,
+                )
+                .await
+            {
+                Ok(_) => {
+                    debug!("Automatic token output optimization completed successfully");
+                }
+                Err(e) => {
+                    error!("Error during automatic token output optimization: {:?}", e);
+                }
+            }
+        };
+
+        // Run first optimization immediately
+        run_optimization().await;
+
         loop {
             // Wait for the interval or cancellation
             tokio::select! {
                 _ = tokio::time::sleep(interval) => {
-                    debug!("Running automatic token output optimization");
-                    match self.token_service.optimize_token_outputs(None, self.token_outputs_optimization_options.min_outputs_threshold).await {
-                        Ok(_) => {
-                            debug!("Automatic token output optimization completed successfully");
-                        }
-                        Err(e) => {
-                            error!("Error during automatic token output optimization: {:?}", e);
-                        }
-                    }
+                    run_optimization().await;
                 }
                 _ = cancellation_token.changed() => {
                     info!("Stopping automatic token output optimization");
