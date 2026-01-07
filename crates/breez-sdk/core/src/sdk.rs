@@ -107,7 +107,9 @@ const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology:442";
 
 const CLAIM_TX_SIZE_VBYTES: u64 = 99;
 const SYNC_PAGING_LIMIT: u32 = 100;
+/// Default maximum slippage for token conversions in basis points (0.5%)
 const DEFAULT_TOKEN_CONVERSION_MAX_SLIPPAGE_BPS: u32 = 50;
+/// Default timeout for token conversion operations in seconds
 const DEFAULT_TOKEN_CONVERSION_TIMEOUT_SECS: u32 = 30;
 
 bitflags! {
@@ -3095,6 +3097,14 @@ impl BreezSdk {
             pools.extend(res.pools.into_iter().map(|pool| (pool.lp_public_key, pool)));
         }
         let pools = pools.into_values().collect::<Vec<_>>();
+        if pools.is_empty() {
+            warn!(
+                "No token conversion pools available: in address {asset_in_address}, out address {asset_out_address}",
+            );
+            return Err(SdkError::Generic(
+                "No token conversion pools available".to_string(),
+            ));
+        }
 
         // Extract max_slippage_bps with default fallback
         let max_slippage_bps = conversion_options
@@ -3168,9 +3178,10 @@ impl BreezSdk {
             })
             .await?;
         if response.amount_out < amount_out {
-            return Err(SdkError::Generic(
-                "Less output amount than expected".to_string(),
-            ));
+            return Err(SdkError::Generic(format!(
+                "Validation returned {} but expected at least {amount_out}",
+                response.amount_out
+            )));
         }
         Ok((amount_in, response.fee_paid_asset_in))
     }

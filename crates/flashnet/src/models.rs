@@ -418,6 +418,12 @@ impl Pool {
     ///
     /// If calculating the required input amount when the output asset is BTC, the output amount
     /// is rounded up to the next multiple of 64 sats to account for BTC variable fee bit masking.
+    ///
+    /// # Arithmetic Safety
+    ///
+    /// This function allows arithmetic side effects (overflow/truncation) because:
+    /// - **Checked Arithmetic**: All arithmetic operations use `checked_*` methods to prevent overflow/underflow.
+    #[allow(clippy::too_many_lines)]
     pub fn calculate_amount_in(
         &self,
         asset_in_address: &str,
@@ -425,6 +431,8 @@ impl Pool {
         max_slippage_bps: u32,
         network: Network,
     ) -> Result<u128, FlashnetError> {
+        let overflow_err =
+            FlashnetError::Generic("Amount overflow calculating amount in".to_string());
         let asset_in_address = decode_token_identifier(asset_in_address, network)?;
         let is_a_to_b = asset_in_address == self.asset_a_address;
 
@@ -440,10 +448,17 @@ impl Pool {
             amount_out
         };
 
+        if max_slippage_bps > 10_000 {
+            return Err(FlashnetError::Generic(
+                "Max slippage basis points cannot exceed 10000".to_string(),
+            ));
+        }
+
         // Add slippage buffer to amount_out first
         // amount_out_with_slippage = amount_out * (max_slippage_bps + 10_000) / 10_000
         let amount_out_with_slippage = amount_out
-            .saturating_mul(u128::from(max_slippage_bps).saturating_add(10_000))
+            .checked_mul(u128::from(max_slippage_bps).saturating_add(10_000))
+            .ok_or(overflow_err.clone())?
             .saturating_div(10_000);
 
         // Account for fees on output (only for A to B swaps)
@@ -451,7 +466,8 @@ impl Pool {
         let amount_out_before_output_fees = if is_a_to_b {
             let output_fee_bps = self.host_fee_bps;
             amount_out_with_slippage
-                .saturating_mul(u128::from(output_fee_bps).saturating_add(10_000))
+                .checked_mul(u128::from(output_fee_bps).saturating_add(10_000))
+                .ok_or(overflow_err.clone())?
                 .saturating_div(10_000)
         } else {
             amount_out_with_slippage
@@ -484,7 +500,9 @@ impl Pool {
                 ));
             }
 
-            let numerator = reserve_in.saturating_mul(amount_out_before_output_fees);
+            let numerator = reserve_in
+                .checked_mul(amount_out_before_output_fees)
+                .ok_or(overflow_err.clone())?;
             let denominator = reserve_out.saturating_sub(amount_out_before_output_fees);
 
             div_ceil(numerator, denominator)
@@ -504,21 +522,27 @@ impl Pool {
                 // A to B: multiply by price (works well with fixed-point)
                 let price_scaled = (current_price_a_in_b * PRICE_SCALE as f64) as u128;
                 (
-                    amount_out_before_output_fees.saturating_mul(price_scaled),
+                    amount_out_before_output_fees
+                        .checked_mul(price_scaled)
+                        .ok_or(overflow_err.clone())?,
                     PRICE_SCALE,
                 )
             } else if current_price_a_in_b > LARGE_PRICE_THRESHOLD {
                 // B to A with large price: use direct integer division for better precision
                 let price_scaled = (current_price_a_in_b * LARGE_PRICE_SCALE as f64) as u128;
                 (
-                    amount_out_before_output_fees.saturating_mul(LARGE_PRICE_SCALE),
+                    amount_out_before_output_fees
+                        .checked_mul(LARGE_PRICE_SCALE)
+                        .ok_or(overflow_err.clone())?,
                     price_scaled,
                 )
             } else {
                 // B to A with normal/small price: use scaled inverse
                 let price_scaled = (PRICE_SCALE as f64 / current_price_a_in_b) as u128;
                 (
-                    amount_out_before_output_fees.saturating_mul(price_scaled),
+                    amount_out_before_output_fees
+                        .checked_mul(price_scaled)
+                        .ok_or(overflow_err.clone())?,
                     PRICE_SCALE,
                 )
             };
@@ -541,7 +565,8 @@ impl Pool {
         };
 
         let amount_in = amount_in_before_input_fees
-            .saturating_mul(u128::from(input_fee_bps).saturating_add(10_000))
+            .checked_mul(u128::from(input_fee_bps).saturating_add(10_000))
+            .ok_or(overflow_err)?
             .saturating_div(10_000);
 
         Ok(amount_in)

@@ -106,6 +106,45 @@ pub fn select_best_pool(
     Ok(best_pool.pool)
 }
 
+/// Calculates a weighted score for a pool based on fee efficiency, liquidity, and price stability.
+///
+/// # Scoring Algorithm
+///
+/// The function computes three component scores, each normalized to a 0-10000 basis point scale:
+/// 1. **Fee Efficiency Score** (0-10000 bps): Measures how favorable the `amount_in` requirement is
+///    relative to other pools. Lower `amount_in` yields higher scores.
+/// 2. **Liquidity Score** (0-10000 bps): Measures pool depth using TVL (total value locked) in asset B.
+///    Higher TVL relative to `max_tvl` yields higher scores. Missing data receives a 10% penalty (1000 bps).
+/// 3. **Stability Score** (0-10000 bps): Inverse of 24h price volatility. Lower volatility yields higher
+///    scores. Missing data defaults to neutral (5000 bps).
+///
+/// The final weighted score combines these components using predefined weights:
+/// - Fee Efficiency: 50% (5000 bps)
+/// - Liquidity: 30% (3000 bps)
+/// - Stability: 20% (2000 bps)
+///
+/// # Arguments
+///
+/// * `pool` - The pool to score
+/// * `amount_in` - The amount of input asset required by this pool
+/// * `min_amount_in` - Minimum `amount_in` across all viable pools (for normalization)
+/// * `max_amount_in` - Maximum `amount_in` across all viable pools (for normalization)
+/// * `max_tvl` - Maximum TVL across all viable pools (for normalization), `None` if all pools lack TVL data
+///
+/// # Returns
+///
+/// A `PoolScore` struct containing the pool, component scores, and total weighted score.
+///
+/// # Arithmetic Safety
+///
+/// This function allows arithmetic side effects (overflow/truncation) because:
+/// - **Saturation**: All arithmetic uses `saturating_*` operations to prevent overflow/underflow
+/// - **Truncation**: Casting u128 to u64 is safe because all values are normalized to 0-10000 range
+///   before casting, which fits well within u64's maximum value
+/// - **Division by zero**: Protected by explicit checks (e.g., `max_amount_in > min_amount_in`)
+///   and saturating operations that default to safe values
+/// - **Input bounds**: Scoring components are clamped to 0-10000 bps by design, ensuring
+///   intermediate calculations stay within safe ranges even before saturation
 #[allow(
     clippy::arithmetic_side_effects,
     clippy::cast_possible_truncation,
