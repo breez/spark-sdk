@@ -667,6 +667,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bip39",
  "bitcoin",
  "breez-sdk-spark",
  "dotenvy",
