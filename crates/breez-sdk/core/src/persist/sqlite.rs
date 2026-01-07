@@ -251,6 +251,15 @@ impl SqliteStorage {
             // Delete all unclaimed deposits to clear old claim_error JSON format.
             // Deposits will be recovered on next sync.
             "DELETE FROM unclaimed_deposits;",
+            // Clear all sync tables due to BreezSigner signature change.
+            // This forces users to sync from scratch to the sync server.
+            // Also delete the sync_initial_complete flag to force re-populating
+            // all payment metadata for outgoing sync using the new key.
+            "DELETE FROM sync_outgoing;
+             DELETE FROM sync_incoming;
+             DELETE FROM sync_state;
+             UPDATE sync_revision SET revision = 0;
+             DELETE FROM settings WHERE key = 'sync_initial_complete';",
         ]
     }
 }

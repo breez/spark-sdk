@@ -24,7 +24,11 @@ pub use spark::{
         TransferStatus, TransferTokenOutput, TransferType, Utxo,
     },
     session_manager::*,
-    signer::{DefaultSigner, DefaultSignerError, KeySet, KeySetType, Signer},
+    signer::{
+        AggregateFrostRequest, DefaultSigner, DefaultSignerError, EncryptedPrivateKey,
+        FrostSigningCommitmentsWithNonces, KeySet, KeySetType, PrivateKeySource, SecretToSplit,
+        SignFrostRequest, Signer, SignerError, VerifiableSecretShare,
+    },
     ssp::*,
     token::{TokenMetadata, TokenOutputWithPrevOut},
     tree::{SigningKeyshare, TreeNodeId},

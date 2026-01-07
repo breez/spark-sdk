@@ -408,9 +408,12 @@ impl Signer for DefaultSigner {
         }
         let mut hash_array = [0u8; 32];
         hash_array.copy_from_slice(hash);
-        let sig = self.secp.sign_schnorr_no_aux_rand(
+        // Always use auxiliary randomness for enhanced security
+        let mut rng = thread_rng();
+        let sig = self.secp.sign_schnorr_with_rng(
             &Message::from_digest(hash_array),
             &self.key_set.identity_key_pair,
+            &mut rng,
         );
         Ok(sig)
     }

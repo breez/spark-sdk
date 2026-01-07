@@ -13,6 +13,7 @@ mod persist;
 mod realtime_sync;
 mod sdk;
 mod sdk_builder;
+pub mod signer;
 mod sync;
 mod utils;
 
