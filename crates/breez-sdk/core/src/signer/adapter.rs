@@ -25,11 +25,13 @@ impl ExternalSignerAdapter {
 
 #[macros::async_trait]
 impl BreezSigner for ExternalSignerAdapter {
-    fn identity_public_key(&self) -> secp256k1::PublicKey {
-        let pk_bytes = self.external.identity_public_key();
+    fn identity_public_key(&self) -> Result<secp256k1::PublicKey, SdkError> {
+        let pk_bytes = self.external.identity_public_key().map_err(|e| {
+            SdkError::Signer(format!("External signer identity_public_key failed: {e}"))
+        })?;
         pk_bytes
             .to_public_key()
-            .expect("Invalid identity public key from external signer")
+            .map_err(|e| SdkError::Signer(e.to_string()))
     }
 
     async fn derive_public_key(
@@ -42,7 +44,7 @@ impl BreezSigner for ExternalSignerAdapter {
             .derive_public_key(path_str)
             .await
             .map_err(|e| {
-                SdkError::Generic(format!("External signer derive_public_key failed: {e}"))
+                SdkError::Signer(format!("External signer derive_public_key failed: {e}"))
             })?;
         pk_bytes.to_public_key()
     }
@@ -57,7 +59,7 @@ impl BreezSigner for ExternalSignerAdapter {
             .external
             .sign_ecdsa(message.to_vec(), path_str)
             .await
-            .map_err(|e| SdkError::Generic(format!("External signer sign_ecdsa failed: {e}")))?;
+            .map_err(|e| SdkError::Signer(format!("External signer sign_ecdsa failed: {e}")))?;
         sig_bytes.to_signature()
     }
 
@@ -71,7 +73,7 @@ impl BreezSigner for ExternalSignerAdapter {
             .sign_ecdsa_recoverable(message.to_vec(), path_str)
             .await
             .map_err(|e| {
-                SdkError::Generic(format!(
+                SdkError::Signer(format!(
                     "External signer sign_ecdsa_recoverable failed: {e}"
                 ))
             })
@@ -86,7 +88,7 @@ impl BreezSigner for ExternalSignerAdapter {
         self.external
             .ecies_encrypt(message.to_vec(), path_str)
             .await
-            .map_err(|e| SdkError::Generic(format!("External signer ecies_encrypt failed: {e}")))
+            .map_err(|e| SdkError::Signer(format!("External signer ecies_encrypt failed: {e}")))
     }
 
     async fn ecies_decrypt(
@@ -98,7 +100,7 @@ impl BreezSigner for ExternalSignerAdapter {
         self.external
             .ecies_decrypt(message.to_vec(), path_str)
             .await
-            .map_err(|e| SdkError::Generic(format!("External signer ecies_decrypt failed: {e}")))
+            .map_err(|e| SdkError::Signer(format!("External signer ecies_decrypt failed: {e}")))
     }
 
     async fn sign_hash_schnorr(
@@ -112,7 +114,7 @@ impl BreezSigner for ExternalSignerAdapter {
             .sign_hash_schnorr(hash.to_vec(), path_str)
             .await
             .map_err(|e| {
-                SdkError::Generic(format!("External signer sign_hash_schnorr failed: {e}"))
+                SdkError::Signer(format!("External signer sign_hash_schnorr failed: {e}"))
             })?;
         sig_bytes.to_signature()
     }
@@ -125,7 +127,7 @@ impl BreezSigner for ExternalSignerAdapter {
             .generate_frost_signing_commitments()
             .await
             .map_err(|e| {
-                SdkError::Generic(format!(
+                SdkError::Signer(format!(
                     "External signer generate_frost_signing_commitments failed: {e}"
                 ))
             })?;
@@ -142,7 +144,7 @@ impl BreezSigner for ExternalSignerAdapter {
             .get_public_key_for_node(id_ext)
             .await
             .map_err(|e| {
-                SdkError::Generic(format!(
+                SdkError::Signer(format!(
                     "External signer get_public_key_for_node failed: {e}"
                 ))
             })?;
@@ -151,7 +153,7 @@ impl BreezSigner for ExternalSignerAdapter {
 
     async fn generate_random_key(&self) -> Result<spark_wallet::PrivateKeySource, SdkError> {
         let key_ext = self.external.generate_random_key().await.map_err(|e| {
-            SdkError::Generic(format!("External signer generate_random_key failed: {e}"))
+            SdkError::Signer(format!("External signer generate_random_key failed: {e}"))
         })?;
         key_ext.to_private_key_source()
     }
@@ -165,7 +167,7 @@ impl BreezSigner for ExternalSignerAdapter {
             .get_static_deposit_private_key_source(index)
             .await
             .map_err(|e| {
-                SdkError::Generic(format!(
+                SdkError::Signer(format!(
                     "External signer get_static_deposit_private_key_source failed: {e}"
                 ))
             })?;
@@ -181,20 +183,20 @@ impl BreezSigner for ExternalSignerAdapter {
             .get_static_deposit_private_key(index)
             .await
             .map_err(|e| {
-                SdkError::Generic(format!(
+                SdkError::Signer(format!(
                     "External signer get_static_deposit_private_key failed: {e}"
                 ))
             })?;
 
         if key_bytes.len() != 32 {
-            return Err(SdkError::Generic(format!(
+            return Err(SdkError::Signer(format!(
                 "Invalid private key length: expected 32 bytes, got {}",
                 key_bytes.len()
             )));
         }
 
         secp256k1::SecretKey::from_slice(&key_bytes)
-            .map_err(|e| SdkError::Generic(format!("Invalid private key bytes: {e}")))
+            .map_err(|e| SdkError::Signer(format!("Invalid private key bytes: {e}")))
     }
 
     async fn get_static_deposit_public_key(
@@ -206,7 +208,7 @@ impl BreezSigner for ExternalSignerAdapter {
             .get_static_deposit_public_key(index)
             .await
             .map_err(|e| {
-                SdkError::Generic(format!(
+                SdkError::Signer(format!(
                     "External signer get_static_deposit_public_key failed: {e}"
                 ))
             })?;
@@ -227,7 +229,7 @@ impl BreezSigner for ExternalSignerAdapter {
             .subtract_private_keys(signing_key_ext, new_signing_key_ext)
             .await
             .map_err(|e| {
-                SdkError::Generic(format!("External signer subtract_private_keys failed: {e}"))
+                SdkError::Signer(format!("External signer subtract_private_keys failed: {e}"))
             })?;
         result_ext.to_private_key_source()
     }
@@ -246,7 +248,7 @@ impl BreezSigner for ExternalSignerAdapter {
             .external
             .split_secret(secret_ext, threshold, num_shares_u32)
             .await
-            .map_err(|e| SdkError::Generic(format!("External signer split_secret failed: {e}")))?;
+            .map_err(|e| SdkError::Signer(format!("External signer split_secret failed: {e}")))?;
 
         shares_ext
             .into_iter()
@@ -266,7 +268,7 @@ impl BreezSigner for ExternalSignerAdapter {
             .encrypt_private_key_for_receiver(private_key_ext, receiver_pk_bytes)
             .await
             .map_err(|e| {
-                SdkError::Generic(format!(
+                SdkError::Signer(format!(
                     "External signer encrypt_private_key_for_receiver failed: {e}"
                 ))
             })
@@ -282,7 +284,7 @@ impl BreezSigner for ExternalSignerAdapter {
             .get_public_key_from_private_key_source(private_key_ext)
             .await
             .map_err(|e| {
-                SdkError::Generic(format!(
+                SdkError::Signer(format!(
                     "External signer get_public_key_from_private_key_source failed: {e}"
                 ))
             })?;
@@ -295,10 +297,11 @@ impl BreezSigner for ExternalSignerAdapter {
     ) -> Result<frost_secp256k1_tr::round2::SignatureShare, SdkError> {
         let request_ext = ExternalSignFrostRequest::from_sign_frost_request(&request)?;
 
-        let share_ext =
-            self.external.sign_frost(request_ext).await.map_err(|e| {
-                SdkError::Generic(format!("External signer sign_frost failed: {e}"))
-            })?;
+        let share_ext = self
+            .external
+            .sign_frost(request_ext)
+            .await
+            .map_err(|e| SdkError::Signer(format!("External signer sign_frost failed: {e}")))?;
         share_ext.to_signature_share()
     }
 
@@ -313,7 +316,7 @@ impl BreezSigner for ExternalSignerAdapter {
             .aggregate_frost_signatures(request_ext)
             .await
             .map_err(|e| {
-                SdkError::Generic(format!("External signer aggregate_frost failed: {e}"))
+                SdkError::Signer(format!("External signer aggregate_frost failed: {e}"))
             })?;
         sig_ext.to_frost_signature()
     }

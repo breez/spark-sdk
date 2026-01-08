@@ -57,9 +57,12 @@ impl DefaultExternalSigner {
 
 #[macros::async_trait]
 impl ExternalSigner for DefaultExternalSigner {
-    fn identity_public_key(&self) -> PublicKeyBytes {
-        let pk = self.inner.identity_public_key();
-        PublicKeyBytes::from_public_key(&pk)
+    fn identity_public_key(&self) -> Result<PublicKeyBytes, SignerError> {
+        let pk = self
+            .inner
+            .identity_public_key()
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        Ok(PublicKeyBytes::from_public_key(&pk))
     }
 
     async fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, SignerError> {
@@ -297,46 +300,6 @@ impl ExternalSigner for DefaultExternalSigner {
         ExternalFrostSignatureShare::from_signature_share(&share).map_err(|e| e.to_string().into())
     }
 
-    async fn recover_secret(
-        &self,
-        _shares: Vec<ExternalVerifiableSecretShare>,
-    ) -> Result<Vec<u8>, SignerError> {
-        // This method doesn't have a direct implementation in BreezSignerImpl
-        // Return a not implemented error for now
-        Err(SignerError::Generic(
-            "recover_secret not yet implemented for DefaultExternalSigner".to_string(),
-        ))
-    }
-
-    async fn derive_public_key_from_identity(
-        &self,
-        _identity: PublicKeyBytes,
-        path: String,
-    ) -> Result<PublicKeyBytes, SignerError> {
-        // This delegates to the derive_public_key method since identity is the root
-        let derivation_path = string_to_derivation_path(&path)
-            .map_err(|e| SignerError::InvalidInput(e.to_string()))?;
-
-        // Use the standard derive_public_key
-        let public_key = self
-            .inner
-            .derive_public_key(&derivation_path)
-            .await
-            .map_err(|e| SignerError::KeyDerivation(e.to_string()))?;
-
-        Ok(PublicKeyBytes::from_public_key(&public_key))
-    }
-
-    async fn encrypt_random_key(
-        &self,
-        _key: ExternalPrivateKeySource,
-    ) -> Result<ExternalPrivateKeySource, SignerError> {
-        // This method requires complex key encryption logic that isn't directly available
-        Err(SignerError::Generic(
-            "encrypt_random_key not yet implemented for DefaultExternalSigner".to_string(),
-        ))
-    }
-
     async fn aggregate_frost_signatures(
         &self,
         request: ExternalAggregateFrostRequest,
@@ -404,8 +367,8 @@ mod tests {
     fn test_identity_public_key() {
         let (external, internal) = create_test_signer();
 
-        let external_pk = external.identity_public_key();
-        let internal_pk = internal.identity_public_key();
+        let external_pk = external.identity_public_key().unwrap();
+        let internal_pk = internal.identity_public_key().unwrap();
 
         assert_eq!(
             external_pk.to_public_key().unwrap(),
@@ -702,7 +665,7 @@ mod tests {
 
         // Create a simple FROST signing request
         let message = b"test frost signing message";
-        let public_key = internal.identity_public_key();
+        let public_key = internal.identity_public_key().unwrap();
         let private_key_source = internal.generate_random_key().await.unwrap();
         let verifying_key = public_key;
 

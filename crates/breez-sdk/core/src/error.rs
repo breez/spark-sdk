@@ -58,6 +58,9 @@ pub enum SdkError {
     #[error("Lnurl error: {0}")]
     LnurlError(String),
 
+    #[error("Signer error: {0}")]
+    Signer(String),
+
     #[error("Error: {0}")]
     Generic(String),
 }
