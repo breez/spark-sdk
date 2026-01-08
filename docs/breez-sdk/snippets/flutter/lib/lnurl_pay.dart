@@ -12,17 +12,35 @@ Future<void> prepareLnurlPay(BreezSdk sdk) async {
     BigInt amountSats = BigInt.from(5000);
     String optionalComment = "<comment>";
     bool optionalValidateSuccessActionUrl = true;
+    // Optionally set to use token funds to pay via token conversion
+    int optionalMaxSlippageBps = 50;
+    int optionalCompletionTimeoutSecs = 30;
+    final optionalConversionOptions = ConversionOptions(
+      conversionType: ConversionType.toBitcoin(
+        fromTokenIdentifier: "<token identifier>",
+      ),
+      maxSlippageBps: optionalMaxSlippageBps,
+      completionTimeoutSecs: optionalCompletionTimeoutSecs,
+    );
 
     PrepareLnurlPayRequest request = PrepareLnurlPayRequest(
       amountSats: amountSats,
       payRequest: inputType.field0.payRequest,
       comment: optionalComment,
       validateSuccessActionUrl: optionalValidateSuccessActionUrl,
+      conversionOptions: optionalConversionOptions,
     );
     PrepareLnurlPayResponse prepareResponse =
         await sdk.prepareLnurlPay(request: request);
 
     // If the fees are acceptable, continue to create the LNURL Pay
+    if (prepareResponse.conversionEstimate != null) {
+      print(
+          "Estimated conversion amount: ${prepareResponse.conversionEstimate!.amount} token base units");
+      print(
+          "Estimated conversion fee: ${prepareResponse.conversionEstimate!.fee} token base units");
+    }
+
     BigInt feeSats = prepareResponse.feeSats;
     print("Fees: $feeSats sats");
   }
