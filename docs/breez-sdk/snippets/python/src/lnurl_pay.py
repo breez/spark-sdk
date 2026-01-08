@@ -5,6 +5,8 @@ from breez_sdk_spark import (
     LnurlPayRequest,
     PrepareLnurlPayRequest,
     PrepareLnurlPayResponse,
+    TokenConversionOptions,
+    TokenConversionType,
 )
 
 
@@ -24,16 +26,33 @@ async def prepare_pay(sdk: BreezSdk):
             optional_comment = "<comment>"
             pay_request = details.pay_request
             optional_validate_success_action_url = True
+            # Optionally set to use token funds to pay via token conversion
+            optional_max_slippage_bps = 50
+            optional_completion_timeout_secs = 30
+            optional_token_conversion_options = TokenConversionOptions(
+                conversion_type=TokenConversionType.TO_BITCOIN(
+                    from_token_identifier="<token identifier>"
+                ),
+                max_slippage_bps=optional_max_slippage_bps,
+                completion_timeout_secs=optional_completion_timeout_secs,
+            )
 
             request = PrepareLnurlPayRequest(
                 amount_sats=amount_sats,
                 pay_request=pay_request,
                 comment=optional_comment,
                 validate_success_action_url=optional_validate_success_action_url,
+                token_conversion_options=optional_token_conversion_options,
             )
             prepare_response = await sdk.prepare_lnurl_pay(request=request)
 
             # If the fees are acceptable, continue to create the LNURL Pay
+            if prepare_response.token_conversion_fee is not None:
+                token_conversion_fee = prepare_response.token_conversion_fee
+                logging.debug(
+                    f"Estimated token conversion fee: {token_conversion_fee} token base units"
+                )
+
             fee_sats = prepare_response.fee_sats
             logging.debug(f"Fees: {fee_sats} sats")
             return prepare_response

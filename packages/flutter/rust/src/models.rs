@@ -276,6 +276,7 @@ pub struct _PrepareLnurlPayRequest {
     pub pay_request: LnurlPayRequestDetails,
     pub comment: Option<String>,
     pub validate_success_action_url: Option<bool>,
+    pub token_conversion_options: Option<TokenConversionOptions>,
 }
 
 #[frb(mirror(PrepareLnurlPayResponse))]
@@ -286,6 +287,8 @@ pub struct _PrepareLnurlPayResponse {
     pub fee_sats: u64,
     pub invoice_details: Bolt11InvoiceDetails,
     pub success_action: Option<SuccessAction>,
+    pub token_conversion_options: Option<TokenConversionOptions>,
+    pub token_conversion_fee: Option<u128>,
 }
 
 #[frb(mirror(PrepareSendPaymentRequest))]

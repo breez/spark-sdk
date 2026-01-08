@@ -58,7 +58,7 @@ The code example below demonstrates manual specification. Follow the standard pr
 
 <div class="warning">
 <h4>Developer note</h4>
-To perform a token conversion as a step before sending the payment, see the <a href="./token_conversion.md">Token conversion</a> page.
+To perform a token conversion as a step before sending the payment, see <a href="./token_conversion.md">Converting tokens</a> for more information.
 </div>
 
 {{#tabs tokens:send-token-payment}}

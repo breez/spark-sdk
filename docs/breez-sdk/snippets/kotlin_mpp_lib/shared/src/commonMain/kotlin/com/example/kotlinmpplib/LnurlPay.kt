@@ -16,16 +16,32 @@ class LnurlPay {
                 val optionalComment = "<comment>"
                 val payRequest = inputType.v1.payRequest
                 val optionalValidateSuccessActionUrl = true
+                // Optionally set to use token funds to pay via token conversion
+                val optionalMaxSlippageBps = 50u
+                val optionalCompletionTimeoutSecs = 30u
+                val optionalTokenConversionOptions = TokenConversionOptions(
+                    conversionType = TokenConversionType.ToBitcoin(
+                        "<token identifier>"
+                    ),
+                    maxSlippageBps = optionalMaxSlippageBps,
+                    completionTimeoutSecs = optionalCompletionTimeoutSecs
+                )
 
                 val req = PrepareLnurlPayRequest(
                     amountSats,
                     payRequest,
                     optionalComment,
-                    optionalValidateSuccessActionUrl
+                    optionalValidateSuccessActionUrl,
+                    optionalTokenConversionOptions
                 )
                 val prepareResponse = sdk.prepareLnurlPay(req)
 
                 // If the fees are acceptable, continue to create the LNURL Pay
+                if (prepareResponse.tokenConversionFee != null) {
+                    val tokenConversionFee = prepareResponse.tokenConversionFee
+                    // Log.v("Breez", "Estimated token conversion fee: ${tokenConversionFee} token base units")
+                }
+
                 val feeSats = prepareResponse.feeSats;
                 // Log.v("Breez", "Fees: ${feeSats} sats")
             }

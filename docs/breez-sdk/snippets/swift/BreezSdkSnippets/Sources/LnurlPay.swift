@@ -14,17 +14,32 @@ func preparePay(sdk: BreezSdk) async throws {
         let optionalComment = "<comment>"
         let payRequest = details.payRequest
         let optionalValidateSuccessActionUrl = true
+        // Optionally set to use token funds to pay via token conversion
+        let optionalMaxSlippageBps = UInt32(50)
+        let optionalCompletionTimeoutSecs = UInt32(30)
+        let tokenConversionOptions = TokenConversionOptions(
+            conversionType: TokenConversionType.toBitcoin(
+                fromTokenIdentifier: "<token identifier>"
+            ),
+            maxSlippageBps: optionalMaxSlippageBps,
+            completionTimeoutSecs: optionalCompletionTimeoutSecs
+        )
 
         let request = PrepareLnurlPayRequest(
             amountSats: amountSats,
             payRequest: payRequest,
             comment: optionalComment,
-            validateSuccessActionUrl: optionalValidateSuccessActionUrl
+            validateSuccessActionUrl: optionalValidateSuccessActionUrl,
+            tokenConversionOptions: tokenConversionOptions
         )
-        let response = try await sdk.prepareLnurlPay(request: request)
+        let prepareResponse = try await sdk.prepareLnurlPay(request: request)
 
         // If the fees are acceptable, continue to create the LNURL Pay
-        let feesSat = response.feeSats
+        if let tokenConversionFee = prepareResponse.tokenConversionFee {
+            print("Estimated token conversion fee: \(tokenConversionFee) token base units")
+        }
+
+        let feesSat = prepareResponse.feeSats
         print("Fees: \(feesSat) sats")
     }
 

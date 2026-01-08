@@ -21,16 +21,32 @@ namespace BreezSdkSnippets
                 var optionalComment = "<comment>";
                 var payRequest = details.payRequest;
                 var optionalValidateSuccessActionUrl = true;
+                // Optionally set to use token funds to pay via token conversion
+                var optionalMaxSlippageBps = 50U;
+                var optionalCompletionTimeoutSecs = 30U;
+                var optionalTokenConversionOptions = new TokenConversionOptions(
+                    conversionType: new TokenConversionType.ToBitcoin(
+                        fromTokenIdentifier: "<token identifier>"
+                    ),
+                    maxSlippageBps: optionalMaxSlippageBps,
+                    completionTimeoutSecs: optionalCompletionTimeoutSecs
+                );
 
                 var request = new PrepareLnurlPayRequest(
                     amountSats: amountSats,
                     payRequest: payRequest,
                     comment: optionalComment,
-                    validateSuccessActionUrl: optionalValidateSuccessActionUrl
+                    validateSuccessActionUrl: optionalValidateSuccessActionUrl,
+                    tokenConversionOptions: optionalTokenConversionOptions
                 );
                 var prepareResponse = await sdk.PrepareLnurlPay(request: request);
 
                 // If the fees are acceptable, continue to create the LNURL Pay
+                if (prepareResponse.tokenConversionFee != null)
+                {
+                    Console.WriteLine("Estimated token conversion fee: " +
+                        $"{prepareResponse.tokenConversionFee} token base units");
+                }
                 var feeSats = prepareResponse.feeSats;
                 Console.WriteLine($"Fees: {feeSats} sats");
             }

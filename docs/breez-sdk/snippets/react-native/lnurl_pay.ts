@@ -1,7 +1,8 @@
 import {
   type BreezSdk,
   InputType_Tags,
-  type PrepareLnurlPayResponse
+  type PrepareLnurlPayResponse,
+  TokenConversionType
 } from '@breeztech/breez-sdk-spark-react-native'
 
 const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
@@ -17,15 +18,31 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
     const optionalComment = '<comment>'
     const payRequest = input.inner[0].payRequest
     const optionalValidateSuccessActionUrl = true
+    // Optionally set to use token funds to pay via token conversion
+    const optionalMaxSlippageBps = 50
+    const optionalCompletionTimeoutSecs = 30
+    const optionalTokenConversionOptions = {
+      conversionType: new TokenConversionType.ToBitcoin({
+        fromTokenIdentifier: '<token identifier>'
+      }),
+      maxSlippageBps: optionalMaxSlippageBps,
+      completionTimeoutSecs: optionalCompletionTimeoutSecs
+    }
 
     const prepareResponse = await sdk.prepareLnurlPay({
       amountSats,
       payRequest,
       comment: optionalComment,
-      validateSuccessActionUrl: optionalValidateSuccessActionUrl
+      validateSuccessActionUrl: optionalValidateSuccessActionUrl,
+      tokenConversionOptions: optionalTokenConversionOptions
     })
 
     // If the fees are acceptable, continue to create the LNURL Pay
+    if (prepareResponse.tokenConversionFee !== undefined) {
+      const tokenConversionFee = prepareResponse.tokenConversionFee
+      console.debug(`Estimated token conversion fee: ${tokenConversionFee} token base units`)
+    }
+
     const feeSats = prepareResponse.feeSats
     console.log(`Fees: ${feeSats} sats`)
   }
