@@ -315,6 +315,17 @@ pub enum EventResult {
     Synced,
 }
 
+pub async fn clear_event_receiver(event_rx: &mut mpsc::Receiver<SdkEvent>) {
+    loop {
+        if event_rx.is_empty() {
+            break;
+        }
+
+        let event = event_rx.recv().await;
+        info!("Clearing event from channel: {:?}", event);
+    }
+}
+
 /// Generic event waiter with timeout
 ///
 /// # Arguments
