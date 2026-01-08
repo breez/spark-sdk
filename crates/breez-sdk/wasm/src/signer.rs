@@ -170,8 +170,11 @@ impl DefaultSigner {
 #[wasm_bindgen]
 impl DefaultSigner {
     #[wasm_bindgen(js_name = "identityPublicKey")]
-    pub fn identity_public_key(&self) -> PublicKeyBytes {
-        self.inner.identity_public_key().into()
+    pub fn identity_public_key(&self) -> Result<PublicKeyBytes, JsValue> {
+        self.inner
+            .identity_public_key()
+            .map(|pk| pk.into())
+            .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
     #[wasm_bindgen(js_name = "derivePublicKey")]
@@ -387,7 +390,7 @@ use breez_sdk_spark::SignerError;
 
 #[async_trait]
 impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
-    fn identity_public_key(&self) -> core_types::PublicKeyBytes {
+    fn identity_public_key(&self) -> Result<core_types::PublicKeyBytes, SignerError> {
         self.inner.identity_public_key()
     }
 
@@ -420,30 +423,6 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
 
     async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
         self.inner.ecies_decrypt(message, path).await
-    }
-
-    async fn recover_secret(
-        &self,
-        shares: Vec<core_types::ExternalVerifiableSecretShare>,
-    ) -> Result<Vec<u8>, SignerError> {
-        self.inner.recover_secret(shares).await
-    }
-
-    async fn derive_public_key_from_identity(
-        &self,
-        identity: core_types::PublicKeyBytes,
-        path: String,
-    ) -> Result<core_types::PublicKeyBytes, SignerError> {
-        self.inner
-            .derive_public_key_from_identity(identity, path)
-            .await
-    }
-
-    async fn encrypt_random_key(
-        &self,
-        key: core_types::ExternalPrivateKeySource,
-    ) -> Result<core_types::ExternalPrivateKeySource, SignerError> {
-        self.inner.encrypt_random_key(key).await
     }
 
     async fn sign_hash_schnorr(
@@ -548,9 +527,12 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
 
 #[async_trait]
 impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
-    fn identity_public_key(&self) -> core_types::PublicKeyBytes {
-        let wasm_pubkey: PublicKeyBytes = self.inner.identity_public_key();
-        wasm_pubkey.into()
+    fn identity_public_key(&self) -> Result<core_types::PublicKeyBytes, SignerError> {
+        let wasm_pubkey: PublicKeyBytes = self
+            .inner
+            .identity_public_key()
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        Ok(wasm_pubkey.into())
     }
 
     async fn derive_public_key(
@@ -636,58 +618,6 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         serde_wasm_bindgen::from_value(result)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))
-    }
-
-    async fn recover_secret(
-        &self,
-        shares: Vec<core_types::ExternalVerifiableSecretShare>,
-    ) -> Result<Vec<u8>, SignerError> {
-        let wasm_shares: Vec<ExternalVerifiableSecretShare> =
-            shares.into_iter().map(Into::into).collect();
-        let promise = self
-            .inner
-            .recover_secret(wasm_shares.into_boxed_slice())
-            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
-        let result = JsFuture::from(promise)
-            .await
-            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
-        let bytes: Vec<u8> = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| SignerError::Generic(e.to_string()))?;
-        Ok(bytes)
-    }
-
-    async fn derive_public_key_from_identity(
-        &self,
-        identity: core_types::PublicKeyBytes,
-        path: String,
-    ) -> Result<core_types::PublicKeyBytes, SignerError> {
-        let promise = self
-            .inner
-            .derive_public_key_from_identity(identity.bytes.into_boxed_slice(), path)
-            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
-        let result = JsFuture::from(promise)
-            .await
-            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
-        let bytes: Vec<u8> = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| SignerError::Generic(e.to_string()))?;
-        Ok(core_types::PublicKeyBytes { bytes })
-    }
-
-    async fn encrypt_random_key(
-        &self,
-        key: core_types::ExternalPrivateKeySource,
-    ) -> Result<core_types::ExternalPrivateKeySource, SignerError> {
-        let wasm_key: ExternalPrivateKeySource = key.into();
-        let promise = self
-            .inner
-            .encrypt_random_key(wasm_key)
-            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
-        let result = JsFuture::from(promise)
-            .await
-            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
-        let wasm_result: ExternalPrivateKeySource = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| SignerError::Generic(e.to_string()))?;
-        Ok(wasm_result.into())
     }
 
     async fn sign_hash_schnorr(
@@ -970,8 +900,8 @@ extern "C" {
     #[wasm_bindgen(typescript_type = "ExternalSigner")]
     pub type JsExternalSigner;
 
-    #[wasm_bindgen(structural, method, js_name = "identityPublicKey")]
-    pub fn identity_public_key(this: &JsExternalSigner) -> PublicKeyBytes;
+    #[wasm_bindgen(structural, method, js_name = "identityPublicKey", catch)]
+    pub fn identity_public_key(this: &JsExternalSigner) -> Result<PublicKeyBytes, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "derivePublicKey", catch)]
     pub fn derive_public_key(this: &JsExternalSigner, path: String) -> Result<Promise, JsValue>;
@@ -1002,25 +932,6 @@ extern "C" {
         this: &JsExternalSigner,
         message: Vec<u8>,
         path: String,
-    ) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(structural, method, js_name = "recoverSecret", catch)]
-    pub fn recover_secret(
-        this: &JsExternalSigner,
-        shares: Box<[ExternalVerifiableSecretShare]>,
-    ) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(structural, method, js_name = "derivePublicKeyFromIdentity", catch)]
-    pub fn derive_public_key_from_identity(
-        this: &JsExternalSigner,
-        identity: Box<[u8]>,
-        path: String,
-    ) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(structural, method, js_name = "encryptRandomKey", catch)]
-    pub fn encrypt_random_key(
-        this: &JsExternalSigner,
-        key: ExternalPrivateKeySource,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signHashSchnorr", catch)]

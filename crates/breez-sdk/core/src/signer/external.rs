@@ -22,7 +22,7 @@ use super::external_types::{
 #[macros::async_trait]
 pub trait ExternalSigner: Send + Sync {
     /// Returns the identity public key as 33 bytes (compressed secp256k1 key).
-    fn identity_public_key(&self) -> PublicKeyBytes;
+    fn identity_public_key(&self) -> Result<PublicKeyBytes, SignerError>;
 
     /// Derives a public key for the given BIP32 derivation path.
     ///
@@ -59,18 +59,6 @@ pub trait ExternalSigner: Send + Sync {
         &self,
         message: Vec<u8>,
         path: String,
-    ) -> Result<Vec<u8>, SignerError>;
-
-    /// Recovers a secret from a vector of verifiable secret shares.
-    ///
-    /// # Arguments
-    /// * `shares` - The shares to recover the secret from
-    ///
-    /// # Returns
-    /// The recovered secret as bytes, or a `SignerError`
-    async fn recover_secret(
-        &self,
-        shares: Vec<ExternalVerifiableSecretShare>,
     ) -> Result<Vec<u8>, SignerError>;
 
     /// Encrypts a message using ECIES at the given derivation path.
@@ -127,20 +115,6 @@ pub trait ExternalSigner: Send + Sync {
         id: ExternalTreeNodeId,
     ) -> Result<PublicKeyBytes, SignerError>;
 
-    /// Derives a public key from an identity public key and a BIP32 derivation path.
-    ///
-    /// # Arguments
-    /// * `identity` - The identity public key
-    /// * `path` - BIP32 derivation path as a string
-    ///
-    /// # Returns
-    /// The derived public key as 33 bytes, or a `SignerError`
-    async fn derive_public_key_from_identity(
-        &self,
-        identity: PublicKeyBytes,
-        path: String,
-    ) -> Result<PublicKeyBytes, SignerError>;
-
     /// Generates a random private key.
     ///
     /// # Returns
@@ -192,18 +166,6 @@ pub trait ExternalSigner: Send + Sync {
         &self,
         signing_key: ExternalPrivateKeySource,
         new_signing_key: ExternalPrivateKeySource,
-    ) -> Result<ExternalPrivateKeySource, SignerError>;
-
-    /// Encrypts a random key.
-    ///
-    /// # Arguments
-    /// * `key` - The key to encrypt
-    ///
-    /// # Returns
-    /// The encrypted key, or a `SignerError`
-    async fn encrypt_random_key(
-        &self,
-        key: ExternalPrivateKeySource,
     ) -> Result<ExternalPrivateKeySource, SignerError>;
 
     /// Splits a secret with proofs using Shamir's Secret Sharing.

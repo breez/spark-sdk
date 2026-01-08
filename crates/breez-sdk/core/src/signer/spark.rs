@@ -71,7 +71,9 @@ impl Signer for SparkSigner {
     }
 
     async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
-        Ok(self.signer.identity_public_key())
+        self.signer
+            .identity_public_key()
+            .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
     async fn get_static_deposit_private_key_source(

@@ -5,7 +5,7 @@ use bitcoin::secp256k1;
 #[macros::async_trait]
 pub trait BreezSigner: Send + Sync {
     /// Returns the identity public key.
-    fn identity_public_key(&self) -> secp256k1::PublicKey;
+    fn identity_public_key(&self) -> Result<secp256k1::PublicKey, SdkError>;
 
     async fn sign_ecdsa(
         &self,
