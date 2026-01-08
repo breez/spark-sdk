@@ -440,7 +440,7 @@ checksum = "43d193de1f7487df1914d3a568b772458861d33f9c54249612cc2893d6915054"
 dependencies = [
  "bitcoin_hashes 0.13.0",
  "rand 0.8.5",
- "rand_core 0.6.4",
+ "rand_core 0.4.2",
  "serde",
  "unicode-normalization",
 ]
@@ -709,7 +709,6 @@ dependencies = [
  "ecies",
  "frost-secp256k1-tr-unofficial",
  "hex",
- "hmac",
  "lnurl-models",
  "macros",
  "nostr",
@@ -719,7 +718,6 @@ dependencies = [
  "rusqlite_migration",
  "serde",
  "serde_json",
- "sha2",
  "spark-wallet",
  "thiserror 2.0.14",
  "tokio",
