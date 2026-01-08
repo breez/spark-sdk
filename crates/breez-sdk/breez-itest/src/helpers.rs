@@ -316,12 +316,7 @@ pub enum EventResult {
 }
 
 pub async fn clear_event_receiver(event_rx: &mut mpsc::Receiver<SdkEvent>) {
-    loop {
-        if event_rx.is_empty() {
-            break;
-        }
-
-        let event = event_rx.recv().await;
+    while let Ok(event) = event_rx.try_recv() {
         info!("Clearing event from channel: {:?}", event);
     }
 }

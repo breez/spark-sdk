@@ -111,7 +111,7 @@ async fn test_token_conversion_success(
     // Wait for Bob to receive the token payment
     info!("Waiting for Bob to receive token payment...");
     let bob_received_payment =
-        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 120).await?;
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
 
     assert_eq!(
         bob_received_payment.payment_type,
@@ -231,7 +231,7 @@ async fn test_token_conversion_success(
     // Wait for Alice to receive the Bitcoin payment
     info!("Waiting for Alice to receive Bitcoin payment...");
     let alice_received_payment =
-        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 120).await?;
+        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 30).await?;
 
     assert_eq!(
         alice_received_payment.payment_type,
@@ -412,7 +412,7 @@ async fn test_token_conversion_failure(
     // Wait for payment refund event
     info!("Waiting for payment refund event...");
     let refund_payment =
-        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 120).await?;
+        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 30).await?;
 
     assert_eq!(
         refund_payment.payment_type,
@@ -438,9 +438,9 @@ async fn test_token_conversion_failure(
         "Alice balance after refund: {} sats (was {} sats before failure)",
         alice_balance_after_refund, alice_balance_before_failure
     );
-    assert!(
-        alice_balance_before_failure == alice_balance_after_refund,
-        "Alice's balance should be restored after refund (before: {alice_balance_before_failure}, after: {alice_balance_after_refund})",
+    assert_eq!(
+        alice_balance_after_refund, alice_balance_before_failure,
+        "Alice's balance should be restored after refund"
     );
 
     info!("Part B: Low slippage failure with refund completed successfully");
