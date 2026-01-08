@@ -17,6 +17,11 @@ and also returns the fees related to the payment so they can be confirmed.
 
 The payment request field supports Lightning invoices, Bitcoin addresses, Spark addresses and Spark invoices.
 
+<div class="warning">
+<h4>Developer note</h4>
+To perform a token conversion as a step before sending the payment, see the <a href="./token_conversion.md">Token conversion</a> page.
+</div>
+
 ## Lightning
 
 #### BOLT11 invoice
@@ -25,15 +30,11 @@ For BOLT11 invoices the amount can be optionally set. The amount set in the requ
 
 If the invoice also contains a Spark address, the payment can be sent directly via a Spark transfer instead. When this is the case, the prepare response includes the Spark transfer fee.
 
-To perform a token conversion as a step before sending the payment, see the <a href="./token_conversion.md">Token conversion</a> page.
-
 {{#tabs send_payment:prepare-send-payment-lightning-bolt11}}
 
 ## Bitcoin
 
 For Bitcoin addresses, the amount must be set in the request. The prepare response includes fee quotes for three payment speeds: Slow, Medium, and Fast.
-
-To perform a token conversion as a step before sending the payment, see the <a href="./token_conversion.md">Token conversion</a> page.
 
 {{#tabs send_payment:prepare-send-payment-onchain}}
 
@@ -43,15 +44,11 @@ To perform a token conversion as a step before sending the payment, see the <a h
 
 For Spark addresses, the amount must be set in the request. Sending to a Spark address uses a direct Spark transfer.
 
-To perform a token conversion as a step before sending the payment, see the <a href="./token_conversion.md">Token conversion</a> page.
-
 {{#tabs send_payment:prepare-send-payment-spark-address}}
 
 #### Spark invoice
 
 For Spark invoices, the amount can be optionally set. It is only required if the invoice doesn't specify an amount. If the invoice specifies an amount, providing a different amount is not supported.
-
-To perform a token conversion as a step before sending the payment, see the <a href="./token_conversion.md">Token conversion</a> page.
 
 <div class="warning">
 <h4>Developer note</h4>

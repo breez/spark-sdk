@@ -1,6 +1,6 @@
 pub(crate) mod adaptors;
 pub mod payment_observer;
-use flashnet::Pool;
+use flashnet::{BTC_ASSET_ADDRESS, Pool};
 pub use payment_observer::*;
 
 use core::fmt;
@@ -1265,6 +1265,38 @@ pub enum TokenConversionType {
     FromBitcoin,
     /// Converting from a token to Bitcoin
     ToBitcoin { from_token_identifier: String },
+}
+
+impl TokenConversionType {
+    /// Returns the asset addresses for the conversion type
+    ///
+    /// # Arguments
+    ///
+    /// * `token_identifier` - The token identifier when converting from Bitcoin to a token
+    ///
+    /// # Returns
+    ///
+    /// Result containing:
+    /// * (String, String): A tuple containing the asset in address and asset out address
+    /// * `SdkError`: If the token identifier is required but not provided
+    pub(crate) fn as_asset_addresses(
+        &self,
+        token_identifier: Option<&String>,
+    ) -> Result<(String, String), SdkError> {
+        Ok(match self {
+            TokenConversionType::FromBitcoin => (
+                BTC_ASSET_ADDRESS.to_string(),
+                token_identifier
+                    .ok_or(SdkError::InvalidInput(
+                        "Token identifier is required for from Bitcoin conversion".to_string(),
+                    ))?
+                    .clone(),
+            ),
+            TokenConversionType::ToBitcoin {
+                from_token_identifier,
+            } => (from_token_identifier.clone(), BTC_ASSET_ADDRESS.to_string()),
+        })
+    }
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

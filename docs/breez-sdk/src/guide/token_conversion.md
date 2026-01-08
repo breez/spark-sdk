@@ -1,4 +1,4 @@
-# Token conversion
+# Converting tokens
 
 Token conversion enables payments to be made without holding the required asset by converting on-the-fly between Bitcoin and tokens using the Flashnet protocol.
 

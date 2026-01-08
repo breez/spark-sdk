@@ -75,27 +75,15 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const tokenIdentifier = '<token identifier>'
   // Set the amount of tokens you wish to send.
   const optionalAmount = BigInt(1_000)
-  // Optionally set to use Bitcoin funds to pay via token conversion
-  const optionalMaxSlippageBps = 50
-  const optionalCompletionTimeoutSecs = 30
-  const optionalTokenConversionOptions = {
-    conversionType: new TokenConversionType.FromBitcoin(),
-    maxSlippageBps: optionalMaxSlippageBps,
-    completionTimeoutSecs: optionalCompletionTimeoutSecs
-  }
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
     amount: optionalAmount,
     tokenIdentifier,
-    tokenConversionOptions: optionalTokenConversionOptions
+    tokenConversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to send the token payment
-  if (prepareResponse.tokenConversionFee !== undefined) {
-    const tokenConversionFee = prepareResponse.tokenConversionFee
-    console.debug(`Estimated token conversion fee: ${tokenConversionFee} sats`)
-  }
   if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.SparkAddress) {
     console.log(`Token ID: ${prepareResponse.paymentMethod.inner.tokenIdentifier}`)
     console.log(`Fees: ${prepareResponse.paymentMethod.inner.fee} token base units`)

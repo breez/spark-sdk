@@ -20,8 +20,8 @@ use breez_sdk_common::{
     rest::RestClient,
 };
 use flashnet::{
-    BTC_ASSET_ADDRESS, ClawbackRequest, ClawbackResponse, ExecuteSwapRequest, FlashnetClient,
-    FlashnetError, GetMinAmountsRequest, ListPoolsRequest, PoolSortOrder, SimulateSwapRequest,
+    ClawbackRequest, ClawbackResponse, ExecuteSwapRequest, FlashnetClient, FlashnetError,
+    GetMinAmountsRequest, ListPoolsRequest, PoolSortOrder, SimulateSwapRequest,
 };
 use lnurl_models::sanitize_username;
 use spark_wallet::{
@@ -1793,18 +1793,9 @@ impl BreezSdk {
         &self,
         request: FetchTokenConversionLimitsRequest,
     ) -> Result<FetchTokenConversionLimitsResponse, SdkError> {
-        self.ensure_spark_private_mode_initialized().await?;
-        let (asset_in_address, asset_out_address) = match request.conversion_type {
-            TokenConversionType::FromBitcoin => (
-                BTC_ASSET_ADDRESS.to_string(),
-                request.token_identifier.ok_or(SdkError::InvalidInput(
-                    "Token identifier is required for from Bitcoin conversion".to_string(),
-                ))?,
-            ),
-            TokenConversionType::ToBitcoin {
-                from_token_identifier,
-            } => (from_token_identifier, BTC_ASSET_ADDRESS.to_string()),
-        };
+        let (asset_in_address, asset_out_address) = request
+            .conversion_type
+            .as_asset_addresses(request.token_identifier.as_ref())?;
         let min_amounts = self
             .flashnet_client
             .get_min_amounts(GetMinAmountsRequest {
@@ -2375,7 +2366,6 @@ impl BreezSdk {
         &self,
         request: &SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
-        // Perform a token conversion before sending the payment
         match &request.prepare_response.payment_method {
             SendPaymentMethod::SparkAddress {
                 address,
@@ -3059,19 +3049,8 @@ impl BreezSdk {
         amount_out: u128,
     ) -> Result<TokenConversionPool, SdkError> {
         let conversion_type = &conversion_options.conversion_type;
-        let (asset_in_address, asset_out_address) = match conversion_type {
-            TokenConversionType::FromBitcoin => (
-                BTC_ASSET_ADDRESS.to_string(),
-                token_identifier
-                    .ok_or(SdkError::InvalidInput(
-                        "Token identifier is required for from Bitcoin conversion".to_string(),
-                    ))?
-                    .clone(),
-            ),
-            TokenConversionType::ToBitcoin {
-                from_token_identifier,
-            } => (from_token_identifier.clone(), BTC_ASSET_ADDRESS.to_string()),
-        };
+        let (asset_in_address, asset_out_address) =
+            conversion_type.as_asset_addresses(token_identifier)?;
 
         // List available pools for the asset pair
         let a_in_pools_fut = self.flashnet_client.list_pools(ListPoolsRequest {

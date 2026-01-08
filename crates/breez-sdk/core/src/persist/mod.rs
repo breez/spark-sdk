@@ -1036,16 +1036,17 @@ pub mod tests {
 
         // Test 11: Successful conversion payment
         let successful_sent_conversion_payment_metadata = PaymentMetadata {
+            parent_payment_id: Some("after_conversion_pmt124".to_string()),
             token_conversion_info: Some(crate::TokenConversionInfo {
                 pool_id: "pool_abc".to_string(),
-                payment_id: Some("conversion_pmt123".to_string()),
+                payment_id: Some("conversion_sent_pmt123".to_string()),
                 fee: Some(21),
                 refund_identifier: None,
             }),
             ..Default::default()
         };
         let successful_sent_conversion_payment = Payment {
-            id: "conversion_pmt123".to_string(),
+            id: "conversion_sent_pmt123".to_string(),
             payment_type: PaymentType::Send,
             status: PaymentStatus::Completed,
             amount: 10_000,
@@ -1058,6 +1059,36 @@ pub mod tests {
                 token_conversion_info: successful_sent_conversion_payment_metadata
                     .token_conversion_info
                     .clone(),
+            }),
+        };
+        let successful_received_conversion_payment = Payment {
+            id: "conversion_received_pmt123".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 10_000_000,
+            fees: 0,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Token,
+            details: Some(PaymentDetails::Token {
+                metadata: token_metadata.clone(),
+                tx_hash: "conversion_received_pmt123_tx_hash".to_string(),
+                invoice_details: None,
+                token_conversion_info: None,
+            }),
+        };
+        let after_conversion_payment = Payment {
+            id: "after_conversion_pmt124".to_string(),
+            payment_type: PaymentType::Send,
+            status: PaymentStatus::Completed,
+            amount: 10_000_000,
+            fees: 0,
+            timestamp: Utc::now().timestamp().try_into().unwrap(),
+            method: PaymentMethod::Token,
+            details: Some(PaymentDetails::Token {
+                metadata: token_metadata.clone(),
+                tx_hash: "after_conversion_pmt124_tx_hash".to_string(),
+                invoice_details: None,
+                token_conversion_info: None,
             }),
         };
 
@@ -1127,6 +1158,8 @@ pub mod tests {
             deposit_payment.clone(),
             no_details_payment.clone(),
             successful_sent_conversion_payment.clone(),
+            successful_received_conversion_payment.clone(),
+            after_conversion_payment.clone(),
             failed_with_refund_conversion_payment.clone(),
             failed_no_refund_conversion_payment.clone(),
         ];
@@ -1180,12 +1213,12 @@ pub mod tests {
         let payments = storage
             .list_payments(ListPaymentsRequest {
                 offset: Some(0),
-                limit: Some(14),
+                limit: Some(16),
                 ..Default::default()
             })
             .await
             .unwrap();
-        assert_eq!(payments.len(), 13);
+        assert_eq!(payments.len(), 15);
 
         // Test each payment type individually
         for (i, expected_payment) in test_payments.iter().enumerate() {
@@ -1343,8 +1376,8 @@ pub mod tests {
             .iter()
             .filter(|p| p.payment_type == PaymentType::Receive)
             .count();
-        assert_eq!(send_payments, 7); // spark, lightning_lnurl_pay, withdraw, no_details, conversion x3
-        assert_eq!(receive_payments, 6); // spark_htlc, token, lightning_lnurl_withdraw, lightning_minimal, lightning_lnurl_receive, deposit
+        assert_eq!(send_payments, 8); // spark, lightning_lnurl_pay, withdraw, no_details, conversion x4
+        assert_eq!(receive_payments, 7); // spark_htlc, token, lightning_lnurl_withdraw, lightning_minimal, lightning_lnurl_receive, deposit, conversion
 
         // Test filtering by status
         let completed_payments = payments
@@ -1359,7 +1392,7 @@ pub mod tests {
             .iter()
             .filter(|p| p.status == PaymentStatus::Failed)
             .count();
-        assert_eq!(completed_payments, 10); // spark, spark_htlc, lightning_lnurl_pay, lightning_lnurl_withdraw, lightning_lnurl_receive, withdraw, deposit, conversion x3
+        assert_eq!(completed_payments, 12); // spark, spark_htlc, lightning_lnurl_pay, lightning_lnurl_withdraw, lightning_lnurl_receive, withdraw, deposit, conversion x5
         assert_eq!(pending_payments, 2); // token, no_details
         assert_eq!(failed_payments, 1); // lightning_minimal
 

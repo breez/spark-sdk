@@ -97,30 +97,17 @@ class Tokens {
             val optionalAmount = BigInteger.fromLong(1_000L)
             // Android (BigInteger from java.math)
             // val optionalAmount = BigInteger.valueOf(1_000L)
-            // Optionally set to use Bitcoin funds to pay via token conversion
-            val optionalMaxSlippageBps = 50u
-            val optionalCompletionTimeoutSecs = 30u
-            val optionalTokenConversionOptions = TokenConversionOptions(
-                conversionType = TokenConversionType.FromBitcoin,
-                maxSlippageBps = optionalMaxSlippageBps,
-                completionTimeoutSecs = optionalCompletionTimeoutSecs
-            )
 
             val prepareResponse =
                 sdk.prepareSendPayment(
                     PrepareSendPaymentRequest(
                         paymentRequest = paymentRequest,
                         amount = optionalAmount,
-                        tokenIdentifier = tokenIdentifier,
-                        tokenConversionOptions = optionalTokenConversionOptions
+                        tokenIdentifier = tokenIdentifier
                     )
                 )
 
             // If the fees are acceptable, continue to send the token payment
-            if (prepareResponse.tokenConversionFee != null) {
-                val tokenConversionFee = prepareResponse.tokenConversionFee
-                println("Estimated token conversion fee: ${tokenConversionFee} sats")
-            }
             when (val method = prepareResponse.paymentMethod) {
                 is SendPaymentMethod.SparkAddress -> {
                     println("Token ID: ${method.tokenIdentifier}")

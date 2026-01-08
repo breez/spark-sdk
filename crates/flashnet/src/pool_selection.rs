@@ -216,11 +216,7 @@ fn score_pool(
 mod tests {
     use super::*;
 
-    // Note: Comprehensive unit tests for pool selection logic would require mocking
-    // the Pool::calculate_amount_in method, which is complex due to its dependencies.
-    // The scoring logic is tested indirectly through integration tests in the SDK.
-    //
-    // Key test scenarios covered by integration tests:
+    // Key test scenarios covered by tests:
     // - Single pool selection
     // - Lowest fee pool wins
     // - Missing data fallback scoring
