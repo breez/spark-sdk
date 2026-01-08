@@ -130,15 +130,47 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Flutter
+      - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.35.7
+          flutter-version: 3.38.5
+      - run: flutter --version
 
-      - name: Generate bindings
+      - name: Set up just
+        uses: extractions/setup-just@v3
+
+      - name: Initialize the workspace
         working-directory: packages/flutter
-        run: make generate-bindings-build-release
+        run: just setup
+
+      - name: Install flutter_rust_bridge_codegen dependencies
+        working-directory: packages/flutter
+        run: just frb
+
+      - name: Generate Dart/Flutter bindings & Check Rust package for errors
+        working-directory: packages/flutter
+        run: |
+          just codegen
+          cd rust && cargo check
+
+      - name: Static Analysis
+        working-directory: packages/flutter
+        if: ${{ success() || failure() }}
+        run: dart analyze --no-fatal-warnings lib
+
+      - name: Check Formatting
+        working-directory: packages/flutter
+        run: dart format -o none --set-exit-if-changed -l 110 lib
+
+      # This step is added to ensure version recipe was run to update podspec files & Gradle script.
+      # It does not catch the case where 'packages/flutter/pubspec.yaml' wasn't updated properly.
+      - name: Update version number on podspec files & Gradle scripts
+        working-directory: packages/flutter
+        run: just version
+
+      - name: Check git status
+        uses: ./.github/actions/check-git-status
 
   docs-rust:
     name: Docs (rust)
@@ -190,7 +222,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.35.7
+          flutter-version: 3.38.5
 
       - name: Run Check doc snippets
         run: |

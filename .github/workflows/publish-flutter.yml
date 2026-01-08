@@ -31,7 +31,7 @@ on:
         required: true
 
 env:
-  FLUTTER_VERSION: '3.35.7'  
+  FLUTTER_VERSION: '3.38.5'  
   NDK_VERSION: '23.2.8568313'
   ANDROID_MIN_SDK: '24'
   IPHONEOS_DEPLOYMENT_TARGET: '13.0'
@@ -66,12 +66,16 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Flutter
+      - name: Set up just
+        uses: extractions/setup-just@v3
+
+      - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
+      - run: flutter --version
 
       - name: Update Cargo Dependencies
         working-directory: build/packages/flutter/rust
@@ -81,9 +85,13 @@ jobs:
           sed -i.bak -e 's/^breez-sdk-spark = .*/breez-sdk-spark = { git = "https:\/\/github.com\/breez\/spark-sdk.git", rev = "'"$HASH"'", features = ["openssl-vendored"] }/' Cargo.toml
           rm Cargo.toml.bak
 
-      - name: Install flutter_rust_bridge_codegen & Generate Flutter Bindings
+      - name: Install flutter_rust_bridge_codegen
         working-directory: build/packages/flutter
-        run: make generate-bindings
+        run: just frb
+
+      - name: Generate Flutter Bindings
+        working-directory: build/packages/flutter
+        run: just codegen
   
       - name: Prepare Package Structure
         working-directory: dist
@@ -110,20 +118,27 @@ jobs:
             [ -f "../packages/flutter/$file" ] && cp "../packages/flutter/$file" . || echo "Warning: $file not found"
           done
 
-      - name: Update Package Version
+      - name: Update Package Version to Release Version
         working-directory: dist
         run: |
+          # Override version with the release version specified in inputs
+          # Note: The version script already synced versions in the build directory,
+          # but for releases we use the explicit package-version input parameter
+
           # Update pubspec.yaml
           sed -i.bak -e 's/^version:.*/version: ${{ inputs.package-version }}/' pubspec.yaml
 
           # Update Android gradle
           sed -i.bak -e "s/^version .*/version '${{ inputs.package-version }}'/" android/build.gradle
 
-          # Update iOS podspec          
+          # Update iOS podspec
           sed -i.bak -e "s/version             = .*/version             = '${{ inputs.package-version }}'/" ios/breez_sdk_spark_flutter.podspec
 
           # Update macOS podspec
           sed -i.bak -e "s/version             = .*/version             = '${{ inputs.package-version }}'/" macos/breez_sdk_spark_flutter.podspec
+
+          # Update Rust Cargo.toml
+          sed -i.bak -e 's/^version = ".*"/version = "${{ inputs.package-version }}"/' rust/Cargo.toml
 
           # Remove backup files
           rm *.bak */*.bak 2>/dev/null || true
