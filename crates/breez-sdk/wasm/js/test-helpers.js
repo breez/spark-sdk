@@ -75,19 +75,19 @@ export async function createOldV2Database(dbName) {
 }
 
 /**
- * Creates an old v6 format IndexedDB database for migration testing
- * This simulates the database state before the v6→v7 migration
- * The v7 migration adds txType field to token payments
+ * Creates an old v7 format IndexedDB database for migration testing
+ * This simulates the database state before the v7→v8 migration
+ * The v8 migration adds txType field to token payments
  */
-export async function createOldV6Database(dbName) {
+export async function createOldV7Database(dbName) {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(dbName, 6);
+    const request = indexedDB.open(dbName, 7);
 
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
       const transaction = event.target.transaction;
 
-      // Create all stores that exist in v6
+      // Create all stores that exist in v7
       // Settings store
       if (!db.objectStoreNames.contains("settings")) {
         db.createObjectStore("settings", { keyPath: "key" });
@@ -152,7 +152,7 @@ export async function createOldV6Database(dbName) {
         });
       }
 
-      // Insert test token payment WITHOUT txType (pre-v7 format)
+      // Insert test token payment WITHOUT txType (pre-v8 format)
       const paymentStore = transaction.objectStore("payments");
       paymentStore.put({
         id: "token-migration-test-payment",
@@ -173,7 +173,7 @@ export async function createOldV6Database(dbName) {
             isFreezable: false,
           },
           txHash: "0xabcdef1234567890",
-          // NOTE: txType is missing - this is what migration 7 will add
+          // NOTE: txType is missing - this is what migration 8 will add
         }),
         method: JSON.stringify("token"),
       });
@@ -186,7 +186,7 @@ export async function createOldV6Database(dbName) {
 
     request.onerror = () => {
       reject(
-        new Error(`Failed to create old v6 database: ${request.error?.message}`)
+        new Error(`Failed to create old v7 database: ${request.error?.message}`)
       );
     };
   });

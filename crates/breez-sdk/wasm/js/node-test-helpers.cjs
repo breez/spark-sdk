@@ -34,15 +34,15 @@ try {
 }
 
 /**
- * Creates an old v14 format SQLite database for migration testing
- * This simulates the database state before the v14→v15 migration
- * The v15 migration adds tx_type column to payment_details_token
+ * Creates an old v15 format SQLite database for migration testing
+ * This simulates the database state before the v15→v16 migration
+ * The v16 migration adds tx_type column to payment_details_token
  */
-function createOldV14Database(dbPath) {
+function createOldV15Database(dbPath) {
   const db = new Database(dbPath);
 
   try {
-    // Create the exact schema that should exist at v14 (before tx_type migration)
+    // Create the exact schema that should exist at v15 (before tx_type migration)
     // Need all payment detail tables because queries JOIN against them
     const transaction = db.transaction(() => {
       // Payments table (with TEXT amount/fees from migration 7)
@@ -131,13 +131,13 @@ function createOldV14Database(dbPath) {
         )
       `);
 
-      // Set database version to 14 (before tx_type migration which is v15)
-      db.pragma("user_version = 14");
+      // Set database version to 15 (before tx_type migration which is v16)
+      db.pragma("user_version = 15");
     });
 
     transaction();
 
-    // Insert test token payment WITHOUT tx_type (pre-v14 format)
+    // Insert test token payment WITHOUT tx_type (pre-v15 format)
     const insertPayment = db.prepare(`
       INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
@@ -179,9 +179,9 @@ function createOldV14Database(dbPath) {
   } catch (error) {
     db.close();
     return Promise.reject(
-      new Error(`Failed to create old v13 database: ${error.message}`)
+      new Error(`Failed to create old v15 database: ${error.message}`)
     );
   }
 }
 
-module.exports = { createOldV14Database };
+module.exports = { createOldV15Database };

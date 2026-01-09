@@ -21,8 +21,8 @@ extern "C" {
     #[wasm_bindgen(js_name = "createOldV2Database", catch)]
     async fn create_old_v2_database(db_name: &str) -> Result<JsValue, JsValue>;
 
-    #[wasm_bindgen(js_name = "createOldV6Database", catch)]
-    async fn create_old_v6_database(db_name: &str) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(js_name = "createOldV7Database", catch)]
+    async fn create_old_v7_database(db_name: &str) -> Result<JsValue, JsValue>;
 }
 
 // Helper to create a WasmStorage instance for testing using node-storage
@@ -224,15 +224,15 @@ async fn test_migration_from_v2_to_v3() {
 }
 
 #[wasm_bindgen_test]
-async fn test_migration_from_v6_to_v7() {
-    let db_name = "migration_v6_to_v7_test";
+async fn test_migration_from_v7_to_v8() {
+    let db_name = "migration_v7_to_v8_test";
 
-    // Step 1: Create old v6 database with token payment WITHOUT txType
-    create_old_v6_database(db_name)
+    // Step 1: Create old v7 database with token payment WITHOUT txType
+    create_old_v7_database(db_name)
         .await
-        .expect("Failed to create old v6 format database");
+        .expect("Failed to create old v7 format database");
 
-    // Step 2: Open with new code (triggers migration to v7)
+    // Step 2: Open with new code (triggers migration to v8)
     let storage = create_test_storage(db_name).await;
 
     // Step 3: Verify old token payment was migrated correctly

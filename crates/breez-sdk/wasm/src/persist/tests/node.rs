@@ -25,8 +25,8 @@ extern "C" {
 // Import test helpers
 #[wasm_bindgen(module = "js/node-test-helpers.cjs")]
 extern "C" {
-    #[wasm_bindgen(js_name = "createOldV14Database", catch)]
-    fn create_old_v14_database(db_path: &str) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(js_name = "createOldV15Database", catch)]
+    fn create_old_v15_database(db_path: &str) -> Result<Promise, JsValue>;
 }
 
 // Helper to create a WasmStorage instance for testing using node-storage
@@ -151,8 +151,8 @@ async fn test_sync_storage() {
 }
 
 #[wasm_bindgen_test]
-async fn test_migration_from_v14_to_v15() {
-    let data_dir = "/tmp/breez-sdk-node-migration-v14-to-v15-test";
+async fn test_migration_from_v15_to_v16() {
+    let data_dir = "/tmp/breez-sdk-node-migration-v15-to-v16-test";
     let db_path = format!("{}/storage.sql", data_dir);
 
     // Step 1: Remove any existing test directory
@@ -179,15 +179,15 @@ async fn test_migration_from_v14_to_v15() {
     .await
     .expect("Failed to create directory");
 
-    // Step 3: Create old v14 database with token payment WITHOUT tx_type
+    // Step 3: Create old v15 database with token payment WITHOUT tx_type
     let create_future = JsFuture::from(
-        create_old_v14_database(&db_path).expect("Failed to call create_old_v14_database"),
+        create_old_v15_database(&db_path).expect("Failed to call create_old_v15_database"),
     );
     create_future
         .await
-        .expect("Failed to create old v14 format database");
+        .expect("Failed to create old v15 format database");
 
-    // Step 4: Open with new code (triggers migration to v15)
+    // Step 4: Open with new code (triggers migration to v16)
     let storage = create_default_storage(data_dir, None)
         .await
         .expect("Failed to create node storage instance");
