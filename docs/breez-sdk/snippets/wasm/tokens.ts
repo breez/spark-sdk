@@ -1,4 +1,4 @@
-import { type BreezSdk, type PrepareSendPaymentResponse } from '@breeztech/breez-sdk-spark'
+import type { BreezSdk, TokenConversionOptions } from '@breeztech/breez-sdk-spark'
 
 const exampleFetchTokenBalances = async (sdk: BreezSdk) => {
   // ANCHOR: fetch-token-balances
@@ -96,4 +96,70 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const payment = sendResponse.payment
   console.log(`Payment: ${JSON.stringify(payment)}`)
   // ANCHOR_END: send-token-payment
+}
+
+const exampleFetchTokenConversionLimits = async (sdk: BreezSdk) => {
+  // ANCHOR: fetch-token-conversion-limits
+  // Fetch limits for converting Bitcoin to a token
+  const fromBitcoinResponse = await sdk.fetchTokenConversionLimits({
+    conversionType: { type: 'fromBitcoin' },
+    tokenIdentifier: '<token identifier>'
+  })
+
+  if (fromBitcoinResponse.minFromAmount !== undefined) {
+    console.log(`Minimum BTC to convert: ${fromBitcoinResponse.minFromAmount} sats`)
+  }
+  if (fromBitcoinResponse.minToAmount !== undefined) {
+    console.log(`Minimum tokens to receive: ${fromBitcoinResponse.minToAmount} base units`)
+  }
+
+  // Fetch limits for converting a token to Bitcoin
+  const toBitcoinResponse = await sdk.fetchTokenConversionLimits({
+    conversionType: {
+      type: 'toBitcoin',
+      fromTokenIdentifier: '<token identifier>'
+    },
+    tokenIdentifier: undefined
+  })
+
+  if (toBitcoinResponse.minFromAmount !== undefined) {
+    console.log(`Minimum tokens to convert: ${toBitcoinResponse.minFromAmount} base units`)
+  }
+  if (toBitcoinResponse.minToAmount !== undefined) {
+    console.log(`Minimum BTC to receive: ${toBitcoinResponse.minToAmount} sats`)
+  }
+  // ANCHOR_END: fetch-token-conversion-limits
+}
+
+const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-send-payment-token-conversion
+  const paymentRequest = '<spark address or invoice>'
+  // Token identifier must match the invoice in case it specifies one.
+  const tokenIdentifier = '<token identifier>'
+  // Set the amount of tokens you wish to send.
+  const optionalAmount = BigInt(1_000)
+  // Optionally set to use token funds to pay via token conversion
+  const optionalMaxSlippageBps = 50
+  const optionalCompletionTimeoutSecs = 30
+  const tokenConversionOptions: TokenConversionOptions = {
+    conversionType: {
+      type: 'fromBitcoin'
+    },
+    maxSlippageBps: optionalMaxSlippageBps,
+    completionTimeoutSecs: optionalCompletionTimeoutSecs
+  }
+
+  const prepareResponse = await sdk.prepareSendPayment({
+    paymentRequest,
+    amount: optionalAmount,
+    tokenIdentifier,
+    tokenConversionOptions
+  })
+
+  // If the fees are acceptable, continue to send the token payment
+  if (prepareResponse.tokenConversionFee !== undefined) {
+    const tokenConversionFee = prepareResponse.tokenConversionFee
+    console.log(`Estimated token conversion fee: ${tokenConversionFee} sats`)
+  }
+  // ANCHOR_END: prepare-send-payment-token-conversion
 }

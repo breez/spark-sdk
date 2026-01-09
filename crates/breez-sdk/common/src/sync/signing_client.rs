@@ -15,7 +15,7 @@ use crate::{
         },
         signer::SyncSigner,
     },
-    utils::now,
+    utils::{now, zbase32::encode_zbase32},
 };
 
 const MESSAGE_PREFIX: &[u8; 13] = b"realtimesync:";
@@ -117,7 +117,7 @@ impl SigningClient {
         self.signer
             .sign_ecdsa_recoverable(&msg)
             .await
-            .map(|bytes| zbase32::encode_full_bytes(&bytes))
+            .map(|bytes| encode_zbase32(&bytes))
     }
 
     async fn map_record(&self, record: crate::sync::proto::Record) -> anyhow::Result<Record> {
@@ -127,7 +127,7 @@ impl SigningClient {
         Ok(Record {
             id: sync_data.id,
             revision: record.revision,
-            schema_version: record.schema_version.parse()?,
+            schema_version: record.schema_version.parse().map_err(anyhow::Error::msg)?,
             data: sync_data.data,
         })
     }

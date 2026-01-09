@@ -4,6 +4,7 @@ import {
   SendPaymentOptions,
   SparkHtlcOptions,
   SparkHtlcStatus,
+  PaymentDetailsFilter,
   PaymentType,
   PaymentStatus,
   SendPaymentMethod_Tags
@@ -17,7 +18,8 @@ const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
   const prepareRequest = {
     paymentRequest,
     amount: amountSats,
-    tokenIdentifier: undefined
+    tokenIdentifier: undefined,
+    tokenConversionOptions: undefined
   }
   const prepareResponse = await sdk.prepareSendPayment(prepareRequest)
 
@@ -55,7 +57,10 @@ const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[
   const request = {
     typeFilter: [PaymentType.Receive],
     statusFilter: [PaymentStatus.Pending],
-    sparkHtlcStatusFilter: [SparkHtlcStatus.WaitingForPreimage],
+    paymentDetailsFilter: [new PaymentDetailsFilter.Spark({
+      htlcStatus: [SparkHtlcStatus.WaitingForPreimage],
+      conversionRefundNeeded: undefined
+    })],
     assetFilter: undefined,
     fromTimestamp: undefined,
     toTimestamp: undefined,

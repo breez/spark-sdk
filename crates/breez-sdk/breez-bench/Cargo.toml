@@ -33,6 +33,6 @@ bip39 = { workspace = true, features = ["rand"] }
 
 # Utils
 anyhow.workspace = true
-tempdir.workspace = true
+tempdir = "0.3.7"
 dirs.workspace = true
 

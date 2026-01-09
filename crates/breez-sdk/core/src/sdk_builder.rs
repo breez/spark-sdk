@@ -4,12 +4,14 @@
 )]
 use std::sync::Arc;
 
-use bitcoin::bip32::Xpriv;
 use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
     rest::ReqwestRestClient as CommonRequestRestClient,
 };
-use spark_wallet::{DefaultSigner, KeySet, Signer};
+
+use flashnet::{CacheStore, FlashnetClient, FlashnetConfig};
+#[cfg(not(target_family = "wasm"))]
+use spark_wallet::Signer;
 use tokio::sync::watch;
 use tracing::{debug, info};
 
@@ -28,6 +30,9 @@ use crate::{
     persist::Storage,
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams},
+    signer::{
+        breez::BreezSignerImpl, nostr::NostrSigner, rtsync::RTSyncSigner, spark::SparkSigner,
+    },
     sync_storage::SyncStorage,
 };
 
@@ -36,6 +41,10 @@ use crate::{
 pub struct SdkBuilder {
     config: Config,
     seed: Seed,
+    key_set_type: KeySetType,
+    use_address_index: bool,
+    account_number: Option<u32>,
+
     storage_dir: Option<String>,
     storage: Option<Arc<dyn Storage>>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
@@ -43,9 +52,6 @@ pub struct SdkBuilder {
     lnurl_client: Option<Arc<dyn RestClient>>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     payment_observer: Option<Arc<dyn PaymentObserver>>,
-    key_set_type: KeySetType,
-    use_address_index: bool,
-    account_number: Option<u32>,
     sync_storage: Option<Arc<dyn SyncStorage>>,
 }
 
@@ -54,10 +60,14 @@ impl SdkBuilder {
     /// Arguments:
     /// - `config`: The configuration to be used.
     /// - `seed`: The seed for wallet generation.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn new(config: Config, seed: Seed) -> Self {
         SdkBuilder {
             config,
             seed,
+            key_set_type: KeySetType::Default,
+            use_address_index: false,
+            account_number: None,
             storage_dir: None,
             storage: None,
             chain_service: None,
@@ -65,11 +75,25 @@ impl SdkBuilder {
             lnurl_client: None,
             lnurl_server_client: None,
             payment_observer: None,
-            key_set_type: KeySetType::Default,
-            use_address_index: false,
-            account_number: None,
             sync_storage: None,
         }
+    }
+
+    /// Sets the key set type to be used by the SDK.
+    /// Arguments:
+    /// - `key_set_type`: The key set type which determines the derivation path.
+    /// - `use_address_index`: Controls the structure of the BIP derivation path.
+    #[must_use]
+    pub fn with_key_set(
+        mut self,
+        key_set_type: KeySetType,
+        use_address_index: bool,
+        account_number: Option<u32>,
+    ) -> Self {
+        self.key_set_type = key_set_type;
+        self.use_address_index = use_address_index;
+        self.account_number = account_number;
+        self
     }
 
     #[must_use]
@@ -98,23 +122,6 @@ impl SdkBuilder {
     /// - `storage`: The sync storage implementation to be used.
     pub fn with_real_time_sync_storage(mut self, storage: Arc<dyn SyncStorage>) -> Self {
         self.sync_storage = Some(storage);
-        self
-    }
-
-    /// Sets the key set type to be used by the SDK.
-    /// Arguments:
-    /// - `key_set_type`: The key set type which determines the derivation path.
-    /// - `use_address_index`: Controls the structure of the BIP derivation path.
-    #[must_use]
-    pub fn with_key_set(
-        mut self,
-        key_set_type: KeySetType,
-        use_address_index: bool,
-        account_number: Option<u32>,
-    ) -> Self {
-        self.key_set_type = key_set_type;
-        self.use_address_index = use_address_index;
-        self.account_number = account_number;
         self
     }
 
@@ -189,17 +196,35 @@ impl SdkBuilder {
     /// Builds the `BreezSdk` instance with the configured components.
     #[allow(clippy::too_many_lines)]
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
-        // Create the signer from seed
-        let seed_bytes = self.seed.to_bytes()?;
-        let key_set = KeySet::new(
-            &seed_bytes,
-            self.config.network.into(),
-            self.key_set_type.into(),
+        let (key_set_type, use_address_index, account_number) = (
+            self.key_set_type,
             self.use_address_index,
             self.account_number,
-        )
-        .map_err(|e| SdkError::Generic(e.to_string()))?;
-        let signer: Arc<dyn Signer> = Arc::new(DefaultSigner::from_key_set(key_set.clone()));
+        );
+
+        // Create the signer from seed
+        let signer = Arc::new(
+            BreezSignerImpl::new(
+                &self.config,
+                &self.seed,
+                key_set_type.into(),
+                use_address_index,
+                account_number,
+            )
+            .map_err(|e| SdkError::Generic(e.to_string()))?,
+        );
+
+        // Create the signers
+        let spark_signer = Arc::new(SparkSigner::new(signer.clone()));
+        let rtsync_signer = Arc::new(
+            RTSyncSigner::new(signer.clone(), self.config.network)
+                .map_err(|e| SdkError::Generic(e.to_string()))?,
+        );
+        let nostr_signer = Arc::new(
+            NostrSigner::new(signer.clone(), self.config.network, account_number)
+                .await
+                .map_err(|e| SdkError::Generic(format!("{e:?}")))?,
+        );
 
         let chain_service = if let Some(service) = self.chain_service {
             service
@@ -241,7 +266,7 @@ impl SdkBuilder {
             // Initialize default storages based on provided directory
             #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
             (None, Some(storage_dir)) => {
-                let identity_pub_key = signer
+                let identity_pub_key = spark_signer
                     .get_identity_public_key()
                     .await
                     .map_err(|e| SdkError::Generic(e.to_string()))?;
@@ -300,7 +325,7 @@ impl SdkBuilder {
             self.config.optimization_config.multiplicity;
 
         let mut wallet_builder =
-            spark_wallet::WalletBuilder::new(spark_wallet_config, Arc::clone(&signer));
+            spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer);
         if let Some(observer) = self.payment_observer {
             let observer: Arc<dyn spark_wallet::TransferObserver> =
                 Arc::new(SparkTransferObserver::new(observer));
@@ -335,21 +360,10 @@ impl SdkBuilder {
                 ));
             };
 
-            // Use legacy master key when using default key set and default derivation path for backwards compatibility
-            let master_key =
-                if self.key_set_type == KeySetType::Default && self.account_number.is_none() {
-                    let bitcoin_network: bitcoin::Network = self.config.network.into();
-                    Xpriv::new_master(bitcoin_network, &seed_bytes)
-                        .map_err(|e| SdkError::Generic(e.to_string()))?
-                } else {
-                    key_set.identity_master_key
-                };
-
             init_and_start_real_time_sync(RealTimeSyncParams {
                 server_url: server_url.clone(),
                 api_key: self.config.api_key.clone(),
-                network: self.config.network,
-                master_key,
+                signer: rtsync_signer,
                 storage: Arc::clone(&storage),
                 sync_storage,
                 shutdown_receiver: shutdown_sender.subscribe(),
@@ -359,14 +373,13 @@ impl SdkBuilder {
         } else {
             storage
         };
+        let flashnet_client = Arc::new(FlashnetClient::new(
+            FlashnetConfig::default_config(self.config.network.into()),
+            spark_wallet.clone(),
+            Arc::new(CacheStore::default()),
+        ));
 
-        let nostr_client = Arc::new(NostrClient::new(
-            &key_set.identity_master_key,
-            self.account_number.unwrap_or(match self.config.network {
-                Network::Mainnet => 0,
-                Network::Regtest => 1,
-            }),
-        )?);
+        let nostr_client = Arc::new(NostrClient::new(nostr_signer));
 
         // Create the SDK instance
         let sdk = BreezSdk::init_and_start(BreezSdkParams {
@@ -380,6 +393,7 @@ impl SdkBuilder {
             spark_wallet,
             event_emitter,
             nostr_client,
+            flashnet_client,
         })?;
         debug!("Initialized and started breez sdk.");
 

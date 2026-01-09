@@ -392,6 +392,12 @@ dependencies = [
 
 [[package]]
 name = "base64"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
+
+[[package]]
+name = "base64"
 version = "0.21.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
@@ -641,12 +647,10 @@ dependencies = [
  "lightning",
  "macros",
  "mockall",
- "percent-encoding-rfc3986",
  "prost",
  "rand 0.8.5",
  "regex",
  "reqwest",
- "semver",
  "serde",
  "serde_json",
  "spark",
@@ -661,7 +665,6 @@ dependencies = [
  "tracing",
  "wasm-bindgen-test",
  "web-time",
- "zbase32",
 ]
 
 [[package]]
@@ -707,6 +710,8 @@ dependencies = [
  "built",
  "chrono",
  "ecies",
+ "flashnet",
+ "frost-secp256k1-tr-unofficial",
  "hex",
  "lnurl-models",
  "macros",
@@ -718,7 +723,6 @@ dependencies = [
  "serde",
  "serde_json",
  "spark-wallet",
- "tempdir",
  "thiserror 2.0.14",
  "tokio",
  "tokio_with_wasm",
@@ -1569,6 +1573,31 @@ name = "fixedbitset"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
+
+[[package]]
+name = "flashnet"
+version = "0.1.0"
+dependencies = [
+ "bitcoin",
+ "getrandom 0.2.16",
+ "hex",
+ "jwt",
+ "macros",
+ "rand 0.8.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_qs",
+ "serde_with",
+ "spark",
+ "spark-wallet",
+ "thiserror 2.0.14",
+ "tokio",
+ "tokio_with_wasm",
+ "tracing",
+ "wasm-bindgen-test",
+ "web-time",
+]
 
 [[package]]
 name = "fnv"
@@ -2563,6 +2592,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "jwt"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6204285f77fe7d9784db3fdc449ecce1a0114927a51d5a41c4c7a292011c015f"
+dependencies = [
+ "base64 0.13.1",
+ "crypto-common",
+ "digest 0.10.7",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "k256"
 version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3277,12 +3321,6 @@ name = "percent-encoding"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
-
-[[package]]
-name = "percent-encoding-rfc3986"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3637c05577168127568a64e9dc5a6887da720efef07b3d9472d45f63ab191166"
 
 [[package]]
 name = "petgraph"
@@ -4440,6 +4478,19 @@ dependencies = [
  "memchr",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serde_qs"
+version = "1.0.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cb0b9062a400c31442e67d1f2b1e7746bebd691110ebee1b7d0c7293b04fab1"
+dependencies = [
+ "itoa",
+ "percent-encoding",
+ "ryu",
+ "serde",
+ "thiserror 2.0.14",
 ]
 
 [[package]]
@@ -6557,12 +6608,6 @@ dependencies = [
  "syn 2.0.105",
  "synstructure",
 ]
-
-[[package]]
-name = "zbase32"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f9079049688da5871a7558ddacb7f04958862c703e68258594cb7a862b5e33f"
 
 [[package]]
 name = "zerocopy"

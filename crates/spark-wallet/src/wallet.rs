@@ -50,7 +50,7 @@ use tracing::{debug, error, info, trace};
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    FulfillSparkInvoiceResult, ListTokenTransactionsRequest, PreimageRequest,
+    FulfillSparkInvoiceResult, ListTokenTransactionsRequest, ListTransfersRequest, PreimageRequest,
     QuerySparkInvoiceResult, TokenBalance, WalletEvent, WalletLeaves, WalletSettings,
     WithdrawInnerParams,
     event::EventManager,
@@ -718,6 +718,11 @@ impl SparkWallet {
             self.maybe_start_optimization();
         }
 
+        for transfer in &transfers {
+            self.event_manager
+                .notify_listeners(WalletEvent::TransferClaimed(transfer.clone()));
+        }
+
         Ok(transfers)
     }
 
@@ -893,10 +898,13 @@ impl SparkWallet {
 
     pub async fn list_transfers(
         &self,
-        paging: Option<PagingFilter>,
+        request: ListTransfersRequest,
     ) -> Result<PagingResult<WalletTransfer>, SparkWalletError> {
         let our_pubkey = self.identity_public_key;
-        let transfers = self.transfer_service.query_transfers(paging).await?;
+        let transfers = self
+            .transfer_service
+            .query_transfers(&request.transfer_ids, request.paging)
+            .await?;
         create_transfers(
             transfers,
             &self.ssp_client,
@@ -973,6 +981,8 @@ impl SparkWallet {
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
         self.tree_service.refresh_leaves().await?;
         self.token_output_service.refresh_tokens_outputs().await?;
+        // Claiming here any transfers that may have been missed in the event stream handling (e.g. counter swap transfers are intentionally not claimed there)
+        self.claim_pending_transfers().await?;
         Ok(())
     }
 
@@ -1548,6 +1558,11 @@ async fn claim_pending_transfers(
         );
     }
 
+    let mut transfers = transfers;
+    for transfer in transfers.items.iter_mut() {
+        transfer.status = TransferStatus::Completed;
+    }
+
     debug!("Claimed all transfers, creating wallet transfers");
     Ok(create_transfers(
         transfers,
@@ -1802,6 +1817,7 @@ impl BackgroundProcessor {
     }
 
     async fn process_transfer_event(&self, transfer: Transfer) -> Result<(), SparkWalletError> {
+        // Skip claiming counter swap transfer as these are claimed synchronously by the Swap::swap_leaves() method.
         if transfer.transfer_type == spark::services::TransferType::CounterSwap {
             debug!(
                 "Received counter swap transfer, not claiming: {:?}",
@@ -1896,12 +1912,12 @@ impl BackgroundProcessor {
                     "Claimed {} pending transfers on stream reconnection",
                     transfers.len()
                 );
+                if !transfers.is_empty() {
+                    self.maybe_start_optimization();
+                }
                 for transfer in &transfers {
                     self.event_manager
                         .notify_listeners(WalletEvent::TransferClaimed(transfer.clone()));
-                }
-                if !transfers.is_empty() {
-                    self.maybe_start_optimization();
                 }
             }
             Err(e) => {

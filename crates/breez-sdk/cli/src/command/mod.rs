@@ -3,13 +3,14 @@ mod issuer;
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, Fee, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
-    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentStatus,
-    PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest,
-    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
-    SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
+    ClaimHtlcPaymentRequest, Fee, FetchTokenConversionLimitsRequest, GetInfoRequest,
+    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
+    MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
+    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
+    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest,
+    TokenConversionOptions, TokenConversionType, TokenIssuer, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -60,6 +61,10 @@ pub enum Command {
         /// Filter by Spark HTLC status
         #[arg(long)]
         spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
+
+        /// Filter by token transaction hash
+        #[arg(long)]
+        tx_hash: Option<String>,
 
         /// Only include payments created after this timestamp (inclusive)
         #[arg(long)]
@@ -126,6 +131,21 @@ pub enum Command {
         /// Optional idempotency key to ensure only one payment is made for multiple requests.
         #[arg(short = 'i', long)]
         idempotency_key: Option<String>,
+
+        /// If provided, the payment will include a token conversion step, converting from Bitcoin
+        /// to the specified token to fulfill the payment.
+        #[clap(long = "from-bitcoin", conflicts_with = "convert_from_token_identifier", action = clap::ArgAction::SetTrue)]
+        convert_from_bitcoin: Option<bool>,
+
+        // If provided, the payment will include a token conversion step, converting from the
+        // specified token to Bitcoin to fulfill the payment.
+        #[arg(long = "from-token", conflicts_with = "convert_from_bitcoin")]
+        convert_from_token_identifier: Option<String>,
+
+        /// The optional maximum slippage in basis points (1/100 of a percent) allowed when
+        /// a token conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
+        #[arg(short = 's', long)]
+        convert_max_slippage_bps: Option<u32>,
     },
 
     /// Pay using LNURL
@@ -226,6 +246,14 @@ pub enum Command {
         /// The token identifiers to get metadata for
         token_identifiers: Vec<String>,
     },
+    FetchTokenConversionLimits {
+        /// Whether we are converting from or to Bitcoin
+        #[clap(short = 'f', long, action = clap::ArgAction::SetTrue)]
+        from_bitcoin: bool,
+
+        /// The token identifier of the token
+        token_identifier: String,
+    },
     GetUserSettings,
     SetUserSettings {
         /// Whether spark private mode is enabled.
@@ -278,11 +306,30 @@ pub(crate) async fn execute_command(
             type_filter,
             status_filter,
             spark_htlc_status_filter,
+            tx_hash,
             asset_filter,
             from_timestamp,
             to_timestamp,
             sort_ascending,
         } => {
+            let mut payment_details_filter = Vec::new();
+            if let Some(statuses) = spark_htlc_status_filter {
+                payment_details_filter.push(PaymentDetailsFilter::Spark {
+                    htlc_status: Some(statuses),
+                    conversion_refund_needed: None,
+                });
+            }
+            if let Some(tx_hash) = tx_hash {
+                payment_details_filter.push(PaymentDetailsFilter::Token {
+                    conversion_refund_needed: None,
+                    tx_hash: Some(tx_hash),
+                });
+            }
+            let payment_details_filter = if payment_details_filter.is_empty() {
+                None
+            } else {
+                Some(payment_details_filter)
+            };
             let value = sdk
                 .list_payments(ListPaymentsRequest {
                     limit,
@@ -290,7 +337,7 @@ pub(crate) async fn execute_command(
                     type_filter,
                     status_filter,
                     asset_filter,
-                    spark_htlc_status_filter,
+                    payment_details_filter,
                     from_timestamp,
                     to_timestamp,
                     sort_ascending,
@@ -439,12 +486,32 @@ pub(crate) async fn execute_command(
             amount,
             token_identifier,
             idempotency_key,
+            convert_from_bitcoin,
+            convert_from_token_identifier,
+            convert_max_slippage_bps: max_slippage_bps,
         } => {
+            let token_conversion_options =
+                match (convert_from_bitcoin, convert_from_token_identifier) {
+                    (Some(true), _) => Some(TokenConversionOptions {
+                        conversion_type: TokenConversionType::FromBitcoin,
+                        max_slippage_bps,
+                        completion_timeout_secs: None,
+                    }),
+                    (_, Some(from_token_identifier)) => Some(TokenConversionOptions {
+                        conversion_type: TokenConversionType::ToBitcoin {
+                            from_token_identifier,
+                        },
+                        max_slippage_bps,
+                        completion_timeout_secs: None,
+                    }),
+                    _ => None,
+                };
             let prepared_payment = sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request,
                     amount,
                     token_identifier,
+                    token_conversion_options,
                 })
                 .await;
 
@@ -454,6 +521,18 @@ pub(crate) async fn execute_command(
                     prepared_payment.err().unwrap()
                 ));
             };
+
+            if let Some(token_conversion_fee) = prepare_response.token_conversion_fee {
+                println!(
+                    "This payment has an estimated token conversion fee of {token_conversion_fee}"
+                );
+                let line = rl
+                    .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
+                    .to_lowercase();
+                if line != "y" {
+                    return Err(anyhow::anyhow!("Payment cancelled"));
+                }
+            }
 
             let payment_options =
                 read_payment_options(prepare_response.payment_method.clone(), rl)?;
@@ -602,6 +681,27 @@ pub(crate) async fn execute_command(
             print_value(&res)?;
             Ok(true)
         }
+        Command::FetchTokenConversionLimits {
+            from_bitcoin,
+            token_identifier,
+        } => {
+            let request = if from_bitcoin {
+                FetchTokenConversionLimitsRequest {
+                    conversion_type: TokenConversionType::FromBitcoin,
+                    token_identifier: Some(token_identifier),
+                }
+            } else {
+                FetchTokenConversionLimitsRequest {
+                    conversion_type: TokenConversionType::ToBitcoin {
+                        from_token_identifier: token_identifier,
+                    },
+                    token_identifier: None,
+                }
+            };
+            let res = sdk.fetch_token_conversion_limits(request).await?;
+            print_value(&res)?;
+            Ok(true)
+        }
         Command::GetUserSettings => {
             let res = sdk.get_user_settings().await?;
             print_value(&res)?;
@@ -666,7 +766,14 @@ fn read_payment_options(
                 completion_timeout_secs: Some(0),
             }))
         }
-        SendPaymentMethod::SparkAddress { .. } => {
+        SendPaymentMethod::SparkAddress {
+            token_identifier, ..
+        } => {
+            // HTLC options are only valid for Bitcoin payments, not token payments
+            if token_identifier.is_some() {
+                return Ok(None);
+            }
+
             let line = rl
                 .readline_with_initial("Do you want to create an HTLC transfer? (y/n)", ("n", ""))?
                 .to_lowercase();

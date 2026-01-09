@@ -18,15 +18,15 @@ pub enum SyncStorageError {
     Serialization(String),
 }
 
-impl From<semver::Error> for SyncStorageError {
-    fn from(e: semver::Error) -> Self {
+impl From<serde_json::Error> for SyncStorageError {
+    fn from(e: serde_json::Error) -> Self {
         SyncStorageError::Serialization(e.to_string())
     }
 }
 
-impl From<serde_json::Error> for SyncStorageError {
-    fn from(e: serde_json::Error) -> Self {
-        SyncStorageError::Serialization(e.to_string())
+impl From<String> for SyncStorageError {
+    fn from(e: String) -> Self {
+        SyncStorageError::Serialization(e)
     }
 }
 

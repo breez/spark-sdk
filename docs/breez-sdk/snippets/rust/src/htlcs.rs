@@ -11,6 +11,7 @@ async fn send_htlc_payment(sdk: &BreezSdk) -> Result<()> {
         payment_request,
         amount: amount_sats,
         token_identifier: None,
+        token_conversion_options: None,
     };
     let prepare_response = sdk.prepare_send_payment(prepare_request).await?;
 
@@ -48,7 +49,10 @@ async fn list_claimable_htlc_payments(sdk: &BreezSdk) -> Result<Vec<Payment>> {
     let request = ListPaymentsRequest {
         type_filter: Some(vec![PaymentType::Receive]),
         status_filter: Some(vec![PaymentStatus::Pending]),
-        spark_htlc_status_filter: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+        payment_details_filter: Some(vec![PaymentDetailsFilter::Spark {
+            htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+            conversion_refund_needed: None,
+        }]),
         ..Default::default()
     };
 

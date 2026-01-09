@@ -13,6 +13,7 @@ pub mod utils;
 
 pub use core::Network;
 pub use frost_secp256k1_tr::Identifier;
+pub use services::{bech32m_decode_token_id, bech32m_encode_token_id};
 
 #[allow(clippy::doc_markdown)]
 pub(crate) mod built_info {

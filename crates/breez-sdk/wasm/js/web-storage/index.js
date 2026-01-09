@@ -198,6 +198,44 @@ class MigrationManager {
             store.clear();
           }
         }
+      },
+      {
+        name: "Clear sync tables for BreezSigner backward compatibility",
+        upgrade: (db, transaction) => {
+          // Clear all sync tables due to BreezSigner signature change.
+          // This forces users to sync from scratch to the sync server.
+          // Also delete the sync_initial_complete flag to force re-populating
+          // all payment metadata for outgoing sync using the new key.
+
+          // Clear sync tables (only if they exist)
+          if (db.objectStoreNames.contains("sync_outgoing")) {
+            const syncOutgoing = transaction.objectStore("sync_outgoing");
+            syncOutgoing.clear();
+          }
+
+          if (db.objectStoreNames.contains("sync_incoming")) {
+            const syncIncoming = transaction.objectStore("sync_incoming");
+            syncIncoming.clear();
+          }
+
+          if (db.objectStoreNames.contains("sync_state")) {
+            const syncState = transaction.objectStore("sync_state");
+            syncState.clear();
+          }
+
+          // Reset revision to 0 (only if store exists)
+          if (db.objectStoreNames.contains("sync_revision")) {
+            const syncRevision = transaction.objectStore("sync_revision");
+            syncRevision.clear();
+            syncRevision.put({ id: 1, revision: "0" });
+          }
+
+          // Delete sync_initial_complete setting (only if store exists)
+          if (db.objectStoreNames.contains("settings")) {
+            const settings = transaction.objectStore("settings");
+            settings.delete("sync_initial_complete");
+          }
+        }
       }
     ];
   }
@@ -222,7 +260,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 6; // Current schema version
+    this.dbVersion = 7; // Current schema version
   }
 
   /**
@@ -420,12 +458,6 @@ class IndexedDBStorage {
 
         const payment = cursor.value;
 
-        // Apply filters
-        if (!this._matchesFilters(payment, request)) {
-          cursor.continue();
-          return;
-        }
-
         if (skipped < actualOffset) {
           skipped++;
           cursor.continue();
@@ -440,6 +472,12 @@ class IndexedDBStorage {
             payment,
             metadata
           );
+
+          // Apply filters
+          if (!this._matchesFilters(paymentWithMetadata, request)) {
+            cursor.continue();
+            return;
+          }
           
           // Fetch lnurl receive metadata if it's a lightning payment
           this._fetchLnurlReceiveMetadata(paymentWithMetadata, lnurlReceiveMetadataStore)
@@ -457,8 +495,11 @@ class IndexedDBStorage {
         };
         metadataRequest.onerror = () => {
           // Continue without metadata if it fails
-          payments.push(payment);
-          count++;
+          if (this._matchesFilters(payment, request)) {
+            payments.push(payment);
+            count++;
+          }
+
           cursor.continue();
         };
       };
@@ -637,6 +678,7 @@ class IndexedDBStorage {
 
       const metadataToStore = {
         paymentId,
+        parentPaymentId: metadata.parentPaymentId,
         lnurlPayInfo: metadata.lnurlPayInfo
           ? JSON.stringify(metadata.lnurlPayInfo)
           : null,
@@ -644,6 +686,9 @@ class IndexedDBStorage {
           ? JSON.stringify(metadata.lnurlWithdrawInfo)
           : null,
         lnurlDescription: metadata.lnurlDescription,
+        tokenConversionInfo: metadata.tokenConversionInfo
+          ? JSON.stringify(metadata.tokenConversionInfo)
+          : null,
       };
 
       const request = store.put(metadataToStore);
@@ -1456,11 +1501,8 @@ class IndexedDBStorage {
       }
     }
 
-    // Filter by Spark HTLC status
-    if (
-      request.sparkHtlcStatusFilter &&
-      request.sparkHtlcStatusFilter.length > 0
-    ) {
+    // Filter by payment details
+    if (request.paymentDetailsFilter && request.paymentDetailsFilter.length > 0) {
       let details = null;
 
       // Parse details if it's a string (stored in IndexedDB)
@@ -1475,12 +1517,66 @@ class IndexedDBStorage {
         details = payment.details;
       }
 
-      // Only Spark payments can have HTLC details
-      if (!details || details.type !== "spark" || !details.htlcDetails) {
+      if (!details) {
         return false;
       }
 
-      if (!request.sparkHtlcStatusFilter.includes(details.htlcDetails.status)) {
+      // Filter by payment details. If any filter matches, we include the payment
+      let paymentDetailsFilterMatches = false;
+      for (const paymentDetailsFilter of request.paymentDetailsFilter) {
+        // Filter by Spark HTLC status
+        if (
+          paymentDetailsFilter.type === "spark" &&
+          paymentDetailsFilter.htlcStatus != null &&
+          paymentDetailsFilter.htlcStatus.length > 0
+        ) {
+          if (
+            details.type !== "spark" ||
+            !details.htlcDetails ||
+            !paymentDetailsFilter.htlcStatus.includes(details.htlcDetails.status)
+          ) {
+            continue;
+          }
+        }
+        // Filter by token conversion info presence
+        if (
+          (paymentDetailsFilter.type === "spark" ||
+            paymentDetailsFilter.type === "token") &&
+          paymentDetailsFilter.conversionRefundNeeded != null
+        ) {
+          if (
+            details.type !== paymentDetailsFilter.type ||
+            !details.tokenConversionInfo
+          ) {
+            continue;
+          }
+
+          if (
+            details.tokenConversionInfo.paymentId ||
+            paymentDetailsFilter.conversionRefundNeeded ===
+              !!details.tokenConversionInfo.refundIdentifier
+          ) {
+            continue;
+          }
+        }
+        // Filter by token transaction hash
+        if (
+          paymentDetailsFilter.type === "token" &&
+          paymentDetailsFilter.txHash != null
+        ) {
+          if (
+            details.type !== "token" ||
+            details.txHash !== paymentDetailsFilter.txHash
+          ) {
+            continue;
+          }
+        }
+
+        paymentDetailsFilterMatches = true;
+        break;
+      }
+      
+      if (!paymentDetailsFilterMatches) {
         return false;
       }
     }
@@ -1555,31 +1651,44 @@ class IndexedDBStorage {
       }
     }
 
-    // If this is a Lightning payment and we have metadata
-    if (metadata && details && details.type == "lightning") {
-      if (metadata.lnurlDescription && !details.description) {
-        details.description = metadata.lnurlDescription;
-      }
-      // If lnurlPayInfo exists, parse and add to details
-      if (metadata.lnurlPayInfo) {
-        try {
-          details.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
-        } catch (e) {
-          throw new StorageError(
-            `Failed to parse lnurlPayInfo JSON for payment ${payment.id}: ${e.message}`,
-            e
-          );
+    if (metadata && details) {
+      if (details.type == "lightning") {
+        if (metadata.lnurlDescription && !details.description) {
+          details.description = metadata.lnurlDescription;
         }
-      }
-      // If lnurlWithdrawInfo exists, parse and add to details
-      if (metadata.lnurlWithdrawInfo) {
-        try {
-          details.lnurlWithdrawInfo = JSON.parse(metadata.lnurlWithdrawInfo);
-        } catch (e) {
-          throw new StorageError(
-            `Failed to parse lnurlWithdrawInfo JSON for payment ${payment.id}: ${e.message}`,
-            e
-          );
+        // If lnurlPayInfo exists, parse and add to details
+        if (metadata.lnurlPayInfo) {
+          try {
+            details.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
+          } catch (e) {
+            throw new StorageError(
+              `Failed to parse lnurlPayInfo JSON for payment ${payment.id}: ${e.message}`,
+              e
+            );
+          }
+        }
+        // If lnurlWithdrawInfo exists, parse and add to details
+        if (metadata.lnurlWithdrawInfo) {
+          try {
+            details.lnurlWithdrawInfo = JSON.parse(metadata.lnurlWithdrawInfo);
+          } catch (e) {
+            throw new StorageError(
+              `Failed to parse lnurlWithdrawInfo JSON for payment ${payment.id}: ${e.message}`,
+              e
+            );
+          }
+        }
+      } else if (details.type == "spark" || details.type == "token") {
+        // If tokenConversionInfo exists, parse and add to details
+        if (metadata.tokenConversionInfo) {
+          try {
+            details.tokenConversionInfo = JSON.parse(metadata.tokenConversionInfo);
+          } catch (e) {
+            throw new StorageError(
+              `Failed to parse tokenConversionInfo JSON for payment ${payment.id}: ${e.message}`,
+              e
+            );
+          }
         }
       }
     }

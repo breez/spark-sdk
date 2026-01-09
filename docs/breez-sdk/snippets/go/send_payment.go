@@ -120,6 +120,38 @@ func PrepareSendPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 	return &response, nil
 }
 
+func PrepareSendPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
+	// ANCHOR: prepare-send-payment-token-conversion
+	paymentRequest := "<payment request>"
+	// Set to use token funds to pay via token conversion
+	optionalMaxSlippageBps := uint32(50)
+	optionalCompletionTimeoutSecs := uint32(30)
+	tokenConversionOptions := breez_sdk_spark.TokenConversionOptions{
+		ConversionType: breez_sdk_spark.TokenConversionTypeToBitcoin{
+			FromTokenIdentifier: "<token identifier>",
+		},
+		MaxSlippageBps:        &optionalMaxSlippageBps,
+		CompletionTimeoutSecs: &optionalCompletionTimeoutSecs,
+	}
+
+	request := breez_sdk_spark.PrepareSendPaymentRequest{
+		PaymentRequest:         paymentRequest,
+		TokenConversionOptions: &tokenConversionOptions,
+	}
+	response, err := sdk.PrepareSendPayment(request)
+
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return nil, err
+	}
+
+	// If the fees are acceptable, continue to create the Send Payment
+	if response.TokenConversionFee != nil {
+		log.Printf("Estimated token conversion fee: %v token base units", *response.TokenConversionFee)
+	}
+	// ANCHOR_END: prepare-send-payment-token-conversion
+	return &response, nil
+}
+
 func SendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.PrepareSendPaymentResponse) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: send-payment-lightning-bolt11
 	var completionTimeoutSecs uint32 = 10

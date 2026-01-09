@@ -432,11 +432,13 @@ pub enum PaymentDetails {
     Spark {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         htlc_details: Option<SparkHtlcDetails>,
+        token_conversion_info: Option<TokenConversionInfo>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         invoice_details: Option<SparkInvoicePaymentDetails>,
+        token_conversion_info: Option<TokenConversionInfo>,
     },
     Lightning {
         description: Option<String>,
@@ -765,6 +767,7 @@ pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
+    pub token_conversion_options: Option<TokenConversionOptions>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
@@ -772,6 +775,8 @@ pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     pub amount: u128,
     pub token_identifier: Option<String>,
+    pub token_conversion_options: Option<TokenConversionOptions>,
+    pub token_conversion_fee: Option<u128>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OnchainConfirmationSpeed)]
@@ -813,12 +818,24 @@ pub struct SendPaymentResponse {
     pub payment: Payment,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentDetailsFilter)]
+pub enum PaymentDetailsFilter {
+    Spark {
+        htlc_status: Option<Vec<SparkHtlcStatus>>,
+        conversion_refund_needed: Option<bool>,
+    },
+    Token {
+        conversion_refund_needed: Option<bool>,
+        tx_hash: Option<String>,
+    },
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ListPaymentsRequest)]
 pub struct ListPaymentsRequest {
     pub type_filter: Option<Vec<PaymentType>>,
     pub status_filter: Option<Vec<PaymentStatus>>,
     pub asset_filter: Option<AssetFilter>,
-    pub spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
+    pub payment_details_filter: Option<Vec<PaymentDetailsFilter>>,
     pub from_timestamp: Option<u64>,
     pub to_timestamp: Option<u64>,
     pub offset: Option<u32>,
@@ -855,9 +872,11 @@ pub struct LogEntry {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentMetadata)]
 pub struct PaymentMetadata {
+    pub parent_payment_id: Option<String>,
     pub lnurl_pay_info: Option<LnurlPayInfo>,
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
+    pub token_conversion_info: Option<TokenConversionInfo>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SetLnurlMetadataItem)]
@@ -1084,4 +1103,38 @@ pub struct OptimizationProgress {
     pub is_running: bool,
     pub current_round: u32,
     pub total_rounds: u32,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenConversionInfo)]
+pub struct TokenConversionInfo {
+    pub pool_id: String,
+    pub payment_id: Option<String>,
+    #[serde(default, with = "serde_option_u128_as_string")]
+    pub fee: Option<u128>,
+    pub refund_identifier: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenConversionOptions)]
+pub struct TokenConversionOptions {
+    pub conversion_type: TokenConversionType,
+    pub max_slippage_bps: Option<u32>,
+    pub completion_timeout_secs: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenConversionType)]
+pub enum TokenConversionType {
+    FromBitcoin,
+    ToBitcoin { from_token_identifier: String },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchTokenConversionLimitsRequest)]
+pub struct FetchTokenConversionLimitsRequest {
+    pub conversion_type: TokenConversionType,
+    pub token_identifier: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchTokenConversionLimitsResponse)]
+pub struct FetchTokenConversionLimitsResponse {
+    pub min_from_amount: Option<u128>,
+    pub min_to_amount: Option<u128>,
 }

@@ -11,6 +11,7 @@ namespace BreezSdkSnippets
             var paymentRequest = "<bolt11 invoice>";
             // Optionally set the amount you wish the pay the receiver
             var optionalAmountSats = new BigInteger(5000);
+
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
                 amount: optionalAmountSats
@@ -36,6 +37,7 @@ namespace BreezSdkSnippets
             var paymentRequest = "<bitcoin address>";
             // Set the amount you wish the pay the receiver
             var amountSats = new BigInteger(50000);
+
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
                 amount: amountSats
@@ -62,6 +64,7 @@ namespace BreezSdkSnippets
             var paymentRequest = "<spark address>";
             // Set the amount you wish the pay the receiver
             var amountSats = new BigInteger(50000);
+
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
                 amount: amountSats
@@ -83,6 +86,7 @@ namespace BreezSdkSnippets
             var paymentRequest = "<spark invoice>";
             // Optionally set the amount you wish the pay the receiver
             var optionalAmountSats = new BigInteger(50000);
+
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
                 amount: optionalAmountSats
@@ -96,6 +100,36 @@ namespace BreezSdkSnippets
                 Console.WriteLine($"Fees: {fee} sats");
             }
             // ANCHOR_END: prepare-send-payment-spark-invoice
+        }
+
+        async Task PrepareSendPaymentTokenConversion(BreezSdk sdk)
+        {
+            // ANCHOR: prepare-send-payment-token-conversion
+            var paymentRequest = "<payment request>";
+            // Set to use token funds to pay via token conversion
+            var optionalMaxSlippageBps = 50U;
+            var optionalCompletionTimeoutSecs = 30U;
+            var tokenConversionOptions = new TokenConversionOptions(
+                conversionType: new TokenConversionType.ToBitcoin(
+                    fromTokenIdentifier: "<token identifier>"
+                ),
+                maxSlippageBps: optionalMaxSlippageBps,
+                completionTimeoutSecs: optionalCompletionTimeoutSecs
+            );
+
+            var request = new PrepareSendPaymentRequest(
+                paymentRequest: paymentRequest,
+                tokenConversionOptions: tokenConversionOptions
+            );
+            var prepareResponse = await sdk.PrepareSendPayment(request: request);
+
+            // If the fees are acceptable, continue to create the Send Payment
+            if (prepareResponse.tokenConversionFee != null)
+            {
+                Console.WriteLine("Estimated token conversion fee: " +
+                    $"{prepareResponse.tokenConversionFee} token base units");
+            }
+            // ANCHOR_END: prepare-send-payment-token-conversion
         }
 
         async Task SendPaymentLightningBolt11(BreezSdk sdk, PrepareSendPaymentResponse prepareResponse)

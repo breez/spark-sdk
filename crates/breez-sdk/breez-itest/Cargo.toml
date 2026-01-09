@@ -26,11 +26,11 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 hex.workspace = true
 macros.workspace = true
-tempdir.workspace = true
+tempdir = "0.3.7"
 testcontainers.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-dotenvy.workspace = true
+dotenvy = "0.15.7"
 rand.workspace = true
 uuid.workspace = true
 futures.workspace = true

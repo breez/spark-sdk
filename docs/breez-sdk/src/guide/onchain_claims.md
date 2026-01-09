@@ -6,7 +6,7 @@ When receiving bitcoin through on-chain deposits, the SDK [automatically attempt
 
 The [maximum deposit claim fee](config.md#max-deposit-claim-fee) setting in the SDK configuration defines the maximum fee the SDK uses when automatically claiming an on-chain deposit. The SDK's default fee limit is set to 1 sats/vbyte, which is low and requires manual claiming when fees exceed this threshold. You can set a higher fee, either in sats/vbyte, in absolute sats, or to the fastest recommended fee at the time of claim, with a leeway in sats/vbyte.
 
-To increase the likelihood of automatically claiming deposits, set the maximum fee to the fastest recommended fee at the time of claim. Be aware that during periods of network congestion, this may result in high fees being charged.
+To increase the likelihood of automatically claiming deposits, you may set the maximum fee to the fastest recommended rate at the time of claim, which can result in higher fees.
 
 {{#tabs refunding_payments:set-max-fee-to-recommended-fees}}
 

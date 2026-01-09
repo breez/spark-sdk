@@ -1,0 +1,60 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/setup-build.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "agent",
+            "prompt": "Code changes were just made. Verify the changes by running 'make claude-check' (which runs fmt-check, clippy-check, and cargo-test). If any checks fail, analyze the error output and provide a clear summary of what failed and what needs to be fixed. If all checks pass, confirm that verification succeeded. The main Claude session will see your response and can iterate on fixes if needed.",
+            "timeout": 300,
+            "statusMessage": "Verifying code changes..."
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(cargo test:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo tree:*)",
+      "Bash(cargo metadata:*)",
+      "Bash(make:*)",
+      "Bash(make test:*)",
+      "Bash(make cargo-test:*)",
+      "Bash(make wasm-test:*)",
+      "Bash(make clippy-check:*)",
+      "Bash(make cargo-clippy-check:*)",
+      "Bash(make fmt-check:*)",
+      "Bash(make breez-itest:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh api:*)",
+      "Bash(git fetch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(cat:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(tree:*)",
+      "Bash(xargs cat:*)",
+      "WebFetch(domain:raw.githubusercontent.com)"
+    ]
+  }
+}

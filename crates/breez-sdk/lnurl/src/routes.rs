@@ -431,14 +431,18 @@ where
                         )
                     })?;
 
-                lnurl_models::nostr::create_zap_receipt(
-                    &zap.zap_request,
-                    invoice,
-                    preimage,
-                    signing_keys,
-                )
-                .map_err(|e| {
-                    error!("failed to recreate zap receipt: {}", e);
+                let builder =
+                    lnurl_models::nostr::create_zap_receipt(&zap.zap_request, invoice, preimage)
+                        .map_err(|e| {
+                            error!("failed to recreate zap receipt: {}", e);
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(json!({"error": "internal server error"})),
+                            )
+                        })?;
+
+                builder.sign_with_keys(signing_keys).map_err(|e| {
+                    error!("failed to sign zap receipt: {}", e);
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({"error": "internal server error"})),

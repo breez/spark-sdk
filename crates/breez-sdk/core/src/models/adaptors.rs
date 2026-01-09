@@ -6,6 +6,7 @@ use spark_wallet::{
     Network as SparkNetwork, PreimageRequest, PreimageRequestStatus, SspUserRequest,
     TokenTransactionStatus, TransferDirection, TransferStatus, TransferType, WalletTransfer,
 };
+use tracing::debug;
 use web_time::UNIX_EPOCH;
 
 use crate::{
@@ -47,6 +48,7 @@ impl PaymentDetails {
                 return Ok(Some(PaymentDetails::Spark {
                     invoice_details: Some(invoice_details.into()),
                     htlc_details: None,
+                    token_conversion_info: None,
                 }));
             }
 
@@ -55,12 +57,14 @@ impl PaymentDetails {
                 return Ok(Some(PaymentDetails::Spark {
                     invoice_details: None,
                     htlc_details: Some(htlc_preimage_request.clone().try_into()?),
+                    token_conversion_info: None,
                 }));
             }
 
             return Ok(Some(PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
+                token_conversion_info: None,
             }));
         }
 
@@ -107,6 +111,7 @@ impl PaymentDetails {
             SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
+                token_conversion_info: None,
             },
             SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
                 tx_id: request.transaction_id.clone(),
@@ -129,6 +134,19 @@ impl From<SparkInvoiceDetails> for SparkInvoicePaymentDetails {
 impl TryFrom<WalletTransfer> for Payment {
     type Error = SdkError;
     fn try_from(transfer: WalletTransfer) -> Result<Self, Self::Error> {
+        if [
+            TransferType::CounterSwap,
+            TransferType::CounterSwapV3,
+            TransferType::Swap,
+            TransferType::PrimarySwapV3,
+        ]
+        .contains(&transfer.transfer_type)
+        {
+            debug!("Tried to convert swap-related transfer to payment. Transfer: {transfer:?}");
+            return Err(SdkError::Generic(
+                "Swap-related transfers are not considered payments".to_string(),
+            ));
+        }
         let payment_type = match transfer.direction {
             TransferDirection::Incoming => PaymentType::Receive,
             TransferDirection::Outgoing => PaymentType::Send,

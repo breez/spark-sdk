@@ -9,7 +9,7 @@ use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::SigningCommitments;
 use tracing::{info, trace};
 
-use crate::core::{current_sequence, next_lightning_htlc_sequence};
+use crate::core::{current_sequence, enforce_timelock, next_lightning_htlc_sequence};
 use crate::services::{LeafRefundSigningData, ServiceError, SignedTx};
 use crate::signer::{SignFrostRequest, Signer, SignerError};
 use crate::tree::{TreeNode, TreeNodeId};
@@ -30,7 +30,6 @@ pub struct RefundSignatures {
 pub struct RefundTxConstructor<'a> {
     pub node: &'a TreeNode,
     pub vout: u32,
-    pub refund_tx: Transaction,
     pub cpfp_sequence: Sequence,
     pub direct_sequence: Sequence,
     pub receiving_pubkey: &'a PublicKey,
@@ -462,7 +461,8 @@ where
             .ok_or(ServiceError::Generic("No refund tx".to_string()))?;
         let old_sequence = refund_tx.input[0].sequence;
         let (cpfp_sequence, direct_sequence) = if is_for_claim {
-            current_sequence(old_sequence)
+            let enforced = enforce_timelock(old_sequence);
+            current_sequence(enforced)
         } else {
             next_sequence(old_sequence).ok_or(ServiceError::Generic(
                 "Failed to get next sequence".to_string(),
@@ -476,7 +476,6 @@ where
         } = refund_tx_constructor(RefundTxConstructor {
             node: &leaf.node,
             vout: i as u32,
-            refund_tx,
             cpfp_sequence,
             direct_sequence,
             receiving_pubkey: &refund_signing_data.receiving_public_key,

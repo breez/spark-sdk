@@ -1,11 +1,65 @@
 use std::collections::HashMap;
 
 use bitcoin::hashes::{Hash, sha256};
-use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const CURRENT_SCHEMA_VERSION: Version = Version::new(1, 0, 0);
+/// Simple semantic version for schema versioning
+/// Supports only major.minor.patch format without pre-release or build metadata
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SchemaVersion {
+    pub major: u64,
+    pub minor: u64,
+    pub patch: u64,
+}
+
+impl SchemaVersion {
+    /// Create a new schema version
+    pub const fn new(major: u64, minor: u64, patch: u64) -> Self {
+        SchemaVersion {
+            major,
+            minor,
+            patch,
+        }
+    }
+}
+
+impl std::fmt::Display for SchemaVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+impl std::str::FromStr for SchemaVersion {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('.').collect();
+        if parts.len() != 3 {
+            return Err(format!(
+                "Invalid version format '{s}': expected major.minor.patch"
+            ));
+        }
+
+        let major = parts[0]
+            .parse()
+            .map_err(|_| format!("Invalid major version: {}", parts[0]))?;
+        let minor = parts[1]
+            .parse()
+            .map_err(|_| format!("Invalid minor version: {}", parts[1]))?;
+        let patch = parts[2]
+            .parse()
+            .map_err(|_| format!("Invalid patch version: {}", parts[2]))?;
+
+        Ok(SchemaVersion {
+            major,
+            minor,
+            patch,
+        })
+    }
+}
+
+const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0, 0);
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RecordId {
     pub r#type: String,
@@ -45,7 +99,7 @@ impl From<&RecordChangeRequest> for UnversionedRecordChange {
 
 pub struct UnversionedRecordChange {
     pub id: RecordId,
-    pub schema_version: Version,
+    pub schema_version: SchemaVersion,
     pub updated_fields: HashMap<String, Value>,
 }
 
@@ -92,7 +146,7 @@ pub struct IncomingChange {
 
 pub struct RecordChange {
     pub id: RecordId,
-    pub schema_version: Version,
+    pub schema_version: SchemaVersion,
     pub updated_fields: HashMap<String, Value>,
     pub revision: u64,
 }
@@ -101,7 +155,7 @@ pub struct RecordChange {
 pub struct Record {
     pub id: RecordId,
     pub revision: u64,
-    pub schema_version: Version,
+    pub schema_version: SchemaVersion,
     pub data: HashMap<String, Value>,
 }
 
@@ -162,11 +216,10 @@ mod test {
     use std::collections::HashMap;
 
     use bitcoin::hashes::{Hash, sha256};
-    use semver::Version;
     use serde_json::json;
 
     use crate::sync::{
-        OutgoingChange, Record, RecordChange, RecordChangeRequest, RecordId,
+        OutgoingChange, Record, RecordChange, RecordChangeRequest, RecordId, SchemaVersion,
         UnversionedRecordChange, model::CURRENT_SCHEMA_VERSION,
     };
 
@@ -242,7 +295,7 @@ mod test {
         let parent = Record {
             id: id.clone(),
             revision: 1,
-            schema_version: Version::new(0, 2, 5),
+            schema_version: SchemaVersion::new(0, 2, 5),
             data: parent_data,
         };
 
@@ -256,7 +309,7 @@ mod test {
 
         let change = RecordChange {
             id: id.clone(),
-            schema_version: Version::new(0, 2, 6),
+            schema_version: SchemaVersion::new(0, 2, 6),
             updated_fields,
             revision: 2,
         };
@@ -273,7 +326,7 @@ mod test {
         assert_eq!(merged.id.r#type, "payment");
         assert_eq!(merged.id.data_id, "invoice123");
         assert_eq!(merged.revision, 2);
-        assert_eq!(merged.schema_version, Version::new(0, 2, 6));
+        assert_eq!(merged.schema_version, SchemaVersion::new(0, 2, 6));
 
         // Check that parent data was preserved
         assert_eq!(merged.data.get("amount"), Some(&json!(1000)));
@@ -298,7 +351,7 @@ mod test {
 
         let change = RecordChange {
             id: id.clone(),
-            schema_version: Version::new(0, 2, 6),
+            schema_version: SchemaVersion::new(0, 2, 6),
             updated_fields,
             revision: 1,
         };
@@ -315,7 +368,7 @@ mod test {
         assert_eq!(merged.id.r#type, "payment");
         assert_eq!(merged.id.data_id, "invoice123");
         assert_eq!(merged.revision, 1);
-        assert_eq!(merged.schema_version, Version::new(0, 2, 6));
+        assert_eq!(merged.schema_version, SchemaVersion::new(0, 2, 6));
 
         // Check that fields were applied
         assert_eq!(merged.data.get("amount"), Some(&json!(500)));
@@ -334,7 +387,7 @@ mod test {
         let parent = Record {
             id: id.clone(),
             revision: 1,
-            schema_version: Version::new(0, 2, 5),
+            schema_version: SchemaVersion::new(0, 2, 5),
             data: parent_data,
         };
 
@@ -346,7 +399,7 @@ mod test {
         let child = Record {
             id: id.clone(),
             revision: 2,
-            schema_version: Version::new(0, 2, 6),
+            schema_version: SchemaVersion::new(0, 2, 6),
             data: child_data,
         };
 
@@ -357,7 +410,7 @@ mod test {
         assert_eq!(combined.id.r#type, "payment");
         assert_eq!(combined.id.data_id, "invoice123");
         assert_eq!(combined.revision, 2);
-        assert_eq!(combined.schema_version, Version::new(0, 2, 6));
+        assert_eq!(combined.schema_version, SchemaVersion::new(0, 2, 6));
 
         // Check that parent data was included
         assert_eq!(combined.data.get("currency"), Some(&json!("BTC")));
@@ -378,7 +431,7 @@ mod test {
         let record = Record {
             id: id.clone(),
             revision: 1,
-            schema_version: Version::new(0, 2, 5),
+            schema_version: SchemaVersion::new(0, 2, 5),
             data: data.clone(),
         };
 
@@ -389,7 +442,7 @@ mod test {
         assert_eq!(result.id.r#type, "payment");
         assert_eq!(result.id.data_id, "invoice123");
         assert_eq!(result.revision, 1);
-        assert_eq!(result.schema_version, Version::new(0, 2, 5));
+        assert_eq!(result.schema_version, SchemaVersion::new(0, 2, 5));
 
         // Check data is preserved
         assert_eq!(result.data.get("amount"), Some(&json!(1000)));
@@ -408,7 +461,7 @@ mod test {
         let parent = Record {
             id: id.clone(),
             revision: 1,
-            schema_version: Version::new(0, 2, 5),
+            schema_version: SchemaVersion::new(0, 2, 5),
             data: parent_data,
         };
 
@@ -425,7 +478,7 @@ mod test {
         let child = Record {
             id: id.clone(),
             revision: 2,
-            schema_version: Version::new(0, 2, 6),
+            schema_version: SchemaVersion::new(0, 2, 6),
             data: child_data,
         };
 
@@ -436,7 +489,10 @@ mod test {
         assert_eq!(change_set.change.id.r#type, "payment");
         assert_eq!(change_set.change.id.data_id, "invoice123");
         assert_eq!(change_set.change.revision, 2);
-        assert_eq!(change_set.change.schema_version, Version::new(0, 2, 6));
+        assert_eq!(
+            change_set.change.schema_version,
+            SchemaVersion::new(0, 2, 6)
+        );
 
         // Only changed or new fields should be in updated_fields
         assert!(!change_set.change.updated_fields.contains_key("amount")); // Unchanged
@@ -468,7 +524,7 @@ mod test {
         let record = Record {
             id: id.clone(),
             revision: 1,
-            schema_version: Version::new(0, 2, 5),
+            schema_version: SchemaVersion::new(0, 2, 5),
             data: data.clone(),
         };
 
@@ -479,7 +535,10 @@ mod test {
         assert_eq!(change_set.change.id.r#type, "payment");
         assert_eq!(change_set.change.id.data_id, "invoice123");
         assert_eq!(change_set.change.revision, 1);
-        assert_eq!(change_set.change.schema_version, Version::new(0, 2, 5));
+        assert_eq!(
+            change_set.change.schema_version,
+            SchemaVersion::new(0, 2, 5)
+        );
 
         // All fields should be included
         assert_eq!(
@@ -497,5 +556,47 @@ mod test {
 
         // Parent should be None
         assert!(change_set.parent.is_none());
+    }
+
+    #[test]
+    fn test_schema_version_new() {
+        let v = SchemaVersion::new(1, 2, 3);
+        assert_eq!(v.major, 1);
+        assert_eq!(v.minor, 2);
+        assert_eq!(v.patch, 3);
+    }
+
+    #[test]
+    fn test_schema_version_to_string() {
+        let v = SchemaVersion::new(1, 0, 0);
+        assert_eq!(v.to_string(), "1.0.0");
+
+        let v = SchemaVersion::new(0, 2, 5);
+        assert_eq!(v.to_string(), "0.2.5");
+    }
+
+    #[test]
+    fn test_schema_version_from_str() {
+        let v: SchemaVersion = "1.0.0".parse().unwrap();
+        assert_eq!(v, SchemaVersion::new(1, 0, 0));
+
+        let v: SchemaVersion = "0.2.5".parse().unwrap();
+        assert_eq!(v, SchemaVersion::new(0, 2, 5));
+    }
+
+    #[test]
+    fn test_schema_version_from_str_errors() {
+        assert!("1.0".parse::<SchemaVersion>().is_err());
+        assert!("1.0.0.0".parse::<SchemaVersion>().is_err());
+        assert!("a.b.c".parse::<SchemaVersion>().is_err());
+        assert!("".parse::<SchemaVersion>().is_err());
+    }
+
+    #[test]
+    fn test_schema_version_roundtrip() {
+        let v = SchemaVersion::new(1, 2, 3);
+        let s = v.to_string();
+        let parsed: SchemaVersion = s.parse().unwrap();
+        assert_eq!(parsed, v);
     }
 }
