@@ -101,9 +101,17 @@ pub trait BreezSigner: Send + Sync {
         &self,
         request: spark_wallet::AggregateFrostRequest<'a>,
     ) -> Result<frost_secp256k1_tr::Signature, SdkError>;
+
+    /// Computes HMAC-SHA256 using a key derived at the given path.
+    async fn hmac_sha256(
+        &self,
+        key_path: &DerivationPath,
+        input: &[u8],
+    ) -> Result<Vec<u8>, SdkError>;
 }
 
 pub mod breez;
+pub mod lnurl_auth;
 pub mod nostr;
 pub mod rtsync;
 pub mod spark;
