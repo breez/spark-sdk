@@ -4,7 +4,7 @@ use crate::{
     error::{WasmError, WasmResult},
     logger::{Logger, WASM_LOGGER},
     models::{
-        Config, Credentials, KeySetType, Seed,
+        Config, Credentials, Seed,
         chain_service::{BitcoinChainService, ChainApiType, WasmBitcoinChainService},
         fiat_service::{FiatService, WasmFiatService},
         payment_observer::{PaymentObserver, WasmPaymentObserver},
@@ -82,21 +82,16 @@ impl SdkBuilder {
     }
 
     #[wasm_bindgen(js_name = "withKeySet")]
-    pub fn with_key_set(
-        mut self,
-        key_set_type: KeySetType,
-        use_address_index: bool,
-        account_number: Option<u32>,
-    ) -> Self {
-        self.key_set_type = key_set_type.clone().into();
-        self.use_address_index = use_address_index;
-        self.account_number = account_number;
-        let config = breez_sdk_spark::KeySetConfig {
-            key_set_type: key_set_type.into(),
-            use_address_index,
-            account_number,
+    pub fn with_key_set(mut self, config: crate::models::KeySetConfig) -> Self {
+        self.key_set_type = config.key_set_type.clone().into();
+        self.use_address_index = config.use_address_index;
+        self.account_number = config.account_number;
+        let core_config = breez_sdk_spark::KeySetConfig {
+            key_set_type: config.key_set_type.into(),
+            use_address_index: config.use_address_index,
+            account_number: config.account_number,
         };
-        self.builder = self.builder.with_key_set(config);
+        self.builder = self.builder.with_key_set(core_config);
         self
     }
 

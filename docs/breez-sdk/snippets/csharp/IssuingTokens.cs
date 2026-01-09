@@ -47,7 +47,7 @@ namespace BreezSdkSnippets
             var keySetConfig = new KeySetConfig(
                 keySetType: KeySetType.Default,
                 useAddressIndex: false,
-                accountNumber: accountNumber
+                accountNumber
             );
             await builder.WithKeySet(keySetConfig);
 

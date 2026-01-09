@@ -12,7 +12,7 @@ The SDK provides a convenient factory function `default_external_signer` that cr
 
 {{#tabs external_signer:default-external-signer}}
 
-Once you have a signer, you can use it when connecting to the SDK with the `connectWithSigner` method instead of the regular `connect` method:
+Once you have a signer, you can use it when connecting to the SDK with the `connect_with_signer` method instead of the regular `connect` method:
 
 {{#tabs external_signer:connect-with-signer}}
 
