@@ -1,7 +1,10 @@
 use core::fmt;
 use std::{
     collections::BTreeMap,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use serde::Serialize;
@@ -152,7 +155,7 @@ pub trait EventListener: Send + Sync {
 pub struct EventEmitter {
     has_real_time_sync: bool,
     listener_index: AtomicU64,
-    listeners: RwLock<BTreeMap<String, Box<dyn EventListener>>>,
+    listeners: RwLock<BTreeMap<String, Arc<dyn EventListener>>>,
     synced_event_buffer: Mutex<Option<InternalSyncedEvent>>,
 }
 
@@ -176,7 +179,7 @@ impl EventEmitter {
     /// # Returns
     ///
     /// A unique identifier for the listener, which can be used to remove it later
-    pub async fn add_listener(&self, listener: Box<dyn EventListener>) -> String {
+    pub async fn add_listener(&self, listener: Arc<dyn EventListener>) -> String {
         let index = self.listener_index.fetch_add(1, Ordering::Relaxed);
         let id = format!("listener_{}-{}", index, Uuid::new_v4());
         let mut listeners = self.listeners.write().await;
@@ -200,12 +203,17 @@ impl EventEmitter {
 
     /// Emit an event to all registered listeners
     pub async fn emit(&self, event: &SdkEvent) {
-        // Get a read lock on the listeners
-        let listeners = self.listeners.read().await;
+        // Clone listeners first — NO lock held during await
+        let listeners: Vec<Arc<dyn EventListener>> = {
+            let guard = self.listeners.read().await;
+            guard.values().cloned().collect()
+        };
 
-        // Emit the event to each listener
-        for listener in listeners.values() {
-            listener.on_event(event.clone()).await;
+        for listener in listeners {
+            let event = event.clone();
+            tokio::spawn(async move {
+                listener.on_event(event).await;
+            });
         }
     }
 
@@ -280,13 +288,13 @@ mod tests {
         let received = Arc::new(AtomicBool::new(false));
 
         // Create the listener with a shared reference to the atomic boolean
-        let listener = Box::new(TestListener {
+        let listener = Arc::new(TestListener {
             received: received.clone(),
         });
 
         let _ = emitter.add_listener(listener).await;
 
-        let event = SdkEvent::Synced {};
+        let event = SdkEvent::Synced;
 
         emitter.emit(&event).await;
 
@@ -303,11 +311,11 @@ mod tests {
         let received2 = Arc::new(AtomicBool::new(false));
 
         // Create listeners with their own shared references
-        let listener1 = Box::new(TestListener {
+        let listener1 = Arc::new(TestListener {
             received: received1.clone(),
         });
 
-        let listener2 = Box::new(TestListener {
+        let listener2 = Arc::new(TestListener {
             received: received2.clone(),
         });
 
@@ -318,7 +326,7 @@ mod tests {
         assert!(emitter.remove_listener(&id1).await);
 
         // Emit an event
-        let event = SdkEvent::Synced {};
+        let event = SdkEvent::Synced;
         emitter.emit(&event).await;
 
         // The first listener should not receive the event
@@ -339,7 +347,7 @@ mod tests {
         let emitter = EventEmitter::new(false);
         let received = Arc::new(AtomicBool::new(false));
 
-        let listener = Box::new(TestListener {
+        let listener = Arc::new(TestListener {
             received: received.clone(),
         });
 
@@ -377,7 +385,7 @@ mod tests {
         let emitter = EventEmitter::new(true);
         let received = Arc::new(AtomicBool::new(false));
 
-        let listener = Box::new(TestListener {
+        let listener = Arc::new(TestListener {
             received: received.clone(),
         });
 
@@ -416,7 +424,7 @@ mod tests {
         let emitter = EventEmitter::new(true);
         let received = Arc::new(AtomicBool::new(false));
 
-        let listener = Box::new(TestListener {
+        let listener = Arc::new(TestListener {
             received: received.clone(),
         });
 
@@ -454,7 +462,7 @@ mod tests {
         let emitter = EventEmitter::new(false);
         let received = Arc::new(AtomicBool::new(false));
 
-        let listener = Box::new(TestListener {
+        let listener = Arc::new(TestListener {
             received: received.clone(),
         });
 
@@ -528,7 +536,7 @@ mod tests {
         let emitter = EventEmitter::new(false);
         let received = Arc::new(AtomicBool::new(false));
 
-        let listener = Box::new(TestListener {
+        let listener = Arc::new(TestListener {
             received: received.clone(),
         });
 
@@ -553,7 +561,7 @@ mod tests {
         let emitter = EventEmitter::new(false);
         let received = Arc::new(AtomicBool::new(false));
 
-        let listener = Box::new(TestListener {
+        let listener = Arc::new(TestListener {
             received: received.clone(),
         });
 
@@ -593,7 +601,7 @@ mod tests {
         let emitter = EventEmitter::new(true);
         let count = Arc::new(AtomicUsize::new(0));
 
-        let listener = Box::new(CountingListener {
+        let listener = Arc::new(CountingListener {
             count: count.clone(),
         });
 
@@ -708,7 +716,7 @@ mod tests {
         let emitter = EventEmitter::new(false);
         let count = Arc::new(AtomicUsize::new(0));
 
-        let listener = Box::new(CountingListener {
+        let listener = Arc::new(CountingListener {
             count: count.clone(),
         });
 
