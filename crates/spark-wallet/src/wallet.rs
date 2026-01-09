@@ -1833,6 +1833,10 @@ impl BackgroundProcessor {
             error!("Error refreshing leaves on startup: {:?}", e);
         }
 
+        if let Err(e) = self.token_service.refresh_tokens_outputs().await {
+            error!("Error refreshing token outputs on startup: {:?}", e);
+        }
+
         // Start token output optimization background task if configured
         if let Some(interval) = self
             .token_outputs_optimization_options

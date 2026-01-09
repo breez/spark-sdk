@@ -84,6 +84,12 @@ impl TokenService {
         }
     }
 
+    /// Refreshes token outputs from the operator.
+    pub async fn refresh_tokens_outputs(&self) -> Result<(), ServiceError> {
+        self.token_output_service.refresh_tokens_outputs().await?;
+        Ok(())
+    }
+
     /// Returns the metadata for the given token identifiers.
     ///
     /// For token identifiers that are not found in the local cache, the metadata will be queried from the SE.
@@ -544,7 +550,6 @@ impl TokenService {
             token_identifier
         );
 
-        self.token_output_service.refresh_tokens_outputs().await?;
         let mut outputs = self.token_output_service.list_tokens_outputs().await?;
 
         if let Some(token_identifier) = token_identifier {
