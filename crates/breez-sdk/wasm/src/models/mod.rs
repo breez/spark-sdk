@@ -767,6 +767,7 @@ pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
+    pub token_conversion_options: Option<TokenConversionOptions>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
@@ -774,6 +775,8 @@ pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     pub amount: u128,
     pub token_identifier: Option<String>,
+    pub token_conversion_options: Option<TokenConversionOptions>,
+    pub token_conversion_fee: Option<u128>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OnchainConfirmationSpeed)]
@@ -869,6 +872,7 @@ pub struct LogEntry {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentMetadata)]
 pub struct PaymentMetadata {
+    pub parent_payment_id: Option<String>,
     pub lnurl_pay_info: Option<LnurlPayInfo>,
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
@@ -1108,4 +1112,29 @@ pub struct TokenConversionInfo {
     #[serde(default, with = "serde_option_u128_as_string")]
     pub fee: Option<u128>,
     pub refund_identifier: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenConversionOptions)]
+pub struct TokenConversionOptions {
+    pub conversion_type: TokenConversionType,
+    pub max_slippage_bps: Option<u32>,
+    pub completion_timeout_secs: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenConversionType)]
+pub enum TokenConversionType {
+    FromBitcoin,
+    ToBitcoin { from_token_identifier: String },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchTokenConversionLimitsRequest)]
+pub struct FetchTokenConversionLimitsRequest {
+    pub conversion_type: TokenConversionType,
+    pub token_identifier: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchTokenConversionLimitsResponse)]
+pub struct FetchTokenConversionLimitsResponse {
+    pub min_from_amount: Option<u128>,
+    pub min_to_amount: Option<u128>,
 }

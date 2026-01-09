@@ -678,6 +678,7 @@ class IndexedDBStorage {
 
       const metadataToStore = {
         paymentId,
+        parentPaymentId: metadata.parentPaymentId,
         lnurlPayInfo: metadata.lnurlPayInfo
           ? JSON.stringify(metadata.lnurlPayInfo)
           : null,

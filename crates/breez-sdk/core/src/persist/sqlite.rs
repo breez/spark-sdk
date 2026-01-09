@@ -261,6 +261,7 @@ impl SqliteStorage {
              UPDATE sync_revision SET revision = 0;
              DELETE FROM settings WHERE key = 'sync_initial_complete';",
             "ALTER TABLE payment_metadata ADD COLUMN token_conversion_info TEXT;",
+            "ALTER TABLE payment_metadata ADD COLUMN parent_payment_id TEXT;",
         ]
     }
 }
@@ -608,10 +609,11 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         connection.execute(
-            "INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, token_conversion_info)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, token_conversion_info)
+             VALUES (?, ?, ?, ?, ?, ?)",
             params![
                 payment_id,
+                metadata.parent_payment_id,
                 metadata.lnurl_pay_info,
                 metadata.lnurl_withdraw_info,
                 metadata.lnurl_description,

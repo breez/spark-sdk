@@ -530,12 +530,13 @@ class SqliteStorage {
   setPaymentMetadata(paymentId, metadata) {
     try {
       const stmt = this.db.prepare(`
-                INSERT OR REPLACE INTO payment_metadata (payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, token_conversion_info) 
-                VALUES (?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, token_conversion_info) 
+                VALUES (?, ?, ?, ?, ?, ?)
             `);
 
       stmt.run(
         paymentId,
+        metadata.parentPaymentId,
         metadata.lnurlPayInfo ? JSON.stringify(metadata.lnurlPayInfo) : null,
         metadata.lnurlWithdrawInfo
           ? JSON.stringify(metadata.lnurlWithdrawInfo)

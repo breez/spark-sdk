@@ -7,8 +7,8 @@ use serde_with::serde_as;
 use spark::Network;
 use spark_wallet::PublicKey;
 
-use crate::FlashnetError;
 use crate::utils::decode_token_identifier;
+use crate::{BTC_ASSET_ADDRESS, FlashnetError};
 
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -411,6 +411,168 @@ pub struct Pool {
     pub updated_at: String,
 }
 
+impl Pool {
+    /// Calculate the required amount of the input asset to receive the desired amount of the output asset,
+    /// taking into account pool reserves, fees, and slippage. Returns an error if the calculation
+    /// cannot be performed due to insufficient pool data or invalid parameters.
+    ///
+    /// If calculating the required input amount when the output asset is BTC, the output amount
+    /// is rounded up to the next multiple of 64 sats to account for BTC variable fee bit masking.
+    ///
+    /// # Arithmetic Safety
+    ///
+    /// This function allows arithmetic side effects (overflow/truncation) because:
+    /// - **Checked Arithmetic**: All arithmetic operations use `checked_*` methods to prevent overflow/underflow.
+    #[allow(clippy::too_many_lines)]
+    pub fn calculate_amount_in(
+        &self,
+        asset_in_address: &str,
+        amount_out: u128,
+        max_slippage_bps: u32,
+        network: Network,
+    ) -> Result<u128, FlashnetError> {
+        let overflow_err =
+            FlashnetError::Generic("Amount overflow calculating amount in".to_string());
+        let asset_in_address = decode_token_identifier(asset_in_address, network)?;
+        let is_a_to_b = asset_in_address == self.asset_a_address;
+
+        // Round up to next multiple of 64 (2^6) to account for BTC variable fee bit masking
+        let asset_out_address = if is_a_to_b {
+            &self.asset_b_address
+        } else {
+            &self.asset_a_address
+        };
+        let amount_out = if asset_out_address == BTC_ASSET_ADDRESS {
+            amount_out.saturating_add(63) & !63
+        } else {
+            amount_out
+        };
+
+        if max_slippage_bps > 10_000 {
+            return Err(FlashnetError::Generic(
+                "Max slippage basis points cannot exceed 10000".to_string(),
+            ));
+        }
+
+        // Add slippage buffer to amount_out first
+        // amount_out_with_slippage = amount_out * (max_slippage_bps + 10_000) / 10_000
+        let amount_out_with_slippage = amount_out
+            .checked_mul(u128::from(max_slippage_bps).saturating_add(10_000))
+            .ok_or(overflow_err.clone())?
+            .saturating_div(10_000);
+
+        // Account for fees on output (only for A to B swaps)
+        // amount_out_effective = amount_out × (10_000 + fee_bps) / 10_000
+        let amount_out_before_output_fees = if is_a_to_b {
+            let output_fee_bps = self.host_fee_bps;
+            amount_out_with_slippage
+                .checked_mul(u128::from(output_fee_bps).saturating_add(10_000))
+                .ok_or(overflow_err.clone())?
+                .saturating_div(10_000)
+        } else {
+            amount_out_with_slippage
+        };
+
+        // Helper function for ceiling division: (numerator + denominator - 1) / denominator
+        #[allow(clippy::arithmetic_side_effects)]
+        let div_ceil = |numerator: u128, denominator: u128| -> u128 {
+            numerator
+                .saturating_add(denominator.saturating_sub(1))
+                .saturating_div(denominator)
+        };
+
+        // Calculate amount_in before input fees
+        let amount_in_before_input_fees = if let (Some(reserve_a), Some(reserve_b)) =
+            (self.asset_a_reserve, self.asset_b_reserve)
+        {
+            // Calculate amount_in using reserves with integer arithmetic
+            // amount_in = (reserve_in × amount_out) / (reserve_out - amount_out)
+            let (reserve_in, reserve_out) = if is_a_to_b {
+                (reserve_a, reserve_b)
+            } else {
+                (reserve_b, reserve_a)
+            };
+
+            // Check for overflow/underflow conditions
+            if amount_out_before_output_fees >= reserve_out {
+                return Err(FlashnetError::Generic(
+                    "Amount out exceeds reserve out".to_string(),
+                ));
+            }
+
+            let numerator = reserve_in
+                .checked_mul(amount_out_before_output_fees)
+                .ok_or(overflow_err.clone())?;
+            let denominator = reserve_out.saturating_sub(amount_out_before_output_fees);
+
+            div_ceil(numerator, denominator)
+        } else if let Some(current_price_a_in_b) = self.current_price_a_in_b {
+            // Convert floating point price to fixed-point integer representation
+            // Use adaptive scaling to handle both small and large price ratios
+            const PRICE_SCALE: u128 = 1_000_000_000;
+            const LARGE_PRICE_SCALE: u128 = 1_000_000;
+            const LARGE_PRICE_THRESHOLD: f64 = 100.0;
+
+            #[allow(
+                clippy::cast_precision_loss,
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss
+            )]
+            let (numerator, denominator) = if is_a_to_b {
+                // A to B: multiply by price (works well with fixed-point)
+                let price_scaled = (current_price_a_in_b * PRICE_SCALE as f64) as u128;
+                (
+                    amount_out_before_output_fees
+                        .checked_mul(price_scaled)
+                        .ok_or(overflow_err.clone())?,
+                    PRICE_SCALE,
+                )
+            } else if current_price_a_in_b > LARGE_PRICE_THRESHOLD {
+                // B to A with large price: use direct integer division for better precision
+                let price_scaled = (current_price_a_in_b * LARGE_PRICE_SCALE as f64) as u128;
+                (
+                    amount_out_before_output_fees
+                        .checked_mul(LARGE_PRICE_SCALE)
+                        .ok_or(overflow_err.clone())?,
+                    price_scaled,
+                )
+            } else {
+                // B to A with normal/small price: use scaled inverse
+                let price_scaled = (PRICE_SCALE as f64 / current_price_a_in_b) as u128;
+                (
+                    amount_out_before_output_fees
+                        .checked_mul(price_scaled)
+                        .ok_or(overflow_err.clone())?,
+                    PRICE_SCALE,
+                )
+            };
+
+            div_ceil(numerator, denominator)
+        } else {
+            return Err(FlashnetError::Generic(
+                "Insufficient pool data to calculate amount_in".to_string(),
+            ));
+        };
+
+        // Account for fees on input
+        // amount_in = amount_in_before_input_fees × (10_000 + fee_bps) / 10_000
+        let input_fee_bps = if is_a_to_b {
+            // A to B: only LP fees on input
+            self.lp_fee_bps
+        } else {
+            // B to A: both host and LP fees on input
+            self.host_fee_bps.saturating_add(self.lp_fee_bps)
+        };
+
+        let amount_in = amount_in_before_input_fees
+            .checked_mul(u128::from(input_fee_bps).saturating_add(10_000))
+            .ok_or(overflow_err)?
+            .saturating_div(10_000);
+
+        Ok(amount_in)
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PoolSortOrder {
@@ -560,6 +722,55 @@ mod test {
     use super::*;
     use std::str::FromStr;
 
+    fn create_default_test_pool() -> Pool {
+        create_test_pool(
+            0,
+            20,
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            Some(155_123_677),
+            Some(143_108_978_165),
+            Some(922.547_613_635_651_9),
+        )
+    }
+
+    fn create_test_pool(
+        host_fee_bps: u32,
+        lp_fee_bps: u32,
+        a_address: &str,
+        b_address: &str,
+        a_reserve: Option<u128>,
+        b_reserve: Option<u128>,
+        current_price_a_in_b: Option<f64>,
+    ) -> Pool {
+        Pool {
+            lp_public_key: PublicKey::from_str(
+                "02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da",
+            )
+            .unwrap(),
+            host_name: "flashnet".to_string(),
+            host_fee_bps,
+            lp_fee_bps,
+            asset_a_address: a_address.to_string(),
+            asset_b_address: b_address.to_string(),
+            asset_a_reserve: a_reserve,
+            asset_b_reserve: b_reserve,
+            virtual_reserve_a: None,
+            virtual_reserve_b: None,
+            threshold_pct: None,
+            current_price_a_in_b,
+            tvl_asset_b: Some(316_135_065_311),
+            volume_24h_asset_b: Some(7_559_202_607),
+            price_change_percent_24h: Some(2.74),
+            curve_type: Some(CurveType::ConstantProduct),
+            initial_reserve_a: None,
+            bonding_progress_percent: None,
+            graduation_threshold_amount: None,
+            created_at: "2025-09-22 19:09:36.661269 +00:00:00".to_string(),
+            updated_at: "2025-12-03 12:43:53.903531 +00:00:00".to_string(),
+        }
+    }
+
     #[test]
     fn test_execute_swap_intent_serialization() {
         let intent = ExecuteSwapIntent {
@@ -609,5 +820,360 @@ mod test {
         "#;
         let parsed2: MinAmount = serde_json::from_str(json2).unwrap();
         assert_eq!(parsed2.min_amount, 500_000_u128);
+    }
+
+    #[test]
+    fn test_calculate_amount_in_a_to_b_with_reserves() {
+        // A to B swap: LP fees on input, host fees on output
+        let pool = create_test_pool(
+            100, // 1% host fee
+            20,  // 0.2% LP fee
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            Some(1_000_000_000),  // 1B asset A reserve
+            Some(10_000_000_000), // 10B asset B reserve
+            None,
+        );
+
+        let amount_out = 1_000_000; // Want 1M of asset B
+        let max_slippage_bps = 100; // 1% slippage
+
+        let result = pool.calculate_amount_in(
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            amount_out,
+            max_slippage_bps,
+            Network::Regtest,
+        );
+
+        assert!(result.is_ok());
+        let amount_in = result.unwrap();
+
+        // Expected calculation:
+        // amount_out_with_slippage = 1_000_000 * (100 + 10_000) / 10_000 = 1_010_000
+        // output_fee_rate = 100 / 10_000 = 0.01
+        // amount_out_before_output_fees = 1_010_000 * (1 + 0.01) = 1_020_100
+        // amount_in_before_input_fees = (1_000_000_000 * 1_020_100) / (10_000_000_000 - 1_020_100) ≈ 101_031.03
+        // input_fee_rate = 20 / 10_000 = 0.002
+        // amount_in = 101_031.03 * (1 + 0.002) ≈ 102_233.24
+        assert!(amount_in > 102_000 && amount_in < 103_000);
+    }
+    #[test]
+    fn test_calculate_amount_in_b_to_a_with_reserves() {
+        // B to A swap: both host and LP fees on input
+        let pool = create_test_pool(
+            100, // 1% host fee
+            20,  // 0.2% LP fee
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            Some(1_000_000_000),  // 1B asset A reserve
+            Some(10_000_000_000), // 10B asset B reserve
+            None,
+        );
+
+        let amount_out = 100_000; // Want 100K of asset A
+        let max_slippage_bps = 100; // 1% slippage
+
+        let result = pool.calculate_amount_in(
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            amount_out,
+            max_slippage_bps,
+            Network::Regtest,
+        );
+
+        assert!(result.is_ok());
+        let amount_in = result.unwrap();
+
+        // Expected calculation:
+        // amount_out_with_slippage = 100_000 * (100 + 10_000) / 10_000 = 101_000
+        // No output fees for B to A
+        // amount_in_before_input_fees = (10_000_000_000 * 101_000) / (1_000_000_000 - 101_000) ≈ 1_010_101.01
+        // input_fee_rate = (100 + 20) / 10_000 = 0.012
+        // amount_in = 1_010_101.01 * (1 + 0.012) ≈ 1_022_222.22
+        assert!(amount_in > 1_020_000 && amount_in < 1_025_000);
+    }
+
+    #[test]
+    fn test_calculate_amount_in_with_price_only() {
+        // Test using price when reserves are not available (A to B)
+        let pool = create_test_pool(
+            100, // 1% host fee
+            20,  // 0.2% LP fee
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            None,       // No reserve A
+            None,       // No reserve B
+            Some(10.0), // Price: 1 A = 10 B
+        );
+
+        let amount_out = 1_000_000; // Want 1M of asset B
+        let max_slippage_bps = 100; // 1% slippage
+
+        let result = pool.calculate_amount_in(
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            amount_out,
+            max_slippage_bps,
+            Network::Regtest,
+        );
+
+        assert!(result.is_ok());
+        let amount_in = result.unwrap();
+
+        // Expected calculation:
+        // amount_out_with_slippage = 1_000_000 * 1.01 = 1_010_000
+        // amount_out_before_output_fees = 1_010_000 * 1.01 = 1_020_100
+        // amount_in_before_input_fees = 1_020_100 * 10 = 10_201_000
+        // amount_in = 10_201_000 * 1.002 = 10_221_402
+        assert!(amount_in > 10_220_000 && amount_in < 10_222_000);
+    }
+
+    #[test]
+    fn test_calculate_amount_in_with_price_only_b_to_a() {
+        // Test using price when reserves are not available (B to A)
+        let pool = create_test_pool(
+            100, // 1% host fee
+            20,  // 0.2% LP fee
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            None,       // No reserve A
+            None,       // No reserve B
+            Some(10.0), // Price: 1 A = 10 B
+        );
+
+        let amount_out = 100_000; // Want 100K of asset A
+        let max_slippage_bps = 100; // 1% slippage
+
+        let result = pool.calculate_amount_in(
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            amount_out,
+            max_slippage_bps,
+            Network::Regtest,
+        );
+
+        assert!(result.is_ok());
+        let amount_in = result.unwrap();
+
+        // Expected calculation with fixed-point math (PRICE_SCALE = 10^9):
+        // amount_out_with_slippage = 100_000 * 1.01 = 101_000
+        // No output fees for B to A
+        // Inverse price scaled: (10^9 / 10.0) = 100_000_000
+        // amount_in_before_input_fees = (101_000 * 100_000_000 + 999_999_999) / 1_000_000_000 = 10_100
+        // input_fee_rate = (100 + 20) / 10_000 = 0.012
+        // amount_in = 10_100 * 1.012 = 10_221
+        assert!(amount_in > 10_220 && amount_in < 10_230);
+    }
+
+    #[test]
+    fn test_calculate_amount_in_with_realistic_btc_usd_price() {
+        // Test with realistic BTC/USD-like price (B to A swap with high price)
+        let pool = create_test_pool(
+            100, // 1% host fee
+            20,  // 0.2% LP fee
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            None,         // No reserve A
+            None,         // No reserve B
+            Some(1000.0), // Price: 1 A (BTC) = 1000 B (USD-like token)
+        );
+
+        let amount_out = 100_000; // Want 100K sats of BTC
+        let max_slippage_bps = 100; // 1% slippage
+
+        let result = pool.calculate_amount_in(
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            amount_out,
+            max_slippage_bps,
+            Network::Regtest,
+        );
+
+        assert!(result.is_ok());
+        let amount_in = result.unwrap();
+
+        // Expected calculation with improved precision for large price ratios:
+        // amount_out_with_slippage = 100_000 * 1.01 = 101_000
+        // No output fees for B to A
+        // Direct division: 101_000 / 1000 = 101
+        // input_fee_rate = (100 + 20) / 10_000 = 0.012
+        // amount_in = 101 * 1.012 ≈ 102.2
+        println!("BTC/USD test - amount_in: {amount_in} (for {amount_out} sats out)",);
+
+        // With improved precision handling, we get accurate results
+        assert!((102..=103).contains(&amount_in));
+    }
+
+    #[test]
+    fn test_calculate_amount_in_with_small_price_reversed() {
+        // Test with small price (reversed asset order: A to B with price 0.001)
+        // This tests the A→B multiplication path with a small price
+        let pool = create_test_pool(
+            100,                                                                  // 1% host fee
+            20,                                                                   // 0.2% LP fee
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca", // USD-like as asset_a
+            "020202020202020202020202020202020202020202020202020202020202020202", // BTC as asset_b
+            None,                                                               // No reserve A
+            None,                                                               // No reserve B
+            Some(0.001), // Price: 1 USD = 0.001 BTC (or 1 BTC = 1000 USD)
+        );
+
+        let amount_out = 100_000; // Want 100K sats of BTC (asset_b)
+        let max_slippage_bps = 100; // 1% slippage
+
+        // Swapping A→B (USD → BTC)
+        let result = pool.calculate_amount_in(
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            amount_out,
+            max_slippage_bps,
+            Network::Regtest,
+        );
+
+        assert!(result.is_ok());
+        let amount_in = result.unwrap();
+
+        // Expected calculation with A→B and price 0.001:
+        // amount_out_with_slippage = 100_000 * 1.01 = 101_000
+        // output_fee_bps = 100 (host fee applies to A→B)
+        // amount_out_before_output_fees = 101_000 * 1.01 = 102,010
+        // price_scaled = 0.001 * 10^9 = 1_000_000
+        // amount_in_before_input_fees = (102_010 * 1_000_000 + 999_999_999) / 10^9 ≈ 103
+        // input_fee_rate = 20 / 10_000 = 0.002 (only LP fee for A→B)
+        // amount_in = 103 * 1.002 ≈ 103.2
+        println!("Small price reversed - amount_in: {amount_in} (for {amount_out} sats out)",);
+
+        // With small price and A→B direction, we get a small amount_in
+        assert!((103..=104).contains(&amount_in));
+    }
+
+    #[test]
+    fn test_calculate_amount_in_zero_slippage() {
+        let pool = create_test_pool(
+            0,  // 0% host fee
+            20, // 0.2% LP fee
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            Some(1_000_000_000),
+            Some(10_000_000_000),
+            None,
+        );
+
+        let amount_out = 1_000_000;
+        let max_slippage_bps = 0; // 0% slippage
+
+        let result = pool.calculate_amount_in(
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            amount_out,
+            max_slippage_bps,
+            Network::Regtest,
+        );
+
+        assert!(result.is_ok());
+        let amount_in = result.unwrap();
+
+        // With 0 slippage, should be base calculation
+        assert!(amount_in > 100_000 && amount_in < 101_000);
+    }
+
+    #[test]
+    fn test_calculate_amount_in_high_slippage() {
+        let pool = create_test_pool(
+            100,
+            20,
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            Some(1_000_000_000),
+            Some(10_000_000_000),
+            None,
+        );
+
+        let amount_out = 1_000_000;
+        let max_slippage_bps = 1000; // 10% slippage
+
+        let result = pool.calculate_amount_in(
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            amount_out,
+            max_slippage_bps,
+            Network::Regtest,
+        );
+
+        assert!(result.is_ok());
+        let amount_in = result.unwrap();
+
+        // Higher slippage means more buffer needed
+        assert!(amount_in > 110_000);
+    }
+
+    #[test]
+    fn test_calculate_amount_in_no_fees() {
+        let pool = create_test_pool(
+            0, // 0% host fee
+            0, // 0% LP fee
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            Some(1_000_000_000),
+            Some(10_000_000_000),
+            None,
+        );
+
+        let amount_out = 1_000_000;
+        let max_slippage_bps = 100;
+
+        let result = pool.calculate_amount_in(
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            amount_out,
+            max_slippage_bps,
+            Network::Regtest,
+        );
+
+        assert!(result.is_ok());
+        let amount_in = result.unwrap();
+
+        // With no fees, calculation should be simpler
+        // amount_out_with_slippage = 1_010_000
+        // amount_in_before_input_fees ≈ 101_010.10
+        // No fees applied
+        assert!(amount_in > 101_000 && amount_in < 102_000);
+    }
+
+    #[test]
+    fn test_calculate_amount_in_error_no_data() {
+        let pool = create_test_pool(
+            100,
+            20,
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+            None, // No reserves
+            None,
+            None, // No price
+        );
+
+        let result = pool.calculate_amount_in(
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            1_000_000,
+            100,
+            Network::Regtest,
+        );
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), FlashnetError::Generic(_)));
+    }
+
+    #[test]
+    fn test_calculate_amount_in_real_world_values() {
+        // Test with realistic pool values
+        let pool = create_default_test_pool();
+
+        let amount_out = 10_000; // Want 10K sats
+        let max_slippage_bps = 500; // 5% slippage
+
+        let result = pool.calculate_amount_in(
+            "020202020202020202020202020202020202020202020202020202020202020202",
+            amount_out,
+            max_slippage_bps,
+            Network::Regtest,
+        );
+
+        assert!(result.is_ok());
+        let amount_in = result.unwrap();
+
+        // Should return a reasonable amount
+        assert!(amount_in > 0);
     }
 }
