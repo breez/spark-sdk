@@ -1,20 +1,21 @@
+use std::sync::Arc;
+use breez_sdk_spark::signer::ExternalSigner;
 use breez_sdk_spark::*;
 
 // ANCHOR: default-external-signer
 fn create_signer() -> Result<Arc<dyn ExternalSigner>, SdkError> {
     let mnemonic = "<mnemonic words>".to_string();
     let network = Network::Mainnet;
-    let key_set_type = KeySetType::Default;
-    let use_address_index = false;
-    let account_number = Some(0);
     
     let signer = default_external_signer(
         mnemonic,
         None, // passphrase
         network,
-        key_set_type,
-        use_address_index,
-        account_number,
+        Some(KeySetConfig {
+            key_set_type: KeySetType::Default,
+            use_address_index: false,
+            account_number: Some(0),
+        }),
     )?;
     
     Ok(signer)
@@ -22,7 +23,7 @@ fn create_signer() -> Result<Arc<dyn ExternalSigner>, SdkError> {
 // ANCHOR_END: default-external-signer
 
 // ANCHOR: connect-with-signer
-async fn connect_with_signer() -> Result<BreezSdk, SdkError> {
+async fn connect_example() -> Result<BreezSdk, SdkError> {
     // Create the signer
     let signer = default_external_signer(
         "<mnemonic words>".to_string(),
