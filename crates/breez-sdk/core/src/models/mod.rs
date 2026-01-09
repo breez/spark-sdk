@@ -238,12 +238,16 @@ pub enum PaymentDetails {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         /// The HTLC transfer details if the payment fulfilled an HTLC transfer
         htlc_details: Option<SparkHtlcDetails>,
+        /// The information for a token conversion
+        token_conversion_info: Option<TokenConversionInfo>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         /// The invoice details if the payment fulfilled a spark invoice
         invoice_details: Option<SparkInvoicePaymentDetails>,
+        /// The information for a token conversion
+        token_conversion_info: Option<TokenConversionInfo>,
     },
     Lightning {
         /// Represents the invoice description
@@ -921,6 +925,23 @@ pub struct SendPaymentResponse {
     pub payment: Payment,
 }
 
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PaymentDetailsFilter {
+    Spark {
+        /// Filter specific Spark HTLC statuses
+        htlc_status: Option<Vec<SparkHtlcStatus>>,
+        /// Filter conversion payments with refund information
+        conversion_refund_needed: Option<bool>,
+    },
+    Token {
+        /// Filter conversion payments with refund information
+        conversion_refund_needed: Option<bool>,
+        /// Filter by transaction hash
+        tx_hash: Option<String>,
+    },
+}
+
 /// Request to list payments with optional filters and pagination
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -931,9 +952,9 @@ pub struct ListPaymentsRequest {
     pub status_filter: Option<Vec<PaymentStatus>>,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub asset_filter: Option<AssetFilter>,
-    /// Only include payments with specific Spark HTLC statuses
+    /// Only include payments matching at least one of these payment details filters
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub spark_htlc_status_filter: Option<Vec<SparkHtlcStatus>>,
+    pub payment_details_filter: Option<Vec<PaymentDetailsFilter>>,
     /// Only include payments created after this timestamp (inclusive)
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub from_timestamp: Option<u64>,
@@ -1178,4 +1199,18 @@ pub struct OptimizationProgress {
     pub is_running: bool,
     pub current_round: u32,
     pub total_rounds: u32,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TokenConversionInfo {
+    /// The pool id associated with the conversion
+    pub pool_id: String,
+    /// The receiving payment id associated with the conversion
+    pub payment_id: Option<String>,
+    /// The fee paid for the conversion
+    /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
+    pub fee: Option<u128>,
+    /// The refund payment id if a refund payment was made
+    pub refund_identifier: Option<String>,
 }
