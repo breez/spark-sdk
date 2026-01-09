@@ -176,6 +176,12 @@ pub enum Command {
         completion_timeout_secs: Option<u32>,
     },
 
+    /// Authenticate using LNURL
+    LnurlAuth {
+        /// LNURL-auth endpoint
+        lnurl: String,
+    },
+
     /// Claim an HTLC payment
     ClaimHtlcPayment {
         /// The preimage of the HTLC (hex string)
@@ -624,6 +630,27 @@ pub(crate) async fn execute_command(
                 }
                 _ => Err(anyhow::anyhow!("Invalid input")),
             }?;
+
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::LnurlAuth { lnurl } => {
+            let input = sdk.parse(&lnurl).await?;
+            let res = match input {
+                InputType::LnurlAuth(auth_request) => {
+                    let action = auth_request.action.as_deref().unwrap_or("auth");
+                    let prompt = format!(
+                        "Authenticate with {} (action: {})? (y/n): ",
+                        auth_request.domain, action
+                    );
+                    let line = rl.readline_with_initial(&prompt, ("y", ""))?.to_lowercase();
+                    if line != "y" {
+                        return Ok(true);
+                    }
+                    sdk.lnurl_auth(auth_request).await?
+                }
+                _ => return Err(anyhow::anyhow!("Invalid input: expected LNURL-auth")),
+            };
 
             print_value(&res)?;
             Ok(true)
