@@ -202,6 +202,29 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
     Ok(sdk)
 }
 
+/// Connects to the Spark network using an external signer.
+///
+/// This method allows using a custom signer implementation instead of providing
+/// a seed directly.
+///
+/// # Arguments
+///
+/// * `request` - The connection request object with external signer
+///
+/// # Returns
+///
+/// Result containing either the initialized `BreezSdk` or an `SdkError`
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+pub async fn connect_with_signer(
+    request: crate::ConnectWithSignerRequest,
+) -> Result<BreezSdk, SdkError> {
+    let builder = super::sdk_builder::SdkBuilder::new_with_signer(request.config, request.signer)
+        .with_default_storage(request.storage_dir);
+    let sdk = builder.build().await?;
+    Ok(sdk)
+}
+
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn default_config(network: Network) -> Config {
     let lnurl_domain = match network {
@@ -224,6 +247,44 @@ pub fn default_config(network: Network) -> Config {
             multiplicity: 1,
         },
     }
+}
+
+/// Creates a default external signer from a mnemonic.
+///
+/// This is a convenience factory method for creating a signer that can be used
+/// with `connect_with_signer` or `SdkBuilder::new_with_signer`.
+///
+/// # Arguments
+///
+/// * `mnemonic` - BIP39 mnemonic phrase (12 or 24 words)
+/// * `passphrase` - Optional passphrase for the mnemonic
+/// * `network` - Network to use (Mainnet or Regtest)
+/// * `key_set_config` - Optional key set configuration. If None, uses default configuration.
+///
+/// # Returns
+///
+/// Result containing the signer as `Arc<dyn ExternalSigner>`
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub fn default_external_signer(
+    mnemonic: String,
+    passphrase: Option<String>,
+    network: Network,
+    key_set_config: Option<crate::models::KeySetConfig>,
+) -> Result<Arc<dyn crate::signer::ExternalSigner>, SdkError> {
+    use crate::signer::DefaultExternalSigner;
+
+    let config = key_set_config.unwrap_or_default();
+    let signer = DefaultExternalSigner::new(
+        mnemonic,
+        passphrase,
+        network,
+        config.key_set_type,
+        config.use_address_index,
+        config.account_number,
+    )?;
+
+    Ok(Arc::new(signer))
 }
 
 pub(crate) struct BreezSdkParams {

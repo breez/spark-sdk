@@ -383,7 +383,7 @@ impl DefaultSigner {
     }
 }
 
-#[async_trait::async_trait]
+#[macros::async_trait]
 impl Signer for DefaultSigner {
     async fn sign_message_ecdsa_with_identity_key(
         &self,

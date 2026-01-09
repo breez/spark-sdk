@@ -42,9 +42,42 @@ pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
     Ok(sdk)
 }
 
+#[wasm_bindgen(js_name = "connectWithSigner")]
+pub async fn connect_with_signer(
+    config: Config,
+    signer: crate::signer::JsExternalSigner,
+    storage_dir: String,
+) -> WasmResult<BreezSdk> {
+    let builder = SdkBuilder::new_with_signer(config, signer)
+        .with_default_storage(storage_dir)
+        .await?;
+    let sdk = builder.build().await?;
+    Ok(sdk)
+}
+
 #[wasm_bindgen(js_name = "defaultConfig")]
 pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network.into()).into()
+}
+
+/// Creates a default external signer from a mnemonic phrase.
+///
+/// This creates a signer that can be used with `connectWithDefaultSigner` or `SdkBuilder.newWithDefaultSigner`.
+#[wasm_bindgen(js_name = "defaultExternalSigner")]
+pub fn default_external_signer(
+    mnemonic: String,
+    passphrase: Option<String>,
+    network: Network,
+    key_set_config: Option<crate::models::KeySetConfig>,
+) -> WasmResult<crate::signer::DefaultSigner> {
+    let signer = breez_sdk_spark::default_external_signer(
+        mnemonic,
+        passphrase,
+        network.into(),
+        key_set_config.map(|k| k.into()),
+    )?;
+
+    Ok(crate::signer::DefaultSigner::new(signer))
 }
 
 #[wasm_bindgen]

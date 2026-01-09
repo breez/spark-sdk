@@ -52,6 +52,7 @@ web-time.workspace = true
 x509-parser = { version = "0.16.0" }
 anyhow.workspace = true
 frost-secp256k1-tr = { workspace = true }
+k256 = { workspace = true, features = ["arithmetic"] }
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]

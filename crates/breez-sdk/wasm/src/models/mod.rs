@@ -107,6 +107,13 @@ pub enum KeySetType {
     Legacy,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::KeySetConfig)]
+pub struct KeySetConfig {
+    pub key_set_type: KeySetType,
+    pub use_address_index: bool,
+    pub account_number: Option<u32>,
+}
+
 #[derive(Clone)]
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Seed)]
 pub enum Seed {
