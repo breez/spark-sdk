@@ -69,6 +69,39 @@ impl SchnorrSignatureBytes {
     }
 }
 
+/// FFI-safe representation of a recoverable ECDSA signature (65 bytes: 1 recovery byte + 64 signature bytes)
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RecoverableEcdsaSignatureBytes {
+    pub bytes: Vec<u8>,
+}
+
+impl RecoverableEcdsaSignatureBytes {
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+}
+
+/// FFI-safe representation of a private key (32 bytes)
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PrivateKeyBytes {
+    pub bytes: Vec<u8>,
+}
+
+impl PrivateKeyBytes {
+    pub fn from_secret_key(sk: &secp256k1::SecretKey) -> Self {
+        Self {
+            bytes: sk.secret_bytes().to_vec(),
+        }
+    }
+
+    pub fn to_secret_key(&self) -> Result<secp256k1::SecretKey, SdkError> {
+        secp256k1::SecretKey::from_slice(&self.bytes)
+            .map_err(|e| SdkError::Generic(format!("Invalid private key bytes: {e}")))
+    }
+}
+
 /// Helper functions for `DerivationPath` string conversion
 pub fn derivation_path_to_string(path: &DerivationPath) -> String {
     path.to_string()

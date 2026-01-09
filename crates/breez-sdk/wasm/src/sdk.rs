@@ -62,7 +62,7 @@ pub fn default_config(network: Network) -> Config {
 
 /// Creates a default external signer from a mnemonic phrase.
 ///
-/// This creates a signer that can be used with `connectWithDefaultSigner` or `SdkBuilder.newWithDefaultSigner`.
+/// This creates a signer that can be used with `connectWithSigner` or `SdkBuilder.newWithSigner`.
 #[wasm_bindgen(js_name = "defaultExternalSigner")]
 pub fn default_external_signer(
     mnemonic: String,

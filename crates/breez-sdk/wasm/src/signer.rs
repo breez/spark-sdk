@@ -208,6 +208,7 @@ impl DefaultSigner {
         self.inner
             .sign_ecdsa_recoverable(message, path)
             .await
+            .map(|sig| sig.bytes)
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
@@ -289,6 +290,7 @@ impl DefaultSigner {
         self.inner
             .get_static_deposit_private_key(index)
             .await
+            .map(|k| k.bytes)
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
@@ -413,7 +415,7 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
         &self,
         message: Vec<u8>,
         path: String,
-    ) -> Result<Vec<u8>, SignerError> {
+    ) -> Result<core_types::RecoverableEcdsaSignatureBytes, SignerError> {
         self.inner.sign_ecdsa_recoverable(message, path).await
     }
 
@@ -461,7 +463,10 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
             .await
     }
 
-    async fn get_static_deposit_private_key(&self, index: u32) -> Result<Vec<u8>, SignerError> {
+    async fn get_static_deposit_private_key(
+        &self,
+        index: u32,
+    ) -> Result<core_types::PrivateKeyBytes, SignerError> {
         self.inner.get_static_deposit_private_key(index).await
     }
 
@@ -576,7 +581,7 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         &self,
         message: Vec<u8>,
         path: String,
-    ) -> Result<Vec<u8>, SignerError> {
+    ) -> Result<core_types::RecoverableEcdsaSignatureBytes, SignerError> {
         let promise = self
             .inner
             .sign_ecdsa_recoverable(message, path)
@@ -585,12 +590,13 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         let result = future
             .await
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
-        serde_wasm_bindgen::from_value(result).map_err(|e| {
+        let bytes: Vec<u8> = serde_wasm_bindgen::from_value(result).map_err(|e| {
             SignerError::Generic(format!(
                 "Failed to deserialize recoverable signature: {}",
                 e
             ))
-        })
+        })?;
+        Ok(core_types::RecoverableEcdsaSignatureBytes::new(bytes))
     }
 
     async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
@@ -714,7 +720,10 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(wasm_source.into())
     }
 
-    async fn get_static_deposit_private_key(&self, index: u32) -> Result<Vec<u8>, SignerError> {
+    async fn get_static_deposit_private_key(
+        &self,
+        index: u32,
+    ) -> Result<core_types::PrivateKeyBytes, SignerError> {
         let promise = self
             .inner
             .get_static_deposit_private_key(index)
@@ -723,8 +732,10 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         let result = future
             .await
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
-        serde_wasm_bindgen::from_value(result)
-            .map_err(|e| SignerError::Generic(format!("Failed to deserialize private key: {}", e)))
+        let bytes: Vec<u8> = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            SignerError::Generic(format!("Failed to deserialize private key: {}", e))
+        })?;
+        Ok(core_types::PrivateKeyBytes { bytes })
     }
 
     async fn get_static_deposit_public_key(

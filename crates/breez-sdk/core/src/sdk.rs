@@ -279,7 +279,6 @@ pub fn default_config(network: Network) -> Config {
 ///
 /// Result containing the signer as `Arc<dyn ExternalSigner>`
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub fn default_external_signer(
     mnemonic: String,
     passphrase: Option<String>,

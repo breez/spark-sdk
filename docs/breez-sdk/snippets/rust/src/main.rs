@@ -15,6 +15,7 @@ mod send_payment;
 mod tokens;
 mod user_settings;
 mod optimize;
+mod external_signer;
 
 use anyhow::Result;
 

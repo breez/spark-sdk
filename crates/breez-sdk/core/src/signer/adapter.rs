@@ -69,14 +69,16 @@ impl BreezSigner for ExternalSignerAdapter {
         path: &DerivationPath,
     ) -> Result<Vec<u8>, SdkError> {
         let path_str = derivation_path_to_string(path);
-        self.external
+        let sig_bytes = self
+            .external
             .sign_ecdsa_recoverable(message.to_vec(), path_str)
             .await
             .map_err(|e| {
                 SdkError::Signer(format!(
                     "External signer sign_ecdsa_recoverable failed: {e}"
                 ))
-            })
+            })?;
+        Ok(sig_bytes.bytes)
     }
 
     async fn ecies_encrypt(
@@ -188,14 +190,8 @@ impl BreezSigner for ExternalSignerAdapter {
                 ))
             })?;
 
-        if key_bytes.len() != 32 {
-            return Err(SdkError::Signer(format!(
-                "Invalid private key length: expected 32 bytes, got {}",
-                key_bytes.len()
-            )));
-        }
-
-        secp256k1::SecretKey::from_slice(&key_bytes)
+        key_bytes
+            .to_secret_key()
             .map_err(|e| SdkError::Signer(format!("Invalid private key bytes: {e}")))
     }
 

@@ -4,7 +4,8 @@ use super::external_types::{
     EcdsaSignatureBytes, ExternalAggregateFrostRequest, ExternalEncryptedPrivateKey,
     ExternalFrostCommitments, ExternalFrostSignature, ExternalFrostSignatureShare,
     ExternalPrivateKeySource, ExternalSecretToSplit, ExternalSignFrostRequest, ExternalTreeNodeId,
-    ExternalVerifiableSecretShare, PublicKeyBytes, SchnorrSignatureBytes,
+    ExternalVerifiableSecretShare, PrivateKeyBytes, PublicKeyBytes, RecoverableEcdsaSignatureBytes,
+    SchnorrSignatureBytes,
 };
 
 /// External signer trait that can be implemented by users and passed to the SDK.
@@ -59,7 +60,7 @@ pub trait ExternalSigner: Send + Sync {
         &self,
         message: Vec<u8>,
         path: String,
-    ) -> Result<Vec<u8>, SignerError>;
+    ) -> Result<RecoverableEcdsaSignatureBytes, SignerError>;
 
     /// Encrypts a message using ECIES at the given derivation path.
     ///
@@ -140,7 +141,10 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// The 32-byte private key, or an error string
-    async fn get_static_deposit_private_key(&self, index: u32) -> Result<Vec<u8>, SignerError>;
+    async fn get_static_deposit_private_key(
+        &self,
+        index: u32,
+    ) -> Result<PrivateKeyBytes, SignerError>;
 
     /// Gets a static deposit public key by index.
     ///

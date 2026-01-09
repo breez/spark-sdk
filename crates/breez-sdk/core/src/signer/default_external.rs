@@ -1,12 +1,12 @@
 use crate::error::SignerError;
-#[cfg(all(test, not(target_family = "wasm")))]
+#[cfg(test)]
 use crate::signer::external_types::derivation_path_to_string;
 use crate::signer::external_types::{
     EcdsaSignatureBytes, ExternalAggregateFrostRequest, ExternalEncryptedPrivateKey,
     ExternalFrostCommitments, ExternalFrostSignature, ExternalFrostSignatureShare,
     ExternalPrivateKeySource, ExternalSecretToSplit, ExternalSignFrostRequest, ExternalTreeNodeId,
-    ExternalVerifiableSecretShare, PublicKeyBytes, SchnorrSignatureBytes,
-    string_to_derivation_path,
+    ExternalVerifiableSecretShare, PrivateKeyBytes, PublicKeyBytes, RecoverableEcdsaSignatureBytes,
+    SchnorrSignatureBytes, string_to_derivation_path,
 };
 use crate::signer::{BreezSigner, ExternalSigner, breez::BreezSignerImpl};
 use crate::{Network, SdkError, Seed, default_config, models::KeySetType};
@@ -95,13 +95,15 @@ impl ExternalSigner for DefaultExternalSigner {
         &self,
         message: Vec<u8>,
         path: String,
-    ) -> Result<Vec<u8>, SignerError> {
+    ) -> Result<RecoverableEcdsaSignatureBytes, SignerError> {
         let derivation_path =
             string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
-        self.inner
+        let bytes = self
+            .inner
             .sign_ecdsa_recoverable(&message, &derivation_path)
             .await
-            .map_err(|e| SignerError::Generic(e.to_string()))
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        Ok(RecoverableEcdsaSignatureBytes::new(bytes))
     }
 
     async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
@@ -187,13 +189,16 @@ impl ExternalSigner for DefaultExternalSigner {
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_private_key(&self, index: u32) -> Result<Vec<u8>, SignerError> {
+    async fn get_static_deposit_private_key(
+        &self,
+        index: u32,
+    ) -> Result<PrivateKeyBytes, SignerError> {
         let secret = self
             .inner
             .get_static_deposit_private_key(index)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
-        Ok(secret.secret_bytes().to_vec())
+        Ok(PrivateKeyBytes::from_secret_key(&secret))
     }
 
     async fn get_static_deposit_public_key(
@@ -322,11 +327,8 @@ impl ExternalSigner for DefaultExternalSigner {
 mod tests {
     use super::*;
     use crate::models::KeySetType;
-    #[cfg(not(target_family = "wasm"))]
     use bitcoin::bip32::DerivationPath;
-    #[cfg(not(target_family = "wasm"))]
     use bitcoin::hashes::Hash;
-    #[cfg(not(target_family = "wasm"))]
     use std::str::FromStr;
 
     fn create_test_signer() -> (DefaultExternalSigner, BreezSignerImpl) {
@@ -377,8 +379,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    #[tokio::test]
+    #[macros::async_test_all]
     async fn test_derive_public_key() {
         let (external, internal) = create_test_signer();
 
@@ -395,8 +396,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    #[tokio::test]
+    #[macros::async_test_all]
     async fn test_sign_ecdsa() {
         let (external, internal) = create_test_signer();
 
@@ -417,8 +417,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    #[tokio::test]
+    #[macros::async_test_all]
     async fn test_sign_ecdsa_recoverable() {
         let (external, internal) = create_test_signer();
 
@@ -436,13 +435,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            external_sig, internal_sig,
+            external_sig.bytes, internal_sig,
             "Recoverable ECDSA signatures should match"
         );
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    #[tokio::test]
+    #[macros::async_test_all]
     async fn test_ecies_encrypt_decrypt() {
         let (external, internal) = create_test_signer();
 
@@ -477,8 +475,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    #[tokio::test]
+    #[macros::async_test_all]
     async fn test_sign_hash_schnorr() {
         use bitcoin::secp256k1::{Message, XOnlyPublicKey};
 
@@ -521,8 +518,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    #[tokio::test]
+    #[macros::async_test_all]
     async fn test_get_public_key_for_node() {
         let (external, internal) = create_test_signer();
 
@@ -542,8 +538,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    #[tokio::test]
+    #[macros::async_test_all]
     async fn test_generate_random_key() {
         let (external, _internal) = create_test_signer();
 
@@ -569,8 +564,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    #[tokio::test]
+    #[macros::async_test_all]
     async fn test_get_static_deposit_keys() {
         let (external, internal) = create_test_signer();
 
@@ -607,7 +601,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            ext_secret_key,
+            ext_secret_key.bytes,
             int_secret_key.secret_bytes().to_vec(),
             "Static deposit private keys should match"
         );
@@ -623,8 +617,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    #[tokio::test]
+    #[macros::async_test_all]
     async fn test_get_public_key_from_private_key_source() {
         let (external, internal) = create_test_signer();
 
@@ -651,8 +644,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    #[tokio::test]
+    #[macros::async_test_all]
     async fn test_sign_frost() {
         use std::collections::BTreeMap;
 
