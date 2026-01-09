@@ -11,7 +11,7 @@ import {
 import { Network } from 'node:inspector'
 
 // Init stub
-const init = async () => {}
+const init = async () => { }
 
 const getTokenIssuer = (sdk: BreezSdk) => {
   // ANCHOR: get-token-issuer
@@ -48,7 +48,11 @@ const createTokenWithCustomAccountNumber = async () => {
   builder = await builder.withDefaultStorage('./.data')
 
   // Set the account number for the SDK
-  builder = builder.withKeySet('default', false, accountNumber)
+  builder = builder.withKeySet({
+    keySetType: 'default',
+    useAddressIndex: false,
+    accountNumber: accountNumber
+  })
 
   const sdk = await builder.build()
   // ANCHOR_END: custom-account-number

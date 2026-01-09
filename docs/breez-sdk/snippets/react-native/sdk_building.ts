@@ -29,7 +29,7 @@ const exampleGettingStartedAdvanced = async () => {
   // await builder.withRealTimeSyncStorage(<your real-time sync storage implementation>)
   // await builder.withChainService(<your chain service implementation>)
   // await builder.withRestClient(<your rest client implementation>)
-  // await builder.withKeySet(<your key set type>, <use address index>, <account number>)
+  // await builder.withKeySet({ keySetType: <your key set type>, useAddressIndex: <use address index>, accountNumber: <account number> })
   // await builder.withPaymentObserver(<your payment observer implementation>)
   const sdk = await builder.build()
   // ANCHOR_END: init-sdk-advanced
