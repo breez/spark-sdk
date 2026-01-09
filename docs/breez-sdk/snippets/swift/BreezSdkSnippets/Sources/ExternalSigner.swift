@@ -6,17 +6,16 @@ class ExternalSignerSnippets {
     func createSigner() throws -> ExternalSigner {
         let mnemonic = "<mnemonic words>"
         let network = Network.mainnet
-        let keySetType = KeySetType.default
-        let useAddressIndex = false
-        let accountNumber: UInt32 = 0
         
         let signer = try defaultExternalSigner(
             mnemonic: mnemonic,
             passphrase: nil,
             network: network,
-            keySetType: keySetType,
-            useAddressIndex: useAddressIndex,
-            accountNumber: accountNumber
+            keySetConfig: KeySetConfig(
+                keySetType: KeySetType.default,
+                useAddressIndex: false,
+                accountNumber: 0
+            )
         )
         
         return signer
@@ -24,7 +23,7 @@ class ExternalSignerSnippets {
     // ANCHOR_END: default-external-signer
     
     // ANCHOR: connect-with-signer
-    func connectWithSigner() async throws -> BreezSdk {
+    func connectExample() async throws -> BreezSdk {
         // Create the signer
         let signer = try! defaultExternalSigner(
             mnemonic: "<mnemonic words>",
@@ -43,7 +42,7 @@ class ExternalSignerSnippets {
         config.apiKey = "<breez api key>"
         
         // Connect using the external signer
-        let sdk = try await connectWithSigner(request: ConnectWithSignerRequest(
+        let sdk = try await BreezSdkSpark.connectWithSigner(request: ConnectWithSignerRequest(
             config: config,
             signer: signer,
             storageDir: "./.data"
