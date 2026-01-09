@@ -40,6 +40,7 @@ pub enum _SdkError {
         vout: u32,
     },
     LnurlError(String),
+    Signer(String),
     Generic(String),
 }
 
