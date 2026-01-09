@@ -49,6 +49,30 @@ impl EcdsaSignatureBytes {
     }
 }
 
+/// FFI-safe representation of a recoverable ECDSA signature (65 bytes)
+///
+/// Format: recovery ID (1 byte, value 31 + recovery_id) followed by 64-byte compact signature.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RecoverableEcdsaSignatureBytes {
+    pub bytes: Vec<u8>,
+}
+
+impl RecoverableEcdsaSignatureBytes {
+    /// Creates a new `RecoverableEcdsaSignatureBytes` from raw bytes.
+    ///
+    /// Expected format: 65 bytes where first byte is recovery ID (31 + recovery_id)
+    /// followed by 64-byte compact signature.
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    /// Returns the raw bytes of the recoverable signature.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.bytes.clone()
+    }
+}
+
 /// FFI-safe representation of a Schnorr signature (64 bytes)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

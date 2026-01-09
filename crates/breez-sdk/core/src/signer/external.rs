@@ -4,7 +4,8 @@ use super::external_types::{
     EcdsaSignatureBytes, ExternalAggregateFrostRequest, ExternalEncryptedPrivateKey,
     ExternalFrostCommitments, ExternalFrostSignature, ExternalFrostSignatureShare,
     ExternalPrivateKeySource, ExternalSecretToSplit, ExternalSignFrostRequest, ExternalTreeNodeId,
-    ExternalVerifiableSecretShare, PublicKeyBytes, SchnorrSignatureBytes,
+    ExternalVerifiableSecretShare, PublicKeyBytes, RecoverableEcdsaSignatureBytes,
+    SchnorrSignatureBytes,
 };
 
 /// External signer trait that can be implemented by users and passed to the SDK.
@@ -59,7 +60,7 @@ pub trait ExternalSigner: Send + Sync {
         &self,
         message: Vec<u8>,
         path: String,
-    ) -> Result<Vec<u8>, SignerError>;
+    ) -> Result<RecoverableEcdsaSignatureBytes, SignerError>;
 
     /// Encrypts a message using ECIES at the given derivation path.
     ///

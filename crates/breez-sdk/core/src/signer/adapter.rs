@@ -69,14 +69,16 @@ impl BreezSigner for ExternalSignerAdapter {
         path: &DerivationPath,
     ) -> Result<Vec<u8>, SdkError> {
         let path_str = derivation_path_to_string(path);
-        self.external
+        let sig = self
+            .external
             .sign_ecdsa_recoverable(message.to_vec(), path_str)
             .await
             .map_err(|e| {
                 SdkError::Signer(format!(
                     "External signer sign_ecdsa_recoverable failed: {e}"
                 ))
-            })
+            })?;
+        Ok(sig.to_bytes())
     }
 
     async fn ecies_encrypt(
