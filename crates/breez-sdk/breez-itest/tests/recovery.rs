@@ -29,8 +29,8 @@ use tracing::{info, warn};
 /// Expected payments specification for recovery testing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExpectedRecoveryPayments {
-    /// Minimum balance expected after recovery
-    pub min_balance_sats: u64,
+    /// Expected balance after recovery
+    pub balance_sats: u64,
     /// Expected payments to verify
     pub payments: Vec<ExpectedPayment>,
 }
@@ -111,10 +111,7 @@ fn recovery_test_config() -> Option<RecoveryTestConfig> {
 ///
 /// This captures all payment details after they are finalized, ensuring
 /// timestamps and other details are stable for assertion.
-fn build_expected_payments(
-    payments: &[Payment],
-    min_balance_sats: u64,
-) -> ExpectedRecoveryPayments {
+fn build_expected_payments(payments: &[Payment], balance_sats: u64) -> ExpectedRecoveryPayments {
     let expected_payments: Vec<ExpectedPayment> = payments
         .iter()
         .map(|p| {
@@ -161,7 +158,7 @@ fn build_expected_payments(
         .collect();
 
     ExpectedRecoveryPayments {
-        min_balance_sats,
+        balance_sats,
         payments: expected_payments,
     }
 }
@@ -326,7 +323,6 @@ async fn test_setup_recovery_wallet() -> Result<()> {
 
     // Bob claims the HTLC
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     bob.sdk
         .claim_htlc_payment(ClaimHtlcPaymentRequest {
@@ -364,7 +360,6 @@ async fn test_setup_recovery_wallet() -> Result<()> {
 
     // Alice claims the HTLC
     alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     alice
         .sdk
@@ -475,7 +470,6 @@ async fn test_setup_recovery_wallet() -> Result<()> {
 
     // Bob sends tokens back to Alice
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let prepare = bob
         .sdk
@@ -687,11 +681,10 @@ async fn test_wallet_recovery_from_mnemonic() -> Result<()> {
 
     info!("Recovered balance: {} sats", info.balance_sats);
 
-    assert!(
-        info.balance_sats >= config.expected.min_balance_sats,
-        "Balance {} < expected minimum {}",
-        info.balance_sats,
-        config.expected.min_balance_sats
+    assert_eq!(
+        info.balance_sats, config.expected.balance_sats,
+        "Balance {} != expected {}",
+        info.balance_sats, config.expected.balance_sats
     );
 
     // 6. List payments
@@ -702,6 +695,14 @@ async fn test_wallet_recovery_from_mnemonic() -> Result<()> {
         .payments;
 
     info!("Recovered {} payments", payments.len());
+
+    assert_eq!(
+        payments.len(),
+        config.expected.payments.len(),
+        "Payment count {} != expected {}",
+        payments.len(),
+        config.expected.payments.len()
+    );
 
     // 7. Verify each expected payment exists with matching attributes
     for expected in &config.expected.payments {
