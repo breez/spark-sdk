@@ -5,7 +5,7 @@
 
 Once the SDK is initialized, you can directly begin receiving payments. The SDK currently supports three methods of receiving: Lightning, Bitcoin and Spark.
 
-### Lightning
+## Lightning
 
 #### BOLT11 invoice
 
@@ -21,7 +21,7 @@ To receive via LNURL-Pay and/or a Lightning address, follow [these instructions]
 
 > Note: Lightning payments work in Spark even if the receiver is offline. To understand how it works under the hood, read [this](https://docs.spark.money/learn/lightning).
 
-### Bitcoin
+## Bitcoin
 
 For on-chain payments you can use the static Bitcoin address to receive payments.
 
@@ -29,7 +29,7 @@ The SDK monitors the specified address for new UTXOs and automatically initiates
 
 {{#tabs receive_payment:receive-payment-onchain}}
 
-### Spark
+## Spark
 
 For payments between Spark users, you can use a Spark address or generate a Spark invoice to receive payments.
 
@@ -53,14 +53,14 @@ Once a receive payment is initiated, you can follow and react to the different p
 | ---------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | **Synced** | The SDK has synced payments in the background. | Update the payments list and balance. See [listing payments](/guide/list_payments.md) and [fetching the balance](/guide/get_info.md). |
 
-### Lightning
+#### Lightning
 
 | Event                | Description                                                       | UX Suggestion                                    |
 | -------------------- | ----------------------------------------------------------------- | ------------------------------------------------ |
 | **PaymentPending**   | The Spark transfer was detected and the claim process will start. | Show payment as pending.                         |
 | **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete.        | Update the balance and show payment as complete. |
 
-### Bitcoin
+#### Bitcoin
 
 | Event                 | Description                                                                                                                                                                                               | UX Suggestion                                                                                                    |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
@@ -69,7 +69,7 @@ Once a receive payment is initiated, you can follow and react to the different p
 | **PaymentPending**    | The Spark transfer was detected and the claim process will start.                                                                                                                                         | Show payment as pending.                                                                                         |
 | **PaymentSucceeded**  | The Spark transfer is claimed and the payment is complete.                                                                                                                                                | Update the balance and show payment as complete.                                                                 |
 
-### Spark
+#### Spark
 
 | Event                | Description                                                                                                                                                                                          | UX Suggestion                                    |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |

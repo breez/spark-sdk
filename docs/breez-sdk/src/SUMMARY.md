@@ -11,7 +11,6 @@
   - [Fetching the balance](guide/get_info.md)
   - [Listening to events](guide/events.md)
   - [Adding logging](guide/logging.md)
-  - [Custom configuration](guide/config.md)
 - [Payment fundamentals](guide/payments.md)
   - [Parsing inputs](guide/parse.md)
   - [Receiving payments](guide/receive_payment.md)
@@ -30,7 +29,8 @@
   - [Token payments](guide/token_payments.md)
   - [Issuing tokens](guide/issuing_tokens.md)
 - [Advanced features](guide/advanced.md)
-  - [Spark HTLC payments](guide/htlcs.md)
+  - [Custom configuration](guide/config.md)
+  - [Spark HTLC Payments](guide/htlcs.md)
   - [Custom leaf optimization](guide/optimize.md)
 - [Moving to production](guide/moving_to_production.md)
 
