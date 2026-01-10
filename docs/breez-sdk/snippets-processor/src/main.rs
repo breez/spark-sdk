@@ -51,13 +51,6 @@ fn handle_supports(pre: &dyn Preprocessor, sub_args: &ArgMatches) -> Result<()> 
 /// Preprocess `book` using `pre` and print it out.
 fn handle_preprocessing(pre: &dyn Preprocessor) -> Result<()> {
     let input = io::read_to_string(io::stdin())?;
-    eprintln!("DEBUG: Input JSON length: {}", input.len());
-    if input.len() >= 147 {
-        eprintln!(
-            "DEBUG: Characters around column 147: {:?}",
-            &input[140..min(157, input.len())]
-        );
-    }
     let (ctx, book) = CmdPreprocessor::parse_input(input.as_bytes())?;
     check_mdbook_version(&ctx.mdbook_version);
 
