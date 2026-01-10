@@ -51,7 +51,7 @@ const createTokenWithCustomAccountNumber = async () => {
   builder = builder.withKeySet({
     keySetType: 'default',
     useAddressIndex: false,
-    accountNumber: accountNumber
+    accountNumber
   })
 
   const sdk = await builder.build()

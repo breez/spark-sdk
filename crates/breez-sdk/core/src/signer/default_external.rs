@@ -15,7 +15,6 @@ use crate::{Network, SdkError, Seed, default_config, models::KeySetType};
 ///
 /// This provides a reference implementation and allows users to easily create a signer
 /// from a mnemonic without implementing the trait themselves.
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub struct DefaultExternalSigner {
     inner: BreezSignerImpl,
 }
@@ -365,7 +364,7 @@ mod tests {
         (external, internal)
     }
 
-    #[test]
+    #[macros::test_all]
     fn test_identity_public_key() {
         let (external, internal) = create_test_signer();
 

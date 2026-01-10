@@ -50,21 +50,12 @@ fn handle_supports(pre: &dyn Preprocessor, sub_args: &ArgMatches) -> Result<()> 
 
 /// Preprocess `book` using `pre` and print it out.
 fn handle_preprocessing(pre: &dyn Preprocessor) -> Result<()> {
-    let input = io::read_to_string(io::stdin())?;
-    let (ctx, book) = CmdPreprocessor::parse_input(input.as_bytes())?;
+    let (ctx, book) = CmdPreprocessor::parse_input(io::stdin())?;
     check_mdbook_version(&ctx.mdbook_version);
 
     let processed_book = pre.run(&ctx, book)?;
     serde_json::to_writer(io::stdout(), &processed_book)?;
     Ok(())
-}
-
-fn min(a: usize, b: usize) -> usize {
-    if a < b {
-        a
-    } else {
-        b
-    }
 }
 
 /// Produce a warning on mdBook version mismatch.
