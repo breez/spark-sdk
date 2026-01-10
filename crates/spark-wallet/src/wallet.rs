@@ -35,8 +35,8 @@ use spark::{
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     token::{
-        InMemoryTokenOutputStore, SynchronousTokenOutputService, TokenMetadata, TokenOutputService,
-        TokenOutputStore, TokenOutputWithPrevOut,
+        InMemoryTokenOutputStore, SelectionStrategy, SynchronousTokenOutputService, TokenMetadata,
+        TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut,
     },
     tree::{
         InMemoryTreeStore, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
@@ -60,7 +60,7 @@ use crate::{
 const SELECT_LEAVES_MAX_RETRIES: usize = 3;
 const MAX_LEAF_SPENT_RETRIES: usize = 3;
 
-use super::{SparkWalletConfig, SparkWalletError};
+use super::{SparkWalletConfig, SparkWalletError, TokenOutputsOptimizationOptions};
 
 /// Checks if an error indicates a transfer lock conflict that should trigger a retry.
 // TODO: We want to move to an error code but it isn't available yet.
@@ -295,7 +295,7 @@ impl SparkWallet {
         });
 
         let leaf_optimizer = Arc::new(LeafOptimizer::new(
-            config.optimization_options.clone(),
+            config.leaf_optimization_options.clone(),
             Arc::clone(&swap_service),
             Arc::clone(&tree_service),
             Some(optimization_event_handler),
@@ -314,7 +314,9 @@ impl SparkWallet {
                 Arc::clone(&transfer_service),
                 Arc::clone(&htlc_service),
                 Arc::clone(&leaf_optimizer),
-                config.auto_optimize_enabled,
+                config.leaf_auto_optimize_enabled,
+                Arc::clone(&token_service),
+                config.token_outputs_optimization_options.clone(),
             ));
             background_processor
                 .run_background_tasks(cancellation_token.clone())
@@ -354,7 +356,7 @@ impl SparkWallet {
 
     /// Starts leaf optimization if auto-optimization is enabled.
     fn maybe_start_optimization(&self) {
-        if self.config.auto_optimize_enabled {
+        if self.config.leaf_auto_optimize_enabled {
             self.leaf_optimizer.start();
         }
     }
@@ -374,6 +376,12 @@ impl SparkWallet {
 
         // In case the invoice is for a spark address, we can just transfer the amount to the receiver.
         if let Some(receiver_spark_address) = receiver_spark_address {
+            if !self.config.self_payment_allowed
+                && receiver_spark_address.identity_public_key == self.identity_public_key
+            {
+                return Err(SparkWalletError::SelfPaymentNotAllowed);
+            }
+
             return Ok(PayLightningInvoiceResult {
                 transfer: self
                     .transfer(total_amount_sat, &receiver_spark_address, transfer_id)
@@ -675,7 +683,12 @@ impl SparkWallet {
         if self.config.network != receiver_address.network {
             return Err(SparkWalletError::InvalidNetwork);
         }
-        let receiver_pubkey = receiver_address.identity_public_key;
+
+        if !self.config.self_payment_allowed
+            && receiver_address.identity_public_key == self.identity_public_key
+        {
+            return Err(SparkWalletError::SelfPaymentNotAllowed);
+        }
 
         // Transfer leaves with retry logic for concurrent leaf spending
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
@@ -685,7 +698,7 @@ impl SparkWallet {
             "Transfer",
             |leaves_reservation| self.transfer_service.transfer_leaves_to(
                 leaves_reservation.leaves.clone(),
-                &receiver_pubkey,
+                &receiver_address.identity_public_key,
                 transfer_id.clone(),
                 None,
                 spark_invoice.clone(),
@@ -738,7 +751,12 @@ impl SparkWallet {
         if self.config.network != receiver_address.network {
             return Err(SparkWalletError::InvalidNetwork);
         }
-        let receiver_pubkey = receiver_address.identity_public_key;
+
+        if !self.config.self_payment_allowed
+            && receiver_address.identity_public_key == self.identity_public_key
+        {
+            return Err(SparkWalletError::SelfPaymentNotAllowed);
+        }
 
         // Create HTLC with retry logic for concurrent leaf spending
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
@@ -749,7 +767,7 @@ impl SparkWallet {
             "HTLC creation",
             |leaves_reservation| self.htlc_service.create_htlc(
                 leaves_reservation.leaves.clone(),
-                &receiver_pubkey,
+                &receiver_address.identity_public_key,
                 payment_hash,
                 expiry_time,
                 transfer_id.clone(),
@@ -1124,13 +1142,13 @@ impl SparkWallet {
 
         let balances = token_outputs
             .into_iter()
-            .map(|output| {
-                let balance = output.outputs.iter().map(|o| o.output.token_amount).sum();
+            .map(|token_outputs| {
+                let balance = token_outputs.balance();
                 (
-                    output.metadata.identifier.clone(),
+                    token_outputs.metadata.identifier.clone(),
                     TokenBalance {
                         balance,
-                        token_metadata: output.metadata,
+                        token_metadata: token_outputs.metadata,
                     },
                 )
             })
@@ -1146,6 +1164,7 @@ impl SparkWallet {
         &self,
         outputs: Vec<TransferTokenOutput>,
         selected_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenTransaction, SparkWalletError> {
         if outputs.iter().any(|o| o.spark_invoice.is_some()) {
             return Err(SparkWalletError::Generic(
@@ -1153,9 +1172,17 @@ impl SparkWallet {
             ));
         }
 
+        if !self.config.self_payment_allowed
+            && outputs
+                .iter()
+                .any(|o| o.receiver_address.identity_public_key == self.identity_public_key)
+        {
+            return Err(SparkWalletError::SelfPaymentNotAllowed);
+        }
+
         let tx = self
             .token_service
-            .transfer_tokens(outputs, selected_outputs)
+            .transfer_tokens(outputs, selected_outputs, selection_strategy)
             .await?;
         Ok(tx)
     }
@@ -1247,7 +1274,7 @@ impl SparkWallet {
     ) -> Result<TokenTransaction, SparkWalletError> {
         let token_transaction = self
             .token_service
-            .burn_issuer_token(amount, preferred_outputs)
+            .burn_issuer_token(amount, preferred_outputs, None)
             .await?;
         Ok(token_transaction)
     }
@@ -1347,6 +1374,7 @@ impl SparkWallet {
                             spark_invoice: Some(invoice_str.to_string()),
                         }],
                         None,
+                        None,
                     )
                     .await?;
 
@@ -1426,6 +1454,24 @@ impl SparkWallet {
     /// Returns the current optimization progress snapshot.
     pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
         self.leaf_optimizer.progress()
+    }
+
+    /// Optimizes token outputs by consolidating them when there are more than the configured threshold.
+    /// Processes one token at a time. Token identifier can be provided, otherwise one is automatically selected.
+    /// Only optimizes if the number of outputs is greater than the configured threshold.
+    pub async fn optimize_token_outputs(
+        &self,
+        token_identifier: Option<&str>,
+    ) -> Result<(), SparkWalletError> {
+        self.token_service
+            .optimize_token_outputs(
+                token_identifier,
+                self.config
+                    .token_outputs_optimization_options
+                    .min_outputs_threshold,
+            )
+            .await?;
+        Ok(())
     }
 
     /// Selects leaves with automatic retry logic.
@@ -1715,6 +1761,8 @@ struct BackgroundProcessor {
     htlc_service: Arc<HtlcService>,
     leaf_optimizer: Arc<LeafOptimizer>,
     auto_optimize_enabled: bool,
+    token_service: Arc<TokenService>,
+    token_outputs_optimization_options: TokenOutputsOptimizationOptions,
 }
 
 impl BackgroundProcessor {
@@ -1730,6 +1778,8 @@ impl BackgroundProcessor {
         htlc_service: Arc<HtlcService>,
         leaf_optimizer: Arc<LeafOptimizer>,
         auto_optimize_enabled: bool,
+        token_service: Arc<TokenService>,
+        token_outputs_optimization_options: TokenOutputsOptimizationOptions,
     ) -> Self {
         Self {
             operator_pool,
@@ -1742,6 +1792,8 @@ impl BackgroundProcessor {
             htlc_service,
             leaf_optimizer,
             auto_optimize_enabled,
+            token_service,
+            token_outputs_optimization_options,
         }
     }
 
@@ -1760,27 +1812,43 @@ impl BackgroundProcessor {
         });
     }
 
-    async fn run_background_tasks_inner(
-        self: &Arc<Self>,
-        mut cancellation_token: watch::Receiver<()>,
-    ) {
+    async fn run_background_tasks_inner(self: &Arc<Self>, cancellation_token: watch::Receiver<()>) {
         let (event_tx, event_stream) = broadcast::channel(100);
         let operator_pool = Arc::clone(&self.operator_pool);
         let reconnect_interval = self.reconnect_interval;
         let identity_public_key = self.identity_public_key;
+        let mut cancellation_token_for_events = cancellation_token.clone();
         tokio::spawn(async move {
             subscribe_server_events(
                 identity_public_key,
                 operator_pool,
                 &event_tx,
                 reconnect_interval,
-                &mut cancellation_token,
+                &mut cancellation_token_for_events,
             )
             .await;
         });
 
         if let Err(e) = self.tree_service.refresh_leaves().await {
             error!("Error refreshing leaves on startup: {:?}", e);
+        }
+
+        if let Err(e) = self.token_service.refresh_tokens_outputs().await {
+            error!("Error refreshing token outputs on startup: {:?}", e);
+        }
+
+        // Start token output optimization background task if configured
+        if let Some(interval) = self
+            .token_outputs_optimization_options
+            .auto_optimize_interval
+        {
+            let cloned_self = Arc::clone(self);
+            let cancellation_token_clone = cancellation_token.clone();
+            tokio::spawn(async move {
+                cloned_self
+                    .run_token_output_optimization(interval, cancellation_token_clone)
+                    .await;
+            });
         }
 
         self.process_events(event_stream).await;
@@ -1936,5 +2004,52 @@ impl BackgroundProcessor {
         self.event_manager
             .notify_listeners(WalletEvent::StreamDisconnected);
         Ok(())
+    }
+
+    async fn run_token_output_optimization(
+        &self,
+        interval: Duration,
+        mut cancellation_token: watch::Receiver<()>,
+    ) {
+        info!(
+            "Starting automatic token output optimization with interval: {:?}",
+            interval
+        );
+
+        let run_optimization = || async {
+            debug!("Running automatic token output optimization");
+            match self
+                .token_service
+                .optimize_token_outputs(
+                    None,
+                    self.token_outputs_optimization_options
+                        .min_outputs_threshold,
+                )
+                .await
+            {
+                Ok(_) => {
+                    debug!("Automatic token output optimization completed successfully");
+                }
+                Err(e) => {
+                    error!("Error during automatic token output optimization: {:?}", e);
+                }
+            }
+        };
+
+        // Run first optimization immediately
+        run_optimization().await;
+
+        loop {
+            // Wait for the interval or cancellation
+            tokio::select! {
+                _ = tokio::time::sleep(interval) => {
+                    run_optimization().await;
+                }
+                _ = cancellation_token.changed() => {
+                    info!("Stopping automatic token output optimization");
+                    break;
+                }
+            }
+        }
     }
 }

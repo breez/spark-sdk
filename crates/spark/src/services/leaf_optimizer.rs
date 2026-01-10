@@ -15,7 +15,7 @@ pub const DEFAULT_MAX_LEAVES_PER_SWAP: u32 = 64;
 
 /// Configuration options for leaf optimization.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct OptimizationOptions {
+pub struct LeafOptimizationOptions {
     /// Controls the optimization aggressiveness. Minimum value is 0, maximum value is 5.
     /// Higher values create more leaves for flexibility but may slow down operations.
     pub multiplicity: u8,
@@ -23,7 +23,7 @@ pub struct OptimizationOptions {
     pub max_leaves_per_swap: u32,
 }
 
-impl Default for OptimizationOptions {
+impl Default for LeafOptimizationOptions {
     fn default() -> Self {
         Self {
             multiplicity: 1,
@@ -32,7 +32,7 @@ impl Default for OptimizationOptions {
     }
 }
 
-impl OptimizationOptions {
+impl LeafOptimizationOptions {
     pub fn validate(&self) -> Result<(), ServiceError> {
         if self.multiplicity > 5 {
             return Err(ServiceError::Generic(
@@ -127,7 +127,7 @@ impl Drop for RunningGuard {
 /// maximizes the amount that can be unilaterally exited (depending on the configuration).
 /// It operates in multiple rounds, each performing a swap operation.
 pub struct LeafOptimizer {
-    config: OptimizationOptions,
+    config: LeafOptimizationOptions,
     swap_service: Arc<Swap>,
     tree_service: Arc<dyn TreeService>,
     progress: Arc<Mutex<OptimizationProgress>>,
@@ -139,7 +139,7 @@ pub struct LeafOptimizer {
 
 impl LeafOptimizer {
     pub fn new(
-        config: OptimizationOptions,
+        config: LeafOptimizationOptions,
         swap_service: Arc<Swap>,
         tree_service: Arc<dyn TreeService>,
         event_handler: Option<Arc<dyn OptimizationEventHandler>>,
@@ -707,26 +707,26 @@ mod tests {
 
     #[test_all]
     fn test_optimization_options_validation() {
-        let valid = OptimizationOptions {
+        let valid = LeafOptimizationOptions {
             multiplicity: 2,
             max_leaves_per_swap: 64,
         };
         assert!(valid.validate().is_ok());
 
         // multiplicity 0 is valid
-        let multiplicity_zero = OptimizationOptions {
+        let multiplicity_zero = LeafOptimizationOptions {
             multiplicity: 0,
             ..valid.clone()
         };
         assert!(multiplicity_zero.validate().is_ok());
 
-        let invalid_multiplicity_high = OptimizationOptions {
+        let invalid_multiplicity_high = LeafOptimizationOptions {
             multiplicity: 6,
             ..valid.clone()
         };
         assert!(invalid_multiplicity_high.validate().is_err());
 
-        let invalid_max_leaves = OptimizationOptions {
+        let invalid_max_leaves = LeafOptimizationOptions {
             max_leaves_per_swap: 0,
             ..valid
         };

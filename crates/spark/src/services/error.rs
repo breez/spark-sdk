@@ -89,6 +89,10 @@ pub enum ServiceError {
     #[error("invalid preimage: {0}")]
     InvalidPreimage(String),
 
+    // Token related errors
+    #[error("needed too many outputs to transfer tokens")]
+    NeededTooManyOutputs,
+
     // Common errors
     #[error("bitcoin error: {0}")]
     BitcoinError(#[from] crate::bitcoin::BitcoinError),

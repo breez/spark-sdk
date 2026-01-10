@@ -437,6 +437,7 @@ impl FlashnetClient {
                         spark_invoice: None,
                     }],
                     None,
+                    None,
                 )
                 .await?
                 .hash

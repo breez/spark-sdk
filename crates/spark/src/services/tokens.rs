@@ -28,8 +28,9 @@ use crate::{
     },
     signer::Signer,
     token::{
-        GetTokenOutputsFilter, TokenMetadata, TokenOutputService, TokenOutputWithPrevOut,
-        TokenOutputs, with_reserved_token_outputs,
+        GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy,
+        TokenMetadata, TokenOutputService, TokenOutputWithPrevOut, TokenOutputs,
+        with_reserved_token_outputs,
     },
     utils::{
         paging::{PagingFilter, PagingResult, pager},
@@ -38,6 +39,7 @@ use crate::{
 };
 
 const MAX_TOKEN_TX_INPUTS: usize = 500;
+const MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS: usize = 3;
 
 const HRP_STR_MAINNET: &str = "btkn";
 const HRP_STR_TESTNET: &str = "btknt";
@@ -80,6 +82,12 @@ impl TokenService {
             tokens_config,
             transfer_observer,
         }
+    }
+
+    /// Refreshes token outputs from the operator.
+    pub async fn refresh_tokens_outputs(&self) -> Result<(), ServiceError> {
+        self.token_output_service.refresh_tokens_outputs().await?;
+        Ok(())
     }
 
     /// Returns the metadata for the given token identifiers.
@@ -318,6 +326,7 @@ impl TokenService {
         &self,
         amount: u128,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenTransaction, ServiceError> {
         let burn_public_key =
             PublicKey::from_slice(&[2; 33]).map_err(|_| ServiceError::InvalidPublicKey)?;
@@ -328,7 +337,7 @@ impl TokenService {
             receiver_address: burn_spark_address,
             spark_invoice: None,
         }];
-        self.transfer_tokens(receiver_outputs, preferred_outputs)
+        self.transfer_tokens(receiver_outputs, preferred_outputs, selection_strategy)
             .await
     }
 
@@ -398,6 +407,7 @@ impl TokenService {
         &self,
         receiver_outputs: Vec<TransferTokenOutput>,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenTransaction, ServiceError> {
         // Validate parameters
         if receiver_outputs.is_empty() {
@@ -414,21 +424,46 @@ impl TokenService {
 
         let total_amount: u128 = receiver_outputs.iter().map(|o| o.amount).sum();
 
-        let reservation = self
-            .token_output_service
-            .reserve_token_outputs(&token_id, total_amount, preferred_outputs.clone())
-            .await?;
+        let mut attempt = 0;
+        let (token_transaction, reservation) = loop {
+            if attempt >= MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS {
+                return Err(ServiceError::NeededTooManyOutputs);
+            }
 
-        let token_transaction = with_reserved_token_outputs(
-            self.token_output_service.as_ref(),
-            self.transfer_tokens_inner(
-                &token_id,
-                reservation.token_outputs.outputs.clone(),
-                receiver_outputs.clone(),
-            ),
-            &reservation,
-        )
-        .await?;
+            let reservation = self
+                .token_output_service
+                .reserve_token_outputs(
+                    &token_id,
+                    ReservationTarget::MinTotalValue(total_amount),
+                    ReservationPurpose::Payment,
+                    preferred_outputs.clone(),
+                    selection_strategy,
+                )
+                .await?;
+
+            let result = with_reserved_token_outputs(
+                self.token_output_service.as_ref(),
+                self.transfer_tokens_inner(
+                    &token_id,
+                    reservation.token_outputs.outputs.clone(),
+                    receiver_outputs.clone(),
+                ),
+                &reservation,
+            )
+            .await;
+
+            match result {
+                Ok(token_transaction) => break (token_transaction, reservation),
+                Err(ServiceError::NeededTooManyOutputs)
+                    if attempt < MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS - 1 =>
+                {
+                    self.optimize_token_outputs(Some(&token_id), 2).await?;
+                    attempt += 1;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        };
 
         let identity_public_key = self.signer.get_identity_public_key().await?;
         let outputs = token_transaction
@@ -459,11 +494,7 @@ impl TokenService {
         receiver_outputs: Vec<TransferTokenOutput>,
     ) -> Result<TokenTransaction, ServiceError> {
         if inputs.len() > MAX_TOKEN_TX_INPUTS {
-            // We may consider doing an intermediate self transfer here to aggregate the inputs
-            return Err(ServiceError::Generic(format!(
-                "Needed too many outputs ({}) to transfer tokens",
-                inputs.len()
-            )));
+            return Err(ServiceError::NeededTooManyOutputs);
         }
 
         let partial_tx = self
@@ -498,6 +529,109 @@ impl TokenService {
         self.commit_transaction(final_tx.clone()).await?;
 
         (final_tx, self.network).try_into()
+    }
+
+    /// Optimizes token outputs by consolidating them when there are more than the configured threshold.
+    /// Processes one token at a time. Token identifier can be provided, otherwise one is automatically selected.
+    /// Only optimizes if the number of outputs is greater than the provided `min_outputs_threshold` (min 2).
+    pub async fn optimize_token_outputs(
+        &self,
+        token_identifier: Option<&str>,
+        min_outputs_threshold: u32,
+    ) -> Result<(), ServiceError> {
+        if min_outputs_threshold <= 1 {
+            return Err(ServiceError::ValidationError(
+                "min_outputs_threshold must be greater than 1".to_string(),
+            ));
+        }
+
+        info!(
+            "Optimizing token outputs starting (optional token identifier: {:?})",
+            token_identifier
+        );
+
+        let mut outputs = self.token_output_service.list_tokens_outputs().await?;
+
+        if let Some(token_identifier) = token_identifier {
+            outputs.retain(|o| o.metadata.identifier == token_identifier);
+        }
+
+        let mut did_optimize = false;
+
+        for output in outputs {
+            if output.available.len() <= min_outputs_threshold as usize {
+                continue;
+            }
+
+            did_optimize = true;
+
+            let reservation = self
+                .token_output_service
+                .reserve_token_outputs(
+                    &output.metadata.identifier,
+                    ReservationTarget::MaxOutputCount(MAX_TOKEN_TX_INPUTS),
+                    ReservationPurpose::Swap,
+                    None,
+                    Some(SelectionStrategy::SmallestFirst),
+                )
+                .await?;
+
+            info!(
+                "Optimizing token {} - currently has {} available outputs",
+                output.metadata.identifier,
+                output.available.len(),
+            );
+
+            let amount = reservation
+                .token_outputs
+                .outputs
+                .iter()
+                .map(|o| o.output.token_amount)
+                .sum::<u128>();
+
+            let token_transaction = with_reserved_token_outputs(
+                self.token_output_service.as_ref(),
+                self.transfer_tokens_inner(
+                    &output.metadata.identifier,
+                    reservation.token_outputs.outputs.clone(),
+                    vec![TransferTokenOutput {
+                        token_id: output.metadata.identifier.clone(),
+                        amount,
+                        receiver_address: SparkAddress::new(
+                            self.signer.get_identity_public_key().await?,
+                            self.network,
+                            None,
+                        ),
+                        spark_invoice: None,
+                    }],
+                ),
+                &reservation,
+            )
+            .await?;
+
+            let outputs = token_transaction
+                .outputs
+                .iter()
+                .enumerate()
+                .map(|(vout, output)| TokenOutputWithPrevOut {
+                    output: output.clone(),
+                    prev_tx_hash: token_transaction.hash.clone(),
+                    prev_tx_vout: vout as u32,
+                })
+                .collect::<Vec<_>>();
+            self.token_output_service
+                .insert_token_outputs(&TokenOutputs {
+                    metadata: reservation.token_outputs.metadata,
+                    outputs,
+                })
+                .await?;
+        }
+
+        if !did_optimize {
+            info!("No token outputs to optimize");
+        }
+
+        Ok(())
     }
 
     async fn build_create_token_transaction(
