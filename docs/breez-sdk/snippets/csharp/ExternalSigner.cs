@@ -31,22 +31,8 @@ namespace BreezSdkSnippets
         // ANCHOR_END: default-external-signer
 
         // ANCHOR: connect-with-signer
-        public static async Task<BreezSdk> ConnectWithSigner()
+        public static async Task<BreezSdk> ConnectWithSigner(ExternalSigner signer)
         {
-            // Create the signer
-            var keySetConfig = new KeySetConfig(
-                keySetType: KeySetType.Default,
-                useAddressIndex: false,
-                accountNumber: 0
-            );
-
-            var signer = BreezSdkSparkMethods.DefaultExternalSigner(
-                mnemonic: "<mnemonic words>",
-                passphrase: null,
-                network: Network.Mainnet,
-                keySetConfig: keySetConfig
-            );
-
             // Create the config
             var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
             {

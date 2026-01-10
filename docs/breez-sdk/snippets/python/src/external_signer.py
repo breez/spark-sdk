@@ -35,21 +35,7 @@ def create_signer() -> ExternalSigner:
 # ANCHOR_END: default-external-signer
 
 # ANCHOR: connect-with-signer
-async def example_connect_with_signer() -> BreezSdk:
-    # Create the signer
-    key_set_config = KeySetConfig(
-        key_set_type=KeySetType.DEFAULT,
-        use_address_index=False,
-        account_number=None,
-    )
-
-    signer = default_external_signer(
-        mnemonic="<mnemonic words>",
-        passphrase=None,
-        network=Network.MAINNET,
-        key_set_config=key_set_config,
-    )
-
+async def example_connect_with_signer(signer: ExternalSigner) -> BreezSdk:
     # Create the config
     config = default_config(Network.MAINNET)
     config.api_key = "<breez api key>"

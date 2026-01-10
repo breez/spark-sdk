@@ -21,18 +21,8 @@ const createSigner = () => {
 }
 // ANCHOR_END: default-external-signer
 
-const exampleConnectWithSigner = async () => {
-  // ANCHOR: connect-with-signer
-  const mnemonic = '<mnemonic words>'
-
-  // Create the default signer
-  const keySetConfig: KeySetConfig = {
-    keySetType: 'default',
-    useAddressIndex: false,
-    accountNumber: 0
-  }
-  const signer = defaultExternalSigner(mnemonic, null, 'mainnet', keySetConfig)
-
+// ANCHOR: connect-with-signer
+const exampleConnectWithSigner = async (signer: ReturnType<typeof defaultExternalSigner>) => {
   // Create the config
   const config = defaultConfig('mainnet')
   config.apiKey = '<breez api key>'
@@ -43,7 +33,7 @@ const exampleConnectWithSigner = async () => {
     signer,
     'breez_spark_db' // For WASM, this is the IndexedDB database name
   )
-  // ANCHOR_END: connect-with-signer
 }
+// ANCHOR_END: connect-with-signer
 
 export { createSigner, exampleConnectWithSigner }

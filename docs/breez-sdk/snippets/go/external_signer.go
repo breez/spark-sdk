@@ -34,22 +34,7 @@ func createSigner() (breez_sdk_spark.ExternalSigner, error) {
 // ANCHOR_END: default-external-signer
 
 // ANCHOR: connect-with-signer
-func connectWithSigner() (*breez_sdk_spark.BreezSdk, error) {
-	// Create the signer
-	signer, err := breez_sdk_spark.DefaultExternalSigner(
-		"<mnemonic words>",
-		nil, // passphrase
-		breez_sdk_spark.NetworkMainnet,
-		&breez_sdk_spark.KeySetConfig{
-			KeySetType:      breez_sdk_spark.KeySetTypeDefault,
-			UseAddressIndex: false,
-			AccountNumber:   nil,
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
+func connectWithSigner(signer breez_sdk_spark.ExternalSigner) (*breez_sdk_spark.BreezSdk, error) {
 	// Create the config
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
 	apiKey := "<breez api key>"
