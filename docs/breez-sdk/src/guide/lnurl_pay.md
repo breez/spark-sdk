@@ -10,6 +10,8 @@
 During the prepare step, the SDK ensures that the inputs are valid with respect to the LNURL-pay request,
 and also returns the fees related to the payment so they can be confirmed.
 
+To perform a token conversion as a step before sending the payment, set the optional token conversion options. See <a href="./token_conversion.md">Converting tokens</a> for more information.
+
 {{#tabs lnurl_pay:prepare-lnurl-pay}}
 
 <h2 id="lnurl-payments">

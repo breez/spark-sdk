@@ -13,6 +13,16 @@ async fn prepare_pay(sdk: &BreezSdk) -> Result<()> {
         let amount_sats = 5_000;
         let optional_comment = Some("<comment>".to_string());
         let optional_validate_success_action_url = Some(true);
+        // Optionally set to use token funds to pay via token conversion
+        let optional_max_slippage_bps = Some(50);
+        let optional_completion_timeout_secs = Some(30);
+        let optional_token_conversion_options = Some(TokenConversionOptions {
+            conversion_type: TokenConversionType::ToBitcoin {
+                from_token_identifier: "<token identifier>".to_string(),
+            },
+            max_slippage_bps: optional_max_slippage_bps,
+            completion_timeout_secs: optional_completion_timeout_secs,
+        });
 
         let prepare_response = sdk
             .prepare_lnurl_pay(PrepareLnurlPayRequest {
@@ -20,10 +30,15 @@ async fn prepare_pay(sdk: &BreezSdk) -> Result<()> {
                 pay_request: details.pay_request,
                 comment: optional_comment,
                 validate_success_action_url: optional_validate_success_action_url,
+                token_conversion_options: optional_token_conversion_options,
             })
             .await?;
 
         // If the fees are acceptable, continue to create the LNURL Pay
+        if let Some(token_conversion_fee) = prepare_response.token_conversion_fee {
+            info!("Estimated token conversion fee: {token_conversion_fee} token base units");
+        }
+
         let fee_sats = prepare_response.fee_sats;
         info!("Fees: {fee_sats} sats");
     }

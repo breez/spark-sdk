@@ -164,6 +164,16 @@ pub enum Command {
         /// Optional idempotency key to ensure only one payment is made for multiple requests.
         #[arg(short = 'i', long)]
         idempotency_key: Option<String>,
+
+        // If provided, the payment will include a token conversion step, converting from the
+        // specified token to Bitcoin to fulfill the payment.
+        #[arg(long = "from-token")]
+        convert_from_token_identifier: Option<String>,
+
+        /// The optional maximum slippage in basis points (1/100 of a percent) allowed when
+        /// a token conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
+        #[arg(short = 's', long)]
+        convert_max_slippage_bps: Option<u32>,
     },
 
     /// Withdraw using LNURL
@@ -552,7 +562,18 @@ pub(crate) async fn execute_command(
             comment,
             validate_success_url,
             idempotency_key,
+            convert_from_token_identifier,
+            convert_max_slippage_bps: max_slippage_bps,
         } => {
+            let token_conversion_options =
+                convert_from_token_identifier.map(|from_token_identifier| TokenConversionOptions {
+                    conversion_type: TokenConversionType::ToBitcoin {
+                        from_token_identifier,
+                    },
+                    max_slippage_bps,
+                    completion_timeout_secs: None,
+                });
+
             let input = sdk.parse(&lnurl).await?;
             let res = match input {
                 InputType::LightningAddress(LightningAddressDetails { pay_request, .. })
@@ -569,8 +590,21 @@ pub(crate) async fn execute_command(
                             comment,
                             pay_request,
                             validate_success_action_url: validate_success_url,
+                            token_conversion_options,
                         })
                         .await?;
+
+                    if let Some(token_conversion_fee) = prepare_response.token_conversion_fee {
+                        println!(
+                            "This payment has an estimated token conversion fee of {token_conversion_fee} token base units"
+                        );
+                        let line = rl
+                            .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
+                            .to_lowercase();
+                        if line != "y" {
+                            return Err(anyhow::anyhow!("Payment cancelled"));
+                        }
+                    }
 
                     println!(
                         "Prepared payment: {prepare_response:#?}\n Do you want to continue? (y/n)"
