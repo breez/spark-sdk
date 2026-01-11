@@ -84,7 +84,7 @@ async fn send_doh_query(client: &Client, query: &[u8]) -> Result<Vec<u8>> {
     let encoded_query = URL_SAFE_NO_PAD.encode(query);
 
     let response = client
-        .get(format!("{}?dns={}", DOH_ENDPOINT, encoded_query))
+        .get(format!("{DOH_ENDPOINT}?dns={encoded_query}"))
         .header("Accept", "application/dns-message")
         .send()
         .await?
