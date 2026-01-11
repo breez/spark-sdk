@@ -47,7 +47,7 @@ const createTokenWithCustomAccountNumber = async () => {
   const keySetConfig: KeySetConfig = {
     keySetType: KeySetType.Default,
     useAddressIndex: false,
-    accountNumber: accountNumber
+    accountNumber
   }
   await builder.withKeySet(keySetConfig)
 

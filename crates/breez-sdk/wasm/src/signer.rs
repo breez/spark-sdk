@@ -22,6 +22,18 @@ pub struct SchnorrSignatureBytes {
     pub bytes: Vec<u8>,
 }
 
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_types::RecoverableEcdsaSignatureBytes
+)]
+pub struct RecoverableEcdsaSignatureBytes {
+    pub bytes: Vec<u8>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::PrivateKeyBytes)]
+pub struct PrivateKeyBytes {
+    pub bytes: Vec<u8>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalTreeNodeId)]
 pub struct ExternalTreeNodeId {
     pub id: String,
@@ -204,11 +216,11 @@ impl DefaultSigner {
         &self,
         message: Vec<u8>,
         path: String,
-    ) -> Result<Vec<u8>, JsValue> {
+    ) -> Result<RecoverableEcdsaSignatureBytes, JsValue> {
         self.inner
             .sign_ecdsa_recoverable(message, path)
             .await
-            .map(|sig| sig.bytes)
+            .map(|sig| sig.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
@@ -286,11 +298,14 @@ impl DefaultSigner {
     }
 
     #[wasm_bindgen(js_name = "getStaticDepositPrivateKey")]
-    pub async fn get_static_deposit_private_key(&self, index: u32) -> Result<Vec<u8>, JsValue> {
+    pub async fn get_static_deposit_private_key(
+        &self,
+        index: u32,
+    ) -> Result<PrivateKeyBytes, JsValue> {
         self.inner
             .get_static_deposit_private_key(index)
             .await
-            .map(|k| k.bytes)
+            .map(|k| k.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
