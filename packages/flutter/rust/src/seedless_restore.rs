@@ -1,7 +1,8 @@
 //! Flutter bindings for seedless wallet restore.
 //!
 //! This module provides Flutter/Dart bindings for the seedless restore functionality
-//! using `flutter_rust_bridge`.
+//! using `flutter_rust_bridge`. Instead of passing a trait object across FFI, this
+//! implementation uses Dart callbacks for the PRF operations.
 
 use std::sync::Arc;
 
@@ -9,32 +10,57 @@ use breez_sdk_spark::seedless_restore::{
     NostrRelayConfig, PasskeyPrfError, PasskeyPrfProvider, SeedlessRestoreError,
 };
 use breez_sdk_spark::Seed;
-use flutter_rust_bridge::frb;
+use flutter_rust_bridge::{DartFnFuture, frb};
+
+/// Callback-based implementation of `PasskeyPrfProvider` for Flutter.
+///
+/// This struct wraps Dart callbacks to implement the PRF provider trait,
+/// allowing Flutter to provide the passkey PRF implementation.
+struct CallbackPrfProvider {
+    derive_prf_seed_fn: Arc<dyn Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync>,
+    is_prf_available_fn: Arc<dyn Fn() -> DartFnFuture<bool> + Send + Sync>,
+}
+
+#[async_trait::async_trait]
+impl PasskeyPrfProvider for CallbackPrfProvider {
+    async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+        // DartFnFuture returns the value directly (Dart throws on error)
+        Ok((self.derive_prf_seed_fn)(salt).await)
+    }
+
+    async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
+        Ok((self.is_prf_available_fn)().await)
+    }
+}
 
 /// Flutter wrapper for SeedlessRestore.
 ///
 /// Orchestrates seedless wallet creation and restore operations using
-/// passkey PRF and Nostr relays.
+/// passkey PRF callbacks and Nostr relays.
+#[frb(opaque)]
 pub struct SeedlessRestore {
     inner: breez_sdk_spark::seedless_restore::SeedlessRestore,
 }
 
 impl SeedlessRestore {
-    /// Create a new SeedlessRestore instance.
+    /// Create a new SeedlessRestore instance using Dart callbacks.
     ///
     /// # Arguments
-    /// * `prf_provider` - Platform implementation of passkey PRF operations
+    /// * `derive_prf_seed` - Dart callback to derive a 32-byte seed from passkey PRF with a salt
+    /// * `is_prf_available` - Dart callback to check if PRF-capable passkey is available
     /// * `relay_config` - Configuration for Nostr relay connections
-    #[frb(sync)]
     pub fn new(
-        prf_provider: Arc<dyn PasskeyPrfProvider>,
+        derive_prf_seed: impl Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync + 'static,
+        is_prf_available: impl Fn() -> DartFnFuture<bool> + Send + Sync + 'static,
         relay_config: NostrRelayConfig,
     ) -> Self {
+        let provider = Arc::new(CallbackPrfProvider {
+            derive_prf_seed_fn: Arc::new(derive_prf_seed),
+            is_prf_available_fn: Arc::new(is_prf_available),
+        });
+
         Self {
-            inner: breez_sdk_spark::seedless_restore::SeedlessRestore::new(
-                prf_provider,
-                relay_config,
-            ),
+            inner: breez_sdk_spark::seedless_restore::SeedlessRestore::new(provider, relay_config),
         }
     }
 
