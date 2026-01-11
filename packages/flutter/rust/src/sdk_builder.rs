@@ -3,7 +3,7 @@ use std::sync::Arc;
 use breez_sdk_spark::{ChainApiType, Config, Credentials, SdkError, Seed};
 use flutter_rust_bridge::frb;
 
-use crate::{models::KeySetType, sdk::BreezSdk};
+use crate::sdk::BreezSdk;
 
 pub struct SdkBuilder {
     inner: Arc<breez_sdk_spark::SdkBuilder>,
@@ -27,17 +27,9 @@ impl SdkBuilder {
     }
 
     #[frb(sync)]
-    pub fn with_key_set(
-        self,
-        key_set_type: KeySetType,
-        use_address_index: bool,
-        account_number: Option<u32>,
-    ) -> Self {
-        let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner).with_key_set(
-            key_set_type,
-            use_address_index,
-            account_number,
-        );
+    pub fn with_key_set(self, config: breez_sdk_spark::KeySetConfig) -> Self {
+        let builder =
+            <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner).with_key_set(config);
         Self {
             inner: Arc::new(builder),
         }

@@ -33,6 +33,7 @@
   - [Custom configuration](guide/config.md)
   - [Spark HTLC Payments](guide/htlcs.md)
   - [Custom leaf optimization](guide/optimize.md)
+  - [Using an External Signer](guide/external_signer.md)
 - [Moving to production](guide/moving_to_production.md)
 
 ---

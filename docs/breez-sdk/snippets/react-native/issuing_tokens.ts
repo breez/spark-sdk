@@ -7,7 +7,8 @@ import {
   type TokenMetadata,
   type Payment,
   KeySetType,
-  SdkBuilder
+  SdkBuilder,
+  type KeySetConfig
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 
@@ -43,7 +44,12 @@ const createTokenWithCustomAccountNumber = async () => {
   await builder.withDefaultStorage(`${RNFS.DocumentDirectoryPath}/data`)
 
   // Set the account number for the SDK
-  await builder.withKeySet(KeySetType.Default, false, accountNumber)
+  const keySetConfig: KeySetConfig = {
+    keySetType: KeySetType.Default,
+    useAddressIndex: false,
+    accountNumber
+  }
+  await builder.withKeySet(keySetConfig)
 
   const sdk = await builder.build()
   // ANCHOR_END: custom-account-number

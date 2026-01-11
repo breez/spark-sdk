@@ -72,6 +72,17 @@ pub struct ConnectRequest {
     pub storage_dir: String,
 }
 
+/// Request object for connecting to the Spark network using an external signer.
+///
+/// This allows using a custom signer implementation instead of providing a seed directly.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ConnectWithSignerRequest {
+    pub config: Config,
+    pub signer: std::sync::Arc<dyn crate::signer::ExternalSigner>,
+    pub storage_dir: String,
+}
+
 /// The type of payment
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -1078,7 +1089,7 @@ impl From<RecoverLnurlPayResponse> for LightningAddressInfo {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KeySetType {
     #[default]
     Default,
@@ -1108,6 +1119,30 @@ impl From<KeySetType> for spark_wallet::KeySetType {
             KeySetType::NativeSegwit => spark_wallet::KeySetType::NativeSegwit,
             KeySetType::WrappedSegwit => spark_wallet::KeySetType::WrappedSegwit,
             KeySetType::Legacy => spark_wallet::KeySetType::Legacy,
+        }
+    }
+}
+
+/// Configuration for key set derivation.
+///
+/// This struct encapsulates the parameters needed for BIP32 key derivation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct KeySetConfig {
+    /// The key set type which determines the derivation path
+    pub key_set_type: KeySetType,
+    /// Controls the structure of the BIP derivation path
+    pub use_address_index: bool,
+    /// Optional account number for key derivation
+    pub account_number: Option<u32>,
+}
+
+impl Default for KeySetConfig {
+    fn default() -> Self {
+        Self {
+            key_set_type: KeySetType::Default,
+            use_address_index: false,
+            account_number: None,
         }
     }
 }

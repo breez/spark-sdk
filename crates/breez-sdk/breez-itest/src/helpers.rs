@@ -7,6 +7,7 @@ use tracing::{debug, info};
 
 use crate::SdkInstance;
 use crate::faucet::RegtestFaucet;
+use tempdir::TempDir;
 
 /// Event listener that forwards events to a channel
 struct ChannelEventListener {
@@ -161,6 +162,68 @@ pub async fn build_sdk_from_mnemonic(
     };
     let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
     let sdk = builder.build().await?;
+
+    // Set up event listener
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    // Ensure initial sync completes
+    let _ = sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?;
+
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        temp_dir,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
+    })
+}
+
+/// Build SDK instance using external signer instead of seed
+///
+/// # Arguments
+/// * `storage_dir` - Directory path for SDK storage
+/// * `mnemonic` - BIP39 mnemonic phrase for the external signer
+/// * `temp_dir` - Optional TempDir to keep alive
+///
+/// # Returns
+/// An SdkInstance with SDK initialized via connect_with_signer
+pub async fn build_sdk_with_external_signer(
+    storage_dir: String,
+    mnemonic: String,
+    temp_dir: Option<TempDir>,
+) -> Result<SdkInstance> {
+    let mut config = default_config(Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = true;
+    config.sync_interval_secs = 5;
+    config.real_time_sync_server_url = None;
+
+    // Create default external signer from mnemonic
+    let signer = breez_sdk_spark::default_external_signer(
+        mnemonic,
+        None, // no passphrase
+        Network::Regtest,
+        Some(KeySetConfig {
+            key_set_type: KeySetType::Default,
+            use_address_index: false,
+            account_number: None,
+        }),
+    )?;
+
+    // Use connect_with_signer instead of connect
+    let sdk = connect_with_signer(ConnectWithSignerRequest {
+        config,
+        signer,
+        storage_dir,
+    })
+    .await?;
 
     // Set up event listener
     let (tx, rx) = mpsc::channel(100);
