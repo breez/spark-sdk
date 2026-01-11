@@ -1224,12 +1224,8 @@ mod tests {
         assert!(!matches!(result, Ok(InputType::Bip21(_))));
     }
 
-    /// Integration test for BIP353 address resolution using real DNS.
-    /// This test requires network access and is ignored by default.
-    /// Run with: cargo test test_bip353_real_dns -p breez-sdk-common -- --ignored
-    #[cfg(not(target_arch = "wasm32"))]
-    #[tokio::test]
-    #[ignore]
+    /// Integration test for BIP353 address resolution using real DNS.   
+    #[async_test_all]
     async fn test_bip353_real_dns() {
         use crate::dns::Resolver;
         use crate::rest::ReqwestRestClient;
