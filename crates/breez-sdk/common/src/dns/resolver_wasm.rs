@@ -1,11 +1,11 @@
-use anyhow::{anyhow, Result};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use anyhow::{Result, anyhow};
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use dnssec_prover::query::{ProofBuilder, QueryBuf};
 use dnssec_prover::rr::Name;
 use reqwest::Client;
 
-use super::{normalize_dns_name, parse_dns_name, verify_proof_and_extract_txt, DnsResolver};
+use super::{DnsResolver, normalize_dns_name, parse_dns_name, verify_proof_and_extract_txt};
 
 const DOH_ENDPOINT: &str = "https://cloudflare-dns.com/dns-query";
 

@@ -3,7 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use anyhow::Result;
 use dnssec_prover::query::build_txt_proof_async;
 
-use super::{normalize_dns_name, parse_dns_name, verify_proof_and_extract_txt, DnsResolver};
+use super::{DnsResolver, normalize_dns_name, parse_dns_name, verify_proof_and_extract_txt};
 
 /// Default DNS resolver address (Cloudflare's public DNS)
 const DEFAULT_RESOLVER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53);
