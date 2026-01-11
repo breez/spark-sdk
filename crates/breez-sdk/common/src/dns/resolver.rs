@@ -33,6 +33,13 @@ impl Default for Resolver {
 #[macros::async_trait]
 impl DnsResolver for Resolver {
     async fn txt_lookup(&self, dns_name: String) -> Result<Vec<String>> {
+        // Ensure the domain name has a trailing dot (FQDN format required by dnssec-prover)
+        let dns_name = if dns_name.ends_with('.') {
+            dns_name
+        } else {
+            dns_name + "."
+        };
+
         // Parse the domain name
         let name = Name::try_from(dns_name.as_str())
             .map_err(|()| anyhow::anyhow!("Invalid DNS name: {}", dns_name))?;
@@ -65,9 +72,11 @@ impl DnsResolver for Resolver {
             );
         }
 
-        // Extract TXT records from verified records
-        let txt_records: Vec<String> = verified
-            .verified_rrs
+        // Resolve the name to get the correct records (handles CNAME chains)
+        let resolved_rrs = verified.resolve_name(&name);
+
+        // Extract TXT records from resolved records
+        let txt_records: Vec<String> = resolved_rrs
             .into_iter()
             .filter_map(|rr| {
                 if let RR::Txt(txt) = rr {
