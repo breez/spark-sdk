@@ -440,7 +440,7 @@ mod tests {
                 value,
                 parent_node_id: None,
                 node_tx: Transaction {
-                    version: Version::TWO,
+                    version: Version::non_standard(3),
                     lock_time: LockTime::ZERO,
                     input: vec![],
                     output: vec![],
