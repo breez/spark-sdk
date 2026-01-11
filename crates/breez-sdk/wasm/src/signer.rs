@@ -903,7 +903,7 @@ const SIGNER_INTERFACE: &'static str = r#"export interface ExternalSigner {
     identityPublicKey(): PublicKeyBytes;
     derivePublicKey(path: string): Promise<PublicKeyBytes>;
     signEcdsa(message: Uint8Array, path: string): Promise<EcdsaSignatureBytes>;
-    signEcdsaRecoverable(message: Uint8Array, path: string): Promise<Uint8Array>;
+    signEcdsaRecoverable(message: Uint8Array, path: string): Promise<RecoverableEcdsaSignatureBytes>;
     eciesEncrypt(message: Uint8Array, path: string): Promise<Uint8Array>;
     eciesDecrypt(message: Uint8Array, path: string): Promise<Uint8Array>;
     signHashSchnorr(hash: Uint8Array, path: string): Promise<SchnorrSignatureBytes>;
@@ -911,7 +911,7 @@ const SIGNER_INTERFACE: &'static str = r#"export interface ExternalSigner {
     getPublicKeyForNode(id: ExternalTreeNodeId): Promise<PublicKeyBytes>;
     generateRandomKey(): Promise<ExternalPrivateKeySource>;
     getStaticDepositPrivateKeySource(index: number): Promise<ExternalPrivateKeySource>;
-    getStaticDepositPrivateKey(index: number): Promise<Uint8Array>;
+    getStaticDepositPrivateKey(index: number): Promise<PrivateKeyBytes>;
     getStaticDepositPublicKey(index: number): Promise<PublicKeyBytes>;
     subtractPrivateKeys(signingKey: ExternalPrivateKeySource, newSigningKey: ExternalPrivateKeySource): Promise<ExternalPrivateKeySource>;
     splitSecretWithProofs(secret: ExternalSecretToSplit, threshold: number, numShares: number): Promise<ExternalVerifiableSecretShare[]>;
