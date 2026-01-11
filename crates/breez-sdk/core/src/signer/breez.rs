@@ -81,9 +81,11 @@ impl BreezSigner for BreezSignerImpl {
             .identity_master_key
             .derive_priv(&self.secp, path)
             .map_err(|e| SdkError::Generic(e.to_string()))?;
-        let digest = bitcoin::hashes::sha256::Hash::hash(
-            bitcoin::hashes::sha256::Hash::hash(message).as_ref(),
-        );
+
+        // - Single SHA256 is standard for ECDSA message/API authentication
+        // - Consistent with sign_ecdsa() which also uses single SHA256
+
+        let digest = bitcoin::hashes::sha256::Hash::hash(message);
         let (recovery_id, sig) = self
             .secp
             .sign_ecdsa_recoverable(
