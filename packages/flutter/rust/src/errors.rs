@@ -51,3 +51,25 @@ pub enum _StorageError {
     InitializationError(String),
     Serialization(String),
 }
+
+#[frb(mirror(PasskeyPrfError))]
+pub enum _PasskeyPrfError {
+    PrfNotSupported,
+    UserCancelled,
+    CredentialNotFound,
+    AuthenticationFailed(String),
+    PrfEvaluationFailed(String),
+    Generic(String),
+}
+
+#[frb(mirror(SeedlessRestoreError))]
+pub enum _SeedlessRestoreError {
+    PasskeyError(PasskeyPrfError),
+    RelayConnectionFailed(String),
+    SaltPublishFailed(String),
+    SaltQueryFailed(String),
+    KeyDerivationError(String),
+    InvalidPrfOutput(String),
+    MnemonicError(String),
+    Generic(String),
+}

@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
+pub use breez_sdk_spark::seedless_restore::*;
 pub use breez_sdk_spark::sync_storage::*;
 pub use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
-use std::collections::HashMap;
 
 #[frb(mirror(BitcoinAddressDetails))]
 pub struct _BitcoinAddressDetails {
@@ -1064,9 +1066,7 @@ pub struct _ConversionEstimate {
 
 #[frb(mirror(ConversionPurpose))]
 pub enum _ConversionPurpose {
-    OngoingPayment {
-        payment_request: String,
-    },
+    OngoingPayment { payment_request: String },
     SelfTransfer,
 }
 
@@ -1124,4 +1124,10 @@ pub enum _ServiceStatus {
 pub struct _SparkStatus {
     pub status: ServiceStatus,
     pub last_updated: u64,
+}
+
+#[frb(mirror(NostrRelayConfig))]
+pub struct _NostrRelayConfig {
+    pub relay_urls: Vec<String>,
+    pub timeout_secs: u32,
 }
