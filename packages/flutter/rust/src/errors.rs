@@ -1,3 +1,4 @@
+pub use breez_sdk_spark::seedless_restore::{PasskeyPrfError, SeedlessRestoreError};
 pub use breez_sdk_spark::{DepositClaimError, Fee, SdkError, StorageError};
 use flutter_rust_bridge::frb;
 
