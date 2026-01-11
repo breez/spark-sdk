@@ -1224,6 +1224,54 @@ mod tests {
         assert!(!matches!(result, Ok(InputType::Bip21(_))));
     }
 
+    /// Integration test for BIP353 address resolution using real DNS.
+    /// This test requires network access and is ignored by default.
+    /// Run with: cargo test test_bip353_real_dns -p breez-sdk-common -- --ignored
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    #[ignore]
+    async fn test_bip353_real_dns() {
+        use crate::dns::Resolver;
+        use crate::rest::ReqwestRestClient;
+
+        let dns_resolver = Resolver::new();
+        let rest_client = ReqwestRestClient::new().expect("Failed to create REST client");
+        let input_parser = InputParser::new(dns_resolver, rest_client, None);
+
+        // Test BIP353 address with ₿ prefix
+        let bip353_address = "₿rosecow@breez.fun";
+
+        let result = input_parser
+            .parse(bip353_address)
+            .await
+            .expect("Failed to parse BIP353 address");
+
+        let InputType::Bip21(bip21_details) = result else {
+            panic!("Expected Bip21 result, got: {result:?}");
+        };
+
+        // Verify the expected BOLT12 offer is present
+        let expected_lno = "lno1pqpsrp4qpgf9qcteyp6x7gzdd9ehg7fqgfex2et6zzfq9ktw4h4r67qpq3zf4jjujdrpeenuz4jw9cwhxgjl5e7a8wvh5cqcq2wgtqentcyrar59dpp5jee59ehvvj0tfpyl4w2qzjzqjkus2j805qgrp4wqtw4s3sqd95c9y2peznmaa837wcdv37pny8z0ed2qhcx6wgesqtz6u90fy4c9gkgp7a0cwxjlylpsekr7qmvupwtzvu2h0gqcqa9cas7h7heedhkxwhtn7nr3c93pqgj5vfxndnyw9gcr50zwtc3z4wz3e0xx6x6vklkjcksqg3ft6eq9k";
+
+        let bolt12_offer_details = bip21_details
+            .payment_methods
+            .iter()
+            .find_map(|pm| match pm {
+                InputType::Bolt12Offer(offer_details) => Some(offer_details),
+                _ => None,
+            })
+            .expect("Expected BOLT12 offer in payment methods");
+
+        // Verify the offer string matches
+        assert_eq!(bolt12_offer_details.offer.offer, expected_lno);
+
+        // Verify the source contains the BIP353 address
+        assert_eq!(
+            bolt12_offer_details.offer.source.bip_353_address,
+            Some(bip353_address.to_string())
+        );
+    }
+
     #[async_test_all]
     async fn test_bitcoin_address() {
         let mock_dns_resolver = MockDnsResolver::new();
