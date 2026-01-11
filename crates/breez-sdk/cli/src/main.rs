@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::{fs, io, path::PathBuf};
 
 use anyhow::{Result, anyhow};
-use breez_sdk_spark::seedless_restore::{NostrRelayConfig, SeedlessRestore};
+use breez_sdk_spark::seedless_restore::SeedlessRestore;
 use breez_sdk_spark::{EventListener, Network, SdkBuilder, SdkEvent, Seed, default_config};
 use clap::Parser;
 use command::{Command, execute_command};
@@ -127,7 +127,7 @@ async fn run_interactive_mode(
             FilePrfProvider::new(&data_dir)
                 .map_err(|e| anyhow!("File PRF initialization failed: {e}"))?,
         );
-        let seedless = SeedlessRestore::new(provider, NostrRelayConfig::default());
+        let seedless = SeedlessRestore::new(provider, None);
 
         println!("Deriving seed from file-based secret...");
         seedless
@@ -140,7 +140,7 @@ async fn run_interactive_mode(
             FilePrfProvider::new(&data_dir)
                 .map_err(|e| anyhow!("File PRF initialization failed: {e}"))?,
         );
-        let seedless = SeedlessRestore::new(provider, NostrRelayConfig::default());
+        let seedless = SeedlessRestore::new(provider, None);
 
         println!("Querying Nostr for available salts...");
         let salts = seedless
