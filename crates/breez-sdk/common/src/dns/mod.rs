@@ -18,7 +18,7 @@ pub trait DnsResolver {
 }
 
 /// Normalizes a DNS name to FQDN format (with trailing dot) as required by dnssec-prover.
-pub fn normalize_dns_name(dns_name: String) -> String {
+fn normalize_dns_name(dns_name: String) -> String {
     if dns_name.ends_with('.') {
         dns_name
     } else {
@@ -27,7 +27,7 @@ pub fn normalize_dns_name(dns_name: String) -> String {
 }
 
 /// Parses a DNS name string into a dnssec-prover Name.
-pub fn parse_dns_name(dns_name: &str) -> Result<Name> {
+fn parse_dns_name(dns_name: &str) -> Result<Name> {
     Name::try_from(dns_name).map_err(|()| anyhow::anyhow!("Invalid DNS name: {}", dns_name))
 }
 
@@ -39,7 +39,7 @@ pub fn parse_dns_name(dns_name: &str) -> Result<Name> {
 /// - Checking time validity
 /// - Resolving CNAME chains
 /// - Extracting TXT records
-pub fn verify_proof_and_extract_txt(proof: &[u8], name: &Name) -> Result<Vec<String>> {
+fn verify_proof_and_extract_txt(proof: &[u8], name: &Name) -> Result<Vec<String>> {
     // Parse the proof into resource records
     let rrs = parse_rr_stream(proof).map_err(|()| anyhow::anyhow!("Failed to parse DNS proof"))?;
 
