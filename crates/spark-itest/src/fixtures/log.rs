@@ -39,10 +39,14 @@ impl LogConsumer for TracingConsumer {
         async move {
             match record {
                 LogFrame::StdOut(bytes) => {
-                    tracing::info!("{}", self.format_message(&String::from_utf8_lossy(bytes)));
+                    // Only log stdout if SPARK_ITEST_VERBOSE is set
+                    if std::env::var("SPARK_ITEST_VERBOSE").is_ok() {
+                        tracing::info!("{}", self.format_message(&String::from_utf8_lossy(bytes)));
+                    }
                 }
                 LogFrame::StdErr(bytes) => {
-                    tracing::info!("{}", self.format_message(&String::from_utf8_lossy(bytes)));
+                    // Always log stderr (errors/warnings)
+                    tracing::warn!("{}", self.format_message(&String::from_utf8_lossy(bytes)));
                 }
             }
         }
