@@ -43,6 +43,8 @@
       "Bash(make breez-itest:*)",
       "Bash(gh pr view:*)",
       "Bash(gh pr diff:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr list:*)",
       "Bash(gh api:*)",
       "Bash(git fetch:*)",
       "Bash(git checkout:*)",
