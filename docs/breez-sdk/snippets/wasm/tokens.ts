@@ -42,7 +42,7 @@ const exampleReceiveTokenPaymentSparkInvoice = async (sdk: BreezSdk) => {
   // ANCHOR: receive-token-payment-spark-invoice
   const tokenIdentifier = '<token identifier>'
   const optionalDescription = '<invoice description>'
-  const optionalAmount = BigInt(5_000)
+  const optionalAmount = '5000'
   const optionalExpiryTimeSeconds = 1716691200
   const optionalSenderPublicKey = '<sender public key>'
 
