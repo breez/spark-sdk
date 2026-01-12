@@ -1,3 +1,4 @@
+pub use breez_sdk_spark::seedless_restore::{PasskeyPrfError, SeedlessRestoreError};
 pub use breez_sdk_spark::{DepositClaimError, Fee, SdkError, StorageError};
 use flutter_rust_bridge::frb;
 
@@ -49,4 +50,26 @@ pub enum _StorageError {
     Implementation(String),
     InitializationError(String),
     Serialization(String),
+}
+
+#[frb(mirror(PasskeyPrfError))]
+pub enum _PasskeyPrfError {
+    PrfNotSupported,
+    UserCancelled,
+    CredentialNotFound,
+    AuthenticationFailed(String),
+    PrfEvaluationFailed(String),
+    Generic(String),
+}
+
+#[frb(mirror(SeedlessRestoreError))]
+pub enum _SeedlessRestoreError {
+    PasskeyError(PasskeyPrfError),
+    RelayConnectionFailed(String),
+    SaltPublishFailed(String),
+    SaltQueryFailed(String),
+    KeyDerivationError(String),
+    InvalidPrfOutput(String),
+    MnemonicError(String),
+    Generic(String),
 }
