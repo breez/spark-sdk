@@ -31,10 +31,7 @@
 //! // Platform provides a PasskeyPrfProvider implementation
 //! let prf_provider = Arc::new(MyPasskeyPrfProvider::new());
 //!
-//! let seedless = SeedlessRestore::new(
-//!     prf_provider,
-//!     NostrRelayConfig::default(),
-//! );
+//! let seedless = SeedlessRestore::new(prf_provider, None);
 //!
 //! // Create a new seed with a user-chosen salt
 //! let seed = seedless.create_seed("my-wallet".to_string()).await?;
@@ -66,21 +63,55 @@ use nostr_client::NostrSaltClient;
 /// This struct coordinates between the platform's passkey PRF provider and
 /// Nostr relays to create and restore wallet seeds without requiring users
 /// to manage mnemonic phrases directly.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct SeedlessRestore {
     prf_provider: Arc<dyn PasskeyPrfProvider>,
     nostr_client: NostrSaltClient,
 }
 
 impl SeedlessRestore {
+    /// Derive the Nostr keypair from the passkey using the magic salt.
+    async fn derive_nostr_identity(&self) -> Result<nostr::Keys, SeedlessRestoreError> {
+        // Derive account master using magic salt
+        let account_master = self
+            .prf_provider
+            .derive_prf_seed(ACCOUNT_MASTER_SALT.to_string())
+            .await?;
+
+        // Derive Nostr keypair from account master
+        derive_nostr_keypair(&account_master)
+    }
+
+    /// Derive a wallet seed from a user-provided salt.
+    async fn derive_seed_from_salt(&self, salt: &str) -> Result<Seed, SeedlessRestoreError> {
+        // Derive root key using user salt
+        let root_key = self.prf_provider.derive_prf_seed(salt.to_string()).await?;
+
+        // Convert to mnemonic
+        let mnemonic = prf_to_mnemonic(&root_key)?;
+
+        Ok(Seed::Mnemonic {
+            mnemonic,
+            passphrase: None,
+        })
+    }
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+impl SeedlessRestore {
     /// Create a new `SeedlessRestore` instance.
     ///
     /// # Arguments
     /// * `prf_provider` - Platform implementation of passkey PRF operations
-    /// * `relay_config` - Configuration for Nostr relay connections
-    pub fn new(prf_provider: Arc<dyn PasskeyPrfProvider>, relay_config: NostrRelayConfig) -> Self {
+    /// * `relay_config` - Optional configuration for Nostr relay connections (uses default if None)
+    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
+    pub fn new(
+        prf_provider: Arc<dyn PasskeyPrfProvider>,
+        relay_config: Option<NostrRelayConfig>,
+    ) -> Self {
         Self {
             prf_provider,
-            nostr_client: NostrSaltClient::new(relay_config),
+            nostr_client: NostrSaltClient::new(relay_config.unwrap_or_default()),
         }
     }
 
@@ -158,32 +189,6 @@ impl SeedlessRestore {
             .is_prf_available()
             .await
             .map_err(SeedlessRestoreError::from)
-    }
-
-    /// Derive the Nostr keypair from the passkey using the magic salt.
-    async fn derive_nostr_identity(&self) -> Result<nostr::Keys, SeedlessRestoreError> {
-        // Derive account master using magic salt
-        let account_master = self
-            .prf_provider
-            .derive_prf_seed(ACCOUNT_MASTER_SALT.to_string())
-            .await?;
-
-        // Derive Nostr keypair from account master
-        derive_nostr_keypair(&account_master)
-    }
-
-    /// Derive a wallet seed from a user-provided salt.
-    async fn derive_seed_from_salt(&self, salt: &str) -> Result<Seed, SeedlessRestoreError> {
-        // Derive root key using user salt
-        let root_key = self.prf_provider.derive_prf_seed(salt.to_string()).await?;
-
-        // Convert to mnemonic
-        let mnemonic = prf_to_mnemonic(&root_key)?;
-
-        Ok(Seed::Mnemonic {
-            mnemonic,
-            passphrase: None,
-        })
     }
 }
 
@@ -313,14 +318,14 @@ mod tests {
         let provider = Arc::new(MockPasskeyPrfProvider::new([0u8; 32]));
         let config = NostrRelayConfig::default();
 
-        let _seedless = SeedlessRestore::new(provider, config);
+        let _seedless = SeedlessRestore::new(provider, Some(config));
         // Just verify construction works
     }
 
     #[tokio::test]
     async fn test_is_prf_available() {
         let provider = Arc::new(MockPasskeyPrfProvider::new([0u8; 32]));
-        let seedless = SeedlessRestore::new(provider, NostrRelayConfig::default());
+        let seedless = SeedlessRestore::new(provider, None);
 
         let available = seedless.is_prf_available().await.unwrap();
         assert!(available);
@@ -329,7 +334,7 @@ mod tests {
     #[tokio::test]
     async fn test_is_prf_available_false() {
         let provider = Arc::new(UnavailablePrfProvider);
-        let seedless = SeedlessRestore::new(provider, NostrRelayConfig::default());
+        let seedless = SeedlessRestore::new(provider, None);
 
         let available = seedless.is_prf_available().await.unwrap();
         assert!(!available);
@@ -340,7 +345,7 @@ mod tests {
         let provider = Arc::new(FailingPasskeyPrfProvider::new(
             PasskeyPrfError::AuthenticationFailed("Test error".to_string()),
         ));
-        let seedless = SeedlessRestore::new(provider, NostrRelayConfig::default());
+        let seedless = SeedlessRestore::new(provider, None);
 
         let result = seedless.is_prf_available().await;
         assert!(result.is_err());
@@ -356,8 +361,8 @@ mod tests {
         let provider1 = Arc::new(MockPasskeyPrfProvider::new([42u8; 32]));
         let provider2 = Arc::new(MockPasskeyPrfProvider::new([42u8; 32]));
 
-        let seedless1 = SeedlessRestore::new(provider1, NostrRelayConfig::default());
-        let seedless2 = SeedlessRestore::new(provider2, NostrRelayConfig::default());
+        let seedless1 = SeedlessRestore::new(provider1, None);
+        let seedless2 = SeedlessRestore::new(provider2, None);
 
         let seed1 = seedless1.restore_seed("test".to_string()).await.unwrap();
         let seed2 = seedless2.restore_seed("test".to_string()).await.unwrap();
@@ -371,8 +376,8 @@ mod tests {
         let provider1 = Arc::new(MockPasskeyPrfProvider::new([1u8; 32]));
         let provider2 = Arc::new(MockPasskeyPrfProvider::new([2u8; 32]));
 
-        let seedless1 = SeedlessRestore::new(provider1, NostrRelayConfig::default());
-        let seedless2 = SeedlessRestore::new(provider2, NostrRelayConfig::default());
+        let seedless1 = SeedlessRestore::new(provider1, None);
+        let seedless2 = SeedlessRestore::new(provider2, None);
 
         let seed1 = seedless1.restore_seed("test".to_string()).await.unwrap();
         let seed2 = seedless2.restore_seed("test".to_string()).await.unwrap();
@@ -383,7 +388,7 @@ mod tests {
     #[tokio::test]
     async fn test_restore_seed_produces_24_word_mnemonic() {
         let provider = Arc::new(MockPasskeyPrfProvider::new([0u8; 32]));
-        let seedless = SeedlessRestore::new(provider, NostrRelayConfig::default());
+        let seedless = SeedlessRestore::new(provider, None);
 
         let seed = seedless.restore_seed("test".to_string()).await.unwrap();
 
@@ -395,7 +400,7 @@ mod tests {
     #[tokio::test]
     async fn test_restore_seed_no_passphrase() {
         let provider = Arc::new(MockPasskeyPrfProvider::new([0u8; 32]));
-        let seedless = SeedlessRestore::new(provider, NostrRelayConfig::default());
+        let seedless = SeedlessRestore::new(provider, None);
 
         let seed = seedless.restore_seed("test".to_string()).await.unwrap();
 
@@ -412,7 +417,7 @@ mod tests {
         let provider = Arc::new(FailingPasskeyPrfProvider::new(
             PasskeyPrfError::UserCancelled,
         ));
-        let seedless = SeedlessRestore::new(provider, NostrRelayConfig::default());
+        let seedless = SeedlessRestore::new(provider, None);
 
         let result = seedless.restore_seed("test".to_string()).await;
         assert!(result.is_err());
@@ -426,7 +431,7 @@ mod tests {
     async fn test_salt_aware_provider_different_salts() {
         // Salt-aware provider should produce different outputs for different salts
         let provider = Arc::new(SaltAwareMockProvider::new([0u8; 32]));
-        let seedless = SeedlessRestore::new(provider, NostrRelayConfig::default());
+        let seedless = SeedlessRestore::new(provider, None);
 
         let seed1 = seedless.restore_seed("personal".to_string()).await.unwrap();
         let seed2 = seedless.restore_seed("business".to_string()).await.unwrap();
@@ -442,7 +447,7 @@ mod tests {
     async fn test_salt_aware_provider_same_salt_deterministic() {
         // Same salt should always produce the same output
         let provider = Arc::new(SaltAwareMockProvider::new([0u8; 32]));
-        let seedless = SeedlessRestore::new(provider, NostrRelayConfig::default());
+        let seedless = SeedlessRestore::new(provider, None);
 
         let seed1 = seedless.restore_seed("test".to_string()).await.unwrap();
         let seed2 = seedless.restore_seed("test".to_string()).await.unwrap();
@@ -505,8 +510,8 @@ mod tests {
         let provider1 = Arc::new(MockPasskeyPrfProvider::new([99u8; 32]));
         let provider2 = Arc::new(MockPasskeyPrfProvider::new([99u8; 32]));
 
-        let seedless1 = SeedlessRestore::new(provider1, NostrRelayConfig::default());
-        let seedless2 = SeedlessRestore::new(provider2, NostrRelayConfig::default());
+        let seedless1 = SeedlessRestore::new(provider1, None);
+        let seedless2 = SeedlessRestore::new(provider2, None);
 
         let keys1 = seedless1.derive_nostr_identity().await.unwrap();
         let keys2 = seedless2.derive_nostr_identity().await.unwrap();
@@ -524,8 +529,8 @@ mod tests {
         let provider1 = Arc::new(MockPasskeyPrfProvider::new([1u8; 32]));
         let provider2 = Arc::new(MockPasskeyPrfProvider::new([2u8; 32]));
 
-        let seedless1 = SeedlessRestore::new(provider1, NostrRelayConfig::default());
-        let seedless2 = SeedlessRestore::new(provider2, NostrRelayConfig::default());
+        let seedless1 = SeedlessRestore::new(provider1, None);
+        let seedless2 = SeedlessRestore::new(provider2, None);
 
         let keys1 = seedless1.derive_nostr_identity().await.unwrap();
         let keys2 = seedless2.derive_nostr_identity().await.unwrap();

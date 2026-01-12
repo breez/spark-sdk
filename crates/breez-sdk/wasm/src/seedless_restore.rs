@@ -27,13 +27,13 @@ impl SeedlessRestore {
     /// @param prf_provider - Platform implementation of passkey PRF operations
     /// @param relay_config - Configuration for Nostr relay connections
     #[wasm_bindgen(constructor)]
-    pub fn new(prf_provider: PasskeyPrfProvider, relay_config: NostrRelayConfig) -> Self {
+    pub fn new(prf_provider: PasskeyPrfProvider, relay_config: Option<NostrRelayConfig>) -> Self {
         let wasm_provider = WasmPasskeyPrfProvider {
             inner: prf_provider,
         };
         let inner = breez_sdk_spark::seedless_restore::SeedlessRestore::new(
             Arc::new(wasm_provider),
-            relay_config.into(),
+            relay_config.map(|rc| rc.into()),
         );
         Self { inner }
     }
