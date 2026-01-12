@@ -27,7 +27,7 @@ check-deps:
 
 	# Check Rust
 	if command -v cargo &> /dev/null; then
-		echo "✅ cargo: $(cargo --version)"
+		echo "✅ $(cargo --version)"
 	else
 		echo "❌ cargo not found. Please install Rust."
 		MISSING=1
@@ -35,7 +35,7 @@ check-deps:
 
 	# Check Flutter
 	if command -v flutter &> /dev/null; then
-		echo "✅ flutter: $(flutter --version | head -n1)"
+		echo "✅ $(flutter --version | head -n1)"
 	else
 		echo "❌ flutter not found. Please install Flutter."
 		MISSING=1
@@ -43,7 +43,7 @@ check-deps:
 
 	# Check Dart
 	if command -v dart &> /dev/null; then
-		echo "✅ dart: $(dart --version)"
+		echo "✅ $(dart --version)"
 	else
 		echo "❌ dart not found (should come with Flutter)."
 		MISSING=1
