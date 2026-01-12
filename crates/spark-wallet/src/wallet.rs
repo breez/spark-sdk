@@ -1878,7 +1878,7 @@ impl BackgroundProcessor {
                 }
 
                 Err(RecvError::Lagged(skipped)) => {
-                    warn!("Event stream lagged, skipped {} messages", skipped);
+                    error!("Event stream lagged, skipped {} messages", skipped);
                     // Continue processing - THIS IS THE CRITICAL FIX
                     continue;
                 }
