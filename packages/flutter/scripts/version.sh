@@ -43,6 +43,12 @@ rm "$ROOT/packages/flutter/rust/Cargo.toml.bak"
 
 # Stage changes for commit
 log "Staging updated files for git..."
-git add "$ROOT/packages/flutter/"
+git add \
+  "$ROOT/packages/flutter/pubspec.yaml" \
+  "$ROOT/packages/flutter/ios/breez_sdk_spark_flutter.podspec" \
+  "$ROOT/packages/flutter/macos/breez_sdk_spark_flutter.podspec" \
+  "$ROOT/packages/flutter/android/build.gradle" \
+  "$ROOT/packages/flutter/rust/Cargo.toml" \
+  "$ROOT/packages/flutter/rust/Cargo.lock"
 
 log "✅ Version bump to $TAG_NAME completed successfully."
