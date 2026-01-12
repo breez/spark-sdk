@@ -1815,7 +1815,22 @@ impl BreezSdk {
         &self,
         request: ListPaymentsRequest,
     ) -> Result<ListPaymentsResponse, SdkError> {
-        let payments = self.storage.list_payments(request).await?;
+        let mut payments = self.storage.list_payments(request).await?;
+
+        // Collect all parent IDs and batch query for related payments
+        let parent_ids: Vec<String> = payments.iter().map(|p| p.id.clone()).collect();
+
+        if !parent_ids.is_empty() {
+            let related_payments_map = self.storage.get_payments_by_parent_ids(parent_ids).await?;
+
+            // Join related payments to their parents
+            for payment in &mut payments {
+                if let Some(related_payments) = related_payments_map.get(&payment.id) {
+                    payment.related_payments = related_payments.clone();
+                }
+            }
+        }
+
         Ok(ListPaymentsResponse { payments })
     }
 
@@ -1823,7 +1838,18 @@ impl BreezSdk {
         &self,
         request: GetPaymentRequest,
     ) -> Result<GetPaymentResponse, SdkError> {
-        let payment = self.storage.get_payment_by_id(request.payment_id).await?;
+        let mut payment = self.storage.get_payment_by_id(request.payment_id).await?;
+
+        // Load related payments (single ID batch)
+        let related_payments_map = self
+            .storage
+            .get_payments_by_parent_ids(vec![payment.id.clone()])
+            .await?;
+
+        if let Some(related_payments) = related_payments_map.get(&payment.id) {
+            payment.related_payments.clone_from(related_payments);
+        }
+
         Ok(GetPaymentResponse { payment })
     }
 
@@ -2357,8 +2383,14 @@ impl BreezSdk {
             },
         )
         .await?;
-
-        Ok(response)
+        // Fetch the updated payment with related payments
+        self.get_payment(GetPaymentRequest {
+            payment_id: response.payment.id,
+        })
+        .await
+        .map(|res| SendPaymentResponse {
+            payment: res.payment,
+        })
     }
 
     async fn send_payment_internal(
@@ -2615,11 +2647,12 @@ impl BreezSdk {
             None => payment_response.transfer.try_into()?,
         };
 
-        let Some(completion_timeout_secs) = completion_timeout_secs else {
-            return Ok(SendPaymentResponse { payment });
-        };
+        let completion_timeout_secs = completion_timeout_secs.unwrap_or(0);
 
         if completion_timeout_secs == 0 {
+            // Insert the payment into storage to make it immediately available for listing
+            self.storage.insert_payment(payment.clone()).await?;
+
             return Ok(SendPaymentResponse { payment });
         }
 

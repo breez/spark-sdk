@@ -154,6 +154,7 @@ pub async fn token_transaction_to_payments(
                 invoice_details: invoice.map(Into::into),
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
         payments.push(payment);
     }

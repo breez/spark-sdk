@@ -516,6 +516,19 @@ pub struct _Payment {
     pub timestamp: u64,
     pub method: PaymentMethod,
     pub details: Option<PaymentDetails>,
+    pub related_payments: Vec<RelatedPayment>,
+}
+
+#[frb(mirror(RelatedPayment))]
+pub struct _RelatedPayment {
+    pub id: String,
+    pub payment_type: PaymentType,
+    pub status: PaymentStatus,
+    pub amount: u128,
+    pub fees: u128,
+    pub timestamp: u64,
+    pub method: PaymentMethod,
+    pub details: Option<PaymentDetails>,
 }
 
 #[frb(mirror(PaymentDetails))]

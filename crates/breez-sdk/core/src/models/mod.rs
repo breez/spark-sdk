@@ -225,6 +225,47 @@ pub struct Payment {
     pub method: PaymentMethod,
     /// Details of the payment
     pub details: Option<PaymentDetails>,
+    /// Related payments (child payments linked via `parent_payment_id`).
+    /// These are payments that were created as part of this payment (e.g., token conversions).
+    pub related_payments: Vec<RelatedPayment>,
+}
+
+/// A payment that is related to another payment (e.g., token conversion child).
+/// This is a non-recursive version of Payment for use in the `related_payments` field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RelatedPayment {
+    /// Unique identifier for the payment
+    pub id: String,
+    /// Type of payment (send or receive)
+    pub payment_type: PaymentType,
+    /// Status of the payment
+    pub status: PaymentStatus,
+    /// Amount in satoshis or token base units
+    pub amount: u128,
+    /// Fee paid in satoshis or token base units
+    pub fees: u128,
+    /// Timestamp of when the payment was created
+    pub timestamp: u64,
+    /// Method of payment
+    pub method: PaymentMethod,
+    /// Details of the payment
+    pub details: Option<PaymentDetails>,
+}
+
+impl From<Payment> for RelatedPayment {
+    fn from(payment: Payment) -> Self {
+        Self {
+            id: payment.id,
+            payment_type: payment.payment_type,
+            status: payment.status,
+            amount: payment.amount,
+            fees: payment.fees,
+            timestamp: payment.timestamp,
+            method: payment.method,
+            details: payment.details,
+        }
+    }
 }
 
 #[cfg(feature = "uniffi")]
