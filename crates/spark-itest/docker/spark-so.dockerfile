@@ -1,6 +1,6 @@
 # $USER name to be used in the `final` image
 ARG USER=so
-ARG VERSION=003289e7c35982f589ea0e99e973abab1f2c3af3
+ARG VERSION=a9f1e408bbc77a6f0bf3e94bf5d69d8704513087
 ARG REPOSITORY=https://github.com/buildonspark/spark.git
 
 FROM debian:bookworm-20250721-slim AS downloader
@@ -48,6 +48,7 @@ RUN apt-get update -qq && \
 
 WORKDIR /app
 COPY --from=downloader /source/signer/ ./
+COPY --from=downloader /source/protos/ /protos/
 WORKDIR /app/spark-frost-signer
 RUN cargo install --path .
 

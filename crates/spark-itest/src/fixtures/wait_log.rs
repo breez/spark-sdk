@@ -94,12 +94,16 @@ impl LogConsumer for WaitForLogConsumer {
             match record {
                 LogFrame::StdOut(bytes) => {
                     let message = String::from_utf8_lossy(bytes);
-                    tracing::info!("{}", self.format_message(&message));
+                    // Only log stdout if SPARK_ITEST_VERBOSE is set
+                    if std::env::var("SPARK_ITEST_VERBOSE").is_ok() {
+                        tracing::info!("{}", self.format_message(&message));
+                    }
                     self.check_and_signal(&message);
                 }
                 LogFrame::StdErr(bytes) => {
                     let message = String::from_utf8_lossy(bytes);
-                    tracing::info!("{}", self.format_message(&message));
+                    // Always log stderr (errors/warnings)
+                    tracing::warn!("{}", self.format_message(&message));
                     self.check_and_signal(&message);
                 }
             }
