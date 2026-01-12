@@ -417,7 +417,7 @@ pub(crate) fn create_static_deposit_refund_tx(
     refund_address: &Address,
 ) -> Transaction {
     Transaction {
-        version: Version::TWO,
+        version: Version::non_standard(3),
         lock_time: LockTime::ZERO,
         input: vec![TxIn {
             previous_output: deposit_outpoint,

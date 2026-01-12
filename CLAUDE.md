@@ -2,6 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Dependencies
+
+The following system dependencies are required:
+
+```bash
+# Debian/Ubuntu
+apt-get install -y protobuf-compiler
+
+# macOS
+brew install protobuf
+
+# Arch Linux
+pacman -S protobuf
+```
+
 ## Build Commands
 
 ```bash

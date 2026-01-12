@@ -2,6 +2,7 @@ import {
   OnchainConfirmationSpeed,
   SendPaymentMethod_Tags,
   SendPaymentOptions,
+  TokenConversionType,
   type BreezSdk,
   type PrepareSendPaymentResponse
 } from '@breeztech/breez-sdk-spark-react-native'
@@ -15,7 +16,8 @@ const examplePrepareSendPaymentLightningBolt11 = async (sdk: BreezSdk) => {
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
     amount: optionalAmountSats,
-    tokenIdentifier: undefined
+    tokenIdentifier: undefined,
+    tokenConversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -39,7 +41,8 @@ const examplePrepareSendPaymentOnchain = async (sdk: BreezSdk) => {
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
     amount: amountSats,
-    tokenIdentifier: undefined
+    tokenIdentifier: undefined,
+    tokenConversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -64,7 +67,8 @@ const examplePrepareSendPaymentSparkAddress = async (sdk: BreezSdk) => {
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
     amount: amountSats,
-    tokenIdentifier: undefined
+    tokenIdentifier: undefined,
+    tokenConversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -84,7 +88,8 @@ const examplePrepareSendPaymentSparkInvoice = async (sdk: BreezSdk) => {
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
     amount: optionalAmountSats,
-    tokenIdentifier: undefined
+    tokenIdentifier: undefined,
+    tokenConversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -93,6 +98,35 @@ const examplePrepareSendPaymentSparkInvoice = async (sdk: BreezSdk) => {
     console.debug(`Fees: ${feeSats} sats`)
   }
   // ANCHOR_END: prepare-send-payment-spark-invoice
+}
+
+const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-send-payment-token-conversion
+  const paymentRequest = '<payment request>'
+  // Set to use token funds to pay via token conversion
+  const optionalMaxSlippageBps = 50
+  const optionalCompletionTimeoutSecs = 30
+  const tokenConversionOptions = {
+    conversionType: new TokenConversionType.ToBitcoin({
+      fromTokenIdentifier: '<token identifier>'
+    }),
+    maxSlippageBps: optionalMaxSlippageBps,
+    completionTimeoutSecs: optionalCompletionTimeoutSecs
+  }
+
+  const prepareResponse = await sdk.prepareSendPayment({
+    paymentRequest,
+    amount: undefined,
+    tokenIdentifier: undefined,
+    tokenConversionOptions
+  })
+
+  // If the fees are acceptable, continue to create the Send Payment
+  if (prepareResponse.tokenConversionFee !== undefined) {
+    const tokenConversionFee = prepareResponse.tokenConversionFee
+    console.debug(`Estimated token conversion fee: ${tokenConversionFee} token base units`)
+  }
+  // ANCHOR_END: prepare-send-payment-token-conversion
 }
 
 const exampleSendPaymentLightningBolt11 = async (

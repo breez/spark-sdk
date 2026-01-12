@@ -1,11 +1,11 @@
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
 use bitcoin::secp256k1::PublicKey;
 use serde::{Deserialize, Serialize};
 use spark::{
     Network,
     operator::{OperatorConfig, OperatorPoolConfig},
-    services::{OptimizationOptions, TokensConfig},
+    services::{LeafOptimizationOptions, TokensConfig},
     ssp::ServiceProviderConfig,
 };
 
@@ -19,8 +19,10 @@ pub struct SparkWalletConfig {
     pub service_provider_config: ServiceProviderConfig,
     pub split_secret_threshold: u32,
     pub tokens_config: TokensConfig,
-    pub optimization_options: OptimizationOptions,
-    pub auto_optimize_enabled: bool,
+    pub leaf_optimization_options: LeafOptimizationOptions,
+    pub leaf_auto_optimize_enabled: bool,
+    pub token_outputs_optimization_options: TokenOutputsOptimizationOptions,
+    pub self_payment_allowed: bool,
 }
 
 impl SparkWalletConfig {
@@ -31,9 +33,11 @@ impl SparkWalletConfig {
             ));
         }
 
-        self.optimization_options
+        self.leaf_optimization_options
             .validate()
             .map_err(|e| SparkWalletError::ValidationError(e.to_string()))?;
+
+        self.token_outputs_optimization_options.validate()?;
 
         Ok(())
     }
@@ -52,8 +56,13 @@ impl SparkWalletConfig {
                 .unwrap(),
                 split_secret_threshold: 2,
                 tokens_config: Self::default_tokens_config(),
-                optimization_options: OptimizationOptions::default(),
-                auto_optimize_enabled: true,
+                leaf_optimization_options: LeafOptimizationOptions::default(),
+                leaf_auto_optimize_enabled: true,
+                token_outputs_optimization_options: TokenOutputsOptimizationOptions {
+                    min_outputs_threshold: 50,
+                    auto_optimize_interval: Some(Duration::from_secs(60 * 2)),
+                },
+                self_payment_allowed: false,
             },
             _ => Self {
                 network,
@@ -67,8 +76,13 @@ impl SparkWalletConfig {
                 .unwrap(),
                 split_secret_threshold: 2,
                 tokens_config: Self::default_tokens_config(),
-                optimization_options: OptimizationOptions::default(),
-                auto_optimize_enabled: true,
+                leaf_optimization_options: LeafOptimizationOptions::default(),
+                leaf_auto_optimize_enabled: true,
+                token_outputs_optimization_options: TokenOutputsOptimizationOptions {
+                    min_outputs_threshold: 50,
+                    auto_optimize_interval: Some(Duration::from_secs(60 * 2)),
+                },
+                self_payment_allowed: false,
             },
         }
     }
@@ -150,5 +164,22 @@ impl SparkWalletConfig {
             expected_withdraw_relative_block_locktime: 1_000,
             transaction_validity_duration_seconds: 180,
         }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TokenOutputsOptimizationOptions {
+    pub min_outputs_threshold: u32,
+    pub auto_optimize_interval: Option<Duration>,
+}
+
+impl TokenOutputsOptimizationOptions {
+    pub fn validate(&self) -> Result<(), SparkWalletError> {
+        if self.min_outputs_threshold <= 1 {
+            return Err(SparkWalletError::ValidationError(
+                "min_outputs_threshold must be greater than 1".to_string(),
+            ));
+        }
+        Ok(())
     }
 }

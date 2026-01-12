@@ -17,6 +17,9 @@ pub enum SparkWalletError {
     #[error("Invalid output index")]
     InvalidOutputIndex,
 
+    #[error("Self payment not allowed")]
+    SelfPaymentNotAllowed,
+
     #[error("Leaves not found")]
     LeavesNotFound,
 

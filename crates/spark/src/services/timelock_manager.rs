@@ -6,14 +6,11 @@ use crate::{
     Network,
     operator::{
         OperatorPool,
-        rpc::{
-            QueryAllNodesRequest,
-            spark::{
-                GetSigningCommitmentsRequest, RenewLeafRequest, RenewNodeTimelockSigningJob,
-                RenewNodeZeroTimelockSigningJob, RenewRefundTimelockSigningJob, TreeNodeIds,
-                query_nodes_request::Source, renew_leaf_request::SigningJobs,
-                renew_leaf_response::RenewResult,
-            },
+        rpc::spark::{
+            GetSigningCommitmentsRequest, RenewLeafRequest, RenewNodeTimelockSigningJob,
+            RenewNodeZeroTimelockSigningJob, RenewRefundTimelockSigningJob, TreeNodeIds,
+            query_nodes_request::Source, renew_leaf_request::SigningJobs,
+            renew_leaf_response::RenewResult,
         },
     },
     services::{ServiceError, map_signing_nonce_commitments},
@@ -88,19 +85,23 @@ impl TimelockManager {
         }
 
         // Get the parent nodes
-        let query_nodes_response = self
+        let paging_result = self
             .operator_pool
             .get_coordinator()
             .client
-            .query_nodes_all_pages(QueryAllNodesRequest {
-                include_parents: true,
-                network: self.network.into(),
-                source: Some(Source::NodeIds(TreeNodeIds { node_ids })),
-            })
+            .query_nodes_paginated(
+                crate::operator::rpc::QueryNodesPaginatedRequest {
+                    source: Some(Source::NodeIds(TreeNodeIds { node_ids })),
+                    include_parents: true,
+                    network: self.network.to_proto_network() as i32,
+                    ..Default::default()
+                },
+                None, // fetch all pages
+            )
             .await?;
 
         let mut node_ids_to_nodes_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
-        for node in query_nodes_response.nodes.values() {
+        for (_node_id_str, node) in paging_result.items {
             node_ids_to_nodes_map.insert(
                 TreeNodeId::from_str(&node.id).map_err(ServiceError::ValidationError)?,
                 node.clone().try_into()?,

@@ -42,7 +42,11 @@ const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[
   const response = await sdk.listPayments({
     typeFilter: ['receive'],
     statusFilter: ['pending'],
-    sparkHtlcStatusFilter: ['waitingForPreimage']
+    paymentDetailsFilter: [{
+      type: 'spark',
+      htlcStatus: ['waitingForPreimage']
+    }],
+    assetFilter: undefined
   })
   const payments = response.payments
   // ANCHOR_END: list-claimable-htlc-payments

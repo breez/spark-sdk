@@ -7,6 +7,7 @@ use tracing::{debug, info};
 
 use crate::SdkInstance;
 use crate::faucet::RegtestFaucet;
+use tempdir::TempDir;
 
 /// Event listener that forwards events to a channel
 struct ChannelEventListener {
@@ -107,6 +108,122 @@ pub async fn build_sdk_with_custom_config(
 
     let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
     let sdk = builder.build().await?;
+
+    // Set up event listener
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    // Ensure initial sync completes
+    let _ = sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?;
+
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        temp_dir,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
+    })
+}
+
+/// Build and initialize a BreezSDK instance from a BIP-39 mnemonic phrase
+///
+/// This is used for wallet recovery testing, where we need to restore a wallet
+/// from its mnemonic and verify that all historical payments are correctly synced.
+///
+/// # Arguments
+/// * `storage_dir` - Directory path for SDK storage
+/// * `mnemonic` - BIP-39 mnemonic phrase (12 or 24 words)
+/// * `passphrase` - Optional BIP-39 passphrase
+/// * `temp_dir` - Optional TempDir to keep alive (prevents premature deletion)
+///
+/// # Returns
+/// An SdkInstance containing the SDK, event channel, and optional TempDir
+pub async fn build_sdk_from_mnemonic(
+    storage_dir: String,
+    mnemonic: String,
+    passphrase: Option<String>,
+    temp_dir: Option<tempdir::TempDir>,
+) -> Result<SdkInstance> {
+    let mut config = default_config(Network::Regtest);
+    config.api_key = None; // Regtest: no API key needed
+    config.lnurl_domain = None; // Avoid lnurl server in tests
+    config.prefer_spark_over_lightning = true; // prefer spark transfers when possible
+    config.sync_interval_secs = 5; // Faster syncing for tests
+    config.real_time_sync_server_url = None; // Disable real-time sync for tests
+
+    let seed = Seed::Mnemonic {
+        mnemonic,
+        passphrase,
+    };
+    let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
+    let sdk = builder.build().await?;
+
+    // Set up event listener
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    // Ensure initial sync completes
+    let _ = sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?;
+
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        temp_dir,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
+    })
+}
+
+/// Build SDK instance using external signer instead of seed
+///
+/// # Arguments
+/// * `storage_dir` - Directory path for SDK storage
+/// * `mnemonic` - BIP39 mnemonic phrase for the external signer
+/// * `temp_dir` - Optional TempDir to keep alive
+///
+/// # Returns
+/// An SdkInstance with SDK initialized via connect_with_signer
+pub async fn build_sdk_with_external_signer(
+    storage_dir: String,
+    mnemonic: String,
+    temp_dir: Option<TempDir>,
+) -> Result<SdkInstance> {
+    let mut config = default_config(Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = true;
+    config.sync_interval_secs = 5;
+    config.real_time_sync_server_url = None;
+
+    // Create default external signer from mnemonic
+    let signer = breez_sdk_spark::default_external_signer(
+        mnemonic,
+        None, // no passphrase
+        Network::Regtest,
+        Some(KeySetConfig {
+            key_set_type: KeySetType::Default,
+            use_address_index: false,
+            account_number: None,
+        }),
+    )?;
+
+    // Use connect_with_signer instead of connect
+    let sdk = connect_with_signer(ConnectWithSignerRequest {
+        config,
+        signer,
+        storage_dir,
+    })
+    .await?;
 
     // Set up event listener
     let (tx, rx) = mpsc::channel(100);
@@ -313,6 +430,12 @@ pub enum EventResult {
     PaymentFailed(Box<Payment>),
     /// Synced event occurred
     Synced,
+}
+
+pub async fn clear_event_receiver(event_rx: &mut mpsc::Receiver<SdkEvent>) {
+    while let Ok(event) = event_rx.try_recv() {
+        info!("Clearing event from channel: {:?}", event);
+    }
 }
 
 /// Generic event waiter with timeout

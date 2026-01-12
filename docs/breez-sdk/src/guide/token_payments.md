@@ -56,6 +56,11 @@ Your application can use the [parse](./parse.md) functionality to determine if a
 
 The code example below demonstrates manual specification. Follow the standard prepare/send payment flow as described in the [Sending a payment](./send_payment.md) guide.
 
+<div class="warning">
+<h4>Developer note</h4>
+To perform a token conversion as a step before sending the payment, see the <a href="./token_conversion.md">Token conversion</a> page.
+</div>
+
 {{#tabs tokens:send-token-payment}}
 
 <h2 id="listing-payments">

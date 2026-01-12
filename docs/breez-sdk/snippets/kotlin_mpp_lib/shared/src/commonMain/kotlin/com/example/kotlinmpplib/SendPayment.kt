@@ -12,8 +12,12 @@ class SendPayment {
         val optionalAmountSats = BigInteger.fromLong(5_000L)
         // Android (BigInteger from java.math)
         // val optionalAmountSats = BigInteger.valueOf(5_000L)
+
         try {
-            val req = PrepareSendPaymentRequest(paymentRequest, optionalAmountSats)
+            val req = PrepareSendPaymentRequest(
+                paymentRequest,
+                optionalAmountSats,
+            )
             val prepareResponse = sdk.prepareSendPayment(req)
 
             // If the fees are acceptable, continue to create the Send Payment
@@ -40,8 +44,12 @@ class SendPayment {
         val amountSats = BigInteger.fromLong(50_000L)
         // Android (BigInteger from java.math)
         // val amountSats = BigInteger.valueOf(50_000L)
+
         try {
-            val req = PrepareSendPaymentRequest(paymentRequest, amountSats)
+            val req = PrepareSendPaymentRequest(
+                paymentRequest,
+                amountSats,
+            )
             val prepareResponse = sdk.prepareSendPayment(req)
 
             // If the fees are acceptable, continue to create the Send Payment
@@ -69,8 +77,12 @@ class SendPayment {
         val amountSats = BigInteger.fromLong(50_000L)
         // Android (BigInteger from java.math)
         // val amountSats = BigInteger.valueOf(50_000L)
+
         try {
-            val req = PrepareSendPaymentRequest(paymentRequest, amountSats)
+            val req = PrepareSendPaymentRequest(
+                paymentRequest,
+                amountSats,
+            )
             val prepareResponse = sdk.prepareSendPayment(req)
 
             // If the fees are acceptable, continue to create the Send Payment
@@ -94,8 +106,12 @@ class SendPayment {
         val optionalAmountSats = BigInteger.fromLong(50_000L)
         // Android (BigInteger from java.math)
         // val optionalAmountSats = BigInteger.valueOf(50_000L)
+
         try {
-            val req = PrepareSendPaymentRequest(paymentRequest, optionalAmountSats)
+            val req = PrepareSendPaymentRequest(
+                paymentRequest,
+                optionalAmountSats,
+            )
             val prepareResponse = sdk.prepareSendPayment(req)
 
             // If the fees are acceptable, continue to create the Send Payment
@@ -108,6 +124,38 @@ class SendPayment {
             // handle error
         }
         // ANCHOR_END: prepare-send-payment-spark-invoice
+    }
+    
+    suspend fun prepareSendPaymentTokenConversion(sdk: BreezSdk) {
+        // ANCHOR: prepare-send-payment-token-conversion
+        val paymentRequest = "<payment request>"
+        // Set to use token funds to pay via token conversion
+        val optionalMaxSlippageBps = 50u
+        val optionalCompletionTimeoutSecs = 30u
+        val tokenConversionOptions = TokenConversionOptions(
+            conversionType = TokenConversionType.ToBitcoin(
+                "<token identifier>"
+            ),
+            maxSlippageBps = optionalMaxSlippageBps,
+            completionTimeoutSecs = optionalCompletionTimeoutSecs
+        )
+
+        try {
+            val req = PrepareSendPaymentRequest(
+                paymentRequest,
+                tokenConversionOptions = tokenConversionOptions
+            )
+            val prepareResponse = sdk.prepareSendPayment(req)
+
+            // If the fees are acceptable, continue to create the Send Payment
+            if (prepareResponse.tokenConversionFee != null) {
+                val tokenConversionFee = prepareResponse.tokenConversionFee
+                // Log.v("Breez", "Estimated token conversion fee: ${tokenConversionFee} token base units")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: prepare-send-payment-token-conversion
     }
 
     suspend fun sendPaymentLightningBolt11(

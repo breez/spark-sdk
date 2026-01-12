@@ -50,9 +50,21 @@ repositories {
       url("https://mvn.breez.technology/releases")
   }
 }
+```
 
+### Android Only
+
+```gradle
 dependencies {
   implementation("breez_sdk_spark:bindings-android:{VERSION}")
+}
+```
+
+### Kotlin Multiplatform
+
+```gradle
+dependencies {
+  implementation("technology.breez.spark:breez-sdk-spark-kmp:{VERSION}")
 }
 ```
 

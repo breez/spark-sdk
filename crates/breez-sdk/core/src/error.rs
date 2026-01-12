@@ -20,6 +20,9 @@ pub enum SdkError {
     #[error("SparkSdkError: {0}")]
     SparkError(String),
 
+    #[error("Insufficient funds")]
+    InsufficientFunds,
+
     #[error("Invalid UUID: {0}")]
     InvalidUuid(String),
 
@@ -55,6 +58,9 @@ pub enum SdkError {
     #[error("Lnurl error: {0}")]
     LnurlError(String),
 
+    #[error("Signer error: {0}")]
+    Signer(String),
+
     #[error("Error: {0}")]
     Generic(String),
 }
@@ -80,6 +86,21 @@ impl From<breez_sdk_common::input::ParseError> for SdkError {
 impl From<bitcoin::address::ParseError> for SdkError {
     fn from(e: bitcoin::address::ParseError) -> Self {
         SdkError::InvalidInput(e.to_string())
+    }
+}
+
+impl From<flashnet::FlashnetError> for SdkError {
+    fn from(e: flashnet::FlashnetError) -> Self {
+        match e {
+            flashnet::FlashnetError::Network { reason, code } => {
+                let code = match code {
+                    Some(c) => format!(" (code: {c})"),
+                    None => String::new(),
+                };
+                SdkError::NetworkError(format!("{reason}{code}"))
+            }
+            _ => SdkError::Generic(e.to_string()),
+        }
     }
 }
 
@@ -127,7 +148,10 @@ impl From<serde_json::Error> for SdkError {
 
 impl From<SparkWalletError> for SdkError {
     fn from(e: SparkWalletError) -> Self {
-        SdkError::SparkError(e.to_string())
+        match e {
+            SparkWalletError::InsufficientFunds => SdkError::InsufficientFunds,
+            _ => SdkError::SparkError(e.to_string()),
+        }
     }
 }
 
@@ -238,5 +262,43 @@ impl From<SdkError> for DepositClaimError {
                 message: value.to_string(),
             },
         }
+    }
+}
+
+/// Error type for signer operations
+#[derive(Debug, Error, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
+pub enum SignerError {
+    #[error("Key derivation error: {0}")]
+    KeyDerivation(String),
+
+    #[error("Signing error: {0}")]
+    Signing(String),
+
+    #[error("Encryption error: {0}")]
+    Encryption(String),
+
+    #[error("Decryption error: {0}")]
+    Decryption(String),
+
+    #[error("FROST error: {0}")]
+    Frost(String),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
+    #[error("Generic signer error: {0}")]
+    Generic(String),
+}
+
+impl From<String> for SignerError {
+    fn from(s: String) -> Self {
+        SignerError::Generic(s)
+    }
+}
+
+impl From<&str> for SignerError {
+    fn from(s: &str) -> Self {
+        SignerError::Generic(s.to_string())
     }
 }

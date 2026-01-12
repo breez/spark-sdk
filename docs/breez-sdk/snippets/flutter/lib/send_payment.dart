@@ -54,7 +54,8 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentOnchain(
   return response;
 }
 
-Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(BreezSdk sdk) async {
+Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(
+    BreezSdk sdk) async {
   // ANCHOR: prepare-send-payment-spark-address
   String paymentRequest = "<spark address>";
   // Set the amount you wish the pay the receiver
@@ -74,16 +75,15 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(BreezSdk sdk) 
   return response;
 }
 
-Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(BreezSdk sdk) async {
+Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(
+    BreezSdk sdk) async {
   // ANCHOR: prepare-send-payment-spark-invoice
   String paymentRequest = "<spark invoice>";
   // Optionally set the amount you wish the pay the receiver
   BigInt optionalAmountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest, 
-      amount: optionalAmountSats
-  );
+      paymentRequest: paymentRequest, amount: optionalAmountSats);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -93,6 +93,35 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(BreezSdk sdk) 
     print("Fees: $feeSats sats");
   }
   // ANCHOR_END: prepare-send-payment-spark-invoice
+  return response;
+}
+
+Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
+    BreezSdk sdk) async {
+  // ANCHOR: prepare-send-payment-token-conversion
+  String paymentRequest = "<payment request>";
+  // Set to use token funds to pay via token conversion
+  int optionalMaxSlippageBps = 50;
+  int optionalCompletionTimeoutSecs = 30;
+  final tokenConversionOptions = TokenConversionOptions(
+    conversionType: TokenConversionType.toBitcoin(
+      fromTokenIdentifier: "<token identifier>",
+    ),
+    maxSlippageBps: optionalMaxSlippageBps,
+    completionTimeoutSecs: optionalCompletionTimeoutSecs,
+  );
+
+  final request = PrepareSendPaymentRequest(
+      paymentRequest: paymentRequest,
+      tokenConversionOptions: tokenConversionOptions);
+  final response = await sdk.prepareSendPayment(request: request);
+
+  // If the fees are acceptable, continue to create the Send Payment
+  if (response.tokenConversionFee != null) {
+    print(
+        "Estimated token conversion fee: ${response.tokenConversionFee} token base units");
+  }
+  // ANCHOR_END: prepare-send-payment-token-conversion
   return response;
 }
 
@@ -117,12 +146,12 @@ Future<SendPaymentResponse> sendPaymentOnchain(
     BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-onchain
   final options = SendPaymentOptions.bitcoinAddress(
-    confirmationSpeed: OnchainConfirmationSpeed.medium);
+      confirmationSpeed: OnchainConfirmationSpeed.medium);
   String? optionalIdempotencyKey = "<idempotency key uuid>";
   final request = SendPaymentRequest(
-    prepareResponse: prepareResponse,
-    options: options,
-    idempotencyKey: optionalIdempotencyKey);
+      prepareResponse: prepareResponse,
+      options: options,
+      idempotencyKey: optionalIdempotencyKey);
   SendPaymentResponse response = await sdk.sendPayment(request: request);
   Payment payment = response.payment;
   // ANCHOR_END: send-payment-onchain
@@ -135,8 +164,7 @@ Future<SendPaymentResponse> sendPaymentSpark(
   // ANCHOR: send-payment-spark
   String? optionalIdempotencyKey = "<idempotency key uuid>";
   final request = SendPaymentRequest(
-    prepareResponse: prepareResponse,
-    idempotencyKey: optionalIdempotencyKey);
+      prepareResponse: prepareResponse, idempotencyKey: optionalIdempotencyKey);
   SendPaymentResponse response = await sdk.sendPayment(request: request);
   Payment payment = response.payment;
   // ANCHOR_END: send-payment-spark

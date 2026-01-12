@@ -50,10 +50,22 @@ let wallet = create_wallet(&bitcoind).await?;
 
 ## Debugging Tests
 
-To view detailed logs during test execution:
+By default, Docker container stdout logs are suppressed to reduce noise during test execution. **Errors (stderr) are always logged**. To enable verbose logging of all output from Docker containers (bitcoind, operators, migrations), set the `SPARK_ITEST_VERBOSE` environment variable:
+
+```bash
+SPARK_ITEST_VERBOSE=1 cargo test -- --nocapture
+```
+
+To view detailed logs from the Spark SDK itself:
 
 ```bash
 RUST_LOG=spark_wallet=trace,spark=trace cargo test -- --nocapture
+```
+
+To see everything (SDK + Docker containers):
+
+```bash
+SPARK_ITEST_VERBOSE=1 RUST_LOG=spark_wallet=trace,spark=trace cargo test -- --nocapture
 ```
 
 This will show all container logs and test output, which is useful for diagnosing issues.

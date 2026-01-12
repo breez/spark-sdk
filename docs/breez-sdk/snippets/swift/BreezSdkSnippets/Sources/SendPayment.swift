@@ -85,6 +85,32 @@ func prepareSendPaymentSparkInvoice(sdk: BreezSdk) async throws {
     // ANCHOR_END: prepare-send-payment-spark-invoice
 }
 
+func prepareSendTokenPaymentTokenConversion(sdk: BreezSdk) async throws {
+    // ANCHOR: prepare-send-payment-token-conversion
+    let paymentRequest = "<bolt11 invoice>"
+    // Set to use token funds to pay via token conversion
+    let optionalMaxSlippageBps = UInt32(50)
+    let optionalCompletionTimeoutSecs = UInt32(30)
+    let tokenConversionOptions = TokenConversionOptions(
+        conversionType: TokenConversionType.toBitcoin(
+            fromTokenIdentifier: "<token identifier>"
+        ),
+        maxSlippageBps: optionalMaxSlippageBps,
+        completionTimeoutSecs: optionalCompletionTimeoutSecs
+    )
+
+    let prepareResponse = try await sdk.prepareSendPayment(
+        request: PrepareSendPaymentRequest(
+            paymentRequest: paymentRequest,
+            tokenConversionOptions: tokenConversionOptions
+        ))
+
+    if let tokenConversionFee = prepareResponse.tokenConversionFee {
+        print("Estimated token conversion fee: \(tokenConversionFee) token base units")
+    }
+    // ANCHOR_END: prepare-send-payment-token-conversion
+}
+
 func sendPaymentLightningBolt11(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse)
     async throws
 {

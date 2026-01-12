@@ -19,7 +19,7 @@ Pod::Spec.new do |spec|
   spec.source_files        = 'Classes/**/*'
   spec.dependency 'Flutter'
 
-  spec.platform            = :ios, '11.0'
+  spec.platform            = :ios, '13.0'
   spec.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   spec.swift_version       = '5.0'
 

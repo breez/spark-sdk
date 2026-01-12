@@ -7,11 +7,13 @@ async fn prepare_send_payment_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     let payment_request = "<bolt11 invoice>".to_string();
     // Optionally set the amount you wish the pay the receiver
     let optional_amount_sats = Some(5_000);
+
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             amount: optional_amount_sats,
             token_identifier: None,
+            token_conversion_options: None,
         })
         .await?;
 
@@ -36,11 +38,13 @@ async fn prepare_send_payment_lightning_onchain(sdk: &BreezSdk) -> Result<()> {
     let payment_request = "<bitcoin address>".to_string();
     // Set the amount you wish the pay the receiver
     let amount_sats = Some(50_000);
+
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             amount: amount_sats,
             token_identifier: None,
+            token_conversion_options: None,
         })
         .await?;
 
@@ -62,11 +66,13 @@ async fn prepare_send_payment_spark_address(sdk: &BreezSdk) -> Result<()> {
     let payment_request = "<spark address>".to_string();
     // Set the amount you wish the pay the receiver
     let amount_sats = Some(50_000);
+
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             amount: amount_sats,
             token_identifier: None,
+            token_conversion_options: None,
         })
         .await?;
 
@@ -83,11 +89,13 @@ async fn prepare_send_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     let payment_request = "<spark invoice>".to_string();
     // Optionally set the amount you wish the pay the receiver
     let optional_amount_sats = Some(50_000);
+
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             amount: optional_amount_sats,
             token_identifier: None,
+            token_conversion_options: None,
         })
         .await?;
 
@@ -96,6 +104,37 @@ async fn prepare_send_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
         info!("Fees: {} sats", fee);
     }
     // ANCHOR_END: prepare-send-payment-spark-invoice
+    Ok(())
+}
+
+async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: prepare-send-payment-token-conversion
+    let payment_request = "<payment request>".to_string();
+    // Set to use token funds to pay via token conversion
+    let optional_max_slippage_bps = Some(50);
+    let optional_completion_timeout_secs = Some(30);
+    let token_conversion_options = Some(TokenConversionOptions {
+        conversion_type: TokenConversionType::ToBitcoin {
+            from_token_identifier: "<token identifier>".to_string(),
+        },
+        max_slippage_bps: optional_max_slippage_bps,
+        completion_timeout_secs: optional_completion_timeout_secs,
+    });
+
+    let prepare_response = sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request,
+            amount: None,
+            token_identifier: None,
+            token_conversion_options,
+        })
+        .await?;
+
+    // If the fees are acceptable, continue to create the Send Payment
+    if let Some(token_conversion_fee) = prepare_response.token_conversion_fee {
+        info!("Estimated token conversion fee: {token_conversion_fee} token base units");
+    }
+    // ANCHOR_END: prepare-send-payment-token-conversion
     Ok(())
 }
 

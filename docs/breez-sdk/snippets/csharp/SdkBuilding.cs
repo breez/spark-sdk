@@ -52,11 +52,14 @@ namespace BreezSdkSnippets
             var keySetType = KeySetType.Default;
             var useAddressIndex = false;
             var optionalAccountNumber = 21u;
-            await builder.WithKeySet(
+
+            var keySetConfig = new KeySetConfig(
                 keySetType: keySetType,
                 useAddressIndex: useAddressIndex,
                 accountNumber: optionalAccountNumber
             );
+
+            await builder.WithKeySet(keySetConfig);
             // ANCHOR_END: with-key-set
         }
 

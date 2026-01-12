@@ -20,7 +20,7 @@ import type {
 } from '@breeztech/breez-sdk-spark'
 
 // Init stub
-const init = async () => {}
+const init = async () => { }
 
 const exampleGettingStartedAdvanced = async () => {
   // ANCHOR: init-sdk-advanced
@@ -44,7 +44,7 @@ const exampleGettingStartedAdvanced = async () => {
   // builder = builder.withRealTimeSyncStorage(<your real-time sync storage implementation>)
   // builder = builder.withChainService(<your chain service implementation>)
   // builder = builder.withRestClient(<your rest client implementation>)
-  // builder = builder.withKeySet(<your key set type>, <use address index>, <account number>)
+  // builder = builder.withKeySet({ keySetType: <your key set type>, useAddressIndex: <use address index>, accountNumber: <account number> })
   // builder = builder.withPaymentObserver(<your payment observer implementation>)
   const sdk = await builder.build()
   // ANCHOR_END: init-sdk-advanced
@@ -64,10 +64,11 @@ const exampleWithRestChainService = async (builder: SdkBuilder) => {
 
 const exampleWithKeySet = async (builder: SdkBuilder) => {
   // ANCHOR: with-key-set
-  const keySetType = 'default'
-  const useAddressIndex = false
-  const optionalAccountNumber = 21
-  builder = builder.withKeySet(keySetType, useAddressIndex, optionalAccountNumber)
+  builder = builder.withKeySet({
+    keySetType: 'default',
+    useAddressIndex: false,
+    accountNumber: 21
+  })
   // ANCHOR_END: with-key-set
 }
 

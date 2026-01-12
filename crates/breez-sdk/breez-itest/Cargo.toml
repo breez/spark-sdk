@@ -21,6 +21,7 @@ test-log = { workspace = true, features = ["trace"] }
 anyhow.workspace = true
 
 # Utils
+bip39.workspace = true
 bitcoin = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

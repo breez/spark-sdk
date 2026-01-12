@@ -1,7 +1,8 @@
 import {
   type BreezSdk,
   type PrepareSendPaymentResponse,
-  type SendPaymentOptions
+  type SendPaymentOptions,
+  type TokenConversionOptions
 } from '@breeztech/breez-sdk-spark'
 
 const examplePrepareSendPaymentLightningBolt11 = async (sdk: BreezSdk) => {
@@ -87,6 +88,34 @@ const examplePrepareSendPaymentSparkInvoice = async (sdk: BreezSdk) => {
     console.debug(`Fees: ${feeSats} sats`)
   }
   // ANCHOR_END: prepare-send-payment-spark-invoice
+}
+
+const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-send-payment-token-conversion
+  const paymentRequest = '<bolt11 invoice>'
+  // Set to use token funds to pay via token conversion
+  const optionalMaxSlippageBps = 50
+  const optionalCompletionTimeoutSecs = 30
+  const tokenConversionOptions: TokenConversionOptions = {
+    conversionType: {
+      type: 'toBitcoin',
+      fromTokenIdentifier: '<token identifier>'
+    },
+    maxSlippageBps: optionalMaxSlippageBps,
+    completionTimeoutSecs: optionalCompletionTimeoutSecs
+  }
+
+  const prepareResponse = await sdk.prepareSendPayment({
+    paymentRequest,
+    tokenConversionOptions
+  })
+
+  // If the fees are acceptable, continue to create the Send Payment
+  if (prepareResponse.tokenConversionFee !== undefined) {
+    const tokenConversionFee = prepareResponse.tokenConversionFee
+    console.debug(`Estimated token conversion fee: ${tokenConversionFee} token base units`)
+  }
+  // ANCHOR_END: prepare-send-payment-token-conversion
 }
 
 const exampleSendPaymentLightningBolt11 = async (

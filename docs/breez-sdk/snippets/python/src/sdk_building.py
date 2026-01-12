@@ -10,6 +10,7 @@ from breez_sdk_spark import (
     ChainApiType,
     Credentials,
     KeySetType,
+    KeySetConfig,
 )
 
 
@@ -61,11 +62,14 @@ async def with_key_set(builder: SdkBuilder):
     key_set_type = KeySetType.DEFAULT
     use_address_index = False
     optional_account_number = 21
-    await builder.with_key_set(
+
+    key_set_config = KeySetConfig(
         key_set_type=key_set_type,
         use_address_index=use_address_index,
         account_number=optional_account_number,
     )
+
+    await builder.with_key_set(config=key_set_config)
     # ANCHOR_END: with-key-set
 
 

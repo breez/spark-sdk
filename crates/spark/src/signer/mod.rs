@@ -16,7 +16,7 @@ pub(crate) use secret_sharing::from_bytes_to_scalar;
 #[cfg(test)]
 pub(crate) use default_signer::tests::create_test_signer;
 
-#[async_trait::async_trait]
+#[macros::async_trait]
 pub trait Signer: Send + Sync + 'static {
     async fn sign_message_ecdsa_with_identity_key(
         &self,
