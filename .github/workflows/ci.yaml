@@ -144,10 +144,6 @@ jobs:
         working-directory: packages/flutter
         run: just setup
 
-      - name: Install flutter_rust_bridge_codegen dependencies
-        working-directory: packages/flutter
-        run: just frb
-
       - name: Generate Dart/Flutter bindings & Check Rust package for errors
         working-directory: packages/flutter
         run: |
