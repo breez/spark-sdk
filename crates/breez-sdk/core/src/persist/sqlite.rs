@@ -774,6 +774,16 @@ impl Storage for SqliteStorage {
 
         let connection = self.get_connection()?;
 
+        // Early exit if no related payments exist
+        let has_related: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM payment_metadata WHERE parent_payment_id IS NOT NULL LIMIT 1)",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_related {
+            return Ok(HashMap::new());
+        }
+
         // Build the IN clause with placeholders
         let placeholders: Vec<&str> = parent_payment_ids.iter().map(|_| "?").collect();
         let in_clause = placeholders.join(", ");

@@ -541,6 +541,17 @@ class SqliteStorage {
         return Promise.resolve({});
       }
 
+      // Early exit if no related payments exist
+      const hasRelated = this.db
+        .prepare(
+          "SELECT EXISTS(SELECT 1 FROM payment_metadata WHERE parent_payment_id IS NOT NULL LIMIT 1)"
+        )
+        .pluck()
+        .get();
+      if (!hasRelated) {
+        return Promise.resolve({});
+      }
+
       const placeholders = parentPaymentIds.map(() => "?").join(", ");
       const query = `
             SELECT p.id
