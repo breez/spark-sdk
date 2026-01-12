@@ -468,6 +468,14 @@ class IndexedDBStorage {
         const metadataRequest = metadataStore.get(payment.id);
         metadataRequest.onsuccess = () => {
           const metadata = metadataRequest.result;
+
+          // Skip child payments (those with a parentPaymentId)
+          // Child payments are accessed via the parent's relatedPayments field
+          if (metadata && metadata.parentPaymentId) {
+            cursor.continue();
+            return;
+          }
+
           const paymentWithMetadata = this._mergePaymentMetadata(
             payment,
             metadata
@@ -661,6 +669,114 @@ class IndexedDBStorage {
               paymentRequest.error?.message || "Unknown error"
             }`,
             paymentRequest.error
+          )
+        );
+      };
+    });
+  }
+
+  /**
+   * Gets payments that have any of the specified parent payment IDs.
+   * @param {string[]} parentPaymentIds - Array of parent payment IDs
+   * @returns {Promise<Object>} Map of parentPaymentId -> array of RelatedPayment objects
+   */
+  async getPaymentsByParentIds(parentPaymentIds) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    if (!parentPaymentIds || parentPaymentIds.length === 0) {
+      return {};
+    }
+
+    const parentIdSet = new Set(parentPaymentIds);
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(
+        ["payments", "payment_metadata", "lnurl_receive_metadata"],
+        "readonly"
+      );
+      const metadataStore = transaction.objectStore("payment_metadata");
+      const paymentStore = transaction.objectStore("payments");
+      const lnurlReceiveMetadataStore = transaction.objectStore("lnurl_receive_metadata");
+
+      const result = {};
+      const fetchedMetadata = [];
+
+      // Query all metadata records and filter by parentPaymentId
+      const cursorRequest = metadataStore.openCursor();
+
+      cursorRequest.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (!cursor) {
+          // All metadata processed, now fetch payment details
+          if (fetchedMetadata.length === 0) {
+            resolve(result);
+            return;
+          }
+
+          let processed = 0;
+          for (const metadata of fetchedMetadata) {
+            const parentId = metadata.parentPaymentId;
+            const paymentRequest = paymentStore.get(metadata.paymentId);
+            paymentRequest.onsuccess = () => {
+              const payment = paymentRequest.result;
+              if (payment) {
+                const paymentWithMetadata = this._mergePaymentMetadata(payment, metadata);
+
+                if (!result[parentId]) {
+                  result[parentId] = [];
+                }
+
+                // Fetch lnurl receive metadata if applicable
+                this._fetchLnurlReceiveMetadata(paymentWithMetadata, lnurlReceiveMetadataStore)
+                  .then((mergedPayment) => {
+                    result[parentId].push(this._toRelatedPayment(mergedPayment));
+                  })
+                  .catch(() => {
+                    result[parentId].push(this._toRelatedPayment(paymentWithMetadata));
+                  })
+                  .finally(() => {
+                    processed++;
+                    if (processed === fetchedMetadata.length) {
+                      // Sort each parent's children by timestamp
+                      for (const parentId of Object.keys(result)) {
+                        result[parentId].sort((a, b) => a.timestamp - b.timestamp);
+                      }
+                      resolve(result);
+                    }
+                  });
+              } else {
+                processed++;
+                if (processed === fetchedMetadata.length) {
+                  resolve(result);
+                }
+              }
+            };
+            paymentRequest.onerror = () => {
+              processed++;
+              if (processed === fetchedMetadata.length) {
+                resolve(result);
+              }
+            };
+          }
+          return;
+        }
+
+        const metadata = cursor.value;
+        if (metadata.parentPaymentId && parentIdSet.has(metadata.parentPaymentId)) {
+          fetchedMetadata.push(metadata);
+        }
+        cursor.continue();
+      };
+
+      cursorRequest.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to get payments by parent ids: ${
+              cursorRequest.error?.message || "Unknown error"
+            }`,
+            cursorRequest.error
           )
         );
       };
@@ -1701,7 +1817,16 @@ class IndexedDBStorage {
       timestamp: payment.timestamp,
       method,
       details,
+      relatedPayments: [],
     };
+  }
+
+  /**
+   * Converts a payment to a RelatedPayment object (without relatedPayments field)
+   */
+  _toRelatedPayment(payment) {
+    const { relatedPayments, ...relatedPayment } = payment;
+    return relatedPayment;
   }
 
   _fetchLnurlReceiveMetadata(payment, lnurlReceiveMetadataStore) {

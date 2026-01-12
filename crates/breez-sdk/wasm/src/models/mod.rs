@@ -444,6 +444,19 @@ pub struct Payment {
     pub timestamp: u64,
     pub method: PaymentMethod,
     pub details: Option<PaymentDetails>,
+    pub related_payments: Vec<RelatedPayment>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RelatedPayment)]
+pub struct RelatedPayment {
+    pub id: String,
+    pub payment_type: PaymentType,
+    pub status: PaymentStatus,
+    pub amount: u128,
+    pub fees: u128,
+    pub timestamp: u64,
+    pub method: PaymentMethod,
+    pub details: Option<PaymentDetails>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentDetails)]

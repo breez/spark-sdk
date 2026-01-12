@@ -273,6 +273,15 @@ impl Storage for SyncedStorage {
         self.inner.get_payment_by_invoice(invoice).await
     }
 
+    async fn get_payments_by_parent_ids(
+        &self,
+        parent_payment_ids: Vec<String>,
+    ) -> Result<HashMap<String, Vec<crate::RelatedPayment>>, StorageError> {
+        self.inner
+            .get_payments_by_parent_ids(parent_payment_ids)
+            .await
+    }
+
     async fn add_deposit(
         &self,
         txid: String,

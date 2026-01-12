@@ -102,13 +102,17 @@ async fn test_token_conversion_success(
         "Alice sent Bitcoin→Token payment: status={:?}, method={:?}",
         send_btc_to_token.payment.status, send_btc_to_token.payment.method
     );
-
     assert!(
         matches!(
             send_btc_to_token.payment.status,
             PaymentStatus::Completed | PaymentStatus::Pending
         ),
         "Bitcoin to Token payment should be completed or pending"
+    );
+    assert_eq!(
+        send_btc_to_token.payment.related_payments.len(),
+        2,
+        "There should be 2 related payments (conversion steps)"
     );
 
     // Wait for Bob to receive the token payment
@@ -125,6 +129,11 @@ async fn test_token_conversion_success(
         bob_received_payment.method,
         PaymentMethod::Token,
         "Bob should receive a token payment"
+    );
+    assert_eq!(
+        bob_received_payment.related_payments.len(),
+        0,
+        "Received payment should have no related payments"
     );
 
     // Verify Bob received tokens
@@ -226,13 +235,17 @@ async fn test_token_conversion_success(
         "Bob sent Token→Bitcoin payment: status={:?}, method={:?}",
         send_token_to_btc.payment.status, send_token_to_btc.payment.method
     );
-
     assert!(
         matches!(
             send_token_to_btc.payment.status,
             PaymentStatus::Completed | PaymentStatus::Pending
         ),
         "Token to Bitcoin payment should be completed or pending"
+    );
+    assert_eq!(
+        send_token_to_btc.payment.related_payments.len(),
+        2,
+        "There should be 2 related payments (conversion steps)"
     );
 
     // Wait for Alice to receive the Bitcoin payment
@@ -248,6 +261,11 @@ async fn test_token_conversion_success(
     assert_eq!(
         alice_received_payment.amount, token_to_sats_success_amount as u128,
         "Alice should receive the exact invoice amount"
+    );
+    assert_eq!(
+        alice_received_payment.related_payments.len(),
+        0,
+        "Received payment should have no related payments"
     );
 
     // Verify Alice received Bitcoin

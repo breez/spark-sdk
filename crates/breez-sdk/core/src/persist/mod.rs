@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::{
     ConversionInfo, DepositClaimError, DepositInfo, LightningAddressInfo, ListPaymentsRequest,
-    LnurlPayInfo, LnurlWithdrawInfo, TokenBalance, TokenMetadata, models::Payment,
+    LnurlPayInfo, LnurlWithdrawInfo, RelatedPayment, TokenBalance, TokenMetadata, models::Payment,
 };
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
@@ -154,6 +154,21 @@ pub trait Storage: Send + Sync {
         &self,
         invoice: String,
     ) -> Result<Option<Payment>, StorageError>;
+
+    /// Gets payments that have any of the specified parent payment IDs.
+    /// Used to load related/child payments for a set of parent payments.
+    ///
+    /// # Arguments
+    ///
+    /// * `parent_payment_ids` - The IDs of the parent payments
+    ///
+    /// # Returns
+    ///
+    /// A map of `parent_payment_id` -> Vec<child payments> or a `StorageError`
+    async fn get_payments_by_parent_ids(
+        &self,
+        parent_payment_ids: Vec<String>,
+    ) -> Result<HashMap<String, Vec<RelatedPayment>>, StorageError>;
 
     /// Add a deposit to storage
     /// # Arguments
@@ -480,6 +495,8 @@ pub(crate) struct StaticDepositAddress {
 
 #[cfg(feature = "test-utils")]
 pub mod tests {
+    use std::collections::HashMap;
+
     use chrono::Utc;
 
     use crate::{
@@ -815,6 +832,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         // Test 2: Spark HTLC payment
@@ -836,6 +854,7 @@ pub mod tests {
                 }),
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         // Test 3: Token payment
@@ -866,6 +885,7 @@ pub mod tests {
                 }),
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         // Test 4: Lightning payment with full details
@@ -899,6 +919,7 @@ pub mod tests {
                 lnurl_withdraw_info: pay_metadata.lnurl_withdraw_info.clone(),
                 lnurl_receive_metadata: None,
             }),
+            related_payments: Vec::new(),
         };
 
         // Test 5: Lightning payment with full details
@@ -926,6 +947,7 @@ pub mod tests {
                 lnurl_withdraw_info: withdraw_metadata.lnurl_withdraw_info.clone(),
                 lnurl_receive_metadata: None,
             }),
+            related_payments: Vec::new(),
         };
 
         // Test 6: Lightning payment with minimal details
@@ -947,6 +969,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
+            related_payments: Vec::new(),
         };
 
         // Test 7: Lightning payment with LNURL receive metadata
@@ -975,6 +998,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: Some(lnurl_receive_metadata.clone()),
             }),
+            related_payments: Vec::new(),
         };
 
         // Test 8: Withdraw payment
@@ -990,6 +1014,7 @@ pub mod tests {
                 tx_id: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
                     .to_string(),
             }),
+            related_payments: Vec::new(),
         };
 
         // Test 9: Deposit payment
@@ -1005,6 +1030,7 @@ pub mod tests {
                 tx_id: "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321fe"
                     .to_string(),
             }),
+            related_payments: Vec::new(),
         };
 
         // Test 10: Payment with no details
@@ -1017,6 +1043,7 @@ pub mod tests {
             timestamp: Utc::now().timestamp().try_into().unwrap(),
             method: PaymentMethod::Unknown,
             details: None,
+            related_payments: Vec::new(),
         };
 
         // Test 11: Successful conversion payment
@@ -1046,6 +1073,11 @@ pub mod tests {
                     .conversion_info
                     .clone(),
             }),
+            related_payments: Vec::new(),
+        };
+        let successful_received_conversion_payment_metadata = PaymentMetadata {
+            parent_payment_id: Some("after_conversion_pmt124".to_string()),
+            ..Default::default()
         };
         let successful_received_conversion_payment = Payment {
             id: "conversion_received_pmt123".to_string(),
@@ -1061,6 +1093,7 @@ pub mod tests {
                 invoice_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
         let after_conversion_payment = Payment {
             id: "after_conversion_pmt124".to_string(),
@@ -1076,6 +1109,7 @@ pub mod tests {
                 invoice_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         // Test 12: Failed conversion payment with refund info
@@ -1104,6 +1138,7 @@ pub mod tests {
                     .conversion_info
                     .clone(),
             }),
+            related_payments: Vec::new(),
         };
 
         // Test 13: Failed conversion payment with no refund info
@@ -1132,6 +1167,7 @@ pub mod tests {
                     .conversion_info
                     .clone(),
             }),
+            related_payments: Vec::new(),
         };
 
         let test_payments = vec![
@@ -1151,6 +1187,11 @@ pub mod tests {
             failed_with_refund_conversion_payment.clone(),
             failed_no_refund_conversion_payment.clone(),
         ];
+        // Note: Storage layer returns related_payments as empty Vec.
+        // The SDK layer is responsible for populating related_payments by calling
+        // get_payments_by_parent_ids() and joining the results.
+        // This test only verifies the Storage layer behavior.
+        let test_related_payment_count = HashMap::from([(after_conversion_payment.id.clone(), 2)]);
 
         // Insert all payments
         for payment in &test_payments {
@@ -1185,6 +1226,13 @@ pub mod tests {
             .unwrap();
         storage
             .set_payment_metadata(
+                successful_received_conversion_payment.id.clone(),
+                successful_received_conversion_payment_metadata,
+            )
+            .await
+            .unwrap();
+        storage
+            .set_payment_metadata(
                 failed_with_refund_conversion_payment.id.clone(),
                 failed_with_refund_conversion_payment_metadata,
             )
@@ -1197,7 +1245,7 @@ pub mod tests {
             )
             .await
             .unwrap();
-        // List all payments
+        // List all payments (excludes child payments with parent_payment_id set)
         let payments = storage
             .list_payments(ListPaymentsRequest {
                 offset: Some(0),
@@ -1206,7 +1254,9 @@ pub mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(payments.len(), 15);
+        // 15 total payments minus 2 child payments
+        // (successful_sent_conversion_payment and successful_received_conversion_payment has parent_payment_id)
+        assert_eq!(payments.len(), 13);
 
         // Test each payment type individually
         for (i, expected_payment) in test_payments.iter().enumerate() {
@@ -1225,6 +1275,31 @@ pub mod tests {
             assert_eq!(retrieved_payment.amount, expected_payment.amount);
             assert_eq!(retrieved_payment.fees, expected_payment.fees);
             assert_eq!(retrieved_payment.method, expected_payment.method);
+
+            // Storage layer always returns empty related_payments.
+            // The SDK layer populates this field via get_payments_by_parent_ids().
+            assert!(
+                retrieved_payment.related_payments.is_empty(),
+                "Storage layer should return empty related_payments for payment {}",
+                expected_payment.id
+            );
+
+            // Test related payments retrieval
+            let related_payment_count = storage
+                .get_payments_by_parent_ids(vec![expected_payment.id.clone()])
+                .await
+                .unwrap()
+                .get(&expected_payment.id)
+                .map_or(0, Vec::len);
+            let expected_related_count = test_related_payment_count
+                .get(&expected_payment.id)
+                .copied()
+                .unwrap_or(0);
+            assert_eq!(
+                related_payment_count, expected_related_count,
+                "Related payments count mismatch for payment {}",
+                expected_payment.id
+            );
 
             // Test payment details persistence
             match (&retrieved_payment.details, &expected_payment.details) {
@@ -1364,8 +1439,10 @@ pub mod tests {
             .iter()
             .filter(|p| p.payment_type == PaymentType::Receive)
             .count();
-        assert_eq!(send_payments, 8); // spark, lightning_lnurl_pay, withdraw, no_details, conversion x4
-        assert_eq!(receive_payments, 7); // spark_htlc, token, lightning_lnurl_withdraw, lightning_minimal, lightning_lnurl_receive, deposit, conversion
+        // Send: 8 - 1 child (successful_sent_conversion_payment) = 7
+        // Receive: 7 - 1 child (successful_received_conversion_payment) = 6
+        assert_eq!(send_payments, 7); // spark, lightning_lnurl_pay, withdraw, no_details, after_conversion, failed_with_refund, failed_no_refund
+        assert_eq!(receive_payments, 6); // spark_htlc, token, lightning_lnurl_withdraw, lightning_minimal, lightning_lnurl_receive, deposit
 
         // Test filtering by status
         let completed_payments = payments
@@ -1380,7 +1457,9 @@ pub mod tests {
             .iter()
             .filter(|p| p.status == PaymentStatus::Failed)
             .count();
-        assert_eq!(completed_payments, 12); // spark, spark_htlc, lightning_lnurl_pay, lightning_lnurl_withdraw, lightning_lnurl_receive, withdraw, deposit, conversion x5
+        // 12 completed payments minus 2 child payments = 10
+        // (successful_sent_conversion_payment and successful_received_conversion_payment both have parent_payment_id)
+        assert_eq!(completed_payments, 10); // spark, spark_htlc, lightning_lnurl_pay, lightning_lnurl_withdraw, lightning_lnurl_receive, withdraw, deposit, after_conversion, failed_with_refund, failed_no_refund
         assert_eq!(pending_payments, 2); // token, no_details
         assert_eq!(failed_payments, 1); // lightning_minimal
 
@@ -1410,6 +1489,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
+            related_payments: Vec::new(),
         };
 
         storage
@@ -1482,6 +1562,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let lightning_zap_payment3 = Payment {
@@ -1502,6 +1583,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
+            related_payments: Vec::new(),
         };
 
         storage
@@ -1723,6 +1805,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let receive_payment = Payment {
@@ -1743,6 +1826,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
+            related_payments: Vec::new(),
         };
 
         storage.insert_payment(send_payment).await.unwrap();
@@ -1803,6 +1887,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let pending_payment = Payment {
@@ -1818,6 +1903,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let failed_payment = Payment {
@@ -1833,6 +1919,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         storage.insert_payment(completed_payment).await.unwrap();
@@ -1890,6 +1977,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let lightning_payment = Payment {
@@ -1910,6 +1998,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let token_payment = Payment {
@@ -1934,6 +2023,7 @@ pub mod tests {
                 invoice_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let withdraw_payment = Payment {
@@ -1947,6 +2037,7 @@ pub mod tests {
             details: Some(PaymentDetails::Withdraw {
                 tx_id: "withdraw_tx_1".to_string(),
             }),
+            related_payments: Vec::new(),
         };
 
         let deposit_payment = Payment {
@@ -1960,6 +2051,7 @@ pub mod tests {
             details: Some(PaymentDetails::Deposit {
                 tx_id: "deposit_tx_1".to_string(),
             }),
+            related_payments: Vec::new(),
         };
 
         storage.insert_payment(spark_payment).await.unwrap();
@@ -2038,6 +2130,7 @@ pub mod tests {
                 }),
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let htlc_shared = Payment {
@@ -2058,6 +2151,7 @@ pub mod tests {
                 }),
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let htlc_returned = Payment {
@@ -2078,6 +2172,7 @@ pub mod tests {
                 }),
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         // Create a payment that is not HTLC-related
@@ -2097,6 +2192,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         // Insert all payments
@@ -2219,6 +2315,7 @@ pub mod tests {
                 invoice_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let successful_conversion_metadata = PaymentMetadata {
@@ -2244,6 +2341,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let payment_without_refund_metadata = PaymentMetadata {
@@ -2269,6 +2367,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         storage.insert_payment(payment_with_refund).await.unwrap();
@@ -2404,6 +2503,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let payment2 = Payment {
@@ -2419,6 +2519,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let payment3 = Payment {
@@ -2434,6 +2535,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         storage.insert_payment(payment1).await.unwrap();
@@ -2491,6 +2593,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let payment2 = Payment {
@@ -2511,6 +2614,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let payment3 = Payment {
@@ -2531,6 +2635,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
+            related_payments: Vec::new(),
         };
 
         storage.insert_payment(payment1).await.unwrap();
@@ -2590,6 +2695,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let payment2 = Payment {
@@ -2605,6 +2711,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         let payment3 = Payment {
@@ -2620,6 +2727,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         storage.insert_payment(payment1).await.unwrap();
@@ -2746,6 +2854,7 @@ pub mod tests {
                 }),
                 conversion_info: None,
             }),
+            related_payments: Vec::new(),
         };
 
         // Insert the payment into storage
