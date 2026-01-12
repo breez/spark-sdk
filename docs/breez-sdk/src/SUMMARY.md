@@ -46,6 +46,7 @@
   - [Spark HTLC Payments](guide/htlcs.md)
   - [Custom leaf optimization](guide/optimize.md)
   - [Using an External Signer](guide/external_signer.md)
+  - [Seedless restore](guide/seedless_restore.md)
 - [Moving to production](guide/moving_to_production.md)
 
 ---

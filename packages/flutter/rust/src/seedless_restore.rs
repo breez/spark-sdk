@@ -48,11 +48,12 @@ impl SeedlessRestore {
     /// # Arguments
     /// * `derive_prf_seed` - Dart callback to derive a 32-byte seed from passkey PRF with a salt
     /// * `is_prf_available` - Dart callback to check if PRF-capable passkey is available
-    /// * `relay_config` - Configuration for Nostr relay connections
+    /// * `relay_config` - Optional configuration for Nostr relay connections (uses default if None)
+    #[frb(sync)]
     pub fn new(
         derive_prf_seed: impl Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync + 'static,
         is_prf_available: impl Fn() -> DartFnFuture<bool> + Send + Sync + 'static,
-        relay_config: NostrRelayConfig,
+        relay_config: Option<NostrRelayConfig>,
     ) -> Self {
         let provider = Arc::new(CallbackPrfProvider {
             derive_prf_seed_fn: Arc::new(derive_prf_seed),
@@ -113,22 +114,4 @@ impl SeedlessRestore {
     pub async fn is_prf_available(&self) -> Result<bool, SeedlessRestoreError> {
         self.inner.is_prf_available().await
     }
-}
-
-/// Create a default NostrRelayConfig with public relays.
-#[frb(sync)]
-pub fn default_nostr_relay_config() -> NostrRelayConfig {
-    NostrRelayConfig::default()
-}
-
-/// Create a NostrRelayConfig with Breez-operated relays.
-#[frb(sync)]
-pub fn breez_nostr_relay_config() -> NostrRelayConfig {
-    NostrRelayConfig::breez_relays()
-}
-
-/// Create a custom NostrRelayConfig.
-#[frb(sync)]
-pub fn custom_nostr_relay_config(relay_urls: Vec<String>, timeout_secs: u32) -> NostrRelayConfig {
-    NostrRelayConfig::custom(relay_urls, timeout_secs)
 }
