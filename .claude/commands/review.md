@@ -19,7 +19,16 @@ gh pr diff $ARGUMENTS
 
 # Check CI status
 gh pr checks $ARGUMENTS
+
+# Get existing comments and discussions
+gh api repos/{owner}/{repo}/pulls/{number}/comments
+gh pr view $ARGUMENTS --json reviews,comments
 ```
+
+Review existing discussions before providing feedback:
+- Don't repeat points others already raised
+- Note if author addressed concerns in responses
+- Build on existing suggestions rather than duplicate them
 
 ## Step 2: Review Code Changes
 
