@@ -52,10 +52,10 @@ make build-wasm  # verify WASM builds
 
 ## Follow-up Actions
 
-For Flutter binding changes (new features or breaking changes):
-- Check if an issue already exists on [breez/glow](https://github.com/breez/glow) for this feature
-- If not, create one using the template in `.claude/skills/pr-review/templates/glow-issue.md`
-- If exists, update it with new information
+For Flutter binding changes (new features or breaking changes), create/update a follow-up issue on [breez/glow](https://github.com/breez/glow):
+
+1. Check for existing issues: `gh issue list --repo breez/glow --search "{feature}" --state open`
+2. If exists, update it. If not, create using template: `.claude/skills/pr-review/templates/glow-issue.md`
 
 ## Anti-Patterns to Flag
 

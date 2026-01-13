@@ -2,22 +2,7 @@
 
 Use this template when creating follow-up issues on [breez/glow](https://github.com/breez/glow) for Flutter binding changes.
 
-## Before Creating
-
-**Check for existing issues first** to avoid duplicates:
-```bash
-gh issue list --repo breez/glow --search "{feature_name}" --state open
-```
-
-If an issue exists, update it instead of creating a new one:
-```bash
-gh issue edit {issue_number} --repo breez/glow --body "$(cat <<'EOF'
-{updated_body}
-EOF
-)"
-```
-
-## Issue Template
+## Issue Format
 
 ```markdown
 🧪 Follow-up from spark-sdk PR review.
@@ -44,22 +29,6 @@ EOF
 
 - [SDK PR #{pr_number}](https://github.com/breez/spark-sdk/pull/{pr_number})
 - [Flutter snippet]({link_to_snippet_if_exists})
-```
-
-## Creating the Issue
-
-```bash
-gh issue create --repo breez/glow \
-  --title "feat: integrate {feature_name} from spark-sdk" \
-  --body "$(cat <<'EOF'
-🧪 Follow-up from spark-sdk PR review.
-
----
-
-## Summary
-...
-EOF
-)"
 ```
 
 ## Labels

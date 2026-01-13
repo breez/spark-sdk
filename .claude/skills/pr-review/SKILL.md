@@ -5,32 +5,20 @@ description: Review code changes against Breez SDK guidelines. Use when reviewin
 
 # PR Review Skill
 
-This skill provides templates and guidance for PR reviews.
+This skill provides the `/review` command and supporting templates for PR reviews.
 
 ## Usage
 
-Use the `code-reviewer` agent to perform thorough code reviews. The agent contains all review criteria for:
-- Design evaluation (UX-first API design)
-- Security checks (key handling, crypto ops)
-- Code quality (no unwrap, doc comments, clippy)
-- Binding consistency (all 5 files updated)
+```
+/review [pr-number]
+```
+
+The command uses review criteria from `.claude/agents/code-reviewer.md`.
 
 ## Templates
 
-### Glow Follow-up Issues
+- `templates/glow-issue.md` - Follow-up issue format for breez/glow
 
-When a PR adds new Flutter binding features or breaking changes, create a follow-up issue on [breez/glow](https://github.com/breez/glow).
+## Scripts
 
-**Important**: Check for existing issues first to avoid duplicates:
-```bash
-gh issue list --repo breez/glow --search "spark-sdk" --state open
-```
-
-Template: `templates/glow-issue.md`
-
-## Review Workflow
-
-1. Gather PR context (metadata, diff, CI status)
-2. Delegate to `code-reviewer` agent for analysis
-3. Present concise review
-4. If Flutter bindings changed, handle Glow follow-up (create or update)
+- `validate-bindings.sh` - Check binding file consistency for API changes

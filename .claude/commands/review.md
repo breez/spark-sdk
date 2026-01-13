@@ -1,5 +1,5 @@
 ---
-allowed-tools: Bash(gh pr:*), Bash(git:*), Task, Read, Grep, Glob
+allowed-tools: Bash(gh pr:*), Bash(git:*), Read, Grep, Glob
 argument-hint: [pr-number]
 description: Review a pull request against repository guidelines
 ---
@@ -23,19 +23,15 @@ gh pr checks $ARGUMENTS
 
 ## Step 2: Review Code Changes
 
-Use the Task tool with `subagent_type: "code-reviewer"` to perform a thorough code review.
-
-Pass the PR details and diff to the agent. The code-reviewer agent will analyze:
-- Design and API decisions
-- Security concerns
-- Code quality
-- Binding file consistency
+Apply review criteria from `.claude/agents/code-reviewer.md`:
+- Design and API decisions (UX-first)
+- Security concerns (no keys in logs, checked arithmetic)
+- Code quality (no unwrap, doc comments, clippy)
+- Binding file consistency (run `validate-bindings.sh` if API changed)
 
 ## Step 3: Present Review
 
-Format the agent's analysis as a concise review.
-
-If posting to GitHub, include:
+Format as a concise review. If posting to GitHub, include:
 ```markdown
 🧪 Experimental PR review using Claude Code.
 
@@ -44,13 +40,8 @@ If posting to GitHub, include:
 {review_content}
 ```
 
-## Step 4: Handle Follow-ups (if applicable)
+## Step 4: Follow-up Actions
 
-If the PR includes Flutter binding changes (new features or breaking changes):
-
-1. Check for existing Glow issues:
-   ```bash
-   gh issue list --repo breez/glow --search "{feature}" --state open
-   ```
-
-2. Create or update using template from `.claude/skills/pr-review/templates/glow-issue.md`
+If Flutter bindings changed (new features or breaking changes):
+1. Check for existing issues: `gh issue list --repo breez/glow --search "{feature}" --state open`
+2. Create or update issue using `.claude/skills/pr-review/templates/glow-issue.md`
