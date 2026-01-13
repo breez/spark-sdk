@@ -1160,4 +1160,75 @@ mod tests {
             "Should succeed for onchain_speed with Bitcoin address"
         );
     }
+
+    #[test_all]
+    fn test_validate_onchain_speed_not_allowed_for_spark_address() {
+        use crate::PaymentRequestSource;
+        let address_details = SparkAddressDetails {
+            address: "test_address".to_string(),
+            identity_public_key: "test_identity_key".to_string(),
+            network: BitcoinNetwork::Regtest,
+            source: PaymentRequestSource::default(),
+        };
+
+        let mut request = create_bitcoin_amount_request(1000);
+        request.onchain_speed = Some(OnchainConfirmationSpeed::Fast);
+
+        let input_type = InputType::SparkAddress(address_details);
+        let identity_key = "test_identity".to_string();
+        let result = validate_prepare_send_payment_request(&input_type, &request, &identity_key);
+        assert!(
+            result.is_err(),
+            "Should fail for onchain_speed with Spark address"
+        );
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("onchain_speed cannot be provided"),
+                "Error message should mention onchain_speed"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_onchain_speed_not_allowed_for_bolt11_invoice() {
+        use crate::{Bolt11Invoice, PaymentRequestSource};
+        let invoice_details = Bolt11InvoiceDetails {
+            amount_msat: None,
+            description: None,
+            description_hash: None,
+            expiry: 3600,
+            invoice: Bolt11Invoice {
+                bolt11: "lnbc1...".to_string(),
+                source: PaymentRequestSource::default(),
+            },
+            min_final_cltv_expiry_delta: 144,
+            network: BitcoinNetwork::Regtest,
+            payee_pubkey: "test_pubkey".to_string(),
+            payment_hash: "test_hash".to_string(),
+            payment_secret: "test_secret".to_string(),
+            routing_hints: vec![],
+            timestamp: 0,
+        };
+
+        let mut request = create_test_request();
+        request.onchain_speed = Some(OnchainConfirmationSpeed::Fast);
+
+        let input_type = InputType::Bolt11Invoice(invoice_details);
+        let identity_key = "test_identity".to_string();
+        let result = validate_prepare_send_payment_request(&input_type, &request, &identity_key);
+        assert!(
+            result.is_err(),
+            "Should fail for onchain_speed with Bolt11 invoice"
+        );
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("onchain_speed cannot be provided"),
+                "Error message should mention onchain_speed"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
 }

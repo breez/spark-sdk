@@ -687,3 +687,132 @@ fn percent_encode(input: &str) -> Cow<'_, str> {
     }
     Cow::Owned(result)
 }
+
+/// Test LNURL drain payment - sends entire balance via LNURL
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_07_lnurl_drain_payment(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_07_lnurl_drain_payment ===");
+
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
+
+    let username = "bobdrain";
+    let description = "Bob's drain test Lightning address";
+
+    // Bob registers a Lightning address
+    let register_response = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: Some(description.to_string()),
+        })
+        .await?;
+
+    let bob_lightning_address = register_response.lightning_address;
+    info!(
+        "Bob registered Lightning address: {}",
+        bob_lightning_address
+    );
+
+    // Fund Alice with a specific amount for testing
+    let funding_amount = 10_000u64;
+    receive_and_fund(&mut alice, funding_amount, false).await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice balance after funding: {} sats", alice_balance);
+
+    // Alice parses Bob's Lightning address
+    let parse_response = alice.sdk.parse(&bob_lightning_address).await?;
+    let InputType::LightningAddress(details) = parse_response else {
+        anyhow::bail!("Expected Lightning address");
+    };
+
+    info!("Alice parsed Lightning address successfully");
+    info!(
+        "LNURL min_sendable: {} msats, max_sendable: {} msats",
+        details.pay_request.min_sendable, details.pay_request.max_sendable
+    );
+
+    // Alice prepares LNURL drain (sends entire balance)
+    let prepare_response = alice
+        .sdk
+        .prepare_lnurl_pay(PrepareLnurlPayRequest {
+            pay_amount: PayAmount::Drain,
+            pay_request: details.pay_request,
+            comment: Some("Drain test from Alice".to_string()),
+            validate_success_action_url: None,
+        })
+        .await?;
+
+    info!(
+        "Alice prepared drain payment: {} sats (fee: {} sats)",
+        prepare_response.amount_sats, prepare_response.fee_sats
+    );
+
+    // Verify the drain amount is exactly balance - fees
+    let expected_drain = alice_balance.saturating_sub(prepare_response.fee_sats);
+    assert_eq!(
+        prepare_response.amount_sats, expected_drain,
+        "Drain amount should be exactly balance - fees"
+    );
+
+    // Alice sends the drain payment
+    let pay_response = alice
+        .sdk
+        .lnurl_pay(LnurlPayRequest {
+            prepare_response: prepare_response.clone(),
+            idempotency_key: None,
+        })
+        .await?;
+
+    info!("Alice initiated drain payment to Bob");
+
+    // Wait for payment to complete on both sides
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 30).await?;
+    info!("Payment completed on Alice's side");
+
+    wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+    info!("Payment completed on Bob's side");
+
+    // Verify Alice's balance is now zero
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_final = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice final balance: {} sats", alice_final);
+
+    assert_eq!(alice_final, 0, "Alice's balance should be fully drained");
+
+    // Verify payment details
+    let alice_payment = alice
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: pay_response.payment.id,
+        })
+        .await?
+        .payment;
+
+    assert_eq!(alice_payment.payment_type, PaymentType::Send);
+    assert_eq!(alice_payment.method, PaymentMethod::Lightning);
+    assert_eq!(alice_payment.status, PaymentStatus::Completed);
+    assert_eq!(alice_payment.amount, expected_drain.into());
+    assert_eq!(alice_payment.fees, prepare_response.fee_sats.into());
+
+    info!("=== Test test_07_lnurl_drain_payment PASSED ===");
+    Ok(())
+}

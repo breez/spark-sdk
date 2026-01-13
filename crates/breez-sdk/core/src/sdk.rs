@@ -1331,17 +1331,14 @@ impl BreezSdk {
                 ));
             }
             PayAmount::Drain => {
-                // Drain handling will be implemented in Phase 3
-                return Err(SdkError::InvalidInput(
-                    "Drain is not yet supported for LNURL".to_string(),
-                ));
+                return self.prepare_lnurl_pay_drain(request).await;
             }
         };
 
         let success_data = match validate_lnurl_pay(
             self.lnurl_client.as_ref(),
             amount_sats.saturating_mul(1_000),
-            &None,
+            &request.comment,
             &request.pay_request.clone().into(),
             self.config.network.into(),
             request.validate_success_action_url,
@@ -1381,11 +1378,166 @@ impl BreezSdk {
             invoice_details,
             fee_sats: lightning_fee_sats,
             success_action: success_data.success_action.map(From::from),
+            is_drain: false,
+        })
+    }
+
+    /// Prepares an LNURL pay drain operation using a double-query approach.
+    ///
+    /// This method:
+    /// 1. Gets the current available balance
+    /// 2. Validates balance doesn't exceed LNURL `max_sendable`
+    /// 3. First query: gets invoice for full balance to estimate fees
+    /// 4. Calculates actual send amount (balance - estimated fee)
+    /// 5. Second query: gets invoice for actual amount
+    /// 6. Returns the prepare response with the second invoice
+    async fn prepare_lnurl_pay_drain(
+        &self,
+        request: PrepareLnurlPayRequest,
+    ) -> Result<PrepareLnurlPayResponse, SdkError> {
+        // 1. Get current available balance (always fresh)
+        let balance_sats = self.spark_wallet.get_balance().await?;
+
+        if balance_sats == 0 {
+            return Err(SdkError::InsufficientFunds);
+        }
+
+        // 2. Validate balance is within LNURL limits
+        let min_sendable_sats = request.pay_request.min_sendable.div_ceil(1000);
+        let max_sendable_sats = request.pay_request.max_sendable / 1000;
+
+        if balance_sats < min_sendable_sats {
+            return Err(SdkError::InvalidInput(format!(
+                "Balance ({balance_sats} sats) is below LNURL minimum ({min_sendable_sats} sats)"
+            )));
+        }
+
+        if balance_sats > max_sendable_sats {
+            return Err(SdkError::DrainExceedsLnurlMax {
+                balance_sats,
+                max_sendable_sats,
+            });
+        }
+
+        // 3. First query: get invoice for full balance to estimate fees
+        // Note: We don't intend to pay this invoice. It's only for fee estimation.
+        let first_invoice = validate_lnurl_pay(
+            self.lnurl_client.as_ref(),
+            balance_sats.saturating_mul(1_000), // convert to msats
+            &request.comment,
+            &request.pay_request.clone().into(),
+            self.config.network.into(),
+            request.validate_success_action_url,
+        )
+        .await?;
+
+        let first_data = match first_invoice {
+            lnurl::pay::ValidatedCallbackResponse::EndpointError { data } => {
+                return Err(LnurlError::EndpointError(data.reason).into());
+            }
+            lnurl::pay::ValidatedCallbackResponse::EndpointSuccess { data } => data,
+        };
+
+        // 4. Get fee estimate for first invoice
+        let first_fee = self
+            .spark_wallet
+            .fetch_lightning_send_fee_estimate(&first_data.pr, None)
+            .await?;
+
+        // 5. Calculate actual send amount (balance - fee)
+        let actual_amount = balance_sats.saturating_sub(first_fee);
+
+        // Validate against LNURL minimum
+        if actual_amount < min_sendable_sats {
+            return Err(SdkError::InvalidInput(format!(
+                "Amount after fees ({actual_amount} sats) is below LNURL minimum ({min_sendable_sats} sats)"
+            )));
+        }
+
+        // 6. Second query: get invoice for actual amount (back-to-back, no delay)
+        let success_data = match validate_lnurl_pay(
+            self.lnurl_client.as_ref(),
+            actual_amount.saturating_mul(1_000),
+            &request.comment,
+            &request.pay_request.clone().into(),
+            self.config.network.into(),
+            request.validate_success_action_url,
+        )
+        .await?
+        {
+            lnurl::pay::ValidatedCallbackResponse::EndpointError { data } => {
+                return Err(LnurlError::EndpointError(data.reason).into());
+            }
+            lnurl::pay::ValidatedCallbackResponse::EndpointSuccess { data } => data,
+        };
+
+        // 7. Get actual fee for the smaller invoice
+        let actual_fee = self
+            .spark_wallet
+            .fetch_lightning_send_fee_estimate(&success_data.pr, None)
+            .await?;
+
+        // If fee increased between queries, fail (user must retry)
+        if actual_fee > first_fee {
+            return Err(SdkError::Generic(
+                "Fee increased between queries. Please retry.".to_string(),
+            ));
+        }
+
+        // Parse the invoice to get details
+        let parsed = self.parse(&success_data.pr).await?;
+        let InputType::Bolt11Invoice(invoice_details) = parsed else {
+            return Err(SdkError::Generic(
+                "Expected Bolt11 invoice from LNURL".to_string(),
+            ));
+        };
+
+        Ok(PrepareLnurlPayResponse {
+            amount_sats: actual_amount,
+            comment: request.comment,
+            pay_request: request.pay_request,
+            invoice_details,
+            fee_sats: first_fee,
+            success_action: success_data.success_action.map(From::from),
+            is_drain: true,
         })
     }
 
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
+
+        // Calculate amount override for drain operations
+        let amount_override = if request.prepare_response.is_drain {
+            // Re-estimate current fee for the invoice
+            let current_fee = self
+                .spark_wallet
+                .fetch_lightning_send_fee_estimate(
+                    &request.prepare_response.invoice_details.invoice.bolt11,
+                    None,
+                )
+                .await?;
+
+            // drain_fee = first_fee (from prepare), which is the total we need to pay in fees
+            let drain_fee = request.prepare_response.fee_sats;
+
+            if current_fee > drain_fee {
+                return Err(SdkError::Generic(
+                    "Fee increased since prepare. Please retry.".to_string(),
+                ));
+            }
+
+            // Overpay by the difference to fully drain the balance
+            let overpayment = drain_fee.saturating_sub(current_fee);
+            Some(
+                request
+                    .prepare_response
+                    .amount_sats
+                    .saturating_add(overpayment),
+            )
+        } else {
+            None
+        };
+
         let mut payment = Box::pin(self.maybe_convert_token_send_payment(
             SendPaymentRequest {
                 prepare_response: PrepareSendPaymentResponse {
@@ -1402,6 +1554,7 @@ impl BreezSdk {
                 idempotency_key: request.idempotency_key,
             },
             true,
+            amount_override,
         ))
         .await?
         .payment;
@@ -1775,7 +1928,7 @@ impl BreezSdk {
                         fee_quote,
                     },
                     amount,
-                    token_identifier: None,
+                    token_identifier,
                     conversion_estimate,
                 })
             }
@@ -1808,7 +1961,7 @@ impl BreezSdk {
         request: SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
-        Box::pin(self.maybe_convert_token_send_payment(request, false)).await
+        Box::pin(self.maybe_convert_token_send_payment(request, false, None)).await
     }
 
     pub async fn fetch_conversion_limits(
@@ -2204,6 +2357,7 @@ impl BreezSdk {
         &self,
         request: SendPaymentRequest,
         mut suppress_payment_event: bool,
+        amount_override: Option<u64>,
     ) -> Result<SendPaymentResponse, SdkError> {
         // Check the idempotency key is valid and payment doesn't already exist
         if request.idempotency_key.is_some() && request.prepare_response.token_identifier.is_some()
@@ -2235,7 +2389,7 @@ impl BreezSdk {
             ))
             .await
         } else {
-            Box::pin(self.send_payment_internal(&request)).await
+            Box::pin(self.send_payment_internal(&request, amount_override)).await
         };
         // Emit payment status event and trigger wallet state sync
         if let Ok(response) = &res {
@@ -2381,7 +2535,7 @@ impl BreezSdk {
             return Ok(SendPaymentResponse { payment });
         }
         // Now send the actual payment
-        let response = Box::pin(self.send_payment_internal(request)).await?;
+        let response = Box::pin(self.send_payment_internal(request, None)).await?;
         // Merge payment metadata to link the payments
         self.merge_payment_metadata(
             conversion_response.sent_payment_id,
@@ -2406,6 +2560,7 @@ impl BreezSdk {
     async fn send_payment_internal(
         &self,
         request: &SendPaymentRequest,
+        amount_override: Option<u64>,
     ) -> Result<SendPaymentResponse, SdkError> {
         match &request.prepare_response.payment_method {
             SendPaymentMethod::SparkAddress {
@@ -2440,6 +2595,7 @@ impl BreezSdk {
                     *spark_transfer_fee_sats,
                     *lightning_fee_sats,
                     request,
+                    amount_override,
                 ))
                 .await
             }
@@ -2607,12 +2763,17 @@ impl BreezSdk {
         spark_transfer_fee_sats: Option<u64>,
         lightning_fee_sats: u64,
         request: &SendPaymentRequest,
+        amount_override: Option<u64>,
     ) -> Result<SendPaymentResponse, SdkError> {
-        let amount_to_send = match invoice_details.amount_msat {
-            // We are not sending amount in case the invoice contains it.
-            Some(_) => None,
-            // We are sending amount for zero amount invoice
-            None => Some(request.prepare_response.amount),
+        let amount_to_send = match amount_override {
+            // Amount override provided (e.g., for drain overpayment)
+            Some(amt) => Some(amt.into()),
+            None => match invoice_details.amount_msat {
+                // We are not sending amount in case the invoice contains it.
+                Some(_) => None,
+                // We are sending amount for zero amount invoice
+                None => Some(request.prepare_response.amount),
+            },
         };
         let (prefer_spark, completion_timeout_secs) = match request.options {
             Some(SendPaymentOptions::Bolt11Invoice {

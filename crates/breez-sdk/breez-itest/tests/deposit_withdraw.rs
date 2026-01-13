@@ -223,6 +223,185 @@ async fn test_deposit_fee_manual_claim(
     Ok(())
 }
 
+/// Test drain to Bitcoin address with speed selection
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_drain_to_bitcoin_address(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    let mut alice = alice_sdk.await?;
+    let bob = bob_sdk.await?;
+
+    // Fund Alice with exactly a known amount
+    let funding_amount = 50_000u64;
+    receive_and_fund(&mut alice, funding_amount, false).await?;
+
+    // Get Alice's initial balance (less than funding_amount due to claim fees)
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_initial = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice initial balance: {} sats", alice_initial);
+    assert!(alice_initial > 0, "Alice should have been funded");
+
+    // Bob exposes a static deposit address
+    let bob_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress,
+        })
+        .await?
+        .payment_request;
+    info!("Bob deposit address: {}", bob_address);
+
+    // Get fee estimate for drain
+    let fee_estimate = alice
+        .sdk
+        .estimate_onchain_send_fee_quotes(EstimateOnchainSendFeeQuotesRequest {
+            address: bob_address.clone(),
+            amount_sats: None, // None for drain
+        })
+        .await?;
+    info!(
+        "Fee estimates - Fast: {}, Medium: {}, Slow: {}",
+        fee_estimate.fee_quote.speed_fast.total_fee_sat(),
+        fee_estimate.fee_quote.speed_medium.total_fee_sat(),
+        fee_estimate.fee_quote.speed_slow.total_fee_sat()
+    );
+
+    // Alice prepares drain with Fast speed
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_address.clone(),
+            pay_amount: Some(PayAmount::Drain),
+            onchain_speed: Some(OnchainConfirmationSpeed::Fast),
+            conversion_options: None,
+        })
+        .await?;
+
+    // Verify drain amount is balance minus fast fee
+    let expected_drain =
+        alice_initial.saturating_sub(fee_estimate.fee_quote.speed_fast.total_fee_sat());
+    let actual_drain: u64 = prepare.amount.try_into()?;
+    assert_eq!(
+        actual_drain, expected_drain,
+        "Drain amount should be balance minus fast fee"
+    );
+    info!("Drain prepared: {} sats to be sent", actual_drain);
+
+    // Send the drain
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: Some(SendPaymentOptions::BitcoinAddress {
+                confirmation_speed: OnchainConfirmationSpeed::Fast,
+            }),
+            idempotency_key: None,
+        })
+        .await?;
+
+    info!("Alice withdraw status: {:?}", send_resp.payment.status);
+    assert!(matches!(send_resp.payment.method, PaymentMethod::Withdraw));
+
+    // Verify Alice's balance is now 0
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_final = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice final balance: {} sats", alice_final);
+    assert_eq!(alice_final, 0, "Alice's balance should be fully drained");
+
+    Ok(())
+}
+
+/// Test drain with different speed selections
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_drain_speed_selection(#[future] alice_sdk: Result<SdkInstance>) -> Result<()> {
+    let mut alice = alice_sdk.await?;
+
+    // Fund Alice
+    receive_and_fund(&mut alice, 30_000, false).await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+
+    // Get a Bitcoin address
+    let receive = alice
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress,
+        })
+        .await?;
+    let address = receive.payment_request;
+
+    let balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    // Get fee estimates
+    let fee_estimate = alice
+        .sdk
+        .estimate_onchain_send_fee_quotes(EstimateOnchainSendFeeQuotesRequest {
+            address: address.clone(),
+            amount_sats: None,
+        })
+        .await?;
+
+    // Test each speed option
+    for (speed, expected_fee) in [
+        (
+            OnchainConfirmationSpeed::Slow,
+            fee_estimate.fee_quote.speed_slow.total_fee_sat(),
+        ),
+        (
+            OnchainConfirmationSpeed::Medium,
+            fee_estimate.fee_quote.speed_medium.total_fee_sat(),
+        ),
+        (
+            OnchainConfirmationSpeed::Fast,
+            fee_estimate.fee_quote.speed_fast.total_fee_sat(),
+        ),
+    ] {
+        let prepare = alice
+            .sdk
+            .prepare_send_payment(PrepareSendPaymentRequest {
+                payment_request: address.clone(),
+                pay_amount: Some(PayAmount::Drain),
+                onchain_speed: Some(speed.clone()),
+                conversion_options: None,
+            })
+            .await?;
+
+        let expected_drain = balance.saturating_sub(expected_fee);
+        let actual_drain: u64 = prepare.amount.try_into()?;
+        assert_eq!(
+            actual_drain, expected_drain,
+            "Drain amount for {:?} should be {} (balance {} - fee {})",
+            speed, expected_drain, balance, expected_fee
+        );
+        info!(
+            "Speed {:?}: drain amount = {} sats (fee = {})",
+            speed, actual_drain, expected_fee
+        );
+    }
+
+    Ok(())
+}
+
 /// Verify deposit no fee blocks auto-claim then refund
 #[rstest]
 #[ignore]
