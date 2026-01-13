@@ -1,71 +1,56 @@
 ---
-allowed-tools: Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh pr checks:*), Bash(git diff:*), Bash(git log:*), Read, Grep, Glob
-description: Review the current PR against repository guidelines
+allowed-tools: Bash(gh pr:*), Bash(git:*), Task, Read, Grep, Glob
+argument-hint: [pr-number]
+description: Review a pull request against repository guidelines
 ---
 
-## Step 1: Gather Context
+## Step 1: Gather PR Context
 
-Fetch current PR details:
-!`gh pr view --json number,title,body,author,state,baseRefName,headRefName,additions,deletions,changedFiles`
+Determine which PR to review:
+- If `$ARGUMENTS` is provided, use that PR number
+- Otherwise, detect the PR for the current branch
 
-## Step 2: Get the Diff
+```bash
+# Get PR details
+gh pr view $ARGUMENTS --json number,title,body,author,state,additions,deletions,changedFiles
 
-Choose strategy based on PR size from Step 1:
+# Get diff (adjust strategy based on size)
+gh pr diff $ARGUMENTS
 
-**Small PR** (<500 lines changed):
-!`gh pr diff`
+# Check CI status
+gh pr checks $ARGUMENTS
+```
 
-**Medium PR** (500-2000 lines):
-!`gh pr diff --name-only`
-Then fetch full diff for critical files (models, SDK interface, security-related), summarize the rest.
+## Step 2: Review Code Changes
 
-**Large PR** (>2000 lines):
-!`gh pr diff --name-only`
-Review file-by-file, prioritizing:
-1. API changes (`*/models.rs`, `*/sdk.rs`)
-2. Security-sensitive code (`*/signer/*`, `*/crypto/*`)
-3. Schema changes (`*/migrations/*`)
-4. Tests last
+Use the Task tool with `subagent_type: "code-reviewer"` to perform a thorough code review.
 
-Use `gh pr diff -- <filepath>` for individual files.
+Pass the PR details and diff to the agent. The code-reviewer agent will analyze:
+- Design and API decisions
+- Security concerns
+- Code quality
+- Binding file consistency
 
-## Step 3: Check CI Status
+## Step 3: Present Review
 
-!`gh pr checks`
+Format the agent's analysis as a concise review.
 
-## Step 4: Apply Review Criteria
-
-- **Review criteria**: `.claude/rules/pr-review.md`
-- **Technical reference** (build commands, binding files, architecture): `CLAUDE.md`
-
-## Your Task
-
-Provide a **concise, actionable review**. Only include sections with meaningful findings.
-
-### Summary
-1-2 sentences: what the PR does and the problem it solves.
-
-### Design Analysis (only if concerns)
-- Rationale, approach, trade-offs, extensibility
-- Skip if design is sound
-
-### Issues (only if any)
-List by severity. Omit empty levels. Format: `file:line - description`
-- CRITICAL / HIGH / MEDIUM / LOW
-
-### Questions (only if needed)
-Clarifications needed from author.
-
-### Recommendation
-**APPROVE** | **REQUEST CHANGES** | **COMMENT**
+If posting to GitHub, include:
+```markdown
+🧪 Experimental PR review using Claude Code.
 
 ---
 
-**Keep it short.** If everything passes, a review can be as simple as:
+{review_content}
 ```
-### Summary
-Adds X to support Y.
 
-### Recommendation
-**APPROVE** - CI passes, tests included, design is sound.
-```
+## Step 4: Handle Follow-ups (if applicable)
+
+If the PR includes Flutter binding changes (new features or breaking changes):
+
+1. Check for existing Glow issues:
+   ```bash
+   gh issue list --repo breez/glow --search "{feature}" --state open
+   ```
+
+2. Create or update using template from `.claude/skills/pr-review/templates/glow-issue.md`
