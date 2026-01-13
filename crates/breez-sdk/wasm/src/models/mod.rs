@@ -228,6 +228,7 @@ pub struct SparkInvoiceDetails {
     pub invoice: String,
     pub identity_public_key: String,
     pub network: BitcoinNetwork,
+    #[tsify(type = "string")]
     #[serde(with = "serde_option_u128_as_string")]
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
@@ -646,6 +647,7 @@ pub struct TokenMetadata {
     // Serde doesn't support deserializing u128 types whenever they are used with flatten: https://github.com/serde-rs/json/issues/625
     // This occurs in the storage implementation when parsing `PaymentDetails` due to the use of flatten in LnurlRequestDetails
     // Serializing as string is a workaround to avoid the issue.
+    #[tsify(type = "string")]
     #[serde(with = "serde_u128_as_string")]
     pub max_supply: u128,
     pub is_freezable: bool,
@@ -661,6 +663,8 @@ pub struct SyncWalletResponse {}
 pub enum ReceivePaymentMethod {
     SparkAddress,
     SparkInvoice {
+        #[tsify(type = "string")]
+        #[serde(with = "serde_option_u128_as_string")]
         amount: Option<u128>,
         token_identifier: Option<String>,
         expiry_time: Option<u64>,
@@ -703,12 +707,14 @@ pub enum SendPaymentMethod {
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
+        #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
         fee: u128,
         token_identifier: Option<String>,
     },
     SparkInvoice {
         spark_invoice_details: SparkInvoiceDetails,
+        #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
         fee: u128,
         token_identifier: Option<String>,
@@ -1116,6 +1122,7 @@ pub struct OptimizationProgress {
 pub struct TokenConversionInfo {
     pub pool_id: String,
     pub payment_id: Option<String>,
+    #[tsify(type = "string")]
     #[serde(default, with = "serde_option_u128_as_string")]
     pub fee: Option<u128>,
     pub refund_identifier: Option<String>,
