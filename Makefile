@@ -16,7 +16,7 @@ build-target-%: install-target-%
 build-release:
 	cargo xtask build --release
 
-check: fmt-check clippy-check test
+check: fmt-check clippy-check test flutter-check
 
 clippy-fix: cargo-clippy-fix wasm-clippy-fix
 
@@ -54,6 +54,9 @@ wasm-test-browser:
 
 wasm-test-node:
 	cargo xtask wasm-test --node
+
+flutter-check:
+	cargo xtask flutter-check
 
 itest:
 	cargo xtask itest

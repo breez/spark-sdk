@@ -111,6 +111,9 @@ enum Commands {
 
     /// Run integration tests (containers etc.)
     Itest {},
+
+    /// Check Flutter package (generate bindings and build)
+    FlutterCheck {},
 }
 
 fn main() -> Result<()> {
@@ -137,6 +140,7 @@ fn main() -> Result<()> {
             skip_build,
         } => check_doc_snippets_cmd(package, skip_build),
         Commands::Itest {} => itest_cmd(),
+        Commands::FlutterCheck {} => flutter_check_cmd(),
     }
 }
 
@@ -648,5 +652,23 @@ fn itest_cmd() -> Result<()> {
 
     // Run the integration tests
     cmd!(sh, "cargo test -p spark-itest --no-fail-fast").run()?;
+    Ok(())
+}
+
+fn flutter_check_cmd() -> Result<()> {
+    let workspace_root = std::env::current_dir()?;
+    let flutter_dir = workspace_root.join("packages/flutter");
+
+    println!("Checking Flutter package...");
+    let status = Command::new("make")
+        .arg("generate-bindings-build-release")
+        .current_dir(&flutter_dir)
+        .status()
+        .with_context(|| "failed to run make generate-bindings-build-release")?;
+    if !status.success() {
+        bail!("Flutter check failed: make generate-bindings-build-release failed");
+    }
+
+    println!("Flutter check completed successfully");
     Ok(())
 }
