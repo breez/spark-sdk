@@ -3,10 +3,6 @@ allowed-tools: Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh pr checks:*), Bas
 description: Review the current PR against repository guidelines
 ---
 
-# PR Review Command
-
-You are reviewing the current pull request for the Breez SDK repository.
-
 ## Step 1: Gather Context
 
 Fetch current PR details:
@@ -14,17 +10,33 @@ Fetch current PR details:
 
 ## Step 2: Get the Diff
 
-!`gh pr diff | head -500`
+Choose strategy based on PR size from Step 1:
 
-(If diff is large, focus on the most critical files first)
+**Small PR** (<500 lines changed):
+!`gh pr diff`
+
+**Medium PR** (500-2000 lines):
+!`gh pr diff --name-only`
+Then fetch full diff for critical files (models, SDK interface, security-related), summarize the rest.
+
+**Large PR** (>2000 lines):
+!`gh pr diff --name-only`
+Review file-by-file, prioritizing:
+1. API changes (`*/models.rs`, `*/sdk.rs`)
+2. Security-sensitive code (`*/signer/*`, `*/crypto/*`)
+3. Schema changes (`*/migrations/*`)
+4. Tests last
+
+Use `gh pr diff -- <filepath>` for individual files.
 
 ## Step 3: Check CI Status
 
 !`gh pr checks`
 
-## Step 4: Review Guidelines
+## Step 4: Apply Review Criteria
 
-Read and apply the review guidelines from `.claude/rules/pr-review.md`.
+- **Review criteria**: `.claude/rules/pr-review.md`
+- **Technical reference** (build commands, binding files, architecture): `CLAUDE.md`
 
 ## Your Task
 
@@ -50,7 +62,6 @@ Clarifications needed from author.
 ---
 
 **Keep it short.** If everything passes, a review can be as simple as:
-
 ```
 ### Summary
 Adds X to support Y.

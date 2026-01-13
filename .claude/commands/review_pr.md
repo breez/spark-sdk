@@ -4,10 +4,6 @@ argument-hint: <pr-number>
 description: Review a pull request against repository guidelines
 ---
 
-# PR Review Command
-
-You are reviewing PR #$ARGUMENTS for the Breez SDK repository.
-
 ## Step 1: Gather Context
 
 Fetch PR details:
@@ -15,17 +11,33 @@ Fetch PR details:
 
 ## Step 2: Get the Diff
 
-!`gh pr diff $ARGUMENTS 2>/dev/null | head -500`
+Choose strategy based on PR size from Step 1:
 
-(If diff is large, focus on the most critical files first)
+**Small PR** (<500 lines changed):
+!`gh pr diff $ARGUMENTS`
+
+**Medium PR** (500-2000 lines):
+!`gh pr diff $ARGUMENTS --name-only`
+Then fetch full diff for critical files (models, SDK interface, security-related), summarize the rest.
+
+**Large PR** (>2000 lines):
+!`gh pr diff $ARGUMENTS --name-only`
+Review file-by-file, prioritizing:
+1. API changes (`*/models.rs`, `*/sdk.rs`)
+2. Security-sensitive code (`*/signer/*`, `*/crypto/*`)
+3. Schema changes (`*/migrations/*`)
+4. Tests last
+
+Use `gh pr diff $ARGUMENTS -- <filepath>` for individual files.
 
 ## Step 3: Check CI Status
 
 !`gh pr checks $ARGUMENTS 2>/dev/null || echo "CI status unavailable"`
 
-## Step 4: Review Guidelines
+## Step 4: Apply Review Criteria
 
-Read and apply the review guidelines from `.claude/rules/pr-review.md`.
+- **Review criteria**: `.claude/rules/pr-review.md`
+- **Technical reference** (build commands, binding files, architecture): `CLAUDE.md`
 
 ## Your Task
 
@@ -51,7 +63,6 @@ Clarifications needed from author.
 ---
 
 **Keep it short.** If everything passes, a review can be as simple as:
-
 ```
 ### Summary
 Adds X to support Y.

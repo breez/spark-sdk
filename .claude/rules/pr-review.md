@@ -1,257 +1,47 @@
-# PR Review Guidelines for Breez SDK
+# PR Review Guidelines
 
-## Overview
+See `CLAUDE.md` for build commands, test commands, and binding file locations.
 
-This document defines the review criteria for pull requests in the Breez SDK repository.
-Reviews should validate both **implementation correctness** and **design decisions**.
-A good review confirms the approach is right, not just that the code works.
+## Design (CRITICAL)
 
----
+Before reviewing code, evaluate the approach:
 
-## Review Categories
-
-### 0. Design & Rationale (CRITICAL Priority)
-
-Before diving into code, evaluate the design:
-
-**Problem Understanding**
-- What problem does this PR solve? (UX, performance, correctness, etc.)
 - Is the problem clearly stated in the PR description?
-- Does the solution match the problem scope?
+- How will app developers use this API? (UX-first)
+- Why this approach over alternatives?
+- Backward compatibility impact?
+- Edge cases: what happens on deletion/failure/partial state?
 
-**UX-Driven Design**
-- How will app developers use this API?
-- How should this data be rendered in a UI?
-- Start from the user experience, then derive the technical structure
-- Don't let implementation convenience drive the API shape
+Prefer semantic types over generic ones:
+- Bad: `Vec<RelatedPayment>`
+- Good: `ConversionInfo { sent: Payment, received: Payment }`
 
-**Alternative Approaches**
-- Were other designs considered? (Ask if not mentioned)
-- Trade-offs between approaches:
-  - Generic vs domain-specific types
-  - Full data duplication vs IDs for drill-down
-  - SDK-side assembly vs DB-side joins
-- Why was this approach chosen over alternatives?
+## Security (CRITICAL)
 
-**Impact Assessment**
-- Schema/API changes: backward compatibility?
-- Data consistency: what happens on edge cases (deletion, partial updates)?
-- Migration path for existing users/data
-
-**Future Extensibility**
-- Does this generalize or is it special-cased?
-- How does this scale if requirements expand?
-- Will this design accommodate future needs without major refactoring?
-
-**Questions to Ask**
-- "How would a developer render this in a payment list?"
-- "Why this approach over X?"
-- "What happens if Y is deleted/fails?"
-- "Does this need to support Z in the future?"
-
----
-
-### 1. Code Quality (HIGH Priority)
-
-**Formatting & Linting**
-- All code must pass `make fmt-check`
-- All code must pass `make clippy-check` and `make wasm-clippy-check`
-- Clippy warnings require `#[allow()]` with documented justification
-
-**Rust Conventions**
-- Use `Result<T, E>` for fallible operations (no unwrap/expect in SDK code)
-- Prefer `?` operator over manual error handling
-- Follow existing naming patterns in the codebase
-- Avoid large enum variants (clippy `large_enum_variant`)
-
-**Documentation**
-- Public structs/enums/functions must have `///` doc comments
-- Doc examples must compile (verified by CI)
-- Comments should explain "why", not "what"
-
-### 2. API & Bindings (HIGH Priority)
-
-**Model Design Principles**
-- **UX-first**: Start from how developers will use the data, then derive the structure
-- **Semantic naming**: Prefer domain-specific types over generic ones
-  - Bad: `Vec<RelatedPayment>` (generic, unclear purpose)
-  - Good: `ConversionInfo { sent: Payment, received: Payment }` (clear intent)
-- **Data minimization**: Expose essential display info + IDs for drill-down, not full duplicates
-- **Consumer perspective**: Ask "How will an app render this?" before finalizing the model
-
-**Binding Files** - When public API changes, verify ALL are updated:
-1. `crates/breez-sdk/core/src/models.rs` - UniFFI attributes
-2. `crates/breez-sdk/wasm/src/models.rs` - WASM exports
-3. `crates/breez-sdk/wasm/src/sdk.rs` - WASM interface
-4. `packages/flutter/rust/src/models.rs` - Flutter structs
-5. `packages/flutter/rust/src/sdk.rs` - Flutter interface
-
-**Breaking Changes**
-- Require explicit version bump consideration
-- Document migration path in PR description
-
-### 3. Testing (HIGH Priority)
-
-**Requirements**
-- New features must include unit tests
-- Bug fixes must include regression tests
-- Tests must be deterministic (no flaky tests)
-
-**Verification Commands**
-```bash
-make cargo-test      # Rust tests
-make wasm-test       # WASM tests (browser + Node.js)
-make itest           # Spark integration tests
-make breez-itest     # Breez integration tests
-```
-
-### 4. Security (CRITICAL Priority)
-
-**Key Management**
-- Private keys never logged or serialized unnecessarily
-- Key derivation follows BIP standards
-- Randomness uses secure sources (`rand` crate)
-- No keys in error messages
-
-**Common Vulnerabilities**
-- Input validation at system boundaries
-- No command injection in shell operations
-- Proper error handling (don't leak sensitive info)
-
-**Cryptographic Operations**
-- Use checked arithmetic (`checked_add`, `checked_mul`)
+- No keys in logs or error messages
+- Checked arithmetic for crypto ops (`checked_add`, `checked_mul`)
+- Input validation at boundaries
 - Schnorr signing must use `aux_rand`
-- Validate all external inputs
 
-### 5. Performance (MEDIUM Priority)
+## Code Quality
 
-- No unnecessary allocations in hot paths
-- Async operations must not block
-- Database queries should use indexes
-- Network calls must have timeouts
-- Avoid excessive cloning of large structures
+- No `unwrap()`/`expect()` in SDK code
+- Public API has `///` doc comments
+- Clippy clean (or `#[allow()]` with justification)
 
-### 6. Architecture (MEDIUM Priority)
-
-**Abstractions**
-- `Storage` trait changes must maintain backward compatibility
-- `Signer` operations shouldn't modify wallet state
-- Event emissions for async notifications
-
-**Platform-Specific Code**
-- WASM: Use `#[cfg(target_family = "wasm")]`
-- Time operations: Use `web_time` crate for WASM
-- File I/O: Platform-appropriate storage
-
----
-
-## Commit Standards
-
-**Format**: Conventional Commits
-```
-<type>(<scope>): <description> (#issue)
-
-Types: feat, fix, docs, refactor, perf, test, chore
+## Before Approving
+```bash
+make check       # fmt, clippy, tests
+make build-wasm  # verify WASM builds
 ```
 
-**Requirements**
-- Each commit is logically complete
-- No bundling unrelated changes
-- Reference related issues
-- Linear history (no merge commits)
+Verify all binding files updated (see CLAUDE.md → "Updating SDK Interfaces").
 
----
+## Anti-Patterns
 
-## Review Output Format
-
-**Keep it concise.** Only include sections with meaningful findings.
-Omit sections where everything passes or is not applicable.
-
-### Summary
-Brief description of what the PR does and the problem it solves.
-
-### Design Analysis (if concerns exist)
-Only include if there are design questions or concerns:
-- **Rationale**: Why is this change needed?
-- **Approach**: Is this the right solution? Alternatives?
-- **Trade-offs**: Costs of this approach?
-- **Extensibility**: Does it generalize?
-
-### Issues (if any)
-List by severity. Omit empty severity levels.
-- **CRITICAL**: Must fix (security, data loss, design flaws)
-- **HIGH**: Should fix (bugs, missing tests, unclear rationale)
-- **MEDIUM**: Recommend fixing (performance, style)
-- **LOW**: Minor suggestions
-
-### Questions (if any)
-Only include if clarification is needed.
-
-### Recommendation
-- **APPROVE**: Design is sound, implementation is correct
-- **REQUEST CHANGES**: Issues must be addressed
-- **COMMENT**: Feedback only, no blocking issues
-
-**Example of a clean approval:**
-```
-### Summary
-Adds X to support Y.
-
-### Recommendation
-**APPROVE** - Design is sound, CI passes, tests included.
-```
-
----
-
-## Quick Checklist
-
-```
-Design & Rationale:
-[ ] Problem clearly stated in PR description
-[ ] UX/consumer perspective considered (how will devs use this?)
-[ ] Approach justified (why this over alternatives?)
-[ ] Semantic naming (domain-specific types over generic ones)
-[ ] Backward compatibility considered
-[ ] Edge cases handled (deletion, failures, partial states)
-[ ] Future extensibility considered
-
-Code Quality:
-[ ] Formatting passes (make fmt-check)
-[ ] Linting passes (make clippy-check + wasm-clippy-check)
-[ ] Public API documented
-[ ] No unwrap/panic in SDK code
-
-Testing:
-[ ] Unit tests for new features
-[ ] Regression tests for bug fixes
-[ ] CI passes (all green)
-
-API Changes:
-[ ] All 5 binding files updated
-[ ] No breaking changes OR version bump planned
-[ ] WASM builds (make build-wasm)
-[ ] Schema migrations included if needed
-
-Security:
-[ ] No hardcoded secrets
-[ ] Input validation present
-[ ] Keys handled securely
-
-Commits:
-[ ] Conventional commit format
-[ ] Issues referenced
-[ ] Clean history
-```
-
----
-
-## Anti-Patterns to Flag
-
-| Pattern | Why It's Bad |
-|---------|--------------|
-| `unwrap()` / `expect()` in SDK | Panics in library code |
-| Blocking in async context | Deadlocks, poor performance |
-| Hardcoded magic numbers | Poor maintainability |
-| Missing error context | Hard to debug |
+| Pattern | Issue |
+|---------|-------|
+| `unwrap()` in SDK | Panics in library code |
+| Blocking in async | Deadlocks |
 | Large enum variants | Memory inefficiency |
-| Unchecked arithmetic | Potential overflow |
+| Unchecked arithmetic | Overflow risk |
