@@ -232,7 +232,7 @@ pub struct SparkInvoiceDetails {
     #[serde(with = "serde_option_u128_as_string")]
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
-    pub expiry_time: Option<u64>,
+    pub expires_at: Option<u64>,
     pub description: Option<String>,
     pub sender_public_key: Option<String>,
 }
@@ -476,7 +476,7 @@ pub struct SparkInvoicePaymentDetails {
 pub struct SparkHtlcDetails {
     pub payment_hash: String,
     pub preimage: Option<String>,
-    pub expiry_time: u64,
+    pub expires_at: u64,
     pub status: SparkHtlcStatus,
 }
 
@@ -667,7 +667,7 @@ pub enum ReceivePaymentMethod {
         #[serde(with = "serde_option_u128_as_string")]
         amount: Option<u128>,
         token_identifier: Option<String>,
-        expiry_time: Option<u64>,
+        expires_at: Option<u64>,
         description: Option<String>,
         sender_public_key: Option<String>,
     },
@@ -675,7 +675,7 @@ pub enum ReceivePaymentMethod {
     Bolt11Invoice {
         description: String,
         amount_sats: Option<u64>,
-        expiry_secs: Option<u32>,
+        expiry_duration_secs: Option<u32>,
     },
 }
 

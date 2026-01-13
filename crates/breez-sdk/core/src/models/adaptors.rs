@@ -397,7 +397,7 @@ impl TryFrom<PreimageRequest> for SparkHtlcDetails {
         Ok(Self {
             payment_hash: value.payment_hash.to_string(),
             preimage: value.preimage.map(|p| p.encode_hex()),
-            expiry_time: value
+            expires_at: value
                 .expiry_time
                 .duration_since(UNIX_EPOCH)
                 .map_err(|e| SdkError::Generic(format!("Invalid expiry time: {e}")))?

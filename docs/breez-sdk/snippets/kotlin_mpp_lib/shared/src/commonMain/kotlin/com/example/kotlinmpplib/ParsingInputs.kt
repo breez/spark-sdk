@@ -47,8 +47,8 @@ class ParsingInputs {
                         println("  Description: ${invoice.description}")
                     }
 
-                    if (invoice.expiryTime != null) {
-                        println("  Expiry time: ${invoice.expiryTime}")
+                    if (invoice.expiresAt != null) {
+                        println("  Expires at: ${invoice.expiresAt}")
                     }
 
                     if (invoice.senderPublicKey != null) {

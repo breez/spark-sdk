@@ -34,8 +34,8 @@ Future<void> parseInput(BreezSdk sdk) async {
       print("  Description: ${invoice.description}");
     }
     
-    if (invoice.expiryTime != null) {
-      print("  Expiry time: ${DateTime.fromMillisecondsSinceEpoch(invoice.expiryTime!.toInt() * 1000)}");
+    if (invoice.expiresAt != null) {
+      print("  Expires at: ${DateTime.fromMillisecondsSinceEpoch(invoice.expiresAt!.toInt() * 1000)}");
     }
     
     if (invoice.senderPublicKey != null) {

@@ -177,7 +177,7 @@ async fn test_token_conversion_success(
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: "Token to Bitcoin test".to_string(),
                 amount_sats: Some(token_to_sats_success_amount),
-                expiry_secs: None,
+                expiry_duration_secs: None,
             },
         })
         .await?

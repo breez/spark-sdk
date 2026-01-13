@@ -382,7 +382,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: "Recovery test lightning payment".to_string(),
                 amount_sats: Some(1_000),
-                expiry_secs: None,
+                expiry_duration_secs: None,
             },
         })
         .await?
@@ -420,7 +420,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: "Recovery test lightning receive".to_string(),
                 amount_sats: Some(800),
-                expiry_secs: None,
+                expiry_duration_secs: None,
             },
         })
         .await?

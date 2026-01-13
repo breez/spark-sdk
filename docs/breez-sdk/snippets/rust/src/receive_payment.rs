@@ -7,14 +7,14 @@ async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     let description = "<invoice description>".to_string();
     // Optionally set the invoice amount you wish the payer to send
     let optional_amount_sats = Some(5_000);
-    let optional_expiry_secs = Some(3600_u32);
+    let optional_expiry_duration_secs = Some(3600_u32);
 
     let response = sdk
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description,
                 amount_sats: optional_amount_sats,
-                expiry_secs: optional_expiry_secs,
+                expiry_duration_secs: optional_expiry_duration_secs,
             },
         })
         .await?;
@@ -63,7 +63,7 @@ async fn receive_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: receive-payment-spark-invoice
     let optional_description = "<invoice description>".to_string();
     let optional_amount_sats = Some(5_000);
-    let optional_expiry_time_seconds = Some(1716691200);
+    let optional_expires_at = Some(1716691200);
     let optional_sender_public_key = Some("<sender public key>".to_string());
 
     let response = sdk
@@ -72,7 +72,7 @@ async fn receive_spark_invoice(sdk: &BreezSdk) -> Result<()> {
                 token_identifier: None,
                 description: Some(optional_description),
                 amount: optional_amount_sats,
-                expiry_time: optional_expiry_time_seconds,
+                expires_at: optional_expires_at,
                 sender_public_key: optional_sender_public_key,
             },
         })

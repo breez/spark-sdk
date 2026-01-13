@@ -391,8 +391,8 @@ pub struct SparkInvoiceDetails {
     pub amount: Option<u128>,
     /// The token identifier of the token payment. Absence indicates a Bitcoin payment.
     pub token_identifier: Option<String>,
-    /// Optional expiry time. If not provided, the invoice will never expire.
-    pub expiry_time: Option<u64>,
+    /// Optional expiry time as a unix timestamp in seconds. If not provided, the invoice will never expire.
+    pub expires_at: Option<u64>,
     /// Optional description.
     pub description: Option<String>,
     /// If set, the invoice may only be fulfilled by a payer with this public key.

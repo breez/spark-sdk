@@ -288,7 +288,7 @@ async fn test_03_lightning_invoice_payment(
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: format!("Test payment ({})", test_type),
                 amount_sats: invoice_amount_sats,
-                expiry_secs: None,
+                expiry_duration_secs: None,
             },
         })
         .await?
@@ -550,7 +550,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: "Prefer spark test".to_string(),
                 amount_sats: Some(invoice_amount_sats),
-                expiry_secs: None,
+                expiry_duration_secs: None,
             },
         })
         .await?
@@ -644,7 +644,7 @@ async fn test_06_lightning_timeout_and_wait(
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: "Timeout test".to_string(),
                 amount_sats: None,
-                expiry_secs: None,
+                expiry_duration_secs: None,
             },
         })
         .await?
@@ -724,7 +724,7 @@ async fn test_07_spark_invoice(
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let expiry_time = current_time + 120;
+    let expires_at = current_time + 120;
 
     // Get Alice's identity public key from her Spark address to use as sender public key in the invoice
     let alice_spark_address = alice
@@ -748,7 +748,7 @@ async fn test_07_spark_invoice(
             payment_method: ReceivePaymentMethod::SparkInvoice {
                 amount: Some(5),
                 token_identifier: None,
-                expiry_time: Some(expiry_time),
+                expires_at: Some(expires_at),
                 description: Some("Test invoice".to_string()),
                 sender_public_key: Some(alice_identity_public_key),
             },
@@ -835,14 +835,14 @@ async fn test_07_spark_invoice(
     Ok(())
 }
 
-/// Test 8: Lightning invoice with custom expiry_secs
+/// Test 8: Lightning invoice with custom expiry_duration_secs
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_08_lightning_invoice_expiry_secs(
+async fn test_08_lightning_invoice_expiry_duration_secs(
     #[future] alice_sdk: Result<SdkInstance>,
     #[future] bob_sdk: Result<SdkInstance>,
 ) -> Result<()> {
-    info!("=== Starting test_08_lightning_invoice_expiry_secs ===");
+    info!("=== Starting test_08_lightning_invoice_expiry_duration_secs ===");
 
     let mut alice = alice_sdk.await?;
     let mut bob = bob_sdk.await?;
@@ -874,8 +874,8 @@ async fn test_08_lightning_invoice_expiry_secs(
 
     info!("Bob initial balance: {} sats", bob_initial_balance);
 
-    // Test with custom expiry_secs (1 hour = 3600 seconds)
-    let custom_expiry_secs: u32 = 3600 - 1;
+    // Test with custom expiry_duration_secs (1 hour = 3600 seconds)
+    let custom_expiry_duration_secs: u32 = 3600 - 1;
     let invoice_amount_sats = 5_000u64;
 
     // Bob creates a Lightning invoice with custom expiry
@@ -885,7 +885,7 @@ async fn test_08_lightning_invoice_expiry_secs(
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: "Test invoice with custom expiry".to_string(),
                 amount_sats: Some(invoice_amount_sats),
-                expiry_secs: Some(custom_expiry_secs),
+                expiry_duration_secs: Some(custom_expiry_duration_secs),
             },
         })
         .await?;
@@ -893,7 +893,7 @@ async fn test_08_lightning_invoice_expiry_secs(
     let bob_invoice = receive_response.payment_request;
     info!(
         "Bob's Lightning invoice with {} secs expiry: {}",
-        custom_expiry_secs, bob_invoice
+        custom_expiry_duration_secs, bob_invoice
     );
 
     // Parse the invoice to verify expiry is set
@@ -906,8 +906,8 @@ async fn test_08_lightning_invoice_expiry_secs(
 
         // Verify the expiry matches what we requested
         assert_eq!(
-            invoice_details.expiry, custom_expiry_secs as u64,
-            "Invoice expiry should match requested expiry_secs"
+            invoice_details.expiry, custom_expiry_duration_secs as u64,
+            "Invoice expiry should match requested expiry_duration_secs"
         );
 
         // Verify the amount is correct (in millisats)
@@ -1002,6 +1002,6 @@ async fn test_08_lightning_invoice_expiry_secs(
         "Bob's balance should increase"
     );
 
-    info!("=== Test test_08_lightning_invoice_expiry_secs PASSED ===");
+    info!("=== Test test_08_lightning_invoice_expiry_duration_secs PASSED ===");
     Ok(())
 }

@@ -446,7 +446,7 @@ pub(crate) async fn execute_command(
                 "sparkinvoice" => ReceivePaymentMethod::SparkInvoice {
                     amount,
                     token_identifier,
-                    expiry_time: expiry_secs
+                    expires_at: expiry_secs
                         .map(|secs| {
                             SystemTime::now()
                                 .duration_since(UNIX_EPOCH)?
@@ -462,7 +462,7 @@ pub(crate) async fn execute_command(
                 "bolt11" => ReceivePaymentMethod::Bolt11Invoice {
                     description: description.unwrap_or_default(),
                     amount_sats: amount.map(TryInto::try_into).transpose()?,
-                    expiry_secs,
+                    expiry_duration_secs: expiry_secs,
                 },
                 _ => return Err(anyhow::anyhow!("Invalid payment method")),
             };

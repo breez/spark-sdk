@@ -846,7 +846,7 @@ pub mod tests {
                 htlc_details: Some(SparkHtlcDetails {
                     payment_hash: "payment_hash123".to_string(),
                     preimage: Some("preimage123".to_string()),
-                    expiry_time: 15_000,
+                    expires_at: 15_000,
                     status: SparkHtlcStatus::PreimageShared,
                 }),
                 token_conversion_info: None,
@@ -2045,7 +2045,7 @@ pub mod tests {
                 htlc_details: Some(SparkHtlcDetails {
                     payment_hash: "hash1".to_string(),
                     preimage: None,
-                    expiry_time: 2000,
+                    expires_at: 2000,
                     status: SparkHtlcStatus::WaitingForPreimage,
                 }),
                 token_conversion_info: None,
@@ -2065,7 +2065,7 @@ pub mod tests {
                 htlc_details: Some(SparkHtlcDetails {
                     payment_hash: "hash2".to_string(),
                     preimage: Some("preimage123".to_string()),
-                    expiry_time: 3000,
+                    expires_at: 3000,
                     status: SparkHtlcStatus::PreimageShared,
                 }),
                 token_conversion_info: None,
@@ -2085,7 +2085,7 @@ pub mod tests {
                 htlc_details: Some(SparkHtlcDetails {
                     payment_hash: "hash3".to_string(),
                     preimage: None,
-                    expiry_time: 4000,
+                    expires_at: 4000,
                     status: SparkHtlcStatus::Returned,
                 }),
                 token_conversion_info: None,
@@ -2760,7 +2760,7 @@ pub mod tests {
                 htlc_details: Some(SparkHtlcDetails {
                     payment_hash: "hash_123".to_string(),
                     preimage: None,
-                    expiry_time: 1_234_567_990,
+                    expires_at: 1_234_567_990,
                     status: SparkHtlcStatus::WaitingForPreimage,
                 }),
                 token_conversion_info: None,
@@ -2794,7 +2794,7 @@ pub mod tests {
             htlc_details: Some(SparkHtlcDetails {
                 payment_hash: "hash_123".to_string(),
                 preimage: Some("preimage_123".to_string()),
-                expiry_time: 1_234_567_990,
+                expires_at: 1_234_567_990,
                 status: SparkHtlcStatus::PreimageShared,
             }),
             token_conversion_info: None,

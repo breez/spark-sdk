@@ -6,8 +6,8 @@ func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
     let description = "<invoice description>"
     // Optionally set the invoice amount you wish the payer to send
     let optionalAmountSats: UInt64 = 5_000
-    // Optionally set the expiry time in seconds
-    let optionalExpirySecs: UInt32 = 3600
+    // Optionally set the expiry duration in seconds
+    let optionalExpiryDurationSecs: UInt32 = 3600
     let response =
         try await sdk
         .receivePayment(
@@ -15,7 +15,7 @@ func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
                 paymentMethod: ReceivePaymentMethod.bolt11Invoice(
                     description: description,
                     amountSats: optionalAmountSats,
-                    expirySecs: optionalExpirySecs
+                    expiryDurationSecs: optionalExpiryDurationSecs
                 )
             ))
 
@@ -68,7 +68,7 @@ func receiveSparkInvoice(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
     // ANCHOR: receive-payment-spark-invoice
     let optionalDescription = "<invoice description>"
     let optionalAmountSats = BInt(5_000)
-    let optionalExpiryTimeSeconds: UInt64 = 1_716_691_200
+    let optionalExpiresAt: UInt64 = 1_716_691_200
     let optionalSenderPublicKey = "<sender public key>"
 
     let response =
@@ -78,7 +78,7 @@ func receiveSparkInvoice(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
                 paymentMethod: ReceivePaymentMethod.sparkInvoice(
                     amount: optionalAmountSats,
                     tokenIdentifier: nil,
-                    expiryTime: optionalExpiryTimeSeconds,
+                    expiresAt: optionalExpiresAt,
                     description: optionalDescription,
                     senderPublicKey: optionalSenderPublicKey
                 )

@@ -61,7 +61,7 @@ class Tokens {
             val optionalAmount = BigInteger.fromLong(5_000L)
             // Android (BigInteger from java.math)
             // val optionalAmount = BigInteger.valueOf(5_000L)
-            val optionalExpiryTimeSeconds = 1716691200.toULong()
+            val optionalExpiresAt = 1716691200.toULong()
             val optionalSenderPublicKey = "<sender public key>"
 
             val request = ReceivePaymentRequest(
@@ -69,7 +69,7 @@ class Tokens {
                     tokenIdentifier = tokenIdentifier,
                     description = optionalDescription,
                     amount = optionalAmount,
-                    expiryTime = optionalExpiryTimeSeconds,
+                    expiresAt = optionalExpiresAt,
                     senderPublicKey = optionalSenderPublicKey
                 )
             )

@@ -47,8 +47,8 @@ async fn parse_input(sdk: &BreezSdk) -> Result<()> {
                 println!("  Description: {}", description);
             }
 
-            if let Some(expiry_time) = invoice.expiry_time {
-                println!("  Expiry time: {}", expiry_time);
+            if let Some(expires_at) = invoice.expires_at {
+                println!("  Expires at: {}", expires_at);
             }
 
             if let Some(sender_public_key) = &invoice.sender_public_key {

@@ -45,8 +45,8 @@ async def parse_input(sdk: BreezSdk):
             if invoice.description:
                 logging.debug(f"  Description: {invoice.description}")
 
-            if invoice.expiry_time:
-                logging.debug(f"  Expiry time: {invoice.expiry_time}")
+            if invoice.expires_at:
+                logging.debug(f"  Expires at: {invoice.expires_at}")
 
             if invoice.sender_public_key:
                 logging.debug(f"  Sender public key: {invoice.sender_public_key}")

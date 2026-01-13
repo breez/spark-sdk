@@ -58,9 +58,9 @@ namespace BreezSdkSnippets
                         Console.WriteLine($"  Description: {invoice.description}");
                     }
 
-                    if (invoice.expiryTime.HasValue)
+                    if (invoice.expiresAt.HasValue)
                     {
-                        Console.WriteLine($"  Expiry time: {invoice.expiryTime}");
+                        Console.WriteLine($"  Expires at: {invoice.expiresAt}");
                     }
 
                     if (invoice.senderPublicKey != null)

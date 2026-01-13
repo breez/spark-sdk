@@ -8,14 +8,14 @@ const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
   const description = '<invoice description>'
   // Optionally set the invoice amount you wish the payer to send
   const optionalAmountSats = BigInt(5_000)
-  // Optionally set the expiry time in seconds
-  const optionalExpirySecs = 3600
+  // Optionally set the expiry duration in seconds
+  const optionalExpiryDurationSecs = 3600
 
   const response = await sdk.receivePayment({
     paymentMethod: new ReceivePaymentMethod.Bolt11Invoice({
       description,
       amountSats: optionalAmountSats,
-      expirySecs: optionalExpirySecs
+      expiryDurationSecs: optionalExpiryDurationSecs
     })
   })
 
@@ -56,14 +56,14 @@ const exampleReceiveSparkInvoice = async (sdk: BreezSdk) => {
   // ANCHOR: receive-payment-spark-invoice
   const optionalDescription = '<invoice description>'
   const optionalAmountSats = BigInt(5_000)
-  const optionalExpiryTimeSeconds = BigInt(1716691200)
+  const optionalExpiresAt = BigInt(1716691200)
   const optionalSenderPublicKey = '<sender public key>'
 
   const response = await sdk.receivePayment({
     paymentMethod: new ReceivePaymentMethod.SparkInvoice({
       description: optionalDescription,
       amount: optionalAmountSats,
-      expiryTime: optionalExpiryTimeSeconds,
+      expiresAt: optionalExpiresAt,
       senderPublicKey: optionalSenderPublicKey,
       tokenIdentifier: undefined
     })

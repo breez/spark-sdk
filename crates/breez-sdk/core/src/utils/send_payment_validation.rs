@@ -71,11 +71,11 @@ fn validate_spark_invoice_request(
     }
 
     // Validate expiry time
-    if let Some(expiry_time) = spark_invoice_details.expiry_time {
+    if let Some(expires_at) = spark_invoice_details.expires_at {
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| SdkError::Generic("Failed to get current time".to_string()))?;
-        if current_time > Duration::from_secs(expiry_time) {
+        if current_time > Duration::from_secs(expires_at) {
             return Err(SdkError::InvalidInput("Invoice has expired".to_string()));
         }
     }
@@ -218,7 +218,7 @@ mod tests {
             network: BitcoinNetwork::Regtest,
             amount: None,
             token_identifier: None,
-            expiry_time: None,
+            expires_at: None,
             description: None,
             sender_public_key: None,
         }
@@ -319,7 +319,7 @@ mod tests {
             .unwrap()
             .as_secs()
             .saturating_sub(1);
-        invoice.expiry_time = Some(expired_time);
+        invoice.expires_at = Some(expired_time);
 
         let request = create_test_request();
         let identity_key = "test_identity".to_string();
@@ -337,14 +337,14 @@ mod tests {
 
     #[allow(clippy::arithmetic_side_effects)]
     #[test_all]
-    fn test_validate_spark_invoice_valid_expiry_time() {
+    fn test_validate_spark_invoice_valid_expires_at() {
         let mut invoice = create_test_invoice();
         let future_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs()
             + 3600;
-        invoice.expiry_time = Some(future_time);
+        invoice.expires_at = Some(future_time);
 
         let request = create_test_request();
         let identity_key = "test_identity".to_string();
@@ -449,7 +449,7 @@ mod tests {
             .unwrap()
             .as_secs()
             + 3600;
-        invoice.expiry_time = Some(future_time);
+        invoice.expires_at = Some(future_time);
 
         let mut request = create_test_request();
         request.token_identifier = Some("token123".to_string());

@@ -43,15 +43,15 @@ Future<ReceivePaymentResponse> receiveTokenPaymentSparkInvoice(BreezSdk sdk) asy
   String tokenIdentifier = '<token identifier>';
   String optionalDescription = "<invoice description>";
   BigInt optionalAmount = BigInt.from(5000);
-  BigInt optionalExpiryTimeSeconds = BigInt.from(1716691200);
-  String optionalSenderPublicKey = "<sender public key>"; 
+  BigInt optionalExpiresAt = BigInt.from(1716691200);
+  String optionalSenderPublicKey = "<sender public key>";
 
   ReceivePaymentRequest request =
       ReceivePaymentRequest(paymentMethod: ReceivePaymentMethod.sparkInvoice(
         tokenIdentifier: tokenIdentifier,
         description: optionalDescription,
         amount: optionalAmount,
-        expiryTime: optionalExpiryTimeSeconds,
+        expiresAt: optionalExpiresAt,
         senderPublicKey: optionalSenderPublicKey,
       ));
   ReceivePaymentResponse response = await sdk.receivePayment(

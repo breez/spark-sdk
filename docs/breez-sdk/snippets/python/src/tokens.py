@@ -64,7 +64,7 @@ async def receive_token_payment_spark_invoice(sdk: BreezSdk):
         token_identifier = "<token identifier>"
         optional_description = "<invoice description>"
         optional_amount = 5_000
-        optional_expiry_time_seconds = 1716691200
+        optional_expires_at = 1716691200
         optional_sender_public_key = "<sender public key>"
 
         request = ReceivePaymentRequest(
@@ -72,7 +72,7 @@ async def receive_token_payment_spark_invoice(sdk: BreezSdk):
                 token_identifier=token_identifier,
                 description=optional_description,
                 amount=optional_amount,
-                expiry_time=optional_expiry_time_seconds,
+                expires_at=optional_expires_at,
                 sender_public_key=optional_sender_public_key,
             )
         )

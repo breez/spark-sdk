@@ -46,8 +46,8 @@ const parseInputs = async (sdk: BreezSdk) => {
       console.log(`  Description: ${invoice.description}`)
     }
 
-    if (invoice.expiryTime != null) {
-      console.log(`  Expiry time: ${new Date(Number(invoice.expiryTime) * 1000).toISOString()}`)
+    if (invoice.expiresAt != null) {
+      console.log(`  Expires at: ${new Date(Number(invoice.expiresAt) * 1000).toISOString()}`)
     }
 
     if (invoice.senderPublicKey != null) {

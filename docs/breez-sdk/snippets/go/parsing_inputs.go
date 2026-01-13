@@ -52,8 +52,8 @@ func ParseInput(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.InputType, erro
 			log.Printf("  Description: %s", *invoice.Description)
 		}
 
-		if invoice.ExpiryTime != nil {
-			log.Printf("  Expiry time: %d", *invoice.ExpiryTime)
+		if invoice.ExpiresAt != nil {
+			log.Printf("  Expires at: %d", *invoice.ExpiresAt)
 		}
 
 		if invoice.SenderPublicKey != nil {

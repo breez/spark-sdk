@@ -310,8 +310,8 @@ pub struct SparkHtlcDetails {
     pub payment_hash: String,
     /// The preimage of the HTLC. Empty until receiver has released it.
     pub preimage: Option<String>,
-    /// The expiry time of the HTLC in seconds since the Unix epoch
-    pub expiry_time: u64,
+    /// The expiry time of the HTLC as a unix timestamp in seconds
+    pub expires_at: u64,
     /// The HTLC status
     pub status: SparkHtlcStatus,
 }
@@ -669,8 +669,8 @@ pub enum ReceivePaymentMethod {
         /// The presence of this field indicates that the payment is for a token
         /// If empty, it is a Bitcoin payment
         token_identifier: Option<String>,
-        /// The expiry time of the invoice in seconds since the Unix epoch
-        expiry_time: Option<u64>,
+        /// The expiry time of the invoice as a unix timestamp in seconds
+        expires_at: Option<u64>,
         /// A description to embed in the invoice.
         description: Option<String>,
         /// If set, the invoice may only be fulfilled by a payer with this public key
@@ -680,8 +680,8 @@ pub enum ReceivePaymentMethod {
     Bolt11Invoice {
         description: String,
         amount_sats: Option<u64>,
-        /// The expiry time of the invoice in seconds
-        expiry_secs: Option<u32>,
+        /// The expiry of the invoice as a duration in seconds
+        expiry_duration_secs: Option<u32>,
     },
 }
 

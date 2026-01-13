@@ -39,8 +39,8 @@ func parseInput(sdk: BreezSdk) async throws {
                 print("  Description: \(description)")
             }
 
-            if let expiryTime = invoice.expiryTime {
-                print("  Expiry time: \(Date(timeIntervalSince1970: TimeInterval(expiryTime)))")
+            if let expiresAt = invoice.expiresAt {
+                print("  Expires at: \(Date(timeIntervalSince1970: TimeInterval(expiresAt)))")
             }
 
             if let senderPublicKey = invoice.senderPublicKey {

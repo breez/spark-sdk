@@ -1348,7 +1348,7 @@ impl BreezSdk {
             ReceivePaymentMethod::SparkInvoice {
                 amount,
                 token_identifier,
-                expiry_time,
+                expires_at,
                 description,
                 sender_public_key,
             } => {
@@ -1357,7 +1357,7 @@ impl BreezSdk {
                     .create_spark_invoice(
                         amount,
                         token_identifier.clone(),
-                        expiry_time
+                        expires_at
                             .map(|time| {
                                 SystemTime::UNIX_EPOCH
                                     .checked_add(Duration::from_secs(time))
@@ -1418,7 +1418,7 @@ impl BreezSdk {
             ReceivePaymentMethod::Bolt11Invoice {
                 description,
                 amount_sats,
-                expiry_secs,
+                expiry_duration_secs,
             } => Ok(ReceivePaymentResponse {
                 payment_request: self
                     .spark_wallet
@@ -1426,7 +1426,7 @@ impl BreezSdk {
                         amount_sats.unwrap_or_default(),
                         Some(InvoiceDescription::Memo(description.clone())),
                         None,
-                        expiry_secs,
+                        expiry_duration_secs,
                         self.config.prefer_spark_over_lightning,
                     )
                     .await?
@@ -1643,7 +1643,7 @@ impl BreezSdk {
                 payment_method: ReceivePaymentMethod::Bolt11Invoice {
                     description: withdraw_request.default_description.clone(),
                     amount_sats: Some(amount_sats),
-                    expiry_secs: None,
+                    expiry_duration_secs: None,
                 },
             })
             .await?

@@ -10,11 +10,11 @@ class ReceivePayment {
             val description = "<invoice description>"
             // Optionally set the invoice amount you wish the payer to send
             val optionalAmountSats = 5_000.toULong()
-            // Optionally set the expiry time in seconds
-            val optionalExpirySecs = 3600.toUInt()
+            // Optionally set the expiry duration in seconds
+            val optionalExpiryDurationSecs = 3600.toUInt()
 
             val request = ReceivePaymentRequest(
-                ReceivePaymentMethod.Bolt11Invoice(description, optionalAmountSats, optionalExpirySecs)
+                ReceivePaymentMethod.Bolt11Invoice(description, optionalAmountSats, optionalExpiryDurationSecs)
             )
             val response = sdk.receivePayment(request)
 
@@ -71,7 +71,7 @@ class ReceivePayment {
             val optionalAmountSats = BigInteger.fromLong(5_000L)
             // Android (BigInteger from java.math)
             // val optionalAmountSats = BigInteger.valueOf(5_000L)
-            val optionalExpiryTimeSeconds = 1716691200.toULong()
+            val optionalExpiresAt = 1716691200.toULong()
             val optionalSenderPublicKey = "<sender public key>"
 
             val request = ReceivePaymentRequest(
@@ -79,7 +79,7 @@ class ReceivePayment {
                     tokenIdentifier = null,
                     description = optionalDescription,
                     amount = optionalAmountSats,
-                    expiryTime = optionalExpiryTimeSeconds,
+                    expiresAt = optionalExpiresAt,
                     senderPublicKey = optionalSenderPublicKey
                 )
             )

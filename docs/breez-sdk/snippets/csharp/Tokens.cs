@@ -55,7 +55,7 @@ namespace BreezSdkSnippets
             var tokenIdentifier = "<token identifier>";
             var optionalDescription = "<invoice description>";
             var optionalAmount = new BigInteger(5000);
-            var optionalExpiryTimeSeconds = 1716691200UL;
+            var optionalExpiresAt = 1716691200UL;
             var optionalSenderPublicKey = "<sender public key>";
 
             var request = new ReceivePaymentRequest(
@@ -63,7 +63,7 @@ namespace BreezSdkSnippets
                     tokenIdentifier: tokenIdentifier,
                     description: optionalDescription,
                     amount: optionalAmount,
-                    expiryTime: optionalExpiryTimeSeconds,
+                    expiresAt: optionalExpiresAt,
                     senderPublicKey: optionalSenderPublicKey
                 )
             );

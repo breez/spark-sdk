@@ -651,14 +651,14 @@ pub fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option
                 SparkAddressPaymentType::SatsPayment(_) => None,
             };
 
-            let Ok(expiry_time_duration) = invoice_fields
+            let Ok(expires_at_duration) = invoice_fields
                 .expiry_time
                 .map(|e| e.duration_since(UNIX_EPOCH))
                 .transpose()
             else {
                 return None;
             };
-            let expiry_time = expiry_time_duration.map(|e| e.as_secs());
+            let expires_at = expires_at_duration.map(|e| e.as_secs());
 
             return Some(InputType::SparkInvoice(SparkInvoiceDetails {
                 invoice: input.to_string(),
@@ -666,7 +666,7 @@ pub fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option
                 network,
                 amount,
                 token_identifier,
-                expiry_time,
+                expires_at,
                 description: invoice_fields.memo,
                 sender_public_key: invoice_fields.sender_public_key.map(|e| e.to_string()),
             }));

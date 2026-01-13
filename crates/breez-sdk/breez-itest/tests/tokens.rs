@@ -282,7 +282,7 @@ async fn test_02_token_invoice(
             payment_method: ReceivePaymentMethod::SparkInvoice {
                 amount: Some(20),
                 token_identifier: Some(token_metadata.identifier.clone()),
-                expiry_time: None,
+                expires_at: None,
                 description: Some("test invoice".to_string()),
                 sender_public_key: None,
             },
@@ -761,7 +761,7 @@ async fn test_05_invoice_expiry(
     );
 
     // Bob creates an invoice that expires in 5 seconds
-    let expiry_time = Some(
+    let expires_at = Some(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs()
@@ -774,7 +774,7 @@ async fn test_05_invoice_expiry(
             payment_method: ReceivePaymentMethod::SparkInvoice {
                 amount: Some(30),
                 token_identifier: Some(token_metadata.identifier.clone()),
-                expiry_time,
+                expires_at,
                 description: Some("expiring invoice".to_string()),
                 sender_public_key: None,
             },

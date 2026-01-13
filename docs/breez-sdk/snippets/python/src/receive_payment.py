@@ -13,12 +13,12 @@ async def receive_lightning(sdk: BreezSdk):
         description = "<invoice description>"
         # Optionally set the invoice amount you wish the payer to send
         optional_amount_sats = 5_000
-        # Optionally set the expiry time in seconds
-        optional_expiry_secs = 3600
+        # Optionally set the expiry duration in seconds
+        optional_expiry_duration_secs = 3600
         payment_method = ReceivePaymentMethod.BOLT11_INVOICE(
             description=description,
             amount_sats=optional_amount_sats,
-            expiry_secs=optional_expiry_secs,
+            expiry_duration_secs=optional_expiry_duration_secs,
         )
         request = ReceivePaymentRequest(payment_method=payment_method)
         response = await sdk.receive_payment(request=request)
@@ -77,14 +77,14 @@ async def receive_spark_invoice(sdk: BreezSdk):
     try:
         optional_description = "<invoice description>"
         optional_amount_sats = 5_000
-        optional_expiry_time_seconds = 1716691200
+        optional_expires_at = 1716691200
         optional_sender_public_key = "<sender public key>"
 
         request = ReceivePaymentRequest(
             payment_method=ReceivePaymentMethod.SPARK_INVOICE(
                 description=optional_description,
                 amount=optional_amount_sats,
-                expiry_time=optional_expiry_time_seconds,
+                expires_at=optional_expires_at,
                 sender_public_key=optional_sender_public_key,
                 token_identifier=None,
             )

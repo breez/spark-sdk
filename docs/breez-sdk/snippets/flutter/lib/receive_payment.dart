@@ -6,15 +6,15 @@ Future<ReceivePaymentResponse> receivePaymentLightning(
   String description = "<invoice description>";
   // Optionally set the invoice amount you wish the payer to send
   BigInt optionalAmountSats = BigInt.from(5000);
-  // Optionally set the expiry time in seconds
-  int optionalExpirySecs = 3600;
+  // Optionally set the expiry duration in seconds
+  int optionalExpiryDurationSecs = 3600;
 
   // Create an invoice and set the amount you wish the payer to send
   ReceivePaymentRequest request = ReceivePaymentRequest(
       paymentMethod: ReceivePaymentMethod.bolt11Invoice(
           description: description,
           amountSats: optionalAmountSats,
-          expirySecs: optionalExpirySecs));
+          expiryDurationSecs: optionalExpiryDurationSecs));
   ReceivePaymentResponse response = await sdk.receivePayment(
     request: request,
   );
@@ -64,14 +64,14 @@ Future<ReceivePaymentResponse> receivePaymentSparkInvoice(BreezSdk sdk) async {
   // ANCHOR: receive-payment-spark-invoice
   String optionalDescription = "<invoice description>";
   BigInt optionalAmountSats = BigInt.from(5000);
-  BigInt optionalExpiryTimeSeconds = BigInt.from(1716691200);
+  BigInt optionalExpiresAt = BigInt.from(1716691200);
   String optionalSenderPublicKey = "<sender public key>";
 
   ReceivePaymentRequest request =
       ReceivePaymentRequest(paymentMethod: ReceivePaymentMethod.sparkInvoice(
         description: optionalDescription,
         amount: optionalAmountSats,
-        expiryTime: optionalExpiryTimeSeconds,
+        expiresAt: optionalExpiresAt,
         senderPublicKey: optionalSenderPublicKey,
       ));
   ReceivePaymentResponse response = await sdk.receivePayment(
