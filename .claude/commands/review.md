@@ -28,35 +28,33 @@ Read and apply the review guidelines from `.claude/rules/pr-review.md`.
 
 ## Your Task
 
-Provide a **compact, actionable review** structured as:
+Provide a **concise, actionable review**. Only include sections with meaningful findings.
 
 ### Summary
-1-2 sentences describing what this PR does.
+1-2 sentences: what the PR does and the problem it solves.
 
-### Review
+### Design Analysis (only if concerns)
+- Rationale, approach, trade-offs, extensibility
+- Skip if design is sound
 
-**Code Quality**
-- Formatting/linting concerns
-- Rust conventions (error handling, patterns)
+### Issues (only if any)
+List by severity. Omit empty levels. Format: `file:line - description`
+- CRITICAL / HIGH / MEDIUM / LOW
 
-**Testing**
-- Test coverage assessment
-- Missing test cases
-
-**API Changes** (if applicable)
-- Binding file updates needed
-- Breaking change considerations
-
-**Security** (if applicable)
-- Key handling, input validation
-
-### Issues
-List specific issues by severity (CRITICAL > HIGH > MEDIUM > LOW).
-Format: `file:line - description`
+### Questions (only if needed)
+Clarifications needed from author.
 
 ### Recommendation
-APPROVE | REQUEST CHANGES | COMMENT
+**APPROVE** | **REQUEST CHANGES** | **COMMENT**
 
 ---
 
-Keep the review focused and avoid over-explaining. Prioritize actionable feedback.
+**Keep it short.** If everything passes, a review can be as simple as:
+
+```
+### Summary
+Adds X to support Y.
+
+### Recommendation
+**APPROVE** - CI passes, tests included, design is sound.
+```

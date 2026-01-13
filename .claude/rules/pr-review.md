@@ -164,34 +164,42 @@ Types: feat, fix, docs, refactor, perf, test, chore
 
 ## Review Output Format
 
-Structure your review as follows:
+**Keep it concise.** Only include sections with meaningful findings.
+Omit sections where everything passes or is not applicable.
 
 ### Summary
 Brief description of what the PR does and the problem it solves.
 
-### Design Analysis
-- **Rationale**: Why is this change needed? Does the PR description explain the "why"?
-- **Approach**: Is this the right solution? What alternatives exist?
-- **Trade-offs**: What are the costs of this approach (complexity, performance, maintenance)?
-- **Extensibility**: Does this generalize well or is it narrowly scoped?
+### Design Analysis (if concerns exist)
+Only include if there are design questions or concerns:
+- **Rationale**: Why is this change needed?
+- **Approach**: Is this the right solution? Alternatives?
+- **Trade-offs**: Costs of this approach?
+- **Extensibility**: Does it generalize?
 
-### Issues Found
-List by severity:
-- **CRITICAL**: Must fix before merge (security, data loss, design flaws)
-- **HIGH**: Should fix before merge (bugs, missing tests, unclear rationale)
+### Issues (if any)
+List by severity. Omit empty severity levels.
+- **CRITICAL**: Must fix (security, data loss, design flaws)
+- **HIGH**: Should fix (bugs, missing tests, unclear rationale)
 - **MEDIUM**: Recommend fixing (performance, style)
-- **LOW**: Minor suggestions (optional improvements)
+- **LOW**: Minor suggestions
 
-### Questions
-Areas needing clarification from the author. Examples:
-- "Why was X chosen over Y?"
-- "What happens when Z fails?"
-- "Will this need to support W in the future?"
+### Questions (if any)
+Only include if clarification is needed.
 
 ### Recommendation
 - **APPROVE**: Design is sound, implementation is correct
-- **REQUEST CHANGES**: Design or implementation issues must be addressed
+- **REQUEST CHANGES**: Issues must be addressed
 - **COMMENT**: Feedback only, no blocking issues
+
+**Example of a clean approval:**
+```
+### Summary
+Adds X to support Y.
+
+### Recommendation
+**APPROVE** - Design is sound, CI passes, tests included.
+```
 
 ---
 
