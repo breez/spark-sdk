@@ -6,12 +6,14 @@ use spark_wallet::{
     Network as SparkNetwork, PreimageRequest, PreimageRequestStatus, SspUserRequest,
     TokenTransactionStatus, TransferDirection, TransferStatus, TransferType, WalletTransfer,
 };
+use tracing::debug;
 use web_time::UNIX_EPOCH;
 
 use crate::{
-    Fee, Network, OnchainConfirmationSpeed, Payment, PaymentDetails, PaymentMethod, PaymentStatus,
-    PaymentType, SdkError, SendOnchainFeeQuote, SendOnchainSpeedFeeQuote, SparkHtlcDetails,
-    SparkHtlcStatus, SparkInvoicePaymentDetails, TokenBalance, TokenMetadata,
+    Fee, Network, OnchainConfirmationSpeed, OptimizationProgress, Payment, PaymentDetails,
+    PaymentMethod, PaymentStatus, PaymentType, SdkError, SendOnchainFeeQuote,
+    SendOnchainSpeedFeeQuote, SparkHtlcDetails, SparkHtlcStatus, SparkInvoicePaymentDetails,
+    TokenBalance, TokenMetadata,
 };
 
 impl PaymentMethod {
@@ -128,6 +130,19 @@ impl From<SparkInvoiceDetails> for SparkInvoicePaymentDetails {
 impl TryFrom<WalletTransfer> for Payment {
     type Error = SdkError;
     fn try_from(transfer: WalletTransfer) -> Result<Self, Self::Error> {
+        if [
+            TransferType::CounterSwap,
+            TransferType::CounterSwapV3,
+            TransferType::Swap,
+            TransferType::PrimarySwapV3,
+        ]
+        .contains(&transfer.transfer_type)
+        {
+            debug!("Tried to convert swap-related transfer to payment. Transfer: {transfer:?}");
+            return Err(SdkError::Generic(
+                "Swap-related transfers are not considered payments".to_string(),
+            ));
+        }
         let payment_type = match transfer.direction {
             TransferDirection::Incoming => PaymentType::Receive,
             TransferDirection::Outgoing => PaymentType::Send,
@@ -394,6 +409,16 @@ impl From<PreimageRequestStatus> for SparkHtlcStatus {
             PreimageRequestStatus::WaitingForPreimage => SparkHtlcStatus::WaitingForPreimage,
             PreimageRequestStatus::PreimageShared => SparkHtlcStatus::PreimageShared,
             PreimageRequestStatus::Returned => SparkHtlcStatus::Returned,
+        }
+    }
+}
+
+impl From<spark_wallet::OptimizationProgress> for OptimizationProgress {
+    fn from(value: spark_wallet::OptimizationProgress) -> Self {
+        Self {
+            is_running: value.is_running,
+            current_round: value.current_round,
+            total_rounds: value.total_rounds,
         }
     }
 }

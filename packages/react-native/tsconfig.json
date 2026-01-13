@@ -26,5 +26,5 @@
     "target": "ESNext",
     "verbatimModuleSyntax": true
   },
-  "exclude": ["android/", "cpp/generated/", "ios/", "lib/", "node_modules", "rust_modules", "src/generated/"]
+  "exclude": ["android/", "cpp/generated/", "ios/", "lib/", "node_modules", "plugin/", "rust_modules", "src/generated/"]
 }

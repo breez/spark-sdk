@@ -75,6 +75,26 @@ pub enum SdkEvent {
     PaymentFailed {
         payment: Payment,
     },
+    Optimization {
+        optimization_event: OptimizationEvent,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationEvent)]
+pub enum OptimizationEvent {
+    Started {
+        total_rounds: u32,
+    },
+    RoundCompleted {
+        current_round: u32,
+        total_rounds: u32,
+    },
+    Completed,
+    Cancelled,
+    Failed {
+        error: String,
+    },
+    Skipped,
 }
 
 #[derive(Clone)]
@@ -555,6 +575,13 @@ pub struct Config {
     pub use_default_external_input_parsers: bool,
     pub real_time_sync_server_url: Option<String>,
     pub private_enabled_default: bool,
+    pub optimization_config: OptimizationConfig,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationConfig)]
+pub struct OptimizationConfig {
+    pub auto_enabled: bool,
+    pub multiplicity: u8,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::MaxFee)]
@@ -635,6 +662,7 @@ pub enum ReceivePaymentMethod {
     Bolt11Invoice {
         description: String,
         amount_sats: Option<u64>,
+        expiry_secs: Option<u32>,
     },
 }
 
@@ -1049,4 +1077,11 @@ pub struct LnurlReceiveMetadata {
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
     pub sender_comment: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationProgress)]
+pub struct OptimizationProgress {
+    pub is_running: bool,
+    pub current_round: u32,
+    pub total_rounds: u32,
 }

@@ -11,9 +11,12 @@ namespace BreezSdkSnippets
             var description = "<invoice description>";
             // Optionally set the invoice amount you wish the payer to send
             var optionalAmountSats = 5_000UL;
+            // Optionally set the expiry time in seconds
+            var optionalExpirySecs = 3600U;
             var paymentMethod = new ReceivePaymentMethod.Bolt11Invoice(
                 description: description,
-                amountSats: optionalAmountSats
+                amountSats: optionalAmountSats,
+                expirySecs: optionalExpirySecs
             );
             var request = new ReceivePaymentRequest(paymentMethod: paymentMethod);
             var response = await sdk.ReceivePayment(request: request);

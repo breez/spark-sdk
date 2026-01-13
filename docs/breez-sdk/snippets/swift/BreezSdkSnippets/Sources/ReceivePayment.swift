@@ -6,13 +6,16 @@ func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
     let description = "<invoice description>"
     // Optionally set the invoice amount you wish the payer to send
     let optionalAmountSats: UInt64 = 5_000
+    // Optionally set the expiry time in seconds
+    let optionalExpirySecs: UInt32 = 3600
     let response =
         try await sdk
         .receivePayment(
             request: ReceivePaymentRequest(
                 paymentMethod: ReceivePaymentMethod.bolt11Invoice(
                     description: description,
-                    amountSats: optionalAmountSats
+                    amountSats: optionalAmountSats,
+                    expirySecs: optionalExpirySecs
                 )
             ))
 

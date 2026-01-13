@@ -20,7 +20,9 @@ Preimages are required to be unique and are not managed by the SDK. It is your r
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.list_payments">API docs</a>
 </h2>
 
-Claimable HTLC payments will be included in the [list of payments](/guide/list_payments.md) as pending as soon as they are detected. To list only claimable HTLC payments, you can filter by HTLC status.
+Once detected, claimable HTLC payments are immediately listed as pending in the [list of payments](/guide/list_payments.md). Additionally, a `PaymentPending` event is emitted to notify your application. See [Listening to events](/guide/events.md) for more details.
+
+To list only claimable HTLC payments, you can filter by HTLC status.
 
 {{#tabs htlcs:list-claimable-htlc-payments}}
 

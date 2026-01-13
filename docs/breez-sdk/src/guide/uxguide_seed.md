@@ -1,10 +1,12 @@
-## Seed & Key Management
+## Seed & key management
 
-### UX Principles
+### UX principles
+
 - Onboarding should be **seamless**; don’t block first use with seed backup.
 - Encourage security without forcing it prematurely.
 
 ### Guidelines
+
 1. **Allow seed backup after wallet creation** or **after the first received payment** to keep onboarding smooth.
 2. **Explain** the need to **write down and save** the seed phrase.
 3. **Consider validation** (e.g., partial re-entry) to confirm backup.

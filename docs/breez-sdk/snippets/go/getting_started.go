@@ -94,6 +94,10 @@ func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 		// A payment failed
 		failedPayment := event.Payment
 		_ = failedPayment
+	case breez_sdk_spark.SdkEventOptimization:
+		// An optimization event occurred
+		optimizationEvent := event.OptimizationEvent
+		_ = optimizationEvent
 	default:
 		// Handle any future event types
 	}

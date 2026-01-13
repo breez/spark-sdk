@@ -276,7 +276,7 @@ impl SparkAddress {
         Ok(address)
     }
 
-    pub fn to_invoice_string(&self, signer: &dyn Signer) -> Result<String, AddressError> {
+    pub async fn to_invoice_string(&self, signer: &dyn Signer) -> Result<String, AddressError> {
         if !self.is_invoice() {
             return Err(AddressError::Other(
                 "Non-invoice addresses cannot be converted to invoice strings".to_string(),
@@ -284,7 +284,7 @@ impl SparkAddress {
         }
 
         if self.identity_public_key
-            != signer.get_identity_public_key().map_err(|e| {
+            != signer.get_identity_public_key().await.map_err(|e| {
                 AddressError::Other(format!("Failed to get identity public key: {e}"))
             })?
         {
@@ -303,6 +303,7 @@ impl SparkAddress {
 
         let signature = signer
             .sign_hash_schnorr_with_identity_key(&invoice_hash)
+            .await
             .map_err(|e| AddressError::Other(format!("Failed to sign invoice hash: {e}")))?;
 
         let proto_address = ProtoSparkAddress {
@@ -572,7 +573,7 @@ mod tests {
 
     use super::*;
     use bitcoin::secp256k1::Secp256k1;
-    use macros::test_all;
+    use macros::{async_test_all, test_all};
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
@@ -779,10 +780,10 @@ mod tests {
         }
     }
 
-    #[test_all]
-    fn test_invoice_roundtrip() {
+    #[async_test_all]
+    async fn test_invoice_roundtrip() {
         let signer = create_test_signer();
-        let public_key = signer.get_identity_public_key().unwrap();
+        let public_key = signer.get_identity_public_key().await.unwrap();
         let sender_public_key = create_test_public_key();
         let invoice_fields = SparkInvoiceFields {
             id: uuid::Uuid::now_v7(),
@@ -801,7 +802,7 @@ mod tests {
         let original_address =
             SparkAddress::new(public_key, Network::Regtest, Some(invoice_fields.clone()));
 
-        let invoice_string = original_address.to_invoice_string(&signer).unwrap();
+        let invoice_string = original_address.to_invoice_string(&signer).await.unwrap();
         let parsed_address = SparkAddress::from_str(&invoice_string).unwrap();
 
         assert_eq!(
@@ -840,10 +841,10 @@ mod tests {
         assert_eq!(tokens_payment1.amount, tokens_payment2.amount);
     }
 
-    #[test_all]
-    fn test_invoice_minimal_data() {
+    #[async_test_all]
+    async fn test_invoice_minimal_data() {
         let signer = create_test_signer();
-        let public_key = signer.get_identity_public_key().unwrap();
+        let public_key = signer.get_identity_public_key().await.unwrap();
         let invoice_fields = SparkInvoiceFields {
             id: uuid::Uuid::now_v7(),
             version: 1,
@@ -858,7 +859,7 @@ mod tests {
         let original_address =
             SparkAddress::new(public_key, Network::Testnet, Some(invoice_fields));
 
-        let invoice_string = original_address.to_invoice_string(&signer).unwrap();
+        let invoice_string = original_address.to_invoice_string(&signer).await.unwrap();
         let parsed_address = SparkAddress::from_str(&invoice_string).unwrap();
 
         assert!(parsed_address.spark_invoice_fields.is_some());
@@ -873,10 +874,10 @@ mod tests {
         assert_eq!(parsed_invoice_fields.memo, None);
     }
 
-    #[test_all]
-    fn test_compare_addresses_with_and_without_invoice_fields() {
+    #[async_test_all]
+    async fn test_compare_addresses_with_and_without_invoice_fields() {
         let signer = create_test_signer();
-        let public_key = signer.get_identity_public_key().unwrap();
+        let public_key = signer.get_identity_public_key().await.unwrap();
         let sender_public_key = create_test_public_key();
 
         // Create address without invoice fields
@@ -898,7 +899,10 @@ mod tests {
         };
         let address_with_intent =
             SparkAddress::new(public_key, Network::Mainnet, Some(invoice_fields));
-        let string_with_intent = address_with_intent.to_invoice_string(&signer).unwrap();
+        let string_with_intent = address_with_intent
+            .to_invoice_string(&signer)
+            .await
+            .unwrap();
 
         // The strings should be different due to the payment intent data
         assert_ne!(string_without_intent, string_with_intent);

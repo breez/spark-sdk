@@ -652,6 +652,7 @@ where
                     desc_hash.to_byte_array(),
                 )),
                 Some(pubkey),
+                None,
                 state.include_spark_address,
             )
             .await

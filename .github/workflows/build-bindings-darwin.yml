@@ -58,9 +58,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.target }}
-          path: |
-            target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.dylib
-            target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.a
+          path: target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.a
+      
+      - name: Archive bindings
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-dynamic-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.dylib
   
   merge:
     runs-on: macOS-latest
@@ -71,25 +75,43 @@ jobs:
       with:
         name: bindings-aarch64-apple-darwin
         path: aarch64-apple-darwin
+    
+    - uses: actions/download-artifact@v4
+      with:
+        name: bindings-dynamic-aarch64-apple-darwin
+        path: dynamic-aarch64-apple-darwin
 
     - uses: actions/download-artifact@v4
       with:
         name: bindings-x86_64-apple-darwin
         path: x86_64-apple-darwin
 
+    - uses: actions/download-artifact@v4
+      with:
+        name: bindings-dynamic-x86_64-apple-darwin
+        path: dynamic-x86_64-apple-darwin
+
     - name: Build Darwin universal
       run: |
         mkdir -p darwin-universal
-        lipo -create -output darwin-universal/libbreez_sdk_spark_bindings.dylib aarch64-apple-darwin/libbreez_sdk_spark_bindings.dylib x86_64-apple-darwin/libbreez_sdk_spark_bindings.dylib
         lipo -create -output darwin-universal/libbreez_sdk_spark_bindings.a aarch64-apple-darwin/libbreez_sdk_spark_bindings.a x86_64-apple-darwin/libbreez_sdk_spark_bindings.a
+
+    - name: Build dynamic Darwin universal
+      run: |
+        mkdir -p dynamic-darwin-universal
+        lipo -create -output dynamic-darwin-universal/libbreez_sdk_spark_bindings.dylib dynamic-aarch64-apple-darwin/libbreez_sdk_spark_bindings.dylib dynamic-x86_64-apple-darwin/libbreez_sdk_spark_bindings.dylib
 
     - name: Archive release
       uses: actions/upload-artifact@v4
       with:
         name: bindings-darwin-universal
-        path: |
-          darwin-universal/libbreez_sdk_spark_bindings.dylib
-          darwin-universal/libbreez_sdk_spark_bindings.a
+        path: darwin-universal/libbreez_sdk_spark_bindings.a
+
+    - name: Archive dynamic release
+      uses: actions/upload-artifact@v4
+      with:
+        name: bindings-dynamic-darwin-universal
+        path: dynamic-darwin-universal/libbreez_sdk_spark_bindings.dylib
 
   build-dummies:
     if: ${{ inputs.use-dummy-binaries }}
@@ -104,12 +126,31 @@ jobs:
         ]
     steps:
       - name: Build dummy darwin ${{ matrix.target }}
-        run: |
-          touch libbreez_sdk_spark_bindings.dylib
-          touch libbreez_sdk_spark_bindings.a
+        run: touch libbreez_sdk_spark_bindings.a
 
       - name: Upload dummy darwin ${{ matrix.target }} artifact
         uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.target }}
+          path: ./*
+
+  build-dynamic-dummies:
+    if: ${{ inputs.use-dummy-binaries }}
+    runs-on: ubuntu-latest
+    name: Build dummies ${{ matrix.target }}
+    strategy:
+      matrix:
+        target: [
+          dynamic-aarch64-apple-darwin,
+          dynamic-x86_64-apple-darwin,
+          dynamic-darwin-universal
+        ]
+    steps:
+      - name: Build dummy darwin ${{ matrix.target }}
+        run: touch libbreez_sdk_spark_bindings.dylib
+
+      - name: Upload dummy darwin ${{ matrix.target }} artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-dynamic-${{ matrix.target }}
           path: ./*

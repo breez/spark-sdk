@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use spark::{
     Network,
     operator::{OperatorConfig, OperatorPoolConfig},
-    services::TokensConfig,
+    services::{OptimizationOptions, TokensConfig},
     ssp::ServiceProviderConfig,
 };
 
@@ -19,6 +19,8 @@ pub struct SparkWalletConfig {
     pub service_provider_config: ServiceProviderConfig,
     pub split_secret_threshold: u32,
     pub tokens_config: TokensConfig,
+    pub optimization_options: OptimizationOptions,
+    pub auto_optimize_enabled: bool,
 }
 
 impl SparkWalletConfig {
@@ -28,6 +30,10 @@ impl SparkWalletConfig {
                 "split_secret_threshold must be less than or equal to the number of signing operators".to_string(),
             ));
         }
+
+        self.optimization_options
+            .validate()
+            .map_err(|e| SparkWalletError::ValidationError(e.to_string()))?;
 
         Ok(())
     }
@@ -46,6 +52,8 @@ impl SparkWalletConfig {
                 .unwrap(),
                 split_secret_threshold: 2,
                 tokens_config: Self::default_tokens_config(),
+                optimization_options: OptimizationOptions::default(),
+                auto_optimize_enabled: true,
             },
             _ => Self {
                 network,
@@ -59,6 +67,8 @@ impl SparkWalletConfig {
                 .unwrap(),
                 split_secret_threshold: 2,
                 tokens_config: Self::default_tokens_config(),
+                optimization_options: OptimizationOptions::default(),
+                auto_optimize_enabled: true,
             },
         }
     }

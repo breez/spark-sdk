@@ -18,7 +18,8 @@ pub use spark::{
     services::{
         CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,
         FreezeIssuerTokenResponse, InvoiceDescription, LightningSendPayment, LightningSendStatus,
-        Preimage, PreimageRequestStatus, ReceiverTokenOutput, TokenInputs, TokenTransaction,
+        OptimizationEvent, OptimizationOptions, OptimizationProgress, Preimage,
+        PreimageRequestStatus, ReceiverTokenOutput, TokenInputs, TokenTransaction,
         TokenTransactionStatus, TransferId, TransferObserver, TransferObserverError,
         TransferStatus, TransferTokenOutput, TransferType, Utxo,
     },

@@ -596,6 +596,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "breez-sdk-bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bip39",
+ "breez-sdk-itest",
+ "breez-sdk-spark",
+ "clap",
+ "dirs",
+ "rand 0.8.5",
+ "tempdir",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "breez-sdk-bindings"
 version = "0.1.0"
 dependencies = [
@@ -4722,6 +4740,7 @@ dependencies = [
  "thiserror 2.0.14",
  "tokio",
  "tokio_with_wasm",
+ "tonic",
  "tracing",
  "uuid",
  "web-time",

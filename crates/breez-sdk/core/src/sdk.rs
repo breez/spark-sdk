@@ -45,11 +45,12 @@ use crate::{
     GetTokensMetadataResponse, InputType, LightningAddressInfo, ListFiatCurrenciesResponse,
     ListFiatRatesResponse, ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse,
     LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawRequest, LnurlWithdrawResponse,
-    Logger, MaxFee, Network, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
-    RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem,
-    SignMessageRequest, SignMessageResponse, SparkHtlcOptions, UpdateUserSettingsRequest,
-    UserSettings, WaitForPaymentIdentifier,
+    Logger, MaxFee, Network, OptimizationConfig, OptimizationProgress, PaymentDetails,
+    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
+    SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem, SignMessageRequest,
+    SignMessageResponse, SparkHtlcOptions, UpdateUserSettingsRequest, UserSettings,
+    WaitForPaymentIdentifier,
     chain::RecommendedFees,
     error::SdkError,
     events::{EventEmitter, EventListener, InternalSyncedEvent, SdkEvent},
@@ -218,6 +219,10 @@ pub fn default_config(network: Network) -> Config {
         use_default_external_input_parsers: true,
         real_time_sync_server_url: Some(BREEZ_SYNC_SERVICE_URL.to_string()),
         private_enabled_default: true,
+        optimization_config: OptimizationConfig {
+            auto_enabled: true,
+            multiplicity: 1,
+        },
     }
 }
 
@@ -578,6 +583,9 @@ impl BreezSdk {
                     error!("Failed to sync wallet: {e:?}");
                 }
             }
+            WalletEvent::Optimization(event) => {
+                info!("Optimization event: {:?}", event);
+            }
         }
     }
 
@@ -797,8 +805,13 @@ impl BreezSdk {
     async fn sync_wallet_state_to_storage(&self) -> Result<(), SdkError> {
         update_balances(self.spark_wallet.clone(), self.storage.clone()).await?;
 
-        let sync_service = SparkSyncService::new(self.spark_wallet.clone(), self.storage.clone());
-        sync_service.sync_payments().await?;
+        let initial_sync_complete = *self.initial_synced_watcher.borrow();
+        let sync_service = SparkSyncService::new(
+            self.spark_wallet.clone(),
+            self.storage.clone(),
+            self.event_emitter.clone(),
+        );
+        sync_service.sync_payments(initial_sync_complete).await?;
 
         Ok(())
     }
@@ -1107,19 +1120,22 @@ impl BreezSdk {
                 description,
                 sender_public_key,
             } => {
-                let invoice = self.spark_wallet.create_spark_invoice(
-                    amount,
-                    token_identifier.clone(),
-                    expiry_time
-                        .map(|time| {
-                            SystemTime::UNIX_EPOCH
-                                .checked_add(Duration::from_secs(time))
-                                .ok_or(SdkError::Generic("Invalid expiry time".to_string()))
-                        })
-                        .transpose()?,
-                    description,
-                    sender_public_key.map(|key| PublicKey::from_str(&key).unwrap()),
-                )?;
+                let invoice = self
+                    .spark_wallet
+                    .create_spark_invoice(
+                        amount,
+                        token_identifier.clone(),
+                        expiry_time
+                            .map(|time| {
+                                SystemTime::UNIX_EPOCH
+                                    .checked_add(Duration::from_secs(time))
+                                    .ok_or(SdkError::Generic("Invalid expiry time".to_string()))
+                            })
+                            .transpose()?,
+                        description,
+                        sender_public_key.map(|key| PublicKey::from_str(&key).unwrap()),
+                    )
+                    .await?;
                 Ok(ReceivePaymentResponse {
                     fee: 0,
                     payment_request: invoice,
@@ -1170,6 +1186,7 @@ impl BreezSdk {
             ReceivePaymentMethod::Bolt11Invoice {
                 description,
                 amount_sats,
+                expiry_secs,
             } => Ok(ReceivePaymentResponse {
                 payment_request: self
                     .spark_wallet
@@ -1177,6 +1194,7 @@ impl BreezSdk {
                         amount_sats.unwrap_or_default(),
                         Some(InvoiceDescription::Memo(description.clone())),
                         None,
+                        expiry_secs,
                         self.config.prefer_spark_over_lightning,
                     )
                     .await?
@@ -1332,7 +1350,9 @@ impl BreezSdk {
             )
             .await?;
 
-        emit_payment_status(&self.event_emitter, payment.clone()).await;
+        self.event_emitter
+            .emit(&SdkEvent::from_payment(payment.clone()))
+            .await;
         Ok(LnurlPayResponse {
             payment,
             success_action: success_action.map(From::from),
@@ -1388,6 +1408,7 @@ impl BreezSdk {
                 payment_method: ReceivePaymentMethod::Bolt11Invoice {
                     description: withdraw_request.default_description.clone(),
                     amount_sats: Some(amount_sats),
+                    expiry_secs: None,
                 },
             })
             .await?
@@ -1899,6 +1920,33 @@ impl BreezSdk {
     pub fn get_token_issuer(&self) -> TokenIssuer {
         TokenIssuer::new(self.spark_wallet.clone(), self.storage.clone())
     }
+
+    /// Starts leaf optimization in the background.
+    ///
+    /// This method spawns the optimization work in a background task and returns
+    /// immediately. Progress is reported via events.
+    /// If optimization is already running, no new task will be started.
+    pub fn start_leaf_optimization(&self) {
+        self.spark_wallet.start_leaf_optimization();
+    }
+
+    /// Cancels the ongoing leaf optimization.
+    ///
+    /// This method cancels the ongoing optimization and waits for it to fully stop.
+    /// The current round will complete before stopping. This method blocks
+    /// until the optimization has fully stopped and leaves reserved for optimization
+    /// are available again.
+    ///
+    /// If no optimization is running, this method returns immediately.
+    pub async fn cancel_leaf_optimization(&self) -> Result<(), SdkError> {
+        self.spark_wallet.cancel_leaf_optimization().await?;
+        Ok(())
+    }
+
+    /// Returns the current optimization progress snapshot.
+    pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
+        self.spark_wallet.get_leaf_optimization_progress().into()
+    }
 }
 
 // Separate impl block to avoid exposing private methods to uniffi.
@@ -1967,7 +2015,9 @@ impl BreezSdk {
         };
         if let Ok(response) = &res {
             if !suppress_payment_event {
-                emit_payment_status(&self.event_emitter, response.payment.clone()).await;
+                self.event_emitter
+                    .emit(&SdkEvent::from_payment(response.payment.clone()))
+                    .await;
             }
             if let Err(e) = self
                 .sync_trigger
@@ -2327,7 +2377,7 @@ impl BreezSdk {
                             info!("Polling payment status = {} {:?}", payment.status, p.status);
                             if payment.status != PaymentStatus::Pending {
                                 info!("Polling payment completed status = {}", payment.status);
-                                emit_payment_status(&event_emitter, payment.clone()).await;
+                                event_emitter.emit(&SdkEvent::from_payment(payment.clone())).await;
                                 if let Err(e) = sync_trigger.send(SyncRequest::no_reply(SyncType::WalletState)) {
                                     error!("Failed to send sync trigger: {e:?}");
                                 }
@@ -2561,26 +2611,6 @@ fn process_success_action(
     };
 
     Ok(Some(SuccessActionProcessed::Aes { result }))
-}
-
-async fn emit_payment_status(event_emitter: &EventEmitter, payment: Payment) {
-    match payment.status {
-        PaymentStatus::Completed => {
-            event_emitter
-                .emit(&SdkEvent::PaymentSucceeded { payment })
-                .await;
-        }
-        PaymentStatus::Failed => {
-            event_emitter
-                .emit(&SdkEvent::PaymentFailed { payment })
-                .await;
-        }
-        PaymentStatus::Pending => {
-            event_emitter
-                .emit(&SdkEvent::PaymentPending { payment })
-                .await;
-        }
-    }
 }
 
 fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {

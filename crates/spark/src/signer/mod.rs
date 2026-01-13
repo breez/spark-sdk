@@ -18,12 +18,12 @@ pub(crate) use default_signer::tests::create_test_signer;
 
 #[async_trait::async_trait]
 pub trait Signer: Send + Sync + 'static {
-    fn sign_message_ecdsa_with_identity_key(
+    async fn sign_message_ecdsa_with_identity_key(
         &self,
         message: &[u8],
     ) -> Result<Signature, SignerError>;
 
-    fn sign_hash_schnorr_with_identity_key(
+    async fn sign_hash_schnorr_with_identity_key(
         &self,
         hash: &[u8],
     ) -> Result<schnorr::Signature, SignerError>;
@@ -32,32 +32,32 @@ pub trait Signer: Send + Sync + 'static {
         &self,
     ) -> Result<FrostSigningCommitmentsWithNonces, SignerError>;
 
-    fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError>;
+    async fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError>;
 
-    fn generate_random_key(&self) -> Result<PrivateKeySource, SignerError>;
+    async fn generate_random_key(&self) -> Result<PrivateKeySource, SignerError>;
 
-    fn get_identity_public_key(&self) -> Result<PublicKey, SignerError>;
+    async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError>;
 
-    fn get_static_deposit_private_key_source(
+    async fn get_static_deposit_private_key_source(
         &self,
         index: u32,
     ) -> Result<PrivateKeySource, SignerError>;
 
-    fn get_static_deposit_private_key(&self, index: u32) -> Result<SecretKey, SignerError>;
+    async fn get_static_deposit_private_key(&self, index: u32) -> Result<SecretKey, SignerError>;
 
-    fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError>;
+    async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError>;
 
     /// Subtract two private keys
     ///
     /// Returns the resulting private key (encrypted)
-    fn subtract_private_keys(
+    async fn subtract_private_keys(
         &self,
         signing_key: &PrivateKeySource,
         new_signing_key: &PrivateKeySource,
     ) -> Result<PrivateKeySource, SignerError>;
 
     /// Split a secret into threshold shares with proofs
-    fn split_secret_with_proofs(
+    async fn split_secret_with_proofs(
         &self,
         secret: &SecretToSplit,
         threshold: u32,
@@ -65,13 +65,13 @@ pub trait Signer: Send + Sync + 'static {
     ) -> Result<Vec<VerifiableSecretShare>, SignerError>;
 
     /// Takes an encrypted private key (encrypted for us) and returns an encrypted private key (encrypted for receiver)
-    fn encrypt_private_key_for_receiver(
+    async fn encrypt_private_key_for_receiver(
         &self,
         private_key: &EncryptedPrivateKey,
         receiver_public_key: &PublicKey,
     ) -> Result<Vec<u8>, SignerError>;
 
-    fn get_public_key_from_private_key_source(
+    async fn get_public_key_from_private_key_source(
         &self,
         private_key: &PrivateKeySource,
     ) -> Result<PublicKey, SignerError>;

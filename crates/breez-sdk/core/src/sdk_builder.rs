@@ -243,6 +243,7 @@ impl SdkBuilder {
             (None, Some(storage_dir)) => {
                 let identity_pub_key = signer
                     .get_identity_public_key()
+                    .await
                     .map_err(|e| SdkError::Generic(e.to_string()))?;
                 let storage =
                     default_storage(&storage_dir, self.config.network, &identity_pub_key)?;
@@ -294,6 +295,9 @@ impl SdkBuilder {
             .operator_pool
             .with_user_agent(Some(user_agent.clone()));
         spark_wallet_config.service_provider_config.user_agent = Some(user_agent);
+        spark_wallet_config.auto_optimize_enabled = self.config.optimization_config.auto_enabled;
+        spark_wallet_config.optimization_options.multiplicity =
+            self.config.optimization_config.multiplicity;
 
         let mut wallet_builder =
             spark_wallet::WalletBuilder::new(spark_wallet_config, Arc::clone(&signer));

@@ -87,26 +87,41 @@ jobs:
           sed -i.bak -e 's/directory: .*/repo: https:\/\/github.com\/breez\/spark-sdk\n  rev: '"$HASH"'/' ubrn.config.yaml
           rm ubrn.config.yaml.bak
 
+      - name: Compress Android binaries
+        working-directory: packages/react-native
+        run: |
+          zip -9 -r android-artifacts.zip android/src/main/jniLibs
+          echo "ANDROID_SHA256=$(shasum -a 256 android-artifacts.zip | cut -d' ' -f1)" >> $GITHUB_ENV
+
+      - name: Compress iOS binaries
+        working-directory: packages/react-native
+        run: |
+          zip -9 -r ios-artifacts.zip build
+          echo "IOS_SHA256=$(shasum -a 256 ios-artifacts.zip | cut -d' ' -f1)" >> $GITHUB_ENV
+
+      - name: Insert package checksums
+        working-directory: packages/react-native
+        run: |
+          node -e "const pkg = require('./package.json'); pkg.checksums={android:'${{ env.ANDROID_SHA256 }}',ios:'${{ env.IOS_SHA256 }}'}; require('fs').writeFileSync('package.json',JSON.stringify(pkg,null,2)+'\n')"
+
       - name: Archive React Native bindings
         uses: actions/upload-artifact@v4
         with:
           name: bindings-react-native
           path: |
+            packages/react-native/app.plugin.js
             packages/react-native/ubrn.config.yaml
             packages/react-native/android/generated
             packages/react-native/android/CMakeLists.txt
             packages/react-native/cpp
             packages/react-native/lib
+            packages/react-native/plugin/build
+            packages/react-native/scripts
             packages/react-native/src
             packages/react-native/*.podspec
-
-      - name: Compress Android binaries
-        working-directory: packages/react-native
-        run: zip -9 -r android-artifacts.zip android/src/main/jniLibs
-
-      - name: Compress iOS binaries
-        working-directory: packages/react-native
-        run: zip -9 -r ios-artifacts.zip build
+            packages/react-native/package.json
+            packages/react-native/README.md
+            packages/react-native/yarn.lock
 
       - name: Archive Android binaries
         uses: actions/upload-artifact@v4
@@ -144,17 +159,22 @@ jobs:
 
       - name: Remove existing bindings
         run: |
-          git rm -r android/generated || true
           git rm android/CMakeLists.txt || true
+          git rm *.podspec || true
+          git rm -r android/generated || true
           git rm -r cpp || true
           git rm -r lib || true
+          git rm -r plugin || true
+          git rm -r scripts || true
           git rm -r src || true
-          git rm *.podspec || true
 
       - name: Download React Native bindings
         uses: actions/download-artifact@v4
         with:
           name: bindings-react-native
+
+      - name: Set file permissions
+        run: chmod +x scripts/*.sh
 
       - name: Set publish version
         run: npm --no-git-tag-version --allow-same-version version ${{ inputs.package-version || '0.0.2' }}

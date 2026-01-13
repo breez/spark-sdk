@@ -12,11 +12,14 @@ func ReceiveLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Rec
 	description := "<invoice description>"
 	// Optionally set the invoice amount you wish the payer to send
 	optionalAmountSats := uint64(5_000)
+	// Optionally set the expiry time in seconds
+	optionalExpirySecs := uint32(3600)
 
 	request := breez_sdk_spark.ReceivePaymentRequest{
 		PaymentMethod: breez_sdk_spark.ReceivePaymentMethodBolt11Invoice{
 			Description: description,
 			AmountSats:  &optionalAmountSats,
+			ExpirySecs:  &optionalExpirySecs,
 		},
 	}
 

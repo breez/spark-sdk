@@ -53,4 +53,8 @@ spark_config:
     expected_withdraw_bond_sats: 10000
     expected_withdraw_relative_block_locktime: 1000
     transaction_validity_duration_seconds: 180
+  optimization_options:
+    multiplicity: 1
+    max_leaves_per_swap: 64
+  auto_optimize_enabled: true
 "#;

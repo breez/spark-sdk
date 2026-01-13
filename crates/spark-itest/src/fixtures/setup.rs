@@ -1,8 +1,8 @@
 use anyhow::Result;
 use rand::Rng;
 use spark_wallet::{
-    DefaultSigner, Network, OperatorConfig, OperatorPoolConfig, PublicKey, ServiceProviderConfig,
-    SparkWalletConfig,
+    DefaultSigner, Network, OperatorConfig, OperatorPoolConfig, OptimizationOptions, PublicKey,
+    ServiceProviderConfig, SparkWalletConfig,
 };
 use tracing::info;
 
@@ -83,6 +83,8 @@ impl TestFixtures {
                 user_agent: Some("spark-wallet-itest/0.1.0".to_string()),
             },
             tokens_config: SparkWalletConfig::default_tokens_config(),
+            optimization_options: OptimizationOptions::default(),
+            auto_optimize_enabled: false,
         })
     }
 }

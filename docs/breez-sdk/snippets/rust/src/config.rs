@@ -36,3 +36,15 @@ pub(crate) fn configure_private_enabled_default() -> Result<()> {
     info!("Config: {:?}", config);
     Ok(())
 }
+
+pub(crate) fn configure_optimization_configuration() -> Result<()> {
+    // ANCHOR: optimization-configuration
+    let mut config = default_config(Network::Mainnet);
+    config.optimization_config = OptimizationConfig {
+        auto_enabled: true,
+        multiplicity: 1,
+    };
+    // ANCHOR_END: optimization-configuration
+    info!("Config: {:?}", config);
+    Ok(())
+}

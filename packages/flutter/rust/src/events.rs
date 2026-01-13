@@ -1,6 +1,6 @@
 use crate::frb_generated::StreamSink;
-pub use breez_sdk_spark::SdkEvent;
 use breez_sdk_spark::{DepositInfo, EventListener, Payment};
+pub use breez_sdk_spark::{OptimizationEvent, SdkEvent};
 use flutter_rust_bridge::frb;
 
 #[frb(mirror(SdkEvent))]
@@ -21,6 +21,26 @@ pub enum _SdkEvent {
     PaymentFailed {
         payment: Payment,
     },
+    Optimization {
+        optimization_event: OptimizationEvent,
+    },
+}
+
+#[frb(mirror(OptimizationEvent))]
+pub enum _OptimizationEvent {
+    Started {
+        total_rounds: u32,
+    },
+    RoundCompleted {
+        current_round: u32,
+        total_rounds: u32,
+    },
+    Completed,
+    Cancelled,
+    Failed {
+        error: String,
+    },
+    Skipped,
 }
 
 pub struct BindingEventListener {

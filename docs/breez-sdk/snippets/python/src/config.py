@@ -2,7 +2,8 @@ import logging
 from breez_sdk_spark import (
     default_config,
     Network,
-    MaxFee
+    MaxFee,
+    OptimizationConfig,
 )
 
 
@@ -33,4 +34,11 @@ async def configure_private_enabled_default():
     config = default_config(network=Network.MAINNET)
     config.private_enabled_default = False
     # ANCHOR_END: private-enabled-default
+    logging.info(f"Config: {config}")
+
+async def configure_optimization_configuration():
+    # ANCHOR: optimization-configuration
+    config = default_config(network=Network.MAINNET)
+    config.optimization_config = OptimizationConfig(auto_enabled=True, multiplicity=1)
+    # ANCHOR_END: optimization-configuration
     logging.info(f"Config: {config}")

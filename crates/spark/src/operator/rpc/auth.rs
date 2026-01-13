@@ -36,7 +36,7 @@ impl OperatorAuth {
     }
 
     async fn authenticate(&self) -> Result<Session> {
-        let pk = self.signer.get_identity_public_key()?;
+        let pk = self.signer.get_identity_public_key().await?;
         let challenge_req = GetChallengeRequest {
             public_key: pk.serialize().to_vec(),
         };
@@ -70,7 +70,8 @@ impl OperatorAuth {
 
         let signature = self
             .signer
-            .sign_message_ecdsa_with_identity_key(&challenge_bytes)?;
+            .sign_message_ecdsa_with_identity_key(&challenge_bytes)
+            .await?;
 
         let verify_req = VerifyChallengeRequest {
             protected_challenge: Some(protected_challenge),

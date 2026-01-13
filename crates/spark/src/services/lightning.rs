@@ -233,9 +233,20 @@ impl LightningService {
         include_spark_address: bool,
         identity_pubkey: Option<PublicKey>,
     ) -> Result<LightningReceivePayment, ServiceError> {
+        // Validate expiry_secs does not exceed i32::MAX (server limitation)
+        if let Some(expiry) = expiry_secs
+            && expiry > i32::MAX as u32
+        {
+            return Err(ServiceError::ValidationError(format!(
+                "expiry_secs {} exceeds maximum allowed value of {}",
+                expiry,
+                i32::MAX
+            )));
+        }
+
         let identity_pubkey = match identity_pubkey {
             Some(pk) => pk,
-            None => self.signer.get_identity_public_key()?,
+            None => self.signer.get_identity_public_key().await?,
         };
         let preimage = preimage.unwrap_or_else(|| {
             bitcoin::secp256k1::SecretKey::new(&mut OsRng)
@@ -281,11 +292,14 @@ impl LightningService {
             }
         }
 
-        let shares = self.signer.split_secret_with_proofs(
-            &SecretToSplit::Preimage(preimage),
-            self.split_secret_threshold,
-            self.operator_pool.len(),
-        )?;
+        let shares = self
+            .signer
+            .split_secret_with_proofs(
+                &SecretToSplit::Preimage(preimage),
+                self.split_secret_threshold,
+                self.operator_pool.len(),
+            )
+            .await?;
 
         let requests =
             self.operator_pool
@@ -344,7 +358,8 @@ impl LightningService {
         }
 
         // Prepare leaf tweaks
-        let leaf_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec(), None)?;
+        let leaf_tweaks =
+            prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec(), None).await?;
 
         let transfer_request = self
             .transfer_service

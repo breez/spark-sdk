@@ -220,12 +220,16 @@ impl DepositService {
             &quote_signature.serialize_der(),
         );
         // Sign the payload with the identity key
-        let signature = self.signer.sign_message_ecdsa_with_identity_key(&payload)?;
+        let signature = self
+            .signer
+            .sign_message_ecdsa_with_identity_key(&payload)
+            .await?;
 
         // TODO: Seems unavoidable to use the static deposit secret key here
         let deposit_secret_key = self
             .signer
             .get_static_deposit_private_key(0)
+            .await
             .map_err(ServiceError::SignerError)?;
 
         // Call the service provider to claim the static deposit
@@ -251,7 +255,11 @@ impl DepositService {
             .client
             .query_all_transfers(TransferFilter {
                 participant: Some(Participant::ReceiverIdentityPublicKey(
-                    self.signer.get_identity_public_key()?.serialize().to_vec(),
+                    self.signer
+                        .get_identity_public_key()
+                        .await?
+                        .serialize()
+                        .to_vec(),
                 )),
                 transfer_ids: vec![resp.transfer_id],
                 network: self.network.to_proto_network() as i32,
@@ -333,9 +341,20 @@ impl DepositService {
             spend_tx_sighash.as_byte_array(),
         );
         // Sign the payload with the identity key
-        let signature = self.signer.sign_message_ecdsa_with_identity_key(&payload)?;
+        let signature = self
+            .signer
+            .sign_message_ecdsa_with_identity_key(&payload)
+            .await?;
 
         // Create the UTXO swap request
+        // Create the UTXO swap request
+        let signing_public_key = self
+            .signer
+            .get_static_deposit_public_key(0)
+            .await?
+            .serialize()
+            .to_vec();
+
         let refund_resp = self
             .operator_pool
             .get_coordinator()
@@ -351,11 +370,7 @@ impl DepositService {
                     }),
                     user_signature: signature.serialize_der().to_vec(),
                     refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
-                        signing_public_key: self
-                            .signer
-                            .get_static_deposit_public_key(0)?
-                            .serialize()
-                            .to_vec(),
+                        signing_public_key,
                         raw_tx: serialize(&refund_tx),
                         signing_nonce_commitment: Some(
                             spend_nonce_commitment.commitments.try_into()?,
@@ -380,8 +395,8 @@ impl DepositService {
             .map_err(|_| ServiceError::InvalidPublicKey)?
             .ok_or(ServiceError::InvalidVerifyingKey)?;
         let static_deposit_private_key_source =
-            self.signer.get_static_deposit_private_key_source(0)?;
-        let static_deposit_public_key = self.signer.get_static_deposit_public_key(0)?;
+            self.signer.get_static_deposit_private_key_source(0).await?;
+        let static_deposit_public_key = self.signer.get_static_deposit_public_key(0).await?;
 
         let spend_signature = sign_aggregate_frost(SignAggregateFrostParams {
             signer: &self.signer,
@@ -490,7 +505,8 @@ impl DepositService {
         let signing_private_key = PrivateKeySource::Derived(deposit_leaf_id.clone());
         let signing_public_key = self
             .signer
-            .get_public_key_from_private_key_source(&signing_private_key)?;
+            .get_public_key_from_private_key_source(&signing_private_key)
+            .await?;
 
         let deposit_txid = deposit_tx.compute_txid();
         let deposit_tx_out = deposit_tx

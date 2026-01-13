@@ -9,7 +9,7 @@ use spark::{
         invoice_response::TransferType as InvoiceTransferType,
     },
     services::{
-        ExitSpeed, LightningSendPayment, Preimage, PreimageRequestStatus,
+        ExitSpeed, LightningSendPayment, OptimizationEvent, Preimage, PreimageRequestStatus,
         PreimageRequestWithTransfer, TokenTransaction, Transfer, TransferId, TransferLeaf,
         TransferStatus, TransferType,
     },
@@ -31,16 +31,23 @@ pub enum WalletEvent {
     Synced,
     TransferClaimed(WalletTransfer),
     TransferClaimStarting(WalletTransfer),
+    /// Optimization lifecycle event.
+    Optimization(OptimizationEvent),
 }
 
 impl Display for WalletEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let WalletEvent::TransferClaimed(transfer) = self {
-            write!(f, "TransferClaimed({})", transfer.id)
-        } else if let WalletEvent::TransferClaimStarting(transfer) = self {
-            write!(f, "TransferClaimStarting({})", transfer.id)
-        } else {
-            write!(f, "{:?}", self)
+        match self {
+            WalletEvent::TransferClaimed(transfer) => {
+                write!(f, "TransferClaimed({})", transfer.id)
+            }
+            WalletEvent::TransferClaimStarting(transfer) => {
+                write!(f, "TransferClaimStarting({})", transfer.id)
+            }
+            WalletEvent::Optimization(event) => {
+                write!(f, "Optimization({:?})", event)
+            }
+            _ => write!(f, "{:?}", self),
         }
     }
 }

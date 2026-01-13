@@ -3,12 +3,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
-use tokio::sync::Mutex;
 use tokio_with_wasm::alias as tokio;
-use tracing::{debug, error, info, trace, warn};
-use web_time::Duration;
+use tracing::{error, info, trace, warn};
 
-use crate::tree::{Leaves, TreeNodeStatus};
+use crate::tree::{Leaves, ReservationPurpose, TreeNodeStatus};
 use crate::{
     Network,
     operator::{
@@ -29,7 +27,6 @@ use crate::{
 
 use super::{TreeNode, error::TreeServiceError};
 
-const SELECT_LEAVES_MAX_RETRIES: u32 = 3;
 pub struct SynchronousTreeService {
     identity_pubkey: PublicKey,
     network: Network,
@@ -37,8 +34,7 @@ pub struct SynchronousTreeService {
     state: Arc<dyn TreeStore>,
     timelock_manager: Arc<TimelockManager>,
     signer: Arc<dyn Signer>,
-    swap_service: Swap,
-    leaf_optimization_lock: Mutex<()>,
+    swap_service: Arc<Swap>,
 }
 
 #[macros::async_trait]
@@ -51,14 +47,17 @@ impl TreeService for SynchronousTreeService {
         self.state.cancel_reservation(&id).await
     }
 
-    async fn finalize_reservation(&self, id: LeavesReservationId) -> Result<(), TreeServiceError> {
-        self.state.finalize_reservation(&id).await
+    async fn finalize_reservation(
+        &self,
+        id: LeavesReservationId,
+        new_leaves: Option<&[TreeNode]>,
+    ) -> Result<(), TreeServiceError> {
+        self.state.finalize_reservation(&id, new_leaves).await
     }
 
     async fn insert_leaves(
         &self,
         leaves: Vec<TreeNode>,
-        optimize: bool,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
         let result_nodes = self
             .check_renew_nodes(leaves, async |e| {
@@ -73,9 +72,6 @@ impl TreeService for SynchronousTreeService {
             .await?;
 
         self.state.add_leaves(&result_nodes).await?;
-        if optimize {
-            Box::pin(self.optimize_leaves()).await?;
-        }
         Ok(result_nodes)
     }
 
@@ -85,37 +81,13 @@ impl TreeService for SynchronousTreeService {
     async fn select_leaves(
         &self,
         target_amounts: Option<&TargetAmounts>,
+        purpose: ReservationPurpose,
     ) -> Result<LeavesReservation, TreeServiceError> {
-        trace!("Selecting leaves for target amounts: {target_amounts:?}");
+        trace!("Selecting leaves for target amounts: {target_amounts:?}, purpose: {purpose:?}");
 
-        let mut reservation: Option<LeavesReservation> = None;
-
-        for i in 0..SELECT_LEAVES_MAX_RETRIES {
-            let reserve_result = self.reserve_fresh_leaves(target_amounts, false).await;
-            match reserve_result {
-                Ok(r) => {
-                    reservation = r;
-                    break;
-                }
-                Err(e) => {
-                    error!("Failed to select leaves: {e:?}");
-                }
-            }
-
-            info!("Failed to select leaves, refreshing leaves and retrying");
-            self.refresh_leaves().await?;
-            let leaves = self.state.get_leaves().await?;
-            if let Some(target_amounts) = target_amounts
-                && leaves.balance() < target_amounts.total_sats()
-            {
-                info!("Not enough funds to select leaves after refresh");
-                return Err(TreeServiceError::InsufficientFunds);
-            }
-
-            if i < SELECT_LEAVES_MAX_RETRIES - 1 {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-        }
+        let reservation = self
+            .reserve_fresh_leaves(target_amounts, false, purpose)
+            .await?;
 
         let Some(reservation) = reservation else {
             return Err(TreeServiceError::InsufficientFunds);
@@ -133,7 +105,8 @@ impl TreeService for SynchronousTreeService {
         //   can be selected from the reserved leaves
         let total_amount_sats = target_amounts.map(|ta| ta.total_sats()).unwrap_or(0);
         if (total_amount_sats == 0 || reservation.sum() == total_amount_sats)
-            && select_helper::select_leaves_by_amounts(&reservation.leaves, target_amounts).is_ok()
+            && select_helper::select_leaves_by_target_amounts(&reservation.leaves, target_amounts)
+                .is_ok()
         {
             trace!("Selected leaves match requirements, no swap needed");
             return Ok(reservation);
@@ -149,7 +122,7 @@ impl TreeService for SynchronousTreeService {
         trace!("Swapped leaves to match target amount");
         // Now the leaves should contain the exact amount.
         let reservation = self
-            .reserve_fresh_leaves(target_amounts, true)
+            .reserve_fresh_leaves(target_amounts, true, purpose)
             .await?
             .ok_or(TreeServiceError::InsufficientFunds)?;
         trace!(
@@ -232,7 +205,7 @@ impl TreeService for SynchronousTreeService {
                 continue;
             }
 
-            let our_node_pubkey = self.signer.get_public_key_for_node(&leaf.id)?;
+            let our_node_pubkey = self.signer.get_public_key_for_node(&leaf.id).await?;
             let other_node_pubkey = leaf.signing_keyshare.public_key;
             let verifying_pubkey = leaf.verifying_public_key;
 
@@ -277,8 +250,6 @@ impl TreeService for SynchronousTreeService {
             .set_leaves(&refreshed_leaves, &missing_operator_leaves)
             .await?;
 
-        self.optimize_leaves().await?;
-
         Ok(())
     }
 
@@ -296,7 +267,7 @@ impl SynchronousTreeService {
         state: Arc<dyn TreeStore>,
         timelock_manager: Arc<TimelockManager>,
         signer: Arc<dyn Signer>,
-        swap_service: Swap,
+        swap_service: Arc<Swap>,
     ) -> Self {
         SynchronousTreeService {
             identity_pubkey,
@@ -306,7 +277,6 @@ impl SynchronousTreeService {
             timelock_manager,
             signer,
             swap_service,
-            leaf_optimization_lock: Mutex::new(()),
         }
     }
 
@@ -372,61 +342,24 @@ impl SynchronousTreeService {
         match self.timelock_manager.check_renew_nodes(nodes).await {
             Ok(nodes) => Ok(nodes),
             Err(e) => {
-                error_fn(e).await;
-                Err(TreeServiceError::Generic(
-                    "Failed to check time lock".to_string(),
-                ))
+                error_fn(e.clone()).await;
+                Err(TreeServiceError::Generic(format!(
+                    "Failed to check time lock: {e:?}"
+                )))
             }
         }
-    }
-
-    async fn optimize_leaves(&self) -> Result<(), TreeServiceError> {
-        if let Ok(_guard) = self.leaf_optimization_lock.try_lock() {
-            if !self.leaves_need_optimization().await {
-                debug!("Leaves do not need optimization, skipping");
-                return Ok(());
-            }
-            if let Some(reservation) = self.reserve_fresh_leaves(None, false).await? {
-                debug!("Optimizing {} leaves", reservation.leaves.len());
-                let optimized_leaves = with_reserved_leaves(
-                    self,
-                    self.swap_leaves_internal(&reservation.leaves, None),
-                    &reservation,
-                )
-                .await?;
-                trace!("Optimized leaves: {optimized_leaves:?}");
-            }
-        } else {
-            debug!("Leaf optimization already in progress, skipping");
-        }
-        Ok(())
-    }
-
-    async fn leaves_need_optimization(&self) -> bool {
-        let leaves = self.state.get_leaves().await.unwrap().available;
-
-        if leaves.len() <= 1 {
-            return false;
-        }
-
-        let total_amount_sats = leaves.iter().map(|leaf| leaf.value).sum::<u64>();
-
-        // Calculate the optimal number of leaves by counting set bits in binary representation
-        // This is equivalent to the JavaScript algorithm that uses powers of 2
-        let optimal_leaves_length = total_amount_sats.count_ones() as usize;
-
-        leaves.len() > optimal_leaves_length * 5
     }
 
     async fn reserve_fresh_leaves(
         &self,
         target_amounts: Option<&TargetAmounts>,
         exact_only: bool,
+        purpose: ReservationPurpose,
     ) -> Result<Option<LeavesReservation>, TreeServiceError> {
-        trace!("Reserving leaves for amounts: {target_amounts:?}");
+        trace!("Reserving leaves for amounts: {target_amounts:?}, purpose: {purpose:?}");
         let reservation = self
             .state
-            .reserve_leaves(target_amounts, exact_only)
+            .reserve_leaves(target_amounts, exact_only, purpose)
             .await?;
 
         let new_leaves = self
@@ -458,13 +391,25 @@ impl SynchronousTreeService {
             return Err(TreeServiceError::Generic("no leaves to swap".to_string()));
         }
 
-        let target_amounts = target_amounts.map(|ta| ta.to_vec());
+        let target_amounts = target_amounts.map(|ta| match ta {
+            TargetAmounts::AmountAndFee {
+                amount_sats,
+                fee_sats,
+            } => {
+                let mut amounts = vec![*amount_sats];
+                if let Some(fee_sats) = fee_sats {
+                    amounts.push(*fee_sats);
+                }
+                amounts
+            }
+            TargetAmounts::ExactDenominations { denominations } => denominations.clone(),
+        });
         let claimed_nodes = self
             .swap_service
             .swap_leaves(leaves, target_amounts)
             .await?;
 
-        let result_nodes = self.insert_leaves(claimed_nodes.clone(), false).await?;
+        let result_nodes = self.insert_leaves(claimed_nodes.clone()).await?;
 
         Ok(result_nodes)
     }

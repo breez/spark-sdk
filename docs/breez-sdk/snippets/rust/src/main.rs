@@ -14,6 +14,7 @@ mod sdk_building;
 mod send_payment;
 mod tokens;
 mod user_settings;
+mod optimize;
 
 use anyhow::Result;
 

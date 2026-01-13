@@ -31,4 +31,16 @@ const exampleConfigurePrivateEnabledDefault = async () => {
   console.log('Config:', config)
 }
 
-export { exampleConfigureSdk, exampleConfigurePrivateEnabledDefault }
+const exampleConfigureOptimizationConfiguration = async () => {
+  // ANCHOR: optimization-configuration
+  const config = defaultConfig('mainnet')
+  config.optimizationConfig = { autoEnabled: true, multiplicity: 1 }
+  // ANCHOR_END: optimization-configuration
+  console.log('Config:', config)
+}
+
+export {
+  exampleConfigureSdk,
+  exampleConfigurePrivateEnabledDefault,
+  exampleConfigureOptimizationConfiguration
+}

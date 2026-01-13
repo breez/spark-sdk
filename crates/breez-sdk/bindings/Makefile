@@ -81,8 +81,10 @@ build-ios-universal: build-release-target-aarch64-apple-ios build-release-target
 	mkdir -p $(TARGET_DIR)ios-universal-sim/release
 	# build universal lib for arm device and x86 sim
 	lipo -create -output $(TARGET_DIR)ios-universal/release/$(BIN_NAME).a $(TARGET_DIR)aarch64-apple-ios/release/$(BIN_NAME).a $(TARGET_DIR)x86_64-apple-ios/release/$(BIN_NAME).a
+	lipo -create -output $(TARGET_DIR)ios-universal/release/$(BIN_NAME).dylib $(TARGET_DIR)aarch64-apple-ios/release/$(BIN_NAME).dylib $(TARGET_DIR)x86_64-apple-ios/release/$(BIN_NAME).dylib
 	# build universal lib for arm sim and x86 sim
 	lipo -create -output $(TARGET_DIR)ios-universal-sim/release/$(BIN_NAME).a $(TARGET_DIR)aarch64-apple-ios-sim/release/$(BIN_NAME).a $(TARGET_DIR)x86_64-apple-ios/release/$(BIN_NAME).a
+	lipo -create -output $(TARGET_DIR)ios-universal-sim/release/$(BIN_NAME).dylib $(TARGET_DIR)aarch64-apple-ios-sim/release/$(BIN_NAME).dylib $(TARGET_DIR)x86_64-apple-ios/release/$(BIN_NAME).dylib
 
 build-darwin-universal: build-aarch64-apple-darwin build-x86_64-apple-darwin
 	mkdir -p $(TARGET_DIR)darwin-universal/release
@@ -102,13 +104,17 @@ package-xcframework-no-binaries: bindings-swift
 	find langs/swift/Sources/BreezSdkSpark -name "*.swift" -exec sed -i '' 's/protocol UniffiForeignFutureTask/fileprivate protocol UniffiForeignFutureTask/g' {} \;
 	cp $(FFI_DIR)swift/breez_sdk_*FFI.h langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/Headers
 	cp $(FFI_DIR)swift/breez_sdk_*FFI.h langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/Headers
-	cp $(FFI_DIR)swift/breez_sdk_*FFI.h langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Headers
+	cp $(FFI_DIR)swift/breez_sdk_*FFI.h langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/Headers
 	cd langs/swift && swift build
 
 package-xcframework: build-ios-universal build-darwin-universal package-xcframework-no-binaries
-	cp $(TARGET_DIR)aarch64-apple-ios/release/$(BIN_NAME).a langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
-	cp $(TARGET_DIR)ios-universal-sim/release/$(BIN_NAME).a langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
-	cp $(TARGET_DIR)darwin-universal/release/$(BIN_NAME).a langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+	cp $(TARGET_DIR)aarch64-apple-ios/release/$(BIN_NAME).dylib langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+	cp $(TARGET_DIR)ios-universal-sim/release/$(BIN_NAME).dylib langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+	cp $(TARGET_DIR)darwin-universal/release/$(BIN_NAME).dylib langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI
+	install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+	install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+	install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI
+	install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
 
 ## Kotlin Multiplatform
 KMP_BASE := langs/kotlin-multiplatform/breez-sdk-spark-kmp/src

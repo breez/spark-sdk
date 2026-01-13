@@ -425,6 +425,33 @@ pub struct Config {
     /// If set to true, the Spark private mode will be enabled on the first initialization of the SDK.
     /// If set to false, no changes will be made to the Spark private mode.
     pub private_enabled_default: bool,
+
+    /// Configuration for leaf optimization.
+    ///
+    /// Leaf optimization controls the denominations of leaves that are held in the wallet.
+    /// Fewer, bigger leaves allow for more funds to be exited unilaterally.
+    /// More leaves allow payments to be made without needing a swap, reducing payment latency.
+    pub optimization_config: OptimizationConfig,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct OptimizationConfig {
+    /// Whether automatic leaf optimization is enabled.
+    ///
+    /// If set to true, the SDK will automatically optimize the leaf set when it changes.
+    /// Otherwise, the manual optimization API must be used to optimize the leaf set.
+    ///
+    /// Default value is true.
+    pub auto_enabled: bool,
+    /// The desired multiplicity for the leaf set. Acceptable values are 0-5.
+    ///
+    /// Setting this to 0 will optimize for maximizing unilateral exit.
+    /// Higher values will optimize for minimizing transfer swaps, with higher values
+    /// being more aggressive.
+    ///
+    /// Default value is 1.
+    pub multiplicity: u8,
 }
 
 impl Config {
@@ -637,6 +664,8 @@ pub enum ReceivePaymentMethod {
     Bolt11Invoice {
         description: String,
         amount_sats: Option<u64>,
+        /// The expiry time of the invoice in seconds
+        expiry_secs: Option<u32>,
     },
 }
 
@@ -1142,4 +1171,11 @@ pub struct LnurlReceiveMetadata {
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
     pub sender_comment: Option<String>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct OptimizationProgress {
+    pub is_running: bool,
+    pub current_round: u32,
+    pub total_rounds: u32,
 }

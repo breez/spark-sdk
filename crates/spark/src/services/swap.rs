@@ -87,16 +87,14 @@ impl Swap {
         // TODO: split swap into batches (js sdk uses chunks of 100 leaves)
 
         // Build leaf key tweaks with new signing keys that will be swapped to the ssp.
-        let leaf_key_tweaks = leaves
-            .iter()
-            .map(|leaf| {
-                Ok(LeafKeyTweak {
-                    node: leaf.clone(),
-                    signing_key: PrivateKeySource::Derived(leaf.id.clone()),
-                    new_signing_key: self.signer.generate_random_key()?,
-                })
-            })
-            .collect::<Result<Vec<_>, ServiceError>>()?;
+        let mut leaf_key_tweaks = Vec::with_capacity(leaves.len());
+        for leaf in leaves {
+            leaf_key_tweaks.push(LeafKeyTweak {
+                node: leaf.clone(),
+                signing_key: PrivateKeySource::Derived(leaf.id.clone()),
+                new_signing_key: self.signer.generate_random_key().await?,
+            });
+        }
 
         let transfer_id = TransferId::generate();
         let expiry_time = SystemTime::now() + SWAP_EXPIRY_DURATION;
@@ -122,7 +120,8 @@ impl Swap {
                 transfer_id: transfer_id.to_string(),
                 owner_identity_public_key: self
                     .signer
-                    .get_identity_public_key()?
+                    .get_identity_public_key()
+                    .await?
                     .serialize()
                     .to_vec(),
                 receiver_identity_public_key: receiver_public_key.serialize().to_vec(),
@@ -298,14 +297,18 @@ impl Swap {
             .ok_or(ServiceError::Generic(
                 "inbound transfer spark_id missing".to_string(),
             ))?;
+        let identity_public_key = self
+            .signer
+            .get_identity_public_key()
+            .await?
+            .serialize()
+            .to_vec();
         let transfers = self
             .operator_pool
             .get_coordinator()
             .client
             .query_all_transfers(TransferFilter {
-                participant: Some(Participant::ReceiverIdentityPublicKey(
-                    self.signer.get_identity_public_key()?.serialize().to_vec(),
-                )),
+                participant: Some(Participant::ReceiverIdentityPublicKey(identity_public_key)),
                 transfer_ids: vec![transfer_id],
                 network: self.network.to_proto_network() as i32,
                 ..Default::default()
