@@ -39,12 +39,9 @@ Prefer semantic types over generic ones:
 
 ### Bindings
 
-For API changes, verify all 5 binding files are updated:
-1. `crates/breez-sdk/core/src/models.rs` - UniFFI attributes
-2. `crates/breez-sdk/wasm/src/models.rs` - WASM exports
-3. `crates/breez-sdk/wasm/src/sdk.rs` - WASM interface
-4. `packages/flutter/rust/src/models.rs` - Flutter structs
-5. `packages/flutter/rust/src/sdk.rs` - Flutter interface
+For API changes, verify all binding files are updated (see `CLAUDE.md` → "Updating SDK Interfaces").
+
+Run `.claude/skills/pr-review/validate-bindings.sh` to check binding consistency.
 
 ### Before Approving
 
@@ -100,5 +97,5 @@ Clarifications needed from author.
 Adds X to support Y.
 
 ### Recommendation
-**APPROVE** - CI passes, design is sound, tests included.
+**APPROVE** - Design is sound, tests included and CI passes.
 ```
