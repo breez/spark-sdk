@@ -37,6 +37,11 @@ make build-wasm  # verify WASM builds
 
 Verify all binding files updated (see CLAUDE.md → "Updating SDK Interfaces").
 
+## Follow-up Actions
+
+For Flutter binding changes (new features or breaking changes):
+- Create follow-up issue on [breez/glow](https://github.com/breez/glow) to integrate the changes
+
 ## Anti-Patterns
 
 | Pattern | Issue |
