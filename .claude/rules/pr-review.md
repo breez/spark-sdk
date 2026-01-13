@@ -19,9 +19,18 @@ Before diving into code, evaluate the design:
 - Is the problem clearly stated in the PR description?
 - Does the solution match the problem scope?
 
+**UX-Driven Design**
+- How will app developers use this API?
+- How should this data be rendered in a UI?
+- Start from the user experience, then derive the technical structure
+- Don't let implementation convenience drive the API shape
+
 **Alternative Approaches**
 - Were other designs considered? (Ask if not mentioned)
-- Trade-offs between approaches (e.g., recursive vs flat structures, joins vs denormalization)
+- Trade-offs between approaches:
+  - Generic vs domain-specific types
+  - Full data duplication vs IDs for drill-down
+  - SDK-side assembly vs DB-side joins
 - Why was this approach chosen over alternatives?
 
 **Impact Assessment**
@@ -35,6 +44,7 @@ Before diving into code, evaluate the design:
 - Will this design accommodate future needs without major refactoring?
 
 **Questions to Ask**
+- "How would a developer render this in a payment list?"
 - "Why this approach over X?"
 - "What happens if Y is deleted/fails?"
 - "Does this need to support Z in the future?"
@@ -61,7 +71,15 @@ Before diving into code, evaluate the design:
 
 ### 2. API & Bindings (HIGH Priority)
 
-When public API changes, verify ALL binding files are updated:
+**Model Design Principles**
+- **UX-first**: Start from how developers will use the data, then derive the structure
+- **Semantic naming**: Prefer domain-specific types over generic ones
+  - Bad: `Vec<RelatedPayment>` (generic, unclear purpose)
+  - Good: `ConversionInfo { sent: Payment, received: Payment }` (clear intent)
+- **Data minimization**: Expose essential display info + IDs for drill-down, not full duplicates
+- **Consumer perspective**: Ask "How will an app render this?" before finalizing the model
+
+**Binding Files** - When public API changes, verify ALL are updated:
 1. `crates/breez-sdk/core/src/models.rs` - UniFFI attributes
 2. `crates/breez-sdk/wasm/src/models.rs` - WASM exports
 3. `crates/breez-sdk/wasm/src/sdk.rs` - WASM interface
@@ -182,7 +200,9 @@ Areas needing clarification from the author. Examples:
 ```
 Design & Rationale:
 [ ] Problem clearly stated in PR description
+[ ] UX/consumer perspective considered (how will devs use this?)
 [ ] Approach justified (why this over alternatives?)
+[ ] Semantic naming (domain-specific types over generic ones)
 [ ] Backward compatibility considered
 [ ] Edge cases handled (deletion, failures, partial states)
 [ ] Future extensibility considered
