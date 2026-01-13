@@ -3,11 +3,43 @@
 ## Overview
 
 This document defines the review criteria for pull requests in the Breez SDK repository.
-Reviews should be thorough but efficient, focusing on actionable feedback.
+Reviews should validate both **implementation correctness** and **design decisions**.
+A good review confirms the approach is right, not just that the code works.
 
 ---
 
 ## Review Categories
+
+### 0. Design & Rationale (CRITICAL Priority)
+
+Before diving into code, evaluate the design:
+
+**Problem Understanding**
+- What problem does this PR solve? (UX, performance, correctness, etc.)
+- Is the problem clearly stated in the PR description?
+- Does the solution match the problem scope?
+
+**Alternative Approaches**
+- Were other designs considered? (Ask if not mentioned)
+- Trade-offs between approaches (e.g., recursive vs flat structures, joins vs denormalization)
+- Why was this approach chosen over alternatives?
+
+**Impact Assessment**
+- Schema/API changes: backward compatibility?
+- Data consistency: what happens on edge cases (deletion, partial updates)?
+- Migration path for existing users/data
+
+**Future Extensibility**
+- Does this generalize or is it special-cased?
+- How does this scale if requirements expand?
+- Will this design accommodate future needs without major refactoring?
+
+**Questions to Ask**
+- "Why this approach over X?"
+- "What happens if Y is deleted/fails?"
+- "Does this need to support Z in the future?"
+
+---
 
 ### 1. Code Quality (HIGH Priority)
 
@@ -117,21 +149,30 @@ Types: feat, fix, docs, refactor, perf, test, chore
 Structure your review as follows:
 
 ### Summary
-Brief description of what the PR does.
+Brief description of what the PR does and the problem it solves.
+
+### Design Analysis
+- **Rationale**: Why is this change needed? Does the PR description explain the "why"?
+- **Approach**: Is this the right solution? What alternatives exist?
+- **Trade-offs**: What are the costs of this approach (complexity, performance, maintenance)?
+- **Extensibility**: Does this generalize well or is it narrowly scoped?
 
 ### Issues Found
 List by severity:
-- **CRITICAL**: Must fix before merge (security, data loss)
-- **HIGH**: Should fix before merge (bugs, missing tests)
+- **CRITICAL**: Must fix before merge (security, data loss, design flaws)
+- **HIGH**: Should fix before merge (bugs, missing tests, unclear rationale)
 - **MEDIUM**: Recommend fixing (performance, style)
 - **LOW**: Minor suggestions (optional improvements)
 
 ### Questions
-Areas needing clarification from the author.
+Areas needing clarification from the author. Examples:
+- "Why was X chosen over Y?"
+- "What happens when Z fails?"
+- "Will this need to support W in the future?"
 
 ### Recommendation
-- **APPROVE**: Ready to merge
-- **REQUEST CHANGES**: Issues must be addressed
+- **APPROVE**: Design is sound, implementation is correct
+- **REQUEST CHANGES**: Design or implementation issues must be addressed
 - **COMMENT**: Feedback only, no blocking issues
 
 ---
@@ -139,6 +180,13 @@ Areas needing clarification from the author.
 ## Quick Checklist
 
 ```
+Design & Rationale:
+[ ] Problem clearly stated in PR description
+[ ] Approach justified (why this over alternatives?)
+[ ] Backward compatibility considered
+[ ] Edge cases handled (deletion, failures, partial states)
+[ ] Future extensibility considered
+
 Code Quality:
 [ ] Formatting passes (make fmt-check)
 [ ] Linting passes (make clippy-check + wasm-clippy-check)
@@ -154,6 +202,7 @@ API Changes:
 [ ] All 5 binding files updated
 [ ] No breaking changes OR version bump planned
 [ ] WASM builds (make build-wasm)
+[ ] Schema migrations included if needed
 
 Security:
 [ ] No hardcoded secrets
