@@ -288,9 +288,21 @@ pub enum _OnchainConfirmationSpeed {
     Slow,
 }
 
+#[frb(mirror(PayAmount))]
+pub enum _PayAmount {
+    Bitcoin {
+        amount_sats: u64,
+    },
+    Token {
+        amount: u128,
+        token_identifier: String,
+    },
+    Drain,
+}
+
 #[frb(mirror(PrepareLnurlPayRequest))]
 pub struct _PrepareLnurlPayRequest {
-    pub amount_sats: u64,
+    pub pay_amount: PayAmount,
     pub pay_request: LnurlPayRequestDetails,
     pub comment: Option<String>,
     pub validate_success_action_url: Option<bool>,
@@ -309,8 +321,8 @@ pub struct _PrepareLnurlPayResponse {
 #[frb(mirror(PrepareSendPaymentRequest))]
 pub struct _PrepareSendPaymentRequest {
     pub payment_request: String,
-    pub amount: Option<u128>,
-    pub token_identifier: Option<String>,
+    pub pay_amount: Option<PayAmount>,
+    pub onchain_speed: Option<OnchainConfirmationSpeed>,
     pub conversion_options: Option<ConversionOptions>,
 }
 
@@ -378,6 +390,17 @@ pub struct _SendOnchainFeeQuote {
 pub struct _SendOnchainSpeedFeeQuote {
     pub user_fee_sat: u64,
     pub l1_broadcast_fee_sat: u64,
+}
+
+#[frb(mirror(EstimateOnchainSendFeeQuotesRequest))]
+pub struct _EstimateOnchainSendFeeQuotesRequest {
+    pub address: String,
+    pub amount_sats: Option<u64>,
+}
+
+#[frb(mirror(EstimateOnchainSendFeeQuotesResponse))]
+pub struct _EstimateOnchainSendFeeQuotesResponse {
+    pub fee_quote: SendOnchainFeeQuote,
 }
 
 #[frb(mirror(SendPaymentMethod))]

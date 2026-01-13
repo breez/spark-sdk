@@ -60,8 +60,8 @@ async fn test_01_spark_transfer(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            amount: Some(5),
-            token_identifier: None,
+            pay_amount: Some(PayAmount::Bitcoin { amount_sats: 5 }),
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -302,8 +302,8 @@ async fn test_03_lightning_invoice_payment(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
-            amount: sender_amount.map(|a| a as u128),
-            token_identifier: None,
+            pay_amount: sender_amount.map(|a| PayAmount::Bitcoin { amount_sats: a }),
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -561,8 +561,8 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
-            amount: None,
-            token_identifier: None,
+            pay_amount: None,
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -654,8 +654,10 @@ async fn test_06_lightning_timeout_and_wait(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
-            amount: Some(expected_amount as u128),
-            token_identifier: None,
+            pay_amount: Some(PayAmount::Bitcoin {
+                amount_sats: expected_amount,
+            }),
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -763,8 +765,8 @@ async fn test_07_spark_invoice(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_invoice.clone(),
-            amount: None,
-            token_identifier: None,
+            pay_amount: None,
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -925,8 +927,8 @@ async fn test_08_lightning_invoice_expiry_secs(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
-            amount: None,
-            token_identifier: None,
+            pay_amount: None,
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;

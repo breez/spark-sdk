@@ -304,7 +304,9 @@ async fn test_05_lnurl_payment_flow(
     let prepare_response = alice
         .sdk
         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-            amount_sats: payment_amount_sats,
+            pay_amount: PayAmount::Bitcoin {
+                amount_sats: payment_amount_sats,
+            },
             pay_request: details.pay_request,
             comment: Some(payment_comment.to_string()),
             validate_success_action_url: None,
@@ -529,8 +531,8 @@ async fn test_06_client_side_zap_receipt(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: invoice.clone(),
-            amount: None,
-            token_identifier: None,
+            pay_amount: None,
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;

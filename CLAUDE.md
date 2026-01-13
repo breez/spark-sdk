@@ -35,6 +35,7 @@ make breez-itest        # Breez integration tests (requires faucet credentials)
 ```
 
 Run a single test:
+
 ```bash
 cargo test <test_name> -p <package>
 ```
@@ -82,10 +83,10 @@ Storage → SyncedStorage → Breez Sync Service (multi-device)
 When changing the SDK's public interface, update these files:
 
 1. **crates/breez-sdk/core/src/models.rs** - Add UniFFI macros to interface types
-2. **crates/breez-sdk/wasm/src/models.rs** - Update exported structs/enums
-3. **crates/breez-sdk/wasm/src/sdk.rs** - Update WASM interface
-4. **packages/flutter/rust/src/models.rs** - Update mirrored structs/enums
-5. **packages/flutter/rust/src/sdk.rs** - Update Flutter interface
+2. **crates/breez-sdk/wasm/src/models.rs** - Update exported structs/enums (skip any rustdoc comments)
+3. **crates/breez-sdk/wasm/src/sdk.rs** - Update WASM interface (skip any rustdoc comments)
+4. **packages/flutter/rust/src/models.rs** - Update mirrored structs/enums (skip any rustdoc comments)
+5. **packages/flutter/rust/src/sdk.rs** - Update Flutter interface (skip any rustdoc comments)
 
 ## Workspace Configuration
 

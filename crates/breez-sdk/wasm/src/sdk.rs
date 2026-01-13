@@ -125,6 +125,18 @@ impl BreezSdk {
         Ok(self.sdk.claim_htlc_payment(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "estimateOnchainSendFeeQuotes")]
+    pub async fn estimate_onchain_send_fee_quotes(
+        &self,
+        request: EstimateOnchainSendFeeQuotesRequest,
+    ) -> WasmResult<EstimateOnchainSendFeeQuotesResponse> {
+        Ok(self
+            .sdk
+            .estimate_onchain_send_fee_quotes(request.into())
+            .await?
+            .into())
+    }
+
     #[wasm_bindgen(js_name = "prepareSendPayment")]
     pub async fn prepare_send_payment(
         &self,

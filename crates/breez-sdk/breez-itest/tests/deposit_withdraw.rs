@@ -74,13 +74,15 @@ async fn test_onchain_withdraw_to_static_address(
     info!("Bob deposit address: {}", bob_address);
 
     // Alice prepares and sends 15_000 sats on-chain to Bob
-    let amount = 15_000u128;
+    let amount = 15_000u64;
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_address.clone(),
-            amount: Some(amount),
-            token_identifier: None,
+            pay_amount: Some(PayAmount::Bitcoin {
+                amount_sats: amount,
+            }),
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;

@@ -71,8 +71,11 @@ async fn test_token_conversion_success(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            amount: Some(sats_to_token_success_amount),
-            token_identifier: Some(REGTEST_TOKEN_ID.to_string()),
+            pay_amount: Some(PayAmount::Token {
+                amount: sats_to_token_success_amount,
+                token_identifier: REGTEST_TOKEN_ID.to_string(),
+            }),
+            onchain_speed: None,
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::FromBitcoin,
                 max_slippage_bps: Some(200), // 2%
@@ -192,8 +195,8 @@ async fn test_token_conversion_success(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: alice_invoice.clone(),
-            amount: None, // Amount from invoice
-            token_identifier: None,
+            pay_amount: None, // Amount from invoice
+            onchain_speed: None,
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::ToBitcoin {
                     from_token_identifier: REGTEST_TOKEN_ID.to_string(),
@@ -348,8 +351,11 @@ async fn test_token_conversion_failure(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            amount: Some(sats_to_token_failure_amount),
-            token_identifier: Some(non_existent_token_id.to_string()),
+            pay_amount: Some(PayAmount::Token {
+                amount: sats_to_token_failure_amount,
+                token_identifier: non_existent_token_id.to_string(),
+            }),
+            onchain_speed: None,
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::FromBitcoin,
                 max_slippage_bps: Some(100),
@@ -388,8 +394,11 @@ async fn test_token_conversion_failure(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            amount: Some(sats_to_token_failure_amount),
-            token_identifier: Some(REGTEST_TOKEN_ID.to_string()),
+            pay_amount: Some(PayAmount::Token {
+                amount: sats_to_token_failure_amount,
+                token_identifier: REGTEST_TOKEN_ID.to_string(),
+            }),
+            onchain_speed: None,
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::FromBitcoin,
                 max_slippage_bps: Some(2), // 0.02% - very low, likely to fail

@@ -57,8 +57,8 @@ async fn test_01_spark_idempotency_key(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            amount: Some(5),
-            token_identifier: None,
+            pay_amount: Some(PayAmount::Bitcoin { amount_sats: 5 }),
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -223,8 +223,8 @@ async fn test_02_lightning_idempotency_key(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
-            amount: None,
-            token_identifier: None,
+            pay_amount: None,
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -369,13 +369,15 @@ async fn test_03_bitcoin_idempotency_key(
     info!("Bob deposit address: {}", bob_address);
 
     // Alice prepares and sends 15_000 sats on-chain to Bob
-    let amount = 15_000u128;
+    let amount = 15_000u64;
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_address.clone(),
-            amount: Some(amount),
-            token_identifier: None,
+            pay_amount: Some(PayAmount::Bitcoin {
+                amount_sats: amount,
+            }),
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -523,8 +525,8 @@ async fn test_04_spark_htlc_idempotency_key(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            amount: Some(5),
-            token_identifier: None,
+            pay_amount: Some(PayAmount::Bitcoin { amount_sats: 5 }),
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;

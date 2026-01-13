@@ -152,7 +152,9 @@ async fn test_01_rtsync_lnurl_info_sync(
     let prepare_response = alice1
         .sdk
         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-            amount_sats: 10_000,
+            pay_amount: PayAmount::Bitcoin {
+                amount_sats: 10_000,
+            },
             pay_request: details.pay_request,
             comment: Some(ln_address_comment.clone()),
             validate_success_action_url: None,

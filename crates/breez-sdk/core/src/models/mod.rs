@@ -749,6 +749,21 @@ impl SendOnchainSpeedFeeQuote {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct EstimateOnchainSendFeeQuotesRequest {
+    /// The Bitcoin address to send to
+    pub address: String,
+    /// The amount to send in satoshis. Omit for drain operations.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub amount_sats: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct EstimateOnchainSendFeeQuotesResponse {
+    pub fee_quote: SendOnchainFeeQuote,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ReceivePaymentRequest {
     pub payment_method: ReceivePaymentMethod,
 }
@@ -764,7 +779,9 @@ pub struct ReceivePaymentResponse {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayRequest {
-    pub amount_sats: u64,
+    /// The amount to send. Use `PayAmount::Drain` to drain all funds.
+    /// Note: `PayAmount::Token` is not supported for LNURL (returns error).
+    pub pay_amount: PayAmount,
     pub pay_request: LnurlPayRequestDetails,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub comment: Option<String>,
@@ -865,6 +882,21 @@ impl LnurlPayInfo {
     }
 }
 
+/// Specifies the amount to send in a payment
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PayAmount {
+    /// A specific Bitcoin amount in satoshis (must be > 0)
+    Bitcoin { amount_sats: u64 },
+    /// A specific token amount (amount must be > 0)
+    Token {
+        amount: u128,
+        token_identifier: String,
+    },
+    /// Drain all Bitcoin funds (only supported for Bitcoin Address and LNURL)
+    Drain,
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize)]
 pub enum OnchainConfirmationSpeed {
@@ -876,15 +908,17 @@ pub enum OnchainConfirmationSpeed {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
-    /// Amount to send. By default is denominated in sats.
-    /// If a token identifier is provided, the amount will be denominated in the token base units.
+    /// The amount to send.
+    /// Optional for payment requests with embedded amounts (e.g., Spark/Bolt11 invoices with amounts).
+    /// Required for Spark addresses, Bitcoin addresses, and amountless invoices.
+    /// Use `PayAmount::Drain` to send all funds (only for Bitcoin addresses and LNURL).
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub amount: Option<u128>,
-    /// If provided, the payment will be for a token.
-    /// May only be provided if the payment request is a spark address.
+    pub pay_amount: Option<PayAmount>,
+    /// Confirmation speed for on-chain payments. Defaults to Medium if not specified.
+    /// Returns an error if provided for non-on-chain payment types.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub token_identifier: Option<String>,
-    /// If provided, the payment will include a conversion step before sending the payment
+    pub onchain_speed: Option<OnchainConfirmationSpeed>,
+    /// If provided, the payment will include a token conversion step before sending the payment
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub conversion_options: Option<ConversionOptions>,
 }

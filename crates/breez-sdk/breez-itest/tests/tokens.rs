@@ -97,8 +97,11 @@ async fn test_01_token_transfer(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            amount: Some(5),
-            token_identifier: Some(token_metadata.identifier.clone()),
+            pay_amount: Some(PayAmount::Token {
+                amount: 5,
+                token_identifier: token_metadata.identifier.clone(),
+            }),
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -300,8 +303,8 @@ async fn test_02_token_invoice(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.payment_request.clone(),
-            amount: None, // Amount comes from invoice
-            token_identifier: Some(token_metadata.identifier.clone()),
+            pay_amount: None, // Amount comes from invoice
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -580,8 +583,11 @@ async fn test_04_token_freeze_unfreeze(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_address,
-            amount: Some(100),
-            token_identifier: Some(token_metadata.identifier.clone()),
+            pay_amount: Some(PayAmount::Token {
+                amount: 100,
+                token_identifier: token_metadata.identifier.clone(),
+            }),
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -658,8 +664,11 @@ async fn test_04_token_freeze_unfreeze(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: alice_address.clone(),
-            amount: Some(50),
-            token_identifier: Some(token_metadata.identifier.clone()),
+            pay_amount: Some(PayAmount::Token {
+                amount: 50,
+                token_identifier: token_metadata.identifier.clone(),
+            }),
+            onchain_speed: None,
             conversion_options: None,
         })
         .await;
@@ -717,8 +726,11 @@ async fn test_04_token_freeze_unfreeze(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: alice_address,
-            amount: Some(50),
-            token_identifier: Some(token_metadata.identifier.clone()),
+            pay_amount: Some(PayAmount::Token {
+                amount: 50,
+                token_identifier: token_metadata.identifier.clone(),
+            }),
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -791,8 +803,8 @@ async fn test_05_invoice_expiry(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.payment_request.clone(),
-            amount: None,
-            token_identifier: Some(token_metadata.identifier.clone()),
+            pay_amount: None,
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -807,8 +819,8 @@ async fn test_05_invoice_expiry(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.payment_request.clone(),
-            amount: None,
-            token_identifier: Some(token_metadata.identifier.clone()),
+            pay_amount: None,
+            onchain_speed: None,
             conversion_options: None,
         })
         .await;
