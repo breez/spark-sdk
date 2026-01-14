@@ -1503,6 +1503,7 @@ impl BreezSdk {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
 
@@ -1528,6 +1529,14 @@ impl BreezSdk {
 
             // Overpay by the difference to fully drain the balance
             let overpayment = drain_fee.saturating_sub(current_fee);
+            if overpayment > 0 {
+                tracing::info!(
+                    overpayment_sats = overpayment,
+                    drain_fee_sats = drain_fee,
+                    current_fee_sats = current_fee,
+                    "Drain fee overpayment applied"
+                );
+            }
             Some(
                 request
                     .prepare_response
