@@ -1102,7 +1102,7 @@ impl BreezSdk {
             ));
         };
         debug!(
-            "Conversion refund needed for payment {}: pool_id {pool_id}",
+            "Conversion refund needed for payment {}: pool_id {pool_id}, conversion_id {conversion_id}",
             payment.id
         );
         let Ok(pool_id) = PublicKey::from_str(pool_id) else {
@@ -1140,7 +1140,7 @@ impl BreezSdk {
                     },
                 )
                 .await?;
-                // Add payment metadata for the not yet receivedrefund payment
+                // Add payment metadata for the not yet received refund payment
                 let cache = ObjectCacheRepository::new(self.storage.clone());
                 cache
                     .save_payment_metadata(
@@ -2838,39 +2838,36 @@ impl BreezSdk {
     async fn merge_payment_metadata(
         &self,
         payment_id: String,
-        metadata: PaymentMetadata,
+        mut metadata: PaymentMetadata,
     ) -> Result<(), SdkError> {
-        let maybe_payment = self
+        if let Some(details) = self
             .storage
             .get_payment_by_id(payment_id.clone())
             .await
-            .ok();
-        let metadata = match maybe_payment.and_then(|p| p.details) {
-            Some(details) => match details {
+            .ok()
+            .and_then(|p| p.details)
+        {
+            match details {
                 PaymentDetails::Lightning {
                     lnurl_pay_info,
                     lnurl_withdraw_info,
                     ..
-                } => PaymentMetadata {
-                    parent_payment_id: metadata.parent_payment_id,
-                    lnurl_pay_info: metadata.lnurl_pay_info.or(lnurl_pay_info),
-                    lnurl_withdraw_info: metadata.lnurl_withdraw_info.or(lnurl_withdraw_info),
-                    ..Default::default()
-                },
+                } => {
+                    metadata.lnurl_pay_info = metadata.lnurl_pay_info.or(lnurl_pay_info);
+                    metadata.lnurl_withdraw_info =
+                        metadata.lnurl_withdraw_info.or(lnurl_withdraw_info);
+                }
                 PaymentDetails::Spark {
                     conversion_info, ..
                 }
                 | PaymentDetails::Token {
                     conversion_info, ..
-                } => PaymentMetadata {
-                    parent_payment_id: metadata.parent_payment_id,
-                    conversion_info: metadata.conversion_info.or(conversion_info),
-                    ..Default::default()
-                },
-                _ => metadata,
-            },
-            None => metadata,
-        };
+                } => {
+                    metadata.conversion_info = metadata.conversion_info.or(conversion_info);
+                }
+                _ => {}
+            }
+        }
         self.storage
             .set_payment_metadata(payment_id, metadata)
             .await?;
@@ -3364,38 +3361,39 @@ impl BreezSdk {
             (None, Some(_)) => ConversionStatus::Refunded,
             _ => ConversionStatus::RefundNeeded,
         };
-        let conversion_info = ConversionInfo {
-            pool_id: pool_id.to_string(),
-            conversion_id: uuid::Uuid::now_v7().to_string(),
-            status,
-            fee: None,
-            purpose: None,
-        };
+        let pool_id_str = pool_id.to_string();
+        let conversion_id = uuid::Uuid::now_v7().to_string();
 
         // Update the sent payment metadata
         let sent_payment = self
             .fetch_payment_by_token_conversion_identifier(&outbound_identifier, true)
             .await?;
+        let sent_payment_id = sent_payment.id.clone();
         self.storage
             .set_payment_metadata(
-                sent_payment.id.clone(),
+                sent_payment_id.clone(),
                 PaymentMetadata {
                     conversion_info: Some(ConversionInfo {
+                        pool_id: pool_id_str.clone(),
+                        conversion_id: conversion_id.clone(),
+                        status: status.clone(),
                         fee,
-                        ..conversion_info.clone()
+                        purpose: None,
                     }),
                     ..Default::default()
                 },
             )
             .await?;
-        self.storage.insert_payment(sent_payment.clone()).await?;
 
         // Update the received payment metadata if available
         let received_payment_id = if let Some(identifier) = &inbound_identifier {
             let metadata = PaymentMetadata {
                 conversion_info: Some(ConversionInfo {
+                    pool_id: pool_id_str.clone(),
+                    conversion_id: conversion_id.clone(),
+                    status: status.clone(),
+                    fee: None,
                     purpose: Some(purpose.clone()),
-                    ..conversion_info.clone()
                 }),
                 ..Default::default()
             };
@@ -3418,26 +3416,30 @@ impl BreezSdk {
         // Update the refund payment metadata if available
         if let Some(identifier) = &refund_identifier {
             let metadata = PaymentMetadata {
-                conversion_info: Some(conversion_info.clone()),
+                conversion_info: Some(ConversionInfo {
+                    pool_id: pool_id_str,
+                    conversion_id,
+                    status,
+                    fee: None,
+                    purpose: None,
+                }),
                 ..Default::default()
             };
-            match self
+            if let Ok(payment) = self
                 .fetch_payment_by_token_conversion_identifier(identifier, false)
                 .await
-                .ok()
             {
-                Some(payment) => {
-                    self.storage
-                        .set_payment_metadata(payment.id.clone(), metadata)
-                        .await?;
-                }
-                None => cache.save_payment_metadata(identifier, &metadata).await?,
+                self.storage
+                    .set_payment_metadata(payment.id.clone(), metadata)
+                    .await?;
+            } else {
+                cache.save_payment_metadata(identifier, &metadata).await?;
             }
         }
 
-        self.storage.insert_payment(sent_payment.clone()).await?;
+        self.storage.insert_payment(sent_payment).await?;
 
-        Ok((sent_payment.id, received_payment_id))
+        Ok((sent_payment_id, received_payment_id))
     }
 }
 

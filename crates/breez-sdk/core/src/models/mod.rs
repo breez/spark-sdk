@@ -1242,6 +1242,7 @@ pub struct OptimizationProgress {
     pub total_rounds: u32,
 }
 
+/// Response from estimating a token conversion, used when preparing a payment that requires conversion
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize)]
 pub struct ConversionEstimate {
@@ -1255,6 +1256,8 @@ pub struct ConversionEstimate {
     pub fee: u128,
 }
 
+/// The purpose of the token conversion, which is used to provide context for the conversion
+/// if its related to an ongoing payment or a self-transfer.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConversionPurpose {
@@ -1267,11 +1270,16 @@ pub enum ConversionPurpose {
     SelfTransfer,
 }
 
+/// The status of the token conversion
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConversionStatus {
+    /// The conversion was successful
     Completed,
+    /// The conversion failed and no refund was made yet, which requires action by the SDK to
+    /// perform the refund. This can happen if there was a failure during the conversion process.
     RefundNeeded,
+    /// The conversion failed and a refund was made
     Refunded,
 }
 
