@@ -23,7 +23,9 @@ When using an external signer, you don't provide a seed directly to the SDK. Ins
 
 ## Implementing a Custom Signer
 
-If you need full control over the signing process, you can implement the `ExternalSigner` interface in your application. This interface defines all the cryptographic operations the SDK needs.
+If you need full control over the signing process, you can implement the [ExternalSigner](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/core/src/signer/external.rs) interface in your application. This interface defines all the cryptographic operations the SDK needs.
+
+The [DefaultSigner](https://github.com/breez/spark-sdk/blob/main/crates/spark/src/signer/default_signer.rs) implementation can be used as a reference for what's expected.
 
 <div class="warning">
 <h4>Developer note</h4>
