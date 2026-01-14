@@ -23,6 +23,7 @@ It’s a nodeless integration that offers a self-custodial, end-to-end solution 
 - [x] Payments persistency including restore support
 - [x] Automatic claims
 - [x] WebAssembly support
+- [x] Compatible with external signers
 - [x] Free open-source solution
 
 ## Pricing
