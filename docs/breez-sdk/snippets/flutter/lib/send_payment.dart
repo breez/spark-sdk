@@ -98,13 +98,13 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(
 
 Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
     BreezSdk sdk) async {
-  // ANCHOR: prepare-send-payment-token-conversion
+  // ANCHOR: prepare-send-payment-with-conversion
   String paymentRequest = "<payment request>";
-  // Set to use token funds to pay via token conversion
+  // Set to use token funds to pay via conversion
   int optionalMaxSlippageBps = 50;
   int optionalCompletionTimeoutSecs = 30;
-  final tokenConversionOptions = TokenConversionOptions(
-    conversionType: TokenConversionType.toBitcoin(
+  final conversionOptions = ConversionOptions(
+    conversionType: ConversionType.toBitcoin(
       fromTokenIdentifier: "<token identifier>",
     ),
     maxSlippageBps: optionalMaxSlippageBps,
@@ -113,15 +113,17 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
 
   final request = PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
-      tokenConversionOptions: tokenConversionOptions);
+      conversionOptions: conversionOptions);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
-  if (response.tokenConversionFee != null) {
+  if (response.conversionEstimate != null) {
     print(
-        "Estimated token conversion fee: ${response.tokenConversionFee} token base units");
+        "Estimated conversion amount: ${response.conversionEstimate!.amount} token base units");
+    print(
+        "Estimated conversion fee: ${response.conversionEstimate!.fee} token base units");
   }
-  // ANCHOR_END: prepare-send-payment-token-conversion
+  // ANCHOR_END: prepare-send-payment-with-conversion
   return response;
 }
 

@@ -134,13 +134,13 @@ class Tokens {
         // ANCHOR_END: send-token-payment
     }
 
-    suspend fun fetchTokenConversionLimits(sdk: BreezSdk) {
-        // ANCHOR: fetch-token-conversion-limits
+    suspend fun fetchConversionLimits(sdk: BreezSdk) {
+        // ANCHOR: fetch-conversion-limits
         try {
             // Fetch limits for converting Bitcoin to a token
-            val fromBitcoinResponse = sdk.fetchTokenConversionLimits(
-                FetchTokenConversionLimitsRequest(
-                    conversionType = TokenConversionType.FromBitcoin,
+            val fromBitcoinResponse = sdk.fetchConversionLimits(
+                FetchConversionLimitsRequest(
+                    conversionType = ConversionType.FromBitcoin,
                     tokenIdentifier = "<token identifier>"
                 )
             )
@@ -153,9 +153,9 @@ class Tokens {
             }
 
             // Fetch limits for converting a token to Bitcoin
-            val toBitcoinResponse = sdk.fetchTokenConversionLimits(
-                FetchTokenConversionLimitsRequest(
-                    conversionType = TokenConversionType.ToBitcoin(
+            val toBitcoinResponse = sdk.fetchConversionLimits(
+                FetchConversionLimitsRequest(
+                    conversionType = ConversionType.ToBitcoin(
                         fromTokenIdentifier = "<token identifier>"
                     ),
                     tokenIdentifier = null
@@ -171,11 +171,11 @@ class Tokens {
         } catch (e: Exception) {
             // handle error
         }
-        // ANCHOR_END: fetch-token-conversion-limits
+        // ANCHOR_END: fetch-conversion-limits
     }
 
     suspend fun prepareSendPaymentTokenConversion(sdk: BreezSdk) {
-        // ANCHOR: prepare-send-payment-token-conversion
+        // ANCHOR: prepare-send-payment-with-conversion
         try {
             val paymentRequest = "<spark address or invoice>"
             // Token identifier must match the invoice in case it specifies one.
@@ -186,11 +186,11 @@ class Tokens {
             val optionalAmount = BigInteger.fromLong(1_000L)
             // Android (BigInteger from java.math)
             // val optionalAmount = BigInteger.valueOf(1_000L)
-            // set to use Bitcoin funds to pay via token conversion
+            // set to use Bitcoin funds to pay via conversion
             val optionalMaxSlippageBps = 50u
             val optionalCompletionTimeoutSecs = 30u
-            val tokenConversionOptions = TokenConversionOptions(
-                conversionType = TokenConversionType.FromBitcoin,
+            val conversionOptions = ConversionOptions(
+                conversionType = ConversionType.FromBitcoin,
                 maxSlippageBps = optionalMaxSlippageBps,
                 completionTimeoutSecs = optionalCompletionTimeoutSecs
             )
@@ -201,18 +201,18 @@ class Tokens {
                         paymentRequest = paymentRequest,
                         amount = optionalAmount,
                         tokenIdentifier = tokenIdentifier,
-                        tokenConversionOptions = tokenConversionOptions
+                        conversionOptions = conversionOptions
                     )
                 )
 
             // If the fees are acceptable, continue to send the token payment
-            if (prepareResponse.tokenConversionFee != null) {
-                val tokenConversionFee = prepareResponse.tokenConversionFee
-                println("Estimated token conversion fee: ${tokenConversionFee} sats")
+            prepareResponse.conversionEstimate?.let { conversionEstimate ->
+                println("Estimated conversion amount: ${conversionEstimate.amount} sats")
+                println("Estimated conversion fee: ${conversionEstimate.fee} sats")
             }
         } catch (e: Exception) {
             // handle error
         }
-        // ANCHOR_END: prepare-send-payment-token-conversion
+        // ANCHOR_END: prepare-send-payment-with-conversion
     }
 }

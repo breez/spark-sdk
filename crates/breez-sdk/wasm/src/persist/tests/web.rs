@@ -94,10 +94,10 @@ async fn test_sort_order() {
 }
 
 #[wasm_bindgen_test]
-async fn test_payment_request_metadata() {
-    let storage = create_test_storage("test_payment_request_metadata").await;
+async fn test_payment_metadata() {
+    let storage = create_test_storage("test_payment_metadata").await;
 
-    breez_sdk_spark::storage_tests::test_payment_request_metadata(Box::new(storage)).await;
+    breez_sdk_spark::storage_tests::test_payment_metadata(Box::new(storage)).await;
 }
 
 #[wasm_bindgen_test]

@@ -13,7 +13,7 @@ async fn prepare_send_payment_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
             payment_request,
             amount: optional_amount_sats,
             token_identifier: None,
-            token_conversion_options: None,
+            conversion_options: None,
         })
         .await?;
 
@@ -44,7 +44,7 @@ async fn prepare_send_payment_lightning_onchain(sdk: &BreezSdk) -> Result<()> {
             payment_request,
             amount: amount_sats,
             token_identifier: None,
-            token_conversion_options: None,
+            conversion_options: None,
         })
         .await?;
 
@@ -72,7 +72,7 @@ async fn prepare_send_payment_spark_address(sdk: &BreezSdk) -> Result<()> {
             payment_request,
             amount: amount_sats,
             token_identifier: None,
-            token_conversion_options: None,
+            conversion_options: None,
         })
         .await?;
 
@@ -95,7 +95,7 @@ async fn prepare_send_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
             payment_request,
             amount: optional_amount_sats,
             token_identifier: None,
-            token_conversion_options: None,
+            conversion_options: None,
         })
         .await?;
 
@@ -108,13 +108,13 @@ async fn prepare_send_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
 }
 
 async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
-    // ANCHOR: prepare-send-payment-token-conversion
+    // ANCHOR: prepare-send-payment-with-conversion
     let payment_request = "<payment request>".to_string();
-    // Set to use token funds to pay via token conversion
+    // Set to use token funds to pay via conversion
     let optional_max_slippage_bps = Some(50);
     let optional_completion_timeout_secs = Some(30);
-    let token_conversion_options = Some(TokenConversionOptions {
-        conversion_type: TokenConversionType::ToBitcoin {
+    let conversion_options = Some(ConversionOptions {
+        conversion_type: ConversionType::ToBitcoin {
             from_token_identifier: "<token identifier>".to_string(),
         },
         max_slippage_bps: optional_max_slippage_bps,
@@ -126,15 +126,16 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
             payment_request,
             amount: None,
             token_identifier: None,
-            token_conversion_options,
+            conversion_options,
         })
         .await?;
 
     // If the fees are acceptable, continue to create the Send Payment
-    if let Some(token_conversion_fee) = prepare_response.token_conversion_fee {
-        info!("Estimated token conversion fee: {token_conversion_fee} token base units");
+    if let Some(conversion_estimate) = &prepare_response.conversion_estimate {
+        info!("Estimated conversion amount: {} token base units", conversion_estimate.amount);
+        info!("Estimated conversion fee: {} token base units", conversion_estimate.fee);
     }
-    // ANCHOR_END: prepare-send-payment-token-conversion
+    // ANCHOR_END: prepare-send-payment-with-conversion
     Ok(())
 }
 

@@ -118,13 +118,13 @@ namespace BreezSdkSnippets
             // ANCHOR_END: send-token-payment
         }
 
-        async Task FetchTokenConversionLimits(BreezSdk sdk)
+        async Task FetchConversionLimits(BreezSdk sdk)
         {
-            // ANCHOR: fetch-token-conversion-limits
+            // ANCHOR: fetch-conversion-limits
             // Fetch limits for converting Bitcoin to a token
-            var fromBitcoinResponse = await sdk.FetchTokenConversionLimits(
-                request: new FetchTokenConversionLimitsRequest(
-                    conversionType: new TokenConversionType.FromBitcoin(),
+            var fromBitcoinResponse = await sdk.FetchConversionLimits(
+                request: new FetchConversionLimitsRequest(
+                    conversionType: new ConversionType.FromBitcoin(),
                     tokenIdentifier: "<token identifier>"
                 )
             );
@@ -139,9 +139,9 @@ namespace BreezSdkSnippets
             }
 
             // Fetch limits for converting a token to Bitcoin
-            var toBitcoinResponse = await sdk.FetchTokenConversionLimits(
-                request: new FetchTokenConversionLimitsRequest(
-                    conversionType: new TokenConversionType.ToBitcoin(
+            var toBitcoinResponse = await sdk.FetchConversionLimits(
+                request: new FetchConversionLimitsRequest(
+                    conversionType: new ConversionType.ToBitcoin(
                         fromTokenIdentifier: "<token identifier>"
                     ),
                     tokenIdentifier: null
@@ -156,22 +156,22 @@ namespace BreezSdkSnippets
             {
                 Console.WriteLine($"Minimum BTC to receive: {toBitcoinResponse.minToAmount} sats");
             }
-            // ANCHOR_END: fetch-token-conversion-limits
+            // ANCHOR_END: fetch-conversion-limits
         }
 
         async Task PrepareSendPaymentTokenConversion(BreezSdk sdk)
         {
-            // ANCHOR: prepare-send-payment-token-conversion
+            // ANCHOR: prepare-send-payment-with-conversion
             var paymentRequest = "<spark address or invoice>";
             // Token identifier must match the invoice in case it specifies one.
             var tokenIdentifier = "<token identifier>";
             // Set the amount of tokens you wish to send.
             var optionalAmount = new BigInteger(1000);
-            // Optionally set to use Bitcoin funds to pay via token conversion
+            // Optionally set to use Bitcoin funds to pay via conversion
             var optionalMaxSlippageBps = 50U;
             var optionalCompletionTimeoutSecs = 30U;
-            var tokenConversionOptions = new TokenConversionOptions(
-                conversionType: new TokenConversionType.FromBitcoin(),
+            var conversionOptions = new ConversionOptions(
+                conversionType: new ConversionType.FromBitcoin(),
                 maxSlippageBps: optionalMaxSlippageBps,
                 completionTimeoutSecs: optionalCompletionTimeoutSecs
             );
@@ -181,17 +181,19 @@ namespace BreezSdkSnippets
                     paymentRequest: paymentRequest,
                     amount: optionalAmount,
                     tokenIdentifier: tokenIdentifier,
-                    tokenConversionOptions: tokenConversionOptions
+                    conversionOptions: conversionOptions
                 )
             );
 
             // If the fees are acceptable, continue to send the token payment
-            if (prepareResponse.tokenConversionFee != null)
+            if (prepareResponse.conversionEstimate != null)
             {
-                Console.WriteLine("Estimated token conversion fee: " +
-                    $"{prepareResponse.tokenConversionFee} sats");
+                Console.WriteLine("Estimated conversion amount: " +
+                    $"{prepareResponse.conversionEstimate.amount} sats");
+                Console.WriteLine("Estimated conversion fee: " +
+                    $"{prepareResponse.conversionEstimate.fee} sats");
             }
-            // ANCHOR_END: prepare-send-payment-token-conversion
+            // ANCHOR_END: prepare-send-payment-with-conversion
         }
     }
 }
