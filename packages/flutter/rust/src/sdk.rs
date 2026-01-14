@@ -232,10 +232,10 @@ impl BreezSdk {
         self.inner.get_leaf_optimization_progress().into()
     }
     
-    pub async fn fetch_token_conversion_limits(
+    pub async fn fetch_conversion_limits(
         &self,
-        request: FetchTokenConversionLimitsRequest,
-    ) -> Result<FetchTokenConversionLimitsResponse, SdkError> {
-        self.inner.fetch_token_conversion_limits(request).await
+        request: FetchConversionLimitsRequest,
+    ) -> Result<FetchConversionLimitsResponse, SdkError> {
+        self.inner.fetch_conversion_limits(request).await
     }
 }

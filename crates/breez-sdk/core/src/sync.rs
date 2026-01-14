@@ -6,8 +6,7 @@ use spark_wallet::{
 use tracing::{error, info};
 
 use crate::{
-    EventEmitter, LnurlWithdrawInfo, Payment, PaymentDetails, PaymentMetadata, PaymentStatus,
-    SdkError, SdkEvent, Storage,
+    EventEmitter, Payment, PaymentDetails, PaymentStatus, SdkError, SdkEvent, Storage,
     persist::{CachedSyncInfo, ObjectCacheRepository},
     utils::token::token_transaction_to_payments,
 };
@@ -83,10 +82,10 @@ impl SparkSyncService {
             for transfer in &transfers_response.items {
                 // Create a payment record
                 let payment: Payment = transfer.clone().try_into()?;
-                // Apply any metadata from the payment request
-                if let Err(e) = self.apply_payment_request_metadata(&payment).await {
+                // Apply any payment metadata for the payment
+                if let Err(e) = self.apply_payment_metadata(&payment).await {
                     error!(
-                        "Failed to apply payment request metadata for payment {}: {e:?}",
+                        "Failed to apply payment metadata for payment {}: {e:?}",
                         payment.id
                     );
                 }
@@ -146,35 +145,25 @@ impl SparkSyncService {
         Ok(())
     }
 
-    async fn apply_payment_request_metadata(&self, payment: &Payment) -> Result<(), SdkError> {
-        // Currently only Lightning LNURL payments have payment request metadata
-        let Some(PaymentDetails::Lightning { invoice, .. }) = &payment.details else {
-            return Ok(());
+    async fn apply_payment_metadata(&self, payment: &Payment) -> Result<(), SdkError> {
+        let identifier = match &payment.details {
+            Some(PaymentDetails::Lightning { invoice, .. }) => invoice,
+            Some(PaymentDetails::Token { tx_hash, .. }) => tx_hash,
+            _ => payment.id.as_str(),
         };
 
-        // Get the payment request metadata from storage for this invoice
+        // Get the payment metadata from storage for this payment
         let cache = ObjectCacheRepository::new(self.storage.clone());
-        let Some(metadata) = cache.fetch_payment_request_metadata(invoice).await? else {
+        let Some(metadata) = cache.fetch_payment_metadata(identifier).await? else {
             return Ok(());
         };
 
         self.storage
-            .set_payment_metadata(
-                payment.id.clone(),
-                PaymentMetadata {
-                    lnurl_withdraw_info: Some(LnurlWithdrawInfo {
-                        withdraw_url: metadata.lnurl_withdraw_request_details.callback,
-                    }),
-                    lnurl_description: Some(
-                        metadata.lnurl_withdraw_request_details.default_description,
-                    ),
-                    ..Default::default()
-                },
-            )
+            .set_payment_metadata(payment.id.clone(), metadata)
             .await?;
 
-        // Delete the payment request metadata since we have applied it
-        cache.delete_payment_request_metadata(invoice).await?;
+        // Delete the payment metadata since we have applied it
+        cache.delete_payment_metadata(identifier).await?;
 
         Ok(())
     }
@@ -321,6 +310,13 @@ impl SparkSyncService {
                 .await?;
 
                 for payment in payments {
+                    // Apply any payment metadata for the payment
+                    if let Err(e) = self.apply_payment_metadata(&payment).await {
+                        error!(
+                            "Failed to apply payment metadata for payment {}: {e:?}",
+                            payment.id
+                        );
+                    }
                     if last_synced_final_token_payment_id
                         .as_ref()
                         .is_some_and(|id| payment.id == *id)

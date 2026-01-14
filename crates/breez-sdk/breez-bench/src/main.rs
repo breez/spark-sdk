@@ -312,7 +312,7 @@ async fn main() -> Result<()> {
                         payment_request: sender_address.clone(),
                         amount: Some(receiver_balance as u128),
                         token_identifier: None,
-                        token_conversion_options: None,
+                        conversion_options: None,
                     })
                     .await?;
 
@@ -460,7 +460,7 @@ async fn main() -> Result<()> {
                 payment_request: receiver_address.clone(),
                 amount: Some(payment_spec.amount_sats as u128),
                 token_identifier: None,
-                token_conversion_options: None,
+                conversion_options: None,
             })
             .await;
 
@@ -842,7 +842,7 @@ async fn return_funds_to_sender(
             payment_request: sender_address.to_string(),
             amount: Some(amount as u128),
             token_identifier: None,
-            token_conversion_options: None,
+            conversion_options: None,
         })
         .await?;
 

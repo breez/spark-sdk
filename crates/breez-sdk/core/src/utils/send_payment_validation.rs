@@ -1,5 +1,5 @@
 use crate::{
-    InputType, SparkInvoiceDetails, TokenConversionOptions, TokenConversionType, error::SdkError,
+    ConversionOptions, ConversionType, InputType, SparkInvoiceDetails, error::SdkError,
     models::PrepareSendPaymentRequest,
 };
 use web_time::{Duration, SystemTime, UNIX_EPOCH};
@@ -43,9 +43,9 @@ fn validate_spark_invoice_request(
         }
         // Validate token conversion to Bitcoin is not supported for tokens invoices
         if matches!(
-            &request.token_conversion_options,
-            Some(TokenConversionOptions {
-                conversion_type: TokenConversionType::ToBitcoin { .. },
+            &request.conversion_options,
+            Some(ConversionOptions {
+                conversion_type: ConversionType::ToBitcoin { .. },
                 ..
             })
         ) {
@@ -59,9 +59,9 @@ fn validate_spark_invoice_request(
                 .to_string(),
         ));
     } else if matches!(
-        &request.token_conversion_options,
-        Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::FromBitcoin,
+        &request.conversion_options,
+        Some(ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
             ..
         })
     ) {
@@ -110,18 +110,18 @@ fn validate_spark_address_request(request: &PrepareSendPaymentRequest) -> Result
         return Err(SdkError::InvalidInput("Amount is required".to_string()));
     }
     // Validate token conversion depending on whether token identifier is provided
-    if let Some(token_conversion_options) = &request.token_conversion_options {
+    if let Some(conversion_options) = &request.conversion_options {
         match (
             &request.token_identifier,
-            &token_conversion_options.conversion_type,
+            &conversion_options.conversion_type,
         ) {
-            (Some(_), TokenConversionType::ToBitcoin { .. }) => {
+            (Some(_), ConversionType::ToBitcoin { .. }) => {
                 return Err(SdkError::InvalidInput(
                     "Token conversion must be from Bitcoin when a token identifier is provided"
                         .to_string(),
                 ));
             }
-            (None, TokenConversionType::FromBitcoin) => {
+            (None, ConversionType::FromBitcoin) => {
                 return Err(SdkError::InvalidInput(
                     "Token conversion must be to Bitcoin when no token identifier is provided"
                         .to_string(),
@@ -146,9 +146,9 @@ fn validate_bolt11_invoice_request(request: &PrepareSendPaymentRequest) -> Resul
     }
     // Token conversion from Bitcoin is not supported for Bolt11 invoices
     if matches!(
-        &request.token_conversion_options,
-        Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::FromBitcoin,
+        &request.conversion_options,
+        Some(ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
             ..
         })
     ) {
@@ -175,9 +175,9 @@ fn validate_bitcoin_address_request(request: &PrepareSendPaymentRequest) -> Resu
     }
     // Validate token conversion from Bitcoin is not supported for Bitcoin addresses
     if matches!(
-        &request.token_conversion_options,
-        Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::FromBitcoin,
+        &request.conversion_options,
+        Some(ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
             ..
         })
     ) {
@@ -207,7 +207,7 @@ mod tests {
             payment_request: "test_request".to_string(),
             amount: None,
             token_identifier: None,
-            token_conversion_options: None,
+            conversion_options: None,
         }
     }
 
@@ -465,8 +465,8 @@ mod tests {
         let invoice = create_test_invoice();
 
         let mut request = create_test_request();
-        request.token_conversion_options = Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::ToBitcoin {
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
                 from_token_identifier: "token123".to_string(),
             },
             max_slippage_bps: None,
@@ -488,8 +488,8 @@ mod tests {
 
         let mut request = create_test_request();
         request.token_identifier = Some("token123".to_string());
-        request.token_conversion_options = Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::FromBitcoin,
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
             max_slippage_bps: None,
             completion_timeout_secs: None,
         });
@@ -507,8 +507,8 @@ mod tests {
         let invoice = create_test_invoice();
 
         let mut request = create_test_request();
-        request.token_conversion_options = Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::FromBitcoin,
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
             max_slippage_bps: None,
             completion_timeout_secs: None,
         });
@@ -528,8 +528,8 @@ mod tests {
 
         let mut request = create_test_request();
         request.token_identifier = Some("token123".to_string());
-        request.token_conversion_options = Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::ToBitcoin {
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
                 from_token_identifier: "token123".to_string(),
             },
             max_slippage_bps: None,
@@ -584,8 +584,8 @@ mod tests {
     fn test_validate_spark_address_with_valid_token_conversion() {
         let mut request = create_test_request();
         request.amount = Some(1000);
-        request.token_conversion_options = Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::ToBitcoin {
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
                 from_token_identifier: "token123".to_string(),
             },
             max_slippage_bps: None,
@@ -603,8 +603,8 @@ mod tests {
         let mut request = create_test_request();
         request.amount = Some(1000);
         request.token_identifier = Some("token123".to_string());
-        request.token_conversion_options = Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::FromBitcoin,
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
             max_slippage_bps: None,
             completion_timeout_secs: None,
         });
@@ -619,8 +619,8 @@ mod tests {
     fn test_validate_spark_address_with_invalid_token_conversion() {
         let mut request = create_test_request();
         request.amount = Some(1000);
-        request.token_conversion_options = Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::FromBitcoin,
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
             max_slippage_bps: None,
             completion_timeout_secs: None,
         });
@@ -636,8 +636,8 @@ mod tests {
         let mut request = create_test_request();
         request.amount = Some(1000);
         request.token_identifier = Some("token123".to_string());
-        request.token_conversion_options = Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::ToBitcoin {
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
                 from_token_identifier: "token123".to_string(),
             },
             max_slippage_bps: None,
@@ -683,8 +683,8 @@ mod tests {
     #[test_all]
     fn test_validate_bolt11_invoice_with_valid_token_conversion() {
         let mut request = create_test_request();
-        request.token_conversion_options = Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::ToBitcoin {
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
                 from_token_identifier: "token123".to_string(),
             },
             max_slippage_bps: None,
@@ -700,8 +700,8 @@ mod tests {
     #[test_all]
     fn test_validate_bolt11_invoice_with_invalid_token_conversion() {
         let mut request = create_test_request();
-        request.token_conversion_options = Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::FromBitcoin,
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
             max_slippage_bps: None,
             completion_timeout_secs: None,
         });
@@ -760,8 +760,8 @@ mod tests {
     fn test_validate_bitcoin_address_with_valid_token_conversion() {
         let mut request = create_test_request();
         request.amount = Some(1000);
-        request.token_conversion_options = Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::ToBitcoin {
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
                 from_token_identifier: "token123".to_string(),
             },
             max_slippage_bps: None,
@@ -778,8 +778,8 @@ mod tests {
     fn test_validate_bitcoin_address_with_invalid_token_conversion() {
         let mut request = create_test_request();
         request.amount = Some(1000);
-        request.token_conversion_options = Some(TokenConversionOptions {
-            conversion_type: TokenConversionType::FromBitcoin,
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
             max_slippage_bps: None,
             completion_timeout_secs: None,
         });

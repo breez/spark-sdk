@@ -686,8 +686,8 @@ class IndexedDBStorage {
           ? JSON.stringify(metadata.lnurlWithdrawInfo)
           : null,
         lnurlDescription: metadata.lnurlDescription,
-        tokenConversionInfo: metadata.tokenConversionInfo
-          ? JSON.stringify(metadata.tokenConversionInfo)
+        conversionInfo: metadata.conversionInfo
+          ? JSON.stringify(metadata.conversionInfo)
           : null,
       };
 
@@ -1546,15 +1546,14 @@ class IndexedDBStorage {
         ) {
           if (
             details.type !== paymentDetailsFilter.type ||
-            !details.tokenConversionInfo
+            !details.conversionInfo
           ) {
             continue;
           }
 
           if (
-            details.tokenConversionInfo.paymentId ||
             paymentDetailsFilter.conversionRefundNeeded ===
-              !!details.tokenConversionInfo.refundIdentifier
+            (details.conversionInfo.status !== "refundNeeded")
           ) {
             continue;
           }
@@ -1679,13 +1678,13 @@ class IndexedDBStorage {
           }
         }
       } else if (details.type == "spark" || details.type == "token") {
-        // If tokenConversionInfo exists, parse and add to details
-        if (metadata.tokenConversionInfo) {
+        // If conversionInfo exists, parse and add to details
+        if (metadata.conversionInfo) {
           try {
-            details.tokenConversionInfo = JSON.parse(metadata.tokenConversionInfo);
+            details.conversionInfo = JSON.parse(metadata.conversionInfo);
           } catch (e) {
             throw new StorageError(
-              `Failed to parse tokenConversionInfo JSON for payment ${payment.id}: ${e.message}`,
+              `Failed to parse conversionInfo JSON for payment ${payment.id}: ${e.message}`,
               e
             );
           }

@@ -91,7 +91,7 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
             payment_request,
             amount: optional_amount,
             token_identifier,
-            token_conversion_options: None,
+            conversion_options: None,
         })
         .await?;
 
@@ -130,12 +130,12 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn fetch_token_conversion_limits(sdk: &BreezSdk) -> Result<()> {
+async fn fetch_conversion_limits(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: fetch-token-conversion-limits
     // Fetch limits for converting Bitcoin to a token
     let response = sdk
-        .fetch_token_conversion_limits(FetchTokenConversionLimitsRequest {
-            conversion_type: TokenConversionType::FromBitcoin,
+        .fetch_conversion_limits(FetchConversionLimitsRequest {
+            conversion_type: ConversionType::FromBitcoin,
             token_identifier: Some("<token identifier>".to_string()),
         })
         .await?;
@@ -149,8 +149,8 @@ async fn fetch_token_conversion_limits(sdk: &BreezSdk) -> Result<()> {
 
     // Fetch limits for converting a token to Bitcoin
     let response = sdk
-        .fetch_token_conversion_limits(FetchTokenConversionLimitsRequest {
-            conversion_type: TokenConversionType::ToBitcoin {
+        .fetch_conversion_limits(FetchConversionLimitsRequest {
+            conversion_type: ConversionType::ToBitcoin {
                 from_token_identifier: "<token identifier>".to_string(),
             },
             token_identifier: None,
@@ -177,8 +177,8 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
     // Set to use Bitcoin funds to pay via token conversion
     let optional_max_slippage_bps = Some(50);
     let optional_completion_timeout_secs = Some(30);
-    let token_conversion_options = Some(TokenConversionOptions {
-        conversion_type: TokenConversionType::FromBitcoin,
+    let conversion_options = Some(ConversionOptions {
+        conversion_type: ConversionType::FromBitcoin,
         max_slippage_bps: optional_max_slippage_bps,
         completion_timeout_secs: optional_completion_timeout_secs,
     });
@@ -188,13 +188,14 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
             payment_request,
             amount: optional_amount,
             token_identifier,
-            token_conversion_options,
+            conversion_options,
         })
         .await?;
 
     // If the fees are acceptable, continue to send the token payment
-    if let Some(token_conversion_fee) = prepare_response.token_conversion_fee {
-        info!("Estimated token conversion fee: {token_conversion_fee} sats");
+    if let Some(conversion_estimate) = &prepare_response.conversion_estimate {
+        info!("Estimated conversion amount: {} sats", conversion_estimate.amount);
+        info!("Estimated conversion fee: {} sats", conversion_estimate.fee);
     }
     // ANCHOR_END: prepare-send-payment-token-conversion
     Ok(())

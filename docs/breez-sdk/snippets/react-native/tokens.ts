@@ -1,7 +1,7 @@
 import {
   ReceivePaymentMethod,
   SendPaymentMethod_Tags,
-  TokenConversionType,
+  ConversionType,
   type BreezSdk
 } from '@breeztech/breez-sdk-spark-react-native'
 
@@ -81,7 +81,7 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
     paymentRequest,
     amount: optionalAmount,
     tokenIdentifier,
-    tokenConversionOptions: undefined
+    conversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to send the token payment
@@ -105,11 +105,11 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   // ANCHOR_END: send-token-payment
 }
 
-const exampleFetchTokenConversionLimits = async (sdk: BreezSdk) => {
+const exampleFetchConversionLimits = async (sdk: BreezSdk) => {
   // ANCHOR: fetch-token-conversion-limits
   // Fetch limits for converting Bitcoin to a token
-  const fromBitcoinResponse = await sdk.fetchTokenConversionLimits({
-    conversionType: new TokenConversionType.FromBitcoin(),
+  const fromBitcoinResponse = await sdk.fetchConversionLimits({
+    conversionType: new ConversionType.FromBitcoin(),
     tokenIdentifier: '<token identifier>'
   })
 
@@ -121,8 +121,8 @@ const exampleFetchTokenConversionLimits = async (sdk: BreezSdk) => {
   }
 
   // Fetch limits for converting a token to Bitcoin
-  const toBitcoinResponse = await sdk.fetchTokenConversionLimits({
-    conversionType: new TokenConversionType.ToBitcoin({
+  const toBitcoinResponse = await sdk.fetchConversionLimits({
+    conversionType: new ConversionType.ToBitcoin({
       fromTokenIdentifier: '<token identifier>'
     }),
     tokenIdentifier: undefined
@@ -147,8 +147,8 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
   // Set to use Bitcoin funds to pay via token conversion
   const optionalMaxSlippageBps = 50
   const optionalCompletionTimeoutSecs = 30
-  const tokenConversionOptions = {
-    conversionType: new TokenConversionType.FromBitcoin(),
+  const conversionOptions = {
+    conversionType: new ConversionType.FromBitcoin(),
     maxSlippageBps: optionalMaxSlippageBps,
     completionTimeoutSecs: optionalCompletionTimeoutSecs
   }
@@ -157,13 +157,14 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
     paymentRequest,
     amount: optionalAmount,
     tokenIdentifier,
-    tokenConversionOptions
+    conversionOptions
   })
 
   // If the fees are acceptable, continue to send the token payment
-  if (prepareResponse.tokenConversionFee !== undefined) {
-    const tokenConversionFee = prepareResponse.tokenConversionFee
-    console.debug(`Estimated token conversion fee: ${tokenConversionFee} sats`)
+  if (prepareResponse.conversionEstimate !== undefined) {
+    const conversionEstimate = prepareResponse.conversionEstimate
+    console.debug(`Estimated conversion amount: ${conversionEstimate.amount} sats`)
+    console.debug(`Estimated conversion fee: ${conversionEstimate.fee} sats`)
   }
   // ANCHOR_END: prepare-send-payment-token-conversion
 }

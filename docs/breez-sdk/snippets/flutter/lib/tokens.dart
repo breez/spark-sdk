@@ -107,12 +107,12 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
   // ANCHOR_END: send-token-payment
 }
 
-Future<void> fetchTokenConversionLimits(BreezSdk sdk) async {
+Future<void> fetchConversionLimits(BreezSdk sdk) async {
   // ANCHOR: fetch-token-conversion-limits
   // Fetch limits for converting Bitcoin to a token
-  final fromBitcoinResponse = await sdk.fetchTokenConversionLimits(
-    request: FetchTokenConversionLimitsRequest(
-      conversionType: TokenConversionType.fromBitcoin(),
+  final fromBitcoinResponse = await sdk.fetchConversionLimits(
+    request: FetchConversionLimitsRequest(
+      conversionType: ConversionType.fromBitcoin(),
       tokenIdentifier: '<token identifier>',
     ),
   );
@@ -125,9 +125,9 @@ Future<void> fetchTokenConversionLimits(BreezSdk sdk) async {
   }
 
   // Fetch limits for converting a token to Bitcoin
-  final toBitcoinResponse = await sdk.fetchTokenConversionLimits(
-    request: FetchTokenConversionLimitsRequest(
-      conversionType: TokenConversionType.toBitcoin(
+  final toBitcoinResponse = await sdk.fetchConversionLimits(
+    request: FetchConversionLimitsRequest(
+      conversionType: ConversionType.toBitcoin(
         fromTokenIdentifier: '<token identifier>',
       ),
       tokenIdentifier: null,
@@ -153,8 +153,8 @@ Future<void> prepareSendPaymentTokenConversion(BreezSdk sdk) async {
   // Set to use Bitcoin funds to pay via token conversion
   int optionalMaxSlippageBps = 50;
   int optionalCompletionTimeoutSecs = 30;
-  final tokenConversionOptions = TokenConversionOptions(
-    conversionType: TokenConversionType.fromBitcoin(),
+  final conversionOptions = ConversionOptions(
+    conversionType: ConversionType.fromBitcoin(),
     maxSlippageBps: optionalMaxSlippageBps,
     completionTimeoutSecs: optionalCompletionTimeoutSecs,
   );
@@ -164,14 +164,16 @@ Future<void> prepareSendPaymentTokenConversion(BreezSdk sdk) async {
       paymentRequest: paymentRequest,
       amount: optionalAmount,
       tokenIdentifier: tokenIdentifier,
-      tokenConversionOptions: tokenConversionOptions
+      conversionOptions: conversionOptions
     ),
   );
   
   // If the fees are acceptable, continue to send the token payment
-  if (prepareResponse.tokenConversionFee != null) {
+  if (prepareResponse.conversionEstimate != null) {
     print(
-        "Estimated token conversion fee: ${prepareResponse.tokenConversionFee} sats");
+        "Estimated conversion amount: ${prepareResponse.conversionEstimate!.amount} sats");
+    print(
+        "Estimated conversion fee: ${prepareResponse.conversionEstimate!.fee} sats");
   }
   // ANCHOR_END: prepare-send-payment-token-conversion
 }

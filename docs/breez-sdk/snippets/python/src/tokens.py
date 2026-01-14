@@ -2,7 +2,7 @@
 import logging
 from breez_sdk_spark import (
     BreezSdk,
-    FetchTokenConversionLimitsRequest,
+    FetchConversionLimitsRequest,
     GetInfoRequest,
     GetTokensMetadataRequest,
     PrepareSendPaymentRequest,
@@ -10,8 +10,8 @@ from breez_sdk_spark import (
     ReceivePaymentRequest,
     SendPaymentMethod,
     SendPaymentRequest,
-    TokenConversionOptions,
-    TokenConversionType,
+    ConversionOptions,
+    ConversionType,
 )
 
 
@@ -130,13 +130,13 @@ async def send_token_payment(sdk: BreezSdk):
     # ANCHOR_END: send-token-payment
 
 
-async def fetch_token_conversion_limits(sdk: BreezSdk):
+async def fetch_conversion_limits(sdk: BreezSdk):
     # ANCHOR: fetch-token-conversion-limits
     try:
         # Fetch limits for converting Bitcoin to a token
-        from_bitcoin_response = await sdk.fetch_token_conversion_limits(
-            request=FetchTokenConversionLimitsRequest(
-                conversion_type=TokenConversionType.FROM_BITCOIN(),
+        from_bitcoin_response = await sdk.fetch_conversion_limits(
+            request=FetchConversionLimitsRequest(
+                conversion_type=ConversionType.FROM_BITCOIN(),
                 token_identifier="<token identifier>",
             )
         )
@@ -147,9 +147,9 @@ async def fetch_token_conversion_limits(sdk: BreezSdk):
             print(f"Minimum tokens to receive: {from_bitcoin_response.min_to_amount} base units")
 
         # Fetch limits for converting a token to Bitcoin
-        to_bitcoin_response = await sdk.fetch_token_conversion_limits(
-            request=FetchTokenConversionLimitsRequest(
-                conversion_type=TokenConversionType.TO_BITCOIN(
+        to_bitcoin_response = await sdk.fetch_conversion_limits(
+            request=FetchConversionLimitsRequest(
+                conversion_type=ConversionType.TO_BITCOIN(
                     from_token_identifier="<token identifier>"
                 ),
                 token_identifier=None,
@@ -177,8 +177,8 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
         # Set to use Bitcoin funds to pay via token conversion
         optional_max_slippage_bps = 50
         optional_completion_timeout_secs = 30
-        token_conversion_options = TokenConversionOptions(
-            conversion_type=TokenConversionType.FROM_BITCOIN(),
+        conversion_options = ConversionOptions(
+            conversion_type=ConversionType.FROM_BITCOIN(),
             max_slippage_bps=optional_max_slippage_bps,
             completion_timeout_secs=optional_completion_timeout_secs,
         )
@@ -188,15 +188,18 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
                 payment_request=payment_request,
                 amount=optional_amount,
                 token_identifier=token_identifier,
-                token_conversion_options=token_conversion_options,
+                conversion_options=conversion_options,
             )
         )
 
         # If the fees are acceptable, continue to send the token payment
-        if prepare_response.token_conversion_fee is not None:
-            token_conversion_fee = prepare_response.token_conversion_fee
+        if prepare_response.conversion_estimate is not None:
+            conversion_estimate = prepare_response.conversion_estimate
             logging.debug(
-                f"Estimated token conversion fee: {token_conversion_fee} sats"
+                f"Estimated conversion amount: {conversion_estimate.amount} sats"
+            )
+            logging.debug(
+                f"Estimated conversion fee: {conversion_estimate.fee} sats"
             )
     except Exception as error:
         logging.error(error)

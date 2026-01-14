@@ -118,13 +118,13 @@ namespace BreezSdkSnippets
             // ANCHOR_END: send-token-payment
         }
 
-        async Task FetchTokenConversionLimits(BreezSdk sdk)
+        async Task FetchConversionLimits(BreezSdk sdk)
         {
             // ANCHOR: fetch-token-conversion-limits
             // Fetch limits for converting Bitcoin to a token
-            var fromBitcoinResponse = await sdk.FetchTokenConversionLimits(
-                request: new FetchTokenConversionLimitsRequest(
-                    conversionType: new TokenConversionType.FromBitcoin(),
+            var fromBitcoinResponse = await sdk.FetchConversionLimits(
+                request: new FetchConversionLimitsRequest(
+                    conversionType: new ConversionType.FromBitcoin(),
                     tokenIdentifier: "<token identifier>"
                 )
             );
@@ -139,9 +139,9 @@ namespace BreezSdkSnippets
             }
 
             // Fetch limits for converting a token to Bitcoin
-            var toBitcoinResponse = await sdk.FetchTokenConversionLimits(
-                request: new FetchTokenConversionLimitsRequest(
-                    conversionType: new TokenConversionType.ToBitcoin(
+            var toBitcoinResponse = await sdk.FetchConversionLimits(
+                request: new FetchConversionLimitsRequest(
+                    conversionType: new ConversionType.ToBitcoin(
                         fromTokenIdentifier: "<token identifier>"
                     ),
                     tokenIdentifier: null
@@ -170,8 +170,8 @@ namespace BreezSdkSnippets
             // Optionally set to use Bitcoin funds to pay via token conversion
             var optionalMaxSlippageBps = 50U;
             var optionalCompletionTimeoutSecs = 30U;
-            var tokenConversionOptions = new TokenConversionOptions(
-                conversionType: new TokenConversionType.FromBitcoin(),
+            var conversionOptions = new ConversionOptions(
+                conversionType: new ConversionType.FromBitcoin(),
                 maxSlippageBps: optionalMaxSlippageBps,
                 completionTimeoutSecs: optionalCompletionTimeoutSecs
             );
@@ -181,15 +181,17 @@ namespace BreezSdkSnippets
                     paymentRequest: paymentRequest,
                     amount: optionalAmount,
                     tokenIdentifier: tokenIdentifier,
-                    tokenConversionOptions: tokenConversionOptions
+                    conversionOptions: conversionOptions
                 )
             );
 
             // If the fees are acceptable, continue to send the token payment
-            if (prepareResponse.tokenConversionFee != null)
+            if (prepareResponse.conversionEstimate != null)
             {
-                Console.WriteLine("Estimated token conversion fee: " +
-                    $"{prepareResponse.tokenConversionFee} sats");
+                Console.WriteLine("Estimated conversion amount: " +
+                    $"{prepareResponse.conversionEstimate.amount} sats");
+                Console.WriteLine("Estimated conversion fee: " +
+                    $"{prepareResponse.conversionEstimate.fee} sats");
             }
             // ANCHOR_END: prepare-send-payment-token-conversion
         }

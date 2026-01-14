@@ -109,8 +109,8 @@ namespace BreezSdkSnippets
             // Set to use token funds to pay via token conversion
             var optionalMaxSlippageBps = 50U;
             var optionalCompletionTimeoutSecs = 30U;
-            var tokenConversionOptions = new TokenConversionOptions(
-                conversionType: new TokenConversionType.ToBitcoin(
+            var conversionOptions = new ConversionOptions(
+                conversionType: new ConversionType.ToBitcoin(
                     fromTokenIdentifier: "<token identifier>"
                 ),
                 maxSlippageBps: optionalMaxSlippageBps,
@@ -119,15 +119,17 @@ namespace BreezSdkSnippets
 
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
-                tokenConversionOptions: tokenConversionOptions
+                conversionOptions: conversionOptions
             );
             var prepareResponse = await sdk.PrepareSendPayment(request: request);
 
             // If the fees are acceptable, continue to create the Send Payment
-            if (prepareResponse.tokenConversionFee != null)
+            if (prepareResponse.conversionEstimate != null)
             {
-                Console.WriteLine("Estimated token conversion fee: " +
-                    $"{prepareResponse.tokenConversionFee} token base units");
+                Console.WriteLine("Estimated conversion amount: " +
+                    $"{prepareResponse.conversionEstimate.amount} token base units");
+                Console.WriteLine("Estimated conversion fee: " +
+                    $"{prepareResponse.conversionEstimate.fee} token base units");
             }
             // ANCHOR_END: prepare-send-payment-token-conversion
         }

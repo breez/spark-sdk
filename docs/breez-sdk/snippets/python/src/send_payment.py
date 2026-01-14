@@ -8,8 +8,8 @@ from breez_sdk_spark import (
     SendPaymentRequest,
     SendPaymentMethod,
     SendPaymentOptions,
-    TokenConversionOptions,
-    TokenConversionType,
+    ConversionOptions,
+    ConversionType,
 )
 
 
@@ -131,8 +131,8 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
     # Set to use token funds to pay via token conversion
     optional_max_slippage_bps = 50
     optional_completion_timeout_secs = 30
-    token_conversion_options = TokenConversionOptions(
-        conversion_type=TokenConversionType.TO_BITCOIN(
+    conversion_options = ConversionOptions(
+        conversion_type=ConversionType.TO_BITCOIN(
             from_token_identifier="<token identifier>"
         ),
         max_slippage_bps=optional_max_slippage_bps,
@@ -141,15 +141,18 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
-            token_conversion_options=token_conversion_options,
+            conversion_options=conversion_options,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
         # If the fees are acceptable, continue to create the Send Payment
-        if prepare_response.token_conversion_fee is not None:
-            token_conversion_fee = prepare_response.token_conversion_fee
+        if prepare_response.conversion_estimate is not None:
+            conversion_estimate = prepare_response.conversion_estimate
             logging.debug(
-                f"Estimated token conversion fee: {token_conversion_fee} token base units"
+                f"Estimated conversion amount: {conversion_estimate.amount} token base units"
+            )
+            logging.debug(
+                f"Estimated conversion fee: {conversion_estimate.fee} token base units"
             )
     except Exception as error:
         logging.error(error)

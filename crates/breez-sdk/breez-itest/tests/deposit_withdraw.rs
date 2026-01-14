@@ -81,7 +81,7 @@ async fn test_onchain_withdraw_to_static_address(
             payment_request: bob_address.clone(),
             amount: Some(amount),
             token_identifier: None,
-            token_conversion_options: None,
+            conversion_options: None,
         })
         .await?;
 

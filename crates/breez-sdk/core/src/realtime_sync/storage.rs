@@ -125,28 +125,26 @@ impl SyncedStorage {
             let Some(details) = payment.details else {
                 continue;
             };
-            let (description, lnurl_pay_info, lnurl_withdraw_info, token_conversion_info) =
-                match details {
-                    PaymentDetails::Lightning {
-                        description,
-                        lnurl_pay_info,
-                        lnurl_withdraw_info,
-                        ..
-                    } => (description, lnurl_pay_info, lnurl_withdraw_info, None),
-                    PaymentDetails::Spark {
-                        token_conversion_info,
-                        ..
-                    }
-                    | PaymentDetails::Token {
-                        token_conversion_info,
-                        ..
-                    } => (None, None, None, token_conversion_info),
-                    _ => continue,
-                };
+            let (description, lnurl_pay_info, lnurl_withdraw_info, conversion_info) = match details
+            {
+                PaymentDetails::Lightning {
+                    description,
+                    lnurl_pay_info,
+                    lnurl_withdraw_info,
+                    ..
+                } => (description, lnurl_pay_info, lnurl_withdraw_info, None),
+                PaymentDetails::Spark {
+                    conversion_info, ..
+                }
+                | PaymentDetails::Token {
+                    conversion_info, ..
+                } => (None, None, None, conversion_info),
+                _ => continue,
+            };
 
             if lnurl_pay_info.is_none()
                 && lnurl_withdraw_info.is_none()
-                && token_conversion_info.is_none()
+                && conversion_info.is_none()
             {
                 continue;
             }
@@ -155,7 +153,7 @@ impl SyncedStorage {
                 lnurl_description: description,
                 lnurl_pay_info,
                 lnurl_withdraw_info,
-                token_conversion_info,
+                conversion_info,
                 ..Default::default()
             };
             let record_id = RecordId::new(RecordType::PaymentMetadata.to_string(), &payment.id);

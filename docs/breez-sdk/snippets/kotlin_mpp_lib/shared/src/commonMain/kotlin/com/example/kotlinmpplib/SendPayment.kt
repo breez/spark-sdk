@@ -132,8 +132,8 @@ class SendPayment {
         // Set to use token funds to pay via token conversion
         val optionalMaxSlippageBps = 50u
         val optionalCompletionTimeoutSecs = 30u
-        val tokenConversionOptions = TokenConversionOptions(
-            conversionType = TokenConversionType.ToBitcoin(
+        val conversionOptions = ConversionOptions(
+            conversionType = ConversionType.ToBitcoin(
                 "<token identifier>"
             ),
             maxSlippageBps = optionalMaxSlippageBps,
@@ -143,14 +143,14 @@ class SendPayment {
         try {
             val req = PrepareSendPaymentRequest(
                 paymentRequest,
-                tokenConversionOptions = tokenConversionOptions
+                conversionOptions = conversionOptions
             )
             val prepareResponse = sdk.prepareSendPayment(req)
 
             // If the fees are acceptable, continue to create the Send Payment
-            if (prepareResponse.tokenConversionFee != null) {
-                val tokenConversionFee = prepareResponse.tokenConversionFee
-                // Log.v("Breez", "Estimated token conversion fee: ${tokenConversionFee} token base units")
+            prepareResponse.conversionEstimate?.let { conversionEstimate ->
+                // Log.v("Breez", "Estimated conversion amount: ${conversionEstimate.amount} token base units")
+                // Log.v("Breez", "Estimated conversion fee: ${conversionEstimate.fee} token base units")
             }
         } catch (e: Exception) {
             // handle error

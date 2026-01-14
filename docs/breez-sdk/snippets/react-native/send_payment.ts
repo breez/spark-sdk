@@ -2,7 +2,7 @@ import {
   OnchainConfirmationSpeed,
   SendPaymentMethod_Tags,
   SendPaymentOptions,
-  TokenConversionType,
+  ConversionType,
   type BreezSdk,
   type PrepareSendPaymentResponse
 } from '@breeztech/breez-sdk-spark-react-native'
@@ -17,7 +17,7 @@ const examplePrepareSendPaymentLightningBolt11 = async (sdk: BreezSdk) => {
     paymentRequest,
     amount: optionalAmountSats,
     tokenIdentifier: undefined,
-    tokenConversionOptions: undefined
+    conversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -42,7 +42,7 @@ const examplePrepareSendPaymentOnchain = async (sdk: BreezSdk) => {
     paymentRequest,
     amount: amountSats,
     tokenIdentifier: undefined,
-    tokenConversionOptions: undefined
+    conversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -68,7 +68,7 @@ const examplePrepareSendPaymentSparkAddress = async (sdk: BreezSdk) => {
     paymentRequest,
     amount: amountSats,
     tokenIdentifier: undefined,
-    tokenConversionOptions: undefined
+    conversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -89,7 +89,7 @@ const examplePrepareSendPaymentSparkInvoice = async (sdk: BreezSdk) => {
     paymentRequest,
     amount: optionalAmountSats,
     tokenIdentifier: undefined,
-    tokenConversionOptions: undefined
+    conversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -106,8 +106,8 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
   // Set to use token funds to pay via token conversion
   const optionalMaxSlippageBps = 50
   const optionalCompletionTimeoutSecs = 30
-  const tokenConversionOptions = {
-    conversionType: new TokenConversionType.ToBitcoin({
+  const conversionOptions = {
+    conversionType: new ConversionType.ToBitcoin({
       fromTokenIdentifier: '<token identifier>'
     }),
     maxSlippageBps: optionalMaxSlippageBps,
@@ -118,13 +118,14 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
     paymentRequest,
     amount: undefined,
     tokenIdentifier: undefined,
-    tokenConversionOptions
+    conversionOptions
   })
 
   // If the fees are acceptable, continue to create the Send Payment
-  if (prepareResponse.tokenConversionFee !== undefined) {
-    const tokenConversionFee = prepareResponse.tokenConversionFee
-    console.debug(`Estimated token conversion fee: ${tokenConversionFee} token base units`)
+  if (prepareResponse.conversionEstimate !== undefined) {
+    const conversionEstimate = prepareResponse.conversionEstimate
+    console.debug(`Estimated conversion amount: ${conversionEstimate.amount} token base units`)
+    console.debug(`Estimated conversion fee: ${conversionEstimate.fee} token base units`)
   }
   // ANCHOR_END: prepare-send-payment-token-conversion
 }

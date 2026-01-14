@@ -300,7 +300,7 @@ pub struct _PrepareSendPaymentRequest {
     pub payment_request: String,
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
-    pub token_conversion_options: Option<TokenConversionOptions>,
+    pub conversion_options: Option<ConversionOptions>,
 }
 
 #[frb(mirror(PrepareSendPaymentResponse))]
@@ -308,8 +308,7 @@ pub struct _PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     pub amount: u128,
     pub token_identifier: Option<String>,
-    pub token_conversion_options: Option<TokenConversionOptions>,
-    pub token_conversion_fee: Option<u128>,
+    pub conversion_estimate: Option<ConversionEstimate>,
 }
 
 #[frb(mirror(ReceivePaymentMethod))]
@@ -511,13 +510,13 @@ pub enum _PaymentDetails {
     Spark {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         htlc_details: Option<SparkHtlcDetails>,
-        token_conversion_info: Option<TokenConversionInfo>,
+        conversion_info: Option<ConversionInfo>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         invoice_details: Option<SparkInvoicePaymentDetails>,
-        token_conversion_info: Option<TokenConversionInfo>,
+        conversion_info: Option<ConversionInfo>,
     },
     Lightning {
         description: Option<String>,
@@ -563,7 +562,7 @@ pub struct _PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
-    pub token_conversion_info: Option<TokenConversionInfo>,
+    pub conversion_info: Option<ConversionInfo>,
 }
 
 #[frb(mirror(PaymentMethod))]
@@ -999,35 +998,58 @@ pub struct _OptimizationProgress {
     pub total_rounds: u32,
 }
 
-#[frb(mirror(TokenConversionInfo))]
-pub struct _TokenConversionInfo {
-    pub pool_id: String,
-    pub payment_id: Option<String>,
-    pub fee: Option<u128>,
-    pub refund_identifier: Option<String>,
+#[frb(mirror(ConversionEstimate))]
+pub struct _ConversionEstimate {
+    pub options: ConversionOptions,
+    pub amount: u128,
+    pub fee: u128,
 }
 
-#[frb(mirror(TokenConversionOptions))]
-pub struct _TokenConversionOptions {
-    pub conversion_type: TokenConversionType,
+#[frb(mirror(ConversionPurpose))]
+pub enum _ConversionPurpose {
+    OngoingPayment {
+        payment_request: String,
+    },
+    SelfTransfer,
+}
+
+#[frb(mirror(ConversionStatus))]
+pub enum _ConversionStatus {
+    Completed,
+    RefundNeeded,
+    Refunded,
+}
+
+#[frb(mirror(ConversionInfo))]
+pub struct _ConversionInfo {
+    pub pool_id: String,
+    pub conversion_id: String,
+    pub status: ConversionStatus,
+    pub fee: Option<u128>,
+    pub purpose: Option<ConversionPurpose>,
+}
+
+#[frb(mirror(ConversionOptions))]
+pub struct _ConversionOptions {
+    pub conversion_type: ConversionType,
     pub max_slippage_bps: Option<u32>,
     pub completion_timeout_secs: Option<u32>,
 }
 
-#[frb(mirror(TokenConversionType))]
-pub enum _TokenConversionType {
+#[frb(mirror(ConversionType))]
+pub enum _ConversionType {
     FromBitcoin,
     ToBitcoin { from_token_identifier: String },
 }
 
-#[frb(mirror(FetchTokenConversionLimitsRequest))]
-pub struct _FetchTokenConversionLimitsRequest {
-    pub conversion_type: TokenConversionType,
+#[frb(mirror(FetchConversionLimitsRequest))]
+pub struct _FetchConversionLimitsRequest {
+    pub conversion_type: ConversionType,
     pub token_identifier: Option<String>,
 }
 
-#[frb(mirror(FetchTokenConversionLimitsResponse))]
-pub struct _FetchTokenConversionLimitsResponse {
+#[frb(mirror(FetchConversionLimitsResponse))]
+pub struct _FetchConversionLimitsResponse {
     pub min_from_amount: Option<u128>,
     pub min_to_amount: Option<u128>,
 }

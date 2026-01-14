@@ -4,7 +4,7 @@ Token conversion enables payments to be made without holding the required asset 
 
 <h2 id="fetching-conversion-limits">
     <a class="header" href="#fetching-conversion-limits">Fetching conversion limits</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.fetch_token_conversion_limits">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.fetch_conversion_limits">API docs</a>
 </h2>
 
 Before performing a token conversion, you can fetch the minimum amounts required for the conversion. The limits depend on the conversion direction:
