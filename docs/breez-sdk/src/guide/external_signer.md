@@ -40,13 +40,3 @@ Most applications should use the default external signer factory function rather
 
 External signers are not supported in Flutter due to limitations with passing trait objects through the flutter_rust_bridge FFI. Flutter applications should use the standard `connect` method with mnemonic-based key management.
 </div>
-
-## Security Considerations
-
-When working with external signers:
-
-1. **Protect the mnemonic/private keys**: Never log or expose secrets
-2. **Validate inputs**: Ensure derivation paths and other parameters are valid before signing
-3. **Use secure storage**: Store keys in platform-specific secure storage (Keychain, KeyStore, etc.)
-4. **Handle errors carefully**: Don't leak information about why signing failed
-5. **Test thoroughly**: Cryptographic bugs can lead to loss of funds
