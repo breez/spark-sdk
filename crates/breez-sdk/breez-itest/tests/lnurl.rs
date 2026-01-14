@@ -990,7 +990,7 @@ async fn test_08_lnurl_drain_with_fee_overpayment(
                     amount_sats: excess,
                 }),
                 onchain_speed: None,
-                token_conversion_options: None,
+                conversion_options: None,
             })
             .await?;
 
