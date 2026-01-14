@@ -378,7 +378,7 @@ impl Storage for SqliteStorage {
                         params.push(Box::new(htlc_status.to_string()));
                     }
                 }
-                // Filter by token conversion info presence
+                // Filter by conversion info presence
                 if let PaymentDetailsFilter::Spark {
                     conversion_refund_needed: Some(conversion_refund_needed),
                     ..

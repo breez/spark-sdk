@@ -2186,7 +2186,7 @@ pub mod tests {
 
     #[allow(clippy::too_many_lines)]
     pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) {
-        // Create payments with and without token conversion info
+        // Create payments with and without conversion info
         let payment_with_refund_metadata = PaymentMetadata {
             conversion_info: Some(crate::ConversionInfo {
                 pool_id: "pool1".to_string(),

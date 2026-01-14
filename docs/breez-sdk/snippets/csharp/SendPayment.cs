@@ -104,9 +104,9 @@ namespace BreezSdkSnippets
 
         async Task PrepareSendPaymentTokenConversion(BreezSdk sdk)
         {
-            // ANCHOR: prepare-send-payment-token-conversion
+            // ANCHOR: prepare-send-payment-with-conversion
             var paymentRequest = "<payment request>";
-            // Set to use token funds to pay via token conversion
+            // Set to use token funds to pay via conversion
             var optionalMaxSlippageBps = 50U;
             var optionalCompletionTimeoutSecs = 30U;
             var conversionOptions = new ConversionOptions(
@@ -131,7 +131,7 @@ namespace BreezSdkSnippets
                 Console.WriteLine("Estimated conversion fee: " +
                     $"{prepareResponse.conversionEstimate.fee} token base units");
             }
-            // ANCHOR_END: prepare-send-payment-token-conversion
+            // ANCHOR_END: prepare-send-payment-with-conversion
         }
 
         async Task SendPaymentLightningBolt11(BreezSdk sdk, PrepareSendPaymentResponse prepareResponse)

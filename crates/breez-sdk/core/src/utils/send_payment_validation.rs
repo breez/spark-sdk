@@ -41,7 +41,7 @@ fn validate_spark_invoice_request(
                 "Requested token identifier does not match invoice token identifier".to_string(),
             ));
         }
-        // Validate token conversion to Bitcoin is not supported for tokens invoices
+        // Validate conversion to Bitcoin is not supported for tokens invoices
         if matches!(
             &request.conversion_options,
             Some(ConversionOptions {
@@ -50,7 +50,7 @@ fn validate_spark_invoice_request(
             })
         ) {
             return Err(SdkError::InvalidInput(
-                "Token conversion must be from Bitcoin for tokens invoice".to_string(),
+                "Conversion must be from Bitcoin for tokens invoice".to_string(),
             ));
         }
     } else if request.token_identifier.is_some() {
@@ -66,7 +66,7 @@ fn validate_spark_invoice_request(
         })
     ) {
         return Err(SdkError::InvalidInput(
-            "Token conversion must be to Bitcoin for non-tokens invoice".to_string(),
+            "Conversion must be to Bitcoin for non-tokens invoice".to_string(),
         ));
     }
 
@@ -109,7 +109,7 @@ fn validate_spark_address_request(request: &PrepareSendPaymentRequest) -> Result
     if request.amount.is_none() {
         return Err(SdkError::InvalidInput("Amount is required".to_string()));
     }
-    // Validate token conversion depending on whether token identifier is provided
+    // Validate conversion depending on whether token identifier is provided
     if let Some(conversion_options) = &request.conversion_options {
         match (
             &request.token_identifier,
@@ -117,13 +117,13 @@ fn validate_spark_address_request(request: &PrepareSendPaymentRequest) -> Result
         ) {
             (Some(_), ConversionType::ToBitcoin { .. }) => {
                 return Err(SdkError::InvalidInput(
-                    "Token conversion must be from Bitcoin when a token identifier is provided"
+                    "Conversion must be from Bitcoin when a token identifier is provided"
                         .to_string(),
                 ));
             }
             (None, ConversionType::FromBitcoin) => {
                 return Err(SdkError::InvalidInput(
-                    "Token conversion must be to Bitcoin when no token identifier is provided"
+                    "Conversion must be to Bitcoin when no token identifier is provided"
                         .to_string(),
                 ));
             }
@@ -144,7 +144,7 @@ fn validate_bolt11_invoice_request(request: &PrepareSendPaymentRequest) -> Resul
                 .to_string(),
         ));
     }
-    // Token conversion from Bitcoin is not supported for Bolt11 invoices
+    // Conversion from Bitcoin is not supported for Bolt11 invoices
     if matches!(
         &request.conversion_options,
         Some(ConversionOptions {
@@ -153,7 +153,7 @@ fn validate_bolt11_invoice_request(request: &PrepareSendPaymentRequest) -> Resul
         })
     ) {
         return Err(SdkError::InvalidInput(
-            "Token conversion must be to Bitcoin for Bolt11 invoices".to_string(),
+            "Conversion must be to Bitcoin for Bolt11 invoices".to_string(),
         ));
     }
 
@@ -173,7 +173,7 @@ fn validate_bitcoin_address_request(request: &PrepareSendPaymentRequest) -> Resu
     if request.amount.is_none() {
         return Err(SdkError::InvalidInput("Amount is required".to_string()));
     }
-    // Validate token conversion from Bitcoin is not supported for Bitcoin addresses
+    // Validate conversion from Bitcoin is not supported for Bitcoin addresses
     if matches!(
         &request.conversion_options,
         Some(ConversionOptions {
@@ -182,7 +182,7 @@ fn validate_bitcoin_address_request(request: &PrepareSendPaymentRequest) -> Resu
         })
     ) {
         return Err(SdkError::InvalidInput(
-            "Token conversion must be to Bitcoin for Bitcoin addresses".to_string(),
+            "Conversion must be to Bitcoin for Bitcoin addresses".to_string(),
         ));
     }
 
@@ -461,7 +461,7 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_spark_invoice_with_valid_token_conversion() {
+    fn test_validate_spark_invoice_with_valid_conversion() {
         let invoice = create_test_invoice();
 
         let mut request = create_test_request();
@@ -477,12 +477,12 @@ mod tests {
         let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
         assert!(
             result.is_ok(),
-            "Should succeed when token conversion to Bitcoin is provided"
+            "Should succeed when conversion to Bitcoin is provided"
         );
     }
 
     #[test_all]
-    fn test_validate_token_spark_invoice_with_valid_token_conversion() {
+    fn test_validate_token_spark_invoice_with_valid_conversion() {
         let mut invoice = create_test_invoice();
         invoice.token_identifier = Some("token123".to_string());
 
@@ -498,12 +498,12 @@ mod tests {
         let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
         assert!(
             result.is_ok(),
-            "Should succeed when token conversion from Bitcoin is provided"
+            "Should succeed when conversion from Bitcoin is provided"
         );
     }
 
     #[test_all]
-    fn test_validate_spark_invoice_with_invalid_token_conversion() {
+    fn test_validate_spark_invoice_with_invalid_conversion() {
         let invoice = create_test_invoice();
 
         let mut request = create_test_request();
@@ -517,12 +517,12 @@ mod tests {
         let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
         assert!(
             result.is_err(),
-            "Should fail when token conversion from Bitcoin is provided"
+            "Should fail when conversion from Bitcoin is provided"
         );
     }
 
     #[test_all]
-    fn test_validate_token_spark_invoice_with_invalid_token_conversion() {
+    fn test_validate_token_spark_invoice_with_invalid_conversion() {
         let mut invoice = create_test_invoice();
         invoice.token_identifier = Some("token123".to_string());
 
@@ -540,7 +540,7 @@ mod tests {
         let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
         assert!(
             result.is_err(),
-            "Should fail when token conversion to Bitcoin is provided"
+            "Should fail when conversion to Bitcoin is provided"
         );
     }
 
@@ -581,7 +581,7 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_spark_address_with_valid_token_conversion() {
+    fn test_validate_spark_address_with_valid_conversion() {
         let mut request = create_test_request();
         request.amount = Some(1000);
         request.conversion_options = Some(ConversionOptions {
@@ -594,12 +594,12 @@ mod tests {
         let result = validate_spark_address_request(&request);
         assert!(
             result.is_ok(),
-            "Should succeed when token conversion to Bitcoin is provided"
+            "Should succeed when conversion to Bitcoin is provided"
         );
     }
 
     #[test_all]
-    fn test_validate_token_spark_address_with_valid_token_conversion() {
+    fn test_validate_token_spark_address_with_valid_conversion() {
         let mut request = create_test_request();
         request.amount = Some(1000);
         request.token_identifier = Some("token123".to_string());
@@ -611,12 +611,12 @@ mod tests {
         let result = validate_spark_address_request(&request);
         assert!(
             result.is_ok(),
-            "Should succeed when token conversion from Bitcoin is provided"
+            "Should succeed when conversion from Bitcoin is provided"
         );
     }
 
     #[test_all]
-    fn test_validate_spark_address_with_invalid_token_conversion() {
+    fn test_validate_spark_address_with_invalid_conversion() {
         let mut request = create_test_request();
         request.amount = Some(1000);
         request.conversion_options = Some(ConversionOptions {
@@ -627,12 +627,12 @@ mod tests {
         let result = validate_spark_address_request(&request);
         assert!(
             result.is_err(),
-            "Should fail when token conversion from Bitcoin is provided"
+            "Should fail when conversion from Bitcoin is provided"
         );
     }
 
     #[test_all]
-    fn test_validate_token_spark_address_with_invalid_token_conversion() {
+    fn test_validate_token_spark_address_with_invalid_conversion() {
         let mut request = create_test_request();
         request.amount = Some(1000);
         request.token_identifier = Some("token123".to_string());
@@ -646,7 +646,7 @@ mod tests {
         let result = validate_spark_address_request(&request);
         assert!(
             result.is_err(),
-            "Should fail when token conversion to Bitcoin is provided"
+            "Should fail when conversion to Bitcoin is provided"
         );
     }
 
@@ -681,7 +681,7 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_bolt11_invoice_with_valid_token_conversion() {
+    fn test_validate_bolt11_invoice_with_valid_conversion() {
         let mut request = create_test_request();
         request.conversion_options = Some(ConversionOptions {
             conversion_type: ConversionType::ToBitcoin {
@@ -693,12 +693,12 @@ mod tests {
         let result = validate_bolt11_invoice_request(&request);
         assert!(
             result.is_ok(),
-            "Should succeed when token conversion to Bitcoin is provided"
+            "Should succeed when conversion to Bitcoin is provided"
         );
     }
 
     #[test_all]
-    fn test_validate_bolt11_invoice_with_invalid_token_conversion() {
+    fn test_validate_bolt11_invoice_with_invalid_conversion() {
         let mut request = create_test_request();
         request.conversion_options = Some(ConversionOptions {
             conversion_type: ConversionType::FromBitcoin,
@@ -708,7 +708,7 @@ mod tests {
         let result = validate_bolt11_invoice_request(&request);
         assert!(
             result.is_err(),
-            "Should fail when token conversion from Bitcoin is provided"
+            "Should fail when conversion from Bitcoin is provided"
         );
     }
 
@@ -757,7 +757,7 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_bitcoin_address_with_valid_token_conversion() {
+    fn test_validate_bitcoin_address_with_valid_conversion() {
         let mut request = create_test_request();
         request.amount = Some(1000);
         request.conversion_options = Some(ConversionOptions {
@@ -770,12 +770,12 @@ mod tests {
         let result = validate_bitcoin_address_request(&request);
         assert!(
             result.is_ok(),
-            "Should succeed when token conversion to Bitcoin is provided"
+            "Should succeed when conversion to Bitcoin is provided"
         );
     }
 
     #[test_all]
-    fn test_validate_bitcoin_address_with_invalid_token_conversion() {
+    fn test_validate_bitcoin_address_with_invalid_conversion() {
         let mut request = create_test_request();
         request.amount = Some(1000);
         request.conversion_options = Some(ConversionOptions {
@@ -786,7 +786,7 @@ mod tests {
         let result = validate_bitcoin_address_request(&request);
         assert!(
             result.is_err(),
-            "Should fail when token conversion from Bitcoin is provided"
+            "Should fail when conversion from Bitcoin is provided"
         );
     }
 

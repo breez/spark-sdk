@@ -120,7 +120,7 @@ namespace BreezSdkSnippets
 
         async Task FetchConversionLimits(BreezSdk sdk)
         {
-            // ANCHOR: fetch-token-conversion-limits
+            // ANCHOR: fetch-conversion-limits
             // Fetch limits for converting Bitcoin to a token
             var fromBitcoinResponse = await sdk.FetchConversionLimits(
                 request: new FetchConversionLimitsRequest(
@@ -156,18 +156,18 @@ namespace BreezSdkSnippets
             {
                 Console.WriteLine($"Minimum BTC to receive: {toBitcoinResponse.minToAmount} sats");
             }
-            // ANCHOR_END: fetch-token-conversion-limits
+            // ANCHOR_END: fetch-conversion-limits
         }
 
         async Task PrepareSendPaymentTokenConversion(BreezSdk sdk)
         {
-            // ANCHOR: prepare-send-payment-token-conversion
+            // ANCHOR: prepare-send-payment-with-conversion
             var paymentRequest = "<spark address or invoice>";
             // Token identifier must match the invoice in case it specifies one.
             var tokenIdentifier = "<token identifier>";
             // Set the amount of tokens you wish to send.
             var optionalAmount = new BigInteger(1000);
-            // Optionally set to use Bitcoin funds to pay via token conversion
+            // Optionally set to use Bitcoin funds to pay via conversion
             var optionalMaxSlippageBps = 50U;
             var optionalCompletionTimeoutSecs = 30U;
             var conversionOptions = new ConversionOptions(
@@ -193,7 +193,7 @@ namespace BreezSdkSnippets
                 Console.WriteLine("Estimated conversion fee: " +
                     $"{prepareResponse.conversionEstimate.fee} sats");
             }
-            // ANCHOR_END: prepare-send-payment-token-conversion
+            // ANCHOR_END: prepare-send-payment-with-conversion
         }
     }
 }

@@ -131,7 +131,7 @@ async def send_token_payment(sdk: BreezSdk):
 
 
 async def fetch_conversion_limits(sdk: BreezSdk):
-    # ANCHOR: fetch-token-conversion-limits
+    # ANCHOR: fetch-conversion-limits
     try:
         # Fetch limits for converting Bitcoin to a token
         from_bitcoin_response = await sdk.fetch_conversion_limits(
@@ -163,18 +163,18 @@ async def fetch_conversion_limits(sdk: BreezSdk):
     except Exception as error:
         logging.error(error)
         raise
-    # ANCHOR_END: fetch-token-conversion-limits
+    # ANCHOR_END: fetch-conversion-limits
 
 
 async def prepare_send_payment_token_conversion(sdk: BreezSdk):
-    # ANCHOR: prepare-send-payment-token-conversion
+    # ANCHOR: prepare-send-payment-with-conversion
     try:
         payment_request = "<spark address or invoice>"
         # Token identifier must match the invoice in case it specifies one.
         token_identifier = "<token identifier>"
         # Set the amount of tokens you wish to send.
         optional_amount = 1_000
-        # Set to use Bitcoin funds to pay via token conversion
+        # Set to use Bitcoin funds to pay via conversion
         optional_max_slippage_bps = 50
         optional_completion_timeout_secs = 30
         conversion_options = ConversionOptions(
@@ -204,4 +204,4 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
     except Exception as error:
         logging.error(error)
         raise
-    # ANCHOR_END: prepare-send-payment-token-conversion
+    # ANCHOR_END: prepare-send-payment-with-conversion

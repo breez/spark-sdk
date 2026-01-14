@@ -98,9 +98,9 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(
 
 Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
     BreezSdk sdk) async {
-  // ANCHOR: prepare-send-payment-token-conversion
+  // ANCHOR: prepare-send-payment-with-conversion
   String paymentRequest = "<payment request>";
-  // Set to use token funds to pay via token conversion
+  // Set to use token funds to pay via conversion
   int optionalMaxSlippageBps = 50;
   int optionalCompletionTimeoutSecs = 30;
   final conversionOptions = ConversionOptions(
@@ -123,7 +123,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
     print(
         "Estimated conversion fee: ${response.conversionEstimate!.fee} token base units");
   }
-  // ANCHOR_END: prepare-send-payment-token-conversion
+  // ANCHOR_END: prepare-send-payment-with-conversion
   return response;
 }
 

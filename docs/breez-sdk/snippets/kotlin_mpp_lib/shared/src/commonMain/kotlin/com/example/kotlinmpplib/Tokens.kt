@@ -135,7 +135,7 @@ class Tokens {
     }
 
     suspend fun fetchConversionLimits(sdk: BreezSdk) {
-        // ANCHOR: fetch-token-conversion-limits
+        // ANCHOR: fetch-conversion-limits
         try {
             // Fetch limits for converting Bitcoin to a token
             val fromBitcoinResponse = sdk.fetchConversionLimits(
@@ -171,11 +171,11 @@ class Tokens {
         } catch (e: Exception) {
             // handle error
         }
-        // ANCHOR_END: fetch-token-conversion-limits
+        // ANCHOR_END: fetch-conversion-limits
     }
 
     suspend fun prepareSendPaymentTokenConversion(sdk: BreezSdk) {
-        // ANCHOR: prepare-send-payment-token-conversion
+        // ANCHOR: prepare-send-payment-with-conversion
         try {
             val paymentRequest = "<spark address or invoice>"
             // Token identifier must match the invoice in case it specifies one.
@@ -186,7 +186,7 @@ class Tokens {
             val optionalAmount = BigInteger.fromLong(1_000L)
             // Android (BigInteger from java.math)
             // val optionalAmount = BigInteger.valueOf(1_000L)
-            // set to use Bitcoin funds to pay via token conversion
+            // set to use Bitcoin funds to pay via conversion
             val optionalMaxSlippageBps = 50u
             val optionalCompletionTimeoutSecs = 30u
             val conversionOptions = ConversionOptions(
@@ -213,6 +213,6 @@ class Tokens {
         } catch (e: Exception) {
             // handle error
         }
-        // ANCHOR_END: prepare-send-payment-token-conversion
+        // ANCHOR_END: prepare-send-payment-with-conversion
     }
 }

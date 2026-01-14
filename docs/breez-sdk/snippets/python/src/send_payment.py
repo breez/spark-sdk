@@ -126,9 +126,9 @@ async def prepare_send_payment_spark_invoice(sdk: BreezSdk):
 
 
 async def prepare_send_payment_token_conversion(sdk: BreezSdk):
-    # ANCHOR: prepare-send-payment-token-conversion
+    # ANCHOR: prepare-send-payment-with-conversion
     payment_request = "<payment request>"
-    # Set to use token funds to pay via token conversion
+    # Set to use token funds to pay via conversion
     optional_max_slippage_bps = 50
     optional_completion_timeout_secs = 30
     conversion_options = ConversionOptions(
@@ -157,7 +157,7 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
     except Exception as error:
         logging.error(error)
         raise
-    # ANCHOR_END: prepare-send-payment-token-conversion
+    # ANCHOR_END: prepare-send-payment-with-conversion
 
 
 async def send_payment_lightning_bolt11(

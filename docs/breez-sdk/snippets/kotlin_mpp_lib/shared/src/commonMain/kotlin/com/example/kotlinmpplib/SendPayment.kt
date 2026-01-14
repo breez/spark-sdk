@@ -127,9 +127,9 @@ class SendPayment {
     }
     
     suspend fun prepareSendPaymentTokenConversion(sdk: BreezSdk) {
-        // ANCHOR: prepare-send-payment-token-conversion
+        // ANCHOR: prepare-send-payment-with-conversion
         val paymentRequest = "<payment request>"
-        // Set to use token funds to pay via token conversion
+        // Set to use token funds to pay via conversion
         val optionalMaxSlippageBps = 50u
         val optionalCompletionTimeoutSecs = 30u
         val conversionOptions = ConversionOptions(
@@ -155,7 +155,7 @@ class SendPayment {
         } catch (e: Exception) {
             // handle error
         }
-        // ANCHOR_END: prepare-send-payment-token-conversion
+        // ANCHOR_END: prepare-send-payment-with-conversion
     }
 
     suspend fun sendPaymentLightningBolt11(

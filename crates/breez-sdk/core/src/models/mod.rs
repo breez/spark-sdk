@@ -250,7 +250,7 @@ pub enum PaymentDetails {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         /// The HTLC transfer details if the payment fulfilled an HTLC transfer
         htlc_details: Option<SparkHtlcDetails>,
-        /// The information for a token conversion
+        /// The information for a conversion
         conversion_info: Option<ConversionInfo>,
     },
     Token {
@@ -258,7 +258,7 @@ pub enum PaymentDetails {
         tx_hash: String,
         /// The invoice details if the payment fulfilled a spark invoice
         invoice_details: Option<SparkInvoicePaymentDetails>,
-        /// The information for a token conversion
+        /// The information for a conversion
         conversion_info: Option<ConversionInfo>,
     },
     Lightning {
@@ -876,7 +876,7 @@ pub struct PrepareSendPaymentRequest {
     /// May only be provided if the payment request is a spark address.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub token_identifier: Option<String>,
-    /// If provided, the payment will include a token conversion step before sending the payment
+    /// If provided, the payment will include a conversion step before sending the payment
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub conversion_options: Option<ConversionOptions>,
 }
@@ -891,7 +891,7 @@ pub struct PrepareSendPaymentResponse {
     /// The presence of this field indicates that the payment is for a token.
     /// If empty, it is a Bitcoin payment.
     pub token_identifier: Option<String>,
-    /// When set, the payment will include a token conversion step before sending the payment
+    /// When set, the payment will include a conversion step before sending the payment
     pub conversion_estimate: Option<ConversionEstimate>,
 }
 
@@ -1242,7 +1242,7 @@ pub struct OptimizationProgress {
     pub total_rounds: u32,
 }
 
-/// Response from estimating a token conversion, used when preparing a payment that requires conversion
+/// Response from estimating a conversion, used when preparing a payment that requires conversion
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize)]
 pub struct ConversionEstimate {
@@ -1256,21 +1256,21 @@ pub struct ConversionEstimate {
     pub fee: u128,
 }
 
-/// The purpose of the token conversion, which is used to provide context for the conversion
+/// The purpose of the conversion, which is used to provide context for the conversion
 /// if its related to an ongoing payment or a self-transfer.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConversionPurpose {
-    /// Token conversion is associated with an ongoing payment
+    /// Conversion is associated with an ongoing payment
     OngoingPayment {
         /// The payment request of the ongoing payment
         payment_request: String,
     },
-    /// Token conversion is for self-transfer
+    /// Conversion is for self-transfer
     SelfTransfer,
 }
 
-/// The status of the token conversion
+/// The status of the conversion
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConversionStatus {
@@ -1312,23 +1312,23 @@ pub(crate) struct TokenConversionResponse {
     pub(crate) received_payment_id: String,
 }
 
-/// Options for token conversion when fulfilling a payment. When set, the SDK will
-/// perform a token conversion before fulfilling the payment. If not set, the payment
+/// Options for conversion when fulfilling a payment. When set, the SDK will
+/// perform a conversion before fulfilling the payment. If not set, the payment
 /// will only be fulfilled if the wallet has sufficient balance of the required asset.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConversionOptions {
-    /// The type of token conversion to perform when fulfilling the payment
+    /// The type of conversion to perform when fulfilling the payment
     pub conversion_type: ConversionType,
     /// The optional maximum slippage in basis points (1/100 of a percent) allowed when
-    /// a token conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
-    /// The token conversion will fail if the actual amount received is less than
+    /// a conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
+    /// The conversion will fail if the actual amount received is less than
     /// `estimated_amount * (1 - max_slippage_bps / 10_000)`.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub max_slippage_bps: Option<u32>,
-    /// The optional timeout in seconds to wait for the token conversion to complete
+    /// The optional timeout in seconds to wait for the conversion to complete
     /// when fulfilling the payment. This timeout only concerns waiting for the received
-    /// payment of the token conversion. If the timeout is reached before the conversion
+    /// payment of the conversion. If the timeout is reached before the conversion
     /// is complete, the payment will fail. Defaults to 30 seconds if not set.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub completion_timeout_secs: Option<u32>,

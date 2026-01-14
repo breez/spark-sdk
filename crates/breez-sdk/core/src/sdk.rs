@@ -108,9 +108,9 @@ const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology:442";
 
 const CLAIM_TX_SIZE_VBYTES: u64 = 99;
 const SYNC_PAGING_LIMIT: u32 = 100;
-/// Default maximum slippage for token conversions in basis points (0.5%)
+/// Default maximum slippage for conversions in basis points (0.5%)
 const DEFAULT_TOKEN_CONVERSION_MAX_SLIPPAGE_BPS: u32 = 50;
-/// Default timeout for token conversion operations in seconds
+/// Default timeout for conversion operations in seconds
 const DEFAULT_TOKEN_CONVERSION_TIMEOUT_SECS: u32 = 30;
 
 bitflags! {
@@ -182,7 +182,7 @@ pub struct BreezSdk {
     shutdown_sender: watch::Sender<()>,
     sync_trigger: tokio::sync::broadcast::Sender<SyncRequest>,
     zap_receipt_trigger: tokio::sync::broadcast::Sender<()>,
-    token_conversion_refund_trigger: tokio::sync::broadcast::Sender<()>,
+    conversion_refund_trigger: tokio::sync::broadcast::Sender<()>,
     initial_synced_watcher: watch::Receiver<bool>,
     external_input_parsers: Vec<ExternalInputParser>,
     spark_private_mode_initialized: Arc<OnceCell<()>>,
@@ -340,7 +340,7 @@ impl BreezSdk {
             shutdown_sender: params.shutdown_sender,
             sync_trigger: tokio::sync::broadcast::channel(10).0,
             zap_receipt_trigger: tokio::sync::broadcast::channel(10).0,
-            token_conversion_refund_trigger: tokio::sync::broadcast::channel(10).0,
+            conversion_refund_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
             external_input_parsers,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
@@ -359,13 +359,13 @@ impl BreezSdk {
     /// 2. `periodic_sync`: syncs the wallet with the Spark network    
     /// 3. `try_recover_lightning_address`: recovers the lightning address on startup
     /// 4. `spawn_zap_receipt_publisher`: publishes zap receipts for payments with zap requests
-    /// 5. `spawm_token_conversion_refunder`: refunds failed token conversions
+    /// 5. `spawm_conversion_refunder`: refunds failed conversions
     fn start(&self, initial_synced_sender: watch::Sender<bool>) {
         self.spawn_spark_private_mode_initialization();
         self.periodic_sync(initial_synced_sender);
         self.try_recover_lightning_address();
         self.spawn_zap_receipt_publisher();
-        self.spawn_token_conversion_refunder();
+        self.spawn_conversion_refunder();
     }
 
     fn spawn_spark_private_mode_initialization(&self) {
@@ -424,26 +424,26 @@ impl BreezSdk {
         });
     }
 
-    /// Background task that periodically checks for failed token conversions and refunds them.
+    /// Background task that periodically checks for failed conversions and refunds them.
     /// Triggered on startup and then every 150 seconds.
-    fn spawn_token_conversion_refunder(&self) {
+    fn spawn_conversion_refunder(&self) {
         let sdk = self.clone();
         let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
-        let mut trigger_receiver = sdk.token_conversion_refund_trigger.clone().subscribe();
+        let mut trigger_receiver = sdk.conversion_refund_trigger.clone().subscribe();
 
         tokio::spawn(async move {
             loop {
-                if let Err(e) = sdk.refund_failed_token_conversions().await {
-                    error!("Failed to refund failed token conversions: {e:?}");
+                if let Err(e) = sdk.refund_failed_conversions().await {
+                    error!("Failed to refund failed conversions: {e:?}");
                 }
 
                 select! {
                     _ = shutdown_receiver.changed() => {
-                        info!("Token conversion refunder shutdown signal received");
+                        info!("Conversion refunder shutdown signal received");
                         return;
                     }
                     _ = trigger_receiver.recv() => {
-                        debug!("Token conversion refunder triggered");
+                        debug!("Conversion refunder triggered");
                     }
                     () = tokio::time::sleep(Duration::from_secs(150)) => {}
                 }
@@ -1038,7 +1038,7 @@ impl BreezSdk {
     /// Checks for payments that need conversion refunds and initiates the manual refund process.
     /// This occurs when a Spark transfer or token transaction is sent using the Flashnet client,
     /// but the execution fails and no automatic refund is initiated.
-    async fn refund_failed_token_conversions(&self) -> Result<(), SdkError> {
+    async fn refund_failed_conversions(&self) -> Result<(), SdkError> {
         debug!("Checking for failed conversions needing refunds");
         let payments = self
             .storage
@@ -1061,7 +1061,7 @@ impl BreezSdk {
             payments.len()
         );
         for payment in payments {
-            if let Err(e) = self.refund_token_conversion(&payment).await {
+            if let Err(e) = self.refund_conversion(&payment).await {
                 error!(
                     "Failed to refund conversion for payment {}: {e:?}",
                     payment.id
@@ -1073,7 +1073,7 @@ impl BreezSdk {
     }
 
     /// Initiates a refund for a conversion payment that requires a manual refund.
-    async fn refund_token_conversion(&self, payment: &Payment) -> Result<(), SdkError> {
+    async fn refund_conversion(&self, payment: &Payment) -> Result<(), SdkError> {
         let (clawback_id, conversion_info) = match &payment.details {
             Some(PaymentDetails::Spark {
                 conversion_info, ..
@@ -1085,7 +1085,7 @@ impl BreezSdk {
             }) => (tx_hash.clone(), conversion_info),
             _ => {
                 return Err(SdkError::Generic(
-                    "Payment is not a Spark or Token conversion".to_string(),
+                    "Payment is not a Spark or Conversion".to_string(),
                 ));
             }
         };
@@ -1098,7 +1098,7 @@ impl BreezSdk {
         }) = conversion_info
         else {
             return Err(SdkError::Generic(
-                "Token conversion does not have a refund pending status".to_string(),
+                "Conversion does not have a refund pending status".to_string(),
             ));
         };
         debug!(
@@ -1736,7 +1736,7 @@ impl BreezSdk {
                     .amount
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
                 let conversion_estimate = self
-                    .estimate_token_conversion(
+                    .estimate_conversion(
                         request.conversion_options.as_ref(),
                         request.token_identifier.as_ref(),
                         amount,
@@ -1760,7 +1760,7 @@ impl BreezSdk {
                     .or(request.amount)
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
                 let conversion_estimate = self
-                    .estimate_token_conversion(
+                    .estimate_conversion(
                         request.conversion_options.as_ref(),
                         request.token_identifier.as_ref(),
                         amount,
@@ -1806,7 +1806,7 @@ impl BreezSdk {
                     )
                     .await?;
                 let conversion_estimate = self
-                    .estimate_token_conversion(
+                    .estimate_conversion(
                         request.conversion_options.as_ref(),
                         request.token_identifier.as_ref(),
                         amount.saturating_add(u128::from(lightning_fee_sats)),
@@ -1837,7 +1837,7 @@ impl BreezSdk {
                     .await?
                     .into();
                 let conversion_estimate = self
-                    .estimate_token_conversion(
+                    .estimate_conversion(
                         request.conversion_options.as_ref(),
                         request.token_identifier.as_ref(),
                         amount.saturating_add(u128::from(fee_quote.speed_fast.total_fee_sat())),
@@ -2288,7 +2288,7 @@ impl BreezSdk {
                 return Ok(SendPaymentResponse { payment });
             }
         }
-        // Perform the send payment, with token conversion if requested
+        // Perform the send payment, with conversion if requested
         let res = if let Some(ConversionEstimate {
             options: conversion_options,
             ..
@@ -2327,8 +2327,8 @@ impl BreezSdk {
         request: &SendPaymentRequest,
         suppress_payment_event: &mut bool,
     ) -> Result<SendPaymentResponse, SdkError> {
-        // Perform a token conversion before sending the payment
-        let (token_conversion_response, conversion_purpose) =
+        // Perform a conversion before sending the payment
+        let (conversion_response, conversion_purpose) =
             match &request.prepare_response.payment_method {
                 SendPaymentMethod::SparkAddress { address, .. } => {
                     let spark_address = address
@@ -2425,11 +2425,11 @@ impl BreezSdk {
                 .sync_trigger
                 .send(SyncRequest::no_reply(SyncType::WalletState));
         }
-        // Wait for the received token conversion payment to complete
+        // Wait for the received conversion payment to complete
         let payment = self
             .wait_for_payment(
                 WaitForPaymentIdentifier::PaymentId(
-                    token_conversion_response.received_payment_id.clone(),
+                    conversion_response.received_payment_id.clone(),
                 ),
                 conversion_options
                     .completion_timeout_secs
@@ -2437,9 +2437,7 @@ impl BreezSdk {
             )
             .await
             .map_err(|e| {
-                SdkError::Generic(format!(
-                    "Timeout waiting for token conversion to complete: {e}"
-                ))
+                SdkError::Generic(format!("Timeout waiting for conversion to complete: {e}"))
             })?;
         // For self-payments, we can skip sending the actual payment
         if conversion_purpose == ConversionPurpose::SelfTransfer {
@@ -2450,7 +2448,7 @@ impl BreezSdk {
         let response = Box::pin(self.send_payment_internal(request)).await?;
         // Merge payment metadata to link the payments
         self.merge_payment_metadata(
-            token_conversion_response.sent_payment_id,
+            conversion_response.sent_payment_id,
             PaymentMetadata {
                 parent_payment_id: Some(response.payment.id.clone()),
                 ..Default::default()
@@ -2458,7 +2456,7 @@ impl BreezSdk {
         )
         .await?;
         self.merge_payment_metadata(
-            token_conversion_response.received_payment_id,
+            conversion_response.received_payment_id,
             PaymentMetadata {
                 parent_payment_id: Some(response.payment.id.clone()),
                 ..Default::default()
@@ -3065,19 +3063,15 @@ impl BreezSdk {
         min_amount_out: u128,
     ) -> Result<TokenConversionResponse, SdkError> {
         let conversion_pool = self
-            .get_token_conversion_pool(conversion_options, token_identifier, min_amount_out)
+            .get_conversion_pool(conversion_options, token_identifier, min_amount_out)
             .await?;
         let conversion_estimate = self
-            .estimate_token_conversion_internal(
-                &conversion_pool,
-                conversion_options,
-                min_amount_out,
-            )
+            .estimate_conversion_internal(&conversion_pool, conversion_options, min_amount_out)
             .await?
             .ok_or(SdkError::Generic(
                 "No conversion estimate available".to_string(),
             ))?;
-        // Execute the token conversion
+        // Execute the conversion
         let pool_id = conversion_pool.pool.lp_public_key;
         let response_res = self
             .flashnet_client
@@ -3097,7 +3091,7 @@ impl BreezSdk {
         match response_res {
             Ok(response) => {
                 info!(
-                    "Token conversion executed: accepted {}, error {:?}",
+                    "Conversion executed: accepted {}, error {:?}",
                     response.accepted, response.error
                 );
                 let (sent_payment_id, received_payment_id) = self
@@ -3143,7 +3137,7 @@ impl BreezSdk {
                             conversion_purpose,
                         )
                         .await;
-                    let _ = self.token_conversion_refund_trigger.send(());
+                    let _ = self.conversion_refund_trigger.send(());
                     Err(SdkError::Generic(format!(
                         "Convert token failed, refund pending: {}",
                         *source.clone()
@@ -3155,7 +3149,7 @@ impl BreezSdk {
         }
     }
 
-    async fn get_token_conversion_pool(
+    async fn get_conversion_pool(
         &self,
         conversion_options: &ConversionOptions,
         token_identifier: Option<&String>,
@@ -3191,10 +3185,10 @@ impl BreezSdk {
         let pools = pools.into_values().collect::<Vec<_>>();
         if pools.is_empty() {
             warn!(
-                "No token conversion pools available: in address {asset_in_address}, out address {asset_out_address}",
+                "No conversion pools available: in address {asset_in_address}, out address {asset_out_address}",
             );
             return Err(SdkError::Generic(
-                "No token conversion pools available".to_string(),
+                "No conversion pools available".to_string(),
             ));
         }
 
@@ -3219,7 +3213,7 @@ impl BreezSdk {
         })
     }
 
-    async fn estimate_token_conversion(
+    async fn estimate_conversion(
         &self,
         conversion_options: Option<&ConversionOptions>,
         token_identifier: Option<&String>,
@@ -3229,14 +3223,14 @@ impl BreezSdk {
             return Ok(None);
         };
         let conversion_pool = self
-            .get_token_conversion_pool(conversion_options, token_identifier, amount_out)
+            .get_conversion_pool(conversion_options, token_identifier, amount_out)
             .await?;
 
-        self.estimate_token_conversion_internal(&conversion_pool, conversion_options, amount_out)
+        self.estimate_conversion_internal(&conversion_pool, conversion_options, amount_out)
             .await
     }
 
-    async fn estimate_token_conversion_internal(
+    async fn estimate_conversion_internal(
         &self,
         conversion_pool: &TokenConversionPool,
         conversion_options: &ConversionOptions,
@@ -3280,9 +3274,9 @@ impl BreezSdk {
         }))
     }
 
-    /// Fetches a payment by its token conversion identifier.
+    /// Fetches a payment by its conversion identifier.
     /// The identifier can be either a spark transfer id or a token transaction hash.
-    async fn fetch_payment_by_token_conversion_identifier(
+    async fn fetch_payment_by_conversion_identifier(
         &self,
         identifier: &str,
         tx_inputs_are_ours: bool,
@@ -3366,7 +3360,7 @@ impl BreezSdk {
 
         // Update the sent payment metadata
         let sent_payment = self
-            .fetch_payment_by_token_conversion_identifier(&outbound_identifier, true)
+            .fetch_payment_by_conversion_identifier(&outbound_identifier, true)
             .await?;
         let sent_payment_id = sent_payment.id.clone();
         self.storage
@@ -3398,7 +3392,7 @@ impl BreezSdk {
                 ..Default::default()
             };
             if let Ok(payment) = self
-                .fetch_payment_by_token_conversion_identifier(identifier, false)
+                .fetch_payment_by_conversion_identifier(identifier, false)
                 .await
             {
                 self.storage
@@ -3426,7 +3420,7 @@ impl BreezSdk {
                 ..Default::default()
             };
             if let Ok(payment) = self
-                .fetch_payment_by_token_conversion_identifier(identifier, false)
+                .fetch_payment_by_conversion_identifier(identifier, false)
                 .await
             {
                 self.storage

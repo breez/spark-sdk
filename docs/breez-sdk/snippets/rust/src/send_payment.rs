@@ -108,9 +108,9 @@ async fn prepare_send_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
 }
 
 async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
-    // ANCHOR: prepare-send-payment-token-conversion
+    // ANCHOR: prepare-send-payment-with-conversion
     let payment_request = "<payment request>".to_string();
-    // Set to use token funds to pay via token conversion
+    // Set to use token funds to pay via conversion
     let optional_max_slippage_bps = Some(50);
     let optional_completion_timeout_secs = Some(30);
     let conversion_options = Some(ConversionOptions {
@@ -135,7 +135,7 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
         info!("Estimated conversion amount: {} token base units", conversion_estimate.amount);
         info!("Estimated conversion fee: {} token base units", conversion_estimate.fee);
     }
-    // ANCHOR_END: prepare-send-payment-token-conversion
+    // ANCHOR_END: prepare-send-payment-with-conversion
     Ok(())
 }
 

@@ -101,9 +101,9 @@ const examplePrepareSendPaymentSparkInvoice = async (sdk: BreezSdk) => {
 }
 
 const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
-  // ANCHOR: prepare-send-payment-token-conversion
+  // ANCHOR: prepare-send-payment-with-conversion
   const paymentRequest = '<payment request>'
-  // Set to use token funds to pay via token conversion
+  // Set to use token funds to pay via conversion
   const optionalMaxSlippageBps = 50
   const optionalCompletionTimeoutSecs = 30
   const conversionOptions = {
@@ -127,7 +127,7 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
     console.debug(`Estimated conversion amount: ${conversionEstimate.amount} token base units`)
     console.debug(`Estimated conversion fee: ${conversionEstimate.fee} token base units`)
   }
-  // ANCHOR_END: prepare-send-payment-token-conversion
+  // ANCHOR_END: prepare-send-payment-with-conversion
 }
 
 const exampleSendPaymentLightningBolt11 = async (

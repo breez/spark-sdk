@@ -121,9 +121,9 @@ func PrepareSendPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 }
 
 func PrepareSendPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
-	// ANCHOR: prepare-send-payment-token-conversion
+	// ANCHOR: prepare-send-payment-with-conversion
 	paymentRequest := "<payment request>"
-	// Set to use token funds to pay via token conversion
+	// Set to use token funds to pay via conversion
 	optionalMaxSlippageBps := uint32(50)
 	optionalCompletionTimeoutSecs := uint32(30)
 	conversionOptions := breez_sdk_spark.ConversionOptions{
@@ -149,7 +149,7 @@ func PrepareSendPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 		log.Printf("Estimated conversion amount: %v token base units", response.ConversionEstimate.Amount)
 		log.Printf("Estimated conversion fee: %v token base units", response.ConversionEstimate.Fee)
 	}
-	// ANCHOR_END: prepare-send-payment-token-conversion
+	// ANCHOR_END: prepare-send-payment-with-conversion
 	return &response, nil
 }
 
