@@ -98,17 +98,22 @@ fn validate_spark_invoice_request(
 
     // Validate token identifier
     if let Some(token_identifier) = &spark_invoice_details.token_identifier {
-        let Some(ref req_token_id) = requested_token_identifier else {
+        // Error if explicitly requesting Bitcoin payment for a token invoice
+        if matches!(request.pay_amount, Some(PayAmount::Bitcoin { .. })) {
             return Err(SdkError::InvalidInput(
-                "Token identifier is required for tokens invoice".to_string(),
+                "PayAmount::Bitcoin is not allowed for tokens invoice".to_string(),
             ));
-        };
-        if req_token_id != token_identifier {
+        }
+        // Error if token identifier doesn't match (when explicitly provided)
+        if let Some(ref req_token_id) = requested_token_identifier
+            && req_token_id != token_identifier
+        {
             return Err(SdkError::InvalidInput(
                 "Requested token identifier does not match invoice token identifier".to_string(),
             ));
         }
-        // Validate conversion to Bitcoin is not supported for tokens invoices
+        // pay_amount: None is allowed - defers to invoice
+        // Validate token conversion to Bitcoin is not supported for tokens invoices
         if matches!(
             &request.conversion_options,
             Some(ConversionOptions {
@@ -164,6 +169,13 @@ fn validate_spark_invoice_request(
     {
         return Err(SdkError::InvalidInput(
             "Requested amount does not match invoice amount".to_string(),
+        ));
+    }
+
+    // Validate amount is provided when invoice has no amount
+    if spark_invoice_details.amount.is_none() && request_amount.is_none() {
+        return Err(SdkError::InvalidInput(
+            "Amount is required when invoice has no amount".to_string(),
         ));
     }
 
@@ -376,22 +388,38 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_spark_invoice_token_identifier_required() {
+    fn test_validate_spark_invoice_no_pay_amount_allowed_for_token_invoice() {
+        let mut invoice = create_test_invoice();
+        invoice.token_identifier = Some("token123".to_string());
+        invoice.amount = Some(1000); // Invoice specifies amount
+
+        let request = create_test_request(); // No pay_amount - defers to invoice
+
+        let identity_key = "test_identity".to_string();
+        let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
+        assert!(
+            result.is_ok(),
+            "Should succeed when pay_amount is None for token invoice (defers to invoice)"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_spark_invoice_bitcoin_not_allowed_for_token_invoice() {
         let mut invoice = create_test_invoice();
         invoice.token_identifier = Some("token123".to_string());
 
-        let request = create_test_request(); // No token identifier
+        let request = create_bitcoin_amount_request(1000); // PayAmount::Bitcoin
 
         let identity_key = "test_identity".to_string();
         let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
         assert!(
             result.is_err(),
-            "Should fail when token identifier is required but not provided"
+            "Should fail when Bitcoin payment is used for token invoice"
         );
         if let Err(SdkError::InvalidInput(msg)) = result {
             assert!(
-                msg.contains("Token identifier is required"),
-                "Error message should mention requirement"
+                msg.contains("PayAmount::Bitcoin is not allowed for tokens invoice"),
+                "Error message should mention PayAmount::Bitcoin is not allowed for tokens invoice"
             );
         } else {
             panic!("Expected InvalidInput error");
@@ -465,6 +493,7 @@ mod tests {
     #[test_all]
     fn test_validate_spark_invoice_valid_expiry_time() {
         let mut invoice = create_test_invoice();
+        invoice.amount = Some(1000); // Invoice specifies amount
         let future_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -481,6 +510,7 @@ mod tests {
     #[test_all]
     fn test_validate_spark_invoice_sender_public_key_match() {
         let mut invoice = create_test_invoice();
+        invoice.amount = Some(1000); // Invoice specifies amount
         invoice.sender_public_key = Some("sender_key123".to_string());
 
         let request = create_test_request();
@@ -561,6 +591,28 @@ mod tests {
         );
     }
 
+    #[test_all]
+    fn test_validate_spark_invoice_amount_required_when_no_invoice_amount() {
+        let invoice = create_test_invoice(); // No amount
+
+        let request = create_test_request(); // No pay_amount
+
+        let identity_key = "test_identity".to_string();
+        let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
+        assert!(
+            result.is_err(),
+            "Should fail when neither invoice nor request has amount"
+        );
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("Amount is required"),
+                "Error message should mention amount requirement"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
     #[allow(clippy::arithmetic_side_effects)]
     #[test_all]
     fn test_validate_spark_invoice_all_valid() {
@@ -583,8 +635,9 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_spark_invoice_with_valid_conversion() {
-        let invoice = create_test_invoice();
+    fn test_validate_spark_invoice_with_valid_token_conversion() {
+        let mut invoice = create_test_invoice();
+        invoice.amount = Some(1000); // Invoice specifies amount
 
         let mut request = create_test_request();
         request.conversion_options = Some(ConversionOptions {
