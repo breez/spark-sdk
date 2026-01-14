@@ -309,11 +309,17 @@ class MigrationManager {
       },
       {
         name: "Add token conversion info to payment_metadata",
-        sql: `ALTER TABLE payment_metadata ADD COLUMN conversion_info TEXT`
+        sql: `ALTER TABLE payment_metadata ADD COLUMN token_conversion_info TEXT`
       },
       {
         name: "Add parent payment id to payment_metadata",
         sql: `ALTER TABLE payment_metadata ADD COLUMN parent_payment_id TEXT`
+      },
+      {
+        name: "Add conversion info to payment_metadata",
+        sql: [
+          `ALTER TABLE payment_metadata DROP COLUMN token_conversion_info`,
+          `ALTER TABLE payment_metadata ADD COLUMN conversion_info TEXT`]
       },
     ];
   }
