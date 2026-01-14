@@ -104,6 +104,23 @@ impl From<flashnet::FlashnetError> for SdkError {
     }
 }
 
+impl From<crate::token_conversion::ConversionError> for SdkError {
+    fn from(e: crate::token_conversion::ConversionError) -> Self {
+        use crate::token_conversion::ConversionError;
+        match e {
+            ConversionError::NoPoolsAvailable => {
+                SdkError::Generic("No conversion pools available".to_string())
+            }
+            ConversionError::ConversionFailed(msg)
+            | ConversionError::ValidationFailed(msg)
+            | ConversionError::RefundFailed(msg) => SdkError::Generic(msg),
+            ConversionError::Sdk(e) => e,
+            ConversionError::Storage(e) => SdkError::StorageError(e.to_string()),
+            ConversionError::Wallet(e) => SdkError::SparkError(e.to_string()),
+        }
+    }
+}
+
 impl From<persist::StorageError> for SdkError {
     fn from(e: persist::StorageError) -> Self {
         SdkError::StorageError(e.to_string())
