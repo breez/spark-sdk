@@ -699,6 +699,8 @@ pub enum SendPaymentMethod {
     BitcoinAddress {
         address: BitcoinAddressDetails,
         fee_quote: SendOnchainFeeQuote,
+        fee_sats: u64,
+        selected_speed: OnchainConfirmationSpeed,
     },
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
@@ -943,9 +945,6 @@ pub struct PrepareSendPaymentResponse {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SendPaymentOptions {
-    BitcoinAddress {
-        confirmation_speed: OnchainConfirmationSpeed,
-    },
     Bolt11Invoice {
         prefer_spark: bool,
 

@@ -377,7 +377,7 @@ async fn test_03_bitcoin_idempotency_key(
             pay_amount: Some(PayAmount::Bitcoin {
                 amount_sats: amount,
             }),
-            onchain_speed: None,
+            onchain_speed: Some(OnchainConfirmationSpeed::Fast),
             conversion_options: None,
         })
         .await?;
@@ -389,9 +389,7 @@ async fn test_03_bitcoin_idempotency_key(
         .sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare.clone(),
-            options: Some(SendPaymentOptions::BitcoinAddress {
-                confirmation_speed: OnchainConfirmationSpeed::Fast,
-            }),
+            options: None,
             idempotency_key: Some(idempotency_key.clone()),
         })
         .await?;
@@ -407,9 +405,7 @@ async fn test_03_bitcoin_idempotency_key(
         .sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare.clone(),
-            options: Some(SendPaymentOptions::BitcoinAddress {
-                confirmation_speed: OnchainConfirmationSpeed::Fast,
-            }),
+            options: None,
             idempotency_key: Some(idempotency_key.clone()),
         })
         .await?;
@@ -433,9 +429,7 @@ async fn test_03_bitcoin_idempotency_key(
         .sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
-            options: Some(SendPaymentOptions::BitcoinAddress {
-                confirmation_speed: OnchainConfirmationSpeed::Fast,
-            }),
+            options: None,
             idempotency_key: Some(idempotency_key),
         })
         .await?;

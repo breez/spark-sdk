@@ -1923,28 +1923,57 @@ impl BreezSdk {
                 })
             }
             InputType::BitcoinAddress(withdrawal_address) => {
-                let amount = request_amount
-                    .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
+                let selected_speed = request.onchain_speed.clone().ok_or(
+                    SdkError::InvalidInput("onchain_speed is required for Bitcoin address".into()),
+                )?;
+
+                let is_drain = matches!(request.pay_amount, Some(PayAmount::Drain));
+
+                // For drain, pass None to get drain-specific fees; otherwise pass the amount
+                let amount_for_quote = (!is_drain)
+                    .then(|| {
+                        request_amount
+                            .ok_or(SdkError::InvalidInput("Amount is required".to_string()))
+                            .and_then(|a| a.try_into().map_err(Into::into))
+                    })
+                    .transpose()?;
+
                 let fee_quote: SendOnchainFeeQuote = self
                     .spark_wallet
-                    .fetch_coop_exit_fee_quote(
-                        &withdrawal_address.address,
-                        Some(amount.try_into()?),
-                    )
+                    .fetch_coop_exit_fee_quote(&withdrawal_address.address, amount_for_quote)
                     .await?
                     .into();
+
+                let fee_sats = match selected_speed {
+                    OnchainConfirmationSpeed::Fast => fee_quote.speed_fast.total_fee_sat(),
+                    OnchainConfirmationSpeed::Medium => fee_quote.speed_medium.total_fee_sat(),
+                    OnchainConfirmationSpeed::Slow => fee_quote.speed_slow.total_fee_sat(),
+                };
+
+                let amount = if is_drain {
+                    let balance_sats = self.spark_wallet.get_balance().await?;
+                    u128::from(balance_sats.saturating_sub(fee_sats))
+                } else {
+                    amount_for_quote
+                        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?
+                        .into()
+                };
+
                 let conversion_estimate = self
                     .token_converter
                     .validate(
                         request.conversion_options.as_ref(),
                         token_identifier.as_ref(),
-                        amount.saturating_add(u128::from(fee_quote.speed_fast.total_fee_sat())),
+                        amount.saturating_add(u128::from(fee_sats)),
                     )
                     .await?;
+
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::BitcoinAddress {
                         address: withdrawal_address.clone(),
                         fee_quote,
+                        fee_sats,
+                        selected_speed,
                     },
                     amount,
                     token_identifier,
@@ -2510,14 +2539,16 @@ impl BreezSdk {
                         .await?;
                     (res, conversion_purpose)
                 }
-                SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
+                SendPaymentMethod::BitcoinAddress {
+                    address, fee_sats, ..
+                } => {
                     let conversion_purpose = ConversionPurpose::OngoingPayment {
                         payment_request: address.address.clone(),
                     };
                     let res = self
                         .convert_token_for_bitcoin_address(
                             conversion_options,
-                            fee_quote,
+                            *fee_sats,
                             request,
                             &conversion_purpose,
                         )
@@ -2618,8 +2649,14 @@ impl BreezSdk {
                 ))
                 .await
             }
-            SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
-                self.send_bitcoin_address(address, fee_quote, request).await
+            SendPaymentMethod::BitcoinAddress {
+                address,
+                fee_quote,
+                selected_speed,
+                ..
+            } => {
+                self.send_bitcoin_address(address, fee_quote, selected_speed, request)
+                    .await
             }
         }
     }
@@ -2863,17 +2900,10 @@ impl BreezSdk {
         &self,
         address: &BitcoinAddressDetails,
         fee_quote: &SendOnchainFeeQuote,
+        selected_speed: &OnchainConfirmationSpeed,
         request: &SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
-        let exit_speed = match &request.options {
-            Some(SendPaymentOptions::BitcoinAddress { confirmation_speed }) => {
-                confirmation_speed.clone().into()
-            }
-            None => ExitSpeed::Fast,
-            _ => {
-                return Err(SdkError::InvalidInput("Invalid options".to_string()));
-            }
-        };
+        let exit_speed: ExitSpeed = selected_speed.clone().into();
         let transfer_id = request
             .idempotency_key
             .as_ref()
@@ -3141,22 +3171,10 @@ impl BreezSdk {
     async fn convert_token_for_bitcoin_address(
         &self,
         conversion_options: &ConversionOptions,
-        fee_quote: &SendOnchainFeeQuote,
+        fee_sats: u64,
         request: &SendPaymentRequest,
         conversion_purpose: &ConversionPurpose,
     ) -> Result<TokenConversionResponse, SdkError> {
-        // Determine the fee to be used based on confirmation speed
-        let fee_sats = if let Some(SendPaymentOptions::BitcoinAddress { confirmation_speed }) =
-            &request.options
-        {
-            match confirmation_speed {
-                OnchainConfirmationSpeed::Slow => fee_quote.speed_slow.total_fee_sat(),
-                OnchainConfirmationSpeed::Medium => fee_quote.speed_medium.total_fee_sat(),
-                OnchainConfirmationSpeed::Fast => fee_quote.speed_fast.total_fee_sat(),
-            }
-        } else {
-            fee_quote.speed_fast.total_fee_sat()
-        };
         // The absolute minimum amount out is the amount plus fee
         let min_amount_out = request
             .prepare_response

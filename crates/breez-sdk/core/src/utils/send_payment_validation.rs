@@ -264,6 +264,14 @@ fn validate_bitcoin_address_request(request: &PrepareSendPaymentRequest) -> Resu
     if request.pay_amount.is_none() {
         return Err(SdkError::InvalidInput("Amount is required".to_string()));
     }
+
+    // onchain_speed is required for Bitcoin addresses
+    if request.onchain_speed.is_none() {
+        return Err(SdkError::InvalidInput(
+            "onchain_speed is required for Bitcoin address sends".to_string(),
+        ));
+    }
+
     // Validate conversion from Bitcoin is not supported for Bitcoin addresses
     if matches!(
         &request.conversion_options,
@@ -302,6 +310,18 @@ mod tests {
         }
     }
 
+    fn create_bitcoin_amount_request_with_speed(
+        amount_sats: u64,
+        speed: OnchainConfirmationSpeed,
+    ) -> PrepareSendPaymentRequest {
+        PrepareSendPaymentRequest {
+            payment_request: "test_request".to_string(),
+            pay_amount: Some(PayAmount::Bitcoin { amount_sats }),
+            onchain_speed: Some(speed),
+            conversion_options: None,
+        }
+    }
+
     fn create_bitcoin_amount_request(amount_sats: u64) -> PrepareSendPaymentRequest {
         PrepareSendPaymentRequest {
             payment_request: "test_request".to_string(),
@@ -330,7 +350,7 @@ mod tests {
         PrepareSendPaymentRequest {
             payment_request: "test_request".to_string(),
             pay_amount: Some(PayAmount::Drain),
-            onchain_speed: None,
+            onchain_speed: Some(OnchainConfirmationSpeed::Medium),
             conversion_options: None,
         }
     }
@@ -906,14 +926,16 @@ mod tests {
     // BitcoinAddress tests
     #[test_all]
     fn test_validate_bitcoin_address_with_amount() {
-        let request = create_bitcoin_amount_request(1000);
+        let request =
+            create_bitcoin_amount_request_with_speed(1000, OnchainConfirmationSpeed::Medium);
         let result = validate_bitcoin_address_request(&request);
         assert!(result.is_ok(), "Should succeed when amount is provided");
     }
 
     #[test_all]
     fn test_validate_bitcoin_address_without_amount() {
-        let request = create_test_request(); // No amount
+        let mut request = create_test_request(); // No amount
+        request.onchain_speed = Some(OnchainConfirmationSpeed::Medium);
         let result = validate_bitcoin_address_request(&request);
         assert!(result.is_err(), "Should fail when amount is not provided");
         if let Err(SdkError::InvalidInput(msg)) = result {
@@ -956,7 +978,8 @@ mod tests {
 
     #[test_all]
     fn test_validate_bitcoin_address_with_valid_conversion() {
-        let mut request = create_bitcoin_amount_request(1000);
+        let mut request =
+            create_bitcoin_amount_request_with_speed(1000, OnchainConfirmationSpeed::Medium);
         request.conversion_options = Some(ConversionOptions {
             conversion_type: ConversionType::ToBitcoin {
                 from_token_identifier: "token123".to_string(),
@@ -973,7 +996,8 @@ mod tests {
 
     #[test_all]
     fn test_validate_bitcoin_address_with_invalid_conversion() {
-        let mut request = create_bitcoin_amount_request(1000);
+        let mut request =
+            create_bitcoin_amount_request_with_speed(1000, OnchainConfirmationSpeed::Medium);
         request.conversion_options = Some(ConversionOptions {
             conversion_type: ConversionType::FromBitcoin,
             max_slippage_bps: None,
@@ -984,6 +1008,24 @@ mod tests {
             result.is_err(),
             "Should fail when conversion from Bitcoin is provided"
         );
+    }
+
+    #[test_all]
+    fn test_validate_bitcoin_address_without_onchain_speed() {
+        let request = create_bitcoin_amount_request(1000);
+        let result = validate_bitcoin_address_request(&request);
+        assert!(
+            result.is_err(),
+            "Should fail when onchain_speed is not provided"
+        );
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("onchain_speed is required"),
+                "Error message should mention onchain_speed is required"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
     }
 
     // Integration tests using validate_send_payment_request
@@ -1010,6 +1052,7 @@ mod tests {
             source: PaymentRequestSource::default(),
         };
 
+        // Note: Spark addresses don't use onchain_speed
         let request = create_bitcoin_amount_request(1000);
 
         let input_type = InputType::SparkAddress(address_details);
@@ -1056,7 +1099,8 @@ mod tests {
             source: PaymentRequestSource::default(),
         };
 
-        let request = create_bitcoin_amount_request(1000);
+        let request =
+            create_bitcoin_amount_request_with_speed(1000, OnchainConfirmationSpeed::Medium);
 
         let input_type = InputType::BitcoinAddress(address_details);
         let identity_key = "test_identity".to_string();
@@ -1202,8 +1246,8 @@ mod tests {
             source: PaymentRequestSource::default(),
         };
 
-        let mut request = create_bitcoin_amount_request(1000);
-        request.onchain_speed = Some(OnchainConfirmationSpeed::Fast);
+        let request =
+            create_bitcoin_amount_request_with_speed(1000, OnchainConfirmationSpeed::Fast);
 
         let input_type = InputType::BitcoinAddress(address_details);
         let identity_key = "test_identity".to_string();
@@ -1224,8 +1268,8 @@ mod tests {
             source: PaymentRequestSource::default(),
         };
 
-        let mut request = create_bitcoin_amount_request(1000);
-        request.onchain_speed = Some(OnchainConfirmationSpeed::Fast);
+        let request =
+            create_bitcoin_amount_request_with_speed(1000, OnchainConfirmationSpeed::Fast);
 
         let input_type = InputType::SparkAddress(address_details);
         let identity_key = "test_identity".to_string();

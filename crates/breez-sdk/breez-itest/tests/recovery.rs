@@ -525,7 +525,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             pay_amount: Some(PayAmount::Bitcoin {
                 amount_sats: 10_000,
             }),
-            onchain_speed: None,
+            onchain_speed: Some(OnchainConfirmationSpeed::Medium),
             conversion_options: None,
         })
         .await?;
@@ -534,9 +534,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
         .sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
-            options: Some(SendPaymentOptions::BitcoinAddress {
-                confirmation_speed: OnchainConfirmationSpeed::Medium,
-            }),
+            options: None,
             idempotency_key: None,
         })
         .await?;

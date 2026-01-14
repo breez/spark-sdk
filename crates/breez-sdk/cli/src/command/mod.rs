@@ -3,14 +3,15 @@ mod issuer;
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FetchConversionLimitsRequest,
-    GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest, InputType,
-    LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest,
-    LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PayAmount, PaymentDetailsFilter,
-    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
-    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
+    ClaimHtlcPaymentRequest, ConversionOptions, ConversionType,
+    EstimateOnchainSendFeeQuotesRequest, Fee, FetchConversionLimitsRequest, GetInfoRequest,
+    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
+    MaxFee, OnchainConfirmationSpeed, PayAmount, PaymentDetailsFilter, PaymentStatus, PaymentType,
+    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
+    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
+    UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -496,6 +497,34 @@ pub(crate) async fn execute_command(
             convert_from_token_identifier,
             convert_max_slippage_bps: max_slippage_bps,
         } => {
+            let speed =
+                if let InputType::BitcoinAddress(address) = sdk.parse(&payment_request).await? {
+                    let fee_quote = sdk
+                        .estimate_onchain_send_fee_quotes(EstimateOnchainSendFeeQuotesRequest {
+                            address: address.address,
+                            amount_sats: amount.map(TryInto::try_into).transpose()?,
+                        })
+                        .await?
+                        .fee_quote;
+
+                    println!("Please choose payment fee:");
+                    println!("1. Fast: {}", fee_quote.speed_fast.total_fee_sat());
+                    println!("2. Medium: {}", fee_quote.speed_medium.total_fee_sat());
+                    println!("3. Slow: {}", fee_quote.speed_slow.total_fee_sat());
+
+                    let line = rl.readline_with_initial("", ("1", ""))?.to_lowercase();
+                    let confirmation_speed = match line.as_str() {
+                        "1" => OnchainConfirmationSpeed::Fast,
+                        "2" => OnchainConfirmationSpeed::Medium,
+                        "3" => OnchainConfirmationSpeed::Slow,
+                        _ => return Err(anyhow::anyhow!("Invalid confirmation speed")),
+                    };
+
+                    Some(confirmation_speed)
+                } else {
+                    None
+                };
+
             let conversion_options = match (convert_from_bitcoin, convert_from_token_identifier) {
                 (Some(true), _) => Some(ConversionOptions {
                     conversion_type: ConversionType::FromBitcoin,
@@ -528,7 +557,7 @@ pub(crate) async fn execute_command(
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request,
                     pay_amount,
-                    onchain_speed: None,
+                    onchain_speed: speed,
                     conversion_options,
                 })
                 .await;
@@ -773,23 +802,6 @@ fn read_payment_options(
     rl: &mut Editor<CliHelper, DefaultHistory>,
 ) -> Result<Option<SendPaymentOptions>, anyhow::Error> {
     match method {
-        SendPaymentMethod::BitcoinAddress { fee_quote, .. } => {
-            println!("Please choose payment fee:");
-            println!("1. Fast: {}", fee_quote.speed_fast.total_fee_sat());
-            println!("2. Medium: {}", fee_quote.speed_medium.total_fee_sat());
-            println!("3. Slow: {}", fee_quote.speed_slow.total_fee_sat());
-
-            let line = rl.readline_with_initial("", ("1", ""))?.to_lowercase();
-            let confirmation_speed = match line.as_str() {
-                "1" => OnchainConfirmationSpeed::Fast,
-                "2" => OnchainConfirmationSpeed::Medium,
-                "3" => OnchainConfirmationSpeed::Slow,
-                _ => return Err(anyhow::anyhow!("Invalid confirmation speed")),
-            };
-            Ok(Some(SendPaymentOptions::BitcoinAddress {
-                confirmation_speed,
-            }))
-        }
         SendPaymentMethod::Bolt11Invoice {
             spark_transfer_fee_sats,
             lightning_fee_sats,
@@ -852,7 +864,9 @@ fn read_payment_options(
                 }),
             }))
         }
-        SendPaymentMethod::SparkInvoice { .. } => Ok(None),
+        SendPaymentMethod::SparkInvoice { .. } | SendPaymentMethod::BitcoinAddress { .. } => {
+            Ok(None)
+        }
     }
 }
 

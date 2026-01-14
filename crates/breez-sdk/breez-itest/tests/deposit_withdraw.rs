@@ -82,7 +82,7 @@ async fn test_onchain_withdraw_to_static_address(
             pay_amount: Some(PayAmount::Bitcoin {
                 amount_sats: amount,
             }),
-            onchain_speed: None,
+            onchain_speed: Some(OnchainConfirmationSpeed::Medium),
             conversion_options: None,
         })
         .await?;
@@ -91,9 +91,7 @@ async fn test_onchain_withdraw_to_static_address(
         .sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
-            options: Some(SendPaymentOptions::BitcoinAddress {
-                confirmation_speed: OnchainConfirmationSpeed::Medium,
-            }),
+            options: None,
             idempotency_key: None,
         })
         .await?;
@@ -300,9 +298,7 @@ async fn test_drain_to_bitcoin_address(
         .sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
-            options: Some(SendPaymentOptions::BitcoinAddress {
-                confirmation_speed: OnchainConfirmationSpeed::Fast,
-            }),
+            options: None,
             idempotency_key: None,
         })
         .await?;

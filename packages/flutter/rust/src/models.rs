@@ -409,6 +409,8 @@ pub enum _SendPaymentMethod {
     BitcoinAddress {
         address: BitcoinAddressDetails,
         fee_quote: SendOnchainFeeQuote,
+        fee_sats: u64,
+        selected_speed: OnchainConfirmationSpeed,
     },
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
@@ -429,9 +431,6 @@ pub enum _SendPaymentMethod {
 
 #[frb(mirror(SendPaymentOptions))]
 pub enum _SendPaymentOptions {
-    BitcoinAddress {
-        confirmation_speed: OnchainConfirmationSpeed,
-    },
     Bolt11Invoice {
         prefer_spark: bool,
         completion_timeout_secs: Option<u32>,

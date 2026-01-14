@@ -721,6 +721,8 @@ pub enum SendPaymentMethod {
     BitcoinAddress {
         address: BitcoinAddressDetails,
         fee_quote: SendOnchainFeeQuote,
+        fee_sats: u64,
+        selected_speed: OnchainConfirmationSpeed,
     },
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
@@ -837,9 +839,6 @@ pub enum OnchainConfirmationSpeed {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentOptions)]
 pub enum SendPaymentOptions {
-    BitcoinAddress {
-        confirmation_speed: OnchainConfirmationSpeed,
-    },
     Bolt11Invoice {
         prefer_spark: bool,
         completion_timeout_secs: Option<u32>,
