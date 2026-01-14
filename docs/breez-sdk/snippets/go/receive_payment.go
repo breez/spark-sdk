@@ -12,7 +12,7 @@ func ReceiveLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Rec
 	description := "<invoice description>"
 	// Optionally set the invoice amount you wish the payer to send
 	optionalAmountSats := uint64(5_000)
-	// Optionally set the expiry time in seconds
+	// Optionally set the expiry duration in seconds
 	optionalExpirySecs := uint32(3600)
 
 	request := breez_sdk_spark.ReceivePaymentRequest{
@@ -81,6 +81,7 @@ func ReceiveSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Receiv
 	// ANCHOR: receive-payment-spark-invoice
 	optionalDescription := "<invoice description>"
 	optionalAmountSats := new(big.Int).SetInt64(5_000)
+	// Optionally set the expiry UNIX timestamp in seconds
 	optionalExpiryTimeSeconds := uint64(1716691200)
 	optionalSenderPublicKey := "<sender public key>"
 

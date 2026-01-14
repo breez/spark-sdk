@@ -5,7 +5,7 @@ const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
   const description = '<invoice description>'
   // Optionally set the invoice amount you wish the payer to send
   const optionalAmountSats = 5_000
-  // Optionally set the expiry time in seconds
+  // Optionally set the expiry duration in seconds
   const optionalExpirySecs = 3600
 
   const response = await sdk.receivePayment({
@@ -54,6 +54,7 @@ const exampleReceiveSparkInvoice = async (sdk: BreezSdk) => {
   // ANCHOR: receive-payment-spark-invoice
   const optionalDescription = '<invoice description>'
   const optionalAmountSats = '5000'
+  // Optionally set the expiry UNIX timestamp in seconds
   const optionalExpiryTimeSeconds = 1716691200
   const optionalSenderPublicKey = '<sender public key>'
 

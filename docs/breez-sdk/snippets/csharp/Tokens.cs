@@ -55,6 +55,7 @@ namespace BreezSdkSnippets
             var tokenIdentifier = "<token identifier>";
             var optionalDescription = "<invoice description>";
             var optionalAmount = new BigInteger(5000);
+            // Optionally set the expiry UNIX timestamp in seconds
             var optionalExpiryTimeSeconds = 1716691200UL;
             var optionalSenderPublicKey = "<sender public key>";
 
