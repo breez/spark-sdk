@@ -890,7 +890,9 @@ async fn test_08_lnurl_drain_with_fee_overpayment(
     ) -> Result<u64> {
         let prepare = sdk
             .prepare_lnurl_pay(PrepareLnurlPayRequest {
-                pay_amount: PayAmount::Bitcoin { amount_sats: amount },
+                pay_amount: PayAmount::Bitcoin {
+                    amount_sats: amount,
+                },
                 pay_request: pay_request.clone(),
                 comment: None,
                 validate_success_action_url: None,

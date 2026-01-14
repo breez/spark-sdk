@@ -1529,6 +1529,16 @@ impl BreezSdk {
 
             // Overpay by the difference to fully drain the balance
             let overpayment = drain_fee.saturating_sub(current_fee);
+
+            // Protect against excessive fee overpayment.
+            // Allow overpayment up to 100% of actual fee, with a minimum of 1 sat.
+            let max_allowed_overpayment = current_fee.max(1);
+            if overpayment > max_allowed_overpayment {
+                return Err(SdkError::Generic(format!(
+                    "Fee overpayment ({overpayment} sats) exceeds allowed maximum ({max_allowed_overpayment} sats)"
+                )));
+            }
+
             if overpayment > 0 {
                 tracing::info!(
                     overpayment_sats = overpayment,
