@@ -61,6 +61,7 @@ class Tokens {
             val optionalAmount = BigInteger.fromLong(5_000L)
             // Android (BigInteger from java.math)
             // val optionalAmount = BigInteger.valueOf(5_000L)
+            // Optionally set the expiry UNIX timestamp in seconds
             val optionalExpiryTimeSeconds = 1716691200.toULong()
             val optionalSenderPublicKey = "<sender public key>"
 

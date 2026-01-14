@@ -43,6 +43,7 @@ const exampleReceiveTokenPaymentSparkInvoice = async (sdk: BreezSdk) => {
   const tokenIdentifier = '<token identifier>'
   const optionalDescription = '<invoice description>'
   const optionalAmount = '5000'
+  // Optionally set the expiry UNIX timestamp in seconds
   const optionalExpiryTimeSeconds = 1716691200
   const optionalSenderPublicKey = '<sender public key>'
 

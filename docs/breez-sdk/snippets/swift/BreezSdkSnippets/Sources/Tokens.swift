@@ -46,6 +46,7 @@ func receiveTokenPaymentSparkInvoice(sdk: BreezSdk) async throws -> ReceivePayme
     let tokenIdentifier = "<token identifier>"
     let optionalDescription = "<invoice description>"
     let optionalAmount = BInt(5_000)
+    // Optionally set the expiry UNIX timestamp in seconds
     let optionalExpiryTimeSeconds: UInt64 = 1_716_691_200
     let optionalSenderPublicKey = "<sender public key>"
 

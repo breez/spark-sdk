@@ -62,6 +62,7 @@ func ReceiveTokenPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_
 	tokenIdentifier := "<token identifier>"
 	optionalDescription := "<invoice description>"
 	optionalAmount := new(big.Int).SetInt64(5_000)
+	// Optionally set the expiry UNIX timestamp in seconds
 	optionalExpiryTimeSeconds := uint64(1716691200)
 	optionalSenderPublicKey := "<sender public key>"
 

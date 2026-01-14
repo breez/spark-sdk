@@ -54,6 +54,7 @@ async fn receive_token_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     let token_identifier = Some("<token identifier>".to_string());
     let optional_description = Some("<invoice description>".to_string());
     let optional_amount = Some(5_000);
+    // Optionally set the expiry UNIX timestamp in seconds
     let optional_expiry_time_seconds = Some(1716691200);
     let optional_sender_public_key = Some("<sender public key>".to_string());
 
