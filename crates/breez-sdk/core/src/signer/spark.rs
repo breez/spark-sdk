@@ -29,9 +29,14 @@ impl Signer for SparkSigner {
         &self,
         message: &[u8],
     ) -> Result<secp256k1::ecdsa::Signature, SignerError> {
+        use bitcoin::hashes::{Hash, sha256};
+        use bitcoin::secp256k1::Message;
+
         let identity_path = DerivationPath::master();
+        let hash = sha256::Hash::hash(message);
+        let msg = Message::from_digest(hash.to_byte_array());
         self.signer
-            .sign_ecdsa(message, &identity_path)
+            .sign_ecdsa(msg, &identity_path)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }

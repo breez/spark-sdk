@@ -270,6 +270,17 @@ pub struct _LnurlWithdrawResponse {
     pub payment: Option<Payment>,
 }
 
+#[frb(mirror(LnurlErrorDetails))]
+pub struct _LnurlErrorDetails {
+    pub reason: String,
+}
+
+#[frb(mirror(LnurlCallbackStatus))]
+pub enum _LnurlCallbackStatus {
+    Ok,
+    ErrorStatus { error_details: LnurlErrorDetails },
+}
+
 #[frb(mirror(OnchainConfirmationSpeed))]
 pub enum _OnchainConfirmationSpeed {
     Fast,

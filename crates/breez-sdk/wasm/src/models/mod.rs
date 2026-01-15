@@ -410,6 +410,17 @@ pub struct LnurlWithdrawRequestDetails {
     pub max_withdrawable: u64,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlErrorDetails)]
+pub struct LnurlErrorDetails {
+    pub reason: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlCallbackStatus)]
+pub enum LnurlCallbackStatus {
+    Ok,
+    ErrorStatus { error_details: LnurlErrorDetails },
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentType)]
 pub enum PaymentType {
     Send,

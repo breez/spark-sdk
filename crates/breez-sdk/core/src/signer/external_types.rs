@@ -3,6 +3,7 @@
 //! These types are designed to be simpler and FFI-safe, using basic types like
 //! Vec<u8> and String instead of complex Rust types.
 use bitcoin::bip32::DerivationPath;
+use bitcoin::hashes::{Hash, Hmac, sha256};
 use bitcoin::secp256k1;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -66,6 +67,47 @@ impl SchnorrSignatureBytes {
     pub fn to_signature(&self) -> Result<secp256k1::schnorr::Signature, SdkError> {
         secp256k1::schnorr::Signature::from_slice(&self.bytes)
             .map_err(|e| SdkError::Generic(format!("Invalid Schnorr signature bytes: {e}")))
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct HashedMessageBytes {
+    pub bytes: Vec<u8>,
+}
+
+impl HashedMessageBytes {
+    pub fn from_hmac(hmac: &Hmac<sha256::Hash>) -> Self {
+        Self {
+            bytes: hmac.to_byte_array().to_vec(),
+        }
+    }
+
+    pub fn to_hmac(&self) -> Result<Hmac<sha256::Hash>, SdkError> {
+        Hmac::<sha256::Hash>::from_slice(&self.bytes)
+            .map_err(|e| SdkError::Generic(format!("Invalid HMAC bytes: {e}")))
+    }
+}
+
+/// FFI-safe representation of a 32-byte message digest for ECDSA signing
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct MessageBytes {
+    pub bytes: Vec<u8>,
+}
+
+impl MessageBytes {
+    /// Create `MessageBytes` from a 32-byte digest
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    /// Convert to 32-byte array for `secp256k1::Message`
+    pub fn to_digest(&self) -> Result<[u8; 32], SdkError> {
+        self.bytes
+            .clone()
+            .try_into()
+            .map_err(|_| SdkError::Generic("Message digest must be 32 bytes".to_string()))
     }
 }
 

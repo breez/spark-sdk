@@ -5,8 +5,9 @@ use crate::signer::external_types::{
     EcdsaSignatureBytes, ExternalAggregateFrostRequest, ExternalEncryptedPrivateKey,
     ExternalFrostCommitments, ExternalFrostSignature, ExternalFrostSignatureShare,
     ExternalPrivateKeySource, ExternalSecretToSplit, ExternalSignFrostRequest, ExternalTreeNodeId,
-    ExternalVerifiableSecretShare, PrivateKeyBytes, PublicKeyBytes, RecoverableEcdsaSignatureBytes,
-    SchnorrSignatureBytes, string_to_derivation_path,
+    ExternalVerifiableSecretShare, HashedMessageBytes, MessageBytes, PrivateKeyBytes,
+    PublicKeyBytes, RecoverableEcdsaSignatureBytes, SchnorrSignatureBytes,
+    string_to_derivation_path,
 };
 use crate::signer::{BreezSigner, ExternalSigner, breez::BreezSignerImpl};
 use crate::{Network, SdkError, Seed, default_config, models::KeySetType};
@@ -77,14 +78,20 @@ impl ExternalSigner for DefaultExternalSigner {
 
     async fn sign_ecdsa(
         &self,
-        message: Vec<u8>,
+        message: MessageBytes,
         path: String,
     ) -> Result<EcdsaSignatureBytes, SignerError> {
+        use bitcoin::secp256k1::Message;
+
         let derivation_path =
             string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
+        let digest = message
+            .to_digest()
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        let msg = Message::from_digest(digest);
         let sig = self
             .inner
-            .sign_ecdsa(&message, &derivation_path)
+            .sign_ecdsa(msg, &derivation_path)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(EcdsaSignatureBytes::from_signature(&sig))
@@ -92,16 +99,33 @@ impl ExternalSigner for DefaultExternalSigner {
 
     async fn sign_ecdsa_recoverable(
         &self,
-        message: Vec<u8>,
+        message: MessageBytes,
         path: String,
     ) -> Result<RecoverableEcdsaSignatureBytes, SignerError> {
+        use bitcoin::secp256k1::Message;
+
         let derivation_path =
             string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
-        let bytes = self
+        let digest = message
+            .to_digest()
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        let msg = Message::from_digest(digest);
+        let sig = self
             .inner
-            .sign_ecdsa_recoverable(&message, &derivation_path)
+            .sign_ecdsa_recoverable(msg, &derivation_path)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
+
+        // Serialize the recoverable signature: recovery_id (31 + id) + 64-byte signature
+        let (recovery_id, sig_bytes) = sig.serialize_compact();
+        let mut bytes =
+            vec![
+                31u8.saturating_add(
+                    u8::try_from(recovery_id.to_i32())
+                        .map_err(|e| SignerError::Generic(e.to_string()))?,
+                ),
+            ];
+        bytes.extend_from_slice(&sig_bytes);
         Ok(RecoverableEcdsaSignatureBytes::new(bytes))
     }
 
@@ -136,6 +160,21 @@ impl ExternalSigner for DefaultExternalSigner {
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(SchnorrSignatureBytes::from_signature(&sig))
+    }
+
+    async fn hmac_sha256(
+        &self,
+        message: Vec<u8>,
+        path: String,
+    ) -> Result<HashedMessageBytes, SignerError> {
+        let derivation_path =
+            string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
+        let sig = self
+            .inner
+            .hmac_sha256(&derivation_path, &message)
+            .await
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        Ok(HashedMessageBytes::from_hmac(&sig))
     }
 
     async fn generate_frost_signing_commitments(
@@ -397,17 +436,21 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_sign_ecdsa() {
+        use bitcoin::secp256k1::Message;
+
         let (external, internal) = create_test_signer();
 
         let message = b"test message";
         let path = DerivationPath::from_str("m/0'/0'/0'").unwrap();
         let path_str = derivation_path_to_string(&path);
 
-        let external_sig = external
-            .sign_ecdsa(message.to_vec(), path_str)
-            .await
-            .unwrap();
-        let internal_sig = internal.sign_ecdsa(message, &path).await.unwrap();
+        // Hash the message first (as required by the new API)
+        let hash = bitcoin::hashes::sha256::Hash::hash(message);
+        let msg_bytes = MessageBytes::new(hash.to_byte_array().to_vec());
+        let msg = Message::from_digest(hash.to_byte_array());
+
+        let external_sig = external.sign_ecdsa(msg_bytes, path_str).await.unwrap();
+        let internal_sig = internal.sign_ecdsa(msg, &path).await.unwrap();
 
         assert_eq!(
             external_sig.to_signature().unwrap(),
@@ -418,23 +461,35 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_sign_ecdsa_recoverable() {
+        use bitcoin::secp256k1::Message;
+
         let (external, internal) = create_test_signer();
 
         let message = b"test message";
         let path = DerivationPath::from_str("m/0'/0'/0'").unwrap();
         let path_str = derivation_path_to_string(&path);
 
+        // Double-hash the message (as it was done internally before)
+        let hash = bitcoin::hashes::sha256::Hash::hash(
+            bitcoin::hashes::sha256::Hash::hash(message).as_ref(),
+        );
+        let msg_bytes = MessageBytes::new(hash.to_byte_array().to_vec());
+        let msg = Message::from_digest(hash.to_byte_array());
+
         let external_sig = external
-            .sign_ecdsa_recoverable(message.to_vec(), path_str)
+            .sign_ecdsa_recoverable(msg_bytes, path_str)
             .await
             .unwrap();
-        let internal_sig = internal
-            .sign_ecdsa_recoverable(message, &path)
-            .await
-            .unwrap();
+        let internal_sig = internal.sign_ecdsa_recoverable(msg, &path).await.unwrap();
+
+        // Serialize internal signature for comparison
+        let (recovery_id, sig_bytes) = internal_sig.serialize_compact();
+        let mut internal_bytes =
+            vec![31u8.saturating_add(u8::try_from(recovery_id.to_i32()).unwrap())];
+        internal_bytes.extend_from_slice(&sig_bytes);
 
         assert_eq!(
-            external_sig.bytes, internal_sig,
+            external_sig.bytes, internal_bytes,
             "Recoverable ECDSA signatures should match"
         );
     }
