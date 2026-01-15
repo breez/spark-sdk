@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # Binding files that must be updated together for API changes
-# Source of truth: CLAUDE.md → "Updating SDK Interfaces"
+# Source of truth: `.claude/docs/sdk-interfaces.md`
 BINDING_FILES=(
   "crates/breez-sdk/core/src/models.rs"
   "crates/breez-sdk/wasm/src/models.rs"
@@ -66,7 +66,7 @@ if [[ ${#UNMODIFIED_BINDINGS[@]} -gt 0 ]]; then
   done
   echo ""
   echo "If this PR changes the SDK's public interface, ensure all binding files are updated."
-  echo "See CLAUDE.md → 'Updating SDK Interfaces' for details."
+  echo "See `.claude/docs/sdk-interfaces.md` for details."
   exit 1
 fi
 
