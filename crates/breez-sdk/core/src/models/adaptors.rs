@@ -218,7 +218,7 @@ impl TryFrom<WalletTransfer> for Payment {
             },
             method: PaymentMethod::from_transfer(&transfer),
             details,
-            related_payments: Vec::new(),
+            conversion_details: None,
         })
     }
 }
@@ -265,7 +265,7 @@ impl Payment {
             timestamp: payment.created_at.cast_unsigned(),
             method: PaymentMethod::Lightning,
             details: Some(details),
-            related_payments: Vec::new(),
+            conversion_details: None,
         })
     }
 }

@@ -222,7 +222,6 @@ class SqliteStorage {
       }
 
       // Exclude child payments (those with a parent_payment_id)
-      // Child payments are accessed via the parent's relatedPayments field
       whereClauses.push("pm.parent_payment_id IS NULL");
 
       // Build the WHERE clause
@@ -572,7 +571,7 @@ class SqliteStorage {
             ,       pm.parent_payment_id
             ,       pm.lnurl_pay_info
             ,       pm.lnurl_withdraw_info
-            ,       pm.token_conversion_info
+            ,       pm.conversion_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -601,7 +600,7 @@ class SqliteStorage {
         if (!result[parentId]) {
           result[parentId] = [];
         }
-        result[parentId].push(this._rowToRelatedPayment(row));
+        result[parentId].push(this._rowToPayment(row));
       }
 
       return Promise.resolve(result);
@@ -874,18 +873,7 @@ class SqliteStorage {
       timestamp: row.timestamp,
       method,
       details,
-      relatedPayments: [],
     };
-  }
-
-  /**
-   * Converts a payment row to a RelatedPayment object (without relatedPayments field)
-   */
-  _rowToRelatedPayment(row) {
-    const payment = this._rowToPayment(row);
-    // Remove the relatedPayments field since RelatedPayment doesn't have it
-    const { relatedPayments, ...relatedPayment } = payment;
-    return relatedPayment;
   }
 
   // ===== Sync Operations =====

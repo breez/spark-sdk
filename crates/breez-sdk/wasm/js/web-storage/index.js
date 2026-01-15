@@ -526,7 +526,6 @@ class IndexedDBStorage {
         const payment = cursor.value;
 
         // Skip related payments (those with a parentPaymentId)
-        // Related payments are accessed via the parent's relatedPayments field
         if (relatedPaymentIds.has(payment.id)) {
           cursor.continue();
           return;
@@ -856,10 +855,10 @@ class IndexedDBStorage {
                 // Fetch lnurl receive metadata if applicable
                 this._fetchLnurlReceiveMetadata(paymentWithMetadata, lnurlReceiveMetadataStore)
                   .then((mergedPayment) => {
-                    result[parentId].push(this._toRelatedPayment(mergedPayment));
+                    result[parentId].push(mergedPayment);
                   })
                   .catch(() => {
-                    result[parentId].push(this._toRelatedPayment(paymentWithMetadata));
+                    result[parentId].push(paymentWithMetadata);
                   })
                   .finally(() => {
                     processed++;
@@ -1942,16 +1941,7 @@ class IndexedDBStorage {
       timestamp: payment.timestamp,
       method,
       details,
-      relatedPayments: [],
     };
-  }
-
-  /**
-   * Converts a payment to a RelatedPayment object (without relatedPayments field)
-   */
-  _toRelatedPayment(payment) {
-    const { relatedPayments, ...relatedPayment } = payment;
-    return relatedPayment;
   }
 
   _fetchLnurlReceiveMetadata(payment, lnurlReceiveMetadataStore) {

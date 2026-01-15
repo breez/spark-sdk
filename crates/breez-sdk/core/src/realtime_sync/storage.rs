@@ -276,7 +276,7 @@ impl Storage for SyncedStorage {
     async fn get_payments_by_parent_ids(
         &self,
         parent_payment_ids: Vec<String>,
-    ) -> Result<HashMap<String, Vec<crate::RelatedPayment>>, StorageError> {
+    ) -> Result<HashMap<String, Vec<Payment>>, StorageError> {
         self.inner
             .get_payments_by_parent_ids(parent_payment_ids)
             .await
