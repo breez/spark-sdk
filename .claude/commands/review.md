@@ -48,7 +48,7 @@ Identify which context-dependent checks apply based on changed files:
 
 Format as a concise review. If posting to GitHub, include:
 ```markdown
-🧪 Experimental PR review using Claude Code.
+> 🧪 Experimental PR review using Claude Code.
 
 ---
 
