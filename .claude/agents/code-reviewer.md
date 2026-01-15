@@ -1,6 +1,7 @@
 ---
 name: code-reviewer
 description: Expert code reviewer for Breez SDK. Reviews PRs for design, security, code quality, and binding consistency. Use proactively when reviewing code changes.
+skills: pr-review
 tools: Read, Grep, Glob, Bash(gh pr:*), Bash(git:*)
 ---
 
