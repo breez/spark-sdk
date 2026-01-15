@@ -1,22 +1,18 @@
 package com.example.kotlinmpplib
 
 import breez_sdk_spark.*
-import com.ionspin.kotlin.bignum.integer.BigInteger
 
 class SendPayment {
     suspend fun prepareSendPaymentLightningBolt11(sdk: BreezSdk) {
         // ANCHOR: prepare-send-payment-lightning-bolt11
         val paymentRequest = "<bolt11 invoice>"
         // Optionally set the amount you wish the pay the receiver
-        // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
-        val optionalAmountSats = BigInteger.fromLong(5_000L)
-        // Android (BigInteger from java.math)
-        // val optionalAmountSats = BigInteger.valueOf(5_000L)
+        val optionalPayAmount = PayAmount.Bitcoin(amountSats = 5_000.toULong())
 
         try {
             val req = PrepareSendPaymentRequest(
                 paymentRequest,
-                optionalAmountSats,
+                payAmount = optionalPayAmount,
             )
             val prepareResponse = sdk.prepareSendPayment(req)
 
@@ -40,28 +36,24 @@ class SendPayment {
         // ANCHOR: prepare-send-payment-onchain
         val paymentRequest = "<bitcoin address>"
         // Set the amount you wish the pay the receiver
-        // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
-        val amountSats = BigInteger.fromLong(50_000L)
-        // Android (BigInteger from java.math)
-        // val amountSats = BigInteger.valueOf(50_000L)
+        val payAmount = PayAmount.Bitcoin(amountSats = 50_000.toULong())
+        // Select the confirmation speed (required for Bitcoin addresses)
+        val onchainSpeed = OnchainConfirmationSpeed.MEDIUM
 
         try {
             val req = PrepareSendPaymentRequest(
                 paymentRequest,
-                amountSats,
+                payAmount,
+                onchainSpeed,
             )
             val prepareResponse = sdk.prepareSendPayment(req)
 
             // If the fees are acceptable, continue to create the Send Payment
             val paymentMethod = prepareResponse.paymentMethod
             if (paymentMethod is SendPaymentMethod.BitcoinAddress) {
-                val feeQuote = paymentMethod.feeQuote
-                val slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
-                val mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
-                val fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat
-                // Log.v("Breez", "Slow Fees: ${slowFeeSats} sats")
-                // Log.v("Breez", "Medium Fees: ${mediumFeeSats} sats")
-                // Log.v("Breez", "Fast Fees: ${fastFeeSats} sats")
+                val feeSats = paymentMethod.feeSats
+                val selectedSpeed = paymentMethod.selectedSpeed
+                // Log.v("Breez", "Fee for $selectedSpeed speed: $feeSats sats")
             }
         } catch (e: Exception) {
             // handle error
@@ -69,19 +61,73 @@ class SendPayment {
         // ANCHOR_END: prepare-send-payment-onchain
     }
 
-    suspend fun prepareSendPaymentSparkAddress(sdk: BreezSdk) {
-        // ANCHOR: prepare-send-payment-spark-address
-        val paymentRequest = "<spark address>"
-        // Set the amount you wish the pay the receiver
-        // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in package)
-        val amountSats = BigInteger.fromLong(50_000L)
-        // Android (BigInteger from java.math)
-        // val amountSats = BigInteger.valueOf(50_000L)
+    suspend fun estimateOnchainSendFeeQuotes(sdk: BreezSdk) {
+        // ANCHOR: estimate-onchain-send-fee-quotes
+        val address = "<bitcoin address>"
+        // Optionally set the amount, omit for drain
+        val optionalAmountSats = 50_000.toULong()
+
+        try {
+            val req = EstimateOnchainSendFeeQuotesRequest(
+                address,
+                amountSats = optionalAmountSats,
+            )
+            val response = sdk.estimateOnchainSendFeeQuotes(req)
+
+            val feeQuote = response.feeQuote
+            val slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
+            val mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
+            val fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat
+            // Log.v("Breez", "Slow Fees: ${slowFeeSats} sats")
+            // Log.v("Breez", "Medium Fees: ${mediumFeeSats} sats")
+            // Log.v("Breez", "Fast Fees: ${fastFeeSats} sats")
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: estimate-onchain-send-fee-quotes
+    }
+
+    suspend fun prepareSendPaymentDrainOnchain(sdk: BreezSdk) {
+        // ANCHOR: prepare-send-payment-drain-onchain
+        val paymentRequest = "<bitcoin address>"
+        // Select the confirmation speed (required for Bitcoin addresses)
+        val onchainSpeed = OnchainConfirmationSpeed.MEDIUM
+        // Use Drain to send all available funds
+        val payAmount = PayAmount.Drain
 
         try {
             val req = PrepareSendPaymentRequest(
                 paymentRequest,
-                amountSats,
+                payAmount,
+                onchainSpeed,
+            )
+            val prepareResponse = sdk.prepareSendPayment(req)
+
+            // The amount is calculated as balance minus the fee for the selected speed
+            val paymentMethod = prepareResponse.paymentMethod
+            if (paymentMethod is SendPaymentMethod.BitcoinAddress) {
+                val drainAmount = prepareResponse.amount
+                val feeSats = paymentMethod.feeSats
+                val selectedSpeed = paymentMethod.selectedSpeed
+                // Log.v("Breez", "Drain amount: $drainAmount sats")
+                // Log.v("Breez", "Fee for $selectedSpeed speed: $feeSats sats")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: prepare-send-payment-drain-onchain
+    }
+
+    suspend fun prepareSendPaymentSparkAddress(sdk: BreezSdk) {
+        // ANCHOR: prepare-send-payment-spark-address
+        val paymentRequest = "<spark address>"
+        // Set the amount you wish the pay the receiver
+        val payAmount = PayAmount.Bitcoin(amountSats = 50_000.toULong())
+
+        try {
+            val req = PrepareSendPaymentRequest(
+                paymentRequest,
+                payAmount,
             )
             val prepareResponse = sdk.prepareSendPayment(req)
 
@@ -101,16 +147,12 @@ class SendPayment {
         // ANCHOR: prepare-send-payment-spark-invoice
         val paymentRequest = "<spark invoice>"
         // Optionally set the amount you wish the pay the receiver
-        // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
-        // package)
-        val optionalAmountSats = BigInteger.fromLong(50_000L)
-        // Android (BigInteger from java.math)
-        // val optionalAmountSats = BigInteger.valueOf(50_000L)
+        val optionalPayAmount = PayAmount.Bitcoin(amountSats = 50_000.toULong())
 
         try {
             val req = PrepareSendPaymentRequest(
                 paymentRequest,
-                optionalAmountSats,
+                optionalPayAmount,
             )
             val prepareResponse = sdk.prepareSendPayment(req)
 
@@ -143,7 +185,9 @@ class SendPayment {
         try {
             val req = PrepareSendPaymentRequest(
                 paymentRequest,
-                conversionOptions = conversionOptions
+                payAmount = null,
+                onchainSpeed = null,
+                conversionOptions,
             )
             val prepareResponse = sdk.prepareSendPayment(req)
 
@@ -186,14 +230,11 @@ class SendPayment {
     suspend fun sendPaymentOnchain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) {
         // ANCHOR: send-payment-onchain
         try {
-            val options = SendPaymentOptions.BitcoinAddress(
-                OnchainConfirmationSpeed.MEDIUM
-            )
             val optionalIdempotencyKey = "<idempotency key uuid>"
             val sendResponse = sdk.sendPayment(
                 SendPaymentRequest(
                     prepareResponse,
-                    options,
+                    options = null,
                     optionalIdempotencyKey
                 )
             )

@@ -1,4 +1,3 @@
-using System.Numerics;
 using Breez.Sdk.Spark;
 
 namespace BreezSdkSnippets
@@ -10,11 +9,11 @@ namespace BreezSdkSnippets
             // ANCHOR: prepare-send-payment-lightning-bolt11
             var paymentRequest = "<bolt11 invoice>";
             // Optionally set the amount you wish the pay the receiver
-            var optionalAmountSats = new BigInteger(5000);
+            var optionalPayAmount = new PayAmount.Bitcoin(5_000UL);
 
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
-                amount: optionalAmountSats
+                payAmount: optionalPayAmount
             );
             var prepareResponse = await sdk.PrepareSendPayment(request: request);
 
@@ -36,24 +35,23 @@ namespace BreezSdkSnippets
             // ANCHOR: prepare-send-payment-onchain
             var paymentRequest = "<bitcoin address>";
             // Set the amount you wish the pay the receiver
-            var amountSats = new BigInteger(50000);
+            var payAmount = new PayAmount.Bitcoin(50_000UL);
+            // Select the confirmation speed (required for Bitcoin addresses)
+            var onchainSpeed = OnchainConfirmationSpeed.Medium;
 
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
-                amount: amountSats
+                payAmount: payAmount,
+                onchainSpeed: onchainSpeed
             );
             var prepareResponse = await sdk.PrepareSendPayment(request: request);
 
             // If the fees are acceptable, continue to create the Send Payment
             if (prepareResponse.paymentMethod is SendPaymentMethod.BitcoinAddress bitcoinMethod)
             {
-                var feeQuote = bitcoinMethod.feeQuote;
-                var slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat;
-                var mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat;
-                var fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat;
-                Console.WriteLine($"Slow Fees: {slowFeeSats} sats");
-                Console.WriteLine($"Medium Fees: {mediumFeeSats} sats");
-                Console.WriteLine($"Fast Fees: {fastFeeSats} sats");
+                var feeSats = bitcoinMethod.feeSats;
+                var selectedSpeed = bitcoinMethod.selectedSpeed;
+                Console.WriteLine($"Fee for {selectedSpeed} speed: {feeSats} sats");
             }
             // ANCHOR_END: prepare-send-payment-onchain
         }
@@ -63,11 +61,11 @@ namespace BreezSdkSnippets
             // ANCHOR: prepare-send-payment-spark-address
             var paymentRequest = "<spark address>";
             // Set the amount you wish the pay the receiver
-            var amountSats = new BigInteger(50000);
+            var payAmount = new PayAmount.Bitcoin(50_000UL);
 
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
-                amount: amountSats
+                payAmount: payAmount
             );
             var prepareResponse = await sdk.PrepareSendPayment(request: request);
 
@@ -85,11 +83,11 @@ namespace BreezSdkSnippets
             // ANCHOR: prepare-send-payment-spark-invoice
             var paymentRequest = "<spark invoice>";
             // Optionally set the amount you wish the pay the receiver
-            var optionalAmountSats = new BigInteger(50000);
+            var optionalPayAmount = new PayAmount.Bitcoin(50_000UL);
 
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
-                amount: optionalAmountSats
+                payAmount: optionalPayAmount
             );
             var prepareResponse = await sdk.PrepareSendPayment(request: request);
 
@@ -100,6 +98,56 @@ namespace BreezSdkSnippets
                 Console.WriteLine($"Fees: {fee} sats");
             }
             // ANCHOR_END: prepare-send-payment-spark-invoice
+        }
+
+        async Task EstimateOnchainSendFeeQuotes(BreezSdk sdk)
+        {
+            // ANCHOR: estimate-onchain-send-fee-quotes
+            var address = "<bitcoin address>";
+            // Optionally set the amount, omit for drain
+            var optionalAmountSats = 50_000UL;
+
+            var request = new EstimateOnchainSendFeeQuotesRequest(
+                address: address,
+                amountSats: optionalAmountSats
+            );
+            var response = await sdk.EstimateOnchainSendFeeQuotes(request: request);
+
+            var feeQuote = response.feeQuote;
+            var slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat;
+            var mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat;
+            var fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat;
+            Console.WriteLine($"Slow Fees: {slowFeeSats} sats");
+            Console.WriteLine($"Medium Fees: {mediumFeeSats} sats");
+            Console.WriteLine($"Fast Fees: {fastFeeSats} sats");
+            // ANCHOR_END: estimate-onchain-send-fee-quotes
+        }
+
+        async Task PrepareSendPaymentDrainOnchain(BreezSdk sdk)
+        {
+            // ANCHOR: prepare-send-payment-drain-onchain
+            var paymentRequest = "<bitcoin address>";
+            // Select the confirmation speed (required for Bitcoin addresses)
+            var onchainSpeed = OnchainConfirmationSpeed.Medium;
+            var payAmount = new PayAmount.Drain();
+
+            var request = new PrepareSendPaymentRequest(
+                paymentRequest: paymentRequest,
+                payAmount: payAmount,
+                onchainSpeed: onchainSpeed
+            );
+            var prepareResponse = await sdk.PrepareSendPayment(request: request);
+
+            // The amount is calculated as balance minus the fee for the selected speed
+            if (prepareResponse.paymentMethod is SendPaymentMethod.BitcoinAddress bitcoinMethod)
+            {
+                var drainAmount = prepareResponse.amount;
+                var feeSats = bitcoinMethod.feeSats;
+                var selectedSpeed = bitcoinMethod.selectedSpeed;
+                Console.WriteLine($"Drain amount: {drainAmount} sats");
+                Console.WriteLine($"Fee for {selectedSpeed} speed: {feeSats} sats");
+            }
+            // ANCHOR_END: prepare-send-payment-drain-onchain
         }
 
         async Task PrepareSendPaymentTokenConversion(BreezSdk sdk)
@@ -155,13 +203,9 @@ namespace BreezSdkSnippets
         async Task SendPaymentOnchain(BreezSdk sdk, PrepareSendPaymentResponse prepareResponse)
         {
             // ANCHOR: send-payment-onchain
-            var options = new SendPaymentOptions.BitcoinAddress(
-                confirmationSpeed: OnchainConfirmationSpeed.Medium
-            );
             var optionalIdempotencyKey = "<idempotency key uuid>";
             var request = new SendPaymentRequest(
                 prepareResponse: prepareResponse,
-                options: options,
                 idempotencyKey: optionalIdempotencyKey
             );
             var sendResponse = await sdk.SendPayment(request: request);

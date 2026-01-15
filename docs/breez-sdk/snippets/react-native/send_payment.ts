@@ -1,5 +1,6 @@
 import {
   OnchainConfirmationSpeed,
+  PayAmount,
   SendPaymentMethod_Tags,
   SendPaymentOptions,
   ConversionType,
@@ -11,12 +12,12 @@ const examplePrepareSendPaymentLightningBolt11 = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-send-payment-lightning-bolt11
   const paymentRequest = '<bolt11 invoice>'
   // Optionally set the amount you wish the pay the receiver
-  const optionalAmountSats = BigInt(5_000)
+  const optionalPayAmount = new PayAmount.Bitcoin({ amountSats: BigInt(5_000) })
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    amount: optionalAmountSats,
-    tokenIdentifier: undefined,
+    payAmount: optionalPayAmount,
+    onchainSpeed: undefined,
     conversionOptions: undefined
   })
 
@@ -36,24 +37,22 @@ const examplePrepareSendPaymentOnchain = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-send-payment-onchain
   const paymentRequest = '<bitcoin address>'
   // Set the amount you wish the pay the receiver
-  const amountSats = BigInt(50_000)
+  const payAmount = new PayAmount.Bitcoin({ amountSats: BigInt(50_000) })
+  // Select the confirmation speed (required for Bitcoin addresses)
+  const onchainSpeed = OnchainConfirmationSpeed.Medium
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    amount: amountSats,
-    tokenIdentifier: undefined,
+    payAmount,
+    onchainSpeed,
     conversionOptions: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
   if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.BitcoinAddress) {
-    const feeQuote = prepareResponse.paymentMethod.inner.feeQuote
-    const slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
-    const mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
-    const fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat
-    console.debug(`Slow Fees: ${slowFeeSats} sats`)
-    console.debug(`Medium Fees: ${mediumFeeSats} sats`)
-    console.debug(`Fast Fees: ${fastFeeSats} sats`)
+    const feeSats = prepareResponse.paymentMethod.inner.feeSats
+    const selectedSpeed = prepareResponse.paymentMethod.inner.selectedSpeed
+    console.debug(`Fee for ${selectedSpeed} speed: ${feeSats} sats`)
   }
   // ANCHOR_END: prepare-send-payment-onchain
 }
@@ -62,12 +61,12 @@ const examplePrepareSendPaymentSparkAddress = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-send-payment-spark-address
   const paymentRequest = '<spark address>'
   // Set the amount you wish the pay the receiver
-  const amountSats = BigInt(50_000)
+  const payAmount = new PayAmount.Bitcoin({ amountSats: BigInt(50_000) })
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    amount: amountSats,
-    tokenIdentifier: undefined,
+    payAmount,
+    onchainSpeed: undefined,
     conversionOptions: undefined
   })
 
@@ -83,12 +82,12 @@ const examplePrepareSendPaymentSparkInvoice = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-send-payment-spark-invoice
   const paymentRequest = '<spark invoice>'
   // Optionally set the amount you wish the pay the receiver
-  const optionalAmountSats = BigInt(50_000)
+  const optionalPayAmount = new PayAmount.Bitcoin({ amountSats: BigInt(50_000) })
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    amount: optionalAmountSats,
-    tokenIdentifier: undefined,
+    payAmount: optionalPayAmount,
+    onchainSpeed: undefined,
     conversionOptions: undefined
   })
 
@@ -116,8 +115,8 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    amount: undefined,
-    tokenIdentifier: undefined,
+    payAmount: undefined,
+    onchainSpeed: undefined,
     conversionOptions
   })
 
@@ -156,12 +155,9 @@ const exampleSendPaymentOnchain = async (
 ) => {
   // ANCHOR: send-payment-onchain
   const optionalIdempotencyKey = '<idempotency key uuid>'
-  const options = new SendPaymentOptions.BitcoinAddress({
-    confirmationSpeed: OnchainConfirmationSpeed.Medium
-  })
   const sendResponse = await sdk.sendPayment({
     prepareResponse,
-    options,
+    options: undefined,
     idempotencyKey: optionalIdempotencyKey
   })
   const payment = sendResponse.payment
@@ -183,4 +179,51 @@ const exampleSendPaymentSpark = async (
   const payment = sendResponse.payment
   // ANCHOR_END: send-payment-spark
   console.log(payment)
+}
+
+const exampleEstimateOnchainSendFeeQuotes = async (sdk: BreezSdk) => {
+  // ANCHOR: estimate-onchain-send-fee-quotes
+  const address = '<bitcoin address>'
+  // Optionally set the amount, omit for drain
+  const optionalAmountSats = BigInt(50_000)
+
+  const response = await sdk.estimateOnchainSendFeeQuotes({
+    address,
+    amountSats: optionalAmountSats
+  })
+
+  const feeQuote = response.feeQuote
+  const slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
+  const mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
+  const fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat
+  console.debug(`Slow Fees: ${slowFeeSats} sats`)
+  console.debug(`Medium Fees: ${mediumFeeSats} sats`)
+  console.debug(`Fast Fees: ${fastFeeSats} sats`)
+  // ANCHOR_END: estimate-onchain-send-fee-quotes
+}
+
+const examplePrepareSendPaymentDrainOnchain = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-send-payment-drain-onchain
+  const paymentRequest = '<bitcoin address>'
+  // Select the confirmation speed (required for Bitcoin addresses)
+  const onchainSpeed = OnchainConfirmationSpeed.Medium
+  // Use Drain to send all available funds
+  const payAmount = new PayAmount.Drain()
+
+  const prepareResponse = await sdk.prepareSendPayment({
+    paymentRequest,
+    payAmount,
+    onchainSpeed,
+    conversionOptions: undefined
+  })
+
+  // The amount is calculated as balance minus the fee for the selected speed
+  if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.BitcoinAddress) {
+    const drainAmount = prepareResponse.amount
+    const feeSats = prepareResponse.paymentMethod.inner.feeSats
+    const selectedSpeed = prepareResponse.paymentMethod.inner.selectedSpeed
+    console.debug(`Drain amount: ${drainAmount} sats`)
+    console.debug(`Fee for ${selectedSpeed} speed: ${feeSats} sats`)
+  }
+  // ANCHOR_END: prepare-send-payment-drain-onchain
 }

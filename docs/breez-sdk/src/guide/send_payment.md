@@ -34,9 +34,26 @@ If the invoice also contains a Spark address, the payment can be sent directly v
 
 ## Bitcoin
 
-For Bitcoin addresses, the amount must be set in the request. The prepare response includes fee quotes for three payment speeds: Slow, Medium, and Fast.
+For Bitcoin addresses, the amount must be set in the request along with the desired confirmation speed. The prepare response includes the fee for the selected speed.
+
+To show the user fee options before they select a speed, use the onchain fee estimation method.
+
+{{#tabs send_payment:estimate-onchain-send-fee-quotes}}
+
+Then prepare the payment with the selected speed.
 
 {{#tabs send_payment:prepare-send-payment-onchain}}
+
+### Draining to Bitcoin address
+
+To send the entire available balance to a Bitcoin address minus fees, specify the drain option for the payment amount:
+
+{{#tabs send_payment:prepare-send-payment-drain-onchain}}
+
+<div class="warning">
+<h4>Developer note</h4>
+Draining is only supported for Bitcoin addresses and LNURL payments. It is not supported for Spark addresses, Spark invoices, or Lightning invoices.
+</div>
 
 ## Spark
 
@@ -77,8 +94,7 @@ In the optional send payment options for BOLT11 invoices, you can set:
 
 ## Bitcoin
 
-In the optional send payment options for Bitcoin addresses, you can set:
-- **Confirmation Speed** - The priority that the Bitcoin transaction confirms, that also effects the fee paid. By default, it is set to Fast.
+For Bitcoin addresses, no additional options are required when sending.
 
 {{#tabs send_payment:send-payment-onchain}}
 

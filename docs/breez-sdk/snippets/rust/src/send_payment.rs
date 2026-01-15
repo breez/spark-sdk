@@ -6,13 +6,13 @@ async fn prepare_send_payment_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-lightning-bolt11
     let payment_request = "<bolt11 invoice>".to_string();
     // Optionally set the amount you wish the pay the receiver
-    let optional_amount_sats = Some(5_000);
+    let optional_pay_amount = Some(PayAmount::Bitcoin { amount_sats: 5_000 });
 
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            amount: optional_amount_sats,
-            token_identifier: None,
+            pay_amount: optional_pay_amount,
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -33,29 +33,28 @@ async fn prepare_send_payment_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn prepare_send_payment_lightning_onchain(sdk: &BreezSdk) -> Result<()> {
+async fn prepare_send_payment_onchain(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-onchain
     let payment_request = "<bitcoin address>".to_string();
     // Set the amount you wish the pay the receiver
-    let amount_sats = Some(50_000);
+    let pay_amount = Some(PayAmount::Bitcoin { amount_sats: 50_000 });
+    // Select the confirmation speed (required for Bitcoin addresses)
+    let onchain_speed = Some(OnchainConfirmationSpeed::Medium);
 
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            amount: amount_sats,
-            token_identifier: None,
+            pay_amount,
+            onchain_speed,
             conversion_options: None,
         })
         .await?;
 
     // If the fees are acceptable, continue to create the Send Payment
-    if let SendPaymentMethod::BitcoinAddress { fee_quote, .. } = &prepare_response.payment_method {
-        info!("Slow Fees: {} sats", fee_quote.speed_slow.total_fee_sat());
-        info!(
-            "Medium Fees: {} sats",
-            fee_quote.speed_medium.total_fee_sat()
-        );
-        info!("Fast Fees: {} sats", fee_quote.speed_fast.total_fee_sat());
+    if let SendPaymentMethod::BitcoinAddress { fee_sats, selected_speed, .. } =
+        &prepare_response.payment_method
+    {
+        info!("Fee for {:?} speed: {} sats", selected_speed, fee_sats);
     }
     // ANCHOR_END: prepare-send-payment-onchain
     Ok(())
@@ -65,13 +64,13 @@ async fn prepare_send_payment_spark_address(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-spark-address
     let payment_request = "<spark address>".to_string();
     // Set the amount you wish the pay the receiver
-    let amount_sats = Some(50_000);
+    let pay_amount = Some(PayAmount::Bitcoin { amount_sats: 50_000 });
 
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            amount: amount_sats,
-            token_identifier: None,
+            pay_amount,
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -88,13 +87,13 @@ async fn prepare_send_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-spark-invoice
     let payment_request = "<spark invoice>".to_string();
     // Optionally set the amount you wish the pay the receiver
-    let optional_amount_sats = Some(50_000);
+    let optional_pay_amount = Some(PayAmount::Bitcoin { amount_sats: 50_000 });
 
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            amount: optional_amount_sats,
-            token_identifier: None,
+            pay_amount: optional_pay_amount,
+            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -124,8 +123,8 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            amount: None,
-            token_identifier: None,
+            pay_amount: None,
+            onchain_speed: None,
             conversion_options,
         })
         .await?;
@@ -167,14 +166,11 @@ async fn send_payment_onchain(
     prepare_response: PrepareSendPaymentResponse,
 ) -> Result<()> {
     // ANCHOR: send-payment-onchain
-    let options = SendPaymentOptions::BitcoinAddress {
-        confirmation_speed: OnchainConfirmationSpeed::Medium,
-    };
     let optional_idempotency_key = Some("<idempotency key uuid>".to_string());
     let send_response = sdk
         .send_payment(SendPaymentRequest {
             prepare_response,
-            options: Some(options),
+            options: None,
             idempotency_key: optional_idempotency_key,
         })
         .await?;
@@ -200,5 +196,57 @@ async fn send_payment_spark(
     let payment = send_response.payment;
     info!("Payment: {payment:?}");
     // ANCHOR_END: send-payment-spark
+    Ok(())
+}
+
+async fn estimate_onchain_send_fee_quotes(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: estimate-onchain-send-fee-quotes
+    let address = "<bitcoin address>".to_string();
+    // Optionally set the amount, omit for drain
+    let optional_amount_sats = Some(50_000);
+
+    let response = sdk
+        .estimate_onchain_send_fee_quotes(EstimateOnchainSendFeeQuotesRequest {
+            address,
+            amount_sats: optional_amount_sats,
+        })
+        .await?;
+
+    let fee_quote = response.fee_quote;
+    info!("Slow Fees: {} sats", fee_quote.speed_slow.total_fee_sat());
+    info!(
+        "Medium Fees: {} sats",
+        fee_quote.speed_medium.total_fee_sat()
+    );
+    info!("Fast Fees: {} sats", fee_quote.speed_fast.total_fee_sat());
+    // ANCHOR_END: estimate-onchain-send-fee-quotes
+    Ok(())
+}
+
+async fn prepare_send_payment_drain_onchain(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: prepare-send-payment-drain-onchain
+    let payment_request = "<bitcoin address>".to_string();
+    // Select the confirmation speed (required for Bitcoin addresses)
+    let onchain_speed = Some(OnchainConfirmationSpeed::Medium);
+    // Use Drain to send all available funds
+    let pay_amount = Some(PayAmount::Drain);
+
+    let prepare_response = sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request,
+            pay_amount,
+            onchain_speed,
+            conversion_options: None,
+        })
+        .await?;
+
+    // The amount is calculated as balance minus the fee for the selected speed
+    if let SendPaymentMethod::BitcoinAddress { fee_sats, selected_speed, .. } =
+        &prepare_response.payment_method
+    {
+        info!("Drain amount: {} sats", prepare_response.amount);
+        info!("Fee for {:?} speed: {} sats", selected_speed, fee_sats);
+    }
+    // ANCHOR_END: prepare-send-payment-drain-onchain
     Ok(())
 }

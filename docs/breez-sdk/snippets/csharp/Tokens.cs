@@ -84,13 +84,12 @@ namespace BreezSdkSnippets
             // Token identifier must match the invoice in case it specifies one.
             var tokenIdentifier = "<token identifier>";
             // Set the amount of tokens you wish to send.
-            var optionalAmount = new BigInteger(1000);
+            var optionalPayAmount = new PayAmount.Token(amount: new BigInteger(1000), tokenIdentifier: tokenIdentifier);
 
             var prepareResponse = await sdk.PrepareSendPayment(
                 request: new PrepareSendPaymentRequest(
                     paymentRequest: paymentRequest,
-                    amount: optionalAmount,
-                    tokenIdentifier: tokenIdentifier
+                    payAmount: optionalPayAmount
                 )
             );
 
@@ -166,7 +165,7 @@ namespace BreezSdkSnippets
             // Token identifier must match the invoice in case it specifies one.
             var tokenIdentifier = "<token identifier>";
             // Set the amount of tokens you wish to send.
-            var optionalAmount = new BigInteger(1000);
+            var optionalPayAmount = new PayAmount.Token(amount: new BigInteger(1000), tokenIdentifier: tokenIdentifier);
             // Optionally set to use Bitcoin funds to pay via conversion
             var optionalMaxSlippageBps = 50U;
             var optionalCompletionTimeoutSecs = 30U;
@@ -179,8 +178,7 @@ namespace BreezSdkSnippets
             var prepareResponse = await sdk.PrepareSendPayment(
                 request: new PrepareSendPaymentRequest(
                     paymentRequest: paymentRequest,
-                    amount: optionalAmount,
-                    tokenIdentifier: tokenIdentifier,
+                    payAmount: optionalPayAmount,
                     conversionOptions: conversionOptions
                 )
             );

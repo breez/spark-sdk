@@ -920,11 +920,11 @@ pub struct PrepareSendPaymentRequest {
     /// Use `PayAmount::Drain` to send all funds (only for Bitcoin addresses and LNURL).
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub pay_amount: Option<PayAmount>,
-    /// Confirmation speed for on-chain payments. Defaults to Medium if not specified.
+    /// Confirmation speed for on-chain payments.
     /// Returns an error if provided for non-on-chain payment types.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub onchain_speed: Option<OnchainConfirmationSpeed>,
-    /// If provided, the payment will include a token conversion step before sending the payment
+    /// If provided, the payment will include a conversion step before sending the payment
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub conversion_options: Option<ConversionOptions>,
 }

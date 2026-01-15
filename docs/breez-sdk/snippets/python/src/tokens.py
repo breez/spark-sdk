@@ -5,6 +5,7 @@ from breez_sdk_spark import (
     FetchConversionLimitsRequest,
     GetInfoRequest,
     GetTokensMetadataRequest,
+    PayAmount,
     PrepareSendPaymentRequest,
     ReceivePaymentMethod,
     ReceivePaymentRequest,
@@ -97,13 +98,12 @@ async def send_token_payment(sdk: BreezSdk):
         # Token identifier must match the invoice in case it specifies one.
         token_identifier = "<token identifier>"
         # Set the amount of tokens you wish to send.
-        optional_amount = 1_000
+        optional_pay_amount = PayAmount.TOKEN(amount=1_000, token_identifier=token_identifier)
 
         prepare_response = await sdk.prepare_send_payment(
             request=PrepareSendPaymentRequest(
                 payment_request=payment_request,
-                amount=optional_amount,
-                token_identifier=token_identifier,
+                pay_amount=optional_pay_amount,
             )
         )
 
@@ -173,7 +173,7 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
         # Token identifier must match the invoice in case it specifies one.
         token_identifier = "<token identifier>"
         # Set the amount of tokens you wish to send.
-        optional_amount = 1_000
+        optional_pay_amount = PayAmount.TOKEN(amount=1_000, token_identifier=token_identifier)
         # Set to use Bitcoin funds to pay via conversion
         optional_max_slippage_bps = 50
         optional_completion_timeout_secs = 30
@@ -186,8 +186,7 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
         prepare_response = await sdk.prepare_send_payment(
             request=PrepareSendPaymentRequest(
                 payment_request=payment_request,
-                amount=optional_amount,
-                token_identifier=token_identifier,
+                pay_amount=optional_pay_amount,
                 conversion_options=conversion_options,
             )
         )

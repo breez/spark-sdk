@@ -73,13 +73,12 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
   // Token identifier must match the invoice in case it specifies one.
   final tokenIdentifier = '<token identifier>';
   // Set the amount of tokens you wish to send.
-  final optionalAmount = BigInt.from(1000);
+  final optionalPayAmount = PayAmount.token(amount: BigInt.from(1000), tokenIdentifier: tokenIdentifier);
 
   final prepareResponse = await sdk.prepareSendPayment(
     request: PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
-      amount: optionalAmount,
-      tokenIdentifier: tokenIdentifier,
+      payAmount: optionalPayAmount,
     ),
   );
   
@@ -149,7 +148,7 @@ Future<void> prepareSendPaymentTokenConversion(BreezSdk sdk) async {
   // Token identifier must match the invoice in case it specifies one.
   final tokenIdentifier = '<token identifier>';
   // Set the amount of tokens you wish to send.
-  final optionalAmount = BigInt.from(1000);
+  final optionalPayAmount = PayAmount.token(amount: BigInt.from(1000), tokenIdentifier: tokenIdentifier);
   // Set to use Bitcoin funds to pay via conversion
   int optionalMaxSlippageBps = 50;
   int optionalCompletionTimeoutSecs = 30;
@@ -162,9 +161,8 @@ Future<void> prepareSendPaymentTokenConversion(BreezSdk sdk) async {
   final prepareResponse = await sdk.prepareSendPayment(
     request: PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
-      amount: optionalAmount,
-      tokenIdentifier: tokenIdentifier,
-      conversionOptions: conversionOptions
+      payAmount: optionalPayAmount,
+      conversionOptions: conversionOptions,
     ),
   );
   
