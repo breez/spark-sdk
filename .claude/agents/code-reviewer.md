@@ -50,6 +50,41 @@ make check       # fmt, clippy, tests
 make build-wasm  # verify WASM builds
 ```
 
+## Context-Dependent Checks
+
+Apply these additional checks based on which files are modified:
+
+### Core Models (`crates/breez-sdk/core/src/models/`)
+
+When model files change:
+- UniFFI macros on public types: `#[cfg_attr(feature = "uniffi", derive(uniffi::Record/Enum))]`
+- Serde derives (`Serialize`, `Deserialize`) for persistence
+- From/Into implementations for internal type conversions (spark_wallet, bitcoin crate)
+- Display/FromStr for enum serialization to storage
+- If Payment/PaymentDetails changed, check `models/adaptors.rs` is updated
+
+### SDK Interface (`crates/breez-sdk/core/src/sdk.rs`)
+
+When SDK methods change:
+- Method signature consistency across WASM (`wasm/src/sdk.rs`) and Flutter (`flutter/rust/src/sdk.rs`)
+- Return type alignment: Core uses `Result<T, SdkError>`, WASM uses `WasmResult<T>`
+- Run `validate-bindings.sh` to verify all binding files updated together
+
+### CLI (`crates/breez-sdk/cli/`)
+
+When CLI changes:
+- Command names map to SDK methods (PascalCase → snake_case)
+- Argument names match request struct fields (kebab-case → snake_case)
+- `///` doc comments on commands and arguments with units/constraints
+- Handler directly constructs request structs from arguments
+
+### Documentation (`docs/breez-sdk/snippets/`)
+
+When snippets change:
+- Parallel examples across all 7 languages (rust, python, react-native, swift, kotlin, csharp, wasm)
+- ANCHOR markers properly paired (`ANCHOR:` and `ANCHOR_END:`)
+- Code matches current SDK API (naming, parameters, error handling)
+
 ## Question Guidelines
 
 When asking questions in reviews, make them **actionable**:

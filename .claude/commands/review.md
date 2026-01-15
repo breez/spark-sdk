@@ -38,6 +38,12 @@ Apply review criteria from `.claude/agents/code-reviewer.md`:
 - Code quality (no unwrap, doc comments, clippy)
 - Binding file consistency (run `validate-bindings.sh` if API changed)
 
+Identify which context-dependent checks apply based on changed files:
+- **Core models** (`models/`): UniFFI macros, serde derives, adaptors
+- **SDK interface** (`sdk.rs`): Binding consistency across WASM/Flutter
+- **CLI** (`cli/`): Command-to-SDK mapping, argument naming
+- **Documentation** (`snippets/`): Parallel language examples
+
 ## Step 3: Present Review
 
 Format as a concise review. If posting to GitHub, include:
