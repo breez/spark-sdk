@@ -116,6 +116,9 @@ async fn test_onchain_withdraw_to_static_address(
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 180).await?;
     assert!(matches!(recv_payment.method, PaymentMethod::Deposit));
 
+    info!("Bob deposit fees after claim: {}", recv_payment.fees);
+    assert!(recv_payment.fees > 0);
+
     // Verify Bob's balance increased and no unclaimed deposits remain
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_final = bob
