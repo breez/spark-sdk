@@ -56,6 +56,11 @@ Your application can use the [parse](./parse.md) functionality to determine if a
 
 The code example below demonstrates manual specification. Follow the standard prepare/send payment flow as described in the [Sending a payment](./send_payment.md) guide.
 
+<div class="warning">
+<h4>Developer note</h4>
+Payments can be sent without holding an asset by converting on-the-fly as a step before sending a payment. See <a href="./token_conversion.md">Converting tokens</a> for more information.
+</div>
+
 {{#tabs tokens:send-token-payment}}
 
 <h2 id="listing-payments">
