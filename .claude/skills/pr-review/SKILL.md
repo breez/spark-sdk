@@ -15,6 +15,8 @@ This skill provides the `/review` command and supporting templates for PR review
 
 The command uses review criteria from `.claude/agents/code-reviewer.md`.
 
+Review tone and feedback style: @tone.md
+
 ## Templates
 
 - `templates/glow-issue.md` - Follow-up issue format for breez/glow
