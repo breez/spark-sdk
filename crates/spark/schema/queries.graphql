@@ -6,6 +6,9 @@ fragment ClaimStaticDepositFragment on ClaimStaticDeposit {
   created_at
   updated_at
   network
+  deposit_amount {
+    ...CurrencyAmountFragment
+  }
   deposit_status: status
   credit_amount {
     ...CurrencyAmountFragment
