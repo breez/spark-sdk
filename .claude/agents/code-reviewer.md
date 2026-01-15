@@ -10,12 +10,16 @@ See `CLAUDE.md` for build commands. For architecture: `.claude/docs/architecture
 
 ## Workflow
 
+**Setup:** Get PR context first
+```bash
+# Get branch name and changed files
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+git diff --name-only origin/main...HEAD > /tmp/changed_files.txt
+```
+
 ### Phase 1: Triage (run first)
 
 ```bash
-# Get changed files
-git diff --name-only origin/main...HEAD > /tmp/changed_files.txt
-
 # Quick checks
 make fmt-check  # Stop if fails—formatting blocks everything
 ```
@@ -141,10 +145,12 @@ Order: Summary → Issues → Questions → Recommendation
 
 ```
 [CRITICAL|IMPORTANT|SUGGESTION] Brief description
-- File: `path/file.rs:42`
+- File: [`path/file.rs:42`](https://github.com/breez/spark-sdk/blob/BRANCH_NAME/path/file.rs#L42)
 - Issue: What's wrong
 - Fix: How to fix
 ```
+
+**Link format:** Use PR branch name in URL (get from `git rev-parse --abbrev-ref HEAD` or PR context)
 
 ### Recommendation
 - **APPROVE**: Sound design, correct implementation
