@@ -1823,10 +1823,17 @@ impl BreezSdk {
         if !parent_ids.is_empty() {
             let related_payments_map = self.storage.get_payments_by_parent_ids(parent_ids).await?;
 
-            // Join related payments to their parents
+            // Add conversion details of each payments
             for payment in &mut payments {
                 if let Some(related_payments) = related_payments_map.get(&payment.id) {
-                    payment.related_payments = related_payments.clone();
+                    match related_payments.try_into() {
+                        Ok(conversion_details) => {
+                            payment.conversion_details = Some(conversion_details);
+                        }
+                        Err(e) => {
+                            warn!("Found payments couldn't be converted to ConversionDetails: {e}");
+                        }
+                    }
                 }
             }
         }
@@ -1847,7 +1854,12 @@ impl BreezSdk {
             .await?;
 
         if let Some(related_payments) = related_payments_map.get(&payment.id) {
-            payment.related_payments.clone_from(related_payments);
+            match related_payments.try_into() {
+                Ok(conversion_details) => payment.conversion_details = Some(conversion_details),
+                Err(e) => {
+                    warn!("Related payments not convertable to ConversionDetails: {e}");
+                }
+            }
         }
 
         Ok(GetPaymentResponse { payment })
@@ -2383,7 +2395,7 @@ impl BreezSdk {
             },
         )
         .await?;
-        // Fetch the updated payment with related payments
+        // Fetch the updated payment with conversion details
         self.get_payment(GetPaymentRequest {
             payment_id: response.payment.id,
         })

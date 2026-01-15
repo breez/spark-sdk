@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::{
     ConversionInfo, DepositClaimError, DepositInfo, LightningAddressInfo, ListPaymentsRequest,
-    LnurlPayInfo, LnurlWithdrawInfo, RelatedPayment, TokenBalance, TokenMetadata, models::Payment,
+    LnurlPayInfo, LnurlWithdrawInfo, TokenBalance, TokenMetadata, models::Payment,
 };
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
@@ -156,7 +156,7 @@ pub trait Storage: Send + Sync {
     ) -> Result<Option<Payment>, StorageError>;
 
     /// Gets payments that have any of the specified parent payment IDs.
-    /// Used to load related/child payments for a set of parent payments.
+    /// Used to load related payments for a set of parent payments.
     ///
     /// # Arguments
     ///
@@ -164,11 +164,11 @@ pub trait Storage: Send + Sync {
     ///
     /// # Returns
     ///
-    /// A map of `parent_payment_id` -> Vec<child payments> or a `StorageError`
+    /// A map of `parent_payment_id` -> Vec<Payment> or a `StorageError`
     async fn get_payments_by_parent_ids(
         &self,
         parent_payment_ids: Vec<String>,
-    ) -> Result<HashMap<String, Vec<RelatedPayment>>, StorageError>;
+    ) -> Result<HashMap<String, Vec<Payment>>, StorageError>;
 
     /// Add a deposit to storage
     /// # Arguments
@@ -832,7 +832,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Test 2: Spark HTLC payment
@@ -854,7 +854,7 @@ pub mod tests {
                 }),
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Test 3: Token payment
@@ -885,7 +885,7 @@ pub mod tests {
                 }),
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Test 4: Lightning payment with full details
@@ -919,7 +919,7 @@ pub mod tests {
                 lnurl_withdraw_info: pay_metadata.lnurl_withdraw_info.clone(),
                 lnurl_receive_metadata: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Test 5: Lightning payment with full details
@@ -947,7 +947,7 @@ pub mod tests {
                 lnurl_withdraw_info: withdraw_metadata.lnurl_withdraw_info.clone(),
                 lnurl_receive_metadata: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Test 6: Lightning payment with minimal details
@@ -969,7 +969,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Test 7: Lightning payment with LNURL receive metadata
@@ -998,7 +998,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: Some(lnurl_receive_metadata.clone()),
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Test 8: Withdraw payment
@@ -1014,7 +1014,7 @@ pub mod tests {
                 tx_id: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
                     .to_string(),
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Test 9: Deposit payment
@@ -1030,7 +1030,7 @@ pub mod tests {
                 tx_id: "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321fe"
                     .to_string(),
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Test 10: Payment with no details
@@ -1043,7 +1043,7 @@ pub mod tests {
             timestamp: Utc::now().timestamp().try_into().unwrap(),
             method: PaymentMethod::Unknown,
             details: None,
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Test 11: Successful conversion payment
@@ -1073,7 +1073,7 @@ pub mod tests {
                     .conversion_info
                     .clone(),
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
         let successful_received_conversion_payment_metadata = PaymentMetadata {
             parent_payment_id: Some("after_conversion_pmt124".to_string()),
@@ -1093,7 +1093,7 @@ pub mod tests {
                 invoice_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
         let after_conversion_payment = Payment {
             id: "after_conversion_pmt124".to_string(),
@@ -1109,7 +1109,7 @@ pub mod tests {
                 invoice_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Test 12: Failed conversion payment with refund info
@@ -1138,7 +1138,7 @@ pub mod tests {
                     .conversion_info
                     .clone(),
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Test 13: Failed conversion payment with no refund info
@@ -1167,7 +1167,7 @@ pub mod tests {
                     .conversion_info
                     .clone(),
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let test_payments = vec![
@@ -1279,8 +1279,8 @@ pub mod tests {
             // Storage layer always returns empty related_payments.
             // The SDK layer populates this field via get_payments_by_parent_ids().
             assert!(
-                retrieved_payment.related_payments.is_empty(),
-                "Storage layer should return empty related_payments for payment {}",
+                retrieved_payment.conversion_details.is_none(),
+                "Storage layer should return an unset conversion_details for payment {}",
                 expected_payment.id
             );
 
@@ -1489,7 +1489,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         storage
@@ -1562,7 +1562,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let lightning_zap_payment3 = Payment {
@@ -1583,7 +1583,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         storage
@@ -1805,7 +1805,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let receive_payment = Payment {
@@ -1826,7 +1826,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         storage.insert_payment(send_payment).await.unwrap();
@@ -1887,7 +1887,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let pending_payment = Payment {
@@ -1903,7 +1903,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let failed_payment = Payment {
@@ -1919,7 +1919,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         storage.insert_payment(completed_payment).await.unwrap();
@@ -1977,7 +1977,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let lightning_payment = Payment {
@@ -1998,7 +1998,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let token_payment = Payment {
@@ -2023,7 +2023,7 @@ pub mod tests {
                 invoice_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let withdraw_payment = Payment {
@@ -2037,7 +2037,7 @@ pub mod tests {
             details: Some(PaymentDetails::Withdraw {
                 tx_id: "withdraw_tx_1".to_string(),
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let deposit_payment = Payment {
@@ -2051,7 +2051,7 @@ pub mod tests {
             details: Some(PaymentDetails::Deposit {
                 tx_id: "deposit_tx_1".to_string(),
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         storage.insert_payment(spark_payment).await.unwrap();
@@ -2130,7 +2130,7 @@ pub mod tests {
                 }),
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let htlc_shared = Payment {
@@ -2151,7 +2151,7 @@ pub mod tests {
                 }),
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let htlc_returned = Payment {
@@ -2172,7 +2172,7 @@ pub mod tests {
                 }),
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Create a payment that is not HTLC-related
@@ -2192,7 +2192,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Insert all payments
@@ -2315,7 +2315,7 @@ pub mod tests {
                 invoice_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let successful_conversion_metadata = PaymentMetadata {
@@ -2341,7 +2341,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let payment_without_refund_metadata = PaymentMetadata {
@@ -2367,7 +2367,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         storage.insert_payment(payment_with_refund).await.unwrap();
@@ -2503,7 +2503,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let payment2 = Payment {
@@ -2519,7 +2519,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let payment3 = Payment {
@@ -2535,7 +2535,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         storage.insert_payment(payment1).await.unwrap();
@@ -2593,7 +2593,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let payment2 = Payment {
@@ -2614,7 +2614,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let payment3 = Payment {
@@ -2635,7 +2635,7 @@ pub mod tests {
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         storage.insert_payment(payment1).await.unwrap();
@@ -2695,7 +2695,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let payment2 = Payment {
@@ -2711,7 +2711,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         let payment3 = Payment {
@@ -2727,7 +2727,7 @@ pub mod tests {
                 htlc_details: None,
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         storage.insert_payment(payment1).await.unwrap();
@@ -2854,7 +2854,7 @@ pub mod tests {
                 }),
                 conversion_info: None,
             }),
-            related_payments: Vec::new(),
+            conversion_details: None,
         };
 
         // Insert the payment into storage

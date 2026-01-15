@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::models::{
     DepositInfo, IncomingChange, ListPaymentsRequest, OutgoingChange, Payment, PaymentMetadata,
-    Record, RelatedPayment, SetLnurlMetadataItem, UnversionedRecordChange, UpdateDepositPayload,
+    Record, SetLnurlMetadataItem, UnversionedRecordChange, UpdateDepositPayload,
 };
 
 pub struct WasmStorage {
@@ -261,7 +261,7 @@ impl breez_sdk_spark::Storage for WasmStorage {
     async fn get_payments_by_parent_ids(
         &self,
         parent_payment_ids: Vec<String>,
-    ) -> Result<HashMap<String, Vec<breez_sdk_spark::RelatedPayment>>, StorageError> {
+    ) -> Result<HashMap<String, Vec<breez_sdk_spark::Payment>>, StorageError> {
         let promise = self
             .storage
             .get_payments_by_parent_ids(parent_payment_ids)
@@ -270,12 +270,11 @@ impl breez_sdk_spark::Storage for WasmStorage {
         let result = future.await.map_err(js_error_to_storage_error)?;
 
         // JS returns { parentId: RelatedPayment[] }
-        let js_map: HashMap<String, Vec<RelatedPayment>> =
-            serde_wasm_bindgen::from_value(result)
-                .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        let js_map: HashMap<String, Vec<Payment>> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
         // Convert WASM RelatedPayment to core RelatedPayment
-        let result_map: HashMap<String, Vec<breez_sdk_spark::RelatedPayment>> = js_map
+        let result_map: HashMap<String, Vec<breez_sdk_spark::Payment>> = js_map
             .into_iter()
             .map(|(parent_id, children)| {
                 (parent_id, children.into_iter().map(|c| c.into()).collect())

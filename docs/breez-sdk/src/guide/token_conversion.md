@@ -59,18 +59,3 @@ When a conversion fails due to exceeding the maximum slippage, the conversion wi
 <div class="warning">
 <h4>Developer note</h4>
 The conversion may result in some Bitcoin remaining in the wallet after the payment is sent. This remaining Bitcoin is to account for slippage in the conversion.
-</div>
-
-<h2 id="related-payments">
-    <a class="header" href="#related-payments">Related payments</a>
-</h2>
-
-When a payment involves a token conversion, the SDK creates related payments to represent the token conversion steps. These related payments are automatically linked to the resulting payment and can be accessed via the **related payments** field on the `Payment` object.
-
-For example, when sending a Bitcoin payment using tokens (token-to-Bitcoin conversion), the following payments are created:
-
-1. **Token payment (Send)**: The token amount sent to the conversion pool
-2. **Spark payment (Receive)**: The Bitcoin received from the conversion pool (used for the main payment)
-3. **Bitcoin Payment (Send)**: The main payment representing the Bitcoin being sent
-
-When [Listing payments](./list_payments.md) and [Getting a payment](./list_payments.md#get-payment), payments are returned in a hierarchical structure. Payments that involve a token conversion are not shown as separate top-level entries; instead, they appear only in the **related payments** field of their parent payment. This keeps the main payment list concise while still providing access to full conversion details through the parent payment.

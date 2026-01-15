@@ -21,7 +21,6 @@ use crate::{
 use std::collections::HashMap;
 
 use super::{Payment, Storage, StorageError};
-use crate::RelatedPayment;
 
 const DEFAULT_DB_FILENAME: &str = "storage.sql";
 /// SQLite-based storage implementation
@@ -767,7 +766,7 @@ impl Storage for SqliteStorage {
     async fn get_payments_by_parent_ids(
         &self,
         parent_payment_ids: Vec<String>,
-    ) -> Result<HashMap<String, Vec<RelatedPayment>>, StorageError> {
+    ) -> Result<HashMap<String, Vec<Payment>>, StorageError> {
         if parent_payment_ids.is_empty() {
             return Ok(HashMap::new());
         }
@@ -806,7 +805,7 @@ impl Storage for SqliteStorage {
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
             ,       pm.lnurl_withdraw_info
-            ,       pm.token_conversion_info
+            ,       pm.conversion_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -831,10 +830,13 @@ impl Storage for SqliteStorage {
             .iter()
             .map(|id| id as &dyn ToSql)
             .collect();
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            let payment = map_payment(row)?;
+            let parent_payment_id: String = row.get(26)?;
+            Ok((parent_payment_id, payment))
+        })?;
 
-        let rows = stmt.query_map(params.as_slice(), map_related_payment_with_parent)?;
-
-        let mut result: HashMap<String, Vec<RelatedPayment>> = HashMap::new();
+        let mut result: HashMap<String, Vec<Payment>> = HashMap::new();
         for row in rows {
             let (parent_id, related_payment) = row?;
             result.entry(parent_id).or_default().push(related_payment);
@@ -1424,17 +1426,8 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         timestamp: row.get(5)?,
         details,
         method: row.get(6)?,
-        related_payments: Vec::new(),
+        conversion_details: None,
     })
-}
-
-/// Maps a row to a `RelatedPayment` struct. This includes the `parent_payment_id` at index 26.
-fn map_related_payment_with_parent(
-    row: &Row<'_>,
-) -> Result<(String, RelatedPayment), rusqlite::Error> {
-    let payment = map_payment(row)?;
-    let parent_payment_id: String = row.get(26)?;
-    Ok((parent_payment_id, RelatedPayment::from(payment)))
 }
 
 impl ToSql for PaymentDetails {
@@ -1584,7 +1577,10 @@ mod tests {
         let temp_dir = create_temp_dir("sqlite_storage");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
-        crate::persist::tests::test_sqlite_storage(Box::new(storage)).await;
+        Box::pin(crate::persist::tests::test_sqlite_storage(Box::new(
+            storage,
+        )))
+        .await;
     }
 
     #[tokio::test]

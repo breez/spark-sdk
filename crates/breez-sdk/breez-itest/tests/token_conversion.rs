@@ -109,10 +109,9 @@ async fn test_token_conversion_success(
         ),
         "Bitcoin to Token payment should be completed or pending"
     );
-    assert_eq!(
-        send_btc_to_token.payment.related_payments.len(),
-        2,
-        "There should be 2 related payments (conversion steps)"
+    assert!(
+        send_btc_to_token.payment.conversion_details.is_some(),
+        "Should contain conversion_details"
     );
 
     // Wait for Bob to receive the token payment
@@ -130,10 +129,9 @@ async fn test_token_conversion_success(
         PaymentMethod::Token,
         "Bob should receive a token payment"
     );
-    assert_eq!(
-        bob_received_payment.related_payments.len(),
-        0,
-        "Received payment should have no related payments"
+    assert!(
+        bob_received_payment.conversion_details.is_none(),
+        "Should contain no conversion_details"
     );
 
     // Verify Bob received tokens
@@ -242,10 +240,9 @@ async fn test_token_conversion_success(
         ),
         "Token to Bitcoin payment should be completed or pending"
     );
-    assert_eq!(
-        send_token_to_btc.payment.related_payments.len(),
-        2,
-        "There should be 2 related payments (conversion steps)"
+    assert!(
+        send_token_to_btc.payment.conversion_details.is_some(),
+        "Should contain conversion_details"
     );
 
     // Wait for Alice to receive the Bitcoin payment
@@ -262,10 +259,9 @@ async fn test_token_conversion_success(
         alice_received_payment.amount, token_to_sats_success_amount as u128,
         "Alice should receive the exact invoice amount"
     );
-    assert_eq!(
-        alice_received_payment.related_payments.len(),
-        0,
-        "Received payment should have no related payments"
+    assert!(
+        alice_received_payment.conversion_details.is_none(),
+        "Should contain no conversion_details"
     );
 
     // Verify Alice received Bitcoin
