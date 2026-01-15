@@ -1,8 +1,8 @@
 use crate::SdkError;
 use crate::signer::external_types::{
     ExternalAggregateFrostRequest, ExternalEncryptedPrivateKey, ExternalPrivateKeySource,
-    ExternalSecretToSplit, ExternalSignFrostRequest, ExternalTreeNodeId, PublicKeyBytes,
-    derivation_path_to_string,
+    ExternalSecretToSplit, ExternalSignFrostRequest, ExternalTreeNodeId, MessageBytes,
+    PublicKeyBytes, derivation_path_to_string,
 };
 use crate::signer::{BreezSigner, ExternalSigner};
 use bitcoin::bip32::DerivationPath;
@@ -51,13 +51,15 @@ impl BreezSigner for ExternalSignerAdapter {
 
     async fn sign_ecdsa(
         &self,
-        message: &[u8],
+        message: secp256k1::Message,
         path: &DerivationPath,
     ) -> Result<secp256k1::ecdsa::Signature, SdkError> {
         let path_str = derivation_path_to_string(path);
+        // Convert Message digest to MessageBytes
+        let msg_bytes = MessageBytes::new(message.as_ref().to_vec());
         let sig_bytes = self
             .external
-            .sign_ecdsa(message.to_vec(), path_str)
+            .sign_ecdsa(msg_bytes, path_str)
             .await
             .map_err(|e| SdkError::Signer(format!("External signer sign_ecdsa failed: {e}")))?;
         sig_bytes.to_signature()
@@ -65,20 +67,33 @@ impl BreezSigner for ExternalSignerAdapter {
 
     async fn sign_ecdsa_recoverable(
         &self,
-        message: &[u8],
+        message: secp256k1::Message,
         path: &DerivationPath,
-    ) -> Result<Vec<u8>, SdkError> {
+    ) -> Result<secp256k1::ecdsa::RecoverableSignature, SdkError> {
         let path_str = derivation_path_to_string(path);
+        // Convert Message digest to MessageBytes
+        let msg_bytes = MessageBytes::new(message.as_ref().to_vec());
         let sig_bytes = self
             .external
-            .sign_ecdsa_recoverable(message.to_vec(), path_str)
+            .sign_ecdsa_recoverable(msg_bytes, path_str)
             .await
             .map_err(|e| {
                 SdkError::Signer(format!(
                     "External signer sign_ecdsa_recoverable failed: {e}"
                 ))
             })?;
-        Ok(sig_bytes.bytes)
+        // Convert the 65-byte signature back to RecoverableSignature
+        if sig_bytes.bytes.len() != 65 {
+            return Err(SdkError::Signer(
+                "Invalid recoverable signature length".to_string(),
+            ));
+        }
+        let recovery_id = secp256k1::ecdsa::RecoveryId::from_i32(
+            i32::from(sig_bytes.bytes[0]).saturating_sub(31),
+        )
+        .map_err(|e| SdkError::Signer(format!("Invalid recovery ID: {e}")))?;
+        secp256k1::ecdsa::RecoverableSignature::from_compact(&sig_bytes.bytes[1..], recovery_id)
+            .map_err(|e| SdkError::Signer(format!("Invalid recoverable signature: {e}")))
     }
 
     async fn ecies_encrypt(

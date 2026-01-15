@@ -89,6 +89,28 @@ impl HashedMessageBytes {
     }
 }
 
+/// FFI-safe representation of a 32-byte message digest for ECDSA signing
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct MessageBytes {
+    pub bytes: Vec<u8>,
+}
+
+impl MessageBytes {
+    /// Create `MessageBytes` from a 32-byte digest
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    /// Convert to 32-byte array for `secp256k1::Message`
+    pub fn to_digest(&self) -> Result<[u8; 32], SdkError> {
+        self.bytes
+            .clone()
+            .try_into()
+            .map_err(|_| SdkError::Generic("Message digest must be 32 bytes".to_string()))
+    }
+}
+
 /// FFI-safe representation of a recoverable ECDSA signature (65 bytes: 1 recovery byte + 64 signature bytes)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

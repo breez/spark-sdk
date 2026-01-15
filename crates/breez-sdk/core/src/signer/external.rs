@@ -1,11 +1,11 @@
-use crate::{error::SignerError, signer::HashedMessageBytes};
+use crate::error::SignerError;
 
 use super::external_types::{
     EcdsaSignatureBytes, ExternalAggregateFrostRequest, ExternalEncryptedPrivateKey,
     ExternalFrostCommitments, ExternalFrostSignature, ExternalFrostSignatureShare,
     ExternalPrivateKeySource, ExternalSecretToSplit, ExternalSignFrostRequest, ExternalTreeNodeId,
-    ExternalVerifiableSecretShare, PrivateKeyBytes, PublicKeyBytes, RecoverableEcdsaSignatureBytes,
-    SchnorrSignatureBytes,
+    ExternalVerifiableSecretShare, HashedMessageBytes, MessageBytes, PrivateKeyBytes,
+    PublicKeyBytes, RecoverableEcdsaSignatureBytes, SchnorrSignatureBytes,
 };
 
 /// External signer trait that can be implemented by users and passed to the SDK.
@@ -36,29 +36,33 @@ pub trait ExternalSigner: Send + Sync {
 
     /// Signs a message using ECDSA at the given derivation path.
     ///
+    /// The message should be a 32-byte digest (typically a hash of the original data).
+    ///
     /// # Arguments
-    /// * `message` - The message to sign
+    /// * `message` - The 32-byte message digest to sign
     /// * `path` - BIP32 derivation path as a string
     ///
     /// # Returns
     /// 64-byte compact ECDSA signature, or a `SignerError`
     async fn sign_ecdsa(
         &self,
-        message: Vec<u8>,
+        message: MessageBytes,
         path: String,
     ) -> Result<EcdsaSignatureBytes, SignerError>;
 
     /// Signs a message using recoverable ECDSA at the given derivation path.
     ///
+    /// The message should be a 32-byte digest (typically a hash of the original data).
+    ///
     /// # Arguments
-    /// * `message` - The message to sign (will be double-SHA256 hashed)
+    /// * `message` - The 32-byte message digest to sign
     /// * `path` - BIP32 derivation path as a string
     ///
     /// # Returns
     /// 65 bytes: recovery ID (31 + `recovery_id`) + 64-byte signature, or a `SignerError`
     async fn sign_ecdsa_recoverable(
         &self,
-        message: Vec<u8>,
+        message: MessageBytes,
         path: String,
     ) -> Result<RecoverableEcdsaSignatureBytes, SignerError>;
 

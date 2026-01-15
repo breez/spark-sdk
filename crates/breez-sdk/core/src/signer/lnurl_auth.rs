@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use bitcoin::bip32::{ChildNumber, DerivationPath};
+use bitcoin::secp256k1::Message;
 use breez_sdk_common::lnurl::auth::LnurlAuthSigner;
 use breez_sdk_common::lnurl::error::{LnurlError, LnurlResult};
 
@@ -40,10 +41,16 @@ impl LnurlAuthSigner for LnurlAuthSignerAdapter {
     ) -> LnurlResult<Vec<u8>> {
         let path = DerivationPath::from(derivation_path.to_vec());
 
+        // LNURL-auth requires single SHA256 hash of the k1 challenge
+        let message = Message::from_digest(
+            msg.try_into()
+                .map_err(|_| LnurlError::General("Invalid lnurl message".to_string()))?,
+        );
+
         // Delegate to BreezSigner for ECDSA signing
         let sig = self
             .signer
-            .sign_ecdsa(msg, &path)
+            .sign_ecdsa(message, &path)
             .await
             .map_err(|e| LnurlError::General(e.to_string()))?;
 

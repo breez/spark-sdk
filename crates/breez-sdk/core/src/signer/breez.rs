@@ -58,7 +58,7 @@ impl BreezSigner for BreezSignerImpl {
 
     async fn sign_ecdsa(
         &self,
-        message: &[u8],
+        message: Message,
         path: &DerivationPath,
     ) -> Result<secp256k1::ecdsa::Signature, SdkError> {
         let derived = self
@@ -66,37 +66,22 @@ impl BreezSigner for BreezSignerImpl {
             .identity_master_key
             .derive_priv(&self.secp, path)
             .map_err(|e| SdkError::Generic(e.to_string()))?;
-        let digest = bitcoin::hashes::sha256::Hash::hash(message);
-        let message = Message::from_digest(digest.to_byte_array());
-        Ok(self.secp.sign_ecdsa(&message, &derived.private_key))
+        Ok(self.secp.sign_ecdsa_low_r(&message, &derived.private_key))
     }
 
     async fn sign_ecdsa_recoverable(
         &self,
-        message: &[u8],
+        message: Message,
         path: &DerivationPath,
-    ) -> Result<Vec<u8>, SdkError> {
+    ) -> Result<secp256k1::ecdsa::RecoverableSignature, SdkError> {
         let derived = self
             .key_set
             .identity_master_key
             .derive_priv(&self.secp, path)
             .map_err(|e| SdkError::Generic(e.to_string()))?;
-        let digest = bitcoin::hashes::sha256::Hash::hash(
-            bitcoin::hashes::sha256::Hash::hash(message).as_ref(),
-        );
-        let (recovery_id, sig) = self
+        Ok(self
             .secp
-            .sign_ecdsa_recoverable(
-                &Message::from_digest(digest.to_byte_array()),
-                &derived.private_key,
-            )
-            .serialize_compact();
-
-        let mut complete_signature = vec![31u8.saturating_add(
-            u8::try_from(recovery_id.to_i32()).map_err(|e| SdkError::Generic(e.to_string()))?,
-        )];
-        complete_signature.extend_from_slice(&sig);
-        Ok(complete_signature)
+            .sign_ecdsa_recoverable(&message, &derived.private_key))
     }
 
     async fn ecies_encrypt(

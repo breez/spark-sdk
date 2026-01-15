@@ -39,6 +39,11 @@ pub struct HashedMessageBytes {
     pub bytes: Vec<u8>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::MessageBytes)]
+pub struct MessageBytes {
+    pub bytes: Vec<u8>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalTreeNodeId)]
 pub struct ExternalTreeNodeId {
     pub id: String,
@@ -206,11 +211,11 @@ impl DefaultSigner {
     #[wasm_bindgen(js_name = "signEcdsa")]
     pub async fn sign_ecdsa(
         &self,
-        message: Vec<u8>,
+        message: MessageBytes,
         path: String,
     ) -> Result<EcdsaSignatureBytes, JsValue> {
         self.inner
-            .sign_ecdsa(message, path)
+            .sign_ecdsa(message.into(), path)
             .await
             .map(|sig| sig.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
@@ -219,11 +224,11 @@ impl DefaultSigner {
     #[wasm_bindgen(js_name = "signEcdsaRecoverable")]
     pub async fn sign_ecdsa_recoverable(
         &self,
-        message: Vec<u8>,
+        message: MessageBytes,
         path: String,
     ) -> Result<RecoverableEcdsaSignatureBytes, JsValue> {
         self.inner
-            .sign_ecdsa_recoverable(message, path)
+            .sign_ecdsa_recoverable(message.into(), path)
             .await
             .map(|sig| sig.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
@@ -438,7 +443,7 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
 
     async fn sign_ecdsa(
         &self,
-        message: Vec<u8>,
+        message: core_types::MessageBytes,
         path: String,
     ) -> Result<core_types::EcdsaSignatureBytes, SignerError> {
         self.inner.sign_ecdsa(message, path).await
@@ -446,7 +451,7 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
 
     async fn sign_ecdsa_recoverable(
         &self,
-        message: Vec<u8>,
+        message: core_types::MessageBytes,
         path: String,
     ) -> Result<core_types::RecoverableEcdsaSignatureBytes, SignerError> {
         self.inner.sign_ecdsa_recoverable(message, path).await
@@ -602,12 +607,13 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
 
     async fn sign_ecdsa(
         &self,
-        message: Vec<u8>,
+        message: core_types::MessageBytes,
         path: String,
     ) -> Result<core_types::EcdsaSignatureBytes, SignerError> {
+        let wasm_msg: MessageBytes = message.into();
         let promise = self
             .inner
-            .sign_ecdsa(message, path)
+            .sign_ecdsa(wasm_msg, path)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -620,12 +626,13 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
 
     async fn sign_ecdsa_recoverable(
         &self,
-        message: Vec<u8>,
+        message: core_types::MessageBytes,
         path: String,
     ) -> Result<core_types::RecoverableEcdsaSignatureBytes, SignerError> {
+        let wasm_msg: MessageBytes = message.into();
         let promise = self
             .inner
-            .sign_ecdsa_recoverable(message, path)
+            .sign_ecdsa_recoverable(wasm_msg, path)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -948,8 +955,8 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
 const SIGNER_INTERFACE: &'static str = r#"export interface ExternalSigner {
     identityPublicKey(): PublicKeyBytes;
     derivePublicKey(path: string): Promise<PublicKeyBytes>;
-    signEcdsa(message: Uint8Array, path: string): Promise<EcdsaSignatureBytes>;
-    signEcdsaRecoverable(message: Uint8Array, path: string): Promise<RecoverableEcdsaSignatureBytes>;
+    signEcdsa(message: MessageBytes, path: string): Promise<EcdsaSignatureBytes>;
+    signEcdsaRecoverable(message: MessageBytes, path: string): Promise<RecoverableEcdsaSignatureBytes>;
     eciesEncrypt(message: Uint8Array, path: string): Promise<Uint8Array>;
     eciesDecrypt(message: Uint8Array, path: string): Promise<Uint8Array>;
     signHashSchnorr(hash: Uint8Array, path: string): Promise<SchnorrSignatureBytes>;
@@ -982,14 +989,14 @@ extern "C" {
     #[wasm_bindgen(structural, method, js_name = "signEcdsa", catch)]
     pub fn sign_ecdsa(
         this: &JsExternalSigner,
-        message: Vec<u8>,
+        message: MessageBytes,
         path: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signEcdsaRecoverable", catch)]
     pub fn sign_ecdsa_recoverable(
         this: &JsExternalSigner,
-        message: Vec<u8>,
+        message: MessageBytes,
         path: String,
     ) -> Result<Promise, JsValue>;
 
