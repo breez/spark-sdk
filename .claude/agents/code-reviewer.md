@@ -41,7 +41,10 @@ Prefer semantic types over generic ones:
 
 For API changes, verify all binding files are updated (see `CLAUDE.md` → "Updating SDK Interfaces").
 
-Only mention bindings in review if something is **missing**. Don't list files that are correctly updated.
+**Output rules**:
+- PR doesn't touch bindings → No mention
+- PR touches bindings, all correct → Brief confirmation: "Bindings: All updated"
+- PR touches bindings, something missing → Detailed issue with file paths
 
 ### Before Approving
 
@@ -85,6 +88,11 @@ When snippets change:
 - ANCHOR markers properly paired (`ANCHOR:` and `ANCHOR_END:`)
 - Code matches current SDK API (naming, parameters, error handling)
 
+**Output rules**:
+- PR doesn't touch docs → No mention
+- PR touches docs, all 7 languages updated → Brief confirmation: "Docs: All languages updated"
+- PR touches docs, some missing → List only the missing languages
+
 ## Question Guidelines
 
 When asking questions in reviews, make them **actionable**:
@@ -119,13 +127,19 @@ For tone/personality settings, see `.claude/anthropomorphism.md`.
 
 ### For clean approvals (no issues)
 
-Put recommendation first:
+Put recommendation first, add brief notes for context-dependent checks if applicable:
 ```
 **LGTM!** 🎉
 
 ### Summary
 Adds X to support Y.
+
+### Notes
+- Bindings: All updated
+- Docs: All languages updated
 ```
+
+Omit Notes section entirely if PR doesn't touch bindings or docs.
 
 ### For reviews with issues
 
