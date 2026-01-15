@@ -5,7 +5,7 @@ Use this template when creating follow-up issues on [breez/glow](https://github.
 ## Issue Format
 
 ```markdown
-🧪 Follow-up from spark-sdk PR review.
+> 🧪 Follow-up from spark-sdk PR review.
 
 ---
 
