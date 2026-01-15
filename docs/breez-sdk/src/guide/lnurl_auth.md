@@ -5,9 +5,7 @@
 
 LNURL-auth allows users to authenticate with services using their Lightning wallet, without requiring passwords or usernames. The Breez SDK supports LNURL-auth following the LUD-04 and LUD-05 specifications.
 
-<h2 id="how-it-works">
-    <a class="header" href="#how-it-works">How it works</a>
-</h2>
+## How it works
 
 LNURL-auth uses cryptographic key derivation to generate domain-specific keys, ensuring that:
 - Each service gets a unique authentication key
@@ -19,9 +17,7 @@ The SDK handles:
 2. Challenge signing
 3. Callback to the LNURL service
 
-<h2 id="parsing-lnurl-auth">
-    <a class="header" href="#parsing-lnurl-auth">Parsing LNURL-Auth URLs</a>
-</h2>
+## Parsing LNURL-Auth URLs
 
 After [parsing](parse.md) an LNURL-auth URL, you'll receive an `LnurlAuthRequestDetails` object containing:
 - **k1** - The authentication challenge (hex-encoded 32 bytes)
@@ -31,9 +27,7 @@ After [parsing](parse.md) an LNURL-auth URL, you'll receive an `LnurlAuthRequest
 
 {{#tabs lnurl_auth:parse-lnurl-auth}}
 
-<h2 id="performing-authentication">
-    <a class="header" href="#performing-authentication">Performing Authentication</a>
-</h2>
+## Performing Authentication
 
 Once you have the authentication request details, you can perform the authentication by passing the request to the `lnurl_auth` method. The SDK will:
 1. Derive a domain-specific key pair
@@ -47,9 +41,7 @@ Once you have the authentication request details, you can perform the authentica
 The SDK automatically derives domain-specific keys according to LUD-05, ensuring that each service gets a unique linking key. This protects user privacy by preventing services from correlating user identities across different domains.
 </div>
 
-<h2 id="action-types">
-    <a class="header" href="#action-types">Action Types</a>
-</h2>
+## Action Types
 
 LNURL-auth supports different action types that indicate the purpose of the authentication:
 
@@ -60,9 +52,7 @@ LNURL-auth supports different action types that indicate the purpose of the auth
 
 Your application can use the `action` field to provide appropriate UI feedback to users.
 
-<h2 id="security-considerations">
-    <a class="header" href="#security-considerations">Security Considerations</a>
-</h2>
+## Security Considerations
 
 - Always verify the domain before authenticating
 - Show the domain to users for confirmation
@@ -74,3 +64,4 @@ Your application can use the `action` field to provide appropriate UI feedback t
 - [LUD-01](https://github.com/lnurl/luds/blob/luds/01.md) LNURL bech32 encoding
 - [LUD-04](https://github.com/lnurl/luds/blob/luds/04.md) `auth` base spec
 - [LUD-05](https://github.com/lnurl/luds/blob/luds/05.md) BIP32-based seed generation for `auth`
+- [LUD-17](https://github.com/lnurl/luds/blob/luds/17.md) Support for lnurl auth 
