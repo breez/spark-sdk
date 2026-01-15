@@ -6,6 +6,7 @@ import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.module.model.ReactModuleInfo
 import com.facebook.react.module.model.ReactModuleInfoProvider
+import com.facebook.react.uimanager.ViewManager
 import java.util.HashMap
 
 class BreezSdkSparkReactNativePackage : TurboReactPackage() {
@@ -26,9 +27,18 @@ class BreezSdkSparkReactNativePackage : TurboReactPackage() {
         false,  // canOverrideExistingModule
         false,  // needsEagerInit
         false,  // isCxxModule
-        true // isTurboModule
+        BuildConfig.IS_NEW_ARCHITECTURE_ENABLED  // isTurboModule
       )
       moduleInfos
     }
+  }
+
+  // Old architecture compatibility - these methods are called when new arch is disabled
+  override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
+    return listOf(BreezSdkSparkReactNativeModule(reactContext))
+  }
+
+  override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {
+    return emptyList()
   }
 }

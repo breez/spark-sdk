@@ -61,6 +61,53 @@ RCT_EXPORT_MODULE()
 {
     return std::make_shared<uniffi_generated::NativeBreezSdkSparkReactNativeSpecJSI>(params);
 }
+
+#else
+// Old Architecture Implementation
+// Accesses JSI through RCTCxxBridge to call the same uniffi-generated bindings
+
+#import <React/RCTBridge+Private.h>
+
+static BOOL _installed = NO;
+
++ (BOOL)requiresMainQueueSetup {
+    return YES;
+}
+
+- (NSNumber *)installRustCrate {
+    if (_installed) {
+        return @YES;
+    }
+
+    RCTCxxBridge *cxxBridge = (RCTCxxBridge *)self.bridge;
+    if (!cxxBridge.runtime) {
+        return @NO;
+    }
+
+    auto &runtime = *(facebook::jsi::Runtime *)cxxBridge.runtime;
+    auto callInvoker = cxxBridge.jsCallInvoker;
+
+    uint8_t result = breeztech_breezsdksparkreactnative::installRustCrate(runtime, callInvoker);
+    _installed = (result != 0);
+    return @(_installed);
+}
+
+- (NSNumber *)cleanupRustCrate {
+    if (!_installed) {
+        return @YES;
+    }
+
+    RCTCxxBridge *cxxBridge = (RCTCxxBridge *)self.bridge;
+    if (!cxxBridge.runtime) {
+        return @NO;
+    }
+
+    auto &runtime = *(facebook::jsi::Runtime *)cxxBridge.runtime;
+    uint8_t result = breeztech_breezsdksparkreactnative::cleanupRustCrate(runtime);
+    _installed = NO;
+    return @(result != 0);
+}
+
 #endif
 
 @end

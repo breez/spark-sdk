@@ -26,7 +26,7 @@ Pod::Spec.new do |s|
   else
     s.dependency "React-Core"
 
-    # Don't install the dependencies when we run `pod install` in the old architecture.
+    # Architecture-specific dependencies
     if ENV['RCT_NEW_ARCH_ENABLED'] == '1' then
       s.compiler_flags = folly_compiler_flags + " -DRCT_NEW_ARCH_ENABLED=1"
       s.pod_target_xcconfig    = {
@@ -39,6 +39,13 @@ Pod::Spec.new do |s|
       s.dependency "RCTRequired"
       s.dependency "RCTTypeSafety"
       s.dependency "ReactCommon/turbomodule/core"
+    else
+      # Old architecture - needs JSI access via RCTCxxBridge
+      s.pod_target_xcconfig = {
+          "CLANG_CXX_LANGUAGE_STANDARD" => "c++17"
+      }
+      s.dependency "React-jsi"
+      s.dependency "React-cxxreact"
     end
   end
 end

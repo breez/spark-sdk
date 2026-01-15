@@ -109,11 +109,15 @@ android {
 
   sourceSets {
     main {
+      // Include architecture-specific source directory
       if (isNewArchitectureEnabled()) {
           java.srcDirs += [
+            "src/newarch/java",
             "generated/java",
             "generated/jni"
           ]
+      } else {
+          java.srcDirs += ["src/oldarch/java"]
       }
     }
   }
