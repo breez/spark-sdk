@@ -17,6 +17,11 @@ and also returns the fees related to the payment so they can be confirmed.
 
 The payment request field supports Lightning invoices, Bitcoin addresses, Spark addresses and Spark invoices.
 
+<div class="warning">
+<h4>Developer note</h4>
+Payments can be sent without holding Bitcoin by converting on-the-fly as a step before sending a payment. See <a href="./token_conversion.md">Converting tokens</a> for more information.
+</div>
+
 ## Lightning
 
 #### BOLT11 invoice
