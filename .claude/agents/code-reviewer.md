@@ -161,29 +161,28 @@ Order: Summary → Issues → Questions → Recommendation
 - Fix: How to fix
 ```
 
-2. **Inline comments (if user requests)** - Post as PR review comments:
+2. **Inline comments (if user requests)** - Post as PR review with tied comments:
 ```bash
 # Get commit SHA
 COMMIT_SHA=$(gh api repos/breez/spark-sdk/pulls/PR_NUMBER/commits --jq '.[].sha' | tail -1)
 
-# Post inline comment on specific line
-gh api repos/breez/spark-sdk/pulls/PR_NUMBER/comments -X POST \
-  -f body="**[SEVERITY]** Issue description
-
-**Fix:** Suggested resolution" \
-  -f commit_id="$COMMIT_SHA" \
-  -f path="path/file.rs" \
-  -F line=42 \
-  -f side="RIGHT"
-
-# Post overall review summary
+# Create review with all inline comments in single request
 gh api repos/breez/spark-sdk/pulls/PR_NUMBER/reviews -X POST \
+  -f commit_id="$COMMIT_SHA" \
   -f event=COMMENT \
   -f body="> 🧪 Experimental PR review using Claude Code.
 
 ---
 
-{summary}"
+{summary}
+
+**Recommendation:** COMMENT" \
+  --field 'comments[][path]=path/file.rs' \
+  --field 'comments[][line]=42' \
+  --field 'comments[][side]=RIGHT' \
+  --field 'comments[][body]=**[SEVERITY]** Issue description
+
+**Fix:** Suggested resolution'
 ```
 
 **When to use inline comments:**
@@ -191,7 +190,10 @@ gh api repos/breez/spark-sdk/pulls/PR_NUMBER/reviews -X POST \
 - Issues have specific file:line references
 - More discoverable for contributors (shows in Files Changed tab)
 
-**Note:** Use `side="LEFT"` for deleted code, `side="RIGHT"` for added/unchanged code
+**Notes:**
+- Use `side="LEFT"` for deleted code, `side="RIGHT"` for added/unchanged code
+- Include all comments in single request using `--field 'comments[][...]'`
+- All comments are automatically tied to the review
 
 **Link format:** Use PR branch name in URL (get from `git rev-parse --abbrev-ref HEAD` or PR context)
 

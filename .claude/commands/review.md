@@ -76,24 +76,15 @@ Identify which context-dependent checks apply based on changed files:
 
 **If `POST_MODE=true` (via `--post` flag):**
 
-Post inline comments on specific lines using GitHub API:
+Create review with tied inline comments in single request:
 
 ```bash
 # Get latest commit SHA
 COMMIT_SHA=$(gh api repos/breez/spark-sdk/pulls/$PR_NUMBER/commits --jq '.[].sha' | tail -1)
 
-# For each issue with file:line location, post inline comment
-gh api repos/breez/spark-sdk/pulls/$PR_NUMBER/comments -X POST \
-  -f body="**[SEVERITY]** Issue description
-
-**Fix:** Suggested resolution" \
-  -f commit_id="$COMMIT_SHA" \
-  -f path="path/file.rs" \
-  -F line=42 \
-  -f side="RIGHT"
-
-# Then post overall review summary
+# Create review with inline comments (all tied together)
 gh api repos/breez/spark-sdk/pulls/$PR_NUMBER/reviews -X POST \
+  -f commit_id="$COMMIT_SHA" \
   -f event=COMMENT \
   -f body="> 🧪 Experimental PR review using Claude Code.
 
@@ -101,15 +92,34 @@ gh api repos/breez/spark-sdk/pulls/$PR_NUMBER/reviews -X POST \
 
 {review_summary}
 
-**Recommendation:** APPROVE | REQUEST CHANGES | COMMENT"
+**Recommendation:** APPROVE | REQUEST CHANGES | COMMENT" \
+  --field 'comments[][path]=path/file1.rs' \
+  --field 'comments[][line]=42' \
+  --field 'comments[][side]=RIGHT' \
+  --field 'comments[][body]=**[CRITICAL]** Issue description
+
+**Fix:** Suggested resolution' \
+  --field 'comments[][path]=path/file2.rs' \
+  --field 'comments[][line]=15' \
+  --field 'comments[][side]=RIGHT' \
+  --field 'comments[][body]=**[IMPORTANT]** Another issue
+
+**Fix:** Another fix'
 ```
+
+**Key Points:**
+- All comments included in single request (tied to review)
+- Use `--field 'comments[][...]'` for array of comments
+- Each comment needs: path, line, side, body
+- Review body contains overall summary
 
 **API Parameters:**
 - `commit_id` - Latest commit SHA from PR
-- `path` - File path relative to repo root
-- `line` - Line number in the diff (use `-F` flag for integer)
-- `side` - "RIGHT" for new code, "LEFT" for deleted code
-- `body` - Comment text (supports markdown)
+- `event` - COMMENT | APPROVE | REQUEST_CHANGES
+- `comments[][path]` - File path relative to repo root
+- `comments[][line]` - Line number (integer)
+- `comments[][side]` - "RIGHT" for new code, "LEFT" for deleted
+- `comments[][body]` - Comment text (markdown)
 
 See `.claude/agents/code-reviewer.md` for severity levels and format
 
