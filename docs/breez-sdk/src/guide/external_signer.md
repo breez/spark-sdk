@@ -23,7 +23,9 @@ When using an external signer, you don't provide a seed directly to the SDK. Ins
 
 ## Implementing a Custom Signer
 
-If you need full control over the signing process, you can implement the `ExternalSigner` interface in your application. This interface defines all the cryptographic operations the SDK needs.
+If you need full control over the signing process, you can implement the [ExternalSigner](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/core/src/signer/external.rs) interface in your application. This interface defines all the cryptographic operations the SDK needs.
+
+The [DefaultSigner](https://github.com/breez/spark-sdk/blob/main/crates/spark/src/signer/default_signer.rs) implementation can be used as a reference for what's expected.
 
 <div class="warning">
 <h4>Developer note</h4>
@@ -38,13 +40,3 @@ Most applications should use the default external signer factory function rather
 
 External signers are not supported in Flutter due to limitations with passing trait objects through the flutter_rust_bridge FFI. Flutter applications should use the standard `connect` method with mnemonic-based key management.
 </div>
-
-## Security Considerations
-
-When working with external signers:
-
-1. **Protect the mnemonic/private keys**: Never log or expose secrets
-2. **Validate inputs**: Ensure derivation paths and other parameters are valid before signing
-3. **Use secure storage**: Store keys in platform-specific secure storage (Keychain, KeyStore, etc.)
-4. **Handle errors carefully**: Don't leak information about why signing failed
-5. **Test thoroughly**: Cryptographic bugs can lead to loss of funds

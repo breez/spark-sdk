@@ -71,6 +71,7 @@ jobs:
     env:
       FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
       FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
+      FAUCET_CONCURRENCY: "2"  # Max concurrent faucet requests (rate limiting)
       RECOVERY_TEST_MNEMONIC: ${{ secrets.RECOVERY_TEST_MNEMONIC }}
       RECOVERY_TEST_EXPECTED_PAYMENTS: ${{ secrets.RECOVERY_TEST_EXPECTED_PAYMENTS }}
     steps:

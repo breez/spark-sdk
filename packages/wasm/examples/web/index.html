@@ -67,6 +67,7 @@
               <option value="bolt11Invoice">BOLT11 Invoice</option>
               <option value="bitcoinAddress">Bitcoin Address</option>
               <option value="sparkAddress">Spark Address</option>
+              <option value="sparkInvoice">Spark Invoice (Token)</option>
             </select>
           </div>
           <div id="bolt11-fields">
@@ -77,6 +78,20 @@
             <div class="form-group">
               <label for="amount">Amount (sats, optional):</label>
               <input type="number" id="amount" placeholder="Amount in satoshis">
+            </div>
+          </div>
+          <div id="spark-invoice-fields" style="display: none;">
+            <div class="form-group">
+              <label for="spark-amount">Amount (optional):</label>
+              <input type="number" id="spark-amount" placeholder="Amount in sats or token units">
+            </div>
+            <div class="form-group">
+              <label for="token-identifier">Token Identifier (optional):</label>
+              <input type="text" id="token-identifier" placeholder="Leave empty for Bitcoin">
+            </div>
+            <div class="form-group">
+              <label for="spark-description">Description (optional):</label>
+              <input type="text" id="spark-description" placeholder="Invoice description">
             </div>
           </div>
           <div class="modal-actions">

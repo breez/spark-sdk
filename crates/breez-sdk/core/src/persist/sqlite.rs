@@ -8,8 +8,8 @@ use rusqlite::{
 use rusqlite_migration::{M, Migrations, SchemaVersion};
 
 use crate::{
-    AssetFilter, DepositInfo, ListPaymentsRequest, LnurlPayInfo, LnurlReceiveMetadata,
-    LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter, PaymentMethod, TokenConversionInfo,
+    AssetFilter, ConversionInfo, DepositInfo, ListPaymentsRequest, LnurlPayInfo,
+    LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter, PaymentMethod,
     error::DepositClaimError,
     persist::{PaymentMetadata, SetLnurlMetadataItem, UpdateDepositPayload},
     sync_storage::{
@@ -262,6 +262,10 @@ impl SqliteStorage {
              DELETE FROM settings WHERE key = 'sync_initial_complete';",
             "ALTER TABLE payment_metadata ADD COLUMN token_conversion_info TEXT;",
             "ALTER TABLE payment_metadata ADD COLUMN parent_payment_id TEXT;",
+            "
+            ALTER TABLE payment_metadata DROP COLUMN token_conversion_info;
+            ALTER TABLE payment_metadata ADD COLUMN conversion_info TEXT;
+            ",
         ]
     }
 }
@@ -374,7 +378,7 @@ impl Storage for SqliteStorage {
                         params.push(Box::new(htlc_status.to_string()));
                     }
                 }
-                // Filter by token conversion info presence
+                // Filter by conversion info presence
                 if let PaymentDetailsFilter::Spark {
                     conversion_refund_needed: Some(conversion_refund_needed),
                     ..
@@ -388,15 +392,15 @@ impl Storage for SqliteStorage {
                         PaymentDetailsFilter::Spark { .. } => "p.spark = 1",
                         PaymentDetailsFilter::Token { .. } => "p.spark IS NULL",
                     };
-                    let null_check = if *conversion_refund_needed {
-                        "IS NULL"
+                    let refund_needed = if *conversion_refund_needed {
+                        "= 'RefundNeeded'"
                     } else {
-                        "IS NOT NULL"
+                        "!= 'RefundNeeded'"
                     };
                     payment_details_clauses.push(format!(
-                        "{type_check} AND pm.token_conversion_info IS NOT NULL AND
-                         json_extract(pm.token_conversion_info, '$.payment_id') IS NULL AND
-                         json_extract(pm.token_conversion_info, '$.refund_identifier') {null_check}"));
+                        "{type_check} AND pm.conversion_info IS NOT NULL AND
+                         json_extract(pm.conversion_info, '$.status') {refund_needed}"
+                    ));
                 }
                 // Filter by token transaction hash
                 if let PaymentDetailsFilter::Token {
@@ -451,7 +455,7 @@ impl Storage for SqliteStorage {
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
             ,       pm.lnurl_withdraw_info
-            ,       pm.token_conversion_info
+            ,       pm.conversion_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -609,7 +613,7 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         connection.execute(
-            "INSERT OR REPLACE INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, token_conversion_info)
+            "INSERT OR REPLACE INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info)
              VALUES (?, ?, ?, ?, ?, ?)",
             params![
                 payment_id,
@@ -617,7 +621,7 @@ impl Storage for SqliteStorage {
                 metadata.lnurl_pay_info,
                 metadata.lnurl_withdraw_info,
                 metadata.lnurl_description,
-                metadata.token_conversion_info.as_ref().map(serde_json::to_string).transpose()?,
+                metadata.conversion_info.as_ref().map(serde_json::to_string).transpose()?,
             ],
         )?;
 
@@ -681,7 +685,7 @@ impl Storage for SqliteStorage {
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
             ,       pm.lnurl_withdraw_info
-            ,       pm.token_conversion_info
+            ,       pm.conversion_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -727,7 +731,7 @@ impl Storage for SqliteStorage {
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
             ,       pm.lnurl_withdraw_info
-            ,       pm.token_conversion_info
+            ,       pm.conversion_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -1293,14 +1297,14 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             let htlc_details = htlc_details_str
                 .map(|s| serde_json_from_str(&s, 22))
                 .transpose()?;
-            let token_conversion_info_str: Option<String> = row.get(17)?;
-            let token_conversion_info: Option<TokenConversionInfo> = token_conversion_info_str
+            let conversion_info_str: Option<String> = row.get(17)?;
+            let conversion_info: Option<ConversionInfo> = conversion_info_str
                 .map(|s: String| serde_json_from_str(&s, 17))
                 .transpose()?;
             Some(PaymentDetails::Spark {
                 invoice_details,
                 htlc_details,
-                token_conversion_info,
+                conversion_info,
             })
         }
         (_, _, _, _, Some(metadata)) => {
@@ -1308,15 +1312,15 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             let invoice_details = invoice_details_str
                 .map(|s| serde_json_from_str(&s, 20))
                 .transpose()?;
-            let token_conversion_info_str: Option<String> = row.get(17)?;
-            let token_conversion_info: Option<TokenConversionInfo> = token_conversion_info_str
+            let conversion_info_str: Option<String> = row.get(17)?;
+            let conversion_info: Option<ConversionInfo> = conversion_info_str
                 .map(|s: String| serde_json_from_str(&s, 17))
                 .transpose()?;
             Some(PaymentDetails::Token {
                 metadata: serde_json_from_str(&metadata, 18)?,
                 tx_hash: row.get(19)?,
                 invoice_details,
-                token_conversion_info,
+                conversion_info,
             })
         }
         _ => None,
@@ -1568,11 +1572,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_payment_request_metadata() {
+    async fn test_payment_metadata() {
         let temp_dir = create_temp_dir("sqlite_storage_payment_request_metadata");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
-        crate::persist::tests::test_payment_request_metadata(Box::new(storage)).await;
+        crate::persist::tests::test_payment_metadata(Box::new(storage)).await;
     }
 
     #[tokio::test]

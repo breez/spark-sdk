@@ -3,14 +3,14 @@ mod issuer;
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
     AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, Fee, FetchTokenConversionLimitsRequest, GetInfoRequest,
-    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
-    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
-    MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
-    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
-    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest,
-    TokenConversionOptions, TokenConversionType, TokenIssuer, UpdateUserSettingsRequest,
+    ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FetchConversionLimitsRequest,
+    GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest, InputType,
+    LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest,
+    LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus,
+    PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
+    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest,
+    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
+    SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -176,6 +176,12 @@ pub enum Command {
         completion_timeout_secs: Option<u32>,
     },
 
+    /// Authenticate using LNURL
+    LnurlAuth {
+        /// LNURL-auth endpoint
+        lnurl: String,
+    },
+
     /// Claim an HTLC payment
     ClaimHtlcPayment {
         /// The preimage of the HTLC (hex string)
@@ -246,7 +252,7 @@ pub enum Command {
         /// The token identifiers to get metadata for
         token_identifiers: Vec<String>,
     },
-    FetchTokenConversionLimits {
+    FetchConversionLimits {
         /// Whether we are converting from or to Bitcoin
         #[clap(short = 'f', long, action = clap::ArgAction::SetTrue)]
         from_bitcoin: bool,
@@ -490,28 +496,27 @@ pub(crate) async fn execute_command(
             convert_from_token_identifier,
             convert_max_slippage_bps: max_slippage_bps,
         } => {
-            let token_conversion_options =
-                match (convert_from_bitcoin, convert_from_token_identifier) {
-                    (Some(true), _) => Some(TokenConversionOptions {
-                        conversion_type: TokenConversionType::FromBitcoin,
-                        max_slippage_bps,
-                        completion_timeout_secs: None,
-                    }),
-                    (_, Some(from_token_identifier)) => Some(TokenConversionOptions {
-                        conversion_type: TokenConversionType::ToBitcoin {
-                            from_token_identifier,
-                        },
-                        max_slippage_bps,
-                        completion_timeout_secs: None,
-                    }),
-                    _ => None,
-                };
+            let conversion_options = match (convert_from_bitcoin, convert_from_token_identifier) {
+                (Some(true), _) => Some(ConversionOptions {
+                    conversion_type: ConversionType::FromBitcoin,
+                    max_slippage_bps,
+                    completion_timeout_secs: None,
+                }),
+                (_, Some(from_token_identifier)) => Some(ConversionOptions {
+                    conversion_type: ConversionType::ToBitcoin {
+                        from_token_identifier,
+                    },
+                    max_slippage_bps,
+                    completion_timeout_secs: None,
+                }),
+                _ => None,
+            };
             let prepared_payment = sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request,
                     amount,
                     token_identifier,
-                    token_conversion_options,
+                    conversion_options,
                 })
                 .await;
 
@@ -522,9 +527,16 @@ pub(crate) async fn execute_command(
                 ));
             };
 
-            if let Some(token_conversion_fee) = prepare_response.token_conversion_fee {
+            if let Some(conversion_estimate) = &prepare_response.conversion_estimate {
+                let units =
+                    if conversion_estimate.options.conversion_type == ConversionType::FromBitcoin {
+                        "sats"
+                    } else {
+                        "token base units"
+                    };
                 println!(
-                    "This payment has an estimated token conversion fee of {token_conversion_fee}"
+                    "Estimated conversion of {} {} with a {} {} fee",
+                    conversion_estimate.amount, units, conversion_estimate.fee, units
                 );
                 let line = rl
                     .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
@@ -622,6 +634,27 @@ pub(crate) async fn execute_command(
             print_value(&res)?;
             Ok(true)
         }
+        Command::LnurlAuth { lnurl } => {
+            let input = sdk.parse(&lnurl).await?;
+            let res = match input {
+                InputType::LnurlAuth(auth_request) => {
+                    let action = auth_request.action.as_deref().unwrap_or("auth");
+                    let prompt = format!(
+                        "Authenticate with {} (action: {})? (y/n): ",
+                        auth_request.domain, action
+                    );
+                    let line = rl.readline_with_initial(&prompt, ("y", ""))?.to_lowercase();
+                    if line != "y" {
+                        return Ok(true);
+                    }
+                    sdk.lnurl_auth(auth_request).await?
+                }
+                _ => return Err(anyhow::anyhow!("Invalid input: expected LNURL-auth")),
+            };
+
+            print_value(&res)?;
+            Ok(true)
+        }
 
         Command::ClaimHtlcPayment { preimage } => {
             let res = sdk
@@ -681,24 +714,24 @@ pub(crate) async fn execute_command(
             print_value(&res)?;
             Ok(true)
         }
-        Command::FetchTokenConversionLimits {
+        Command::FetchConversionLimits {
             from_bitcoin,
             token_identifier,
         } => {
             let request = if from_bitcoin {
-                FetchTokenConversionLimitsRequest {
-                    conversion_type: TokenConversionType::FromBitcoin,
+                FetchConversionLimitsRequest {
+                    conversion_type: ConversionType::FromBitcoin,
                     token_identifier: Some(token_identifier),
                 }
             } else {
-                FetchTokenConversionLimitsRequest {
-                    conversion_type: TokenConversionType::ToBitcoin {
+                FetchConversionLimitsRequest {
+                    conversion_type: ConversionType::ToBitcoin {
                         from_token_identifier: token_identifier,
                     },
                     token_identifier: None,
                 }
             };
-            let res = sdk.fetch_token_conversion_limits(request).await?;
+            let res = sdk.fetch_conversion_limits(request).await?;
             print_value(&res)?;
             Ok(true)
         }

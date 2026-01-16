@@ -88,6 +88,13 @@ impl BreezSdk {
         self.inner.lnurl_withdraw(request).await
     }
 
+    pub async fn lnurl_auth(
+        &self,
+        request_data: LnurlAuthRequestDetails,
+    ) -> Result<LnurlCallbackStatus, SdkError> {
+        self.inner.lnurl_auth(request_data).await
+    }
+
     pub async fn prepare_send_payment(
         &self,
         request: PrepareSendPaymentRequest,
@@ -232,10 +239,10 @@ impl BreezSdk {
         self.inner.get_leaf_optimization_progress().into()
     }
     
-    pub async fn fetch_token_conversion_limits(
+    pub async fn fetch_conversion_limits(
         &self,
-        request: FetchTokenConversionLimitsRequest,
-    ) -> Result<FetchTokenConversionLimitsResponse, SdkError> {
-        self.inner.fetch_token_conversion_limits(request).await
+        request: FetchConversionLimitsRequest,
+    ) -> Result<FetchConversionLimitsResponse, SdkError> {
+        self.inner.fetch_conversion_limits(request).await
     }
 }

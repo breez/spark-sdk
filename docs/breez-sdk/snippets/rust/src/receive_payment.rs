@@ -7,6 +7,7 @@ async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     let description = "<invoice description>".to_string();
     // Optionally set the invoice amount you wish the payer to send
     let optional_amount_sats = Some(5_000);
+    // Optionally set the expiry duration in seconds
     let optional_expiry_secs = Some(3600_u32);
 
     let response = sdk
@@ -63,6 +64,7 @@ async fn receive_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: receive-payment-spark-invoice
     let optional_description = "<invoice description>".to_string();
     let optional_amount_sats = Some(5_000);
+    // Optionally set the expiry UNIX timestamp in seconds
     let optional_expiry_time_seconds = Some(1716691200);
     let optional_sender_public_key = Some("<sender public key>".to_string());
 

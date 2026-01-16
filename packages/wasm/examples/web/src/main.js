@@ -72,6 +72,10 @@ const elements = {
   description: document.getElementById("description"),
   amount: document.getElementById("amount"),
   bolt11Fields: document.getElementById("bolt11-fields"),
+  sparkInvoiceFields: document.getElementById("spark-invoice-fields"),
+  sparkAmount: document.getElementById("spark-amount"),
+  tokenIdentifier: document.getElementById("token-identifier"),
+  sparkDescription: document.getElementById("spark-description"),
   prepareReceiveBtn: document.getElementById("prepare-receive-btn"),
   cancelReceiveBtn: document.getElementById("cancel-receive-btn"),
   receiveResult: document.getElementById("receive-result"),
@@ -354,6 +358,18 @@ async function receive() {
         description: description,
         amountSats: amountSats,
       };
+    } else if (paymentMethodType === "sparkInvoice") {
+      const sparkAmountStr = elements.sparkAmount.value;
+      const tokenId = elements.tokenIdentifier.value.trim();
+      const sparkDesc = elements.sparkDescription.value.trim();
+
+      paymentMethod = {
+        type: "sparkInvoice",
+        amount: sparkAmountStr || undefined,
+        tokenIdentifier: tokenId || undefined,
+        description: sparkDesc || undefined,
+      };
+      console.log("Creating Spark Invoice with:", paymentMethod);
     } else {
       // For sparkAddress and bitcoinAddress, just pass the type
       paymentMethod = { type: paymentMethodType };
@@ -632,8 +648,9 @@ elements.lnurlPayBtn.addEventListener("click", () => {
 });
 
 elements.paymentMethod.addEventListener("change", () => {
-  elements.bolt11Fields.style.display =
-    elements.paymentMethod.value === "bolt11Invoice" ? "block" : "none";
+  const method = elements.paymentMethod.value;
+  elements.bolt11Fields.style.display = method === "bolt11Invoice" ? "block" : "none";
+  elements.sparkInvoiceFields.style.display = method === "sparkInvoice" ? "block" : "none";
 });
 
 elements.prepareReceiveBtn.addEventListener("click", receive);

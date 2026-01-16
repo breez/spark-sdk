@@ -10,7 +10,7 @@ class ReceivePayment {
             val description = "<invoice description>"
             // Optionally set the invoice amount you wish the payer to send
             val optionalAmountSats = 5_000.toULong()
-            // Optionally set the expiry time in seconds
+            // Optionally set the expiry duration in seconds
             val optionalExpirySecs = 3600.toUInt()
 
             val request = ReceivePaymentRequest(
@@ -71,6 +71,7 @@ class ReceivePayment {
             val optionalAmountSats = BigInteger.fromLong(5_000L)
             // Android (BigInteger from java.math)
             // val optionalAmountSats = BigInteger.valueOf(5_000L)
+            // Optionally set the expiry UNIX timestamp in seconds
             val optionalExpiryTimeSeconds = 1716691200.toULong()
             val optionalSenderPublicKey = "<sender public key>"
 

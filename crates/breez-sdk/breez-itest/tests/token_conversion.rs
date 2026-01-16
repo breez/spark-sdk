@@ -73,17 +73,20 @@ async fn test_token_conversion_success(
             payment_request: bob_spark_address.clone(),
             amount: Some(sats_to_token_success_amount),
             token_identifier: Some(REGTEST_TOKEN_ID.to_string()),
-            token_conversion_options: Some(TokenConversionOptions {
-                conversion_type: TokenConversionType::FromBitcoin,
+            conversion_options: Some(ConversionOptions {
+                conversion_type: ConversionType::FromBitcoin,
                 max_slippage_bps: Some(200), // 2%
                 completion_timeout_secs: None,
             }),
         })
         .await?;
-
+    let conversion_estimate = prepare_btc_to_token
+        .conversion_estimate
+        .as_ref()
+        .expect("Conversion estimate should be present");
     info!(
-        "Prepared Bitcoin to Token payment: amount={}, fee={:?}",
-        prepare_btc_to_token.amount, prepare_btc_to_token.token_conversion_fee
+        "Prepared token payment: amount={} (converting bitcoin amount={}, fee={})",
+        prepare_btc_to_token.amount, conversion_estimate.amount, conversion_estimate.fee
     );
 
     let send_btc_to_token = alice
@@ -191,8 +194,8 @@ async fn test_token_conversion_success(
             payment_request: alice_invoice.clone(),
             amount: None, // Amount from invoice
             token_identifier: None,
-            token_conversion_options: Some(TokenConversionOptions {
-                conversion_type: TokenConversionType::ToBitcoin {
+            conversion_options: Some(ConversionOptions {
+                conversion_type: ConversionType::ToBitcoin {
                     from_token_identifier: REGTEST_TOKEN_ID.to_string(),
                 },
                 max_slippage_bps: Some(200), // 2%
@@ -201,9 +204,13 @@ async fn test_token_conversion_success(
         })
         .await?;
 
+    let conversion_estimate = prepare_token_to_btc
+        .conversion_estimate
+        .as_ref()
+        .expect("Conversion estimate should be present");
     info!(
-        "Prepared Token to Bitcoin payment: amount={}, fee={:?}",
-        prepare_token_to_btc.amount, prepare_token_to_btc.token_conversion_fee
+        "Prepared bitcoin payment: amount={} (converting token amount={}, fee={})",
+        prepare_token_to_btc.amount, conversion_estimate.amount, conversion_estimate.fee
     );
 
     let send_token_to_btc = bob
@@ -343,8 +350,8 @@ async fn test_token_conversion_failure(
             payment_request: bob_spark_address.clone(),
             amount: Some(sats_to_token_failure_amount),
             token_identifier: Some(non_existent_token_id.to_string()),
-            token_conversion_options: Some(TokenConversionOptions {
-                conversion_type: TokenConversionType::FromBitcoin,
+            conversion_options: Some(ConversionOptions {
+                conversion_type: ConversionType::FromBitcoin,
                 max_slippage_bps: Some(100),
                 completion_timeout_secs: None,
             }),
@@ -383,16 +390,21 @@ async fn test_token_conversion_failure(
             payment_request: bob_spark_address.clone(),
             amount: Some(sats_to_token_failure_amount),
             token_identifier: Some(REGTEST_TOKEN_ID.to_string()),
-            token_conversion_options: Some(TokenConversionOptions {
-                conversion_type: TokenConversionType::FromBitcoin,
+            conversion_options: Some(ConversionOptions {
+                conversion_type: ConversionType::FromBitcoin,
                 max_slippage_bps: Some(2), // 0.02% - very low, likely to fail
                 completion_timeout_secs: None,
             }),
         })
         .await?;
+
+    let conversion_estimate = prepare_low_slippage
+        .conversion_estimate
+        .as_ref()
+        .expect("Conversion estimate should be present");
     info!(
-        "Prepared low slippage payment: amount={}, fee={:?}",
-        prepare_low_slippage.amount, prepare_low_slippage.token_conversion_fee
+        "Prepared token payment: amount={} (converting bitcoin amount={}, fee={})",
+        prepare_low_slippage.amount, conversion_estimate.amount, conversion_estimate.fee
     );
 
     // Send the payment - expect it to fail due to slippage

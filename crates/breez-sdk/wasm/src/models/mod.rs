@@ -228,6 +228,7 @@ pub struct SparkInvoiceDetails {
     pub invoice: String,
     pub identity_public_key: String,
     pub network: BitcoinNetwork,
+    #[tsify(type = "string")]
     #[serde(with = "serde_option_u128_as_string")]
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
@@ -409,6 +410,17 @@ pub struct LnurlWithdrawRequestDetails {
     pub max_withdrawable: u64,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlErrorDetails)]
+pub struct LnurlErrorDetails {
+    pub reason: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlCallbackStatus)]
+pub enum LnurlCallbackStatus {
+    Ok,
+    ErrorStatus { error_details: LnurlErrorDetails },
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentType)]
 pub enum PaymentType {
     Send,
@@ -439,13 +451,13 @@ pub enum PaymentDetails {
     Spark {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         htlc_details: Option<SparkHtlcDetails>,
-        token_conversion_info: Option<TokenConversionInfo>,
+        conversion_info: Option<ConversionInfo>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         invoice_details: Option<SparkInvoicePaymentDetails>,
-        token_conversion_info: Option<TokenConversionInfo>,
+        conversion_info: Option<ConversionInfo>,
     },
     Lightning {
         description: Option<String>,
@@ -646,6 +658,7 @@ pub struct TokenMetadata {
     // Serde doesn't support deserializing u128 types whenever they are used with flatten: https://github.com/serde-rs/json/issues/625
     // This occurs in the storage implementation when parsing `PaymentDetails` due to the use of flatten in LnurlRequestDetails
     // Serializing as string is a workaround to avoid the issue.
+    #[tsify(type = "string")]
     #[serde(with = "serde_u128_as_string")]
     pub max_supply: u128,
     pub is_freezable: bool,
@@ -661,6 +674,8 @@ pub struct SyncWalletResponse {}
 pub enum ReceivePaymentMethod {
     SparkAddress,
     SparkInvoice {
+        #[tsify(type = "string")]
+        #[serde(with = "serde_option_u128_as_string")]
         amount: Option<u128>,
         token_identifier: Option<String>,
         expiry_time: Option<u64>,
@@ -703,12 +718,14 @@ pub enum SendPaymentMethod {
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
+        #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
         fee: u128,
         token_identifier: Option<String>,
     },
     SparkInvoice {
         spark_invoice_details: SparkInvoiceDetails,
+        #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
         fee: u128,
         token_identifier: Option<String>,
@@ -774,7 +791,7 @@ pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
-    pub token_conversion_options: Option<TokenConversionOptions>,
+    pub conversion_options: Option<ConversionOptions>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
@@ -782,8 +799,7 @@ pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
     pub amount: u128,
     pub token_identifier: Option<String>,
-    pub token_conversion_options: Option<TokenConversionOptions>,
-    pub token_conversion_fee: Option<u128>,
+    pub conversion_estimate: Option<ConversionEstimate>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OnchainConfirmationSpeed)]
@@ -883,7 +899,7 @@ pub struct PaymentMetadata {
     pub lnurl_pay_info: Option<LnurlPayInfo>,
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
-    pub token_conversion_info: Option<TokenConversionInfo>,
+    pub conversion_info: Option<ConversionInfo>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SetLnurlMetadataItem)]
@@ -1112,36 +1128,58 @@ pub struct OptimizationProgress {
     pub total_rounds: u32,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenConversionInfo)]
-pub struct TokenConversionInfo {
-    pub pool_id: String,
-    pub payment_id: Option<String>,
-    #[serde(default, with = "serde_option_u128_as_string")]
-    pub fee: Option<u128>,
-    pub refund_identifier: Option<String>,
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionEstimate)]
+pub struct ConversionEstimate {
+    pub options: ConversionOptions,
+    pub amount: u128,
+    pub fee: u128,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenConversionOptions)]
-pub struct TokenConversionOptions {
-    pub conversion_type: TokenConversionType,
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionPurpose)]
+pub enum ConversionPurpose {
+    OngoingPayment { payment_request: String },
+    SelfTransfer,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionStatus)]
+pub enum ConversionStatus {
+    Completed,
+    RefundNeeded,
+    Refunded,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionInfo)]
+pub struct ConversionInfo {
+    pub pool_id: String,
+    pub conversion_id: String,
+    pub status: ConversionStatus,
+    #[tsify(type = "string")]
+    #[serde(default, with = "serde_option_u128_as_string")]
+    pub fee: Option<u128>,
+    pub purpose: Option<ConversionPurpose>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionOptions)]
+pub struct ConversionOptions {
+    pub conversion_type: ConversionType,
     pub max_slippage_bps: Option<u32>,
     pub completion_timeout_secs: Option<u32>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenConversionType)]
-pub enum TokenConversionType {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionType)]
+pub enum ConversionType {
     FromBitcoin,
     ToBitcoin { from_token_identifier: String },
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchTokenConversionLimitsRequest)]
-pub struct FetchTokenConversionLimitsRequest {
-    pub conversion_type: TokenConversionType,
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchConversionLimitsRequest)]
+pub struct FetchConversionLimitsRequest {
+    pub conversion_type: ConversionType,
     pub token_identifier: Option<String>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchTokenConversionLimitsResponse)]
-pub struct FetchTokenConversionLimitsResponse {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchConversionLimitsResponse)]
+pub struct FetchConversionLimitsResponse {
     pub min_from_amount: Option<u128>,
     pub min_to_amount: Option<u128>,
 }

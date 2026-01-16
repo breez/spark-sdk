@@ -43,10 +43,25 @@ impl RTSyncSigner {
 #[macros::async_trait]
 impl SyncSigner for RTSyncSigner {
     async fn sign_ecdsa_recoverable(&self, data: &[u8]) -> anyhow::Result<Vec<u8>> {
-        self.signer
-            .sign_ecdsa_recoverable(data, &self.signing_path)
+        use bitcoin::hashes::{Hash, sha256};
+        use bitcoin::secp256k1::Message;
+
+        // Real-time sync requires double SHA256 hash
+        let hash = sha256::Hash::hash(sha256::Hash::hash(data).as_ref());
+        let message = Message::from_digest(hash.to_byte_array());
+        let sig = self
+            .signer
+            .sign_ecdsa_recoverable(message, &self.signing_path)
             .await
-            .map_err(|e| anyhow!(e.to_string()))
+            .map_err(|e| anyhow!(e.to_string()))?;
+
+        // Serialize the recoverable signature: recovery_id + 64 bytes
+        let (recovery_id, sig_bytes) = sig.serialize_compact();
+        let mut complete_signature = vec![31u8.saturating_add(
+            u8::try_from(recovery_id.to_i32()).map_err(|e| anyhow!(e.to_string()))?,
+        )];
+        complete_signature.extend_from_slice(&sig_bytes);
+        Ok(complete_signature)
     }
 
     async fn ecies_encrypt(&self, msg: Vec<u8>) -> anyhow::Result<Vec<u8>> {

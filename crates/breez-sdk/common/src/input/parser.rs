@@ -285,7 +285,8 @@ where
         let mut url = parsed_url.clone();
         match parsed_url.scheme() {
             "http" => {
-                if !has_extension(&host, "onion") {
+                // Allow http for .onion domains and local domains (for testing)
+                if !has_extension(&host, "onion") && !is_local_domain(&host) {
                     return Err(LnurlError::HttpSchemeWithoutOnionDomain);
                 }
             }
@@ -421,6 +422,11 @@ fn has_extension(input: &str, extension: &str) -> bool {
     std::path::Path::new(input)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
+}
+
+/// Check if the domain is a local domain (for testing purposes)
+fn is_local_domain(host: &str) -> bool {
+    host.starts_with("127.0.0.1") || host.starts_with("localhost")
 }
 
 fn has_lightning_prefix(input: &str) -> bool {

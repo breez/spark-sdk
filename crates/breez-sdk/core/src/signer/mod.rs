@@ -1,23 +1,30 @@
 use crate::SdkError;
 use bitcoin::bip32::DerivationPath;
-use bitcoin::secp256k1;
+use bitcoin::hashes::{Hmac, sha256};
+use bitcoin::secp256k1::{self, Message, ecdsa::RecoverableSignature};
 
 #[macros::async_trait]
 pub trait BreezSigner: Send + Sync {
     /// Returns the identity public key.
     fn identity_public_key(&self) -> Result<secp256k1::PublicKey, SdkError>;
 
+    /// Signs a pre-hashed message using ECDSA at the given derivation path.
+    ///
+    /// The caller must create the Message from a 32-byte hash digest before calling this method.
     async fn sign_ecdsa(
         &self,
-        message: &[u8],
+        message: Message,
         path: &DerivationPath,
     ) -> Result<secp256k1::ecdsa::Signature, SdkError>;
 
+    /// Signs a pre-hashed message using recoverable ECDSA at the given derivation path.
+    ///
+    /// The caller must create the Message from a 32-byte hash digest before calling.
     async fn sign_ecdsa_recoverable(
         &self,
-        message: &[u8],
+        message: Message,
         path: &DerivationPath,
-    ) -> Result<Vec<u8>, SdkError>;
+    ) -> Result<RecoverableSignature, SdkError>;
 
     async fn ecies_encrypt(
         &self,
@@ -101,13 +108,14 @@ pub trait BreezSigner: Send + Sync {
         &self,
         request: spark_wallet::AggregateFrostRequest<'a>,
     ) -> Result<frost_secp256k1_tr::Signature, SdkError>;
-}
 
-// Internal signer implementations - accessible within crate but not exposed publicly
-pub(crate) mod breez;
-pub(crate) mod nostr;
-pub(crate) mod rtsync;
-pub(crate) mod spark;
+    /// Computes HMAC-SHA256 using a key derived at the given path.
+    async fn hmac_sha256(
+        &self,
+        key_path: &DerivationPath,
+        input: &[u8],
+    ) -> Result<Hmac<sha256::Hash>, SdkError>;
+}
 
 // External signer support - private adapter
 mod adapter;
@@ -124,3 +132,8 @@ pub use external_types::*;
 // Internal-only exports (used by adapter and builder)
 pub(crate) use adapter::ExternalSignerAdapter;
 pub(crate) use default_external::DefaultExternalSigner;
+pub mod breez;
+pub mod lnurl_auth;
+pub mod nostr;
+pub mod rtsync;
+pub mod spark;

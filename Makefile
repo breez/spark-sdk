@@ -16,7 +16,7 @@ build-target-%: install-target-%
 build-release:
 	cargo xtask build --release
 
-check: fmt-check clippy-check test
+check: fmt-check clippy-check test flutter-check
 
 clippy-fix: cargo-clippy-fix wasm-clippy-fix
 
@@ -55,11 +55,14 @@ wasm-test-browser:
 wasm-test-node:
 	cargo xtask wasm-test --node
 
+flutter-check:
+	cargo xtask flutter-check
+
 itest:
 	cargo xtask itest
 
 breez-itest:
-	cargo xtask test --package breez-sdk-itest -- --test-threads=1
+	cargo xtask test --package breez-sdk-itest -- --test-threads=8
 
 claude-check:
 	make fmt-check clippy-check cargo-test

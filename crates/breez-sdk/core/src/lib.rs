@@ -15,6 +15,7 @@ mod sdk;
 mod sdk_builder;
 pub mod signer;
 mod sync;
+pub mod token_conversion;
 mod utils;
 
 pub use chain::{

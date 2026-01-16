@@ -179,14 +179,13 @@ class SqliteStorage {
               paymentDetailsFilter.conversionRefundNeeded !== undefined
           ) {
             const typeCheck = paymentDetailsFilter.type === "spark" ? "p.spark = 1" : "p.spark IS NULL";
-            const nullCheck =
+            const refundNeeded =
               paymentDetailsFilter.conversionRefundNeeded === true
-                ? "IS NULL"
-                : "IS NOT NULL";
+                ? "= 'refundNeeded'"
+                : "!= 'refundNeeded'";
             paymentDetailsClauses.push(
-              `${typeCheck} AND pm.token_conversion_info IS NOT NULL AND
-              json_extract(pm.token_conversion_info, '$.paymentId') IS NULL AND
-              json_extract(pm.token_conversion_info, '$.refundIdentifier') ${nullCheck}`
+              `${typeCheck} AND pm.conversion_info IS NOT NULL AND
+              json_extract(pm.conversion_info, '$.status') ${refundNeeded}`
             );
           }
           // Filter by token transaction hash
@@ -247,7 +246,7 @@ class SqliteStorage {
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
             ,       pm.lnurl_withdraw_info
-            ,       pm.token_conversion_info
+            ,       pm.conversion_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -427,7 +426,7 @@ class SqliteStorage {
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
             ,       pm.lnurl_withdraw_info
-            ,       pm.token_conversion_info
+            ,       pm.conversion_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -491,7 +490,7 @@ class SqliteStorage {
             ,       l.preimage AS lightning_preimage
             ,       pm.lnurl_pay_info
             ,       pm.lnurl_withdraw_info
-            ,       pm.token_conversion_info
+            ,       pm.conversion_info
             ,       t.metadata AS token_metadata
             ,       t.tx_hash AS token_tx_hash
             ,       t.invoice_details AS token_invoice_details
@@ -530,7 +529,7 @@ class SqliteStorage {
   setPaymentMetadata(paymentId, metadata) {
     try {
       const stmt = this.db.prepare(`
-                INSERT OR REPLACE INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, token_conversion_info) 
+                INSERT OR REPLACE INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info) 
                 VALUES (?, ?, ?, ?, ?, ?)
             `);
 
@@ -542,8 +541,8 @@ class SqliteStorage {
           ? JSON.stringify(metadata.lnurlWithdrawInfo)
           : null,
         metadata.lnurlDescription,
-        metadata.tokenConversionInfo
-          ? JSON.stringify(metadata.tokenConversionInfo)
+        metadata.conversionInfo
+          ? JSON.stringify(metadata.conversionInfo)
           : null
       );
       return Promise.resolve();
@@ -747,8 +746,8 @@ class SqliteStorage {
         htlcDetails: row.spark_htlc_details
           ? JSON.parse(row.spark_htlc_details)
           : null,
-        tokenConversionInfo: row.token_conversion_info
-          ? JSON.parse(row.token_conversion_info)
+        conversionInfo: row.conversion_info
+          ? JSON.parse(row.conversion_info)
           : null,
       };
     } else if (row.token_metadata) {
@@ -759,8 +758,8 @@ class SqliteStorage {
         invoiceDetails: row.token_invoice_details
           ? JSON.parse(row.token_invoice_details)
           : null,
-        tokenConversionInfo: row.token_conversion_info
-          ? JSON.parse(row.token_conversion_info)
+        conversionInfo: row.conversion_info
+          ? JSON.parse(row.conversion_info)
           : null,
       };
     }

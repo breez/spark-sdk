@@ -110,7 +110,7 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Sign and verify arbitrary messages 
 - [x] Real-time sync
 - [x] External input parsers
-- [ ] External signer
+- [x] External signer
 - [ ] Seedless restore
 - [ ] NWC
 - [ ] WebLN

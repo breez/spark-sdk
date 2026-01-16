@@ -154,6 +154,14 @@ impl BreezSdk {
         Ok(self.sdk.lnurl_withdraw(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "lnurlAuth")]
+    pub async fn lnurl_auth(
+        &self,
+        request_data: LnurlAuthRequestDetails,
+    ) -> WasmResult<LnurlCallbackStatus> {
+        Ok(self.sdk.lnurl_auth(request_data.into()).await?.into())
+    }
+
     #[wasm_bindgen(js_name = "sendPayment")]
     pub async fn send_payment(
         &self,
@@ -317,14 +325,14 @@ impl BreezSdk {
         self.sdk.get_leaf_optimization_progress().into()
     }
 
-    #[wasm_bindgen(js_name = "fetchTokenConversionLimits")]
-    pub async fn fetch_token_conversion_limits(
+    #[wasm_bindgen(js_name = "fetchConversionLimits")]
+    pub async fn fetch_conversion_limits(
         &self,
-        request: FetchTokenConversionLimitsRequest,
-    ) -> WasmResult<FetchTokenConversionLimitsResponse> {
+        request: FetchConversionLimitsRequest,
+    ) -> WasmResult<FetchConversionLimitsResponse> {
         Ok(self
             .sdk
-            .fetch_token_conversion_limits(request.into())
+            .fetch_conversion_limits(request.into())
             .await?
             .into())
     }

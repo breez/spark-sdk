@@ -1,7 +1,15 @@
 pub(crate) mod adaptors;
 pub mod payment_observer;
-use flashnet::{BTC_ASSET_ADDRESS, Pool};
 pub use payment_observer::*;
+
+// Re-export public conversion types from the conversion module
+pub use crate::token_conversion::{
+    ConversionEstimate, ConversionInfo, ConversionOptions, ConversionPurpose, ConversionStatus,
+    ConversionType, FetchConversionLimitsRequest, FetchConversionLimitsResponse,
+};
+
+// Re-export internal types for crate use only
+pub(crate) use crate::token_conversion::TokenConversionResponse;
 
 use core::fmt;
 use lnurl_models::RecoverLnurlPayResponse;
@@ -250,16 +258,16 @@ pub enum PaymentDetails {
         invoice_details: Option<SparkInvoicePaymentDetails>,
         /// The HTLC transfer details if the payment fulfilled an HTLC transfer
         htlc_details: Option<SparkHtlcDetails>,
-        /// The information for a token conversion
-        token_conversion_info: Option<TokenConversionInfo>,
+        /// The information for a conversion
+        conversion_info: Option<ConversionInfo>,
     },
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
         /// The invoice details if the payment fulfilled a spark invoice
         invoice_details: Option<SparkInvoicePaymentDetails>,
-        /// The information for a token conversion
-        token_conversion_info: Option<TokenConversionInfo>,
+        /// The information for a conversion
+        conversion_info: Option<ConversionInfo>,
     },
     Lightning {
         /// Represents the invoice description
@@ -310,7 +318,7 @@ pub struct SparkHtlcDetails {
     pub payment_hash: String,
     /// The preimage of the HTLC. Empty until receiver has released it.
     pub preimage: Option<String>,
-    /// The expiry time of the HTLC in seconds since the Unix epoch
+    /// The expiry time of the HTLC as a unix timestamp in seconds
     pub expiry_time: u64,
     /// The HTLC status
     pub status: SparkHtlcStatus,
@@ -669,7 +677,7 @@ pub enum ReceivePaymentMethod {
         /// The presence of this field indicates that the payment is for a token
         /// If empty, it is a Bitcoin payment
         token_identifier: Option<String>,
-        /// The expiry time of the invoice in seconds since the Unix epoch
+        /// The expiry time of the invoice as a unix timestamp in seconds
         expiry_time: Option<u64>,
         /// A description to embed in the invoice.
         description: Option<String>,
@@ -680,7 +688,7 @@ pub enum ReceivePaymentMethod {
     Bolt11Invoice {
         description: String,
         amount_sats: Option<u64>,
-        /// The expiry time of the invoice in seconds
+        /// The expiry of the invoice as a duration in seconds
         expiry_secs: Option<u32>,
     },
 }
@@ -876,9 +884,9 @@ pub struct PrepareSendPaymentRequest {
     /// May only be provided if the payment request is a spark address.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub token_identifier: Option<String>,
-    /// If provided, the payment will include a token conversion step before sending the payment
+    /// If provided, the payment will include a conversion step before sending the payment
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub token_conversion_options: Option<TokenConversionOptions>,
+    pub conversion_options: Option<ConversionOptions>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -891,10 +899,8 @@ pub struct PrepareSendPaymentResponse {
     /// The presence of this field indicates that the payment is for a token.
     /// If empty, it is a Bitcoin payment.
     pub token_identifier: Option<String>,
-    /// When set, the payment will include a token conversion step before sending the payment
-    pub token_conversion_options: Option<TokenConversionOptions>,
-    /// The estimated token conversion fee if the payment involves a token conversion
-    pub token_conversion_fee: Option<u128>,
+    /// When set, the payment will include a conversion step before sending the payment
+    pub conversion_estimate: Option<ConversionEstimate>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -1242,114 +1248,4 @@ pub struct OptimizationProgress {
     pub is_running: bool,
     pub current_round: u32,
     pub total_rounds: u32,
-}
-
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TokenConversionInfo {
-    /// The pool id associated with the conversion
-    pub pool_id: String,
-    /// The receiving payment id associated with the conversion
-    pub payment_id: Option<String>,
-    /// The fee paid for the conversion
-    /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
-    pub fee: Option<u128>,
-    /// The refund payment id if a refund payment was made
-    pub refund_identifier: Option<String>,
-}
-
-pub(crate) struct TokenConversionPool {
-    pub(crate) asset_in_address: String,
-    pub(crate) asset_out_address: String,
-    pub(crate) pool: Pool,
-}
-
-pub(crate) struct TokenConversionResponse {
-    /// The sent payment id for the conversion
-    pub(crate) sent_payment_id: String,
-    /// The received payment id for the conversion
-    pub(crate) received_payment_id: String,
-}
-
-/// Options for token conversion when fulfilling a payment. When set, the SDK will
-/// perform a token conversion before fulfilling the payment. If not set, the payment
-/// will only be fulfilled if the wallet has sufficient balance of the required asset.
-#[derive(Debug, Clone, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct TokenConversionOptions {
-    /// The type of token conversion to perform when fulfilling the payment
-    pub conversion_type: TokenConversionType,
-    /// The optional maximum slippage in basis points (1/100 of a percent) allowed when
-    /// a token conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
-    /// The token conversion will fail if the actual amount received is less than
-    /// `estimated_amount * (1 - max_slippage_bps / 10_000)`.
-    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub max_slippage_bps: Option<u32>,
-    /// The optional timeout in seconds to wait for the token conversion to complete
-    /// when fulfilling the payment. This timeout only concerns waiting for the received
-    /// payment of the token conversion. If the timeout is reached before the conversion
-    /// is complete, the payment will fail. Defaults to 30 seconds if not set.
-    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub completion_timeout_secs: Option<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum TokenConversionType {
-    /// Converting from Bitcoin to a token
-    FromBitcoin,
-    /// Converting from a token to Bitcoin
-    ToBitcoin { from_token_identifier: String },
-}
-
-impl TokenConversionType {
-    /// Returns the asset addresses for the conversion type
-    ///
-    /// # Arguments
-    ///
-    /// * `token_identifier` - The token identifier when converting from Bitcoin to a token
-    ///
-    /// # Returns
-    ///
-    /// Result containing:
-    /// * (String, String): A tuple containing the asset in address and asset out address
-    /// * `SdkError`: If the token identifier is required but not provided
-    pub(crate) fn as_asset_addresses(
-        &self,
-        token_identifier: Option<&String>,
-    ) -> Result<(String, String), SdkError> {
-        Ok(match self {
-            TokenConversionType::FromBitcoin => (
-                BTC_ASSET_ADDRESS.to_string(),
-                token_identifier
-                    .ok_or(SdkError::InvalidInput(
-                        "Token identifier is required for from Bitcoin conversion".to_string(),
-                    ))?
-                    .clone(),
-            ),
-            TokenConversionType::ToBitcoin {
-                from_token_identifier,
-            } => (from_token_identifier.clone(), BTC_ASSET_ADDRESS.to_string()),
-        })
-    }
-}
-
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct FetchTokenConversionLimitsRequest {
-    /// The type of conversion, either from or to Bitcoin.
-    pub conversion_type: TokenConversionType,
-    /// The token identifier when converting to a token.
-    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub token_identifier: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct FetchTokenConversionLimitsResponse {
-    /// The minimum amount to be converted.
-    /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
-    pub min_from_amount: Option<u128>,
-    /// The minimum amount to be received from the conversion.
-    /// Denominated in satoshis if converting to Bitcoin, otherwise in the token base units.
-    pub min_to_amount: Option<u128>,
 }

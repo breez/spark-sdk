@@ -11,7 +11,7 @@ namespace BreezSdkSnippets
             var description = "<invoice description>";
             // Optionally set the invoice amount you wish the payer to send
             var optionalAmountSats = 5_000UL;
-            // Optionally set the expiry time in seconds
+            // Optionally set the expiry duration in seconds
             var optionalExpirySecs = 3600U;
             var paymentMethod = new ReceivePaymentMethod.Bolt11Invoice(
                 description: description,
@@ -63,6 +63,7 @@ namespace BreezSdkSnippets
             // ANCHOR: receive-payment-spark-invoice
             var optionalDescription = "<invoice description>";
             var optionalAmountSats = new BigInteger(5000);
+            // Optionally set the expiry UNIX timestamp in seconds
             var optionalExpiryTimeSeconds = 1716691200UL;
             var optionalSenderPublicKey = "<sender public key>";
 

@@ -1,8 +1,25 @@
 use anyhow::{Context, Result, bail};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tracing::{debug, info};
+
+/// Global semaphore to limit concurrent faucet requests.
+/// This enables test parallelization while preventing faucet rate limiting.
+/// The number of permits can be configured via FAUCET_CONCURRENCY env var (default: 2).
+static FAUCET_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| {
+    let concurrency = std::env::var("FAUCET_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+    info!(
+        "Initialized faucet semaphore with {} concurrent permits",
+        concurrency
+    );
+    Semaphore::new(concurrency)
+});
 
 /// Configuration for the regtest faucet
 #[derive(Debug, Clone)]
@@ -89,6 +106,9 @@ impl RegtestFaucet {
 
     /// Fund an address with the specified amount
     ///
+    /// This method acquires a permit from the global faucet semaphore before making
+    /// the request, ensuring controlled concurrency when tests run in parallel.
+    ///
     /// # Arguments
     /// * `address` - Bitcoin regtest address to fund
     /// * `amount_sats` - Amount in satoshis to send
@@ -96,8 +116,14 @@ impl RegtestFaucet {
     /// # Returns
     /// The transaction hash of the funding transaction
     pub async fn fund_address(&self, address: &str, amount_sats: u64) -> Result<String> {
+        // Acquire semaphore permit to limit concurrent faucet requests
+        let _permit = FAUCET_SEMAPHORE
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to acquire faucet semaphore: {}", e))?;
+
         info!(
-            "Requesting funds from faucet: {} sats to address {}",
+            "Requesting funds from faucet: {} sats to address {} (semaphore acquired)",
             amount_sats, address
         );
 
