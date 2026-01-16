@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use breez_sdk_spark::PluginStorage;
 
@@ -8,11 +9,11 @@ const KEY_NWC_URIS: &str = "nwc_uris";
 const KEY_NWC_SECKEY: &str = "nwc_seckey";
 
 pub(crate) struct Persister {
-    storage: PluginStorage,
+    storage: Arc<PluginStorage>,
 }
 
 impl Persister {
-    pub(crate) fn new(storage: PluginStorage) -> Self {
+    pub(crate) fn new(storage: Arc<PluginStorage>) -> Self {
         Self { storage }
     }
 
