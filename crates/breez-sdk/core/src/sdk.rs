@@ -1382,127 +1382,6 @@ impl BreezSdk {
         })
     }
 
-    /// Prepares an LNURL pay drain operation using a double-query approach.
-    ///
-    /// This method:
-    /// 1. Gets the current available balance
-    /// 2. Validates balance doesn't exceed LNURL `max_sendable`
-    /// 3. First query: gets invoice for full balance to estimate fees
-    /// 4. Calculates actual send amount (balance - estimated fee)
-    /// 5. Second query: gets invoice for actual amount
-    /// 6. Returns the prepare response with the second invoice
-    async fn prepare_lnurl_pay_drain(
-        &self,
-        request: PrepareLnurlPayRequest,
-    ) -> Result<PrepareLnurlPayResponse, SdkError> {
-        // 1. Get current available balance (always fresh)
-        let balance_sats = self.spark_wallet.get_balance().await?;
-
-        if balance_sats == 0 {
-            return Err(SdkError::InsufficientFunds);
-        }
-
-        // 2. Validate balance is within LNURL limits
-        let min_sendable_sats = request.pay_request.min_sendable.div_ceil(1000);
-        let max_sendable_sats = request.pay_request.max_sendable / 1000;
-
-        if balance_sats < min_sendable_sats {
-            return Err(SdkError::InvalidInput(format!(
-                "Balance ({balance_sats} sats) is below LNURL minimum ({min_sendable_sats} sats)"
-            )));
-        }
-
-        if balance_sats > max_sendable_sats {
-            return Err(SdkError::DrainExceedsLnurlMax {
-                balance_sats,
-                max_sendable_sats,
-            });
-        }
-
-        // 3. First query: get invoice for full balance to estimate fees
-        // Note: We don't intend to pay this invoice. It's only for fee estimation.
-        let first_invoice = validate_lnurl_pay(
-            self.lnurl_client.as_ref(),
-            balance_sats.saturating_mul(1_000), // convert to msats
-            &request.comment,
-            &request.pay_request.clone().into(),
-            self.config.network.into(),
-            request.validate_success_action_url,
-        )
-        .await?;
-
-        let first_data = match first_invoice {
-            lnurl::pay::ValidatedCallbackResponse::EndpointError { data } => {
-                return Err(LnurlError::EndpointError(data.reason).into());
-            }
-            lnurl::pay::ValidatedCallbackResponse::EndpointSuccess { data } => data,
-        };
-
-        // 4. Get fee estimate for first invoice
-        let first_fee = self
-            .spark_wallet
-            .fetch_lightning_send_fee_estimate(&first_data.pr, None)
-            .await?;
-
-        // 5. Calculate actual send amount (balance - fee)
-        let actual_amount = balance_sats.saturating_sub(first_fee);
-
-        // Validate against LNURL minimum
-        if actual_amount < min_sendable_sats {
-            return Err(SdkError::InvalidInput(format!(
-                "Amount after fees ({actual_amount} sats) is below LNURL minimum ({min_sendable_sats} sats)"
-            )));
-        }
-
-        // 6. Second query: get invoice for actual amount (back-to-back, no delay)
-        let success_data = match validate_lnurl_pay(
-            self.lnurl_client.as_ref(),
-            actual_amount.saturating_mul(1_000),
-            &request.comment,
-            &request.pay_request.clone().into(),
-            self.config.network.into(),
-            request.validate_success_action_url,
-        )
-        .await?
-        {
-            lnurl::pay::ValidatedCallbackResponse::EndpointError { data } => {
-                return Err(LnurlError::EndpointError(data.reason).into());
-            }
-            lnurl::pay::ValidatedCallbackResponse::EndpointSuccess { data } => data,
-        };
-
-        // 7. Get actual fee for the smaller invoice
-        let actual_fee = self
-            .spark_wallet
-            .fetch_lightning_send_fee_estimate(&success_data.pr, None)
-            .await?;
-
-        // If fee increased between queries, fail (user must retry)
-        if actual_fee > first_fee {
-            return Err(SdkError::Generic(
-                "Fee increased between queries. Please retry.".to_string(),
-            ));
-        }
-
-        // Parse the invoice to get details
-        let parsed = self.parse(&success_data.pr).await?;
-        let InputType::Bolt11Invoice(invoice_details) = parsed else {
-            return Err(SdkError::Generic(
-                "Expected Bolt11 invoice from LNURL".to_string(),
-            ));
-        };
-
-        Ok(PrepareLnurlPayResponse {
-            amount_sats: actual_amount,
-            comment: request.comment,
-            pay_request: request.pay_request,
-            invoice_details,
-            fee_sats: first_fee,
-            success_action: success_data.success_action.map(From::from),
-            is_drain: true,
-        })
-    }
-
     #[allow(clippy::too_many_lines)]
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
@@ -2605,6 +2484,127 @@ impl BreezSdk {
         .await?;
 
         Ok(response)
+    }
+
+    /// Prepares an LNURL pay drain operation using a double-query approach.
+    ///
+    /// This method:
+    /// 1. Gets the current available balance
+    /// 2. Validates balance doesn't exceed LNURL `max_sendable`
+    /// 3. First query: gets invoice for full balance to estimate fees
+    /// 4. Calculates actual send amount (balance - estimated fee)
+    /// 5. Second query: gets invoice for actual amount
+    /// 6. Returns the prepare response with the second invoice
+    async fn prepare_lnurl_pay_drain(
+        &self,
+        request: PrepareLnurlPayRequest,
+    ) -> Result<PrepareLnurlPayResponse, SdkError> {
+        // 1. Get current available balance (always fresh)
+        let balance_sats = self.spark_wallet.get_balance().await?;
+
+        if balance_sats == 0 {
+            return Err(SdkError::InsufficientFunds);
+        }
+
+        // 2. Validate balance is within LNURL limits
+        let min_sendable_sats = request.pay_request.min_sendable.div_ceil(1000);
+        let max_sendable_sats = request.pay_request.max_sendable / 1000;
+
+        if balance_sats < min_sendable_sats {
+            return Err(SdkError::InvalidInput(format!(
+                "Balance ({balance_sats} sats) is below LNURL minimum ({min_sendable_sats} sats)"
+            )));
+        }
+
+        if balance_sats > max_sendable_sats {
+            return Err(SdkError::DrainExceedsLnurlMax {
+                balance_sats,
+                max_sendable_sats,
+            });
+        }
+
+        // 3. First query: get invoice for full balance to estimate fees
+        // Note: We don't intend to pay this invoice. It's only for fee estimation.
+        let first_invoice = validate_lnurl_pay(
+            self.lnurl_client.as_ref(),
+            balance_sats.saturating_mul(1_000), // convert to msats
+            &request.comment,
+            &request.pay_request.clone().into(),
+            self.config.network.into(),
+            request.validate_success_action_url,
+        )
+        .await?;
+
+        let first_data = match first_invoice {
+            lnurl::pay::ValidatedCallbackResponse::EndpointError { data } => {
+                return Err(LnurlError::EndpointError(data.reason).into());
+            }
+            lnurl::pay::ValidatedCallbackResponse::EndpointSuccess { data } => data,
+        };
+
+        // 4. Get fee estimate for first invoice
+        let first_fee = self
+            .spark_wallet
+            .fetch_lightning_send_fee_estimate(&first_data.pr, None)
+            .await?;
+
+        // 5. Calculate actual send amount (balance - fee)
+        let actual_amount = balance_sats.saturating_sub(first_fee);
+
+        // Validate against LNURL minimum
+        if actual_amount < min_sendable_sats {
+            return Err(SdkError::InvalidInput(format!(
+                "Amount after fees ({actual_amount} sats) is below LNURL minimum ({min_sendable_sats} sats)"
+            )));
+        }
+
+        // 6. Second query: get invoice for actual amount (back-to-back, no delay)
+        let success_data = match validate_lnurl_pay(
+            self.lnurl_client.as_ref(),
+            actual_amount.saturating_mul(1_000),
+            &request.comment,
+            &request.pay_request.clone().into(),
+            self.config.network.into(),
+            request.validate_success_action_url,
+        )
+        .await?
+        {
+            lnurl::pay::ValidatedCallbackResponse::EndpointError { data } => {
+                return Err(LnurlError::EndpointError(data.reason).into());
+            }
+            lnurl::pay::ValidatedCallbackResponse::EndpointSuccess { data } => data,
+        };
+
+        // 7. Get actual fee for the smaller invoice
+        let actual_fee = self
+            .spark_wallet
+            .fetch_lightning_send_fee_estimate(&success_data.pr, None)
+            .await?;
+
+        // If fee increased between queries, fail (user must retry)
+        if actual_fee > first_fee {
+            return Err(SdkError::Generic(
+                "Fee increased between queries. Please retry.".to_string(),
+            ));
+        }
+
+        // Parse the invoice to get details
+        let parsed = self.parse(&success_data.pr).await?;
+        let InputType::Bolt11Invoice(invoice_details) = parsed else {
+            return Err(SdkError::Generic(
+                "Expected Bolt11 invoice from LNURL".to_string(),
+            ));
+        };
+
+        Ok(PrepareLnurlPayResponse {
+            amount_sats: actual_amount,
+            comment: request.comment,
+            pay_request: request.pay_request,
+            invoice_details,
+            fee_sats: first_fee,
+            success_action: success_data.success_action.map(From::from),
+            is_drain: true,
+        })
     }
 
     async fn send_payment_internal(
