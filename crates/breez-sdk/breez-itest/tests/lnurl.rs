@@ -313,10 +313,10 @@ async fn test_05_lnurl_payment_flow(
         })
         .await?;
 
-    info!(
-        "Alice prepared payment for {} sats to {}",
-        prepare_response.amount_sats, bob_lightning_address
-    );
+    let PayAmount::Bitcoin { amount_sats } = prepare_response.pay_amount else {
+        panic!("Expected Bitcoin payment amount");
+    };
+    info!("Alice prepared payment for {amount_sats} sats to {bob_lightning_address}");
 
     // Alice sends the payment
     let pay_response = alice
@@ -754,15 +754,17 @@ async fn test_07_lnurl_drain_payment(
         })
         .await?;
 
+    // For drain, amount is in invoice details
+    let drain_amount_sats = prepare_response.invoice_details.amount_msat.unwrap() / 1000;
     info!(
-        "Alice prepared drain payment: {} sats (fee: {} sats)",
-        prepare_response.amount_sats, prepare_response.fee_sats
+        "Alice prepared drain payment: {drain_amount_sats} sats (fee: {} sats)",
+        prepare_response.fee_sats
     );
 
     // Verify the drain amount is exactly balance - fees
     let expected_drain = alice_balance.saturating_sub(prepare_response.fee_sats);
     assert_eq!(
-        prepare_response.amount_sats, expected_drain,
+        drain_amount_sats, expected_drain,
         "Drain amount should be exactly balance - fees"
     );
 
@@ -1038,9 +1040,11 @@ async fn test_08_lnurl_drain_with_fee_overpayment(
         })
         .await?;
 
+    // For drain, amount is in invoice details
+    let drain_amount_sats = prepare_response.invoice_details.amount_msat.unwrap() / 1000;
     info!(
-        "Prepared drain: amount={} sats, fee={} sats",
-        prepare_response.amount_sats, prepare_response.fee_sats
+        "Prepared drain: amount={drain_amount_sats} sats, fee={} sats",
+        prepare_response.fee_sats
     );
 
     // The fee should be expected_fee1 (the higher fee for full balance)
@@ -1084,7 +1088,7 @@ async fn test_08_lnurl_drain_with_fee_overpayment(
     // Verify Bob received the expected amount (the invoice amount, not more)
     assert_eq!(
         bob_payment.amount,
-        prepare_response.amount_sats.into(),
+        drain_amount_sats.into(),
         "Bob should receive exactly the prepared amount"
     );
 

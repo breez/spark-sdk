@@ -161,10 +161,10 @@ async fn test_01_rtsync_lnurl_info_sync(
         })
         .await?;
 
-    info!(
-        "Alice1 prepared payment for {} sats",
-        prepare_response.amount_sats
-    );
+    let PayAmount::Bitcoin { amount_sats } = prepare_response.pay_amount else {
+        panic!("Expected Bitcoin payment amount");
+    };
+    info!("Alice1 prepared payment for {amount_sats} sats");
 
     let pay_response = alice1
         .sdk

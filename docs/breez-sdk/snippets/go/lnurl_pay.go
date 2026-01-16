@@ -84,9 +84,7 @@ func PrepareLnurlPayDrain(sdk *breez_sdk_spark.BreezSdk, payRequest breez_sdk_sp
 	}
 
 	// If the fees are acceptable, continue to create the LNURL Pay
-	amountSats := response.AmountSats
 	feeSats := response.FeeSats
-	log.Printf("Amount to send: %v sats", amountSats)
 	log.Printf("Fees: %v sats", feeSats)
 	// ANCHOR_END: prepare-lnurl-pay-drain
 	return &response, nil

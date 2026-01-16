@@ -58,9 +58,7 @@ Future<void> prepareLnurlPayDrain(BreezSdk sdk, LnurlPayRequestDetails payReques
       await sdk.prepareLnurlPay(request: request);
 
   // If the fees are acceptable, continue to create the LNURL Pay
-  BigInt amountSats = prepareResponse.amountSats;
   BigInt feeSats = prepareResponse.feeSats;
-  print("Amount to send: $amountSats sats");
   print("Fees: $feeSats sats");
   // ANCHOR_END: prepare-lnurl-pay-drain
 }

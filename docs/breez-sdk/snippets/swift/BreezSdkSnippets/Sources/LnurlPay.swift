@@ -46,9 +46,7 @@ func prepareLnurlPayDrain(sdk: BreezSdk, payRequest: LnurlPayRequestDetails) asy
     let response = try await sdk.prepareLnurlPay(request: request)
 
     // If the fees are acceptable, continue to create the LNURL Pay
-    let amountSats = response.amountSats
     let feeSats = response.feeSats
-    print("Amount to send: \(amountSats) sats")
     print("Fees: \(feeSats) sats")
     // ANCHOR_END: prepare-lnurl-pay-drain
 }

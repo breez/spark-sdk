@@ -61,9 +61,7 @@ async fn prepare_pay_drain(sdk: &BreezSdk, pay_request: LnurlPayRequestDetails) 
         .await?;
 
     // If the fees are acceptable, continue to create the LNURL Pay
-    let amount_sats = prepare_response.amount_sats;
     let fee_sats = prepare_response.fee_sats;
-    info!("Amount to send: {amount_sats} sats");
     info!("Fees: {fee_sats} sats");
     // ANCHOR_END: prepare-lnurl-pay-drain
     Ok(())

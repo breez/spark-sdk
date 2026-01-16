@@ -777,7 +777,7 @@ pub struct PrepareLnurlPayRequest {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayResponse {
-    pub amount_sats: u64,
+    pub pay_amount: PayAmount,
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
     /// The fee in satoshis. For drain operations, this represents the total drain fee
@@ -785,8 +785,6 @@ pub struct PrepareLnurlPayResponse {
     pub fee_sats: u64,
     pub invoice_details: Bolt11InvoiceDetails,
     pub success_action: Option<SuccessAction>,
-    /// Indicates this is a drain operation.
-    pub is_drain: bool,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

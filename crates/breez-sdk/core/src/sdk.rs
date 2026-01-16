@@ -1370,13 +1370,12 @@ impl BreezSdk {
         };
 
         Ok(PrepareLnurlPayResponse {
-            amount_sats,
+            pay_amount: PayAmount::Bitcoin { amount_sats },
             comment: request.comment,
             pay_request: request.pay_request,
             invoice_details,
             fee_sats: lightning_fee_sats,
             success_action: success_data.success_action.map(From::from),
-            is_drain: false,
         })
     }
 
@@ -1384,8 +1383,27 @@ impl BreezSdk {
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
 
+        // Extract amount from pay_amount
+        let amount_sats = match &request.prepare_response.pay_amount {
+            PayAmount::Bitcoin { amount_sats } => *amount_sats,
+            PayAmount::Drain => {
+                // For drain, extract amount from the invoice (set during prepare)
+                request
+                    .prepare_response
+                    .invoice_details
+                    .amount_msat
+                    .ok_or_else(|| SdkError::Generic("Missing invoice amount".to_string()))?
+                    / 1000
+            }
+            PayAmount::Token { .. } => {
+                return Err(SdkError::Generic(
+                    "Token payments are not supported for LNURL".to_string(),
+                ));
+            }
+        };
+
         // Calculate amount override for drain operations
-        let amount_override = if request.prepare_response.is_drain {
+        let amount_override = if matches!(request.prepare_response.pay_amount, PayAmount::Drain) {
             // Re-estimate current fee for the invoice
             let current_fee = self
                 .spark_wallet
@@ -1424,12 +1442,7 @@ impl BreezSdk {
                     "Drain fee overpayment applied"
                 );
             }
-            Some(
-                request
-                    .prepare_response
-                    .amount_sats
-                    .saturating_add(overpayment),
-            )
+            Some(amount_sats.saturating_add(overpayment))
         } else {
             None
         };
@@ -1442,9 +1455,7 @@ impl BreezSdk {
                         spark_transfer_fee_sats: None,
                         lightning_fee_sats: request.prepare_response.fee_sats,
                     },
-                    pay_amount: PayAmount::Bitcoin {
-                        amount_sats: request.prepare_response.amount_sats,
-                    },
+                    pay_amount: PayAmount::Bitcoin { amount_sats },
                     conversion_estimate: None,
                 },
                 options: None,
@@ -2599,13 +2610,12 @@ impl BreezSdk {
         };
 
         Ok(PrepareLnurlPayResponse {
-            amount_sats: actual_amount,
+            pay_amount: PayAmount::Drain,
             comment: request.comment,
             pay_request: request.pay_request,
             invoice_details,
             fee_sats: first_fee,
             success_action: success_data.success_action.map(From::from),
-            is_drain: true,
         })
     }
 

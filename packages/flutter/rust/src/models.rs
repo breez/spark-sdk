@@ -310,13 +310,12 @@ pub struct _PrepareLnurlPayRequest {
 
 #[frb(mirror(PrepareLnurlPayResponse))]
 pub struct _PrepareLnurlPayResponse {
-    pub amount_sats: u64,
+    pub pay_amount: PayAmount,
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
     pub fee_sats: u64,
     pub invoice_details: Bolt11InvoiceDetails,
     pub success_action: Option<SuccessAction>,
-    pub is_drain: bool,
 }
 
 #[frb(mirror(PrepareSendPaymentRequest))]

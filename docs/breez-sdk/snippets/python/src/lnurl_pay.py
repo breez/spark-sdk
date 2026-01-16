@@ -75,8 +75,6 @@ async def prepare_pay_drain(sdk: BreezSdk, pay_request: LnurlPayRequestDetails):
     prepare_response = await sdk.prepare_lnurl_pay(request=request)
 
     # If the fees are acceptable, continue to create the LNURL Pay
-    amount_sats = prepare_response.amount_sats
     fee_sats = prepare_response.fee_sats
-    logging.debug(f"Amount to send: {amount_sats} sats")
     logging.debug(f"Fees: {fee_sats} sats")
     # ANCHOR_END: prepare-lnurl-pay-drain

@@ -45,9 +45,7 @@ const examplePrepareLnurlPayDrain = async (sdk: BreezSdk, payRequest: LnurlPayRe
   })
 
   // If the fees are acceptable, continue to create the LNURL Pay
-  const amountSats = prepareResponse.amountSats
   const feeSats = prepareResponse.feeSats
-  console.log(`Amount to send: ${amountSats} sats`)
   console.log(`Fees: ${feeSats} sats`)
   // ANCHOR_END: prepare-lnurl-pay-drain
 }

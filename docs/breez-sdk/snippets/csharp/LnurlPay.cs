@@ -53,9 +53,7 @@ namespace BreezSdkSnippets
             var prepareResponse = await sdk.PrepareLnurlPay(request: request);
 
             // If the fees are acceptable, continue to create the LNURL Pay
-            var amountSats = prepareResponse.amountSats;
             var feeSats = prepareResponse.feeSats;
-            Console.WriteLine($"Amount to send: {amountSats} sats");
             Console.WriteLine($"Fees: {feeSats} sats");
             // ANCHOR_END: prepare-lnurl-pay-drain
         }

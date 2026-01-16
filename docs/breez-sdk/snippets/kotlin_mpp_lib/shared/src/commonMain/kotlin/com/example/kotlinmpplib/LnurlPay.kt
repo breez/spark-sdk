@@ -61,9 +61,7 @@ class LnurlPay {
         val prepareResponse = sdk.prepareLnurlPay(req)
 
         // If the fees are acceptable, continue to create the LNURL Pay
-        val amountSats = prepareResponse.amountSats
         val feeSats = prepareResponse.feeSats
-        // Log.v("Breez", "Amount to send: ${amountSats} sats")
         // Log.v("Breez", "Fees: ${feeSats} sats")
         // ANCHOR_END: prepare-lnurl-pay-drain
     }
